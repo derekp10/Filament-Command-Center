@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../3D Print Data"
+		},
+		{
+			"path": "\\\\TRUENAS\\App_Data\\InventoryHub"
+		}
+	],
+	"settings": {}
+}
