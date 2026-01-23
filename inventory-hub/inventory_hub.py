@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v77.0 (Focus Guard)"
+VERSION = "v78.0 (Ghost Fix)"
 
 def load_config():
     defaults = {
@@ -85,7 +85,6 @@ FILABRIDGE_API_BASE = f"http://{SERVER_IP}:{cfg.get('filabridge_port')}/api"
 logger.info(f"🛠️ Server {VERSION} Started")
 
 # --- WEB UI HTML ---
-# NOTE: Using standard string to avoid f-string conflicts with CSS/JS braces
 RAW_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -130,22 +129,24 @@ RAW_HTML = """
         .qr-wrapper { text-align: center; background: #fff; padding: 10px; border-radius: 8px; margin: 5px; }
         .qr-label { color: #000; font-weight: bold; font-size: 1.2rem; margin-top: 5px; display: block; }
         .health-text { color: #ffffff !important; font-size: 1.1rem; }
+        
+        /* BUFFER STYLES */
+        #buffer-zone { border-bottom: 1px solid #444; background: #000; }
+        .buffer-item { padding: 5px 10px; border-bottom: 1px solid #333; display: flex; align-items: center; }
+        .buffer-swatch { width: 20px; height: 20px; border-radius: 50%; margin-right: 10px; border: 2px solid #fff; }
+        .buffer-text { color: #fff; font-size: 1.1rem; }
 
-        /* --- FOCUS GUARD CSS --- */
+        /* FOCUS GUARD */
         #focus-guard {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.85); z-index: 10000;
-            display: none; /* Hidden by default */
-            justify-content: center; align-items: center;
-            border: 20px solid #ff4444; 
-            text-align: center; 
-            backdrop-filter: blur(5px);
+            display: none; justify-content: center; align-items: center;
+            border: 20px solid #ff4444; text-align: center; backdrop-filter: blur(5px);
         }
         .guard-icon { font-size: 5rem; margin-bottom: 20px; }
         .guard-msg { font-size: 3rem; color: #ff4444; font-weight: bold; text-shadow: 0 0 10px #000; text-transform: uppercase; }
         .guard-sub { color: white; font-size: 1.5rem; margin-top: 20px; animation: blink 1.5s infinite; }
         @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-
     </style>
 </head>
 <body>
@@ -159,13 +160,9 @@ RAW_HTML = """
 
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid">
-            <div>
-                <span class="navbar-brand">Filament Command Center</span>
-                <span class="version-tag">{{VERSION}}</span>
-            </div>
+            <div><span class="navbar-brand">Filament Command Center</span><span class="version-tag">{{VERSION}}</span></div>
             <div class="d-flex align-items-center">
-                 <button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO LAST ACTION</button>
-                 <div class="alert alert-protocol py-1 px-3 mb-0 me-3">⚠️ HTTP ONLY</div>
+                 <button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button>
                  <a href="/api/export_locations" class="btn btn-outline-info btn-sm">💾 Export CSV</a>
             </div>
         </div>
@@ -191,16 +188,11 @@ RAW_HTML = """
                 <div class="card">
                     <div class="card-header">Live Activity 📡</div>
                     <div class="card-body p-0">
+                        <div id="buffer-zone" style="display:none;"></div>
                         <div id="live-logs" class="log-box"></div>
                         <div id="cmd-deck" class="cmd-deck" style="display:none;">
-                            <div class="qr-wrapper">
-                                <div id="qr-clear"></div>
-                                <span class="qr-label">CMD:CLEAR</span>
-                            </div>
-                            <div class="qr-wrapper">
-                                <div id="qr-undo"></div>
-                                <span class="qr-label">CMD:UNDO</span>
-                            </div>
+                            <div class="qr-wrapper"><div id="qr-clear"></div><span class="qr-label">CMD:CLEAR</span></div>
+                            <div class="qr-wrapper"><div id="qr-undo"></div><span class="qr-label">CMD:UNDO</span></div>
                         </div>
                     </div>
                 </div>
@@ -253,24 +245,15 @@ RAW_HTML = """
             new QRCode(document.getElementById("qr-undo"), {text: "CMD:UNDO", width: 128, height: 128});
             new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 128, height: 128});
         };
-
-        // --- FOCUS GUARD LOGIC ---
-        window.onblur = function() {
-            document.getElementById('focus-guard').style.display = 'flex';
-        };
-        
-        window.onfocus = function() {
-            document.getElementById('focus-guard').style.display = 'none';
-        };
+        window.onblur = function() { document.getElementById('focus-guard').style.display = 'flex'; };
+        window.onfocus = function() { document.getElementById('focus-guard').style.display = 'none'; };
 
         let scanBuffer = "";
         let bufferTimeout;
-        let heldSpools = []; 
+        let heldSpools = []; // Now stores Objects {id, display, color}
 
         document.addEventListener('keydown', (e) => {
-            // Ignore input if focus guard is active (double safety)
             if (document.getElementById('focus-guard').style.display === 'flex') return;
-
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
             if (e.ctrlKey || e.altKey || e.metaKey) return;
             
@@ -283,35 +266,60 @@ RAW_HTML = """
             }
         });
 
-        function updateCmdDeck() {
+        function renderBuffer() {
+            const zone = document.getElementById('buffer-zone');
             const deck = document.getElementById('cmd-deck');
+            
             if (heldSpools.length > 0) {
-                deck.style.display = "flex";
+                zone.style.display = 'block';
+                deck.style.display = 'flex';
+                zone.innerHTML = heldSpools.map(s => `
+                    <div class="buffer-item">
+                        <div class="buffer-swatch" style="background-color:#${s.color}"></div>
+                        <div class="buffer-text">${s.display}</div>
+                    </div>
+                `).join('');
             } else {
-                deck.style.display = "none";
+                zone.style.display = 'none';
+                deck.style.display = 'none';
+                zone.innerHTML = '';
             }
         }
 
         function processScan(text) {
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) }).then(r => r.json()).then(res => {
                 if (res.type === 'spool') {
-                    if (!heldSpools.includes(res.id)) { 
-                        heldSpools.push(res.id); 
-                        updateCmdDeck();
+                    // Add single spool if not present
+                    if (!heldSpools.some(s => s.id === res.id)) {
+                        heldSpools.push({id: res.id, display: res.display, color: res.color});
+                        renderBuffer();
                     }
                 } else if (res.type === 'location') {
-                    if (heldSpools.length > 0) { executeMove(res.id); } 
+                    if (heldSpools.length > 0) {
+                        // We have items, execute move
+                        executeMove(res.id); 
+                    } else if (res.contents && res.contents.length > 0) {
+                        // SMART EXPAND: Buffer is empty, load location contents!
+                        res.contents.forEach(s => {
+                            if (!heldSpools.some(h => h.id === s.id)) {
+                                heldSpools.push(s);
+                            }
+                        });
+                        renderBuffer();
+                    }
                 } else if (res.type === 'command') {
                     if (res.cmd === 'undo') triggerUndo();
-                    if (res.cmd === 'clear') { heldSpools = []; updateCmdDeck(); }
+                    if (res.cmd === 'clear') { heldSpools = []; renderBuffer(); }
                 }
             });
         }
 
         function executeMove(targetLoc) {
-            fetch('/api/smart_move', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({location: targetLoc, spools: heldSpools}) }).then(r => r.json()).then(data => { 
+            // Extract just IDs for the API
+            const spoolIds = heldSpools.map(s => s.id);
+            fetch('/api/smart_move', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({location: targetLoc, spools: spoolIds}) }).then(r => r.json()).then(data => { 
                 heldSpools = []; 
-                updateCmdDeck();
+                renderBuffer();
                 fetchLogs(); 
             });
         }
@@ -331,7 +339,6 @@ RAW_HTML = """
                     </div>`;
                 const undoBtn = document.getElementById('undo-btn');
                 undoBtn.disabled = !data.undo_available;
-                updateCmdDeck();
             });
         }
         function fetchLocations() {
@@ -441,16 +448,27 @@ def update_spool(sid, data):
     try: requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=data)
     except: pass
 
-def get_spools_at_location(loc_name):
+def get_spools_at_location_detailed(loc_name):
+    # UPDATED: Returns full object list instead of just IDs
     found = []
     try:
         resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
         if resp.ok:
             for s in resp.json():
                 if s.get('location', '').upper() == loc_name.upper():
-                    found.append(s['id'])
+                    # Format standard display data
+                    info = format_spool_display(s)
+                    found.append({
+                        'id': s['id'],
+                        'display': info['text'],
+                        'color': info['color']
+                    })
     except: pass
     return found
+
+def get_spools_at_location(loc_name):
+    # Legacy wrapper for internal logic that needs IDs
+    return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
 
 def format_spool_display(spool_data):
     sid = spool_data.get('id', '?')
@@ -500,16 +518,22 @@ def identify_scan():
     res = resolve_scan(request.json.get('text', ''))
     if not res: return jsonify({"type": "unknown"})
     if res['type'] == 'location':
-        lid = res['id']; items = get_spools_at_location(lid)
+        lid = res['id']; 
+        # UPDATED: Fetch detailed contents for the UI
+        items = get_spools_at_location_detailed(lid)
+        
         if items: add_log_entry(f"🔎 {lid} contains {len(items)} item(s)")
         else: add_log_entry(f"🔎 {lid} is Empty")
-        return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}"})
+        
+        # Return contents in the JSON so the UI can load them
+        return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}", "contents": items})
+    
     if res['type'] == 'spool':
         sid = res['id']; data = get_spool(sid)
         if data:
             info = format_spool_display(data)
             add_log_entry(f"📡 Scanned: {info['text']}", "INFO", info['color'])
-            return jsonify({"type": "spool", "id": sid, "display": info['text']})
+            return jsonify({"type": "spool", "id": sid, "display": info['text'], "color": info['color']})
     if res['type'] == 'command':
         add_log_entry(f"⚠️ Command: {res['cmd'].upper()}")
         return jsonify(res)
