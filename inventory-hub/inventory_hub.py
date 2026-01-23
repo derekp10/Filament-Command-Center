@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v83.0 (Smart Clear Fix)"
+VERSION = "v84.0 (Capacity & MDB Fix)"
 
 def load_config():
     defaults = {
@@ -187,20 +187,14 @@ def update_spool(sid, data):
     except: pass
 
 def get_spools_at_location_detailed(loc_name):
-    # UPDATED: Returns full object list instead of just IDs
     found = []
     try:
         resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
         if resp.ok:
             for s in resp.json():
                 if s.get('location', '').upper() == loc_name.upper():
-                    # Format standard display data
                     info = format_spool_display(s)
-                    found.append({
-                        'id': s['id'],
-                        'display': info['text'],
-                        'color': info['color']
-                    })
+                    found.append({'id': s['id'], 'display': info['text'], 'color': info['color']})
     except: pass
     return found
 
@@ -257,10 +251,8 @@ def identify_scan():
     if res['type'] == 'location':
         lid = res['id']; 
         items = get_spools_at_location_detailed(lid)
-        
         if items: add_log_entry(f"🔎 {lid} contains {len(items)} item(s)")
         else: add_log_entry(f"🔎 {lid} is Empty")
-        
         return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}", "contents": items})
     
     if res['type'] == 'spool':
@@ -279,25 +271,41 @@ def smart_move():
     data = request.json
     target = data.get('location', '').strip().upper()
     raw_spools = data.get('spools', [])
-    cfg = load_config(); printer_map = cfg.get("printer_map", {}); dryer_slots = cfg.get("dryer_slots", [])
+    cfg = load_config(); printer_map = cfg.get("printer_map", {})
     
-    # SAFETY: Single-Slot Dryer Check
-    if target in dryer_slots:
-        occupants = get_spools_at_location(target)
-        if len(occupants) > 0 and str(occupants[0]) not in [str(x) for x in raw_spools]:
-            add_log_entry(f"❌ Aborted: {target} is full!", "ERROR")
-            return jsonify({"status": "error", "msg": "Dryer Full"})
+    # --- LOAD LOCATION RULES FROM CSV ---
+    loc_list = load_locations_list()
+    # Map ID -> Info (Type, Max Spools)
+    loc_info_map = {row['LocationID'].upper(): row for row in loc_list}
 
-    # SAFETY: Single-Slot Printer Check
-    if target in printer_map:
-        if len(raw_spools) > 1:
-            add_log_entry(f"❌ Error: {target} is single-slot!", "ERROR")
-            return jsonify({"status": "error", "msg": "Target full"})
-        occupants = get_spools_at_location(target)
-        if len(occupants) > 0 and str(occupants[0]) not in [str(x) for x in raw_spools]:
-            add_log_entry(f"❌ Aborted: {target} is occupied!", "ERROR")
-            return jsonify({"status": "error", "msg": "Target occupied"})
+    # Helper: Get Capacity
+    def get_max_capacity(lid):
+        if lid in printer_map: return 1 # Printers are always 1 unless specified
+        if lid in loc_info_map:
+            try:
+                val = loc_info_map[lid]['Max Spools']
+                if val and val.strip(): return int(val)
+            except: pass
+        return 9999 # Default to Infinite (Carts, Shelves)
 
+    # --- SAFETY: CAPACITY CHECK ---
+    max_cap = get_max_capacity(target)
+    occupants = get_spools_at_location(target)
+    
+    # Calculate simple occupancy
+    # If we are moving NEW spools in, simple addition. 
+    # (If we supported moving spools *out* of target, we'd subtract, but we don't here)
+    incoming_count = 0
+    for s in raw_spools:
+        # Don't count it if it's ALREADY there (move in place)
+        if str(s) not in [str(x) for x in occupants]:
+            incoming_count += 1
+            
+    if (len(occupants) + incoming_count) > max_cap:
+        add_log_entry(f"❌ Aborted: {target} Full! ({len(occupants)}/{max_cap})", "ERROR")
+        return jsonify({"status": "error", "msg": "Location Full"})
+
+    # --- EXECUTE MOVES ---
     spools = []
     for item in raw_spools:
         if str(item).isdigit(): spools.append(item)
@@ -312,17 +320,14 @@ def smart_move():
         spool_data = get_spool(sid)
         if not spool_data: continue
         
-        # --- FIX: SMART CLEAR (Avoid Race Condition) ---
+        # --- SMART CLEAR (Avoid Race Condition) ---
         current_loc = spool_data.get('location', '').strip().upper()
-        
         p_src = printer_map.get(current_loc)
         p_dst = printer_map.get(target)
         
         should_clear = False
         if p_src:
             should_clear = True
-            # If moving to the SAME printer and SAME position, DO NOT CLEAR
-            # This handles M0 -> M1 (which are physically the same slot)
             if p_dst and p_src['printer_name'] == p_dst['printer_name'] and p_src['position'] == p_dst['position']:
                 should_clear = False
         
@@ -341,14 +346,20 @@ def smart_move():
         current_extra = spool_data.get('extra') or {}
         info = format_spool_display(spool_data)
         
-        if target in dryer_slots:
-            new_extra = current_extra.copy(); new_extra.pop('physical_source', None)
-            update_spool(sid, {"location": target, "extra": new_extra})
-            add_log_entry(f"📦 {info['text']} -> Dryer {target}", "INFO", info['color'])
-        elif target in printer_map:
+        # --- SMART SOURCE (MDB Support) ---
+        # Check if Target is a Printer
+        if target in printer_map:
             new_extra = current_extra.copy()
-            if spool_data.get('location', '') in dryer_slots: new_extra['physical_source'] = spool_data.get('location', '')
+            
+            # Check if Source was ANY kind of Dryer (Single or Multi)
+            # We look up the Source Location in the CSV map
+            src_info = loc_info_map.get(current_loc)
+            if src_info and src_info.get('Type') == 'Dryer Box':
+                new_extra['physical_source'] = current_loc
+                
             update_spool(sid, {"location": target, "extra": new_extra})
+            
+            # FILABRIDGE CALL
             p = printer_map[target]
             try:
                 add_log_entry(f"🔌 Mapping Toolhead: {p['printer_name']} T{p['position']} -> Spool {sid}", "INFO")
@@ -360,7 +371,15 @@ def smart_move():
             except Exception as e: add_log_entry(f"❌ FilaBridge Exception: {e}", "ERROR")
             
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
+            
+        elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
+            # Moving TO a Dryer -> Clear physical source
+            new_extra = current_extra.copy(); new_extra.pop('physical_source', None)
+            update_spool(sid, {"location": target, "extra": new_extra})
+            add_log_entry(f"📦 {info['text']} -> Dryer {target}", "INFO", info['color'])
+            
         else:
+            # Regular Move
             update_spool(sid, {"location": target})
             add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
 
