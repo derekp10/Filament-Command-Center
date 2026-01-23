@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v76.1"
+VERSION = "v77.0 (Focus Guard)"
 
 def load_config():
     defaults = {
@@ -130,9 +130,33 @@ RAW_HTML = """
         .qr-wrapper { text-align: center; background: #fff; padding: 10px; border-radius: 8px; margin: 5px; }
         .qr-label { color: #000; font-weight: bold; font-size: 1.2rem; margin-top: 5px; display: block; }
         .health-text { color: #ffffff !important; font-size: 1.1rem; }
+
+        /* --- FOCUS GUARD CSS --- */
+        #focus-guard {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); z-index: 10000;
+            display: none; /* Hidden by default */
+            justify-content: center; align-items: center;
+            border: 20px solid #ff4444; 
+            text-align: center; 
+            backdrop-filter: blur(5px);
+        }
+        .guard-icon { font-size: 5rem; margin-bottom: 20px; }
+        .guard-msg { font-size: 3rem; color: #ff4444; font-weight: bold; text-shadow: 0 0 10px #000; text-transform: uppercase; }
+        .guard-sub { color: white; font-size: 1.5rem; margin-top: 20px; animation: blink 1.5s infinite; }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
     </style>
 </head>
 <body>
+    <div id="focus-guard" onclick="document.body.focus()">
+        <div>
+            <div class="guard-icon">🚫</div>
+            <div class="guard-msg">Scanner Paused</div>
+            <div class="guard-sub">Window lost focus! Click here to resume.</div>
+        </div>
+    </div>
+
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid">
             <div>
@@ -230,11 +254,23 @@ RAW_HTML = """
             new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 128, height: 128});
         };
 
+        // --- FOCUS GUARD LOGIC ---
+        window.onblur = function() {
+            document.getElementById('focus-guard').style.display = 'flex';
+        };
+        
+        window.onfocus = function() {
+            document.getElementById('focus-guard').style.display = 'none';
+        };
+
         let scanBuffer = "";
         let bufferTimeout;
         let heldSpools = []; 
 
         document.addEventListener('keydown', (e) => {
+            // Ignore input if focus guard is active (double safety)
+            if (document.getElementById('focus-guard').style.display === 'flex') return;
+
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
             if (e.ctrlKey || e.altKey || e.metaKey) return;
             
