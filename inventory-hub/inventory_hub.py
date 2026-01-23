@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v82.0 (Modular)"
+VERSION = "v83.0 (Smart Clear Fix)"
 
 def load_config():
     defaults = {
@@ -102,7 +102,6 @@ logger.info(f"🛠️ Server {VERSION} Started")
 
 @app.route('/')
 def dashboard():
-    # Renders the HTML file from the /templates folder
     return render_template('dashboard.html', version=VERSION)
 
 @app.route('/api/locations', methods=['GET'])
@@ -313,15 +312,28 @@ def smart_move():
         spool_data = get_spool(sid)
         if not spool_data: continue
         
-        # --- FIX #4: CHECK IF LEAVING A PRINTER ---
+        # --- FIX: SMART CLEAR (Avoid Race Condition) ---
         current_loc = spool_data.get('location', '').strip().upper()
-        if current_loc in printer_map:
-             p = printer_map[current_loc]
+        
+        p_src = printer_map.get(current_loc)
+        p_dst = printer_map.get(target)
+        
+        should_clear = False
+        if p_src:
+            should_clear = True
+            # If moving to the SAME printer and SAME position, DO NOT CLEAR
+            # This handles M0 -> M1 (which are physically the same slot)
+            if p_dst and p_src['printer_name'] == p_dst['printer_name'] and p_src['position'] == p_dst['position']:
+                should_clear = False
+        
+        if should_clear:
              try:
-                add_log_entry(f"🔌 Clearing Toolhead: {p['printer_name']} T{p['position']}", "WARNING")
+                add_log_entry(f"🔌 Clearing Toolhead: {p_src['printer_name']} T{p_src['position']}", "WARNING")
                 resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}, timeout=2)
-                if not resp.ok: add_log_entry(f"❌ FilaBridge Error: {resp.status_code}", "ERROR")
+                              json={"printer_name": p_src['printer_name'], "toolhead_id": p_src['position'], "spool_id": 0}, timeout=2)
+                if not resp.ok: 
+                    err_msg = resp.text if len(resp.text) < 50 else str(resp.status_code)
+                    add_log_entry(f"❌ FilaBridge Error: {err_msg}", "ERROR")
              except Exception as e: add_log_entry(f"❌ FilaBridge Exception: {e}", "ERROR")
         # -------------------------------------------
 
@@ -342,7 +354,9 @@ def smart_move():
                 add_log_entry(f"🔌 Mapping Toolhead: {p['printer_name']} T{p['position']} -> Spool {sid}", "INFO")
                 resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                                      json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=2)
-                if not resp.ok: add_log_entry(f"❌ FilaBridge Error: {resp.status_code}", "ERROR")
+                if not resp.ok: 
+                    err_msg = resp.text if len(resp.text) < 50 else str(resp.status_code)
+                    add_log_entry(f"❌ FilaBridge Error: {err_msg}", "ERROR")
             except Exception as e: add_log_entry(f"❌ FilaBridge Exception: {e}", "ERROR")
             
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
