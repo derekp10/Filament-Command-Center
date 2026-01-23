@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v79.0 (Echo & Sticky Fix)"
+VERSION = "v80.0 (Loud Toasts & FilaBridge Fix)"
 
 def load_config():
     defaults = {
@@ -148,15 +148,19 @@ RAW_HTML = """
         .guard-sub { color: white; font-size: 1.5rem; margin-top: 20px; animation: blink 1.5s infinite; }
         @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
 
-        /* TOAST NOTIFICATIONS */
-        #toast-container { position: fixed; top: 20px; right: 20px; z-index: 11000; }
-        .toast-msg {
-            background: rgba(0, 0, 0, 0.9); color: #fff; padding: 15px 20px; margin-bottom: 10px;
-            border-left: 5px solid #00d4ff; border-radius: 4px; box-shadow: 0 5px 15px rgba(0,0,0,0.5);
-            font-size: 1.2rem; min-width: 300px; transition: opacity 0.5s;
+        /* LOUD TOASTS */
+        #toast-container { 
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+            z-index: 11000; text-align: center; width: 80%; max-width: 600px;
         }
-        .toast-warning { border-left-color: #ffcc00; color: #ffcc00; }
-        .toast-error { border-left-color: #ff4444; color: #ff4444; }
+        .toast-msg {
+            background: rgba(0, 0, 0, 0.95); color: #fff; padding: 30px; margin-bottom: 20px;
+            border: 4px solid #00d4ff; border-radius: 12px; box-shadow: 0 0 30px rgba(0,0,0,0.8);
+            font-size: 2rem; font-weight: bold; transition: opacity 0.5s;
+        }
+        .toast-warning { border-color: #ffcc00; color: #ffcc00; }
+        .toast-error { border-color: #ff4444; color: #ff4444; }
+        .toast-info { border-color: #00d4ff; color: #00d4ff; }
     </style>
 </head>
 <body>
@@ -284,7 +288,7 @@ RAW_HTML = """
             el.className = `toast-msg toast-${type}`;
             el.innerText = msg;
             container.appendChild(el);
-            setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 3000);
+            setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
         }
 
         function renderBuffer() {
@@ -310,9 +314,8 @@ RAW_HTML = """
         function processScan(text) {
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) }).then(r => r.json()).then(res => {
                 if (res.type === 'spool') {
-                    // DUPLICATE CHECK
                     if (heldSpools.some(s => s.id === res.id)) {
-                        showToast("⚠️ Spool already in buffer!", "warning");
+                        showToast("⚠️ ALREADY IN BUFFER!", "warning");
                     } else {
                         heldSpools.push({id: res.id, display: res.display, color: res.color});
                         renderBuffer();
@@ -327,13 +330,13 @@ RAW_HTML = """
                             }
                         });
                         renderBuffer();
-                        showToast(`Loaded ${res.contents.length} items`, "info");
+                        showToast(`Loaded ${res.contents.length} Items`, "info");
                     } else {
-                        showToast("Location is empty", "warning");
+                        showToast("Location is Empty", "warning");
                     }
                 } else if (res.type === 'command') {
                     if (res.cmd === 'undo') triggerUndo();
-                    if (res.cmd === 'clear') { heldSpools = []; renderBuffer(); showToast("Buffer Cleared", "info"); }
+                    if (res.cmd === 'clear') { heldSpools = []; renderBuffer(); showToast("BUFFER CLEARED", "info"); }
                 }
             });
         }
@@ -344,8 +347,8 @@ RAW_HTML = """
                 heldSpools = []; 
                 renderBuffer();
                 fetchLogs(); 
-                if(data.status === 'success') showToast("Move Complete ✅", "info");
-                else showToast(data.msg || "Move Failed", "error");
+                if(data.status === 'success') showToast("✅ MOVE COMPLETE", "info");
+                else showToast(data.msg || "❌ MOVE FAILED", "error");
             });
         }
         
@@ -603,14 +606,16 @@ def smart_move():
         if not spool_data: continue
         
         # --- FIX #4: CHECK IF LEAVING A PRINTER ---
-        current_loc = spool_data.get('location', '')
+        current_loc = spool_data.get('location', '').strip().upper()
         if current_loc in printer_map:
              p = printer_map[current_loc]
              try:
                 # Clear the toolhead (spool_id=0)
-                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
-             except: pass
+                add_log_entry(f"🔌 Clearing Toolhead: {p['printer_name']} T{p['position']}", "WARNING")
+                resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}, timeout=2)
+                if not resp.ok: add_log_entry(f"❌ FilaBridge Error: {resp.status_code}", "ERROR")
+             except Exception as e: add_log_entry(f"❌ FilaBridge Exception: {e}", "ERROR")
         # -------------------------------------------
 
         undo_record['moves'][sid] = current_loc
@@ -626,8 +631,13 @@ def smart_move():
             if spool_data.get('location', '') in dryer_slots: new_extra['physical_source'] = spool_data.get('location', '')
             update_spool(sid, {"location": target, "extra": new_extra})
             p = printer_map[target]
-            try: requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)})
-            except: pass
+            try:
+                add_log_entry(f"🔌 Mapping Toolhead: {p['printer_name']} T{p['position']} -> Spool {sid}", "INFO")
+                resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                                     json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=2)
+                if not resp.ok: add_log_entry(f"❌ FilaBridge Error: {resp.status_code}", "ERROR")
+            except Exception as e: add_log_entry(f"❌ FilaBridge Exception: {e}", "ERROR")
+            
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
         else:
             update_spool(sid, {"location": target})
