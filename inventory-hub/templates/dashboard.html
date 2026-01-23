@@ -22,48 +22,61 @@
         /* MAIN GRID */
         .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
         
-        /* LEFT: LOGS */
+        /* LEFT: LOGS (Expanded) */
         .col-logs { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
-        .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; line-height: 1.6; }
+        .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.2rem; line-height: 1.6; }
         .log-INFO { color: #00ff00; } .log-WARNING { color: #ffcc00; } .log-ERROR { color: #ff4444; }
         
-        /* RIGHT: BUFFER */
+        /* RIGHT: BUFFER (Expanded) */
         .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
-        .buffer-header { padding: 10px; background: #222; border-bottom: 1px solid #333; font-weight: bold; color: #00d4ff; display: flex; justify-content: space-between; }
-        .buffer-content { flex-grow: 1; overflow-y: auto; padding: 10px; }
+        .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; font-weight: bold; color: #00d4ff; font-size: 1.2rem; display: flex; justify-content: space-between; }
+        .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
         
         .buffer-item { 
             background: #2a2a2a; border: 1px solid #444; border-radius: 8px; 
-            margin-bottom: 10px; padding: 15px; display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center;
         }
-        .buffer-info { display: flex; align-items: center; gap: 15px; }
-        .buffer-swatch { width: 40px; height: 40px; border-radius: 50%; border: 3px solid #fff; }
-        .buffer-text { font-size: 1.4rem; color: white; font-weight: bold; }
+        .buffer-info { display: flex; align-items: center; gap: 20px; }
+        .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; }
+        .buffer-text { font-size: 1.6rem; color: white; font-weight: bold; }
         .qr-box { background: white; padding: 5px; border-radius: 4px; }
 
         /* COMMAND DECK (Bottom Right) */
-        .cmd-deck { padding: 10px; border-top: 1px solid #333; background: #222; display: flex; justify-content: space-around; }
-        .cmd-item { text-align: center; color: white; font-weight: bold; font-size: 0.9rem; }
+        .cmd-deck { padding: 15px; border-top: 1px solid #333; background: #222; display: flex; justify-content: space-around; }
+        .cmd-item { text-align: center; color: white; font-weight: bold; font-size: 1rem; }
 
-        /* MODALS */
-        .modal-content { background-color: #1e1e1e; color: #f0f0f0; border: 1px solid #444; }
+        /* MODALS (High Contrast) */
+        .modal-content { background-color: #121212; color: #fff; border: 1px solid #555; }
+        .modal-header { border-bottom: 1px solid #333; }
         .form-control, .form-select { background-color: #2a2a2a; color: #fff; border: 1px solid #444; font-size: 1.1rem; }
         .form-control:focus { background-color: #333; color: #fff; border-color: #00d4ff; box-shadow: 0 0 0 0.25rem rgba(0, 212, 255, 0.25); }
-        .table { color: #d0d0d0; font-size: 1rem; }
+        .table { color: #fff; font-size: 1.1rem; }
+        .table-dark { --bs-table-bg: #181818; }
         
-        /* SCROLL HIGHLIGHT */
-        .highlight-row { animation: highlight 2s ease-out; background-color: #333; }
-        @keyframes highlight { 0% { background-color: #00d4ff; color: black; } 100% { background-color: transparent; color: inherit; } }
+        /* SCROLL HIGHLIGHT (Prominent) */
+        .highlight-row { 
+            animation: highlight 3s ease-out; 
+            border: 4px solid #fff !important;
+            background-color: #333 !important; 
+        }
+        @keyframes highlight { 
+            0% { background-color: #ffff00; color: black; border-color: #ffff00; } 
+            100% { background-color: #181818; color: white; border-color: transparent; } 
+        }
+
+        /* MANAGE LIST (Matches Buffer) */
+        .manage-item { 
+            display: flex; justify-content: space-between; align-items: center; 
+            background: #252525; padding: 15px; margin-bottom: 10px; border-radius: 6px; border: 1px solid #444;
+        }
+        .manage-qr { background: white; padding: 4px; margin-right: 15px; }
+        .manage-text { font-size: 1.3rem; font-weight: bold; color: white; }
 
         /* TOASTS & FOCUS */
-        #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; }
+        #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; width: 80%; max-width: 600px; }
         .toast-msg { background: rgba(0,0,0,0.95); color: #fff; padding: 30px; margin-bottom: 20px; border: 4px solid #00d4ff; border-radius: 12px; font-size: 2rem; font-weight: bold; }
         #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; display: none; justify-content: center; align-items: center; border: 20px solid #ff4444; text-align: center; backdrop-filter: blur(5px); }
         .guard-msg { font-size: 3rem; color: #ff4444; font-weight: bold; text-transform: uppercase; }
-        
-        /* MANAGE LIST */
-        .manage-item { display: flex; justify-content: space-between; align-items: center; background: #333; padding: 15px; margin-bottom: 10px; border-radius: 6px; }
-        .manage-qr { background: white; padding: 4px; margin-right: 15px; }
     </style>
 </head>
 <body>
@@ -91,21 +104,17 @@
 
     <div class="main-container">
         <div class="col-logs">
-            <div class="p-2 border-bottom border-secondary text-info fw-bold">Live Activity 📡</div>
+            <div class="p-3 border-bottom border-secondary text-info fw-bold" style="font-size:1.2rem;">Live Activity 📡</div>
             <div id="live-logs" class="log-box"></div>
         </div>
 
         <div class="col-buffer">
             <div class="buffer-header">
                 <span>BUFFER ZONE</span>
-                <span id="scan-status" style="font-size:0.9rem; color:#888;">Ready to Scan...</span>
+                <span id="scan-status" style="font-size:1rem; color:#888;">Ready to Scan...</span>
             </div>
             <div id="buffer-zone" class="buffer-content">
-                <div class="text-center text-muted mt-5">
-                    <h3>Buffer Empty</h3>
-                    <p>Scan a Spool or Location</p>
                 </div>
-            </div>
             <div class="cmd-deck">
                 <div class="cmd-item"><div class="qr-box" id="qr-clear"></div>CLEAR</div>
                 <div class="cmd-item"><div class="qr-box" id="qr-undo"></div>UNDO</div>
@@ -118,16 +127,40 @@
         <div class="modal-dialog modal-xl modal-dialog-scrollable">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Location Manager</h5>
-                    <div class="ms-3 text-muted" id="loc-count">0 Locations</div>
-                    <button class="btn btn-success btn-sm ms-auto me-3" onclick="openAddModal()">+ New Slot</button>
+                    <h5 class="modal-title" style="font-size:1.5rem;">Location Manager</h5>
+                    <div class="ms-3 text-muted" id="loc-count" style="font-size:1.2rem;">0 Locations</div>
+                    <button class="btn btn-success btn-lg ms-auto me-3" onclick="openAddModal()">+ New Slot</button>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body p-0">
-                    <table class="table table-hover table-dark mb-0">
+                    <table class="table table-hover table-dark mb-0" style="font-size:1.2rem;">
                         <thead><tr><th>ID</th><th>Name</th><th>Type</th><th class="text-end">Actions</th></tr></thead>
                         <tbody id="location-table"></tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="manageModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="manageTitle" style="font-size:1.5rem;">Manage Contents</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="manage-contents-list" class="mb-4"></div>
+                    <hr class="border-secondary">
+                    <label class="mb-2" style="font-size:1.2rem;">Add Spool Manually:</label>
+                    <div class="input-group mb-3">
+                        <input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID">
+                        <button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button>
+                    </div>
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Clear Buffer</button>
+                    </div>
+                    <input type="hidden" id="manage-loc-id">
                 </div>
             </div>
         </div>
@@ -153,33 +186,12 @@
         </div>
     </div>
 
-    <div class="modal fade" id="manageModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="manageTitle">Manage Contents</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <div id="manage-contents-list" class="mb-3"></div>
-                    <hr>
-                    <label>Add Spool Manually:</label>
-                    <div class="input-group">
-                        <input type="text" id="manual-spool-id" class="form-control" placeholder="Enter Spool ID">
-                        <button class="btn btn-primary" onclick="manualAddSpool()">➕ Add</button>
-                    </div>
-                    <input type="hidden" id="manage-loc-id">
-                </div>
-            </div>
-        </div>
-    </div>
-
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         window.onload = function() {
-            new QRCode(document.getElementById("qr-undo"), {text: "CMD:UNDO", width: 80, height: 80});
-            new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 80, height: 80});
-            new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 80, height: 80});
+            new QRCode(document.getElementById("qr-undo"), {text: "CMD:UNDO", width: 90, height: 90});
+            new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
+            new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
         };
         window.onblur = function() { document.getElementById('focus-guard').style.display = 'flex'; };
         window.onfocus = function() { document.getElementById('focus-guard').style.display = 'none'; };
@@ -228,8 +240,9 @@
                     </div>
                 `).join('');
                 
+                // PREFIX QR WITH "ID:" TO BYPASS LEGACY LOOKUPS
                 heldSpools.forEach((s, idx) => {
-                    new QRCode(document.getElementById(`qr-buf-${idx}`), {text: s.id.toString(), width: 100, height: 100});
+                    new QRCode(document.getElementById(`qr-buf-${idx}`), {text: "ID:" + s.id.toString(), width: 120, height: 120});
                 });
             } else {
                 zone.innerHTML = `<div class="text-center text-muted mt-5"><h3>Buffer Empty</h3><p>Scan a Spool or Location</p></div>`;
@@ -262,6 +275,7 @@
                     if (heldSpools.length > 0) {
                         executeMove(res.id); 
                     } else if (res.contents && res.contents.length > 0) {
+                        // SMART EXPAND
                         res.contents.forEach(s => {
                             if (!heldSpools.some(h => h.id === s.id)) heldSpools.push(s);
                         });
@@ -302,14 +316,15 @@
 
         function openLocationsModal() {
             locMgrModal.show();
-            // AUTO SURFACE LOGIC
+            // AUTO SURFACE LOGIC (Bright Flash)
             if(lastScannedLoc) {
                 setTimeout(() => {
                     const row = document.getElementById(`row-${lastScannedLoc}`);
                     if(row) {
                         row.scrollIntoView({behavior: "smooth", block: "center"});
                         row.classList.add('highlight-row');
-                        setTimeout(() => row.classList.remove('highlight-row'), 2000);
+                        // Remove class after animation
+                        setTimeout(() => row.classList.remove('highlight-row'), 3000);
                     }
                 }, 300);
             }
@@ -320,7 +335,7 @@
                 document.getElementById('loc-count').innerText = data.length + " Locations";
                 document.getElementById('location-table').innerHTML = data.map(l => `
                     <tr id="row-${l.LocationID}">
-                        <td><code>${l.LocationID}</code></td>
+                        <td style="font-weight:bold;color:#00d4ff;">${l.LocationID}</td>
                         <td>${l.Name}</td>
                         <td><span class="badge bg-secondary">${l.Type}</span></td>
                         <td class="text-end">
@@ -332,14 +347,21 @@
             });
         }
 
-        // --- CONTENT MANAGEMENT (UPDATED) ---
+        // --- CONTENT MANAGEMENT (UPDATED UI) ---
         function openManage(locId) {
-            locMgrModal.hide(); // Swap modals
+            locMgrModal.hide(); 
             document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
             document.getElementById('manage-loc-id').value = locId;
             document.getElementById('manual-spool-id').value = "";
             refreshManageList(locId);
             manageModal.show();
+        }
+        
+        function closeManage() {
+            manageModal.hide();
+            heldSpools = []; // Clear main buffer on exit to sync state
+            renderBuffer();
+            showToast("Buffer Cleared & Synced", "info");
         }
 
         function refreshManageList(locId) {
@@ -353,17 +375,21 @@
                         <div class="manage-item">
                             <div style="display:flex;align-items:center;">
                                 <div id="qr-man-${idx}" class="manage-qr"></div>
-                                <div style="display:flex;flex-direction:column;">
-                                    <span style="font-weight:bold;font-size:1.2rem;color:${s.color}">#${s.id}</span>
-                                    <span class="text-muted small">${s.display}</span>
+                                <div style="display:flex;align-items:center; gap:15px;">
+                                    <div class="buffer-swatch" style="background-color:#${s.color}; width:40px; height:40px;"></div>
+                                    <div style="display:flex;flex-direction:column;">
+                                        <span class="manage-text">#${s.id}</span>
+                                        <span class="text-muted">${s.display.substring(0, 30)}...</span>
+                                    </div>
                                 </div>
                             </div>
-                            <button class="btn btn-danger" onclick="ejectSpool(${s.id}, '${locId}')">⏏️ Eject</button>
+                            <button class="btn btn-danger btn-lg" onclick="ejectSpool(${s.id}, '${locId}')">⏏️ Eject</button>
                         </div>
                     `).join('');
                     
+                    // PREFIX QR HERE TOO
                     data.forEach((s, idx) => {
-                        new QRCode(document.getElementById(`qr-man-${idx}`), {text: s.id.toString(), width: 64, height: 64});
+                        new QRCode(document.getElementById(`qr-man-${idx}`), {text: "ID:" + s.id.toString(), width: 80, height: 80});
                     });
                 }
             });
@@ -372,7 +398,6 @@
         function ejectSpool(spoolId, locId) {
             if(locId !== "Scan" && !confirm("Eject spool #" + spoolId + "?")) return;
             
-            // Optimistic UI Update (for Scan)
             if(locId === "Scan") showToast("⏏️ EJECTED", "warning");
 
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'remove', location: locId, spool_id: spoolId}) })

@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v87.0 (Kiosk UI)"
+VERSION = "v88.0 (Strict IDs & UI Polish)"
 
 def load_config():
     defaults = {
@@ -277,6 +277,14 @@ def resolve_scan(text):
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
     
+    # --- STRICT ID MATCHING (Fixes "Old Code" Bug) ---
+    # If the text starts with "ID:", it is strictly an internal Spoolman ID.
+    # We strip the prefix and return it directly, skipping legacy lookup.
+    if text.upper().startswith("ID:"):
+        clean_id = text[3:].strip()
+        if clean_id.isdigit():
+            return {'type': 'spool', 'id': clean_id}
+
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
