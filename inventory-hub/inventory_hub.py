@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v85.0 (Content Manager)"
+VERSION = "v86.0 (Touch-Free & QR)"
 
 def load_config():
     defaults = {
@@ -199,13 +199,10 @@ def api_manage_contents():
     if not spool_data: return jsonify({"success": False, "msg": "Spool not found"})
     info = format_spool_display(spool_data)
 
-    # --- REMOVE / EJECT ---
     if action == 'remove':
-        # Clear Location in Spoolman
         update_spool(spool_id, {"location": ""})
         add_log_entry(f"⏏️ Ejected: {info['text']} from {loc_id}", "WARNING")
         
-        # If Printer, Clear FilaBridge
         if loc_id in printer_map:
             p = printer_map[loc_id]
             try:
@@ -216,20 +213,12 @@ def api_manage_contents():
 
         return jsonify({"success": True})
 
-    # --- ADD / ASSIGN ---
     elif action == 'add':
-        # Reuse smart_move logic by calling it internally or via request simulation
-        # But we need to handle the request object. 
-        # Easier to just construct a payload and pass to a helper, but let's do a direct call to the logic.
-        
-        # We can actually just call smart_move logic!
-        # Create a synthetic request
         with app.test_request_context(json={"location": loc_id, "spools": [spool_id]}):
              res = smart_move()
              return res
 
     return jsonify({"success": False, "msg": "Unknown Action"})
-
 
 # --- CORE LOGIC ---
 def get_spool(sid):
@@ -286,6 +275,8 @@ def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
     if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
+    if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} # NEW COMMAND
+    
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
@@ -305,10 +296,8 @@ def identify_scan():
     if res['type'] == 'location':
         lid = res['id']; 
         items = get_spools_at_location_detailed(lid)
-        
         if items: add_log_entry(f"🔎 {lid} contains {len(items)} item(s)")
         else: add_log_entry(f"🔎 {lid} is Empty")
-        
         return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}", "contents": items})
     
     if res['type'] == 'spool':
@@ -331,27 +320,23 @@ def smart_move():
     
     # --- LOAD LOCATION RULES FROM CSV ---
     loc_list = load_locations_list()
-    # Map ID -> Info (Type, Max Spools)
     loc_info_map = {row['LocationID'].upper(): row for row in loc_list}
 
-    # Helper: Get Capacity
     def get_max_capacity(lid):
-        if lid in printer_map: return 1 # Printers are always 1 unless specified
+        if lid in printer_map: return 1
         if lid in loc_info_map:
             try:
                 val = loc_info_map[lid]['Max Spools']
                 if val and val.strip(): return int(val)
             except: pass
-        return 9999 # Default to Infinite (Carts, Shelves)
+        return 9999
 
     # --- SAFETY: CAPACITY CHECK ---
     max_cap = get_max_capacity(target)
     occupants = get_spools_at_location(target)
-    
     incoming_count = 0
     for s in raw_spools:
-        if str(s) not in [str(x) for x in occupants]:
-            incoming_count += 1
+        if str(s) not in [str(x) for x in occupants]: incoming_count += 1
             
     if (len(occupants) + incoming_count) > max_cap:
         add_log_entry(f"❌ Aborted: {target} Full! ({len(occupants)}/{max_cap})", "ERROR")
@@ -371,11 +356,11 @@ def smart_move():
         spool_data = get_spool(sid)
         if not spool_data: continue
         
-        # --- SMART CLEAR (Avoid Race Condition) ---
         current_loc = spool_data.get('location', '').strip().upper()
         p_src = printer_map.get(current_loc)
         p_dst = printer_map.get(target)
         
+        # Smart Clear
         should_clear = False
         if p_src:
             should_clear = True
@@ -385,19 +370,15 @@ def smart_move():
         if should_clear:
              try:
                 add_log_entry(f"🔌 Clearing Toolhead: {p_src['printer_name']} T{p_src['position']}", "WARNING")
-                resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                               json={"printer_name": p_src['printer_name'], "toolhead_id": p_src['position'], "spool_id": 0}, timeout=2)
-                if not resp.ok: 
-                    err_msg = resp.text if len(resp.text) < 50 else str(resp.status_code)
-                    add_log_entry(f"❌ FilaBridge Error: {err_msg}", "ERROR")
-             except Exception as e: add_log_entry(f"❌ FilaBridge Exception: {e}", "ERROR")
-        # -------------------------------------------
+             except Exception as e: add_log_entry(f"❌ FilaBridge: {e}", "ERROR")
 
         undo_record['moves'][sid] = current_loc
         current_extra = spool_data.get('extra') or {}
         info = format_spool_display(spool_data)
         
-        # --- SMART SOURCE (MDB Support) ---
+        # MDB Support
         if target in printer_map:
             new_extra = current_extra.copy()
             src_info = loc_info_map.get(current_loc)
@@ -409,13 +390,9 @@ def smart_move():
             p = printer_map[target]
             try:
                 add_log_entry(f"🔌 Mapping Toolhead: {p['printer_name']} T{p['position']} -> Spool {sid}", "INFO")
-                resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                                     json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=2)
-                if not resp.ok: 
-                    err_msg = resp.text if len(resp.text) < 50 else str(resp.status_code)
-                    add_log_entry(f"❌ FilaBridge Error: {err_msg}", "ERROR")
-            except Exception as e: add_log_entry(f"❌ FilaBridge Exception: {e}", "ERROR")
-            
+                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=2)
+            except Exception as e: add_log_entry(f"❌ FilaBridge: {e}", "ERROR")
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
