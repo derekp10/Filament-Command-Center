@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v86.0 (Touch-Free & QR)"
+VERSION = "v87.0 (Kiosk UI)"
 
 def load_config():
     defaults = {
@@ -275,7 +275,7 @@ def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
     if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
-    if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} # NEW COMMAND
+    if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
     
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)

@@ -7,152 +7,131 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
-        body { background-color: #0e0e0e; color: #f0f0f0; font-family: 'Segoe UI', monospace; }
-        .navbar { background-color: #1a1a1a; border-bottom: 2px solid #00d4ff; }
-        .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.8rem; }
-        .version-tag { color: #888; font-size: 1.2rem; margin-left: 15px; font-weight: bold; }
+        body { background-color: #0e0e0e; color: #f0f0f0; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
         
-        .status-card { background-color: #1a1a1a !important; border: 1px solid #444 !important; box-shadow: 0 4px 15px rgba(0,0,0,0.6); }
-        .status-header { background-color: #222 !important; color: #00d4ff !important; border-bottom: 1px solid #333 !important; }
+        /* NAVBAR */
+        .navbar { background-color: #1a1a1a; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
+        .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; }
+        .version-tag { color: #888; font-size: 1rem; margin-left: 10px; font-weight: bold; }
         
-        .card { background-color: #181818; border: 1px solid #333; margin-bottom: 20px; }
-        .card-header { background-color: #222; color: #00d4ff; font-weight: bold; border-bottom: 1px solid #333; font-size: 1.3rem; }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .status-on { background-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
+        .status-off { background-color: #ff4444; box-shadow: 0 0 5px #ff4444; }
+        .status-group { margin-right: 20px; font-size: 0.9rem; color: #ccc; display: flex; align-items: center; }
+
+        /* MAIN GRID */
+        .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
         
-        .btn-success { background-color: #00d4ff; color: #000; font-weight: bold; border: none; }
-        .table { color: #d0d0d0; font-size: 1.1rem; }
-        
-        .log-box { height: 400px; overflow-y: auto; background: #000; border: 1px solid #444; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.2rem; line-height: 1.8; }
+        /* LEFT: LOGS */
+        .col-logs { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
+        .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; line-height: 1.6; }
         .log-INFO { color: #00ff00; } .log-WARNING { color: #ffcc00; } .log-ERROR { color: #ff4444; }
         
-        .stat-num { font-size: 4rem; font-weight: bold; color: #00d4ff; line-height: 1; }
+        /* RIGHT: BUFFER */
+        .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
+        .buffer-header { padding: 10px; background: #222; border-bottom: 1px solid #333; font-weight: bold; color: #00d4ff; display: flex; justify-content: space-between; }
+        .buffer-content { flex-grow: 1; overflow-y: auto; padding: 10px; }
         
+        .buffer-item { 
+            background: #2a2a2a; border: 1px solid #444; border-radius: 8px; 
+            margin-bottom: 10px; padding: 15px; display: flex; justify-content: space-between; align-items: center;
+        }
+        .buffer-info { display: flex; align-items: center; gap: 15px; }
+        .buffer-swatch { width: 40px; height: 40px; border-radius: 50%; border: 3px solid #fff; }
+        .buffer-text { font-size: 1.4rem; color: white; font-weight: bold; }
+        .qr-box { background: white; padding: 5px; border-radius: 4px; }
+
+        /* COMMAND DECK (Bottom Right) */
+        .cmd-deck { padding: 10px; border-top: 1px solid #333; background: #222; display: flex; justify-content: space-around; }
+        .cmd-item { text-align: center; color: white; font-weight: bold; font-size: 0.9rem; }
+
+        /* MODALS */
         .modal-content { background-color: #1e1e1e; color: #f0f0f0; border: 1px solid #444; }
         .form-control, .form-select { background-color: #2a2a2a; color: #fff; border: 1px solid #444; font-size: 1.1rem; }
         .form-control:focus { background-color: #333; color: #fff; border-color: #00d4ff; box-shadow: 0 0 0 0.25rem rgba(0, 212, 255, 0.25); }
-        label { color: #00d4ff; font-weight: 600; margin-bottom: 5px; font-size: 1rem; }
+        .table { color: #d0d0d0; font-size: 1rem; }
         
-        .alert-protocol { background-color: #553300; color: #ffd700; border: 1px solid #ffd700; font-weight: bold; }
-        code { color: #00d4ff; background: #222; padding: 2px 5px; border-radius: 3px; font-size: 1.1rem; }
-        
-        #scan-buffer { position: fixed; bottom: 10px; right: 10px; background: #333; color: #fff; padding: 10px; opacity: 0.9; font-size: 1.2rem; border: 1px solid #555; border-radius: 4px; }
-        
-        /* Command Deck Styles */
-        .cmd-deck { display: flex; justify-content: space-around; background: #111; padding: 10px; border-top: 1px solid #333; }
-        .qr-wrapper { text-align: center; background: #fff; padding: 5px; border-radius: 4px; margin: 2px; }
-        .qr-label { color: #000; font-weight: bold; font-size: 0.9rem; margin-top: 2px; display: block; }
-        .health-text { color: #ffffff !important; font-size: 1.1rem; }
-        
-        /* BUFFER STYLES */
-        #buffer-zone { border-bottom: 1px solid #444; background: #000; }
-        .buffer-item { padding: 5px 10px; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; }
-        .buffer-swatch { width: 20px; height: 20px; border-radius: 50%; margin-right: 10px; border: 2px solid #fff; }
-        .buffer-text { color: #fff; font-size: 1.1rem; }
-        
-        /* CONTENT ITEM STYLE */
-        .content-item {
-            display: flex; justify-content: space-between; align-items: center;
-            background: #333; padding: 10px; margin-bottom: 5px; border-radius: 4px;
-        }
+        /* SCROLL HIGHLIGHT */
+        .highlight-row { animation: highlight 2s ease-out; background-color: #333; }
+        @keyframes highlight { 0% { background-color: #00d4ff; color: black; } 100% { background-color: transparent; color: inherit; } }
 
-        /* FOCUS GUARD */
-        #focus-guard {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.85); z-index: 10000;
-            display: none; justify-content: center; align-items: center;
-            border: 20px solid #ff4444; text-align: center; backdrop-filter: blur(5px);
-        }
-        .guard-icon { font-size: 5rem; margin-bottom: 20px; }
-        .guard-msg { font-size: 3rem; color: #ff4444; font-weight: bold; text-shadow: 0 0 10px #000; text-transform: uppercase; }
-        .guard-sub { color: white; font-size: 1.5rem; margin-top: 20px; animation: blink 1.5s infinite; }
-        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-
-        /* LOUD TOASTS */
-        #toast-container { 
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-            z-index: 11000; text-align: center; width: 80%; max-width: 600px;
-        }
-        .toast-msg {
-            background: rgba(0, 0, 0, 0.95); color: #fff; padding: 30px; margin-bottom: 20px;
-            border: 4px solid #00d4ff; border-radius: 12px; box-shadow: 0 0 30px rgba(0,0,0,0.8);
-            font-size: 2rem; font-weight: bold; transition: opacity 0.5s;
-        }
-        .toast-warning { border-color: #ffcc00; color: #ffcc00; }
-        .toast-error { border-color: #ff4444; color: #ff4444; }
-        .toast-info { border-color: #00d4ff; color: #00d4ff; }
+        /* TOASTS & FOCUS */
+        #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; }
+        .toast-msg { background: rgba(0,0,0,0.95); color: #fff; padding: 30px; margin-bottom: 20px; border: 4px solid #00d4ff; border-radius: 12px; font-size: 2rem; font-weight: bold; }
+        #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; display: none; justify-content: center; align-items: center; border: 20px solid #ff4444; text-align: center; backdrop-filter: blur(5px); }
+        .guard-msg { font-size: 3rem; color: #ff4444; font-weight: bold; text-transform: uppercase; }
+        
+        /* MANAGE LIST */
+        .manage-item { display: flex; justify-content: space-between; align-items: center; background: #333; padding: 15px; margin-bottom: 10px; border-radius: 6px; }
+        .manage-qr { background: white; padding: 4px; margin-right: 15px; }
     </style>
 </head>
 <body>
     <div id="focus-guard" onclick="document.body.focus()">
-        <div>
-            <div class="guard-icon">🚫</div>
-            <div class="guard-msg">Scanner Paused</div>
-            <div class="guard-sub">Window lost focus! Click here to resume.</div>
-        </div>
+        <div><div style="font-size:5rem;">🚫</div><div class="guard-msg">Scanner Paused</div><div style="color:white;font-size:1.5rem;">Tap to Resume</div></div>
     </div>
 
     <div id="toast-container"></div>
 
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid">
-            <div><span class="navbar-brand">Filament Command Center</span><span class="version-tag">{{ version }}</span></div>
             <div class="d-flex align-items-center">
-                 <button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button>
-                 <a href="/api/export_locations" class="btn btn-outline-info btn-sm">💾 Export CSV</a>
+                <span class="navbar-brand">Filament Command Center</span>
+                <span class="version-tag">{{ version }}</span>
+            </div>
+            <div class="d-flex align-items-center">
+                <div class="status-group"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
+                <div class="status-group"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
+                <button class="btn btn-outline-info btn-sm me-3" onclick="openLocationsModal()">📂 Locations</button>
+                <button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button>
+                <a href="/api/export_locations" class="btn btn-secondary btn-sm">💾 Export</a>
             </div>
         </div>
     </nav>
 
-    <div class="container-fluid mt-4">
-        <div class="row">
-            <div class="col-md-3">
-                <div class="card status-card">
-                    <div class="card-header status-header">System Health</div>
-                    <div class="card-body">
-                        <div id="status-display" class="health-text">Checking...</div>
-                        <hr style="border-color: #444; margin: 20px 0;">
-                        <div class="text-center">
-                            <div class="stat-num" id="loc-count">0</div>
-                            <div style="color: #fff; font-size: 1.2rem;">Locations</div>
-                        </div>
-                    </div>
+    <div class="main-container">
+        <div class="col-logs">
+            <div class="p-2 border-bottom border-secondary text-info fw-bold">Live Activity 📡</div>
+            <div id="live-logs" class="log-box"></div>
+        </div>
+
+        <div class="col-buffer">
+            <div class="buffer-header">
+                <span>BUFFER ZONE</span>
+                <span id="scan-status" style="font-size:0.9rem; color:#888;">Ready to Scan...</span>
+            </div>
+            <div id="buffer-zone" class="buffer-content">
+                <div class="text-center text-muted mt-5">
+                    <h3>Buffer Empty</h3>
+                    <p>Scan a Spool or Location</p>
                 </div>
             </div>
-
-            <div class="col-md-5">
-                <div class="card">
-                    <div class="card-header">Live Activity 📡</div>
-                    <div class="card-body p-0">
-                        <div id="buffer-zone" style="display:none;"></div>
-                        <div id="live-logs" class="log-box"></div>
-                        <div id="cmd-deck" class="cmd-deck" style="display:none;">
-                            <div class="qr-wrapper"><div id="qr-clear"></div><span class="qr-label">CLEAR</span></div>
-                            <div class="qr-wrapper"><div id="qr-undo"></div><span class="qr-label">UNDO</span></div>
-                            <div class="qr-wrapper"><div id="qr-eject"></div><span class="qr-label">EJECT</span></div>
-                        </div>
-                    </div>
-                </div>
+            <div class="cmd-deck">
+                <div class="cmd-item"><div class="qr-box" id="qr-clear"></div>CLEAR</div>
+                <div class="cmd-item"><div class="qr-box" id="qr-undo"></div>UNDO</div>
+                <div class="cmd-item"><div class="qr-box" id="qr-eject"></div>EJECT</div>
             </div>
+        </div>
+    </div>
 
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <span>Location Manager</span>
-                        <button class="btn btn-success btn-sm" onclick="openAddModal()">+ Add New Slot</button>
-                    </div>
-                    <div class="card-body">
-                        <div style="max-height: 500px; overflow-y: auto;">
-                            <table class="table table-hover">
-                                <thead class="table-dark"><tr><th>ID</th><th>Name</th><th>Type</th><th class="text-end">Actions</th></tr></thead>
-                                <tbody id="location-table"></tbody>
-                            </table>
-                        </div>
-                    </div>
+    <div class="modal fade" id="locMgrModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Location Manager</h5>
+                    <div class="ms-3 text-muted" id="loc-count">0 Locations</div>
+                    <button class="btn btn-success btn-sm ms-auto me-3" onclick="openAddModal()">+ New Slot</button>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <table class="table table-hover table-dark mb-0">
+                        <thead><tr><th>ID</th><th>Name</th><th>Type</th><th class="text-end">Actions</th></tr></thead>
+                        <tbody id="location-table"></tbody>
+                    </table>
                 </div>
             </div>
         </div>
     </div>
-    
-    <div id="scan-buffer">Ready</div>
 
     <div class="modal fade" id="locModal" tabindex="-1">
         <div class="modal-dialog">
@@ -198,9 +177,9 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         window.onload = function() {
-            new QRCode(document.getElementById("qr-undo"), {text: "CMD:UNDO", width: 64, height: 64});
-            new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 64, height: 64});
-            new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 64, height: 64});
+            new QRCode(document.getElementById("qr-undo"), {text: "CMD:UNDO", width: 80, height: 80});
+            new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 80, height: 80});
+            new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 80, height: 80});
         };
         window.onblur = function() { document.getElementById('focus-guard').style.display = 'flex'; };
         window.onfocus = function() { document.getElementById('focus-guard').style.display = 'none'; };
@@ -209,6 +188,7 @@
         let bufferTimeout;
         let heldSpools = []; 
         let ejectMode = false;
+        let lastScannedLoc = null;
 
         document.addEventListener('keydown', (e) => {
             if (document.getElementById('focus-guard').style.display === 'flex') return;
@@ -218,16 +198,18 @@
             if (e.key === 'Enter') { processScan(scanBuffer); scanBuffer = ""; } 
             else if (e.key.length === 1) { 
                 scanBuffer += e.key; 
-                document.getElementById('scan-buffer').innerText = "Scanning: " + scanBuffer; 
+                document.getElementById('scan-status').innerText = "Scanning: " + scanBuffer; 
                 clearTimeout(bufferTimeout); 
-                bufferTimeout = setTimeout(() => { scanBuffer = ""; document.getElementById('scan-buffer').innerText = "Ready"; }, 2000); 
+                bufferTimeout = setTimeout(() => { scanBuffer = ""; document.getElementById('scan-status').innerText = "Ready"; }, 2000); 
             }
         });
 
         function showToast(msg, type = 'info') {
             const container = document.getElementById('toast-container');
             const el = document.createElement('div');
-            el.className = `toast-msg toast-${type}`;
+            el.className = `toast-msg`;
+            el.style.borderColor = type === 'error' ? '#ff4444' : (type === 'warning' ? '#ffcc00' : '#00d4ff');
+            el.style.color = type === 'error' ? '#ff4444' : (type === 'warning' ? '#ffcc00' : '#ffffff');
             el.innerText = msg;
             container.appendChild(el);
             setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
@@ -235,30 +217,22 @@
 
         function renderBuffer() {
             const zone = document.getElementById('buffer-zone');
-            const deck = document.getElementById('cmd-deck');
-            
             if (heldSpools.length > 0) {
-                zone.style.display = 'block';
-                deck.style.display = 'flex';
                 zone.innerHTML = heldSpools.map((s, idx) => `
                     <div class="buffer-item">
-                        <div style="display:flex;align-items:center;">
+                        <div class="buffer-info">
                             <div class="buffer-swatch" style="background-color:#${s.color}"></div>
                             <div class="buffer-text">${s.display}</div>
                         </div>
-                        <div id="qr-buf-${idx}" style="background:white;padding:2px;"></div>
+                        <div id="qr-buf-${idx}" class="qr-box"></div>
                     </div>
                 `).join('');
                 
-                // Gen QRs
                 heldSpools.forEach((s, idx) => {
-                    new QRCode(document.getElementById(`qr-buf-${idx}`), {text: s.id.toString(), width: 48, height: 48});
+                    new QRCode(document.getElementById(`qr-buf-${idx}`), {text: s.id.toString(), width: 100, height: 100});
                 });
-
             } else {
-                zone.style.display = 'none';
-                deck.style.display = 'none';
-                zone.innerHTML = '';
+                zone.innerHTML = `<div class="text-center text-muted mt-5"><h3>Buffer Empty</h3><p>Scan a Spool or Location</p></div>`;
             }
         }
 
@@ -266,36 +240,30 @@
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) }).then(r => r.json()).then(res => {
                 
                 if (ejectMode) {
-                    // HANDLE EJECT ACTION
-                    ejectMode = false; // Reset mode
-                    document.getElementById('scan-buffer').style.backgroundColor = "#333";
-                    
+                    ejectMode = false;
+                    document.getElementById('buffer-zone').style.border = "none";
                     if (res.type === 'spool') {
                         ejectSpool(res.id, "Scan");
-                    } else if (res.type === 'location') {
-                        // Empty the location if user scans location in eject mode?
-                        // For safety, let's just clear buffer or do nothing.
-                        // Ideally: Clear FilaBridge for toolhead.
-                        executeEjectLocation(res.id);
+                    } else {
+                        showToast("Scan a SPOOL to eject it!", "warning");
                     }
                     return;
                 }
 
                 if (res.type === 'spool') {
                     if (heldSpools.some(s => s.id === res.id)) {
-                        showToast("⚠️ ALREADY IN BUFFER!", "warning");
+                        showToast("⚠️ ALREADY IN BUFFER", "warning");
                     } else {
                         heldSpools.push({id: res.id, display: res.display, color: res.color});
                         renderBuffer();
                     }
                 } else if (res.type === 'location') {
+                    lastScannedLoc = res.id;
                     if (heldSpools.length > 0) {
                         executeMove(res.id); 
                     } else if (res.contents && res.contents.length > 0) {
                         res.contents.forEach(s => {
-                            if (!heldSpools.some(h => h.id === s.id)) {
-                                heldSpools.push(s);
-                            }
+                            if (!heldSpools.some(h => h.id === s.id)) heldSpools.push(s);
                         });
                         renderBuffer();
                         showToast(`Loaded ${res.contents.length} Items`, "info");
@@ -308,7 +276,7 @@
                     if (res.cmd === 'eject') { 
                         ejectMode = true; 
                         showToast("⚠️ SCAN ITEM TO EJECT", "warning"); 
-                        document.getElementById('scan-buffer').style.backgroundColor = "#ff4444";
+                        document.getElementById('buffer-zone').style.border = "4px solid #ff4444";
                     }
                 }
             });
@@ -324,39 +292,34 @@
                 else showToast(data.msg || "❌ MOVE FAILED", "error");
             });
         }
-        
-        function executeEjectLocation(locId) {
-             // Hack: use manage_contents endpoint
-             // We need to know WHAT to eject. If scanning location, maybe we just clear toolhead?
-             // For now, let's just say "Scan the spool, not the location".
-             showToast("Please scan the SPOOL to eject.", "warning");
-        }
 
         function triggerUndo() { fetch('/api/undo', { method: 'POST' }).then(() => fetchLogs()); }
 
-        let allLocations = []; 
+        // --- MANAGERS ---
+        const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
         const locModal = new bootstrap.Modal(document.getElementById('locModal'));
         const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
 
-        function fetchLogs() {
-            fetch('/api/logs').then(r => r.json()).then(data => {
-                document.getElementById('live-logs').innerHTML = data.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
-                document.getElementById('status-display').innerHTML = `
-                    <div class="status-row" style="display:flex; justify-content:space-between; margin-bottom:10px;">
-                        <span>Spoolman</span><span class="badge ${data.status.spoolman ? 'bg-success' : 'bg-danger'}">${data.status.spoolman?'ON':'OFF'}</span>
-                    </div>
-                    <div class="status-row" style="display:flex; justify-content:space-between;">
-                        <span>FilaBridge</span><span class="badge ${data.status.filabridge ? 'bg-success' : 'bg-danger'}">${data.status.filabridge?'ON':'OFF'}</span>
-                    </div>`;
-                const undoBtn = document.getElementById('undo-btn');
-                undoBtn.disabled = !data.undo_available;
-            });
+        function openLocationsModal() {
+            locMgrModal.show();
+            // AUTO SURFACE LOGIC
+            if(lastScannedLoc) {
+                setTimeout(() => {
+                    const row = document.getElementById(`row-${lastScannedLoc}`);
+                    if(row) {
+                        row.scrollIntoView({behavior: "smooth", block: "center"});
+                        row.classList.add('highlight-row');
+                        setTimeout(() => row.classList.remove('highlight-row'), 2000);
+                    }
+                }, 300);
+            }
         }
+
         function fetchLocations() {
             fetch('/api/locations').then(r => r.json()).then(data => {
-                allLocations = data; document.getElementById('loc-count').innerText = data.length;
+                document.getElementById('loc-count').innerText = data.length + " Locations";
                 document.getElementById('location-table').innerHTML = data.map(l => `
-                    <tr>
+                    <tr id="row-${l.LocationID}">
                         <td><code>${l.LocationID}</code></td>
                         <td>${l.Name}</td>
                         <td><span class="badge bg-secondary">${l.Type}</span></td>
@@ -368,16 +331,10 @@
                     </tr>`).join('');
             });
         }
-        function openAddModal() { document.getElementById('modalTitle').innerText = "Add New Location"; document.getElementById('edit-original-id').value = ""; locModal.show(); }
-        function openEdit(id) { const l = allLocations.find(x => x.LocationID === id); if(!l)return; document.getElementById('modalTitle').innerText="Edit Location"; document.getElementById('edit-id').value=l.LocationID; document.getElementById('edit-name').value=l.Name; document.getElementById('edit-type').value=l.Type; document.getElementById('edit-original-id').value=l.LocationID; locModal.show(); }
-        function saveLocation() { 
-            const payload = { old_id: document.getElementById('edit-original-id').value, new_data: { LocationID: document.getElementById('edit-id').value, Name: document.getElementById('edit-name').value, Type: document.getElementById('edit-type').value, Location: "", "Device Identifier": "", "Device Type": "", Order: "", Row: "", "Max Spools": "1", "Label Printed": "No" } };
-            fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) }).then(() => { locModal.hide(); fetchLocations(); });
-        }
-        function deleteLoc(id) { if(confirm("Delete " + id + "?")) fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => fetchLocations()); }
 
-        // --- MANAGE CONTENTS ---
+        // --- CONTENT MANAGEMENT (UPDATED) ---
         function openManage(locId) {
+            locMgrModal.hide(); // Swap modals
             document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
             document.getElementById('manage-loc-id').value = locId;
             document.getElementById('manual-spool-id').value = "";
@@ -386,42 +343,42 @@
         }
 
         function refreshManageList(locId) {
+            document.getElementById('manage-contents-list').innerHTML = "<div class='text-center'>Loading...</div>";
             fetch(`/api/get_contents?id=${locId}`).then(r => r.json()).then(data => {
                 const list = document.getElementById('manage-contents-list');
                 if (data.length === 0) {
                     list.innerHTML = "<div class='text-center text-muted'>Empty</div>";
                 } else {
                     list.innerHTML = data.map((s, idx) => `
-                        <div class="content-item">
+                        <div class="manage-item">
                             <div style="display:flex;align-items:center;">
-                                <div class="buffer-swatch" style="background-color:#${s.color}"></div>
-                                <span>${s.display}</span>
+                                <div id="qr-man-${idx}" class="manage-qr"></div>
+                                <div style="display:flex;flex-direction:column;">
+                                    <span style="font-weight:bold;font-size:1.2rem;color:${s.color}">#${s.id}</span>
+                                    <span class="text-muted small">${s.display}</span>
+                                </div>
                             </div>
-                            <div id="qr-manage-${idx}" style="background:white;padding:2px;margin-right:10px;"></div>
-                            <button class="btn btn-sm btn-danger" onclick="ejectSpool(${s.id}, '${locId}')">⏏️</button>
+                            <button class="btn btn-danger" onclick="ejectSpool(${s.id}, '${locId}')">⏏️ Eject</button>
                         </div>
                     `).join('');
                     
-                     data.forEach((s, idx) => {
-                        new QRCode(document.getElementById(`qr-manage-${idx}`), {text: s.id.toString(), width: 48, height: 48});
+                    data.forEach((s, idx) => {
+                        new QRCode(document.getElementById(`qr-man-${idx}`), {text: s.id.toString(), width: 64, height: 64});
                     });
                 }
             });
         }
 
         function ejectSpool(spoolId, locId) {
-            // IF called from UI, we confirm. If called from SCAN, we assume intent.
             if(locId !== "Scan" && !confirm("Eject spool #" + spoolId + "?")) return;
             
-            // If locId is "Scan", we need to find where it is currently.
-            // But API manage_contents requires a location OR we can make it smart.
-            // Actually, if we just want to clear location, we don't need the location ID.
-            
+            // Optimistic UI Update (for Scan)
+            if(locId === "Scan") showToast("⏏️ EJECTED", "warning");
+
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'remove', location: locId, spool_id: spoolId}) })
             .then(r => r.json()).then((res) => { 
                 if(locId !== "Scan") refreshManageList(locId); 
                 fetchLogs(); 
-                if(locId === "Scan") showToast("⏏️ EJECTED", "warning");
             });
         }
 
@@ -434,6 +391,26 @@
                 if(res.status === 'error') alert(res.msg);
                 refreshManageList(locId); fetchLogs(); 
                 document.getElementById('manual-spool-id').value = "";
+            });
+        }
+
+        // --- HELPERS ---
+        function openAddModal() { locMgrModal.hide(); document.getElementById('modalTitle').innerText = "Add New Location"; document.getElementById('edit-original-id').value = ""; locModal.show(); }
+        function openEdit(id) { locMgrModal.hide(); const l = allLocations.find(x => x.LocationID === id); if(!l)return; document.getElementById('modalTitle').innerText="Edit Location"; document.getElementById('edit-id').value=l.LocationID; document.getElementById('edit-name').value=l.Name; document.getElementById('edit-type').value=l.Type; document.getElementById('edit-original-id').value=l.LocationID; locModal.show(); }
+        function saveLocation() { 
+            const payload = { old_id: document.getElementById('edit-original-id').value, new_data: { LocationID: document.getElementById('edit-id').value, Name: document.getElementById('edit-name').value, Type: document.getElementById('edit-type').value, Location: "", "Device Identifier": "", "Device Type": "", Order: "", Row: "", "Max Spools": "1", "Label Printed": "No" } };
+            fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) }).then(() => { locModal.hide(); fetchLocations(); locMgrModal.show(); });
+        }
+        function deleteLoc(id) { if(confirm("Delete " + id + "?")) fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => fetchLocations()); }
+
+        function fetchLogs() {
+            fetch('/api/logs').then(r => r.json()).then(data => {
+                document.getElementById('live-logs').innerHTML = data.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
+                document.getElementById('undo-btn').disabled = !data.undo_available;
+                
+                // Navbar Status Dots
+                document.getElementById('st-spoolman').className = `status-dot ${data.status.spoolman ? 'status-on' : 'status-off'}`;
+                document.getElementById('st-filabridge').className = `status-dot ${data.status.filabridge ? 'status-on' : 'status-off'}`;
             });
         }
 
