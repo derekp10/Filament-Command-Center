@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v84.0 (Capacity & MDB Fix)"
+VERSION = "v85.0 (Content Manager)"
 
 def load_config():
     defaults = {
@@ -177,6 +177,60 @@ def undo_last_move():
     add_log_entry(f"↩️ Undid: {last['summary']}", "WARNING")
     return jsonify({"success": True})
 
+# --- NEW MANAGEMENT ENDPOINTS ---
+@app.route('/api/get_contents', methods=['GET'])
+def api_get_contents():
+    loc = request.args.get('id', '').strip().upper()
+    return jsonify(get_spools_at_location_detailed(loc))
+
+@app.route('/api/manage_contents', methods=['POST'])
+def api_manage_contents():
+    data = request.json
+    action = data.get('action') # 'add' or 'remove'
+    loc_id = data.get('location', '').strip().upper()
+    spool_id = data.get('spool_id')
+    
+    cfg = load_config()
+    printer_map = cfg.get("printer_map", {})
+
+    if not loc_id or not spool_id: return jsonify({"success": False, "msg": "Missing Data"})
+    
+    spool_data = get_spool(spool_id)
+    if not spool_data: return jsonify({"success": False, "msg": "Spool not found"})
+    info = format_spool_display(spool_data)
+
+    # --- REMOVE / EJECT ---
+    if action == 'remove':
+        # Clear Location in Spoolman
+        update_spool(spool_id, {"location": ""})
+        add_log_entry(f"⏏️ Ejected: {info['text']} from {loc_id}", "WARNING")
+        
+        # If Printer, Clear FilaBridge
+        if loc_id in printer_map:
+            p = printer_map[loc_id]
+            try:
+                add_log_entry(f"🔌 Clearing Toolhead: {p['printer_name']} T{p['position']}", "WARNING")
+                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}, timeout=2)
+            except Exception as e: add_log_entry(f"❌ FilaBridge: {e}", "ERROR")
+
+        return jsonify({"success": True})
+
+    # --- ADD / ASSIGN ---
+    elif action == 'add':
+        # Reuse smart_move logic by calling it internally or via request simulation
+        # But we need to handle the request object. 
+        # Easier to just construct a payload and pass to a helper, but let's do a direct call to the logic.
+        
+        # We can actually just call smart_move logic!
+        # Create a synthetic request
+        with app.test_request_context(json={"location": loc_id, "spools": [spool_id]}):
+             res = smart_move()
+             return res
+
+    return jsonify({"success": False, "msg": "Unknown Action"})
+
+
 # --- CORE LOGIC ---
 def get_spool(sid):
     try: return requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", timeout=3).json()
@@ -251,8 +305,10 @@ def identify_scan():
     if res['type'] == 'location':
         lid = res['id']; 
         items = get_spools_at_location_detailed(lid)
+        
         if items: add_log_entry(f"🔎 {lid} contains {len(items)} item(s)")
         else: add_log_entry(f"🔎 {lid} is Empty")
+        
         return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}", "contents": items})
     
     if res['type'] == 'spool':
@@ -292,12 +348,8 @@ def smart_move():
     max_cap = get_max_capacity(target)
     occupants = get_spools_at_location(target)
     
-    # Calculate simple occupancy
-    # If we are moving NEW spools in, simple addition. 
-    # (If we supported moving spools *out* of target, we'd subtract, but we don't here)
     incoming_count = 0
     for s in raw_spools:
-        # Don't count it if it's ALREADY there (move in place)
         if str(s) not in [str(x) for x in occupants]:
             incoming_count += 1
             
@@ -305,7 +357,6 @@ def smart_move():
         add_log_entry(f"❌ Aborted: {target} Full! ({len(occupants)}/{max_cap})", "ERROR")
         return jsonify({"status": "error", "msg": "Location Full"})
 
-    # --- EXECUTE MOVES ---
     spools = []
     for item in raw_spools:
         if str(item).isdigit(): spools.append(item)
@@ -347,19 +398,14 @@ def smart_move():
         info = format_spool_display(spool_data)
         
         # --- SMART SOURCE (MDB Support) ---
-        # Check if Target is a Printer
         if target in printer_map:
             new_extra = current_extra.copy()
-            
-            # Check if Source was ANY kind of Dryer (Single or Multi)
-            # We look up the Source Location in the CSV map
             src_info = loc_info_map.get(current_loc)
             if src_info and src_info.get('Type') == 'Dryer Box':
                 new_extra['physical_source'] = current_loc
                 
             update_spool(sid, {"location": target, "extra": new_extra})
             
-            # FILABRIDGE CALL
             p = printer_map[target]
             try:
                 add_log_entry(f"🔌 Mapping Toolhead: {p['printer_name']} T{p['position']} -> Spool {sid}", "INFO")
@@ -373,13 +419,11 @@ def smart_move():
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
-            # Moving TO a Dryer -> Clear physical source
             new_extra = current_extra.copy(); new_extra.pop('physical_source', None)
             update_spool(sid, {"location": target, "extra": new_extra})
             add_log_entry(f"📦 {info['text']} -> Dryer {target}", "INFO", info['color'])
             
         else:
-            # Regular Move
             update_spool(sid, {"location": target})
             add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
 
