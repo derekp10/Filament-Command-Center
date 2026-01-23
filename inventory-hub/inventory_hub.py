@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v78.0 (Ghost Fix)"
+VERSION = "v79.0 (Echo & Sticky Fix)"
 
 def load_config():
     defaults = {
@@ -147,6 +147,16 @@ RAW_HTML = """
         .guard-msg { font-size: 3rem; color: #ff4444; font-weight: bold; text-shadow: 0 0 10px #000; text-transform: uppercase; }
         .guard-sub { color: white; font-size: 1.5rem; margin-top: 20px; animation: blink 1.5s infinite; }
         @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+        /* TOAST NOTIFICATIONS */
+        #toast-container { position: fixed; top: 20px; right: 20px; z-index: 11000; }
+        .toast-msg {
+            background: rgba(0, 0, 0, 0.9); color: #fff; padding: 15px 20px; margin-bottom: 10px;
+            border-left: 5px solid #00d4ff; border-radius: 4px; box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+            font-size: 1.2rem; min-width: 300px; transition: opacity 0.5s;
+        }
+        .toast-warning { border-left-color: #ffcc00; color: #ffcc00; }
+        .toast-error { border-left-color: #ff4444; color: #ff4444; }
     </style>
 </head>
 <body>
@@ -157,6 +167,8 @@ RAW_HTML = """
             <div class="guard-sub">Window lost focus! Click here to resume.</div>
         </div>
     </div>
+
+    <div id="toast-container"></div>
 
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid">
@@ -250,7 +262,7 @@ RAW_HTML = """
 
         let scanBuffer = "";
         let bufferTimeout;
-        let heldSpools = []; // Now stores Objects {id, display, color}
+        let heldSpools = []; 
 
         document.addEventListener('keydown', (e) => {
             if (document.getElementById('focus-guard').style.display === 'flex') return;
@@ -265,6 +277,15 @@ RAW_HTML = """
                 bufferTimeout = setTimeout(() => { scanBuffer = ""; document.getElementById('scan-buffer').innerText = "Ready"; }, 2000); 
             }
         });
+
+        function showToast(msg, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const el = document.createElement('div');
+            el.className = `toast-msg toast-${type}`;
+            el.innerText = msg;
+            container.appendChild(el);
+            setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 3000);
+        }
 
         function renderBuffer() {
             const zone = document.getElementById('buffer-zone');
@@ -289,38 +310,42 @@ RAW_HTML = """
         function processScan(text) {
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) }).then(r => r.json()).then(res => {
                 if (res.type === 'spool') {
-                    // Add single spool if not present
-                    if (!heldSpools.some(s => s.id === res.id)) {
+                    // DUPLICATE CHECK
+                    if (heldSpools.some(s => s.id === res.id)) {
+                        showToast("⚠️ Spool already in buffer!", "warning");
+                    } else {
                         heldSpools.push({id: res.id, display: res.display, color: res.color});
                         renderBuffer();
                     }
                 } else if (res.type === 'location') {
                     if (heldSpools.length > 0) {
-                        // We have items, execute move
                         executeMove(res.id); 
                     } else if (res.contents && res.contents.length > 0) {
-                        // SMART EXPAND: Buffer is empty, load location contents!
                         res.contents.forEach(s => {
                             if (!heldSpools.some(h => h.id === s.id)) {
                                 heldSpools.push(s);
                             }
                         });
                         renderBuffer();
+                        showToast(`Loaded ${res.contents.length} items`, "info");
+                    } else {
+                        showToast("Location is empty", "warning");
                     }
                 } else if (res.type === 'command') {
                     if (res.cmd === 'undo') triggerUndo();
-                    if (res.cmd === 'clear') { heldSpools = []; renderBuffer(); }
+                    if (res.cmd === 'clear') { heldSpools = []; renderBuffer(); showToast("Buffer Cleared", "info"); }
                 }
             });
         }
 
         function executeMove(targetLoc) {
-            // Extract just IDs for the API
             const spoolIds = heldSpools.map(s => s.id);
             fetch('/api/smart_move', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({location: targetLoc, spools: spoolIds}) }).then(r => r.json()).then(data => { 
                 heldSpools = []; 
                 renderBuffer();
                 fetchLogs(); 
+                if(data.status === 'success') showToast("Move Complete ✅", "info");
+                else showToast(data.msg || "Move Failed", "error");
             });
         }
         
@@ -576,7 +601,19 @@ def smart_move():
     for sid in spools:
         spool_data = get_spool(sid)
         if not spool_data: continue
-        undo_record['moves'][sid] = spool_data.get('location', '')
+        
+        # --- FIX #4: CHECK IF LEAVING A PRINTER ---
+        current_loc = spool_data.get('location', '')
+        if current_loc in printer_map:
+             p = printer_map[current_loc]
+             try:
+                # Clear the toolhead (spool_id=0)
+                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
+             except: pass
+        # -------------------------------------------
+
+        undo_record['moves'][sid] = current_loc
         current_extra = spool_data.get('extra') or {}
         info = format_spool_display(spool_data)
         
