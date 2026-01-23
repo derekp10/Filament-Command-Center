@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v80.0 (Loud Toasts & FilaBridge Fix)"
+VERSION = "v81.0 (Case-Insensitive Fix)"
 
 def load_config():
     defaults = {
@@ -36,12 +36,29 @@ def load_config():
         "sync_delay": 0.5, "printer_map": {}, "feeder_map": {}, "dryer_slots": [],
         "safe_source_patterns": ["Dryer"]
     }
-    if not os.path.exists(CONFIG_FILE): return defaults
-    try:
-        with open(CONFIG_FILE, 'r') as f: return {**defaults, **json.load(f)}
-    except Exception as e:
-        logger.error(f"Config Load Error: {e}")
-        return defaults
+    
+    final_config = defaults.copy()
+    
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f: 
+                loaded = json.load(f)
+                final_config.update(loaded)
+        except Exception as e:
+            logger.error(f"Config Load Error: {e}")
+            
+    # --- NORMALIZATION FIX ---
+    # Force all map keys to Uppercase so "core1-m0" matches "CORE1-M0"
+    if 'printer_map' in final_config:
+        final_config['printer_map'] = {k.upper(): v for k, v in final_config['printer_map'].items()}
+        
+    if 'feeder_map' in final_config:
+        final_config['feeder_map'] = {k.upper(): v for k, v in final_config['feeder_map'].items()}
+        
+    if 'dryer_slots' in final_config:
+        final_config['dryer_slots'] = [x.upper() for x in final_config['dryer_slots']]
+
+    return final_config
 
 def load_locations_list():
     locs = []
@@ -648,3 +665,4 @@ def smart_move():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
+# --- END OF FILE ---
