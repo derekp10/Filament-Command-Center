@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v93.1 (Hotfix)"
+VERSION = "v94.0 (Full Details & FilaBridge Logs)"
 
 def load_config():
     defaults = {
@@ -83,7 +83,7 @@ SERVER_IP = cfg.get("server_ip")
 SPOOLMAN_URL = f"http://{SERVER_IP}:{cfg.get('spoolman_port')}"
 FILABRIDGE_API_BASE = f"http://{SERVER_IP}:{cfg.get('filabridge_port')}/api"
 
-# --- LOGIC HELPERS (MOVED TO TOP FOR SCOPING) ---
+# --- LOGIC HELPERS ---
 def get_spool(sid):
     try: return requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", timeout=3).json()
     except: return None
@@ -100,6 +100,7 @@ def format_spool_display(spool_data):
     col = fil.get('name', 'Unknown')
     hex_color = fil.get('color_hex', 'ffffff')
     if 'original_color' in fil.get('extra', {}): col = fil.get('extra')['original_color']
+    # THIS STRING IS WHAT SHOWS IN THE UI
     return {"text": f"#{sid} {brand} {mat} ({col})", "color": hex_color}
 
 def find_spool_by_legacy_id(legacy_id):
@@ -108,11 +109,9 @@ def find_spool_by_legacy_id(legacy_id):
         resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
         if resp.ok:
             data = resp.json()
-            # 1. Check External ID (where legacy IDs live)
             for spool in data:
                 ext = str(spool.get('external_id', '')).strip().replace('"','')
                 if ext == legacy_id: return spool['id']
-            # 2. Check direct ID
             for spool in data:
                 if str(spool['id']) == legacy_id: return spool['id']
     except: pass
@@ -136,31 +135,28 @@ def get_spools_at_location(loc_name):
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
     
-    # 1. Commands
     if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
     if "CMD:CONFIRM" in text.upper(): return {'type': 'command', 'cmd': 'confirm'}
 
-    # 2. Standard ID Scan (ID:123)
     if text.upper().startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
 
-    # 3. Google Sheet Legacy URL (range=123)
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1))
             if rid: return {'type': 'spool', 'id': rid}
 
-    # 4. Raw Number (Could be ID or Legacy ID)
     if text.isdigit():
+        # PRIORITIZE LEGACY LOOKUP
         rid = find_spool_by_legacy_id(text)
         if rid: return {'type': 'spool', 'id': rid}
+        # Fallback to direct ID
         return {'type': 'spool', 'id': int(text)}
         
-    # 5. Location
     if len(text) > 2: return {'type': 'location', 'id': text.upper()}
     return None
 
@@ -213,10 +209,20 @@ def perform_smart_move(target, raw_spools):
                 new_extra['physical_source'] = current_loc
             update_spool(sid, {"location": target, "extra": new_extra})
             p = printer_map[target]
+            
+            # --- FILABRIDGE DEBUG ---
             try:
-                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=2)
-            except: pass
+                add_log_entry(f"🔌 FilaBridge: Mapping {p['printer_name']} T{p['position']}...", "INFO")
+                fb_resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=3)
+                if fb_resp.ok:
+                    add_log_entry(f"✅ FilaBridge OK", "INFO")
+                else:
+                    add_log_entry(f"❌ FilaBridge Fail: {fb_resp.status_code} {fb_resp.text}", "ERROR")
+            except Exception as e:
+                add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
+            # ------------------------
+
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
@@ -298,8 +304,7 @@ def api_delete_location():
     return jsonify({"success": True})
 
 @app.route('/api/undo', methods=['POST'])
-def api_undo():
-    return undo_last_move()
+def api_undo(): return undo_last_move()
 
 @app.route('/api/get_contents', methods=['GET'])
 def api_get_contents_route():
@@ -314,41 +319,33 @@ def api_manage_contents():
     spool_input = data.get('spool_id') 
 
     if action == 'clear_location':
-        if not loc_id or loc_id == "SCAN": return jsonify({"success": False, "msg": "Invalid"})
         contents = get_spools_at_location(loc_id)
-        if not contents: return jsonify({"success": False, "msg": "Already empty"})
         for sid in contents: update_spool(sid, {"location": ""})
         add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
         return jsonify({"success": True})
 
-    # --- FIX: UNIFIED LOOKUP LOGIC ---
-    # Convert input (QR URL, Legacy ID, or Standard ID) into a real Spool ID
     spool_id = None
     if spool_input:
-        # Use the same brain as the scanner to resolve what was typed/scanned
         resolution = resolve_scan(str(spool_input))
         if resolution and resolution['type'] == 'spool':
             spool_id = resolution['id']
     
-    if not spool_id:
-        return jsonify({"success": False, "msg": "Spool not found (Invalid Scan/ID)"})
+    if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
 
     spool_data = get_spool(spool_id)
-    if not spool_data: return jsonify({"success": False, "msg": "Spool ID not found in DB"})
+    if not spool_data: return jsonify({"success": False, "msg": "ID not in DB"})
     info = format_spool_display(spool_data)
 
     if action == 'remove':
-        current_db_loc = spool_data.get('location', '').strip().upper()
         update_spool(spool_id, {"location": ""})
-        add_log_entry(f"⏏️ Ejected: {info['text']} from {current_db_loc}", "WARNING")
+        add_log_entry(f"⏏️ Ejected: {info['text']}", "WARNING")
         return jsonify({"success": True})
 
     elif action == 'add':
-        # Direct call to logic
         res_data = perform_smart_move(loc_id, [spool_id])
         return jsonify(res_data)
 
-    return jsonify({"success": False, "msg": "Unknown Action"})
+    return jsonify({"success": False})
 
 @app.route('/api/identify_scan', methods=['POST'])
 def api_identify_scan():
