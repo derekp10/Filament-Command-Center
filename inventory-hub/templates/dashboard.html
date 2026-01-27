@@ -26,13 +26,10 @@
         .buffer-text { font-size: 1.6rem; color: white; font-weight: bold; }
         .qr-box { background: white; padding: 5px; border-radius: 4px; }
         .cmd-deck { padding: 15px; border-top: 1px solid #333; background: #222; display: flex; justify-content: space-around; }
-        
-        /* MODALS & TABLES */
         .modal-content { background-color: #121212; color: #fff; border: 1px solid #555; }
         .table-dark { --bs-table-bg: #181818; }
         .highlight-row { border: 4px solid #ffff00 !important; background-color: #333 !important; }
         .eject-btn { padding: 15px 30px; font-size: 1.5rem; border-radius: 8px; height: 100%; display: flex; align-items: center; }
-
         #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; width: 80%; max-width: 600px; }
         .toast-msg { background: rgba(0,0,0,0.95); color: #fff; padding: 30px; margin-bottom: 20px; border: 4px solid #00d4ff; border-radius: 12px; font-size: 2rem; font-weight: bold; }
         #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; display: none; justify-content: center; align-items: center; border: 20px solid #ff4444; text-align: center; backdrop-filter: blur(5px); }
@@ -67,80 +64,11 @@
         </div>
     </div>
 
-    <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static">
-        <div class="modal-dialog modal-xl modal-dialog-scrollable">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Location Manager</h5>
-                    <div class="ms-auto text-muted" id="loc-count">0 Locs</div>
-                    <button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button>
-                    <button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body p-0">
-                    <table class="table table-hover table-dark mb-0" style="font-size:1.1rem;">
-                        <thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
-                        <tbody id="location-table"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal fade" id="locModal" tabindex="-1" data-bs-backdrop="static">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header"><h5 class="modal-title" id="modalTitle">Edit Location</h5><button type="button" class="btn-close btn-close-white" onclick="closeEdit()"></button></div>
-                <div class="modal-body">
-                    <input type="hidden" id="edit-original-id">
-                    <div class="mb-3"><label>Location ID</label><input type="text" class="form-control" id="edit-id"></div>
-                    <div class="mb-3"><label>Friendly Name</label><input type="text" class="form-control" id="edit-name"></div>
-                    <div class="row">
-                        <div class="col-8 mb-3"><label>Type</label>
-                            <select class="form-select" id="edit-type">
-                                <option value="Dryer Box">Dryer Box</option><option value="Cart">Cart</option><option value="Shelf">Shelf</option><option value="Printer">Printer</option><option value="MMU Slot">MMU Slot</option>
-                            </select>
-                        </div>
-                        <div class="col-4 mb-3"><label>Max Spools</label><input type="number" class="form-control" id="edit-max"></div>
-                    </div>
-                </div>
-                <div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeEdit()">Cancel</button><button type="button" class="btn btn-primary" onclick="saveLocation()">Save</button></div>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header"><h5 class="modal-title" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white" onclick="closeManage()"></button></div>
-                <div class="modal-body">
-                    <div id="manage-contents-list" class="mb-4"></div>
-                    <hr class="border-secondary">
-                    <div class="input-group mb-3">
-                        <input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID">
-                        <button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button>
-                    </div>
-                    <div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div>
-                    <input type="hidden" id="manage-loc-id">
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content" style="border: 4px solid #ffcc00;">
-                <div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRM ACTION</h5></div>
-                <div class="modal-body text-center">
-                    <p id="confirm-msg" style="font-size:1.5rem;">Are you sure?</p>
-                    <div class="bg-white p-2 d-inline-block rounded mb-2"><div id="qr-confirm"></div><div class="small fw-bold text-dark">CMD:CONFIRM</div></div>
-                </div>
-                <div class="modal-footer justify-content-center">
-                    <button type="button" class="btn btn-secondary btn-lg" style="width:40%;" onclick="confirmAction(false)">NO</button>
-                    <button type="button" class="btn btn-warning btn-lg" style="width:40%;" onclick="confirmAction(true)">YES</button>
-                </div>
-            </div>
-        </div>
-    </div>
+    <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-muted" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
+    <div class="modal fade" id="locModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="modalTitle">Edit Location</h5><button type="button" class="btn-close btn-close-white" onclick="closeEdit()"></button></div><div class="modal-body"><input type="hidden" id="edit-original-id"><div class="mb-3"><label>Location ID</label><input type="text" class="form-control" id="edit-id"></div><div class="mb-3"><label>Friendly Name</label><input type="text" class="form-control" id="edit-name"></div><div class="row"><div class="col-8 mb-3"><label>Type</label><select class="form-select" id="edit-type"><option value="Dryer Box">Dryer Box</option><option value="Cart">Cart</option><option value="Shelf">Shelf</option><option value="Printer">Printer</option><option value="MMU Slot">MMU Slot</option></select></div><div class="col-4 mb-3"><label>Max Spools</label><input type="number" class="form-control" id="edit-max"></div></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeEdit()">Cancel</button><button type="button" class="btn btn-primary" onclick="saveLocation()">Save</button></div></div></div></div>
+    
+    <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white" onclick="closeManage()"></button></div><div class="modal-body"><div id="manage-contents-list" class="mb-4"></div><hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div><div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
+    <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-dialog-centered"><div class="modal-content" style="border: 4px solid #ffcc00;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRM ACTION</h5></div><div class="modal-body text-center"><p id="confirm-msg" style="font-size:1.5rem;">Are you sure?</p><div class="bg-white p-2 d-inline-block rounded mb-2"><div id="qr-confirm"></div><div class="small fw-bold text-dark">CMD:CONFIRM</div></div></div><div class="modal-footer justify-content-center"><button type="button" class="btn btn-secondary btn-lg" style="width:40%;" onclick="confirmAction(false)">NO</button><button type="button" class="btn btn-warning btn-lg" style="width:40%;" onclick="confirmAction(true)">YES</button></div></div></div></div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
@@ -150,7 +78,8 @@
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             new QRCode(document.getElementById("qr-confirm"), {text: "CMD:CONFIRM", width: 128, height: 128});
             
-            document.getElementById("manual-spool-id").addEventListener("keypress", function(event) {
+            // KEYDOWN EVENT (Better than keypress)
+            document.getElementById("manual-spool-id").addEventListener("keydown", function(event) {
                 if (event.key === "Enter") {
                     event.preventDefault();
                     manualAddSpool();
@@ -167,7 +96,7 @@
         let ejectMode = false;
         let lastScannedLoc = null;
         let pendingConfirmCallback = null;
-        let allLocations = []; // STORE FOR EDITING
+        let allLocations = []; 
 
         document.addEventListener('keydown', (e) => {
             if (document.getElementById('focus-guard').style.display === 'flex') return;
@@ -195,10 +124,7 @@
             if (heldSpools.length > 0) {
                 zone.innerHTML = heldSpools.map((s, idx) => `
                     <div class="buffer-item">
-                        <div class="buffer-info">
-                            <div class="buffer-swatch" style="background-color:#${s.color}"></div>
-                            <div class="buffer-text">${s.display}</div>
-                        </div>
+                        <div class="buffer-info"><div class="buffer-swatch" style="background-color:#${s.color}"></div><div class="buffer-text">${s.display}</div></div>
                         <div id="qr-buf-${idx}" class="qr-box"></div>
                     </div>`).join('');
                 heldSpools.forEach((s, idx) => { new QRCode(document.getElementById(`qr-buf-${idx}`), {text: "ID:" + s.id.toString(), width: 120, height: 120}); });
@@ -207,14 +133,8 @@
 
         function processScan(text) {
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) }).then(r => r.json()).then(res => {
-                if(res.type === 'command' && res.cmd === 'confirm') {
-                    if(pendingConfirmCallback) confirmAction(true);
-                    return;
-                }
-                if(res.type === 'location') {
-                    lastScannedLoc = res.id;
-                    if(document.getElementById('locMgrModal').classList.contains('show')) scrollToRow(res.id);
-                }
+                if(res.type === 'command' && res.cmd === 'confirm') { if(pendingConfirmCallback) confirmAction(true); return; }
+                if(res.type === 'location') { lastScannedLoc = res.id; if(document.getElementById('locMgrModal').classList.contains('show')) scrollToRow(res.id); }
                 if (ejectMode) {
                     ejectMode = false; document.getElementById('buffer-zone').style.border = "none";
                     if (res.type === 'spool') ejectSpool(res.id, "Scan");
@@ -258,16 +178,8 @@
         const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
         const confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
 
-        function requestConfirmation(msg, callback) {
-            document.getElementById('confirm-msg').innerText = msg;
-            pendingConfirmCallback = callback;
-            confirmModal.show();
-        }
-        function confirmAction(isYes) {
-            confirmModal.hide();
-            if(isYes && pendingConfirmCallback) pendingConfirmCallback();
-            pendingConfirmCallback = null;
-        }
+        function requestConfirmation(msg, callback) { document.getElementById('confirm-msg').innerText = msg; pendingConfirmCallback = callback; confirmModal.show(); }
+        function confirmAction(isYes) { confirmModal.hide(); if(isYes && pendingConfirmCallback) pendingConfirmCallback(); pendingConfirmCallback = null; }
 
         function openLocationsModal() { locMgrModal.show(); fetchLocations(); }
         function scrollToRow(id) {
@@ -280,7 +192,7 @@
 
         function fetchLocations() {
             fetch('/api/locations').then(r => r.json()).then(data => {
-                allLocations = data; // Save for editing
+                allLocations = data; 
                 document.getElementById('loc-count').innerText = data.length + " Locs";
                 document.getElementById('location-table').innerHTML = data.map(l => `
                     <tr id="row-${l.LocationID}">
@@ -304,12 +216,7 @@
             refreshManageList(locId);
             manageModal.show();
         }
-        function closeManage() { 
-            manageModal.hide(); 
-            heldSpools = []; renderBuffer(); 
-            // IMPORTANT: Refresh location list to update counts
-            fetchLocations(); 
-        }
+        function closeManage() { manageModal.hide(); heldSpools = []; renderBuffer(); fetchLocations(); }
 
         function refreshManageList(locId) {
             document.getElementById('manage-contents-list').innerHTML = "<div class='text-center'>Loading...</div>";
@@ -336,14 +243,7 @@
             });
         }
 
-        function ejectSpool(spoolId, locId) {
-            if(locId !== "Scan") {
-                requestConfirmation("Eject spool #" + spoolId + "?", () => {
-                    doEject(spoolId, locId);
-                });
-            } else doEject(spoolId, locId);
-        }
-        
+        function ejectSpool(spoolId, locId) { if(locId !== "Scan") { requestConfirmation("Eject spool #" + spoolId + "?", () => { doEject(spoolId, locId); }); } else doEject(spoolId, locId); }
         function doEject(spoolId, locId) {
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'remove', location: locId, spool_id: spoolId}) })
             .then(r => r.json()).then((res) => { 
@@ -362,64 +262,24 @@
                 if(res.status === 'error') alert(res.msg);
                 else {
                     document.getElementById('manual-spool-id').value = ""; 
-                    // Small delay to ensure DB write before read
                     setTimeout(() => refreshManageList(locId), 300);
                     fetchLogs();
                 }
             });
         }
 
-        // --- ADD/EDIT LOGIC ---
-        function openAddModal() { 
-            locMgrModal.hide(); 
-            document.getElementById('modalTitle').innerText = "Add New Location"; 
-            document.getElementById('edit-original-id').value = ""; 
-            document.getElementById('edit-id').value = "";
-            document.getElementById('edit-name').value = "";
-            document.getElementById('edit-max').value = "1";
-            locModal.show(); 
-        }
-
+        function openAddModal() { locMgrModal.hide(); document.getElementById('modalTitle').innerText = "Add New Location"; document.getElementById('edit-original-id').value = ""; document.getElementById('edit-id').value = ""; document.getElementById('edit-name').value = ""; document.getElementById('edit-max').value = "1"; locModal.show(); }
         function openEdit(locId) {
-            // FIX: Find data in global store
-            const item = allLocations.find(l => l.LocationID === locId);
-            if(!item) return;
-            
-            locMgrModal.hide();
-            document.getElementById('modalTitle').innerText = "Edit Location";
-            document.getElementById('edit-original-id').value = locId;
-            document.getElementById('edit-id').value = locId;
-            // PRE-FILL DATA CORRECTLY
-            document.getElementById('edit-name').value = item.Name || "";
-            document.getElementById('edit-type').value = item.Type || "Dryer Box";
-            document.getElementById('edit-max').value = item['Max Spools'] || "1";
-            locModal.show();
+            const item = allLocations.find(l => l.LocationID === locId); if(!item) return;
+            locMgrModal.hide(); document.getElementById('modalTitle').innerText = "Edit Location"; document.getElementById('edit-original-id').value = locId; document.getElementById('edit-id').value = locId;
+            document.getElementById('edit-name').value = item.Name || ""; document.getElementById('edit-type').value = item.Type || "Dryer Box"; document.getElementById('edit-max').value = item['Max Spools'] || "1"; locModal.show();
         }
-
         function closeEdit() { locModal.hide(); locMgrModal.show(); }
-        
         function saveLocation() { 
-            const payload = { old_id: document.getElementById('edit-original-id').value, new_data: { 
-                LocationID: document.getElementById('edit-id').value, 
-                Name: document.getElementById('edit-name').value, 
-                Type: document.getElementById('edit-type').value,
-                "Max Spools": document.getElementById('edit-max').value,
-                "Label Printed": "No" 
-            }};
-            fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) })
-            .then(() => { 
-                lastScannedLoc = payload.new_data.LocationID; 
-                locModal.hide(); locMgrModal.show(); 
-                setTimeout(fetchLocations, 200); 
-            });
+            const payload = { old_id: document.getElementById('edit-original-id').value, new_data: { LocationID: document.getElementById('edit-id').value, Name: document.getElementById('edit-name').value, Type: document.getElementById('edit-type').value, "Max Spools": document.getElementById('edit-max').value, "Label Printed": "No" }};
+            fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) }).then(() => { lastScannedLoc = payload.new_data.LocationID; locModal.hide(); locMgrModal.show(); setTimeout(fetchLocations, 200); });
         }
-        
-        function deleteLoc(id) { 
-            requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => {
-                fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => fetchLocations()); 
-            });
-        }
-
+        function deleteLoc(id) { requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => { fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => fetchLocations()); }); }
         function triggerUndo() { fetch('/api/undo', { method: 'POST' }).then(() => fetchLogs()); }
         function fetchLogs() {
             fetch('/api/logs').then(r => r.json()).then(data => {
