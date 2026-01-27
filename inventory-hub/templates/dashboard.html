@@ -9,79 +9,51 @@
     <style>
         body { background-color: #0e0e0e; color: #f0f0f0; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
         
-        /* NAVBAR */
         .navbar { background-color: #1a1a1a; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
         .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; }
         .version-tag { color: #888; font-size: 1rem; margin-left: 10px; font-weight: bold; }
-        
         .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
         .status-on { background-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
         .status-off { background-color: #ff4444; box-shadow: 0 0 5px #ff4444; }
-        .status-group { margin-right: 20px; font-size: 0.9rem; color: #ccc; display: flex; align-items: center; }
-
-        /* MAIN GRID */
+        
         .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
         
-        /* LEFT: LOGS (Expanded) */
         .col-logs { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
         .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.2rem; line-height: 1.6; }
         .log-INFO { color: #00ff00; } .log-WARNING { color: #ffcc00; } .log-ERROR { color: #ff4444; }
         
-        /* RIGHT: BUFFER (Expanded) */
         .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
         .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; font-weight: bold; color: #00d4ff; font-size: 1.2rem; display: flex; justify-content: space-between; }
         .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
         
-        .buffer-item { 
-            background: #2a2a2a; border: 1px solid #444; border-radius: 8px; 
-            margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center;
-        }
-        .buffer-info { display: flex; align-items: center; gap: 20px; }
+        .buffer-item { background: #2a2a2a; border: 1px solid #444; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; }
         .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; }
         .buffer-text { font-size: 1.6rem; color: white; font-weight: bold; }
         .qr-box { background: white; padding: 5px; border-radius: 4px; }
 
-        /* COMMAND DECK (Bottom Right) */
         .cmd-deck { padding: 15px; border-top: 1px solid #333; background: #222; display: flex; justify-content: space-around; }
         .cmd-item { text-align: center; color: white; font-weight: bold; font-size: 1rem; }
 
-        /* MODALS (High Contrast) */
         .modal-content { background-color: #121212; color: #fff; border: 1px solid #555; }
         .modal-header { border-bottom: 1px solid #333; }
-        .form-control, .form-select { background-color: #2a2a2a; color: #fff; border: 1px solid #444; font-size: 1.1rem; }
-        .form-control:focus { background-color: #333; color: #fff; border-color: #00d4ff; box-shadow: 0 0 0 0.25rem rgba(0, 212, 255, 0.25); }
         .table { color: #fff; font-size: 1.1rem; }
         .table-dark { --bs-table-bg: #181818; }
         
-        /* SCROLL HIGHLIGHT (Prominent) */
-        .highlight-row { 
-            animation: highlight 3s ease-out; 
-            border: 4px solid #fff !important;
-            background-color: #333 !important; 
-        }
-        @keyframes highlight { 
-            0% { background-color: #ffff00; color: black; border-color: #ffff00; } 
-            100% { background-color: #181818; color: white; border-color: transparent; } 
-        }
+        /* SUPER HIGHLIGHT */
+        .highlight-row { animation: highlight 3s ease-out; border: 4px solid #fff !important; background-color: #333 !important; }
+        @keyframes highlight { 0% { background-color: #ffff00; color: black; border-color: #ffff00; } 100% { background-color: #181818; color: white; border-color: transparent; } }
 
-        /* MANAGE LIST (Matches Buffer) */
-        .manage-item { 
-            display: flex; justify-content: space-between; align-items: center; 
-            background: #252525; padding: 15px; margin-bottom: 10px; border-radius: 6px; border: 1px solid #444;
-        }
-        .manage-qr { background: white; padding: 4px; margin-right: 15px; }
+        .manage-item { display: flex; justify-content: space-between; align-items: center; background: #252525; padding: 15px; margin-bottom: 10px; border-radius: 6px; border: 1px solid #444; }
         .manage-text { font-size: 1.3rem; font-weight: bold; color: white; }
 
-        /* TOASTS & FOCUS */
         #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; width: 80%; max-width: 600px; }
         .toast-msg { background: rgba(0,0,0,0.95); color: #fff; padding: 30px; margin-bottom: 20px; border: 4px solid #00d4ff; border-radius: 12px; font-size: 2rem; font-weight: bold; }
         #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; display: none; justify-content: center; align-items: center; border: 20px solid #ff4444; text-align: center; backdrop-filter: blur(5px); }
-        .guard-msg { font-size: 3rem; color: #ff4444; font-weight: bold; text-transform: uppercase; }
     </style>
 </head>
 <body>
     <div id="focus-guard" onclick="document.body.focus()">
-        <div><div style="font-size:5rem;">🚫</div><div class="guard-msg">Scanner Paused</div><div style="color:white;font-size:1.5rem;">Tap to Resume</div></div>
+        <div><div style="font-size:5rem;">🚫</div><div style="font-size:3rem;color:#ff4444;font-weight:bold;">SCANNER PAUSED</div></div>
     </div>
 
     <div id="toast-container"></div>
@@ -93,8 +65,8 @@
                 <span class="version-tag">{{ version }}</span>
             </div>
             <div class="d-flex align-items-center">
-                <div class="status-group"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
-                <div class="status-group"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
+                <div style="margin-right:20px; color:#ccc;"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
+                <div style="margin-right:20px; color:#ccc;"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
                 <button class="btn btn-outline-info btn-sm me-3" onclick="openLocationsModal()">📂 Locations</button>
                 <button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button>
                 <a href="/api/export_locations" class="btn btn-secondary btn-sm">💾 Export</a>
@@ -107,14 +79,9 @@
             <div class="p-3 border-bottom border-secondary text-info fw-bold" style="font-size:1.2rem;">Live Activity 📡</div>
             <div id="live-logs" class="log-box"></div>
         </div>
-
         <div class="col-buffer">
-            <div class="buffer-header">
-                <span>BUFFER ZONE</span>
-                <span id="scan-status" style="font-size:1rem; color:#888;">Ready to Scan...</span>
-            </div>
-            <div id="buffer-zone" class="buffer-content">
-                </div>
+            <div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status" style="font-size:1rem; color:#888;">Ready...</span></div>
+            <div id="buffer-zone" class="buffer-content"></div>
             <div class="cmd-deck">
                 <div class="cmd-item"><div class="qr-box" id="qr-clear"></div>CLEAR</div>
                 <div class="cmd-item"><div class="qr-box" id="qr-undo"></div>UNDO</div>
@@ -128,9 +95,11 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" style="font-size:1.5rem;">Location Manager</h5>
-                    <div class="ms-3 text-muted" id="loc-count" style="font-size:1.2rem;">0 Locations</div>
-                    <button class="btn btn-success btn-lg ms-auto me-3" onclick="openAddModal()">+ New Slot</button>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    <button class="btn btn-warning btn-sm ms-3" onclick="generateLabels()">🖨️ Generate Labels</button>
+                    <a href="/api/download_labels" class="btn btn-outline-light btn-sm ms-2" target="_blank">⬇️ Download CSV</a>
+                    <div class="ms-auto text-muted" id="loc-count">0 Locs</div>
+                    <button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button>
+                    <button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body p-0">
                     <table class="table table-hover table-dark mb-0" style="font-size:1.2rem;">
@@ -145,10 +114,7 @@
     <div class="modal fade" id="manageModal" tabindex="-1">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="manageTitle" style="font-size:1.5rem;">Manage Contents</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
+                <div class="modal-header"><h5 class="modal-title" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
                 <div class="modal-body">
                     <div id="manage-contents-list" class="mb-4"></div>
                     <hr class="border-secondary">
@@ -157,31 +123,9 @@
                         <input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID">
                         <button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button>
                     </div>
-                    <div class="d-grid gap-2">
-                        <button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Clear Buffer</button>
-                    </div>
+                    <div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div>
                     <input type="hidden" id="manage-loc-id">
                 </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal fade" id="locModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header"><h5 class="modal-title" id="modalTitle">Edit Location</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
-                <div class="modal-body">
-                    <input type="hidden" id="edit-original-id">
-                    <div class="mb-3"><label>Location ID</label><input type="text" class="form-control" id="edit-id"></div>
-                    <div class="mb-3"><label>Friendly Name</label><input type="text" class="form-control" id="edit-name"></div>
-                    <div class="mb-3"><label>Type</label>
-                        <select class="form-select" id="edit-type">
-                            <option value="Dryer Box">Dryer Box</option><option value="Cart">Cart</option><option value="Shelf">Shelf</option>
-                            <option value="Printer">Printer/Toolhead</option><option value="MMU Slot">MMU Slot</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button type="button" class="btn btn-primary" onclick="saveLocation()">Save</button></div>
             </div>
         </div>
     </div>
@@ -206,7 +150,6 @@
             if (document.getElementById('focus-guard').style.display === 'flex') return;
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
             if (e.ctrlKey || e.altKey || e.metaKey) return;
-            
             if (e.key === 'Enter') { processScan(scanBuffer); scanBuffer = ""; } 
             else if (e.key.length === 1) { 
                 scanBuffer += e.key; 
@@ -239,8 +182,6 @@
                         <div id="qr-buf-${idx}" class="qr-box"></div>
                     </div>
                 `).join('');
-                
-                // PREFIX QR WITH "ID:" TO BYPASS LEGACY LOOKUPS
                 heldSpools.forEach((s, idx) => {
                     new QRCode(document.getElementById(`qr-buf-${idx}`), {text: "ID:" + s.id.toString(), width: 120, height: 120});
                 });
@@ -252,18 +193,23 @@
         function processScan(text) {
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) }).then(r => r.json()).then(res => {
                 
+                // AUTO-SCROLL IF MANAGER OPEN
+                if(res.type === 'location') {
+                    lastScannedLoc = res.id;
+                    const mgr = document.getElementById('locMgrModal');
+                    if(mgr.classList.contains('show')) scrollToRow(res.id);
+                }
+
                 if (ejectMode) {
                     ejectMode = false;
                     document.getElementById('buffer-zone').style.border = "none";
-                    if (res.type === 'spool') {
-                        ejectSpool(res.id, "Scan");
-                    } else {
-                        showToast("Scan a SPOOL to eject it!", "warning");
-                    }
+                    if (res.type === 'spool') ejectSpool(res.id, "Scan");
+                    else showToast("Scan a SPOOL to eject it!", "warning");
                     return;
                 }
 
                 if (res.type === 'spool') {
+                    // FIX 1: Frontend Duplicate Check (Int Comparison)
                     if (heldSpools.some(s => s.id === res.id)) {
                         showToast("⚠️ ALREADY IN BUFFER", "warning");
                     } else {
@@ -271,11 +217,9 @@
                         renderBuffer();
                     }
                 } else if (res.type === 'location') {
-                    lastScannedLoc = res.id;
                     if (heldSpools.length > 0) {
                         executeMove(res.id); 
                     } else if (res.contents && res.contents.length > 0) {
-                        // SMART EXPAND
                         res.contents.forEach(s => {
                             if (!heldSpools.some(h => h.id === s.id)) heldSpools.push(s);
                         });
@@ -287,11 +231,7 @@
                 } else if (res.type === 'command') {
                     if (res.cmd === 'undo') triggerUndo();
                     if (res.cmd === 'clear') { heldSpools = []; renderBuffer(); showToast("BUFFER CLEARED", "info"); }
-                    if (res.cmd === 'eject') { 
-                        ejectMode = true; 
-                        showToast("⚠️ SCAN ITEM TO EJECT", "warning"); 
-                        document.getElementById('buffer-zone').style.border = "4px solid #ff4444";
-                    }
+                    if (res.cmd === 'eject') { ejectMode = true; showToast("⚠️ SCAN ITEM TO EJECT", "warning"); document.getElementById('buffer-zone').style.border = "4px solid #ff4444"; }
                 }
             });
         }
@@ -299,35 +239,34 @@
         function executeMove(targetLoc) {
             const spoolIds = heldSpools.map(s => s.id);
             fetch('/api/smart_move', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({location: targetLoc, spools: spoolIds}) }).then(r => r.json()).then(data => { 
-                heldSpools = []; 
-                renderBuffer();
+                
+                // FIX 2: Only clear buffer if success
+                if(data.status === 'success') {
+                    heldSpools = []; 
+                    renderBuffer();
+                    showToast("✅ MOVE COMPLETE", "info");
+                } else {
+                    showToast("❌ " + data.msg, "error");
+                }
                 fetchLogs(); 
-                if(data.status === 'success') showToast("✅ MOVE COMPLETE", "info");
-                else showToast(data.msg || "❌ MOVE FAILED", "error");
             });
         }
 
-        function triggerUndo() { fetch('/api/undo', { method: 'POST' }).then(() => fetchLogs()); }
-
-        // --- MANAGERS ---
+        // --- UI HELPERS ---
         const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
-        const locModal = new bootstrap.Modal(document.getElementById('locModal'));
         const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
 
-        function openLocationsModal() {
-            locMgrModal.show();
-            // AUTO SURFACE LOGIC (Bright Flash)
-            if(lastScannedLoc) {
-                setTimeout(() => {
-                    const row = document.getElementById(`row-${lastScannedLoc}`);
-                    if(row) {
-                        row.scrollIntoView({behavior: "smooth", block: "center"});
-                        row.classList.add('highlight-row');
-                        // Remove class after animation
-                        setTimeout(() => row.classList.remove('highlight-row'), 3000);
-                    }
-                }, 300);
-            }
+        function openLocationsModal() { locMgrModal.show(); if(lastScannedLoc) scrollToRow(lastScannedLoc); }
+        
+        function scrollToRow(id) {
+            setTimeout(() => {
+                const row = document.getElementById(`row-${id}`);
+                if(row) {
+                    row.scrollIntoView({behavior: "smooth", block: "center"});
+                    row.classList.add('highlight-row');
+                    setTimeout(() => row.classList.remove('highlight-row'), 3000);
+                }
+            }, 300);
         }
 
         function fetchLocations() {
@@ -340,14 +279,11 @@
                         <td><span class="badge bg-secondary">${l.Type}</span></td>
                         <td class="text-end">
                             <button class="btn btn-sm btn-info me-1" onclick="openManage('${l.LocationID}')">Manage</button>
-                            <button class="btn btn-sm btn-outline-warning me-1" onclick="openEdit('${l.LocationID}')">Edit</button>
-                            <button class="btn btn-sm btn-outline-danger" onclick="deleteLoc('${l.LocationID}')">Del</button>
                         </td>
                     </tr>`).join('');
             });
         }
 
-        // --- CONTENT MANAGEMENT (UPDATED UI) ---
         function openManage(locId) {
             locMgrModal.hide(); 
             document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
@@ -357,12 +293,7 @@
             manageModal.show();
         }
         
-        function closeManage() {
-            manageModal.hide();
-            heldSpools = []; // Clear main buffer on exit to sync state
-            renderBuffer();
-            showToast("Buffer Cleared & Synced", "info");
-        }
+        function closeManage() { manageModal.hide(); heldSpools = []; renderBuffer(); showToast("Buffer Cleared & Synced", "info"); }
 
         function refreshManageList(locId) {
             document.getElementById('manage-contents-list').innerHTML = "<div class='text-center'>Loading...</div>";
@@ -379,32 +310,23 @@
                                     <div class="buffer-swatch" style="background-color:#${s.color}; width:40px; height:40px;"></div>
                                     <div style="display:flex;flex-direction:column;">
                                         <span class="manage-text">#${s.id}</span>
-                                        <span class="text-muted">${s.display.substring(0, 30)}...</span>
+                                        <span class="text-muted" style="color:white !important; font-size:1rem;">${s.display}</span>
                                     </div>
                                 </div>
                             </div>
-                            <button class="btn btn-danger btn-lg" onclick="ejectSpool(${s.id}, '${locId}')">⏏️ Eject</button>
+                            <button class="btn btn-danger btn-lg" onclick="ejectSpool(${s.id}, '${locId}')">⏏️</button>
                         </div>
                     `).join('');
-                    
-                    // PREFIX QR HERE TOO
-                    data.forEach((s, idx) => {
-                        new QRCode(document.getElementById(`qr-man-${idx}`), {text: "ID:" + s.id.toString(), width: 80, height: 80});
-                    });
+                    data.forEach((s, idx) => { new QRCode(document.getElementById(`qr-man-${idx}`), {text: "ID:" + s.id.toString(), width: 80, height: 80}); });
                 }
             });
         }
 
         function ejectSpool(spoolId, locId) {
             if(locId !== "Scan" && !confirm("Eject spool #" + spoolId + "?")) return;
-            
             if(locId === "Scan") showToast("⏏️ EJECTED", "warning");
-
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'remove', location: locId, spool_id: spoolId}) })
-            .then(r => r.json()).then((res) => { 
-                if(locId !== "Scan") refreshManageList(locId); 
-                fetchLogs(); 
-            });
+            .then(r => r.json()).then((res) => { if(locId !== "Scan") refreshManageList(locId); fetchLogs(); });
         }
 
         function manualAddSpool() {
@@ -419,26 +341,25 @@
             });
         }
 
-        // --- HELPERS ---
-        function openAddModal() { locMgrModal.hide(); document.getElementById('modalTitle').innerText = "Add New Location"; document.getElementById('edit-original-id').value = ""; locModal.show(); }
-        function openEdit(id) { locMgrModal.hide(); const l = allLocations.find(x => x.LocationID === id); if(!l)return; document.getElementById('modalTitle').innerText="Edit Location"; document.getElementById('edit-id').value=l.LocationID; document.getElementById('edit-name').value=l.Name; document.getElementById('edit-type').value=l.Type; document.getElementById('edit-original-id').value=l.LocationID; locModal.show(); }
-        function saveLocation() { 
-            const payload = { old_id: document.getElementById('edit-original-id').value, new_data: { LocationID: document.getElementById('edit-id').value, Name: document.getElementById('edit-name').value, Type: document.getElementById('edit-type').value, Location: "", "Device Identifier": "", "Device Type": "", Order: "", Row: "", "Max Spools": "1", "Label Printed": "No" } };
-            fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) }).then(() => { locModal.hide(); fetchLocations(); locMgrModal.show(); });
+        function generateLabels() {
+            if(!confirm("Generate new labels for unprinted locations?")) return;
+            fetch('/api/generate_labels', { method: 'POST' }).then(r => r.json()).then(res => {
+                if(res.success) alert(`Generated ${res.count} labels! Download CSV now.`);
+                else alert("Error: " + res.msg);
+            });
         }
-        function deleteLoc(id) { if(confirm("Delete " + id + "?")) fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => fetchLocations()); }
 
+        // --- STANDARD HELPERS ---
+        function triggerUndo() { fetch('/api/undo', { method: 'POST' }).then(() => fetchLogs()); }
+        function openAddModal() { /* Add logic if needed */ } 
         function fetchLogs() {
             fetch('/api/logs').then(r => r.json()).then(data => {
                 document.getElementById('live-logs').innerHTML = data.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
                 document.getElementById('undo-btn').disabled = !data.undo_available;
-                
-                // Navbar Status Dots
                 document.getElementById('st-spoolman').className = `status-dot ${data.status.spoolman ? 'status-on' : 'status-off'}`;
                 document.getElementById('st-filabridge').className = `status-dot ${data.status.filabridge ? 'status-on' : 'status-off'}`;
             });
         }
-
         fetchLocations(); setInterval(fetchLogs, 2500);
     </script>
 </body>

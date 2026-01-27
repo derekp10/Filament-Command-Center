@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response, render_template
+from flask import Flask, request, jsonify, Response, render_template, send_file
 import requests
 import logging
 from logging.handlers import RotatingFileHandler
@@ -10,6 +10,7 @@ import time
 import os
 import csv
 import io
+import shutil
 
 # --- LOGGING SETUP ---
 logger = logging.getLogger("InventoryHub")
@@ -26,9 +27,10 @@ app = Flask(__name__)
 # --- CONFIG & CONSTANTS ---
 CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
+LABEL_FILE = 'locations_to_print.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v88.0 (Strict IDs & UI Polish)"
+VERSION = "v89.0 (Polish & Labels)"
 
 def load_config():
     defaults = {
@@ -177,7 +179,44 @@ def undo_last_move():
     add_log_entry(f"↩️ Undid: {last['summary']}", "WARNING")
     return jsonify({"success": True})
 
-# --- NEW MANAGEMENT ENDPOINTS ---
+# --- NEW: LABEL GENERATION ---
+@app.route('/api/generate_labels', methods=['POST'])
+def api_generate_labels():
+    rows = load_locations_list()
+    new_labels = []
+    updates_made = False
+    
+    for row in rows:
+        is_printed = str(row.get('Label Printed', '')).lower() in ['yes', 'true', '1']
+        if not is_printed:
+            loc_id = row.get('LocationID', '').upper()
+            name = row.get('Name', '')
+            new_labels.append({"LocationID": loc_id, "Name": name, "QR_Code": loc_id})
+            row['Label Printed'] = 'Yes'
+            updates_made = True
+            
+    if new_labels:
+        try:
+            with open(LABEL_FILE, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=["LocationID", "Name", "QR_Code"])
+                writer.writeheader()
+                writer.writerows(new_labels)
+            
+            if updates_made: save_locations_list(rows)
+            add_log_entry(f"🖨️ Generated {len(new_labels)} labels.", "INFO")
+            return jsonify({"success": True, "count": len(new_labels)})
+        except Exception as e:
+            return jsonify({"success": False, "msg": str(e)})
+    else:
+        return jsonify({"success": True, "count": 0, "msg": "No new labels."})
+
+@app.route('/api/download_labels', methods=['GET'])
+def api_download_labels():
+    if os.path.exists(LABEL_FILE):
+        return send_file(LABEL_FILE, as_attachment=True)
+    return "No labels generated yet.", 404
+
+# --- MANAGEMENT ENDPOINTS ---
 @app.route('/api/get_contents', methods=['GET'])
 def api_get_contents():
     loc = request.args.get('id', '').strip().upper()
@@ -186,25 +225,31 @@ def api_get_contents():
 @app.route('/api/manage_contents', methods=['POST'])
 def api_manage_contents():
     data = request.json
-    action = data.get('action') # 'add' or 'remove'
-    loc_id = data.get('location', '').strip().upper()
+    action = data.get('action') 
+    loc_id = data.get('location', '').strip().upper() # Might be "Scan" if from QR
     spool_id = data.get('spool_id')
     
     cfg = load_config()
     printer_map = cfg.get("printer_map", {})
 
-    if not loc_id or not spool_id: return jsonify({"success": False, "msg": "Missing Data"})
+    if not spool_id: return jsonify({"success": False, "msg": "Missing Data"})
     
     spool_data = get_spool(spool_id)
     if not spool_data: return jsonify({"success": False, "msg": "Spool not found"})
     info = format_spool_display(spool_data)
 
+    # --- FIX 3: EJECT LOGIC (Check Location FIRST) ---
     if action == 'remove':
-        update_spool(spool_id, {"location": ""})
-        add_log_entry(f"⏏️ Ejected: {info['text']} from {loc_id}", "WARNING")
+        # 1. Find where it IS right now (Database Truth)
+        current_db_loc = spool_data.get('location', '').strip().upper()
         
-        if loc_id in printer_map:
-            p = printer_map[loc_id]
+        # 2. Clear Spoolman
+        update_spool(spool_id, {"location": ""})
+        add_log_entry(f"⏏️ Ejected: {info['text']} from {current_db_loc}", "WARNING")
+        
+        # 3. Clear FilaBridge (using the DB location we just found)
+        if current_db_loc in printer_map:
+            p = printer_map[current_db_loc]
             try:
                 add_log_entry(f"🔌 Clearing Toolhead: {p['printer_name']} T{p['position']}", "WARNING")
                 requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
@@ -277,13 +322,11 @@ def resolve_scan(text):
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
     
-    # --- STRICT ID MATCHING (Fixes "Old Code" Bug) ---
-    # If the text starts with "ID:", it is strictly an internal Spoolman ID.
-    # We strip the prefix and return it directly, skipping legacy lookup.
+    # --- FIX 1: STRICT ID MATCHING ---
     if text.upper().startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit():
-            return {'type': 'spool', 'id': clean_id}
+            return {'type': 'spool', 'id': int(clean_id)} # Return INT to match Spoolman ID type
 
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
@@ -293,7 +336,7 @@ def resolve_scan(text):
     if text.isdigit():
         rid = find_spool_by_legacy_id(text)
         if rid: return {'type': 'spool', 'id': rid}
-        return {'type': 'spool', 'id': text}
+        return {'type': 'spool', 'id': int(text)}
     if len(text) > 2: return {'type': 'location', 'id': text.upper()}
     return None
 
@@ -312,8 +355,8 @@ def identify_scan():
         sid = res['id']; data = get_spool(sid)
         if data:
             info = format_spool_display(data)
-            add_log_entry(f"📡 Scanned: {info['text']}", "INFO", info['color'])
-            return jsonify({"type": "spool", "id": sid, "display": info['text'], "color": info['color']})
+            # Ensure ID is sent as INT for frontend comparison
+            return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
     if res['type'] == 'command':
         add_log_entry(f"⚠️ Command: {res['cmd'].upper()}")
         return jsonify(res)
@@ -348,7 +391,7 @@ def smart_move():
             
     if (len(occupants) + incoming_count) > max_cap:
         add_log_entry(f"❌ Aborted: {target} Full! ({len(occupants)}/{max_cap})", "ERROR")
-        return jsonify({"status": "error", "msg": "Location Full"})
+        return jsonify({"status": "error", "msg": f"Full! ({len(occupants)}/{max_cap})"})
 
     spools = []
     for item in raw_spools:
