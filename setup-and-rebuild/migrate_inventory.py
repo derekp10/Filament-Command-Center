@@ -180,7 +180,6 @@ def get_or_create_filament(d, vendor_id):
     for key, val in AMBIGUOUS_MAP.items():
         if key.lower() in raw_name.lower():
             detected_base = val
-            print(f"   [Dict Match] {raw_name} -> {detected_base}")
             break
 
     if not detected_base:
@@ -192,20 +191,17 @@ def get_or_create_filament(d, vendor_id):
         if matches:
             matches.sort(key=lambda x: x[0]) 
             detected_base = matches[0][1]
-            print(f"   [Text Match] {raw_name} -> {detected_base}")
 
     if not detected_base:
         for term in COLORLESS_TERMS:
             if term.lower() in raw_name.lower():
                 detected_base = "Clear"
-                print(f"   [Colorless Match] {raw_name} -> Clear")
                 break
 
     if not detected_base:
         hex1 = clean_hex(d.get('hex_1'))
         if hex1:
             detected_base = get_closest_parent_color(hex1)
-            print(f"   [Math Fallback] {raw_name} (#{hex1}) -> {detected_base}")
 
     suffix_parts = []
     if detected_base and detected_base.lower() != raw_name.lower():
@@ -250,21 +246,24 @@ def get_or_create_filament(d, vendor_id):
     final_comment = " \n".join(comments)
 
     extra_data = {}
-    def set_extra_json(key, value):
-        if value is not None and value != "":
-            extra_data[key] = json.dumps(value)
-
-    if final_attrs: set_extra_json("filament_attributes", sorted(list(final_attrs)))
-    set_extra_json("shore_hardness", d.get('tpu_shore'))
-    set_extra_json("slicer_profile", d.get('profile'))
-    set_extra_json("price_total", d.get('price_total'))
-    set_extra_json("product_url", d.get('product_url'))
-    set_extra_json("purchase_url", d.get('purchase_url'))
-    set_extra_json("sheet_link", d.get('sheet_row_link'))
-    set_extra_json("label_printed", to_bool(d.get('label_printed')))
-    set_extra_json("sample_printed", to_bool(d.get('sample_printed')))
-    set_extra_json("spoolman_reprint", True) 
-    set_extra_json("original_color", d.get('color_name')) # V49 Addition
+    
+    # FIX: Remove json.dumps for extra fields, send raw types
+    if final_attrs: extra_data["filament_attributes"] = sorted(list(final_attrs))
+    if d.get('tpu_shore'): extra_data["shore_hardness"] = d.get('tpu_shore')
+    if d.get('profile'): extra_data["slicer_profile"] = d.get('profile')
+    if d.get('price_total'): extra_data["price_total"] = d.get('price_total')
+    if d.get('product_url'): extra_data["product_url"] = d.get('product_url')
+    if d.get('purchase_url'): extra_data["purchase_url"] = d.get('purchase_url')
+    if d.get('sheet_row_link'): extra_data["sheet_link"] = d.get('sheet_row_link')
+    
+    extra_data["label_printed"] = to_bool(d.get('label_printed'))
+    extra_data["sample_printed"] = to_bool(d.get('sample_printed'))
+    extra_data["spoolman_reprint"] = True
+    extra_data["original_color"] = d.get('color_name')
+    
+    if d.get('drying_temp'): extra_data["drying_temp"] = d.get('drying_temp')
+    if d.get('drying_time'): extra_data["drying_time"] = d.get('drying_time')
+    if d.get('fan'): extra_data["flush_multiplier"] = d.get('fan') # Mapping FAN to Flush Multiplier? Or custom?
 
     base_nozzle = int(d.get('t1_min') or 200)
     base_bed = int(d.get('b1_min') or 60)
@@ -298,12 +297,13 @@ def get_or_create_filament(d, vendor_id):
     return resp.json()['id'], True
 
 def create_spool(filament_id, remaining, location, purchased, is_refill, spool_type, spool_temp):
+    # FIX: Send raw values, not json.dumps
     extra_payload = {
-        "label_printed": json.dumps(False),
-        "is_refill": json.dumps(is_refill)
+        "label_printed": False,
+        "is_refill": is_refill
     }
-    if spool_type: extra_payload["spool_type"] = json.dumps(spool_type)
-    if spool_temp: extra_payload["spool_temp"] = json.dumps(spool_temp)
+    if spool_type: extra_payload["spool_type"] = spool_type
+    if spool_temp: extra_payload["spool_temp"] = spool_temp
 
     payload = {
         "filament_id": filament_id,
@@ -312,7 +312,11 @@ def create_spool(filament_id, remaining, location, purchased, is_refill, spool_t
         "purchased": purchased if purchased else None,
         "extra": extra_payload
     }
-    requests.post(f"{SPOOLMAN_IP}/api/v1/spool", json=payload)
+    resp = requests.post(f"{SPOOLMAN_IP}/api/v1/spool", json=payload)
+    
+    # FIX: Print error if failed
+    if resp.status_code >= 400:
+        print(f"❌ Spool Create Failed: {resp.text}")
 
 # --- MAIN ---
 print("Starting Migration (Inventory)...")
