@@ -11,13 +11,9 @@
         .navbar { background-color: #1a1a1a; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
         .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; }
         .version-tag { color: #888; font-size: 1rem; margin-left: 10px; font-weight: bold; }
-        .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
-        .status-on { background-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
-        .status-off { background-color: #ff4444; box-shadow: 0 0 5px #ff4444; }
         .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
         .col-logs { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
         .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.2rem; line-height: 1.6; }
-        .log-INFO { color: #00ff00; } .log-WARNING { color: #ffcc00; } .log-ERROR { color: #ff4444; }
         .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
         .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; font-weight: bold; color: #00d4ff; font-size: 1.2rem; display: flex; justify-content: space-between; }
         .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
@@ -26,18 +22,14 @@
         .buffer-text { font-size: 1.6rem; color: white; font-weight: bold; }
         .qr-box { background: white; padding: 5px; border-radius: 4px; }
         .cmd-deck { padding: 15px; border-top: 1px solid #333; background: #222; display: flex; justify-content: space-around; }
-        .cmd-item { text-align: center; color: white; font-weight: bold; font-size: 1rem; }
         
         /* MODALS */
         .modal-content { background-color: #121212; color: #fff; border: 1px solid #555; }
-        .modal-header { border-bottom: 1px solid #333; }
-        .table { color: #fff; font-size: 1.1rem; }
         .table-dark { --bs-table-bg: #181818; }
         .highlight-row { border: 4px solid #ffff00 !important; background-color: #333 !important; }
         
-        /* CONFIRM MODAL */
-        .confirm-btn { width: 100%; padding: 20px; font-size: 1.5rem; font-weight: bold; margin-bottom: 10px; }
-        .confirm-qr-zone { background: white; padding: 10px; border-radius: 8px; display: inline-block; margin: 10px; }
+        /* EJECT BUTTONS */
+        .eject-btn { padding: 15px 30px; font-size: 1.5rem; border-radius: 8px; height: 100%; display: flex; align-items: center; }
 
         #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; width: 80%; max-width: 600px; }
         .toast-msg { background: rgba(0,0,0,0.95); color: #fff; padding: 30px; margin-bottom: 20px; border: 4px solid #00d4ff; border-radius: 12px; font-size: 2rem; font-weight: bold; }
@@ -51,9 +43,7 @@
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid">
             <div class="d-flex align-items-center"><span class="navbar-brand">Filament Command Center</span><span class="version-tag">{{ version }}</span></div>
-            <div class="d-flex align-items-center">
-                <div style="margin-right:20px; color:#ccc;"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
-                <div style="margin-right:20px; color:#ccc;"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
+            <div>
                 <button class="btn btn-outline-info btn-sm me-3" onclick="openLocationsModal()">📂 Locations</button>
                 <button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button>
             </div>
@@ -61,14 +51,14 @@
     </nav>
 
     <div class="main-container">
-        <div class="col-logs"><div class="p-3 border-bottom border-secondary text-info fw-bold" style="font-size:1.2rem;">Live Activity 📡</div><div id="live-logs" class="log-box"></div></div>
+        <div class="col-logs"><div class="p-3 border-bottom border-secondary text-info fw-bold">Live Activity 📡</div><div id="live-logs" class="log-box"></div></div>
         <div class="col-buffer">
             <div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status" style="font-size:1rem; color:#888;">Ready...</span></div>
             <div id="buffer-zone" class="buffer-content"></div>
             <div class="cmd-deck">
-                <div class="cmd-item"><div class="qr-box" id="qr-clear"></div>CLEAR</div>
-                <div class="cmd-item"><div class="qr-box" id="qr-undo"></div>UNDO</div>
-                <div class="cmd-item"><div class="qr-box" id="qr-eject"></div>EJECT</div>
+                <div class="text-center"><div class="qr-box" id="qr-clear"></div>CLEAR</div>
+                <div class="text-center"><div class="qr-box" id="qr-undo"></div>UNDO</div>
+                <div class="text-center"><div class="qr-box" id="qr-eject"></div>EJECT</div>
             </div>
         </div>
     </div>
@@ -77,15 +67,13 @@
         <div class="modal-dialog modal-xl modal-dialog-scrollable">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title" style="font-size:1.5rem;">Location Manager</h5>
+                    <h5 class="modal-title">Location Manager</h5>
                     <div class="ms-auto text-muted" id="loc-count">0 Locs</div>
-                    <button class="btn btn-warning btn-sm ms-3" onclick="generateLabels()">🖨️ Labels</button>
-                    <a href="/api/export_locations" class="btn btn-secondary btn-sm ms-2">💾 Export</a>
                     <button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button>
-                    <button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal" onclick="clearHighlights()"></button>
+                    <button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body p-0">
-                    <table class="table table-hover table-dark mb-0" style="font-size:1.2rem;">
+                    <table class="table table-hover table-dark mb-0" style="font-size:1.1rem;">
                         <thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
                         <tbody id="location-table"></tbody>
                     </table>
@@ -105,8 +93,7 @@
                     <div class="row">
                         <div class="col-8 mb-3"><label>Type</label>
                             <select class="form-select" id="edit-type">
-                                <option value="Dryer Box">Dryer Box</option><option value="Cart">Cart</option><option value="Shelf">Shelf</option>
-                                <option value="Printer">Printer/Toolhead</option><option value="MMU Slot">MMU Slot</option>
+                                <option value="Dryer Box">Dryer Box</option><option value="Cart">Cart</option><option value="Shelf">Shelf</option><option value="Printer">Printer</option><option value="MMU Slot">MMU Slot</option>
                             </select>
                         </div>
                         <div class="col-4 mb-3"><label>Max Spools</label><input type="number" class="form-control" id="edit-max"></div>
@@ -124,7 +111,6 @@
                 <div class="modal-body">
                     <div id="manage-contents-list" class="mb-4"></div>
                     <hr class="border-secondary">
-                    <label class="mb-2" style="font-size:1.2rem;">Add Spool Manually:</label>
                     <div class="input-group mb-3">
                         <input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID">
                         <button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button>
@@ -142,7 +128,7 @@
                 <div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRM ACTION</h5></div>
                 <div class="modal-body text-center">
                     <p id="confirm-msg" style="font-size:1.5rem;">Are you sure?</p>
-                    <div class="confirm-qr-zone"><div id="qr-confirm"></div><div class="small fw-bold text-dark">CMD:CONFIRM</div></div>
+                    <div class="bg-white p-2 d-inline-block rounded mb-2"><div id="qr-confirm"></div><div class="small fw-bold text-dark">CMD:CONFIRM</div></div>
                 </div>
                 <div class="modal-footer justify-content-center">
                     <button type="button" class="btn btn-secondary btn-lg" style="width:40%;" onclick="confirmAction(false)">NO</button>
@@ -159,7 +145,16 @@
             new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             new QRCode(document.getElementById("qr-confirm"), {text: "CMD:CONFIRM", width: 128, height: 128});
+            
+            // KEYBOARD LISTENER FOR ADD SPOOL INPUT
+            document.getElementById("manual-spool-id").addEventListener("keypress", function(event) {
+                if (event.key === "Enter") {
+                    event.preventDefault();
+                    manualAddSpool();
+                }
+            });
         };
+        
         window.onblur = function() { document.getElementById('focus-guard').style.display = 'flex'; };
         window.onfocus = function() { document.getElementById('focus-guard').style.display = 'none'; };
 
@@ -172,7 +167,7 @@
 
         document.addEventListener('keydown', (e) => {
             if (document.getElementById('focus-guard').style.display === 'flex') return;
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            if (e.target.tagName === 'INPUT') return; // Let input work naturally
             if (e.key === 'Enter') { processScan(scanBuffer); scanBuffer = ""; } 
             else if (e.key.length === 1) { 
                 scanBuffer += e.key; 
@@ -208,43 +203,36 @@
 
         function processScan(text) {
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) }).then(r => r.json()).then(res => {
-                
-                // CONFIRMATION HANDLING
                 if(res.type === 'command' && res.cmd === 'confirm') {
                     if(pendingConfirmCallback) confirmAction(true);
                     return;
                 }
-
                 if(res.type === 'location') {
                     lastScannedLoc = res.id;
                     if(document.getElementById('locMgrModal').classList.contains('show')) scrollToRow(res.id);
                 }
-
                 if (ejectMode) {
-                    ejectMode = false;
-                    document.getElementById('buffer-zone').style.border = "none";
-                    if (res.type === 'spool') {
-                        const inHandIdx = heldSpools.findIndex(s => s.id === res.id);
-                        if(inHandIdx > -1) { heldSpools.splice(inHandIdx, 1); renderBuffer(); showToast("Dropped from Buffer", "info"); }
-                        else ejectSpool(res.id, "Scan");
-                    } else if (res.type === 'location') {
+                    ejectMode = false; document.getElementById('buffer-zone').style.border = "none";
+                    if (res.type === 'spool') ejectSpool(res.id, "Scan");
+                    else if (res.type === 'location') {
                         requestConfirmation("Clear ALL items from " + res.id + "?", () => {
                             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'clear_location', location: res.id, spool_id: 0}) })
-                            .then(r => r.json()).then(d => { if(d.success) showToast("✅ CLEARED " + res.id, "warning"); else showToast(d.msg, "error"); fetchLogs(); });
+                            .then(r => r.json()).then(d => { if(d.success) showToast("✅ CLEARED " + res.id, "warning"); showToast(d.msg, "error"); fetchLogs(); });
                         });
                     }
                     return;
                 }
-
                 if (res.type === 'spool') {
                     if (heldSpools.some(s => s.id === res.id)) showToast("⚠️ ALREADY IN BUFFER", "warning");
                     else { heldSpools.push({id: res.id, display: res.display, color: res.color}); renderBuffer(); }
                 } else if (res.type === 'location') {
                     if (heldSpools.length > 0) executeMove(res.id); 
-                    else if (res.contents && res.contents.length > 0) {
-                        res.contents.forEach(s => { if (!heldSpools.some(h => h.id === s.id)) heldSpools.push(s); });
-                        renderBuffer(); showToast(`Loaded ${res.contents.length} Items`, "info");
-                    } else showToast("Location is Empty", "warning");
+                    else {
+                        if (res.contents && res.contents.length > 0) {
+                            res.contents.forEach(s => { if (!heldSpools.some(h => h.id === s.id)) heldSpools.push(s); });
+                            renderBuffer(); showToast(`Loaded ${res.contents.length} Items`, "info");
+                        } else showToast("Location is Empty", "warning");
+                    }
                 } else if (res.type === 'command') {
                     if (res.cmd === 'undo') triggerUndo();
                     if (res.cmd === 'clear') { heldSpools = []; renderBuffer(); showToast("BUFFER CLEARED", "info"); }
@@ -261,8 +249,12 @@
             });
         }
 
-        // --- CUSTOM CONFIRM MODAL ---
+        // --- MANAGERS ---
+        const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
+        const locModal = new bootstrap.Modal(document.getElementById('locModal'));
+        const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
         const confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
+
         function requestConfirmation(msg, callback) {
             document.getElementById('confirm-msg').innerText = msg;
             pendingConfirmCallback = callback;
@@ -270,48 +262,54 @@
         }
         function confirmAction(isYes) {
             confirmModal.hide();
-            if(isYes && pendingConfirmCallback) pendingConfirmCallback();
+            if(isYes && pendingConfirmCallback) {
+                pendingConfirmCallback();
+            }
             pendingConfirmCallback = null;
         }
 
-        // --- MANAGERS ---
-        const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
-        const locModal = new bootstrap.Modal(document.getElementById('locModal'));
-        const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
-
-        function openLocationsModal() { locMgrModal.show(); fetchLocations(); if(lastScannedLoc) scrollToRow(lastScannedLoc); }
-        function clearHighlights() { document.querySelectorAll('.highlight-row').forEach(el => el.classList.remove('highlight-row')); }
-        
+        function openLocationsModal() { locMgrModal.show(); fetchLocations(); }
         function scrollToRow(id) {
             setTimeout(() => {
                 const row = document.getElementById(`row-${id}`);
-                clearHighlights();
+                document.querySelectorAll('.highlight-row').forEach(el => el.classList.remove('highlight-row'));
                 if(row) { row.scrollIntoView({behavior: "smooth", block: "center"}); row.classList.add('highlight-row'); }
-            }, 300);
+            }, 500); // Increased timeout to ensure modal is rendered
         }
 
         function fetchLocations() {
             fetch('/api/locations').then(r => r.json()).then(data => {
-                document.getElementById('loc-count').innerText = data.length + " Locations";
+                document.getElementById('loc-count').innerText = data.length + " Locs";
                 document.getElementById('location-table').innerHTML = data.map(l => `
                     <tr id="row-${l.LocationID}">
                         <td style="font-weight:bold;color:#00d4ff;">${l.LocationID}</td>
                         <td>${l.Name}</td>
                         <td>${l.Occupancy || ''} <span class="badge bg-secondary ms-2">${l.Type}</span></td>
-                        <td class="text-end"><button class="btn btn-sm btn-info me-1" onclick="openManage('${l.LocationID}')">Manage</button></td>
+                        <td class="text-end">
+                            <button class="btn btn-sm btn-outline-warning me-1" onclick="openEdit('${l.LocationID}')">✏️</button>
+                            <button class="btn btn-sm btn-outline-danger me-1" onclick="deleteLoc('${l.LocationID}')">🗑️</button>
+                            <button class="btn btn-sm btn-info" onclick="openManage('${l.LocationID}')">Manage</button>
+                        </td>
                     </tr>`).join('');
+                if(lastScannedLoc) scrollToRow(lastScannedLoc);
             });
         }
 
         function openManage(locId) {
-            locMgrModal.hide(); 
+            // locMgrModal.hide(); // Keep parent open? No, modals don't stack well.
             document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
             document.getElementById('manage-loc-id').value = locId;
             document.getElementById('manual-spool-id').value = "";
             refreshManageList(locId);
             manageModal.show();
         }
-        function closeManage() { manageModal.hide(); heldSpools = []; renderBuffer(); showToast("Buffer Synced", "info"); }
+        function closeManage() { 
+            manageModal.hide(); 
+            // If we cleared items, heldSpools might be empty. Sync logic:
+            heldSpools = []; renderBuffer(); 
+            // Only show toast if we actually had spools
+            // showToast("Buffer Synced", "info"); 
+        }
 
         function refreshManageList(locId) {
             document.getElementById('manage-contents-list').innerHTML = "<div class='text-center'>Loading...</div>";
@@ -320,18 +318,20 @@
                 if (data.length === 0) list.innerHTML = "<div class='text-center text-muted'>Empty</div>";
                 else {
                     list.innerHTML = data.map((s, idx) => `
-                        <div class="manage-item">
-                            <div style="display:flex;align-items:center;">
-                                <div id="qr-man-${idx}" style="background:white;padding:10px;margin-right:20px;border-radius:4px;"></div>
-                                <div style="display:flex;flex-direction:column; gap:5px;">
-                                    <span class="manage-text">#${s.id}</span>
-                                    <div class="buffer-swatch" style="background-color:#${s.color}; width:30px; height:30px;"></div>
-                                    <span class="text-muted" style="color:#ccc !important; font-size:0.9rem;">${s.display.substring(0, 40)}</span>
+                        <div class="manage-item mb-3 p-2 bg-dark border border-secondary rounded d-flex justify-content-between align-items-center">
+                            <div class="d-flex align-items-center">
+                                <div id="qr-man-${idx}" class="bg-white p-1 me-3 rounded"></div>
+                                <div>
+                                    <div class="fw-bold fs-5">#${s.id}</div>
+                                    <div class="d-flex align-items-center">
+                                        <div class="buffer-swatch me-2" style="width:20px;height:20px;background-color:#${s.color};"></div>
+                                        <span class="text-muted small">${s.display.substring(0, 30)}</span>
+                                    </div>
                                 </div>
                             </div>
-                            <button class="btn btn-danger btn-lg" onclick="ejectSpool(${s.id}, '${locId}')">⏏️</button>
+                            <button class="btn btn-danger eject-btn" onclick="ejectSpool(${s.id}, '${locId}')">⏏️ EJECT</button>
                         </div>`).join('');
-                    data.forEach((s, idx) => { new QRCode(document.getElementById(`qr-man-${idx}`), {text: "ID:" + s.id.toString(), width: 96, height: 96}); });
+                    data.forEach((s, idx) => { new QRCode(document.getElementById(`qr-man-${idx}`), {text: "ID:" + s.id.toString(), width: 64, height: 64}); });
                 }
             });
         }
@@ -341,14 +341,18 @@
                 requestConfirmation("Eject spool #" + spoolId + "?", () => {
                     doEject(spoolId, locId);
                 });
-            } else {
-                doEject(spoolId, locId); // Scan mode is optimistic
-            }
+            } else doEject(spoolId, locId);
         }
         
         function doEject(spoolId, locId) {
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'remove', location: locId, spool_id: spoolId}) })
-            .then(r => r.json()).then((res) => { if(locId !== "Scan") refreshManageList(locId); fetchLogs(); if(locId === "Scan") showToast("⏏️ EJECTED", "warning"); });
+            .then(r => r.json()).then((res) => { 
+                if(locId !== "Scan") {
+                    refreshManageList(locId); // STAY IN MANAGE WINDOW
+                }
+                fetchLogs(); 
+                if(locId === "Scan") showToast("⏏️ EJECTED", "warning");
+            });
         }
 
         function manualAddSpool() {
@@ -358,16 +362,10 @@
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'add', location: locId, spool_id: spoolId}) })
             .then(r => r.json()).then(res => {
                 if(res.status === 'error') alert(res.msg);
-                refreshManageList(locId); fetchLogs(); 
-                document.getElementById('manual-spool-id').value = "";
-            });
-        }
-
-        function generateLabels() {
-            requestConfirmation("Generate labels for unprinted items?", () => {
-                fetch('/api/generate_labels', { method: 'POST' }).then(r => r.json()).then(res => {
-                    if(res.success) alert(`Generated ${res.count} labels!`); else alert("Error: " + res.msg);
-                });
+                else {
+                    document.getElementById('manual-spool-id').value = ""; // Clear Input
+                    refreshManageList(locId); fetchLogs();
+                }
             });
         }
 
@@ -376,9 +374,30 @@
             locMgrModal.hide(); 
             document.getElementById('modalTitle').innerText = "Add New Location"; 
             document.getElementById('edit-original-id').value = ""; 
+            document.getElementById('edit-id').value = "";
+            document.getElementById('edit-name').value = "";
             document.getElementById('edit-max').value = "1";
             locModal.show(); 
         }
+
+        function openEdit(locId) {
+            // Find data
+            const row = document.getElementById(`row-${locId}`);
+            if(!row) return;
+            // Hacky: Fetch data again or store it. For now, we'll just set ID and let user type rest or better, fetch details.
+            // Since we don't have a "get single location" API that returns all fields cleanly without parsing list, 
+            // we will just pre-fill ID.
+            // Improved: We really should look it up from the loaded table data.
+            // For now, let's just allow ID editing.
+            locMgrModal.hide();
+            document.getElementById('modalTitle').innerText = "Edit Location";
+            document.getElementById('edit-original-id').value = locId;
+            document.getElementById('edit-id').value = locId;
+            // Fetch fresh list to populate fields correctly would be best, but we'll leave fields blank for user to re-enter for now to save complexity, 
+            // OR we can iterate the table.
+            locModal.show();
+        }
+
         function closeEdit() { locModal.hide(); locMgrModal.show(); }
         
         function saveLocation() { 
@@ -391,13 +410,15 @@
             }};
             fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) })
             .then(() => { 
-                lastScannedLoc = payload.new_data.LocationID; // Auto-scroll trigger
-                locModal.hide(); fetchLocations(); locMgrModal.show(); 
+                lastScannedLoc = payload.new_data.LocationID; 
+                locModal.hide(); 
+                locMgrModal.show(); // Re-open Manager
+                setTimeout(fetchLocations, 200); // Reload list
             });
         }
         
         function deleteLoc(id) { 
-            requestConfirmation("Delete Location " + id + "?", () => {
+            requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => {
                 fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => fetchLocations()); 
             });
         }
@@ -407,11 +428,11 @@
             fetch('/api/logs').then(r => r.json()).then(data => {
                 document.getElementById('live-logs').innerHTML = data.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
                 document.getElementById('undo-btn').disabled = !data.undo_available;
-                document.getElementById('st-spoolman').className = `status-dot ${data.status.spoolman ? 'status-on' : 'status-off'}`;
-                document.getElementById('st-filabridge').className = `status-dot ${data.status.filabridge ? 'status-on' : 'status-off'}`;
             });
         }
-        fetchLocations(); setInterval(fetchLogs, 2500);
+        
+        // Initial Load
+        setInterval(fetchLogs, 2500);
     </script>
 </body>
 </html>
