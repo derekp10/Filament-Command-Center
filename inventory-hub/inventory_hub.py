@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v93.0 (Fixes & Stability)"
+VERSION = "v93.1 (Hotfix)"
 
 def load_config():
     defaults = {
@@ -83,141 +83,7 @@ SERVER_IP = cfg.get("server_ip")
 SPOOLMAN_URL = f"http://{SERVER_IP}:{cfg.get('spoolman_port')}"
 FILABRIDGE_API_BASE = f"http://{SERVER_IP}:{cfg.get('filabridge_port')}/api"
 
-logger.info(f"🛠️ Server {VERSION} Started")
-
-@app.route('/')
-def dashboard(): return render_template('dashboard.html', version=VERSION)
-
-@app.route('/api/locations', methods=['GET'])
-def api_get_locations(): 
-    csv_rows = load_locations_list()
-    occupancy_map = {}
-    try:
-        resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
-        if resp.ok:
-            for s in resp.json():
-                loc = s.get('location', '').upper().strip()
-                if loc: occupancy_map[loc] = occupancy_map.get(loc, 0) + 1
-    except: pass
-
-    final_list = []
-    for row in csv_rows:
-        lid = row['LocationID'].upper()
-        max_s = row.get('Max Spools', '')
-        max_val = int(max_s) if max_s and max_s.isdigit() else 0
-        curr_val = occupancy_map.get(lid, 0)
-        
-        row['OccupancyRaw'] = curr_val # For JS logic
-        if max_val > 0: row['Occupancy'] = f"{curr_val}/{max_val}"
-        else: row['Occupancy'] = f"{curr_val} items"
-        final_list.append(row)
-    return jsonify(final_list)
-
-@app.route('/api/locations', methods=['POST'])
-def api_save_location():
-    data = request.json
-    old_id = data.get('old_id')
-    new_entry = data.get('new_data')
-    current_list = load_locations_list()
-    
-    if old_id:
-        current_list = [row for row in current_list if row['LocationID'] != old_id]
-        add_log_entry(f"📝 Updated: {new_entry['LocationID']}")
-    else:
-        add_log_entry(f"✨ Created: {new_entry['LocationID']}")
-    
-    current_list.append(new_entry)
-    current_list.sort(key=lambda x: x['LocationID'])
-    save_locations_list(current_list)
-    return jsonify({"success": True})
-
-@app.route('/api/locations', methods=['DELETE'])
-def api_delete_location():
-    target = request.args.get('id', '').strip()
-    if not target: return jsonify({"success": False})
-    
-    # Unassign spools logic
-    try:
-        contents = get_spools_at_location(target)
-        for sid in contents: update_spool(sid, {"location": ""})
-        if contents: add_log_entry(f"🏚️ Evicted {len(contents)} spools from {target}", "WARNING")
-    except: pass
-
-    current = load_locations_list()
-    new_list = [row for row in current if row['LocationID'] != target]
-    save_locations_list(new_list)
-    add_log_entry(f"🗑️ Deleted: {target}", "WARNING")
-    return jsonify({"success": True})
-
-@app.route('/api/undo', methods=['POST'])
-def undo_last_move():
-    if not UNDO_STACK: return jsonify({"success": False, "msg": "History empty."})
-    last = UNDO_STACK.pop(); moves = last['moves']; target = last.get('target')
-    
-    cfg = load_config(); printer_map = cfg.get("printer_map", {})
-    if target in printer_map:
-        try:
-            p = printer_map[target]
-            requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
-        except: pass
-        
-    for sid, loc in moves.items():
-        requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json={"location": loc})
-        if loc in printer_map:
-            p = printer_map[loc]
-            try:
-                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)})
-            except: pass
-            
-    add_log_entry(f"↩️ Undid: {last['summary']}", "WARNING")
-    return jsonify({"success": True})
-
-@app.route('/api/get_contents', methods=['GET'])
-def api_get_contents():
-    loc = request.args.get('id', '').strip().upper()
-    return jsonify(get_spools_at_location_detailed(loc))
-
-@app.route('/api/manage_contents', methods=['POST'])
-def api_manage_contents():
-    data = request.json
-    action = data.get('action') 
-    loc_id = data.get('location', '').strip().upper() 
-    spool_id = data.get('spool_id') 
-
-    if action == 'clear_location':
-        if not loc_id or loc_id == "SCAN": return jsonify({"success": False, "msg": "Invalid"})
-        contents = get_spools_at_location(loc_id)
-        if not contents: return jsonify({"success": False, "msg": "Already empty"})
-        for sid in contents: update_spool(sid, {"location": ""})
-        add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
-        return jsonify({"success": True})
-
-    # Legacy ID Lookup
-    if action == 'add' and str(spool_id).isdigit():
-        legacy_match = find_spool_by_legacy_id(spool_id)
-        if legacy_match: spool_id = legacy_match 
-
-    if not spool_id: return jsonify({"success": False, "msg": "Missing Data"})
-    spool_data = get_spool(spool_id)
-    if not spool_data: return jsonify({"success": False, "msg": "Spool not found"})
-    info = format_spool_display(spool_data)
-
-    if action == 'remove':
-        current_db_loc = spool_data.get('location', '').strip().upper()
-        update_spool(spool_id, {"location": ""})
-        add_log_entry(f"⏏️ Ejected: {info['text']} from {current_db_loc}", "WARNING")
-        return jsonify({"success": True})
-
-    elif action == 'add':
-        # Direct call to logic instead of route loopback
-        res_data = perform_smart_move(loc_id, [spool_id])
-        return jsonify(res_data)
-
-    return jsonify({"success": False, "msg": "Unknown Action"})
-
-# --- LOGIC HELPERS ---
+# --- LOGIC HELPERS (MOVED TO TOP FOR SCOPING) ---
 def get_spool(sid):
     try: return requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", timeout=3).json()
     except: return None
@@ -225,21 +91,6 @@ def get_spool(sid):
 def update_spool(sid, data):
     try: requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=data)
     except: pass
-
-def get_spools_at_location_detailed(loc_name):
-    found = []
-    try:
-        resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
-        if resp.ok:
-            for s in resp.json():
-                if s.get('location', '').upper() == loc_name.upper():
-                    info = format_spool_display(s)
-                    found.append({'id': s['id'], 'display': info['text'], 'color': info['color']})
-    except: pass
-    return found
-
-def get_spools_at_location(loc_name):
-    return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
 
 def format_spool_display(spool_data):
     sid = spool_data.get('id', '?')
@@ -257,60 +108,61 @@ def find_spool_by_legacy_id(legacy_id):
         resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
         if resp.ok:
             data = resp.json()
-            # 1. Check Extra Field matches (Google Sheet IDs often here)
+            # 1. Check External ID (where legacy IDs live)
             for spool in data:
                 ext = str(spool.get('external_id', '')).strip().replace('"','')
                 if ext == legacy_id: return spool['id']
-            # 2. Check Spool ID matches
+            # 2. Check direct ID
             for spool in data:
                 if str(spool['id']) == legacy_id: return spool['id']
     except: pass
     return None
 
+def get_spools_at_location_detailed(loc_name):
+    found = []
+    try:
+        resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
+        if resp.ok:
+            for s in resp.json():
+                if s.get('location', '').upper() == loc_name.upper():
+                    info = format_spool_display(s)
+                    found.append({'id': s['id'], 'display': info['text'], 'color': info['color']})
+    except: pass
+    return found
+
+def get_spools_at_location(loc_name):
+    return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
+
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
+    
+    # 1. Commands
     if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
     if "CMD:CONFIRM" in text.upper(): return {'type': 'command', 'cmd': 'confirm'}
 
+    # 2. Standard ID Scan (ID:123)
     if text.upper().startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
 
-    # Legacy Google Sheet URL detection
+    # 3. Google Sheet Legacy URL (range=123)
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1))
             if rid: return {'type': 'spool', 'id': rid}
 
+    # 4. Raw Number (Could be ID or Legacy ID)
     if text.isdigit():
         rid = find_spool_by_legacy_id(text)
         if rid: return {'type': 'spool', 'id': rid}
         return {'type': 'spool', 'id': int(text)}
         
+    # 5. Location
     if len(text) > 2: return {'type': 'location', 'id': text.upper()}
     return None
-
-@app.route('/api/identify_scan', methods=['POST'])
-def identify_scan():
-    res = resolve_scan(request.json.get('text', ''))
-    if not res: return jsonify({"type": "unknown"})
-    if res['type'] == 'location':
-        lid = res['id']; 
-        items = get_spools_at_location_detailed(lid)
-        if items: add_log_entry(f"🔎 {lid}: {len(items)} item(s)")
-        else: add_log_entry(f"🔎 {lid}: Empty")
-        return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}", "contents": items})
-    
-    if res['type'] == 'spool':
-        sid = res['id']; data = get_spool(sid)
-        if data:
-            info = format_spool_display(data)
-            return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
-    if res['type'] == 'command': return jsonify(res)
-    return jsonify({"type": "error"})
 
 def perform_smart_move(target, raw_spools):
     target = target.strip().upper()
@@ -379,12 +231,150 @@ def perform_smart_move(target, raw_spools):
     UNDO_STACK.append(undo_record)
     return {"status": "success"}
 
+# --- ROUTES ---
+logger.info(f"🛠️ Server {VERSION} Started")
+
+@app.route('/')
+def dashboard(): return render_template('dashboard.html', version=VERSION)
+
+@app.route('/api/locations', methods=['GET'])
+def api_get_locations(): 
+    csv_rows = load_locations_list()
+    occupancy_map = {}
+    try:
+        resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
+        if resp.ok:
+            for s in resp.json():
+                loc = s.get('location', '').upper().strip()
+                if loc: occupancy_map[loc] = occupancy_map.get(loc, 0) + 1
+    except: pass
+
+    final_list = []
+    for row in csv_rows:
+        lid = row['LocationID'].upper()
+        max_s = row.get('Max Spools', '')
+        max_val = int(max_s) if max_s and max_s.isdigit() else 0
+        curr_val = occupancy_map.get(lid, 0)
+        
+        row['OccupancyRaw'] = curr_val 
+        if max_val > 0: row['Occupancy'] = f"{curr_val}/{max_val}"
+        else: row['Occupancy'] = f"{curr_val} items"
+        final_list.append(row)
+    return jsonify(final_list)
+
+@app.route('/api/locations', methods=['POST'])
+def api_save_location():
+    data = request.json
+    old_id = data.get('old_id')
+    new_entry = data.get('new_data')
+    current_list = load_locations_list()
+    
+    if old_id:
+        current_list = [row for row in current_list if row['LocationID'] != old_id]
+        add_log_entry(f"📝 Updated: {new_entry['LocationID']}")
+    else:
+        add_log_entry(f"✨ Created: {new_entry['LocationID']}")
+    
+    current_list.append(new_entry)
+    current_list.sort(key=lambda x: x['LocationID'])
+    save_locations_list(current_list)
+    return jsonify({"success": True})
+
+@app.route('/api/locations', methods=['DELETE'])
+def api_delete_location():
+    target = request.args.get('id', '').strip()
+    if not target: return jsonify({"success": False})
+    
+    try:
+        contents = get_spools_at_location(target)
+        for sid in contents: update_spool(sid, {"location": ""})
+        if contents: add_log_entry(f"🏚️ Evicted {len(contents)} spools from {target}", "WARNING")
+    except: pass
+
+    current = load_locations_list()
+    new_list = [row for row in current if row['LocationID'] != target]
+    save_locations_list(new_list)
+    add_log_entry(f"🗑️ Deleted: {target}", "WARNING")
+    return jsonify({"success": True})
+
+@app.route('/api/undo', methods=['POST'])
+def api_undo():
+    return undo_last_move()
+
+@app.route('/api/get_contents', methods=['GET'])
+def api_get_contents_route():
+    loc = request.args.get('id', '').strip().upper()
+    return jsonify(get_spools_at_location_detailed(loc))
+
+@app.route('/api/manage_contents', methods=['POST'])
+def api_manage_contents():
+    data = request.json
+    action = data.get('action') 
+    loc_id = data.get('location', '').strip().upper() 
+    spool_input = data.get('spool_id') 
+
+    if action == 'clear_location':
+        if not loc_id or loc_id == "SCAN": return jsonify({"success": False, "msg": "Invalid"})
+        contents = get_spools_at_location(loc_id)
+        if not contents: return jsonify({"success": False, "msg": "Already empty"})
+        for sid in contents: update_spool(sid, {"location": ""})
+        add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
+        return jsonify({"success": True})
+
+    # --- FIX: UNIFIED LOOKUP LOGIC ---
+    # Convert input (QR URL, Legacy ID, or Standard ID) into a real Spool ID
+    spool_id = None
+    if spool_input:
+        # Use the same brain as the scanner to resolve what was typed/scanned
+        resolution = resolve_scan(str(spool_input))
+        if resolution and resolution['type'] == 'spool':
+            spool_id = resolution['id']
+    
+    if not spool_id:
+        return jsonify({"success": False, "msg": "Spool not found (Invalid Scan/ID)"})
+
+    spool_data = get_spool(spool_id)
+    if not spool_data: return jsonify({"success": False, "msg": "Spool ID not found in DB"})
+    info = format_spool_display(spool_data)
+
+    if action == 'remove':
+        current_db_loc = spool_data.get('location', '').strip().upper()
+        update_spool(spool_id, {"location": ""})
+        add_log_entry(f"⏏️ Ejected: {info['text']} from {current_db_loc}", "WARNING")
+        return jsonify({"success": True})
+
+    elif action == 'add':
+        # Direct call to logic
+        res_data = perform_smart_move(loc_id, [spool_id])
+        return jsonify(res_data)
+
+    return jsonify({"success": False, "msg": "Unknown Action"})
+
+@app.route('/api/identify_scan', methods=['POST'])
+def api_identify_scan():
+    res = resolve_scan(request.json.get('text', ''))
+    if not res: return jsonify({"type": "unknown"})
+    if res['type'] == 'location':
+        lid = res['id']; 
+        items = get_spools_at_location_detailed(lid)
+        if items: add_log_entry(f"🔎 {lid}: {len(items)} item(s)")
+        else: add_log_entry(f"🔎 {lid}: Empty")
+        return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}", "contents": items})
+    
+    if res['type'] == 'spool':
+        sid = res['id']; data = get_spool(sid)
+        if data:
+            info = format_spool_display(data)
+            return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
+    if res['type'] == 'command': return jsonify(res)
+    return jsonify({"type": "error"})
+
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
     return jsonify(perform_smart_move(request.json.get('location'), request.json.get('spools')))
 
 @app.route('/api/logs', methods=['GET'])
-def api_get_logs():
+def api_get_logs_route():
     sm_ok, fb_ok = False, False
     try: sm_ok = requests.get(f"{SPOOLMAN_URL}/api/v1/health", timeout=1).ok
     except: pass
