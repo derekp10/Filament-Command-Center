@@ -11,9 +11,13 @@
         .navbar { background-color: #1a1a1a; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
         .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; }
         .version-tag { color: #888; font-size: 1rem; margin-left: 10px; font-weight: bold; }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .status-on { background-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
+        .status-off { background-color: #ff4444; box-shadow: 0 0 5px #ff4444; }
         .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
         .col-logs { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
         .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.2rem; line-height: 1.6; }
+        .log-INFO { color: #00ff00; } .log-WARNING { color: #ffcc00; } .log-ERROR { color: #ff4444; }
         .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
         .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; font-weight: bold; color: #00d4ff; font-size: 1.2rem; display: flex; justify-content: space-between; }
         .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
@@ -23,12 +27,10 @@
         .qr-box { background: white; padding: 5px; border-radius: 4px; }
         .cmd-deck { padding: 15px; border-top: 1px solid #333; background: #222; display: flex; justify-content: space-around; }
         
-        /* MODALS */
+        /* MODALS & TABLES */
         .modal-content { background-color: #121212; color: #fff; border: 1px solid #555; }
         .table-dark { --bs-table-bg: #181818; }
         .highlight-row { border: 4px solid #ffff00 !important; background-color: #333 !important; }
-        
-        /* EJECT BUTTONS */
         .eject-btn { padding: 15px 30px; font-size: 1.5rem; border-radius: 8px; height: 100%; display: flex; align-items: center; }
 
         #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; width: 80%; max-width: 600px; }
@@ -43,7 +45,9 @@
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid">
             <div class="d-flex align-items-center"><span class="navbar-brand">Filament Command Center</span><span class="version-tag">{{ version }}</span></div>
-            <div>
+            <div class="d-flex align-items-center">
+                <div style="margin-right:20px; color:#ccc;"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
+                <div style="margin-right:20px; color:#ccc;"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
                 <button class="btn btn-outline-info btn-sm me-3" onclick="openLocationsModal()">📂 Locations</button>
                 <button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button>
             </div>
@@ -146,7 +150,6 @@
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             new QRCode(document.getElementById("qr-confirm"), {text: "CMD:CONFIRM", width: 128, height: 128});
             
-            // KEYBOARD LISTENER FOR ADD SPOOL INPUT
             document.getElementById("manual-spool-id").addEventListener("keypress", function(event) {
                 if (event.key === "Enter") {
                     event.preventDefault();
@@ -164,10 +167,11 @@
         let ejectMode = false;
         let lastScannedLoc = null;
         let pendingConfirmCallback = null;
+        let allLocations = []; // STORE FOR EDITING
 
         document.addEventListener('keydown', (e) => {
             if (document.getElementById('focus-guard').style.display === 'flex') return;
-            if (e.target.tagName === 'INPUT') return; // Let input work naturally
+            if (e.target.tagName === 'INPUT') return; 
             if (e.key === 'Enter') { processScan(scanBuffer); scanBuffer = ""; } 
             else if (e.key.length === 1) { 
                 scanBuffer += e.key; 
@@ -249,7 +253,6 @@
             });
         }
 
-        // --- MANAGERS ---
         const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
         const locModal = new bootstrap.Modal(document.getElementById('locModal'));
         const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
@@ -262,9 +265,7 @@
         }
         function confirmAction(isYes) {
             confirmModal.hide();
-            if(isYes && pendingConfirmCallback) {
-                pendingConfirmCallback();
-            }
+            if(isYes && pendingConfirmCallback) pendingConfirmCallback();
             pendingConfirmCallback = null;
         }
 
@@ -274,11 +275,12 @@
                 const row = document.getElementById(`row-${id}`);
                 document.querySelectorAll('.highlight-row').forEach(el => el.classList.remove('highlight-row'));
                 if(row) { row.scrollIntoView({behavior: "smooth", block: "center"}); row.classList.add('highlight-row'); }
-            }, 500); // Increased timeout to ensure modal is rendered
+            }, 500);
         }
 
         function fetchLocations() {
             fetch('/api/locations').then(r => r.json()).then(data => {
+                allLocations = data; // Save for editing
                 document.getElementById('loc-count').innerText = data.length + " Locs";
                 document.getElementById('location-table').innerHTML = data.map(l => `
                     <tr id="row-${l.LocationID}">
@@ -296,7 +298,6 @@
         }
 
         function openManage(locId) {
-            // locMgrModal.hide(); // Keep parent open? No, modals don't stack well.
             document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
             document.getElementById('manage-loc-id').value = locId;
             document.getElementById('manual-spool-id').value = "";
@@ -305,10 +306,9 @@
         }
         function closeManage() { 
             manageModal.hide(); 
-            // If we cleared items, heldSpools might be empty. Sync logic:
             heldSpools = []; renderBuffer(); 
-            // Only show toast if we actually had spools
-            // showToast("Buffer Synced", "info"); 
+            // IMPORTANT: Refresh location list to update counts
+            fetchLocations(); 
         }
 
         function refreshManageList(locId) {
@@ -347,9 +347,7 @@
         function doEject(spoolId, locId) {
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'remove', location: locId, spool_id: spoolId}) })
             .then(r => r.json()).then((res) => { 
-                if(locId !== "Scan") {
-                    refreshManageList(locId); // STAY IN MANAGE WINDOW
-                }
+                if(locId !== "Scan") refreshManageList(locId); 
                 fetchLogs(); 
                 if(locId === "Scan") showToast("⏏️ EJECTED", "warning");
             });
@@ -363,8 +361,10 @@
             .then(r => r.json()).then(res => {
                 if(res.status === 'error') alert(res.msg);
                 else {
-                    document.getElementById('manual-spool-id').value = ""; // Clear Input
-                    refreshManageList(locId); fetchLogs();
+                    document.getElementById('manual-spool-id').value = ""; 
+                    // Small delay to ensure DB write before read
+                    setTimeout(() => refreshManageList(locId), 300);
+                    fetchLogs();
                 }
             });
         }
@@ -381,20 +381,18 @@
         }
 
         function openEdit(locId) {
-            // Find data
-            const row = document.getElementById(`row-${locId}`);
-            if(!row) return;
-            // Hacky: Fetch data again or store it. For now, we'll just set ID and let user type rest or better, fetch details.
-            // Since we don't have a "get single location" API that returns all fields cleanly without parsing list, 
-            // we will just pre-fill ID.
-            // Improved: We really should look it up from the loaded table data.
-            // For now, let's just allow ID editing.
+            // FIX: Find data in global store
+            const item = allLocations.find(l => l.LocationID === locId);
+            if(!item) return;
+            
             locMgrModal.hide();
             document.getElementById('modalTitle').innerText = "Edit Location";
             document.getElementById('edit-original-id').value = locId;
             document.getElementById('edit-id').value = locId;
-            // Fetch fresh list to populate fields correctly would be best, but we'll leave fields blank for user to re-enter for now to save complexity, 
-            // OR we can iterate the table.
+            // PRE-FILL DATA CORRECTLY
+            document.getElementById('edit-name').value = item.Name || "";
+            document.getElementById('edit-type').value = item.Type || "Dryer Box";
+            document.getElementById('edit-max').value = item['Max Spools'] || "1";
             locModal.show();
         }
 
@@ -411,9 +409,8 @@
             fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) })
             .then(() => { 
                 lastScannedLoc = payload.new_data.LocationID; 
-                locModal.hide(); 
-                locMgrModal.show(); // Re-open Manager
-                setTimeout(fetchLocations, 200); // Reload list
+                locModal.hide(); locMgrModal.show(); 
+                setTimeout(fetchLocations, 200); 
             });
         }
         
@@ -428,10 +425,10 @@
             fetch('/api/logs').then(r => r.json()).then(data => {
                 document.getElementById('live-logs').innerHTML = data.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
                 document.getElementById('undo-btn').disabled = !data.undo_available;
+                document.getElementById('st-spoolman').className = `status-dot ${data.status.spoolman ? 'status-on' : 'status-off'}`;
+                document.getElementById('st-filabridge').className = `status-dot ${data.status.filabridge ? 'status-on' : 'status-off'}`;
             });
         }
-        
-        // Initial Load
         setInterval(fetchLogs, 2500);
     </script>
 </body>
