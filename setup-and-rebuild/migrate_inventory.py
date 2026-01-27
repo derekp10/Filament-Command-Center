@@ -10,7 +10,6 @@ SPOOLMAN_IP = "http://192.168.1.29:7912"
 DATA_FOLDER_NAME = "3D Print Data"
 FILAMENT_FILENAME = "3D Print Supplies - Filament.csv"
 
-# --- PATH FINDER HELPER ---
 def find_file(filename):
     current_dir = os.path.dirname(os.path.abspath(__file__))
     for _ in range(4):
@@ -27,7 +26,6 @@ def find_file(filename):
 
 CSV_FILE = find_file(FILAMENT_FILENAME)
 
-# --- MAPPINGS & LOGIC ---
 MATERIAL_PURIFY_MAP = {
     "CF-PETG": ("PETG", "Carbon Fiber"),
     "CF-PC": ("PC", "Carbon Fiber"),
@@ -97,7 +95,6 @@ CSV_COLUMNS = {
 
 DENSITY_MAP = { "PLA": 1.24, "PETG": 1.27, "ABS": 1.04, "ASA": 1.07, "TPU": 1.21, "PC": 1.20, "NYLON": 1.14, "PVB": 1.08, "HIPS": 1.07, "PVA": 1.19, "PA6": 1.14, "PA612": 1.06 }
 
-# --- HELPERS ---
 def hex_to_rgb(hex_str):
     if not hex_str: return None
     hex_str = hex_str.lstrip('#')
@@ -247,23 +244,26 @@ def get_or_create_filament(d, vendor_id):
 
     extra_data = {}
     
-    # FIX: NO JSON.DUMPS! Send native Python types.
-    if final_attrs: extra_data["filament_attributes"] = sorted(list(final_attrs))
-    if d.get('tpu_shore'): extra_data["shore_hardness"] = d.get('tpu_shore')
-    if d.get('profile'): extra_data["slicer_profile"] = d.get('profile')
-    if d.get('price_total'): extra_data["price_total"] = d.get('price_total')
-    if d.get('product_url'): extra_data["product_url"] = d.get('product_url')
-    if d.get('purchase_url'): extra_data["purchase_url"] = d.get('purchase_url')
-    if d.get('sheet_row_link'): extra_data["sheet_link"] = d.get('sheet_row_link')
+    # CRITICAL: RESTORE JSON.DUMPS
+    if final_attrs: extra_data["filament_attributes"] = json.dumps(sorted(list(final_attrs)))
+    if d.get('tpu_shore'): extra_data["shore_hardness"] = json.dumps(d.get('tpu_shore'))
+    if d.get('profile'): extra_data["slicer_profile"] = json.dumps(d.get('profile'))
     
-    extra_data["label_printed"] = to_bool(d.get('label_printed'))
-    extra_data["sample_printed"] = to_bool(d.get('sample_printed'))
-    extra_data["spoolman_reprint"] = True
-    extra_data["original_color"] = d.get('color_name')
+    # TEXT FIELDS MUST BE JSON STRINGS (e.g. '"$24.99"')
+    if d.get('price_total'): extra_data["price_total"] = json.dumps(d.get('price_total'))
+    if d.get('product_url'): extra_data["product_url"] = json.dumps(d.get('product_url'))
+    if d.get('purchase_url'): extra_data["purchase_url"] = json.dumps(d.get('purchase_url'))
+    if d.get('sheet_row_link'): extra_data["sheet_link"] = json.dumps(d.get('sheet_row_link'))
+    if d.get('color_name'): extra_data["original_color"] = json.dumps(d.get('color_name'))
     
-    if d.get('drying_temp'): extra_data["drying_temp"] = d.get('drying_temp')
-    if d.get('drying_time'): extra_data["drying_time"] = d.get('drying_time')
-    if d.get('fan'): extra_data["flush_multiplier"] = d.get('fan')
+    # BOOLEANS MUST BE JSON STRINGS (e.g. '"true"')
+    extra_data["label_printed"] = json.dumps(to_bool(d.get('label_printed')))
+    extra_data["sample_printed"] = json.dumps(to_bool(d.get('sample_printed')))
+    extra_data["spoolman_reprint"] = json.dumps(True)
+    
+    if d.get('drying_temp'): extra_data["drying_temp"] = json.dumps(d.get('drying_temp'))
+    if d.get('drying_time'): extra_data["drying_time"] = json.dumps(d.get('drying_time'))
+    if d.get('fan'): extra_data["flush_multiplier"] = json.dumps(d.get('fan'))
 
     base_nozzle = int(d.get('t1_min') or 200)
     base_bed = int(d.get('b1_min') or 60)
@@ -297,13 +297,12 @@ def get_or_create_filament(d, vendor_id):
     return resp.json()['id'], True
 
 def create_spool(filament_id, remaining, location, purchased, is_refill, spool_type, spool_temp):
-    # FIX: NO JSON.DUMPS here either!
     extra_payload = {
-        "label_printed": False,
-        "is_refill": is_refill
+        "label_printed": json.dumps(False),
+        "is_refill": json.dumps(is_refill)
     }
-    if spool_type: extra_payload["spool_type"] = spool_type 
-    if spool_temp: extra_payload["spool_temp"] = spool_temp
+    if spool_type: extra_payload["spool_type"] = json.dumps(spool_type)
+    if spool_temp: extra_payload["spool_temp"] = json.dumps(spool_temp)
 
     payload = {
         "filament_id": filament_id,
@@ -313,11 +312,8 @@ def create_spool(filament_id, remaining, location, purchased, is_refill, spool_t
         "extra": extra_payload
     }
     resp = requests.post(f"{SPOOLMAN_IP}/api/v1/spool", json=payload)
-    
-    if resp.status_code >= 400:
-        print(f"❌ Spool Create Failed: {resp.text}")
+    if resp.status_code >= 400: print(f"❌ Spool Create Failed: {resp.text}")
 
-# --- MAIN ---
 print("Starting Migration (Inventory)...")
 with open(CSV_FILE, newline='', encoding='utf-8') as csvfile:
     reader = csv.DictReader(csvfile)
@@ -335,23 +331,16 @@ with open(CSV_FILE, newline='', encoding='utf-8') as csvfile:
         fid, is_new = get_or_create_filament(d, vid)
         if not fid: continue
 
-        # Spool Data
         stype = d.get('spool_type')
         stemp = d.get('spool_res')
 
-        # 1. Standard Unopened
         count_unopened = clean_int(d.get('unopened_count'))
-        for _ in range(count_unopened):
-            create_spool(fid, 1000, d['location'], d['purchase_date'], False, stype, stemp)
+        for _ in range(count_unopened): create_spool(fid, 1000, d['location'], d['purchase_date'], False, stype, stemp)
 
-        # 2. Refills
         count_refills = clean_int(d.get('refill_count'))
-        for _ in range(count_refills):
-            create_spool(fid, 1000, d['location'], d['purchase_date'], True, stype, stemp)
+        for _ in range(count_refills): create_spool(fid, 1000, d['location'], d['purchase_date'], True, stype, stemp)
 
-        # 3. Opened (969g)
         count_open = clean_int(d.get('opened_count'))
-        for _ in range(count_open):
-            create_spool(fid, 969, d['location'], d['purchase_date'], False, stype, stemp)
+        for _ in range(count_open): create_spool(fid, 969, d['location'], d['purchase_date'], False, stype, stemp)
 
 print("Migration Complete!")
