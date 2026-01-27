@@ -30,7 +30,7 @@ CSV_FILE = '3D Print Supplies - Locations.csv'
 LABEL_FILE = 'locations_to_print.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v89.0 (Polish & Labels)"
+VERSION = "v90.0 (Manager Polish)"
 
 def load_config():
     defaults = {
@@ -85,7 +85,6 @@ def save_locations_list(new_list):
 
 def add_log_entry(msg, category="INFO", color_hex=None):
     timestamp = time.strftime("%H:%M:%S")
-    # GIANT SWATCHES (24px)
     if color_hex:
         swatch = f'<span style="display:inline-block;width:24px;height:24px;border-radius:50%;background-color:#{color_hex};margin-right:10px;border:2px solid #fff;vertical-align:middle;"></span>'
         msg = swatch + f'<span style="vertical-align:middle;">{msg}</span>'
@@ -179,7 +178,6 @@ def undo_last_move():
     add_log_entry(f"↩️ Undid: {last['summary']}", "WARNING")
     return jsonify({"success": True})
 
-# --- NEW: LABEL GENERATION ---
 @app.route('/api/generate_labels', methods=['POST'])
 def api_generate_labels():
     rows = load_locations_list()
@@ -216,7 +214,6 @@ def api_download_labels():
         return send_file(LABEL_FILE, as_attachment=True)
     return "No labels generated yet.", 404
 
-# --- MANAGEMENT ENDPOINTS ---
 @app.route('/api/get_contents', methods=['GET'])
 def api_get_contents():
     loc = request.args.get('id', '').strip().upper()
@@ -226,28 +223,48 @@ def api_get_contents():
 def api_manage_contents():
     data = request.json
     action = data.get('action') 
-    loc_id = data.get('location', '').strip().upper() # Might be "Scan" if from QR
+    loc_id = data.get('location', '').strip().upper() 
     spool_id = data.get('spool_id')
     
     cfg = load_config()
     printer_map = cfg.get("printer_map", {})
 
+    # --- FEATURE: CLEAR LOCATION (via QR Scan of Location) ---
+    if action == 'clear_location':
+        if not loc_id or loc_id == "SCAN": return jsonify({"success": False, "msg": "Invalid Location"})
+        
+        contents = get_spools_at_location(loc_id)
+        if not contents:
+            return jsonify({"success": False, "msg": "Location already empty"})
+            
+        for sid in contents:
+            update_spool(sid, {"location": ""})
+            
+        add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
+        
+        # Clear FilaBridge if Printer
+        if loc_id in printer_map:
+            p = printer_map[loc_id]
+            try:
+                add_log_entry(f"🔌 Clearing Toolhead: {p['printer_name']} T{p['position']}", "WARNING")
+                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}, timeout=2)
+            except: pass
+            
+        return jsonify({"success": True})
+
+    # --- STANDARD EJECT/ADD ---
     if not spool_id: return jsonify({"success": False, "msg": "Missing Data"})
     
     spool_data = get_spool(spool_id)
     if not spool_data: return jsonify({"success": False, "msg": "Spool not found"})
     info = format_spool_display(spool_data)
 
-    # --- FIX 3: EJECT LOGIC (Check Location FIRST) ---
     if action == 'remove':
-        # 1. Find where it IS right now (Database Truth)
         current_db_loc = spool_data.get('location', '').strip().upper()
-        
-        # 2. Clear Spoolman
         update_spool(spool_id, {"location": ""})
         add_log_entry(f"⏏️ Ejected: {info['text']} from {current_db_loc}", "WARNING")
         
-        # 3. Clear FilaBridge (using the DB location we just found)
         if current_db_loc in printer_map:
             p = printer_map[current_db_loc]
             try:
@@ -322,11 +339,10 @@ def resolve_scan(text):
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
     
-    # --- FIX 1: STRICT ID MATCHING ---
     if text.upper().startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit():
-            return {'type': 'spool', 'id': int(clean_id)} # Return INT to match Spoolman ID type
+            return {'type': 'spool', 'id': int(clean_id)}
 
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
@@ -355,7 +371,6 @@ def identify_scan():
         sid = res['id']; data = get_spool(sid)
         if data:
             info = format_spool_display(data)
-            # Ensure ID is sent as INT for frontend comparison
             return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
     if res['type'] == 'command':
         add_log_entry(f"⚠️ Command: {res['cmd'].upper()}")
@@ -368,8 +383,6 @@ def smart_move():
     target = data.get('location', '').strip().upper()
     raw_spools = data.get('spools', [])
     cfg = load_config(); printer_map = cfg.get("printer_map", {})
-    
-    # --- LOAD LOCATION RULES FROM CSV ---
     loc_list = load_locations_list()
     loc_info_map = {row['LocationID'].upper(): row for row in loc_list}
 
@@ -382,7 +395,6 @@ def smart_move():
             except: pass
         return 9999
 
-    # --- SAFETY: CAPACITY CHECK ---
     max_cap = get_max_capacity(target)
     occupants = get_spools_at_location(target)
     incoming_count = 0
@@ -411,7 +423,6 @@ def smart_move():
         p_src = printer_map.get(current_loc)
         p_dst = printer_map.get(target)
         
-        # Smart Clear
         should_clear = False
         if p_src:
             should_clear = True
@@ -429,15 +440,12 @@ def smart_move():
         current_extra = spool_data.get('extra') or {}
         info = format_spool_display(spool_data)
         
-        # MDB Support
         if target in printer_map:
             new_extra = current_extra.copy()
             src_info = loc_info_map.get(current_loc)
             if src_info and src_info.get('Type') == 'Dryer Box':
                 new_extra['physical_source'] = current_loc
-                
             update_spool(sid, {"location": target, "extra": new_extra})
-            
             p = printer_map[target]
             try:
                 add_log_entry(f"🔌 Mapping Toolhead: {p['printer_name']} T{p['position']} -> Spool {sid}", "INFO")
