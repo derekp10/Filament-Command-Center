@@ -78,7 +78,6 @@
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             new QRCode(document.getElementById("qr-confirm"), {text: "CMD:CONFIRM", width: 128, height: 128});
             
-            // KEYDOWN EVENT (Better than keypress)
             document.getElementById("manual-spool-id").addEventListener("keydown", function(event) {
                 if (event.key === "Enter") {
                     event.preventDefault();
@@ -232,7 +231,7 @@
                                     <div class="fw-bold fs-5">#${s.id}</div>
                                     <div class="d-flex align-items-center">
                                         <div class="buffer-swatch me-2" style="width:20px;height:20px;background-color:#${s.color};"></div>
-                                        <span class="text-muted small">${s.display.substring(0, 30)}</span>
+                                        <span class="text-muted small">${s.display}</span>
                                     </div>
                                 </div>
                             </div>
@@ -279,7 +278,14 @@
             const payload = { old_id: document.getElementById('edit-original-id').value, new_data: { LocationID: document.getElementById('edit-id').value, Name: document.getElementById('edit-name').value, Type: document.getElementById('edit-type').value, "Max Spools": document.getElementById('edit-max').value, "Label Printed": "No" }};
             fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) }).then(() => { lastScannedLoc = payload.new_data.LocationID; locModal.hide(); locMgrModal.show(); setTimeout(fetchLocations, 200); });
         }
-        function deleteLoc(id) { requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => { fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => fetchLocations()); }); }
+        function deleteLoc(id) { 
+            requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => { 
+                fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => { 
+                    lastScannedLoc = null; // Fix: Clear ghost scanner location
+                    fetchLocations(); 
+                }); 
+            }); 
+        }
         function triggerUndo() { fetch('/api/undo', { method: 'POST' }).then(() => fetchLogs()); }
         function fetchLogs() {
             fetch('/api/logs').then(r => r.json()).then(data => {
