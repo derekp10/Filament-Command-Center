@@ -30,7 +30,7 @@ CSV_FILE = '3D Print Supplies - Locations.csv'
 LABEL_FILE = 'locations_to_print.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v90.0 (Manager Polish)"
+VERSION = "v91.0 (Hybrid UI & Occupancy)"
 
 def load_config():
     defaults = {
@@ -106,18 +106,55 @@ def dashboard():
     return render_template('dashboard.html', version=VERSION)
 
 @app.route('/api/locations', methods=['GET'])
-def api_get_locations(): return jsonify(load_locations_list())
+def api_get_locations(): 
+    # 1. Load CSV Data
+    csv_rows = load_locations_list()
+    
+    # 2. Fetch ALL Spools to calculate real-time occupancy
+    occupancy_map = {}
+    try:
+        resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
+        if resp.ok:
+            for s in resp.json():
+                loc = s.get('location', '').upper().strip()
+                if loc:
+                    occupancy_map[loc] = occupancy_map.get(loc, 0) + 1
+    except: pass
+
+    # 3. Merge Data
+    final_list = []
+    for row in csv_rows:
+        lid = row['LocationID'].upper()
+        # Get Max
+        max_s = row.get('Max Spools', '')
+        max_val = int(max_s) if max_s and max_s.isdigit() else 0
+        
+        # Get Current
+        curr_val = occupancy_map.get(lid, 0)
+        
+        # Format string
+        if max_val > 0:
+            row['Occupancy'] = f"{curr_val}/{max_val}"
+        else:
+            row['Occupancy'] = f"{curr_val} items"
+            
+        final_list.append(row)
+        
+    return jsonify(final_list)
 
 @app.route('/api/locations', methods=['POST'])
 def api_save_location():
     data = request.json
     old_id, new_entry = data.get('old_id'), data.get('new_data')
     current_list = load_locations_list()
+    
+    # Remove old if exists
     if old_id:
         current_list = [row for row in current_list if row['LocationID'] != old_id]
         add_log_entry(f"Modified: {old_id}")
     else:
         add_log_entry(f"New Location: {new_entry['LocationID']}")
+    
     current_list.append(new_entry)
     current_list.sort(key=lambda x: x['LocationID'])
     save_locations_list(current_list)
@@ -224,25 +261,21 @@ def api_manage_contents():
     data = request.json
     action = data.get('action') 
     loc_id = data.get('location', '').strip().upper() 
-    spool_id = data.get('spool_id')
+    spool_id = data.get('spool_id') # Can be Legacy ID string
     
     cfg = load_config()
     printer_map = cfg.get("printer_map", {})
 
-    # --- FEATURE: CLEAR LOCATION (via QR Scan of Location) ---
+    # --- FEATURE: CLEAR LOCATION ---
     if action == 'clear_location':
         if not loc_id or loc_id == "SCAN": return jsonify({"success": False, "msg": "Invalid Location"})
         
         contents = get_spools_at_location(loc_id)
-        if not contents:
-            return jsonify({"success": False, "msg": "Location already empty"})
+        if not contents: return jsonify({"success": False, "msg": "Location already empty"})
             
-        for sid in contents:
-            update_spool(sid, {"location": ""})
-            
+        for sid in contents: update_spool(sid, {"location": ""})
         add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
         
-        # Clear FilaBridge if Printer
         if loc_id in printer_map:
             p = printer_map[loc_id]
             try:
@@ -250,10 +283,14 @@ def api_manage_contents():
                 requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}, timeout=2)
             except: pass
-            
         return jsonify({"success": True})
 
-    # --- STANDARD EJECT/ADD ---
+    # --- RESOLVE LEGACY IDs for MANUAL ADD ---
+    if action == 'add' and str(spool_id).isdigit():
+        # Check if it's a legacy ID first
+        legacy_match = find_spool_by_legacy_id(spool_id)
+        if legacy_match: spool_id = legacy_match # Swap to System ID
+
     if not spool_id: return jsonify({"success": False, "msg": "Missing Data"})
     
     spool_data = get_spool(spool_id)
@@ -339,6 +376,8 @@ def resolve_scan(text):
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
     
+    if "CMD:CONFIRM" in text.upper(): return {'type': 'command', 'cmd': 'confirm'} # NEW COMMAND
+
     if text.upper().startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit():
@@ -373,7 +412,7 @@ def identify_scan():
             info = format_spool_display(data)
             return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
     if res['type'] == 'command':
-        add_log_entry(f"⚠️ Command: {res['cmd'].upper()}")
+        # Don't log confirm yet, handle in UI
         return jsonify(res)
     return jsonify({"type": "error"})
 
