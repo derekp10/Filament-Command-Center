@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v94.0 (Full Details & FilaBridge Logs)"
+VERSION = "v95.0 (Detail Restoration)"
 
 def load_config():
     defaults = {
@@ -43,6 +43,7 @@ def load_config():
                 final_config.update(loaded)
         except Exception as e: logger.error(f"Config Load Error: {e}")
             
+    # Normalize Printer Keys to Upper Case for matching
     if 'printer_map' in final_config:
         final_config['printer_map'] = {k.upper(): v for k, v in final_config['printer_map'].items()}
     return final_config
@@ -93,15 +94,18 @@ def update_spool(sid, data):
     except: pass
 
 def format_spool_display(spool_data):
+    # RESTORED: Full detail string
     sid = spool_data.get('id', '?')
+    rem = int(spool_data.get('remaining_weight', 0))
     fil = spool_data.get('filament', {})
-    brand = fil.get('vendor', {}).get('name', '?')
-    mat = fil.get('material', '?')
+    brand = fil.get('vendor', {}).get('name', 'Unknown')
+    mat = fil.get('material', 'PLA')
     col = fil.get('name', 'Unknown')
     hex_color = fil.get('color_hex', 'ffffff')
     if 'original_color' in fil.get('extra', {}): col = fil.get('extra')['original_color']
-    # THIS STRING IS WHAT SHOWS IN THE UI
-    return {"text": f"#{sid} {brand} {mat} ({col})", "color": hex_color}
+    
+    display_text = f"#{sid} {brand} {mat} ({col}) [{rem}g]"
+    return {"text": display_text, "color": hex_color}
 
 def find_spool_by_legacy_id(legacy_id):
     legacy_id = str(legacy_id).strip()
@@ -109,9 +113,11 @@ def find_spool_by_legacy_id(legacy_id):
         resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
         if resp.ok:
             data = resp.json()
+            # 1. Check Extra Field matches
             for spool in data:
                 ext = str(spool.get('external_id', '')).strip().replace('"','')
                 if ext == legacy_id: return spool['id']
+            # 2. Check direct ID matches (Just in case)
             for spool in data:
                 if str(spool['id']) == legacy_id: return spool['id']
     except: pass
@@ -150,11 +156,13 @@ def resolve_scan(text):
             rid = find_spool_by_legacy_id(m.group(1))
             if rid: return {'type': 'spool', 'id': rid}
 
+    # FIX: Robust Number Handling
     if text.isdigit():
-        # PRIORITIZE LEGACY LOOKUP
+        # First, try to see if it's a legacy mapping
         rid = find_spool_by_legacy_id(text)
         if rid: return {'type': 'spool', 'id': rid}
-        # Fallback to direct ID
+        
+        # If not legacy, assume it is a Direct Spoolman ID
         return {'type': 'spool', 'id': int(text)}
         
     if len(text) > 2: return {'type': 'location', 'id': text.upper()}
@@ -201,28 +209,27 @@ def perform_smart_move(target, raw_spools):
         current_extra = spool_data.get('extra') or {}
         info = format_spool_display(spool_data)
         
-        # Determine Source/Dest Logic
         if target in printer_map:
             new_extra = current_extra.copy()
             src_info = loc_info_map.get(current_loc)
             if src_info and src_info.get('Type') == 'Dryer Box':
                 new_extra['physical_source'] = current_loc
             update_spool(sid, {"location": target, "extra": new_extra})
-            p = printer_map[target]
             
-            # --- FILABRIDGE DEBUG ---
+            p = printer_map[target]
+            # --- FILABRIDGE WITH LOGGING ---
             try:
-                add_log_entry(f"🔌 FilaBridge: Mapping {p['printer_name']} T{p['position']}...", "INFO")
+                add_log_entry(f"🔌 FilaBridge: Setting {p['printer_name']} T{p['position']}...", "INFO")
                 fb_resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=3)
                 if fb_resp.ok:
-                    add_log_entry(f"✅ FilaBridge OK", "INFO")
+                    add_log_entry(f"✅ FilaBridge Success", "INFO")
                 else:
-                    add_log_entry(f"❌ FilaBridge Fail: {fb_resp.status_code} {fb_resp.text}", "ERROR")
+                    add_log_entry(f"❌ FilaBridge Fail: {fb_resp.text}", "ERROR")
             except Exception as e:
                 add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
-            # ------------------------
-
+            # -------------------------------
+            
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':

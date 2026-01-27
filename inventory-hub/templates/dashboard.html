@@ -78,6 +78,7 @@
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             new QRCode(document.getElementById("qr-confirm"), {text: "CMD:CONFIRM", width: 128, height: 128});
             
+            // FIX: Keydown for reliable Enter support
             document.getElementById("manual-spool-id").addEventListener("keydown", function(event) {
                 if (event.key === "Enter") {
                     event.preventDefault();
@@ -281,7 +282,7 @@
         function deleteLoc(id) { 
             requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => { 
                 fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => { 
-                    lastScannedLoc = null; // Fix: Clear ghost scanner location
+                    lastScannedLoc = null; // FIX: Clear ghost scanner location
                     fetchLocations(); 
                 }); 
             }); 
