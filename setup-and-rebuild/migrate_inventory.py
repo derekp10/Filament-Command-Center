@@ -247,23 +247,25 @@ def get_or_create_filament(d, vendor_id):
 
     extra_data = {}
     
-    # FIX: Remove json.dumps for extra fields, send raw types
-    if final_attrs: extra_data["filament_attributes"] = sorted(list(final_attrs))
-    if d.get('tpu_shore'): extra_data["shore_hardness"] = d.get('tpu_shore')
-    if d.get('profile'): extra_data["slicer_profile"] = d.get('profile')
+    # FIX: Restored json.dumps because Spoolman API requires strings for extra fields!
+    if final_attrs: extra_data["filament_attributes"] = json.dumps(sorted(list(final_attrs)))
+    if d.get('tpu_shore'): extra_data["shore_hardness"] = json.dumps(d.get('tpu_shore'))
+    if d.get('profile'): extra_data["slicer_profile"] = json.dumps(d.get('profile'))
     if d.get('price_total'): extra_data["price_total"] = d.get('price_total')
     if d.get('product_url'): extra_data["product_url"] = d.get('product_url')
     if d.get('purchase_url'): extra_data["purchase_url"] = d.get('purchase_url')
     if d.get('sheet_row_link'): extra_data["sheet_link"] = d.get('sheet_row_link')
     
-    extra_data["label_printed"] = to_bool(d.get('label_printed'))
-    extra_data["sample_printed"] = to_bool(d.get('sample_printed'))
-    extra_data["spoolman_reprint"] = True
+    # FIX: Wrap booleans in json.dumps -> "true"/"false"
+    extra_data["label_printed"] = json.dumps(to_bool(d.get('label_printed')))
+    extra_data["sample_printed"] = json.dumps(to_bool(d.get('sample_printed')))
+    extra_data["spoolman_reprint"] = json.dumps(True)
+    
     extra_data["original_color"] = d.get('color_name')
     
     if d.get('drying_temp'): extra_data["drying_temp"] = d.get('drying_temp')
     if d.get('drying_time'): extra_data["drying_time"] = d.get('drying_time')
-    if d.get('fan'): extra_data["flush_multiplier"] = d.get('fan') # Mapping FAN to Flush Multiplier? Or custom?
+    if d.get('fan'): extra_data["flush_multiplier"] = d.get('fan')
 
     base_nozzle = int(d.get('t1_min') or 200)
     base_bed = int(d.get('b1_min') or 60)
@@ -297,12 +299,11 @@ def get_or_create_filament(d, vendor_id):
     return resp.json()['id'], True
 
 def create_spool(filament_id, remaining, location, purchased, is_refill, spool_type, spool_temp):
-    # FIX: Send raw values, not json.dumps
     extra_payload = {
-        "label_printed": False,
-        "is_refill": is_refill
+        "label_printed": json.dumps(False), # Fix
+        "is_refill": json.dumps(is_refill)  # Fix
     }
-    if spool_type: extra_payload["spool_type"] = spool_type
+    if spool_type: extra_payload["spool_type"] = json.dumps(spool_type) # Choice field needs stringified
     if spool_temp: extra_payload["spool_temp"] = spool_temp
 
     payload = {
@@ -314,7 +315,6 @@ def create_spool(filament_id, remaining, location, purchased, is_refill, spool_t
     }
     resp = requests.post(f"{SPOOLMAN_IP}/api/v1/spool", json=payload)
     
-    # FIX: Print error if failed
     if resp.status_code >= 400:
         print(f"❌ Spool Create Failed: {resp.text}")
 
