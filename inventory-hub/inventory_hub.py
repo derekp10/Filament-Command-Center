@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v106.0 (Multi-Slot Logic)"
+VERSION = "v108.0 (Loud Error Logging)"
 
 @app.after_request
 def add_header(r):
@@ -96,8 +96,22 @@ def get_spool(sid):
     except: return None
 
 def update_spool(sid, data):
-    try: requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=data)
-    except: pass
+    """
+    Patches spool data in Spoolman.
+    v108 Change: Now logs errors if Spoolman rejects the update.
+    """
+    try:
+        resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=data)
+        if not resp.ok:
+            error_msg = f"Spoolman Rejected Update ({resp.status_code}): {resp.text}"
+            logger.error(error_msg)
+            add_log_entry(f"❌ DB Error: {resp.status_code}", "ERROR")
+            return False
+        return True
+    except Exception as e:
+        logger.error(f"Spoolman Connection Failed: {e}")
+        add_log_entry("❌ DB Connection Fail", "ERROR")
+        return False
 
 def format_spool_display(spool_data):
     try:
@@ -108,7 +122,6 @@ def format_spool_display(spool_data):
         extra = spool_data.get('extra', {})
         slot = extra.get('container_slot', '')
 
-        # Legacy ID Logic
         if not ext_id or ext_id.lower() == 'none':
             fil_data = spool_data.get('filament', {})
             ext_id = str(fil_data.get('external_id', '')).replace('"', '').strip()
@@ -191,22 +204,21 @@ def get_spools_at_location(loc_name):
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
     
-    # COMMANDS
+    # ID PREFIX: Strict Override (v108 Fix)
+    if text.upper().startswith("ID:"):
+        clean_id = text[3:].strip()
+        if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
+
     if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
     if "CMD:CONFIRM" in text.upper(): return {'type': 'command', 'cmd': 'confirm'}
     
-    # NEW: SLOT COMMAND (CMD:SLOT:1)
     if "CMD:SLOT:" in text.upper():
         try:
             slot_num = text.split(':')[-1]
             return {'type': 'command', 'cmd': 'slot', 'value': slot_num}
         except: pass
-
-    if text.upper().startswith("ID:"):
-        clean_id = text[3:].strip()
-        if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
 
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
@@ -272,32 +284,36 @@ def perform_smart_move(target, raw_spools, target_slot=None):
             # If moving to generic location, remove slot data
             new_extra.pop('container_slot', None)
 
+        # PRINTER
         if target in printer_map:
             src_info = loc_info_map.get(current_loc)
             if src_info and src_info.get('Type') == 'Dryer Box':
                 new_extra['physical_source'] = current_loc
-            update_spool(sid, {"location": target, "extra": new_extra})
-            p = printer_map[target]
-            try:
-                add_log_entry(f"🔌 FilaBridge: Setting {p['printer_name']} T{p['position']}...", "INFO")
-                fb_resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=3)
-                if fb_resp.ok: add_log_entry(f"✅ FilaBridge Success", "INFO")
-                else: add_log_entry(f"❌ FilaBridge Fail: {fb_resp.text}", "ERROR")
-            except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
-            add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
+            # ATTEMPT DB UPDATE
+            if update_spool(sid, {"location": target, "extra": new_extra}):
+                # ONLY IF DB SUCCEEDS, update FilaBridge
+                p = printer_map[target]
+                try:
+                    add_log_entry(f"🔌 FilaBridge: Setting {p['printer_name']} T{p['position']}...", "INFO")
+                    fb_resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                                  json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=3)
+                    if fb_resp.ok: add_log_entry(f"✅ FilaBridge Success", "INFO")
+                    else: add_log_entry(f"❌ FilaBridge Fail: {fb_resp.text}", "ERROR")
+                except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
+                add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
+            
+        # DRYER BOX
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
-            # Remove physical_source if it exists
             new_extra.pop('physical_source', None)
-            update_spool(sid, {"location": target, "extra": new_extra})
+            if update_spool(sid, {"location": target, "extra": new_extra}):
+                slot_txt = f" [Slot {target_slot}]" if target_slot else ""
+                add_log_entry(f"📦 {info['text']} -> Dryer {target}{slot_txt}", "INFO", info['color'])
             
-            slot_txt = f" [Slot {target_slot}]" if target_slot else ""
-            add_log_entry(f"📦 {info['text']} -> Dryer {target}{slot_txt}", "INFO", info['color'])
-            
+        # GENERIC
         else:
-            update_spool(sid, {"location": target, "extra": new_extra})
-            add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
+            if update_spool(sid, {"location": target, "extra": new_extra}):
+                add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
 
     UNDO_STACK.append(undo_record)
     return {"status": "success"}
@@ -406,7 +422,7 @@ def api_manage_contents():
     action = data.get('action') 
     loc_id = data.get('location', '').strip().upper() 
     spool_input = data.get('spool_id') 
-    slot_arg = data.get('slot') # NEW: Allow specifying slot
+    slot_arg = data.get('slot') 
 
     if action == 'clear_location':
         cfg = load_config(); printer_map = cfg.get("printer_map", {})
@@ -423,7 +439,6 @@ def api_manage_contents():
 
     spool_id = None
     if action == 'add':
-        # Use Scanner Logic
         if spool_input:
             resolution = resolve_scan(str(spool_input))
             if resolution and resolution['type'] == 'spool':
@@ -431,7 +446,6 @@ def api_manage_contents():
             elif resolution and resolution['type'] == 'error':
                  return jsonify({"success": False, "msg": resolution['msg']})
     elif action == 'remove':
-        # Use Strict Logic
         if str(spool_input).isdigit(): spool_id = int(spool_input)
         
     if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
@@ -450,13 +464,14 @@ def api_manage_contents():
                 if resp.ok: add_log_entry(f"✅ Unload OK", "INFO")
             except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
 
-        # Clear Slot Info on Remove
         spool_extra = spool_data.get('extra', {})
         spool_extra.pop('container_slot', None)
-        update_spool(spool_id, {"location": "", "extra": spool_extra})
         
-        add_log_entry(f"⏏️ Ejected #{spool_id}", "WARNING")
-        return jsonify({"success": True})
+        if update_spool(spool_id, {"location": "", "extra": spool_extra}):
+            add_log_entry(f"⏏️ Ejected #{spool_id}", "WARNING")
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "msg": "DB Update Failed"})
 
     elif action == 'add':
         res_data = perform_smart_move(loc_id, [spool_id], target_slot=slot_arg)
@@ -468,7 +483,6 @@ def api_manage_contents():
 def api_identify_scan():
     res = resolve_scan(request.json.get('text', ''))
     if not res: return jsonify({"type": "unknown"})
-    # ... (Location/Spool logic same) ...
     if res['type'] == 'location':
         lid = res['id']; 
         items = get_spools_at_location_detailed(lid)
@@ -485,7 +499,6 @@ def api_identify_scan():
 
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
-    # Regular moves don't assign slot via this route usually, but we allow it
     return jsonify(perform_smart_move(request.json.get('location'), request.json.get('spools')))
 
 @app.route('/api/logs', methods=['GET'])
