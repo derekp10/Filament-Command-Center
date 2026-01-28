@@ -27,7 +27,7 @@ def find_file(filename):
     print(f"⚠️ Warning: Could not find '{filename}'.")
     return None
 
-# --- API HELPER (UPDATED) ---
+# --- API HELPER ---
 def create_field(entity_type, key, name, f_type, choices=None, multi=False, force_reset=False):
     """
     Creates or Updates a field in Spoolman.
@@ -39,9 +39,13 @@ def create_field(entity_type, key, name, f_type, choices=None, multi=False, forc
         print(f"   ⚠️ Force Reset enabled. Deleting old definition...")
         try:
             del_resp = requests.delete(f"{SPOOLMAN_IP}/api/v1/field/{entity_type}/{key}")
-            if del_resp.status_code == 204: print("   🗑️ Deleted old field.")
-            elif del_resp.status_code == 404: print("   ℹ️ Old field not found (clean start).")
-            else: print(f"   ⚠️ Delete failed: {del_resp.status_code} {del_resp.text}")
+            # FIX: Spoolman returns 200 OK with list of remaining fields on success
+            if del_resp.status_code in [200, 204]: 
+                print("   🗑️ Deleted old field.")
+            elif del_resp.status_code == 404: 
+                print("   ℹ️ Old field not found (clean start).")
+            else: 
+                print(f"   ⚠️ Delete status {del_resp.status_code}: {del_resp.text}")
         except Exception as e: print(f"   ❌ Connection Error during delete: {e}")
 
     payload = {"name": name, "field_type": f_type}
@@ -110,7 +114,7 @@ create_field("spool", "label_printed", "Label Printed", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")
 
-# --- THE FIX: Force Reset this specific field ---
+# --- CRITICAL: FORCE RESET CONTAINER SLOT TO TEXT ---
 create_field("spool", "container_slot", "Container / MMU Slot", "text", force_reset=True)
 
 # Choice field for Spool Type
