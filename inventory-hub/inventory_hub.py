@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v104.0 (Variable Fix & Empty String)"
+VERSION = "v105.0 (Targeted ID Fix)"
 
 @app.after_request
 def add_header(r):
@@ -286,7 +286,7 @@ def perform_undo():
         try:
             p = printer_map[target]
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
+                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
         except: pass
         
     for sid, loc in moves.items():
@@ -359,7 +359,7 @@ def api_delete_location():
         if target in printer_map:
             p = printer_map[target]
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
+                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
     except: pass
     
     current = load_locations_list()
@@ -383,20 +383,58 @@ def api_manage_contents():
     loc_id = data.get('location', '').strip().upper() 
     spool_input = data.get('spool_id') 
 
-    if action == 'clear_location':
-        contents = get_spools_at_location(loc_id)
-        for sid in contents: update_spool(sid, {"location": ""}) # Use "" for Spoolman
+    # --- ACTION: REMOVE (Targeted Logic) ---
+    if action == 'remove':
+        # FIX: TRUST THE ID (It came from the "Eject" button)
+        spool_id = None
+        if str(spool_input).isdigit():
+            spool_id = int(spool_input)
+        else:
+            # Fallback only if weird
+            res = resolve_scan(str(spool_input))
+            if res and res['type'] == 'spool': spool_id = res['id']
         
+        if not spool_id: return jsonify({"success": False, "msg": "Invalid ID"})
+        
+        # Verify
+        spool_data = get_spool(spool_id)
+        if not spool_data: return jsonify({"success": False, "msg": "ID not in DB"})
+        
+        info = format_spool_display(spool_data)
+        current_db_loc = spool_data.get('location', '').strip().upper()
+        
+        # FilaBridge FIRST
+        cfg = load_config(); printer_map = cfg.get("printer_map", {})
+        if current_db_loc in printer_map:
+            p = printer_map[current_db_loc]
+            try:
+                add_log_entry(f"🔌 Unloading FilaBridge {current_db_loc}...", "INFO")
+                resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}) # Use 0
+                if resp.ok: add_log_entry(f"✅ Unload OK", "INFO")
+                else: add_log_entry(f"❌ Unload Fail: {resp.text}", "ERROR")
+            except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
+
+        # Spoolman SECOND
+        update_spool(spool_id, {"location": ""})
+        add_log_entry(f"⏏️ Ejected: {info['text']}", "WARNING")
+        return jsonify({"success": True})
+
+    # --- ACTION: ADD/CLEAR (Use Scanner Logic) ---
+    if action == 'clear_location':
         cfg = load_config(); printer_map = cfg.get("printer_map", {})
         if loc_id in printer_map:
             p = printer_map[loc_id]
             try: requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
             except: pass
 
+        contents = get_spools_at_location(loc_id)
+        for sid in contents: update_spool(sid, {"location": ""})
         add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
         return jsonify({"success": True})
 
+    # Resolve ID for Adding
     spool_id = None
     if spool_input:
         resolution = resolve_scan(str(spool_input))
@@ -407,33 +445,7 @@ def api_manage_contents():
     
     if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
 
-    spool_data = get_spool(spool_id)
-    if not spool_data: return jsonify({"success": False, "msg": "ID not in DB"})
-    info = format_spool_display(spool_data)
-
-    if action == 'remove':
-        current_db_loc = spool_data.get('location', '').strip().upper()
-        cfg = load_config(); printer_map = cfg.get("printer_map", {})
-        
-        # FIX: FilaBridge FIRST
-        if current_db_loc in printer_map:
-            p = printer_map[current_db_loc]
-            try:
-                # Use current_db_loc in logging to avoid NameError
-                add_log_entry(f"🔌 Unloading FilaBridge {current_db_loc}...", "INFO")
-                resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
-                if resp.ok: add_log_entry(f"✅ Unload OK ({resp.status_code})", "INFO")
-                else: add_log_entry(f"❌ Unload Fail: {resp.status_code} {resp.text}", "ERROR")
-            except Exception as e:
-                add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
-
-        # THEN Update Spoolman
-        update_spool(spool_id, {"location": ""}) # Use "" for Spoolman
-        add_log_entry(f"⏏️ Ejected: {info['text']}", "WARNING")
-        return jsonify({"success": True})
-
-    elif action == 'add':
+    if action == 'add':
         res_data = perform_smart_move(loc_id, [spool_id])
         return jsonify(res_data)
 
