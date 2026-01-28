@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v101.0 (Deep Legacy ID Search)"
+VERSION = "v102.0 (FilaBridge Force Unload)"
 
 @app.after_request
 def add_header(r):
@@ -102,15 +102,12 @@ def update_spool(sid, data):
 def format_spool_display(spool_data):
     try:
         sid = spool_data.get('id', '?')
-        
-        # --- FIX: CHECK BOTH SPOOL AND FILAMENT FOR LEGACY ID ---
+        # EXTRACT LEGACY ID from Spool OR Filament
         ext_id = str(spool_data.get('external_id', '')).replace('"', '').strip()
         if not ext_id or ext_id.lower() == 'none':
-            # If Spool doesn't have it, check the Filament definition
             fil_data = spool_data.get('filament', {})
             ext_id = str(fil_data.get('external_id', '')).replace('"', '').strip()
             if ext_id.lower() == 'none': ext_id = ""
-        # --------------------------------------------------------
 
         rem = int(spool_data.get('remaining_weight', 0) or 0)
         fil = spool_data.get('filament')
@@ -126,9 +123,7 @@ def format_spool_display(spool_data):
         if not col_name: col_name = fil.get('name', 'Unknown')
 
         parts = [f"#{sid}"]
-        
         if ext_id: parts.append(f"[Legacy: {ext_id}]")
-        
         parts.append(brand)
         parts.append(mat)
         parts.append(f"({col_name})")
@@ -163,7 +158,6 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
                         if (spool.get('remaining_weight') or 0) > 10:
                             return spool['id']
                         candidates.append(spool['id'])
-                
                 if candidates: return candidates[0]
                 if strict_mode: return None
 
@@ -291,6 +285,7 @@ def perform_undo():
     if target in printer_map:
         try:
             p = printer_map[target]
+            # FIX: Send 0 for unload
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                           json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
         except: pass
@@ -364,6 +359,7 @@ def api_delete_location():
         cfg = load_config(); printer_map = cfg.get("printer_map", {})
         if target in printer_map:
             p = printer_map[target]
+            # FIX: Send 0 for unload
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                           json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
     except: pass
@@ -396,6 +392,7 @@ def api_manage_contents():
         cfg = load_config(); printer_map = cfg.get("printer_map", {})
         if loc_id in printer_map:
             p = printer_map[loc_id]
+            # FIX: Send 0
             try: requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
             except: pass
@@ -424,9 +421,11 @@ def api_manage_contents():
         if loc in printer_map:
             p = printer_map[loc]
             try:
-                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                # FIX: Send 0
+                resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
-                add_log_entry(f"🔌 FilaBridge: Unloaded from {loc}", "INFO")
+                if resp.ok: add_log_entry(f"🔌 FilaBridge: Unloaded from {loc}", "INFO")
+                else: add_log_entry(f"❌ FilaBridge Unload Fail: {resp.text}", "ERROR")
             except: pass
 
         add_log_entry(f"⏏️ Ejected: {info['text']}", "WARNING")
