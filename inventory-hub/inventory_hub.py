@@ -28,19 +28,13 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v97.1 (Cache Buster Edition)"
+VERSION = "v98.0 (Strict Legacy & High Contrast)"
 
-# --- CACHE BUSTING ---
 @app.after_request
 def add_header(r):
-    """
-    Add headers to both force latest IE rendering engine or Chrome Frame,
-    and also to cache the rendered page for 10 minutes.
-    """
     r.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     r.headers["Pragma"] = "no-cache"
     r.headers["Expires"] = "0"
-    r.headers['Cache-Control'] = 'public, max-age=0'
     return r
 
 def load_config():
@@ -108,42 +102,38 @@ def update_spool(sid, data):
 def format_spool_display(spool_data):
     try:
         sid = spool_data.get('id', '?')
-        rem_raw = spool_data.get('remaining_weight', 0)
-        rem = int(rem_raw) if rem_raw is not None else 0
+        rem = int(spool_data.get('remaining_weight', 0) or 0)
         
         fil = spool_data.get('filament')
         if not fil:
             return {"text": f"#{sid} [No Filament Data]", "color": "888888"}
 
         vendor_obj = fil.get('vendor')
-        brand = vendor_obj.get('name') if vendor_obj else None
-        material = fil.get('material')
+        brand = vendor_obj.get('name', 'Generic') if vendor_obj else 'Generic'
+        mat = fil.get('material', 'PLA')
+        col = fil.get('name', 'Unknown')
+        hex_color = fil.get('color_hex', 'ffffff')
         
         extra = fil.get('extra') or {}
-        color_info = extra.get('original_color')
-        if not color_info: color_info = fil.get('name', 'Unknown Color')
-
-        parts = []
-        if brand: parts.append(brand)
-        if material: parts.append(material)
-        
-        if not brand and not material: parts.append(fil.get('name', 'Unknown Filament'))
-        else: parts.append(f"({color_info})")
-
-        display_text = f"#{sid} {' '.join(parts)} [{rem}g]"
-        hex_color = fil.get('color_hex', 'ffffff')
+        if 'original_color' in extra: col = extra['original_color']
+            
+        display_text = f"#{sid} {brand} {mat} ({col}) [{rem}g]"
         return {"text": display_text, "color": hex_color}
-
     except Exception as e:
         logger.error(f"Format Error: {e}")
-        return {"text": f"#{spool_data.get('id', '?')} Error", "color": "ff0000"}
+        return {"text": f"Error formatting #{spool_data.get('id')}", "color": "ff0000"}
 
-def find_spool_by_legacy_id(legacy_id):
+def find_spool_by_legacy_id(legacy_id, strict_mode=False):
+    """
+    strict_mode = True means ONLY check Filament IDs (Legacy).
+    strict_mode = False means check Filament IDs first, then fallback to Spool IDs.
+    """
     legacy_id = str(legacy_id).strip()
     try:
-        # STEP 1: Check Filament Type
+        # STEP 1: Search Filaments (Legacy ID match)
         fil_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/filament", timeout=5)
         target_filament_id = None
+        
         if fil_resp.ok:
             for fil in fil_resp.json():
                 ext = str(fil.get('external_id', '')).strip().replace('"','')
@@ -151,23 +141,33 @@ def find_spool_by_legacy_id(legacy_id):
                     target_filament_id = fil['id']
                     break
         
-        # STEP 2: Find Spool of that Type
+        # STEP 2: If found, get a spool of that type
         if target_filament_id:
             spool_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
             if spool_resp.ok:
                 candidates = []
                 for spool in spool_resp.json():
                     if spool.get('filament', {}).get('id') == target_filament_id:
-                        w = spool.get('remaining_weight', 0)
-                        if w is not None and w > 10: return spool['id']
+                        # Prioritize non-empty
+                        if (spool.get('remaining_weight') or 0) > 10:
+                            return spool['id']
                         candidates.append(spool['id'])
+                
                 if candidates: return candidates[0]
+                
+                # If Strict Mode (QR scan), and we found the filament but no spools...
+                # Do NOT fallback. The user scanned a legacy code, they expect a legacy result.
+                if strict_mode:
+                    add_log_entry(f"⚠️ Found Filament type for Legacy ID {legacy_id}, but no spools exist!", "WARNING")
+                    return None
 
-        # STEP 3: Fallback to Direct ID
-        check_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{legacy_id}", timeout=2)
-        if check_resp.ok: return int(legacy_id)
+        # STEP 3: Fallback (Only if NOT strict)
+        if not strict_mode:
+            check_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{legacy_id}", timeout=2)
+            if check_resp.ok: return int(legacy_id)
 
-    except Exception as e: logger.error(f"Legacy Lookup Error: {e}")
+    except Exception as e:
+        logger.error(f"Legacy Lookup Error: {e}")
     return None
 
 def get_spools_at_location_detailed(loc_name):
@@ -187,6 +187,7 @@ def get_spools_at_location(loc_name):
 
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
+    
     if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
@@ -196,14 +197,18 @@ def resolve_scan(text):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
 
+    # STRICT MODE: If it looks like a URL, it IS a Legacy ID.
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
-            rid = find_spool_by_legacy_id(m.group(1))
+            # Pass strict_mode=True
+            rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
+            else: return {'type': 'error', 'msg': 'Legacy ID Found, but no Spools available.'}
 
+    # RAW NUMBER: Ambiguous. Check Legacy first, then Spool.
     if text.isdigit():
-        rid = find_spool_by_legacy_id(text)
+        rid = find_spool_by_legacy_id(text, strict_mode=False)
         if rid: return {'type': 'spool', 'id': rid}
         return {'type': 'spool', 'id': int(text)}
         
@@ -264,7 +269,8 @@ def perform_smart_move(target, raw_spools):
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=3)
                 if fb_resp.ok: add_log_entry(f"✅ FilaBridge Success", "INFO")
                 else: add_log_entry(f"❌ FilaBridge Fail: {fb_resp.text}", "ERROR")
-            except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
+            except Exception as e:
+                add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
@@ -287,8 +293,9 @@ def perform_undo():
     if target in printer_map:
         try:
             p = printer_map[target]
+            # FIX: Send 0 for unload
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
+                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
         except: pass
         
     for sid, loc in moves.items():
@@ -362,7 +369,7 @@ def api_delete_location():
         if target in printer_map:
             p = printer_map[target]
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
+                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}) # Fix 0
     except: pass
     
     current = load_locations_list()
@@ -394,7 +401,7 @@ def api_manage_contents():
         if loc_id in printer_map:
             p = printer_map[loc_id]
             try: requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
             except: pass
 
         add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
@@ -405,6 +412,8 @@ def api_manage_contents():
         resolution = resolve_scan(str(spool_input))
         if resolution and resolution['type'] == 'spool':
             spool_id = resolution['id']
+        elif resolution and resolution['type'] == 'error':
+             return jsonify({"success": False, "msg": resolution['msg']})
     
     if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
 
@@ -420,7 +429,7 @@ def api_manage_contents():
             p = printer_map[loc]
             try:
                 requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
                 add_log_entry(f"🔌 FilaBridge: Unloaded from {loc}", "INFO")
             except: pass
 
@@ -450,7 +459,7 @@ def api_identify_scan():
             info = format_spool_display(data)
             return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
     if res['type'] == 'command': return jsonify(res)
-    return jsonify({"type": "error"})
+    return jsonify(res) # Return full error object if exists
 
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
