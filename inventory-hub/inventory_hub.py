@@ -28,7 +28,20 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v110.0 (Deep Debug & Strict Scan)"
+VERSION = "v112.0 (Strict Typing)"
+
+# --- THE LAW: STRICT TYPE MAPPING ---
+# This ensures we never send "true" (string) when Spoolman expects True (bool)
+FIELD_TYPE_MAP = {
+    "label_printed": bool,
+    "is_refill": bool,
+    "spoolman_reprint": bool,
+    "sample_printed": bool,
+    "container_slot": str,  # MUST BE STRING
+    "physical_source": str,
+    "spool_type": str,
+    "original_color": str
+}
 
 @app.after_request
 def add_header(r):
@@ -95,17 +108,48 @@ def get_spool(sid):
     try: return requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", timeout=3).json()
     except: return None
 
+def sanitize_outbound_data(data):
+    """
+    Enforces strict types based on FIELD_TYPE_MAP.
+    """
+    if 'extra' not in data or not data['extra']:
+        return data
+
+    clean_extra = {}
+    for key, value in data['extra'].items():
+        if value is None: continue # Skip nulls
+        
+        target_type = FIELD_TYPE_MAP.get(key)
+        
+        # BOOLEAN ENFORCEMENT
+        if target_type == bool:
+            if isinstance(value, str):
+                # Handle "true"/"false" strings
+                clean_extra[key] = (value.lower() == 'true')
+            else:
+                clean_extra[key] = bool(value)
+        
+        # STRING ENFORCEMENT
+        elif target_type == str:
+            # Handle integers sent as strings
+            clean_extra[key] = str(value)
+            
+        # PASS-THROUGH (No strict rule)
+        else:
+            clean_extra[key] = value
+            
+    data['extra'] = clean_extra
+    return data
+
 def update_spool(sid, data):
     try:
-        # Sanitize Extra: Remove nulls
-        if 'extra' in data and data['extra']:
-            data['extra'] = {k: v for k, v in data['extra'].items() if v is not None}
-
-        resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=data)
+        # SANITIZE FIRST
+        clean_data = sanitize_outbound_data(data)
+        
+        resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=clean_data)
         if not resp.ok:
-            # LOUD ERROR LOGGING
             logger.error(f"❌ DB REJECTED: {resp.status_code} | Msg: {resp.text}")
-            logger.error(f"   Payload Sent: {json.dumps(data)}")
+            logger.error(f"   Payload Sent: {json.dumps(clean_data)}")
             add_log_entry(f"❌ DB Error {resp.status_code}: {resp.text[:50]}...", "ERROR")
             return False
         return True
@@ -223,18 +267,14 @@ def resolve_scan(text):
 
     # LEGACY / URL HANDLING (Strict)
     if text.startswith('http') or text.startswith('www'):
-        # Check Legacy Regex ONLY
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
             else: return {'type': 'error', 'msg': 'Legacy ID Found, but no Spools available.'}
-        
-        # If it starts with http but fails regex, it is JUNK.
         return {'type': 'error', 'msg': 'Unknown QR Code'}
 
     # FALLBACK: IS IT A LOCATION?
-    # Only treat as location if it's NOT a url/path and has length
     if text.isdigit():
         rid = find_spool_by_legacy_id(text, strict_mode=False)
         if rid: return {'type': 'spool', 'id': rid}
