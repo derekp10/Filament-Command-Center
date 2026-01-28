@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v100.0 (Merged UI & Legacy ID)"
+VERSION = "v101.0 (Deep Legacy ID Search)"
 
 @app.after_request
 def add_header(r):
@@ -102,9 +102,16 @@ def update_spool(sid, data):
 def format_spool_display(spool_data):
     try:
         sid = spool_data.get('id', '?')
-        # EXTRACT LEGACY ID
-        ext_id = str(spool_data.get('external_id', '')).replace('"', '').strip()
         
+        # --- FIX: CHECK BOTH SPOOL AND FILAMENT FOR LEGACY ID ---
+        ext_id = str(spool_data.get('external_id', '')).replace('"', '').strip()
+        if not ext_id or ext_id.lower() == 'none':
+            # If Spool doesn't have it, check the Filament definition
+            fil_data = spool_data.get('filament', {})
+            ext_id = str(fil_data.get('external_id', '')).replace('"', '').strip()
+            if ext_id.lower() == 'none': ext_id = ""
+        # --------------------------------------------------------
+
         rem = int(spool_data.get('remaining_weight', 0) or 0)
         fil = spool_data.get('filament')
         if not fil:
@@ -118,10 +125,8 @@ def format_spool_display(spool_data):
         col_name = extra.get('original_color')
         if not col_name: col_name = fil.get('name', 'Unknown')
 
-        # CONSTRUCT SINGLE LINE STRING
         parts = [f"#{sid}"]
         
-        # Add Legacy ID if present
         if ext_id: parts.append(f"[Legacy: {ext_id}]")
         
         parts.append(brand)
