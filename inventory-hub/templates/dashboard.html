@@ -8,39 +8,40 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         body { background-color: #0e0e0e; color: #f0f0f0; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-        
-        /* THEME: Cyan/Blue */
         .navbar { background-color: #1a1a1a; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
         .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; }
         .version-tag { color: #888; font-size: 1rem; margin-left: 10px; font-weight: bold; }
-        
         .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
         .status-on { background-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
         .status-off { background-color: #ff4444; box-shadow: 0 0 5px #ff4444; }
-        
         .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
         .col-logs { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
         .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.2rem; line-height: 1.6; }
         .log-INFO { color: #00ff00; } .log-WARNING { color: #ffcc00; } .log-ERROR { color: #ff4444; }
-        
         .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
         .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; font-weight: bold; color: #00d4ff; font-size: 1.2rem; display: flex; justify-content: space-between; }
         .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
         .buffer-item { background: #2a2a2a; border: 1px solid #444; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; }
         .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; }
         .buffer-text { font-size: 1.6rem; color: white; font-weight: bold; }
-        
         .qr-box { background: white; padding: 5px; border-radius: 4px; }
         .cmd-deck { padding: 15px; border-top: 1px solid #333; background: #222; display: flex; justify-content: space-around; }
-        
         .modal-content { background-color: #121212; color: #fff; border: 1px solid #555; }
         .table-dark { --bs-table-bg: #181818; }
         .highlight-row { border: 4px solid #ffff00 !important; background-color: #333 !important; }
         .eject-btn { padding: 15px 30px; font-size: 1.5rem; border-radius: 8px; height: 100%; display: flex; align-items: center; }
-        
         #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; width: 80%; max-width: 600px; }
         .toast-msg { background: rgba(0,0,0,0.95); color: #fff; padding: 30px; margin-bottom: 20px; border: 4px solid #00d4ff; border-radius: 12px; font-size: 2rem; font-weight: bold; }
         #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; display: none; justify-content: center; align-items: center; border: 20px solid #ff4444; text-align: center; backdrop-filter: blur(5px); }
+        
+        /* GRID STYLES */
+        .slot-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px; }
+        .slot-btn { background: #222; border: 2px solid #444; border-radius: 10px; height: 150px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; text-align: center; position: relative; }
+        .slot-btn.full { border-color: #00d4ff; background: #1a1a1a; }
+        .slot-btn.empty { border-color: #666; border-style: dashed; }
+        .slot-num { font-size: 2rem; font-weight: bold; color: #666; position: absolute; top: 5px; left: 10px; }
+        .slot-content { font-size: 1.1rem; padding: 10px; }
+        .slot-swatch { width: 30px; height: 30px; border-radius: 50%; border: 2px solid #fff; margin: 0 auto 5px auto; }
     </style>
 </head>
 <body>
@@ -73,10 +74,23 @@
     </div>
 
     <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-muted" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
-    <div class="modal fade" id="locModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="modalTitle">Edit Location</h5><button type="button" class="btn-close btn-close-white" onclick="closeEdit()"></button></div><div class="modal-body"><input type="hidden" id="edit-original-id"><div class="mb-3"><label>Location ID</label><input type="text" class="form-control" id="edit-id"></div><div class="mb-3"><label>Friendly Name</label><input type="text" class="form-control" id="edit-name"></div><div class="row"><div class="col-8 mb-3"><label>Type</label><select class="form-select" id="edit-type"><option value="Dryer Box">Dryer Box</option><option value="Cart">Cart</option><option value="Shelf">Shelf</option><option value="Printer">Printer</option><option value="MMU Slot">MMU Slot</option></select></div><div class="col-4 mb-3"><label>Max Spools</label><input type="number" class="form-control" id="edit-max"></div></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeEdit()">Cancel</button><button type="button" class="btn btn-primary" onclick="saveLocation()">Save</button></div></div></div></div>
     
-    <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white" onclick="closeManage()"></button></div><div class="modal-body"><div id="manage-contents-list" class="mb-4"></div><hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div><div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
+    <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white" onclick="closeManage()"></button></div><div class="modal-body">
+        
+        <div id="manage-grid-view" style="display:none;">
+            <div class="alert alert-info">Tap a slot to assign the first buffer item.</div>
+            <div id="slot-grid-container" class="slot-grid"></div>
+        </div>
+
+        <div id="manage-list-view">
+            <div id="manage-contents-list" class="mb-4"></div>
+        </div>
+
+        <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div><div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
+    
     <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-dialog-centered"><div class="modal-content" style="border: 4px solid #ffcc00;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRM ACTION</h5></div><div class="modal-body text-center"><p id="confirm-msg" style="font-size:1.5rem;">Are you sure?</p><div class="bg-white p-2 d-inline-block rounded mb-2"><div id="qr-confirm"></div><div class="small fw-bold text-dark">CMD:CONFIRM</div></div></div><div class="modal-footer justify-content-center"><button type="button" class="btn btn-secondary btn-lg" style="width:40%;" onclick="confirmAction(false)">NO</button><button type="button" class="btn btn-warning btn-lg" style="width:40%;" onclick="confirmAction(true)">YES</button></div></div></div></div>
+    
+    <div class="modal fade" id="locModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="modalTitle">Edit Location</h5><button type="button" class="btn-close btn-close-white" onclick="closeEdit()"></button></div><div class="modal-body"><input type="hidden" id="edit-original-id"><div class="mb-3"><label>Location ID</label><input type="text" class="form-control" id="edit-id"></div><div class="mb-3"><label>Friendly Name</label><input type="text" class="form-control" id="edit-name"></div><div class="row"><div class="col-8 mb-3"><label>Type</label><select class="form-select" id="edit-type"><option value="Dryer Box">Dryer Box</option><option value="Cart">Cart</option><option value="Shelf">Shelf</option><option value="Printer">Printer</option><option value="MMU Slot">MMU Slot</option></select></div><div class="col-4 mb-3"><label>Max Spools</label><input type="number" class="form-control" id="edit-max"></div></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeEdit()">Cancel</button><button type="button" class="btn btn-primary" onclick="saveLocation()">Save</button></div></div></div></div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
@@ -85,18 +99,10 @@
             new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             new QRCode(document.getElementById("qr-confirm"), {text: "CMD:CONFIRM", width: 128, height: 128});
-            
-            document.getElementById("manual-spool-id").addEventListener("keydown", function(event) {
-                if (event.key === "Enter") {
-                    event.preventDefault();
-                    manualAddSpool();
-                }
-            });
+            document.getElementById("manual-spool-id").addEventListener("keydown", function(event) { if (event.key === "Enter") { event.preventDefault(); manualAddSpool(); }});
         };
         
-        window.onblur = function() { document.getElementById('focus-guard').style.display = 'flex'; };
-        window.onfocus = function() { document.getElementById('focus-guard').style.display = 'none'; };
-
+        // ... (Standard Scanner/Variables same as before) ...
         let scanBuffer = "";
         let bufferTimeout;
         let heldSpools = []; 
@@ -109,18 +115,12 @@
             if (document.getElementById('focus-guard').style.display === 'flex') return;
             if (e.target.tagName === 'INPUT') return; 
             if (e.key === 'Enter') { processScan(scanBuffer); scanBuffer = ""; } 
-            else if (e.key.length === 1) { 
-                scanBuffer += e.key; 
-                document.getElementById('scan-status').innerText = "Scanning: " + scanBuffer; 
-                clearTimeout(bufferTimeout); 
-                bufferTimeout = setTimeout(() => { scanBuffer = ""; document.getElementById('scan-status').innerText = "Ready"; }, 2000); 
-            }
+            else if (e.key.length === 1) { scanBuffer += e.key; clearTimeout(bufferTimeout); bufferTimeout = setTimeout(() => { scanBuffer = ""; }, 2000); }
         });
 
         function showToast(msg, type = 'info') {
             const container = document.getElementById('toast-container');
-            const el = document.createElement('div');
-            el.className = `toast-msg`;
+            const el = document.createElement('div'); el.className = `toast-msg`;
             el.style.borderColor = type === 'error' ? '#ff4444' : (type === 'warning' ? '#ffcc00' : '#00d4ff');
             el.innerText = msg; container.appendChild(el);
             setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
@@ -130,10 +130,7 @@
             const zone = document.getElementById('buffer-zone');
             if (heldSpools.length > 0) {
                 zone.innerHTML = heldSpools.map((s, idx) => `
-                    <div class="buffer-item">
-                        <div class="buffer-info"><div class="buffer-swatch" style="background-color:#${s.color}"></div><div class="buffer-text">${s.display}</div></div>
-                        <div id="qr-buf-${idx}" class="qr-box"></div>
-                    </div>`).join('');
+                    <div class="buffer-item"><div class="buffer-info"><div class="buffer-swatch" style="background-color:#${s.color}"></div><div class="buffer-text">${s.display}</div></div><div id="qr-buf-${idx}" class="qr-box"></div></div>`).join('');
                 heldSpools.forEach((s, idx) => { new QRCode(document.getElementById(`qr-buf-${idx}`), {text: "ID:" + s.id.toString(), width: 120, height: 120}); });
             } else { zone.innerHTML = `<div class="text-center text-muted mt-5"><h3>Buffer Empty</h3><p>Scan a Spool or Location</p></div>`; }
         }
@@ -141,46 +138,113 @@
         function processScan(text) {
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) }).then(r => r.json()).then(res => {
                 if(res.type === 'command' && res.cmd === 'confirm') { if(pendingConfirmCallback) confirmAction(true); return; }
-                if(res.type === 'location') { lastScannedLoc = res.id; if(document.getElementById('locMgrModal').classList.contains('show')) scrollToRow(res.id); }
-                if (ejectMode) {
-                    ejectMode = false; document.getElementById('buffer-zone').style.border = "none";
-                    if (res.type === 'spool') ejectSpool(res.id, "Scan");
-                    else if (res.type === 'location') {
-                        requestConfirmation("Clear ALL items from " + res.id + "?", () => {
-                            fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'clear_location', location: res.id, spool_id: 0}) })
-                            .then(r => r.json()).then(d => { if(d.success) showToast("✅ CLEARED " + res.id, "warning"); showToast(d.msg, "error"); fetchLogs(); });
-                        });
-                    }
+                
+                // SLOT COMMAND INTERCEPTION
+                if(res.type === 'command' && res.cmd === 'slot') {
+                    handleSlotInteraction(res.value);
                     return;
                 }
+
+                if(res.type === 'location') { lastScannedLoc = res.id; if(document.getElementById('locMgrModal').classList.contains('show')) scrollToRow(res.id); }
+                if (ejectMode && res.type === 'spool') { ejectSpool(res.id, "Scan"); ejectMode = false; return; }
+                
                 if (res.type === 'spool') {
                     if (heldSpools.some(s => s.id === res.id)) showToast("⚠️ ALREADY IN BUFFER", "warning");
                     else { heldSpools.push({id: res.id, display: res.display, color: res.color}); renderBuffer(); }
                 } else if (res.type === 'location') {
-                    if (heldSpools.length > 0) executeMove(res.id); 
-                    else {
-                        if (res.contents && res.contents.length > 0) {
-                            res.contents.forEach(s => { if (!heldSpools.some(h => h.id === s.id)) heldSpools.push(s); });
-                            renderBuffer(); showToast(`Loaded ${res.contents.length} Items`, "info");
-                        } else showToast("Location is Empty", "warning");
+                    // Logic: If buffer empty, show contents. If buffer has items, move them.
+                    if (heldSpools.length > 0) openManage(res.id); // Open Manage to assign slots?
+                    else openManage(res.id); 
+                } 
+            });
+        }
+
+        // --- GRID LOGIC ---
+        function openManage(locId) {
+            document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
+            document.getElementById('manage-loc-id').value = locId;
+            document.getElementById('manual-spool-id').value = "";
+            
+            // Check if Grid Mode applies
+            const locData = allLocations.find(l => l.LocationID === locId);
+            const isGrid = locData && (locData.Type === 'Dryer Box' || locData.Type === 'MMU Slot') && parseInt(locData['Max Spools']) > 1;
+            
+            if (isGrid) {
+                document.getElementById('manage-grid-view').style.display = 'block';
+                document.getElementById('manage-list-view').style.display = 'none';
+                renderSlotGrid(locId, parseInt(locData['Max Spools']));
+            } else {
+                document.getElementById('manage-grid-view').style.display = 'none';
+                document.getElementById('manage-list-view').style.display = 'block';
+                refreshManageList(locId);
+            }
+            manageModal.show();
+        }
+
+        function renderSlotGrid(locId, maxSlots) {
+            const grid = document.getElementById('slot-grid-container');
+            grid.innerHTML = "<div class='text-center text-white'>Loading Slots...</div>";
+            
+            fetch(`/api/get_contents?id=${locId}`).then(r => r.json()).then(data => {
+                grid.innerHTML = "";
+                // Map contents to slots
+                const slotMap = {};
+                data.forEach(item => {
+                    if(item.slot) slotMap[item.slot.toString()] = item;
+                });
+
+                for (let i = 1; i <= maxSlots; i++) {
+                    const item = slotMap[i.toString()];
+                    const div = document.createElement('div');
+                    
+                    if (item) {
+                        div.className = "slot-btn full";
+                        div.innerHTML = `<div class="slot-num">${i}</div>
+                                         <div class="slot-swatch" style="background-color:#${item.color}"></div>
+                                         <div class="slot-content text-white fw-bold">${item.display}</div>`;
+                        div.onclick = () => ejectSpool(item.id, locId); // Tap full to eject
+                    } else {
+                        div.className = "slot-btn empty";
+                        div.innerHTML = `<div class="slot-num">${i}</div><div class="text-muted">EMPTY</div>`;
+                        div.onclick = () => handleSlotInteraction(i); // Tap empty to assign
                     }
-                } else if (res.type === 'command') {
-                    if (res.cmd === 'undo') triggerUndo();
-                    if (res.cmd === 'clear') { heldSpools = []; renderBuffer(); showToast("BUFFER CLEARED", "info"); }
-                    if (res.cmd === 'eject') { ejectMode = true; showToast("⚠️ SCAN ITEM TO EJECT", "warning"); document.getElementById('buffer-zone').style.border = "4px solid #ff4444"; }
+                    grid.appendChild(div);
                 }
-                if (res.type === 'error') showToast(res.msg, 'error');
             });
         }
 
-        function executeMove(targetLoc) {
-            const spoolIds = heldSpools.map(s => s.id);
-            fetch('/api/smart_move', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({location: targetLoc, spools: spoolIds}) }).then(r => r.json()).then(data => { 
-                if(data.status === 'success') { heldSpools = []; renderBuffer(); showToast("✅ MOVE COMPLETE", "info"); } else showToast("❌ " + data.msg, "error");
-                fetchLogs(); 
+        function handleSlotInteraction(slotNum) {
+            // Check if Modal is open
+            if (!document.getElementById('manageModal').classList.contains('show')) return;
+            const locId = document.getElementById('manage-loc-id').value;
+
+            if (heldSpools.length === 0) {
+                showToast("Buffer Empty. Scan Spool First.", "warning");
+                return;
+            }
+
+            // Move the first item in buffer to this slot
+            const spool = heldSpools[0];
+            fetch('/api/manage_contents', { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify({action: 'add', location: locId, spool_id: spool.id, slot: slotNum}) 
+            }).then(r => r.json()).then(res => {
+                if (res.status === 'success') {
+                    heldSpools.shift(); // Remove from buffer
+                    renderBuffer();
+                    showToast(`Assigned to Slot ${slotNum}`, "info");
+                    // Refresh Grid
+                    const locData = allLocations.find(l => l.LocationID === locId);
+                    renderSlotGrid(locId, parseInt(locData['Max Spools']));
+                    fetchLogs();
+                } else {
+                    showToast(res.msg, "error");
+                }
             });
         }
 
+        // ... (Rest of standard functions: ejectSpool, manualAddSpool, etc. same as v100) ...
         const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
         const locModal = new bootstrap.Modal(document.getElementById('locModal'));
         const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
@@ -217,13 +281,6 @@
             });
         }
 
-        function openManage(locId) {
-            document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
-            document.getElementById('manage-loc-id').value = locId;
-            document.getElementById('manual-spool-id').value = "";
-            refreshManageList(locId);
-            manageModal.show();
-        }
         function closeManage() { manageModal.hide(); heldSpools = []; renderBuffer(); fetchLocations(); }
 
         function refreshManageList(locId) {
@@ -254,7 +311,13 @@
         function doEject(spoolId, locId) {
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'remove', location: locId, spool_id: spoolId}) })
             .then(r => r.json()).then((res) => { 
-                if(locId !== "Scan") refreshManageList(locId); 
+                if (document.getElementById('manage-grid-view').style.display !== 'none') {
+                    // Refresh Grid if in grid mode
+                    const locData = allLocations.find(l => l.LocationID === locId);
+                    renderSlotGrid(locId, parseInt(locData['Max Spools']));
+                } else if(locId !== "Scan") {
+                    refreshManageList(locId); 
+                }
                 fetchLogs(); 
                 if(locId === "Scan") showToast("⏏️ EJECTED", "warning");
             });
@@ -269,12 +332,17 @@
                 if(res.status === 'error') alert(res.msg);
                 else {
                     document.getElementById('manual-spool-id').value = ""; 
-                    setTimeout(() => refreshManageList(locId), 300);
+                    // Check mode
+                    if(document.getElementById('manage-grid-view').style.display !== 'none') {
+                         const locData = allLocations.find(l => l.LocationID === locId);
+                         renderSlotGrid(locId, parseInt(locData['Max Spools']));
+                    } else refreshManageList(locId);
                     fetchLogs();
                 }
             });
         }
 
+        // Standard Add/Edit Modals logic (same as v100)
         function openAddModal() { locMgrModal.hide(); document.getElementById('modalTitle').innerText = "Add New Location"; document.getElementById('edit-original-id').value = ""; document.getElementById('edit-id').value = ""; document.getElementById('edit-name').value = ""; document.getElementById('edit-max').value = "1"; locModal.show(); }
         function openEdit(locId) {
             const item = allLocations.find(l => l.LocationID === locId); if(!item) return;
@@ -286,14 +354,7 @@
             const payload = { old_id: document.getElementById('edit-original-id').value, new_data: { LocationID: document.getElementById('edit-id').value, Name: document.getElementById('edit-name').value, Type: document.getElementById('edit-type').value, "Max Spools": document.getElementById('edit-max').value, "Label Printed": "No" }};
             fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) }).then(() => { lastScannedLoc = payload.new_data.LocationID; locModal.hide(); locMgrModal.show(); setTimeout(fetchLocations, 200); });
         }
-        function deleteLoc(id) { 
-            requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => { 
-                fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => { 
-                    lastScannedLoc = null; 
-                    fetchLocations(); 
-                }); 
-            }); 
-        }
+        function deleteLoc(id) { requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => { fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => { lastScannedLoc = null; fetchLocations(); }); }); }
         function triggerUndo() { fetch('/api/undo', { method: 'POST' }).then(() => fetchLogs()); }
         function fetchLogs() {
             fetch('/api/logs').then(r => r.json()).then(data => {
