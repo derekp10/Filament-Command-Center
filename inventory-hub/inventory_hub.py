@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v95.1 (Undo Restored)"
+VERSION = "v96.0 (Legacy Logic & Details)"
 
 def load_config():
     defaults = {
@@ -93,30 +93,76 @@ def update_spool(sid, data):
     except: pass
 
 def format_spool_display(spool_data):
-    sid = spool_data.get('id', '?')
-    rem = int(spool_data.get('remaining_weight', 0))
-    fil = spool_data.get('filament', {})
-    brand = fil.get('vendor', {}).get('name', 'Unknown')
-    mat = fil.get('material', 'PLA')
-    col = fil.get('name', 'Unknown')
-    hex_color = fil.get('color_hex', 'ffffff')
-    if 'original_color' in fil.get('extra', {}): col = fil.get('extra')['original_color']
-    
-    display_text = f"#{sid} {brand} {mat} ({col}) [{rem}g]"
-    return {"text": display_text, "color": hex_color}
+    try:
+        sid = spool_data.get('id', '?')
+        rem = int(spool_data.get('remaining_weight', 0))
+        
+        fil = spool_data.get('filament')
+        if not fil:
+            return {"text": f"#{sid} [Unknown Data]", "color": "888888"}
+
+        # Safe extraction
+        vendor = fil.get('vendor')
+        brand = vendor.get('name', 'Generic') if vendor else 'Generic'
+        mat = fil.get('material', 'PLA')
+        
+        # Color Logic
+        col_name = fil.get('name', 'Unknown')
+        hex_color = fil.get('color_hex', 'ffffff')
+        
+        extra = fil.get('extra', {})
+        if extra and 'original_color' in extra:
+            col_name = extra['original_color']
+            
+        display_text = f"#{sid} {brand} {mat} ({col_name}) [{rem}g]"
+        return {"text": display_text, "color": hex_color}
+    except Exception as e:
+        logger.error(f"Format Error: {e}")
+        return {"text": f"Error formatting #{spool_data.get('id')}", "color": "ff0000"}
 
 def find_spool_by_legacy_id(legacy_id):
+    """
+    Search Logic:
+    1. Search FILAMENTS for external_id matching legacy_id.
+    2. If found, find the first available SPOOL of that filament.
+    3. If not found, check if legacy_id is a direct SPOOL ID.
+    """
     legacy_id = str(legacy_id).strip()
     try:
-        resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
-        if resp.ok:
-            data = resp.json()
-            for spool in data:
-                ext = str(spool.get('external_id', '')).strip().replace('"','')
-                if ext == legacy_id: return spool['id']
-            for spool in data:
-                if str(spool['id']) == legacy_id: return spool['id']
-    except: pass
+        # STEP 1: Check Filaments (The "Type" ID)
+        fil_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/filament", timeout=5)
+        target_filament_id = None
+        
+        if fil_resp.ok:
+            for fil in fil_resp.json():
+                ext = str(fil.get('external_id', '')).strip().replace('"','')
+                if ext == legacy_id:
+                    target_filament_id = fil['id']
+                    break
+        
+        # STEP 2: If we found a Filament Type, find a Spool of that type
+        if target_filament_id:
+            spool_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
+            if spool_resp.ok:
+                candidates = []
+                for spool in spool_resp.json():
+                    if spool['filament']['id'] == target_filament_id:
+                        # Optional: Prefer non-empty spools
+                        if spool['remaining_weight'] > 10:
+                            return spool['id']
+                        candidates.append(spool['id'])
+                
+                # If we only found empty ones, return the first one
+                if candidates: return candidates[0]
+
+        # STEP 3: Fallback - Is it a direct Spool ID?
+        # We verify it exists before returning
+        check_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{legacy_id}", timeout=2)
+        if check_resp.ok:
+            return int(legacy_id)
+
+    except Exception as e:
+        logger.error(f"Legacy Lookup Error: {e}")
     return None
 
 def get_spools_at_location_detailed(loc_name):
@@ -146,15 +192,18 @@ def resolve_scan(text):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
 
+    # Google Sheet URL -> Legacy ID
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
-            rid = find_spool_by_legacy_id(m.group(1))
-            if rid: return {'type': 'spool', 'id': rid}
+            found_id = find_spool_by_legacy_id(m.group(1))
+            if found_id: return {'type': 'spool', 'id': found_id}
 
+    # Raw Number -> Legacy ID Check -> Direct ID Fallback
     if text.isdigit():
-        rid = find_spool_by_legacy_id(text)
-        if rid: return {'type': 'spool', 'id': rid}
+        found_id = find_spool_by_legacy_id(text)
+        if found_id: return {'type': 'spool', 'id': found_id}
+        # If lookup failed, maybe it's a new spool ID created in Spoolman
         return {'type': 'spool', 'id': int(text)}
         
     if len(text) > 2: return {'type': 'location', 'id': text.upper()}
@@ -230,17 +279,17 @@ def perform_smart_move(target, raw_spools):
     UNDO_STACK.append(undo_record)
     return {"status": "success"}
 
-# --- RESTORED UNDO FUNCTION ---
 def perform_undo():
     if not UNDO_STACK: return jsonify({"success": False, "msg": "History empty."})
     last = UNDO_STACK.pop(); moves = last['moves']; target = last.get('target')
     
     cfg = load_config(); printer_map = cfg.get("printer_map", {})
+    # If target was a printer, clear it
     if target in printer_map:
         try:
             p = printer_map[target]
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
+                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
         except: pass
         
     for sid, loc in moves.items():
@@ -307,7 +356,7 @@ def api_delete_location():
     if not target: return jsonify({"success": False})
     try:
         contents = get_spools_at_location(target)
-        for sid in contents: update_spool(sid, {"location": ""})
+        for sid in contents: update_spool(sid, {"location": None}) # FIX: Use None for null
         if contents: add_log_entry(f"🏚️ Evicted {len(contents)} spools from {target}", "WARNING")
     except: pass
     current = load_locations_list()
@@ -333,7 +382,18 @@ def api_manage_contents():
 
     if action == 'clear_location':
         contents = get_spools_at_location(loc_id)
-        for sid in contents: update_spool(sid, {"location": ""})
+        for sid in contents: update_spool(sid, {"location": None}) # FIX: Use None
+        
+        # FIX: Check if this was a printer location and clear FilaBridge
+        cfg = load_config(); printer_map = cfg.get("printer_map", {})
+        if loc_id in printer_map:
+            p = printer_map[loc_id]
+            try:
+                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
+                add_log_entry(f"🔌 FilaBridge: Cleared {loc_id}", "INFO")
+            except: pass
+
         add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
         return jsonify({"success": True})
 
@@ -350,7 +410,19 @@ def api_manage_contents():
     info = format_spool_display(spool_data)
 
     if action == 'remove':
-        update_spool(spool_id, {"location": ""})
+        current_db_loc = spool_data.get('location', '').strip().upper()
+        update_spool(spool_id, {"location": None}) # FIX: Use None
+        
+        # FIX: FilaBridge Unload
+        cfg = load_config(); printer_map = cfg.get("printer_map", {})
+        if current_db_loc in printer_map:
+            p = printer_map[current_db_loc]
+            try:
+                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
+                add_log_entry(f"🔌 FilaBridge: Unloaded from {current_db_loc}", "INFO")
+            except: pass
+
         add_log_entry(f"⏏️ Ejected: {info['text']}", "WARNING")
         return jsonify({"success": True})
 
