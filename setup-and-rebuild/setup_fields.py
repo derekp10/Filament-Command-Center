@@ -95,6 +95,11 @@ create_field("spool", "physical_source", "Physical Source", "text")
 create_field("spool", "label_printed", "Label Printed", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")
+
+# --- NEW FIELD FOR MULTI-SLOT LOGIC ---
+create_field("spool", "container_slot", "Container / MMU Slot", "text") 
+# Using "text" to allow for "1", "2", "L", "R" flexibility.
+
 # Choice field for Spool Type
 create_field("spool", "spool_type", "Spool Type", "choice", choices=list(spool_types), multi=False)
 
