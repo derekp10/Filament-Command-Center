@@ -7,5 +7,3 @@
 9. make items in buffer larger
 10. still missing logic for assigning items from a MDB to a toolhead. (QR Code for slot assignments?)
 11. We also need to integrate any changes to the first run script, that we've made to the custom field section in spoolman. I'm still using my spread sheet to track filament, as we are still finding bugs here. But I would like to be able to retire that at somepoint, but not sure if were there yet or not. We definatly should look at updating the export import code though.
-
-Server status (Filabridge and Spoolman are missing for the status bar at the top of the window.)
