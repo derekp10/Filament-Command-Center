@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v109.0 (No Ghost Locs & DB Fix)"
+VERSION = "v110.0 (Deep Debug & Strict Scan)"
 
 @app.after_request
 def add_header(r):
@@ -97,11 +97,16 @@ def get_spool(sid):
 
 def update_spool(sid, data):
     try:
+        # Sanitize Extra: Remove nulls
+        if 'extra' in data and data['extra']:
+            data['extra'] = {k: v for k, v in data['extra'].items() if v is not None}
+
         resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=data)
         if not resp.ok:
-            error_msg = f"Spoolman Rejected Update ({resp.status_code}): {resp.text}"
-            logger.error(error_msg)
-            add_log_entry(f"❌ DB Error: {resp.status_code}", "ERROR")
+            # LOUD ERROR LOGGING
+            logger.error(f"❌ DB REJECTED: {resp.status_code} | Msg: {resp.text}")
+            logger.error(f"   Payload Sent: {json.dumps(data)}")
+            add_log_entry(f"❌ DB Error {resp.status_code}: {resp.text[:50]}...", "ERROR")
             return False
         return True
     except Exception as e:
@@ -199,7 +204,7 @@ def get_spools_at_location(loc_name):
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
     
-    # ID PREFIX: Strict Override
+    # ID PREFIX
     if text.upper().startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
@@ -216,26 +221,29 @@ def resolve_scan(text):
             return {'type': 'command', 'cmd': 'slot', 'value': slot_num}
         except: pass
 
-    # LEGACY / URL HANDLING
-    if 'google.com' in decoded.lower() or 'range=' in decoded.lower() or text.startswith('http'):
+    # LEGACY / URL HANDLING (Strict)
+    if text.startswith('http') or text.startswith('www'):
+        # Check Legacy Regex ONLY
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
             else: return {'type': 'error', 'msg': 'Legacy ID Found, but no Spools available.'}
         
-        # FIX: If it starts with HTTP but matches no regex, it is JUNK, NOT a Location.
-        if text.startswith('http') or text.startswith('www'):
-             return {'type': 'error', 'msg': 'Unknown QR Code'}
+        # If it starts with http but fails regex, it is JUNK.
+        return {'type': 'error', 'msg': 'Unknown QR Code'}
 
     # FALLBACK: IS IT A LOCATION?
+    # Only treat as location if it's NOT a url/path and has length
     if text.isdigit():
         rid = find_spool_by_legacy_id(text, strict_mode=False)
         if rid: return {'type': 'spool', 'id': rid}
         return {'type': 'spool', 'id': int(text)}
         
-    if len(text) > 2: return {'type': 'location', 'id': text.upper()}
-    return None
+    if len(text) > 2 and not text.startswith('http'): 
+        return {'type': 'location', 'id': text.upper()}
+        
+    return {'type': 'error', 'msg': 'Unknown Code'}
 
 def perform_smart_move(target, raw_spools, target_slot=None):
     target = target.strip().upper()
