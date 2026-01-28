@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v108.0 (Loud Error Logging)"
+VERSION = "v109.0 (No Ghost Locs & DB Fix)"
 
 @app.after_request
 def add_header(r):
@@ -96,10 +96,6 @@ def get_spool(sid):
     except: return None
 
 def update_spool(sid, data):
-    """
-    Patches spool data in Spoolman.
-    v108 Change: Now logs errors if Spoolman rejects the update.
-    """
     try:
         resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=data)
         if not resp.ok:
@@ -117,11 +113,7 @@ def format_spool_display(spool_data):
     try:
         sid = spool_data.get('id', '?')
         
-        # EXTRACT METADATA
         ext_id = str(spool_data.get('external_id', '')).replace('"', '').strip()
-        extra = spool_data.get('extra', {})
-        slot = extra.get('container_slot', '')
-
         if not ext_id or ext_id.lower() == 'none':
             fil_data = spool_data.get('filament', {})
             ext_id = str(fil_data.get('external_id', '')).replace('"', '').strip()
@@ -129,6 +121,9 @@ def format_spool_display(spool_data):
 
         rem = int(spool_data.get('remaining_weight', 0) or 0)
         fil = spool_data.get('filament')
+        extra = spool_data.get('extra', {})
+        slot = extra.get('container_slot', '')
+
         if not fil:
             return {"text": f"#{sid} [No Filament Data]", "color": "888888", "slot": slot}
 
@@ -204,11 +199,12 @@ def get_spools_at_location(loc_name):
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
     
-    # ID PREFIX: Strict Override (v108 Fix)
+    # ID PREFIX: Strict Override
     if text.upper().startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
 
+    # COMMANDS
     if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
@@ -220,13 +216,19 @@ def resolve_scan(text):
             return {'type': 'command', 'cmd': 'slot', 'value': slot_num}
         except: pass
 
-    if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
+    # LEGACY / URL HANDLING
+    if 'google.com' in decoded.lower() or 'range=' in decoded.lower() or text.startswith('http'):
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
             else: return {'type': 'error', 'msg': 'Legacy ID Found, but no Spools available.'}
+        
+        # FIX: If it starts with HTTP but matches no regex, it is JUNK, NOT a Location.
+        if text.startswith('http') or text.startswith('www'):
+             return {'type': 'error', 'msg': 'Unknown QR Code'}
 
+    # FALLBACK: IS IT A LOCATION?
     if text.isdigit():
         rid = find_spool_by_legacy_id(text, strict_mode=False)
         if rid: return {'type': 'spool', 'id': rid}
@@ -276,23 +278,18 @@ def perform_smart_move(target, raw_spools, target_slot=None):
         current_extra = spool_data.get('extra') or {}
         info = format_spool_display(spool_data)
         
-        # LOGIC: If moving to a slot, ensure extra data is updated
         new_extra = current_extra.copy()
         if target_slot:
             new_extra['container_slot'] = str(target_slot)
         else:
-            # If moving to generic location, remove slot data
             new_extra.pop('container_slot', None)
 
-        # PRINTER
         if target in printer_map:
             src_info = loc_info_map.get(current_loc)
             if src_info and src_info.get('Type') == 'Dryer Box':
                 new_extra['physical_source'] = current_loc
             
-            # ATTEMPT DB UPDATE
             if update_spool(sid, {"location": target, "extra": new_extra}):
-                # ONLY IF DB SUCCEEDS, update FilaBridge
                 p = printer_map[target]
                 try:
                     add_log_entry(f"🔌 FilaBridge: Setting {p['printer_name']} T{p['position']}...", "INFO")
@@ -303,14 +300,12 @@ def perform_smart_move(target, raw_spools, target_slot=None):
                 except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
                 add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
-        # DRYER BOX
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
             new_extra.pop('physical_source', None)
             if update_spool(sid, {"location": target, "extra": new_extra}):
                 slot_txt = f" [Slot {target_slot}]" if target_slot else ""
                 add_log_entry(f"📦 {info['text']} -> Dryer {target}{slot_txt}", "INFO", info['color'])
             
-        # GENERIC
         else:
             if update_spool(sid, {"location": target, "extra": new_extra}):
                 add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])

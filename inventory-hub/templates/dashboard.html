@@ -33,23 +33,16 @@
         #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; width: 80%; max-width: 600px; }
         .toast-msg { background: rgba(0,0,0,0.95); color: #fff; padding: 30px; margin-bottom: 20px; border: 4px solid #00d4ff; border-radius: 12px; font-size: 2rem; font-weight: bold; }
         #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; display: none; justify-content: center; align-items: center; border: 20px solid #ff4444; text-align: center; backdrop-filter: blur(5px); }
-        
-        /* GRID STYLES */
         .slot-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px; }
-        /* Made button slightly taller to fit QR code */
         .slot-btn { background: #222; border: 2px solid #444; border-radius: 10px; height: 180px; display: flex; flex-direction: row; align-items: center; justify-content: space-between; cursor: pointer; padding: 10px; position: relative; overflow: hidden; }
         .slot-btn:active { background: #444; border-color: #fff; }
         .slot-btn.full { border-color: #00d4ff; background: #1a1a1a; }
         .slot-btn.empty { border-color: #666; border-style: dashed; }
-        
         .slot-left { display: flex; flex-direction: column; justify-content: center; align-items: center; width: 40%; }
         .slot-right { display: flex; flex-direction: column; justify-content: center; align-items: center; width: 60%; text-align: center; }
-        
         .slot-num { font-size: 1.5rem; font-weight: bold; color: #888; margin-bottom: 5px; }
         .slot-content { font-size: 1.1rem; font-weight: bold; color: white; word-break: break-word; }
         .slot-swatch { width: 35px; height: 35px; border-radius: 50%; border: 2px solid #fff; margin-bottom: 5px; }
-        
-        /* QR Container inside button */
         .slot-qr { background: white; padding: 4px; border-radius: 4px; }
     </style>
 </head>
@@ -70,7 +63,13 @@
     </nav>
 
     <div class="main-container">
-        <div class="col-logs"><div class="p-3 border-bottom border-secondary text-info fw-bold">Live Activity 📡</div><div id="live-logs" class="log-box"></div></div>
+        <div class="col-logs">
+            <div class="p-3 border-bottom border-secondary text-info fw-bold d-flex justify-content-between">
+                <span>Live Activity 📡</span>
+                <span id="log-status" class="small text-muted">Auto-Refresh ON</span>
+            </div>
+            <div id="live-logs" class="log-box" onmouseenter="pauseLogs(true)" onmouseleave="pauseLogs(false)"></div>
+        </div>
         <div class="col-buffer">
             <div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status" style="font-size:1rem; color:#888;">Ready...</span></div>
             <div id="buffer-zone" class="buffer-content"></div>
@@ -85,16 +84,13 @@
     <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-muted" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
     
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white" onclick="closeManage()"></button></div><div class="modal-body">
-        
         <div id="manage-grid-view" style="display:none;">
             <div class="alert alert-info py-1 mb-2 small text-center">Tap button or scan slot QR (CMD:SLOT:X)</div>
             <div id="slot-grid-container" class="slot-grid"></div>
         </div>
-
         <div id="manage-list-view">
             <div id="manage-contents-list" class="mb-4"></div>
         </div>
-
         <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div><div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
     
     <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-dialog-centered"><div class="modal-content" style="border: 4px solid #ffcc00;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRM ACTION</h5></div><div class="modal-body text-center"><p id="confirm-msg" style="font-size:1.5rem;">Are you sure?</p><div class="bg-white p-2 d-inline-block rounded mb-2"><div id="qr-confirm"></div><div class="small fw-bold text-dark">CMD:CONFIRM</div></div></div><div class="modal-footer justify-content-center"><button type="button" class="btn btn-secondary btn-lg" style="width:40%;" onclick="confirmAction(false)">NO</button><button type="button" class="btn btn-warning btn-lg" style="width:40%;" onclick="confirmAction(true)">YES</button></div></div></div></div>
@@ -118,6 +114,7 @@
         let lastScannedLoc = null;
         let pendingConfirmCallback = null;
         let allLocations = []; 
+        let logsPaused = false; // LOG PAUSE FLAG
 
         document.addEventListener('keydown', (e) => {
             if (document.getElementById('focus-guard').style.display === 'flex') return;
@@ -132,6 +129,13 @@
             el.style.borderColor = type === 'error' ? '#ff4444' : (type === 'warning' ? '#ffcc00' : '#00d4ff');
             el.innerText = msg; container.appendChild(el);
             setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
+        }
+
+        function pauseLogs(isPaused) {
+            logsPaused = isPaused;
+            const status = document.getElementById('log-status');
+            if (isPaused) { status.innerText = "Paused (Selection Mode)"; status.className = "small text-warning fw-bold"; }
+            else { status.innerText = "Auto-Refresh ON"; status.className = "small text-muted"; }
         }
 
         function renderBuffer() {
@@ -195,30 +199,14 @@
                     
                     if (item) {
                         div.className = "slot-btn full";
-                        div.innerHTML = `
-                            <div class="slot-left">
-                                <div class="slot-num">Slot ${i}</div>
-                                <div id="${qrId}" class="slot-qr"></div>
-                            </div>
-                            <div class="slot-right">
-                                <div class="slot-swatch" style="background-color:#${item.color}"></div>
-                                <div class="slot-content">${item.display}</div>
-                            </div>`;
+                        div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="${qrId}" class="slot-qr"></div></div><div class="slot-right"><div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div></div>`;
                         div.onclick = () => ejectSpool(item.id, locId); 
                     } else {
                         div.className = "slot-btn empty";
-                        div.innerHTML = `
-                            <div class="slot-left">
-                                <div class="slot-num">Slot ${i}</div>
-                                <div id="${qrId}" class="slot-qr"></div>
-                            </div>
-                            <div class="slot-right">
-                                <div class="text-muted fs-4">EMPTY</div>
-                            </div>`;
+                        div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="${qrId}" class="slot-qr"></div></div><div class="slot-right"><div class="text-muted fs-4">EMPTY</div></div>`;
                         div.onclick = () => handleSlotInteraction(i); 
                     }
                     grid.appendChild(div);
-                    // GENERATE QR
                     new QRCode(document.getElementById(qrId), {text: "CMD:SLOT:" + i, width: 60, height: 60});
                 }
             });
@@ -234,7 +222,6 @@
             }
 
             const spool = heldSpools[0];
-            // FIX: SEND 'ID:' prefix to FORCE STRICT MODE on backend
             fetch('/api/manage_contents', { 
                 method: 'POST', 
                 headers: {'Content-Type': 'application/json'}, 
@@ -253,7 +240,6 @@
             });
         }
 
-        // ... (Standard Functions same as v106.1) ...
         const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
         const locModal = new bootstrap.Modal(document.getElementById('locModal'));
         const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
@@ -347,6 +333,7 @@
         function deleteLoc(id) { requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => { fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => { lastScannedLoc = null; fetchLocations(); }); }); }
         function triggerUndo() { fetch('/api/undo', { method: 'POST' }).then(() => fetchLogs()); }
         function fetchLogs() {
+            if(logsPaused) return; // CHECK PAUSE FLAG
             fetch('/api/logs').then(r => r.json()).then(data => {
                 document.getElementById('live-logs').innerHTML = data.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
                 document.getElementById('undo-btn').disabled = !data.undo_available;
