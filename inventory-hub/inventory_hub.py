@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v105.0 (Targeted ID Fix)"
+VERSION = "v106.0 (Multi-Slot Logic)"
 
 @app.after_request
 def add_header(r):
@@ -103,7 +103,12 @@ def format_spool_display(spool_data):
     try:
         sid = spool_data.get('id', '?')
         
+        # EXTRACT METADATA
         ext_id = str(spool_data.get('external_id', '')).replace('"', '').strip()
+        extra = spool_data.get('extra', {})
+        slot = extra.get('container_slot', '')
+
+        # Legacy ID Logic
         if not ext_id or ext_id.lower() == 'none':
             fil_data = spool_data.get('filament', {})
             ext_id = str(fil_data.get('external_id', '')).replace('"', '').strip()
@@ -112,14 +117,14 @@ def format_spool_display(spool_data):
         rem = int(spool_data.get('remaining_weight', 0) or 0)
         fil = spool_data.get('filament')
         if not fil:
-            return {"text": f"#{sid} [No Filament Data]", "color": "888888"}
+            return {"text": f"#{sid} [No Filament Data]", "color": "888888", "slot": slot}
 
         vendor_obj = fil.get('vendor')
         brand = vendor_obj.get('name', 'Generic') if vendor_obj else 'Generic'
         mat = fil.get('material', 'PLA')
         
-        extra = fil.get('extra') or {}
-        col_name = extra.get('original_color')
+        fil_extra = fil.get('extra') or {}
+        col_name = fil_extra.get('original_color')
         if not col_name: col_name = fil.get('name', 'Unknown')
 
         parts = [f"#{sid}"]
@@ -131,11 +136,11 @@ def format_spool_display(spool_data):
 
         display_text = " ".join(parts)
         hex_color = fil.get('color_hex', 'ffffff')
-        return {"text": display_text, "color": hex_color}
+        return {"text": display_text, "color": hex_color, "slot": slot}
 
     except Exception as e:
         logger.error(f"Format Error: {e}")
-        return {"text": f"#{spool_data.get('id', '?')} Error", "color": "ff0000"}
+        return {"text": f"#{spool_data.get('id', '?')} Error", "color": "ff0000", "slot": ""}
 
 def find_spool_by_legacy_id(legacy_id, strict_mode=False):
     legacy_id = str(legacy_id).strip()
@@ -176,7 +181,7 @@ def get_spools_at_location_detailed(loc_name):
             for s in resp.json():
                 if s.get('location', '').upper() == loc_name.upper():
                     info = format_spool_display(s)
-                    found.append({'id': s['id'], 'display': info['text'], 'color': info['color']})
+                    found.append({'id': s['id'], 'display': info['text'], 'color': info['color'], 'slot': info['slot']})
     except: pass
     return found
 
@@ -185,10 +190,19 @@ def get_spools_at_location(loc_name):
 
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
+    
+    # COMMANDS
     if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
     if "CMD:CONFIRM" in text.upper(): return {'type': 'command', 'cmd': 'confirm'}
+    
+    # NEW: SLOT COMMAND (CMD:SLOT:1)
+    if "CMD:SLOT:" in text.upper():
+        try:
+            slot_num = text.split(':')[-1]
+            return {'type': 'command', 'cmd': 'slot', 'value': slot_num}
+        except: pass
 
     if text.upper().startswith("ID:"):
         clean_id = text[3:].strip()
@@ -209,7 +223,7 @@ def resolve_scan(text):
     if len(text) > 2: return {'type': 'location', 'id': text.upper()}
     return None
 
-def perform_smart_move(target, raw_spools):
+def perform_smart_move(target, raw_spools, target_slot=None):
     target = target.strip().upper()
     cfg = load_config(); printer_map = cfg.get("printer_map", {})
     loc_list = load_locations_list()
@@ -250,8 +264,15 @@ def perform_smart_move(target, raw_spools):
         current_extra = spool_data.get('extra') or {}
         info = format_spool_display(spool_data)
         
+        # LOGIC: If moving to a slot, ensure extra data is updated
+        new_extra = current_extra.copy()
+        if target_slot:
+            new_extra['container_slot'] = str(target_slot)
+        else:
+            # If moving to generic location, remove slot data
+            new_extra.pop('container_slot', None)
+
         if target in printer_map:
-            new_extra = current_extra.copy()
             src_info = loc_info_map.get(current_loc)
             if src_info and src_info.get('Type') == 'Dryer Box':
                 new_extra['physical_source'] = current_loc
@@ -267,12 +288,15 @@ def perform_smart_move(target, raw_spools):
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
-            new_extra = current_extra.copy(); new_extra.pop('physical_source', None)
+            # Remove physical_source if it exists
+            new_extra.pop('physical_source', None)
             update_spool(sid, {"location": target, "extra": new_extra})
-            add_log_entry(f"📦 {info['text']} -> Dryer {target}", "INFO", info['color'])
+            
+            slot_txt = f" [Slot {target_slot}]" if target_slot else ""
+            add_log_entry(f"📦 {info['text']} -> Dryer {target}{slot_txt}", "INFO", info['color'])
             
         else:
-            update_spool(sid, {"location": target})
+            update_spool(sid, {"location": target, "extra": new_extra})
             add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
 
     UNDO_STACK.append(undo_record)
@@ -351,15 +375,15 @@ def api_delete_location():
     target = request.args.get('id', '').strip()
     if not target: return jsonify({"success": False})
     try:
-        contents = get_spools_at_location(target)
-        for sid in contents: update_spool(sid, {"location": ""})
-        if contents: add_log_entry(f"🏚️ Evicted {len(contents)} spools from {target}", "WARNING")
-        
         cfg = load_config(); printer_map = cfg.get("printer_map", {})
         if target in printer_map:
             p = printer_map[target]
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                           json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
+
+        contents = get_spools_at_location(target)
+        for sid in contents: update_spool(sid, {"location": ""})
+        if contents: add_log_entry(f"🏚️ Evicted {len(contents)} spools from {target}", "WARNING")
     except: pass
     
     current = load_locations_list()
@@ -382,45 +406,8 @@ def api_manage_contents():
     action = data.get('action') 
     loc_id = data.get('location', '').strip().upper() 
     spool_input = data.get('spool_id') 
+    slot_arg = data.get('slot') # NEW: Allow specifying slot
 
-    # --- ACTION: REMOVE (Targeted Logic) ---
-    if action == 'remove':
-        # FIX: TRUST THE ID (It came from the "Eject" button)
-        spool_id = None
-        if str(spool_input).isdigit():
-            spool_id = int(spool_input)
-        else:
-            # Fallback only if weird
-            res = resolve_scan(str(spool_input))
-            if res and res['type'] == 'spool': spool_id = res['id']
-        
-        if not spool_id: return jsonify({"success": False, "msg": "Invalid ID"})
-        
-        # Verify
-        spool_data = get_spool(spool_id)
-        if not spool_data: return jsonify({"success": False, "msg": "ID not in DB"})
-        
-        info = format_spool_display(spool_data)
-        current_db_loc = spool_data.get('location', '').strip().upper()
-        
-        # FilaBridge FIRST
-        cfg = load_config(); printer_map = cfg.get("printer_map", {})
-        if current_db_loc in printer_map:
-            p = printer_map[current_db_loc]
-            try:
-                add_log_entry(f"🔌 Unloading FilaBridge {current_db_loc}...", "INFO")
-                resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}) # Use 0
-                if resp.ok: add_log_entry(f"✅ Unload OK", "INFO")
-                else: add_log_entry(f"❌ Unload Fail: {resp.text}", "ERROR")
-            except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
-
-        # Spoolman SECOND
-        update_spool(spool_id, {"location": ""})
-        add_log_entry(f"⏏️ Ejected: {info['text']}", "WARNING")
-        return jsonify({"success": True})
-
-    # --- ACTION: ADD/CLEAR (Use Scanner Logic) ---
     if action == 'clear_location':
         cfg = load_config(); printer_map = cfg.get("printer_map", {})
         if loc_id in printer_map:
@@ -434,19 +421,45 @@ def api_manage_contents():
         add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
         return jsonify({"success": True})
 
-    # Resolve ID for Adding
     spool_id = None
-    if spool_input:
-        resolution = resolve_scan(str(spool_input))
-        if resolution and resolution['type'] == 'spool':
-            spool_id = resolution['id']
-        elif resolution and resolution['type'] == 'error':
-             return jsonify({"success": False, "msg": resolution['msg']})
-    
+    if action == 'add':
+        # Use Scanner Logic
+        if spool_input:
+            resolution = resolve_scan(str(spool_input))
+            if resolution and resolution['type'] == 'spool':
+                spool_id = resolution['id']
+            elif resolution and resolution['type'] == 'error':
+                 return jsonify({"success": False, "msg": resolution['msg']})
+    elif action == 'remove':
+        # Use Strict Logic
+        if str(spool_input).isdigit(): spool_id = int(spool_input)
+        
     if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
 
-    if action == 'add':
-        res_data = perform_smart_move(loc_id, [spool_id])
+    if action == 'remove':
+        spool_data = get_spool(spool_id)
+        current_db_loc = spool_data.get('location', '').strip().upper()
+        cfg = load_config(); printer_map = cfg.get("printer_map", {})
+        
+        if current_db_loc in printer_map:
+            p = printer_map[current_db_loc]
+            try:
+                add_log_entry(f"🔌 Unloading FilaBridge {current_db_loc}...", "INFO")
+                resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
+                if resp.ok: add_log_entry(f"✅ Unload OK", "INFO")
+            except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
+
+        # Clear Slot Info on Remove
+        spool_extra = spool_data.get('extra', {})
+        spool_extra.pop('container_slot', None)
+        update_spool(spool_id, {"location": "", "extra": spool_extra})
+        
+        add_log_entry(f"⏏️ Ejected #{spool_id}", "WARNING")
+        return jsonify({"success": True})
+
+    elif action == 'add':
+        res_data = perform_smart_move(loc_id, [spool_id], target_slot=slot_arg)
         return jsonify(res_data)
 
     return jsonify({"success": False})
@@ -455,11 +468,11 @@ def api_manage_contents():
 def api_identify_scan():
     res = resolve_scan(request.json.get('text', ''))
     if not res: return jsonify({"type": "unknown"})
+    # ... (Location/Spool logic same) ...
     if res['type'] == 'location':
         lid = res['id']; 
         items = get_spools_at_location_detailed(lid)
-        if items: add_log_entry(f"🔎 {lid}: {len(items)} item(s)")
-        else: add_log_entry(f"🔎 {lid}: Empty")
+        add_log_entry(f"🔎 {lid}: {len(items)} item(s)")
         return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}", "contents": items})
     
     if res['type'] == 'spool':
@@ -472,6 +485,7 @@ def api_identify_scan():
 
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
+    # Regular moves don't assign slot via this route usually, but we allow it
     return jsonify(perform_smart_move(request.json.get('location'), request.json.get('spools')))
 
 @app.route('/api/logs', methods=['GET'])
