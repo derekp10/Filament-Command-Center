@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v96.0 (Legacy Logic & Details)"
+VERSION = "v97.0 (Display Logic Fix)"
 
 def load_config():
     defaults = {
@@ -95,38 +95,53 @@ def update_spool(sid, data):
 def format_spool_display(spool_data):
     try:
         sid = spool_data.get('id', '?')
-        rem = int(spool_data.get('remaining_weight', 0))
+        # Handle remaining weight (could be float or None)
+        rem_raw = spool_data.get('remaining_weight', 0)
+        rem = int(rem_raw) if rem_raw is not None else 0
         
         fil = spool_data.get('filament')
         if not fil:
-            return {"text": f"#{sid} [Unknown Data]", "color": "888888"}
+            return {"text": f"#{sid} [No Filament Data]", "color": "888888"}
 
-        # Safe extraction
-        vendor = fil.get('vendor')
-        brand = vendor.get('name', 'Generic') if vendor else 'Generic'
-        mat = fil.get('material', 'PLA')
+        # 1. Try to extract specific components
+        vendor_obj = fil.get('vendor')
+        brand = vendor_obj.get('name') if vendor_obj else None
+        material = fil.get('material')
         
-        # Color Logic
-        col_name = fil.get('name', 'Unknown')
+        # 2. Determine Color Name
+        # Prefer 'original_color' from extra, fallback to filament name
+        extra = fil.get('extra') or {}
+        color_info = extra.get('original_color')
+        
+        if not color_info:
+            # Fallback to the filament's main name if no extra color
+            color_info = fil.get('name', 'Unknown Color')
+
+        # 3. Construct the String
+        parts = []
+        
+        # If we have structured Brand/Material, use them
+        if brand: parts.append(brand)
+        if material: parts.append(material)
+        
+        # If Brand/Material were missing, use the full name as a fallback
+        if not brand and not material:
+             # Just use the name from Spoolman
+             parts.append(fil.get('name', 'Unknown Filament'))
+        else:
+             # Otherwise append the color in parenthesis
+             parts.append(f"({color_info})")
+
+        display_text = f"#{sid} {' '.join(parts)} [{rem}g]"
         hex_color = fil.get('color_hex', 'ffffff')
         
-        extra = fil.get('extra', {})
-        if extra and 'original_color' in extra:
-            col_name = extra['original_color']
-            
-        display_text = f"#{sid} {brand} {mat} ({col_name}) [{rem}g]"
         return {"text": display_text, "color": hex_color}
+
     except Exception as e:
-        logger.error(f"Format Error: {e}")
-        return {"text": f"Error formatting #{spool_data.get('id')}", "color": "ff0000"}
+        logger.error(f"Formatting error for #{spool_data.get('id', '?')}: {e}")
+        return {"text": f"#{spool_data.get('id', '?')} Error", "color": "ff0000"}
 
 def find_spool_by_legacy_id(legacy_id):
-    """
-    Search Logic:
-    1. Search FILAMENTS for external_id matching legacy_id.
-    2. If found, find the first available SPOOL of that filament.
-    3. If not found, check if legacy_id is a direct SPOOL ID.
-    """
     legacy_id = str(legacy_id).strip()
     try:
         # STEP 1: Check Filaments (The "Type" ID)
@@ -146,17 +161,18 @@ def find_spool_by_legacy_id(legacy_id):
             if spool_resp.ok:
                 candidates = []
                 for spool in spool_resp.json():
-                    if spool['filament']['id'] == target_filament_id:
+                    # Check nested filament ID
+                    if spool.get('filament', {}).get('id') == target_filament_id:
                         # Optional: Prefer non-empty spools
-                        if spool['remaining_weight'] > 10:
+                        w = spool.get('remaining_weight', 0)
+                        if w is not None and w > 10:
                             return spool['id']
                         candidates.append(spool['id'])
                 
-                # If we only found empty ones, return the first one
+                # If we only found empty ones (or none matched criteria), return the first one found
                 if candidates: return candidates[0]
 
         # STEP 3: Fallback - Is it a direct Spool ID?
-        # We verify it exists before returning
         check_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{legacy_id}", timeout=2)
         if check_resp.ok:
             return int(legacy_id)
@@ -192,18 +208,15 @@ def resolve_scan(text):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
 
-    # Google Sheet URL -> Legacy ID
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
-            found_id = find_spool_by_legacy_id(m.group(1))
-            if found_id: return {'type': 'spool', 'id': found_id}
+            rid = find_spool_by_legacy_id(m.group(1))
+            if rid: return {'type': 'spool', 'id': rid}
 
-    # Raw Number -> Legacy ID Check -> Direct ID Fallback
     if text.isdigit():
-        found_id = find_spool_by_legacy_id(text)
-        if found_id: return {'type': 'spool', 'id': found_id}
-        # If lookup failed, maybe it's a new spool ID created in Spoolman
+        rid = find_spool_by_legacy_id(text)
+        if rid: return {'type': 'spool', 'id': rid}
         return {'type': 'spool', 'id': int(text)}
         
     if len(text) > 2: return {'type': 'location', 'id': text.upper()}
@@ -284,7 +297,6 @@ def perform_undo():
     last = UNDO_STACK.pop(); moves = last['moves']; target = last.get('target')
     
     cfg = load_config(); printer_map = cfg.get("printer_map", {})
-    # If target was a printer, clear it
     if target in printer_map:
         try:
             p = printer_map[target]
@@ -356,9 +368,17 @@ def api_delete_location():
     if not target: return jsonify({"success": False})
     try:
         contents = get_spools_at_location(target)
-        for sid in contents: update_spool(sid, {"location": None}) # FIX: Use None for null
+        for sid in contents: update_spool(sid, {"location": None}) # Correctly use None
         if contents: add_log_entry(f"🏚️ Evicted {len(contents)} spools from {target}", "WARNING")
+        
+        # Clear FilaBridge if it was a printer
+        cfg = load_config(); printer_map = cfg.get("printer_map", {})
+        if target in printer_map:
+            p = printer_map[target]
+            requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
     except: pass
+    
     current = load_locations_list()
     new_list = [row for row in current if row['LocationID'] != target]
     save_locations_list(new_list)
@@ -382,16 +402,13 @@ def api_manage_contents():
 
     if action == 'clear_location':
         contents = get_spools_at_location(loc_id)
-        for sid in contents: update_spool(sid, {"location": None}) # FIX: Use None
+        for sid in contents: update_spool(sid, {"location": None})
         
-        # FIX: Check if this was a printer location and clear FilaBridge
         cfg = load_config(); printer_map = cfg.get("printer_map", {})
         if loc_id in printer_map:
             p = printer_map[loc_id]
-            try:
-                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+            try: requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
-                add_log_entry(f"🔌 FilaBridge: Cleared {loc_id}", "INFO")
             except: pass
 
         add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
@@ -411,9 +428,8 @@ def api_manage_contents():
 
     if action == 'remove':
         current_db_loc = spool_data.get('location', '').strip().upper()
-        update_spool(spool_id, {"location": None}) # FIX: Use None
+        update_spool(spool_id, {"location": None})
         
-        # FIX: FilaBridge Unload
         cfg = load_config(); printer_map = cfg.get("printer_map", {})
         if current_db_loc in printer_map:
             p = printer_map[current_db_loc]
