@@ -27,21 +27,35 @@ def find_file(filename):
     print(f"⚠️ Warning: Could not find '{filename}'.")
     return None
 
-# --- API HELPER ---
-def create_field(entity_type, key, name, f_type, choices=None, multi=False):
+# --- API HELPER (UPDATED) ---
+def create_field(entity_type, key, name, f_type, choices=None, multi=False, force_reset=False):
+    """
+    Creates or Updates a field in Spoolman.
+    force_reset=True will DELETE the field first to ensure Type changes take effect.
+    """
+    print(f"🔧 Processing {entity_type} field: {name} ({key})...")
+    
+    if force_reset:
+        print(f"   ⚠️ Force Reset enabled. Deleting old definition...")
+        try:
+            del_resp = requests.delete(f"{SPOOLMAN_IP}/api/v1/field/{entity_type}/{key}")
+            if del_resp.status_code == 204: print("   🗑️ Deleted old field.")
+            elif del_resp.status_code == 404: print("   ℹ️ Old field not found (clean start).")
+            else: print(f"   ⚠️ Delete failed: {del_resp.status_code} {del_resp.text}")
+        except Exception as e: print(f"   ❌ Connection Error during delete: {e}")
+
     payload = {"name": name, "field_type": f_type}
     if f_type == "choice":
         payload["multi_choice"] = multi
         if choices:
             payload["choices"] = sorted([c for c in list(set(choices)) if c.strip()])
 
-    print(f"Creating {entity_type} field: {name} ({key})...")
     try:
         resp = requests.post(f"{SPOOLMAN_IP}/api/v1/field/{entity_type}/{key}", json=payload)
-        if resp.status_code in [200, 201]: print("✅ Created/Updated.")
-        elif resp.status_code == 400 and "already exists" in resp.text: print("⚠️ Already exists.")
-        else: print(f"❌ Error {resp.status_code}: {resp.text}")
-    except Exception as e: print(f"❌ Connection Error: {e}")
+        if resp.status_code in [200, 201]: print("   ✅ Created/Updated.")
+        elif resp.status_code == 400 and "already exists" in resp.text: print("   ℹ️ Already exists.")
+        else: print(f"   ❌ Error {resp.status_code}: {resp.text}")
+    except Exception as e: print(f"   ❌ Connection Error: {e}")
 
 # --- CHOICE EXTRACTOR ---
 def get_clean_choices(csv_path, column_name):
@@ -96,9 +110,8 @@ create_field("spool", "label_printed", "Label Printed", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")
 
-# --- NEW FIELD FOR MULTI-SLOT LOGIC ---
-create_field("spool", "container_slot", "Container / MMU Slot", "text") 
-# Using "text" to allow for "1", "2", "L", "R" flexibility.
+# --- THE FIX: Force Reset this specific field ---
+create_field("spool", "container_slot", "Container / MMU Slot", "text", force_reset=True)
 
 # Choice field for Spool Type
 create_field("spool", "spool_type", "Spool Type", "choice", choices=list(spool_types), multi=False)
