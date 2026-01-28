@@ -161,6 +161,7 @@
                     if (res.cmd === 'clear') { heldSpools = []; renderBuffer(); showToast("BUFFER CLEARED", "info"); }
                     if (res.cmd === 'eject') { ejectMode = true; showToast("⚠️ SCAN ITEM TO EJECT", "warning"); document.getElementById('buffer-zone').style.border = "4px solid #ff4444"; }
                 }
+                if (res.type === 'error') showToast(res.msg, 'error');
             });
         }
 
@@ -231,7 +232,7 @@
                                     <div class="fw-bold fs-5">#${s.id}</div>
                                     <div class="d-flex align-items-center">
                                         <div class="buffer-swatch me-2" style="width:20px;height:20px;background-color:#${s.color};"></div>
-                                        <span class="text-muted small">${s.display}</span>
+                                        <span class="text-warning small">${s.display}</span>
                                     </div>
                                 </div>
                             </div>
