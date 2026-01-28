@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response, render_template
+from flask import Flask, request, jsonify, Response, render_template, make_response
 import requests
 import logging
 from logging.handlers import RotatingFileHandler
@@ -28,7 +28,20 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v97.0 (Display Logic Fix)"
+VERSION = "v97.1 (Cache Buster Edition)"
+
+# --- CACHE BUSTING ---
+@app.after_request
+def add_header(r):
+    """
+    Add headers to both force latest IE rendering engine or Chrome Frame,
+    and also to cache the rendered page for 10 minutes.
+    """
+    r.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    r.headers["Pragma"] = "no-cache"
+    r.headers["Expires"] = "0"
+    r.headers['Cache-Control'] = 'public, max-age=0'
+    return r
 
 def load_config():
     defaults = {
@@ -95,7 +108,6 @@ def update_spool(sid, data):
 def format_spool_display(spool_data):
     try:
         sid = spool_data.get('id', '?')
-        # Handle remaining weight (could be float or None)
         rem_raw = spool_data.get('remaining_weight', 0)
         rem = int(rem_raw) if rem_raw is not None else 0
         
@@ -103,51 +115,35 @@ def format_spool_display(spool_data):
         if not fil:
             return {"text": f"#{sid} [No Filament Data]", "color": "888888"}
 
-        # 1. Try to extract specific components
         vendor_obj = fil.get('vendor')
         brand = vendor_obj.get('name') if vendor_obj else None
         material = fil.get('material')
         
-        # 2. Determine Color Name
-        # Prefer 'original_color' from extra, fallback to filament name
         extra = fil.get('extra') or {}
         color_info = extra.get('original_color')
-        
-        if not color_info:
-            # Fallback to the filament's main name if no extra color
-            color_info = fil.get('name', 'Unknown Color')
+        if not color_info: color_info = fil.get('name', 'Unknown Color')
 
-        # 3. Construct the String
         parts = []
-        
-        # If we have structured Brand/Material, use them
         if brand: parts.append(brand)
         if material: parts.append(material)
         
-        # If Brand/Material were missing, use the full name as a fallback
-        if not brand and not material:
-             # Just use the name from Spoolman
-             parts.append(fil.get('name', 'Unknown Filament'))
-        else:
-             # Otherwise append the color in parenthesis
-             parts.append(f"({color_info})")
+        if not brand and not material: parts.append(fil.get('name', 'Unknown Filament'))
+        else: parts.append(f"({color_info})")
 
         display_text = f"#{sid} {' '.join(parts)} [{rem}g]"
         hex_color = fil.get('color_hex', 'ffffff')
-        
         return {"text": display_text, "color": hex_color}
 
     except Exception as e:
-        logger.error(f"Formatting error for #{spool_data.get('id', '?')}: {e}")
+        logger.error(f"Format Error: {e}")
         return {"text": f"#{spool_data.get('id', '?')} Error", "color": "ff0000"}
 
 def find_spool_by_legacy_id(legacy_id):
     legacy_id = str(legacy_id).strip()
     try:
-        # STEP 1: Check Filaments (The "Type" ID)
+        # STEP 1: Check Filament Type
         fil_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/filament", timeout=5)
         target_filament_id = None
-        
         if fil_resp.ok:
             for fil in fil_resp.json():
                 ext = str(fil.get('external_id', '')).strip().replace('"','')
@@ -155,30 +151,23 @@ def find_spool_by_legacy_id(legacy_id):
                     target_filament_id = fil['id']
                     break
         
-        # STEP 2: If we found a Filament Type, find a Spool of that type
+        # STEP 2: Find Spool of that Type
         if target_filament_id:
             spool_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
             if spool_resp.ok:
                 candidates = []
                 for spool in spool_resp.json():
-                    # Check nested filament ID
                     if spool.get('filament', {}).get('id') == target_filament_id:
-                        # Optional: Prefer non-empty spools
                         w = spool.get('remaining_weight', 0)
-                        if w is not None and w > 10:
-                            return spool['id']
+                        if w is not None and w > 10: return spool['id']
                         candidates.append(spool['id'])
-                
-                # If we only found empty ones (or none matched criteria), return the first one found
                 if candidates: return candidates[0]
 
-        # STEP 3: Fallback - Is it a direct Spool ID?
+        # STEP 3: Fallback to Direct ID
         check_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{legacy_id}", timeout=2)
-        if check_resp.ok:
-            return int(legacy_id)
+        if check_resp.ok: return int(legacy_id)
 
-    except Exception as e:
-        logger.error(f"Legacy Lookup Error: {e}")
+    except Exception as e: logger.error(f"Legacy Lookup Error: {e}")
     return None
 
 def get_spools_at_location_detailed(loc_name):
@@ -198,7 +187,6 @@ def get_spools_at_location(loc_name):
 
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
-    
     if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
@@ -276,8 +264,7 @@ def perform_smart_move(target, raw_spools):
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=3)
                 if fb_resp.ok: add_log_entry(f"✅ FilaBridge Success", "INFO")
                 else: add_log_entry(f"❌ FilaBridge Fail: {fb_resp.text}", "ERROR")
-            except Exception as e:
-                add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
+            except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
@@ -368,10 +355,9 @@ def api_delete_location():
     if not target: return jsonify({"success": False})
     try:
         contents = get_spools_at_location(target)
-        for sid in contents: update_spool(sid, {"location": None}) # Correctly use None
+        for sid in contents: update_spool(sid, {"location": None})
         if contents: add_log_entry(f"🏚️ Evicted {len(contents)} spools from {target}", "WARNING")
         
-        # Clear FilaBridge if it was a printer
         cfg = load_config(); printer_map = cfg.get("printer_map", {})
         if target in printer_map:
             p = printer_map[target]
@@ -427,16 +413,15 @@ def api_manage_contents():
     info = format_spool_display(spool_data)
 
     if action == 'remove':
-        current_db_loc = spool_data.get('location', '').strip().upper()
         update_spool(spool_id, {"location": None})
-        
         cfg = load_config(); printer_map = cfg.get("printer_map", {})
-        if current_db_loc in printer_map:
-            p = printer_map[current_db_loc]
+        loc = spool_data.get('location', '').strip().upper()
+        if loc in printer_map:
+            p = printer_map[loc]
             try:
                 requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": None})
-                add_log_entry(f"🔌 FilaBridge: Unloaded from {current_db_loc}", "INFO")
+                add_log_entry(f"🔌 FilaBridge: Unloaded from {loc}", "INFO")
             except: pass
 
         add_log_entry(f"⏏️ Ejected: {info['text']}", "WARNING")
