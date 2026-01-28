@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v98.0 (Strict Legacy & High Contrast)"
+VERSION = "v100.0 (Merged UI & Legacy ID)"
 
 @app.after_request
 def add_header(r):
@@ -102,8 +102,10 @@ def update_spool(sid, data):
 def format_spool_display(spool_data):
     try:
         sid = spool_data.get('id', '?')
-        rem = int(spool_data.get('remaining_weight', 0) or 0)
+        # EXTRACT LEGACY ID
+        ext_id = str(spool_data.get('external_id', '')).replace('"', '').strip()
         
+        rem = int(spool_data.get('remaining_weight', 0) or 0)
         fil = spool_data.get('filament')
         if not fil:
             return {"text": f"#{sid} [No Filament Data]", "color": "888888"}
@@ -111,29 +113,35 @@ def format_spool_display(spool_data):
         vendor_obj = fil.get('vendor')
         brand = vendor_obj.get('name', 'Generic') if vendor_obj else 'Generic'
         mat = fil.get('material', 'PLA')
-        col = fil.get('name', 'Unknown')
-        hex_color = fil.get('color_hex', 'ffffff')
         
         extra = fil.get('extra') or {}
-        if 'original_color' in extra: col = extra['original_color']
-            
-        display_text = f"#{sid} {brand} {mat} ({col}) [{rem}g]"
+        col_name = extra.get('original_color')
+        if not col_name: col_name = fil.get('name', 'Unknown')
+
+        # CONSTRUCT SINGLE LINE STRING
+        parts = [f"#{sid}"]
+        
+        # Add Legacy ID if present
+        if ext_id: parts.append(f"[Legacy: {ext_id}]")
+        
+        parts.append(brand)
+        parts.append(mat)
+        parts.append(f"({col_name})")
+        parts.append(f"[{rem}g]")
+
+        display_text = " ".join(parts)
+        hex_color = fil.get('color_hex', 'ffffff')
         return {"text": display_text, "color": hex_color}
+
     except Exception as e:
         logger.error(f"Format Error: {e}")
-        return {"text": f"Error formatting #{spool_data.get('id')}", "color": "ff0000"}
+        return {"text": f"#{spool_data.get('id', '?')} Error", "color": "ff0000"}
 
 def find_spool_by_legacy_id(legacy_id, strict_mode=False):
-    """
-    strict_mode = True means ONLY check Filament IDs (Legacy).
-    strict_mode = False means check Filament IDs first, then fallback to Spool IDs.
-    """
     legacy_id = str(legacy_id).strip()
     try:
-        # STEP 1: Search Filaments (Legacy ID match)
         fil_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/filament", timeout=5)
         target_filament_id = None
-        
         if fil_resp.ok:
             for fil in fil_resp.json():
                 ext = str(fil.get('external_id', '')).strip().replace('"','')
@@ -141,33 +149,24 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
                     target_filament_id = fil['id']
                     break
         
-        # STEP 2: If found, get a spool of that type
         if target_filament_id:
             spool_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
             if spool_resp.ok:
                 candidates = []
                 for spool in spool_resp.json():
                     if spool.get('filament', {}).get('id') == target_filament_id:
-                        # Prioritize non-empty
                         if (spool.get('remaining_weight') or 0) > 10:
                             return spool['id']
                         candidates.append(spool['id'])
                 
                 if candidates: return candidates[0]
-                
-                # If Strict Mode (QR scan), and we found the filament but no spools...
-                # Do NOT fallback. The user scanned a legacy code, they expect a legacy result.
-                if strict_mode:
-                    add_log_entry(f"⚠️ Found Filament type for Legacy ID {legacy_id}, but no spools exist!", "WARNING")
-                    return None
+                if strict_mode: return None
 
-        # STEP 3: Fallback (Only if NOT strict)
         if not strict_mode:
             check_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{legacy_id}", timeout=2)
             if check_resp.ok: return int(legacy_id)
 
-    except Exception as e:
-        logger.error(f"Legacy Lookup Error: {e}")
+    except Exception as e: logger.error(f"Legacy Lookup Error: {e}")
     return None
 
 def get_spools_at_location_detailed(loc_name):
@@ -187,7 +186,6 @@ def get_spools_at_location(loc_name):
 
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
-    
     if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
     if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
     if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
@@ -197,16 +195,13 @@ def resolve_scan(text):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
 
-    # STRICT MODE: If it looks like a URL, it IS a Legacy ID.
     if 'google.com' in decoded.lower() or 'range=' in decoded.lower():
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
-            # Pass strict_mode=True
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
             else: return {'type': 'error', 'msg': 'Legacy ID Found, but no Spools available.'}
 
-    # RAW NUMBER: Ambiguous. Check Legacy first, then Spool.
     if text.isdigit():
         rid = find_spool_by_legacy_id(text, strict_mode=False)
         if rid: return {'type': 'spool', 'id': rid}
@@ -269,8 +264,7 @@ def perform_smart_move(target, raw_spools):
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=3)
                 if fb_resp.ok: add_log_entry(f"✅ FilaBridge Success", "INFO")
                 else: add_log_entry(f"❌ FilaBridge Fail: {fb_resp.text}", "ERROR")
-            except Exception as e:
-                add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
+            except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
             add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
@@ -288,12 +282,10 @@ def perform_smart_move(target, raw_spools):
 def perform_undo():
     if not UNDO_STACK: return jsonify({"success": False, "msg": "History empty."})
     last = UNDO_STACK.pop(); moves = last['moves']; target = last.get('target')
-    
     cfg = load_config(); printer_map = cfg.get("printer_map", {})
     if target in printer_map:
         try:
             p = printer_map[target]
-            # FIX: Send 0 for unload
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                           json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
         except: pass
@@ -302,8 +294,7 @@ def perform_undo():
         requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json={"location": loc})
         if loc in printer_map:
             p = printer_map[loc]
-            try:
-                requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+            try: requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)})
             except: pass
             
@@ -369,7 +360,7 @@ def api_delete_location():
         if target in printer_map:
             p = printer_map[target]
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}) # Fix 0
+                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
     except: pass
     
     current = load_locations_list()
@@ -459,7 +450,7 @@ def api_identify_scan():
             info = format_spool_display(data)
             return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
     if res['type'] == 'command': return jsonify(res)
-    return jsonify(res) # Return full error object if exists
+    return jsonify(res)
 
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
