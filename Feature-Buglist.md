@@ -16,95 +16,9 @@
 # **Next Steps Items:**
 
 ## **Current:**
-1. 📦 The "Multi-Slot" Logic (MDB/MMU)
-The Issue: Right now, the Hub treats every location like a generic "Bucket." If you add 3 spools to PM-DB-1 (a 4-slot dryer), it just lists them. It doesn't know which slot (1, 2, 3, or 4) they are in.
 
-The Missing Feature:
+1. Working on bugs found during testing of new feature.
 
-When adding to a location defined as a "Dryer Box" or "MMU", the UI should ask for a Slot Number (or auto-assign the first empty one).
-
-Visualizing "Slot 1: Full, Slot 2: Empty" instead of just a list.
-
-## 📋 The v106.0 Verification Checklist
-1. 📦 The "Grid Trigger" Test
-The Goal: Verify that the UI switches to "Grid Mode" only when appropriate.
-Action:
-Edit a location (e.g., PM-DB-1).
-Set Type to Dryer Box (or MMU Slot).
-Set Max Spools to 4.
-Save.
-
-Click "Manage" on that location.
-
-✅ Pass: You see a 2x2 Grid of buttons labeled "1", "2", "3", "4".
-
-❌ Fail: You still see the old vertical list.
-
-2. 👆 The "Tap-to-Fill" Test
-The Goal: Assign a spool to a specific slot using the touchscreen.
-
-Action:
-
-Open the "Manage" grid for PM-DB-1.
-
-Scan/Type a Spool ID (e.g., #105) to add it to the Buffer.
-
-Tap the button for Slot 1 (which should say "EMPTY").
-
-✅ Pass:
-
-The spool moves from the buffer to Slot 1.
-
-The Slot 1 button turns Dark Grey/Blue and displays the spool info (Color/Brand).
-
-The buffer clears.
-
-❌ Fail: Nothing happens, or it adds it to the list without a slot number.
-
-3. ⌨️ The "Scan-to-Slot" Test
-The Goal: Verify that scanning a "Slot Command" works like a physical button press.
-
-Action:
-
-Scan a Spool (e.g., #126) into the buffer.
-
-Type/Scan this text command into the input box: CMD:SLOT:2
-
-Press Enter.
-
-✅ Pass: Spool #126 instantly snaps into Slot 2 on the screen.
-
-4. ⏏️ The "Slot Eject" Test
-The Goal: Verify specific slot clearing.
-
-Action:
-
-Tap the Filled Slot 1 button (the one with Spool #105).
-
-Confirm the prompt: "Eject spool #105?".
-
-✅ Pass:
-
-Spool #105 is removed.
-
-Slot 1 reverts to "EMPTY".
-
-(Bonus) If this was a Printer Location, verify the FilaBridge log says "Unloaded".
-
-5. 🗄️ Persistence Check
-The Goal: Ensure Spoolman actually saved the data.
-
-Action:
-
-Close the Manage window.
-
-Refresh the Page (F5).
-
-Open "Manage" on PM-DB-1 again.
-
-✅ Pass: The spools are still in the exact slots you put them in.
-
-❌ Fail: They are there, but the slots are scrambled or missing.
 
 ## **Future:**
 2. ⚖️ The "Weigh-Out" Protocol
