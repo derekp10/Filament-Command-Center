@@ -126,7 +126,7 @@
         let logsPaused = false;
         let currentGridState = {};
         let isProcessing = false;
-        let pendingAction = null; // Stores pending swap/eject data
+        let pendingAction = null; 
 
         window.addEventListener('blur', () => { document.getElementById('focus-guard').style.display = 'flex'; });
         window.addEventListener('focus', () => { document.getElementById('focus-guard').style.display = 'none'; });
@@ -172,7 +172,6 @@
         }
 
         function processScan(text) {
-            // IF MODAL OPEN, IGNORE SCANS (Safety)
             if(document.getElementById('actionModal').classList.contains('show')) return;
 
             setProcessing(true);
@@ -202,7 +201,6 @@
             }).catch(() => setProcessing(false));
         }
 
-        // --- NEW ACTION MODAL SYSTEM ---
         const actionModal = new bootstrap.Modal(document.getElementById('actionModal'));
 
         function promptAction(title, msg, buttons) {
@@ -226,47 +224,38 @@
             const locId = document.getElementById('manage-loc-id').value;
             const itemInSlot = currentGridState[slotNum.toString()];
 
-            // 1. BUFFER HAS ITEM (Trying to Assign)
             if (heldSpools.length > 0) {
                 const newItem = heldSpools[0];
 
                 if (itemInSlot) {
-                    // CONFLICT: Slot Taken
                     promptAction("⚠️ Slot Occupied", `Slot ${slotNum} holds <b>${itemInSlot.display}</b>.<br>Assigning <b>${newItem.display}</b>.`, [
                         { label: "🔄 Swap (Put Old in Buffer)", cls: "info", action: () => {
-                            // Swap Logic
-                            heldSpools.shift(); // Remove new item (we are using it)
-                            heldSpools.push({id: itemInSlot.id, display: itemInSlot.display, color: itemInSlot.color}); // Add old item to buffer
+                            heldSpools.shift(); 
+                            heldSpools.push({id: itemInSlot.id, display: itemInSlot.display, color: itemInSlot.color}); 
                             renderBuffer();
                             doAssign(locId, newItem.id, slotNum);
                         }},
                         { label: "⬇️ Overwrite (Unslot Old)", cls: "warning", action: () => {
-                            // Overwrite Logic
                             heldSpools.shift();
                             renderBuffer();
                             doAssign(locId, newItem.id, slotNum);
                         }}
                     ]);
                 } else {
-                    // EMPTY SLOT: Direct Assign
                     heldSpools.shift();
                     renderBuffer();
                     doAssign(locId, newItem.id, slotNum);
                 }
             } 
-            // 2. BUFFER EMPTY (Trying to Eject/Pick Up)
             else {
                 if (itemInSlot) {
-                    // ACTION: Pick up or Eject?
                      promptAction("Slot Action", `Slot ${slotNum}: <b>${itemInSlot.display}</b>`, [
                         { label: "✋ Pick Up (Move to Buffer)", cls: "success", action: () => {
-                            // Pick Up Logic: Add to buffer, then remove from DB (using Eject logic)
                             heldSpools.push({id: itemInSlot.id, display: itemInSlot.display, color: itemInSlot.color});
                             renderBuffer();
                             doEject(itemInSlot.id, locId);
                         }},
                         { label: "⏏️ Eject (Clear Slot)", cls: "danger", action: () => {
-                            // Just Eject
                             doEject(itemInSlot.id, locId);
                         }}
                     ]);
@@ -291,19 +280,43 @@
             }).catch(() => setProcessing(false));
         }
 
-        // --- VIEW REFRESH ---
+        // --- FIXED OPEN/REFRESH LOGIC ---
+        function openManage(locId) {
+            // 1. Force UI Clean
+            document.getElementById('manage-grid-view').style.display = 'none';
+            document.getElementById('manage-list-view').style.display = 'none';
+            document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
+            document.getElementById('manage-loc-id').value = locId;
+            document.getElementById('manual-spool-id').value = "";
+
+            // 2. Load View
+            const success = refreshManageView(locId);
+
+            // 3. Show if successful
+            if(success) manageModal.show();
+            else showToast(`Error: Location '${locId}' data not found.`, 'error');
+        }
+
         function refreshManageView(locId) {
-             const locData = allLocations.find(l => l.LocationID === locId);
-             if(!locData) return;
+             // Loose Equality Check to prevent String/Number mismatches
+             const locData = allLocations.find(l => String(l.LocationID) == String(locId));
+             if(!locData) return false;
              
              fetchLogs();
              const isGrid = (locData.Type === 'Dryer Box' || locData.Type === 'MMU Slot') && parseInt(locData['Max Spools']) > 1;
              
-             if (isGrid) renderSlotGrid(locId, parseInt(locData['Max Spools']));
-             else refreshManageList(locId);
+             if (isGrid) {
+                 document.getElementById('manage-grid-view').style.display = 'block';
+                 document.getElementById('manage-list-view').style.display = 'none';
+                 renderSlotGrid(locId, parseInt(locData['Max Spools']));
+             } else {
+                 document.getElementById('manage-grid-view').style.display = 'none';
+                 document.getElementById('manage-list-view').style.display = 'block';
+                 refreshManageList(locId);
+             }
+             return true;
         }
 
-        // --- GRID / LIST RENDERERS ---
         function renderSlotGrid(locId, maxSlots) {
             const grid = document.getElementById('slot-grid-container');
             const unslottedBox = document.getElementById('unslotted-container');
@@ -328,7 +341,7 @@
                     if (item) {
                         div.className = "slot-btn full";
                         div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="${qrId}" class="slot-qr"></div></div><div class="slot-right"><div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div></div>`;
-                        div.onclick = () => handleSlotInteraction(i); // UNIFIED HANDLER
+                        div.onclick = () => handleSlotInteraction(i); 
                     } else {
                         div.className = "slot-btn empty";
                         div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="${qrId}" class="slot-qr"></div></div><div class="slot-right"><div class="text-muted fs-4">EMPTY</div></div>`;
@@ -357,16 +370,6 @@
             });
         }
 
-        function openManage(locId) {
-            document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
-            document.getElementById('manage-loc-id').value = locId;
-            document.getElementById('manual-spool-id').value = "";
-            const locData = allLocations.find(l => l.LocationID === locId);
-            refreshManageView(locId); // Use unified refresher
-            manageModal.show();
-        }
-
-        // --- LEGACY EJECT (List View) ---
         function ejectSpool(spoolId, locId) { if(locId !== "Scan") { requestConfirmation("Eject spool #" + spoolId + "?", () => { doEject(spoolId, locId); }); } else doEject(spoolId, locId); }
         function doEject(spoolId, locId) {
             setProcessing(true);
@@ -379,7 +382,6 @@
             }).catch(() => setProcessing(false));
         }
 
-        // --- STANDARD MODALS ---
         const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
         const locModal = new bootstrap.Modal(document.getElementById('locModal'));
         const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
