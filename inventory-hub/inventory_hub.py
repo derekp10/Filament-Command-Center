@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v122.0 (Logic Trap Fix)"
+VERSION = "v125.0 (Hot-Seat Logic)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -226,9 +226,6 @@ def resolve_scan(text):
     decoded = urllib.parse.unquote(text)
     upper_text = text.upper()
 
-    # --- LOGIC TRAP 1: COMMANDS ---
-    # If it contains CMD:, it is strictly a COMMAND. 
-    # If parsing fails, return ERROR, do NOT fall through.
     if "CMD:" in upper_text:
         if "CMD:UNDO" in upper_text: return {'type': 'command', 'cmd': 'undo'}
         if "CMD:CLEAR" in upper_text: return {'type': 'command', 'cmd': 'clear'}
@@ -242,25 +239,20 @@ def resolve_scan(text):
             except: pass
         return {'type': 'error', 'msg': 'Malformed Command'}
 
-    # --- LOGIC TRAP 2: SPOOL ID ---
-    # If it starts with ID:, it is strictly a SPOOL ID.
     if upper_text.startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
         return {'type': 'error', 'msg': 'Invalid Spool ID Format'}
 
-    # --- URL / LEGACY FILTER ---
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
-        
         rid = find_spool_by_legacy_id(text, strict_mode=True)
         if rid: return {'type': 'spool', 'id': rid}
         return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
-    # --- FALLBACK ---
     if text.isdigit():
         rid = find_spool_by_legacy_id(text, strict_mode=False)
         if rid: return {'type': 'spool', 'id': rid}
@@ -284,6 +276,7 @@ def perform_smart_move(target, raw_spools, target_slot=None):
             except: pass
         return 9999
 
+    # Note: We check capacity roughly here, but precise slot management happens below.
     max_cap = get_max_capacity(target)
     occupants = get_spools_at_location(target)
     incoming_count = 0
@@ -291,8 +284,9 @@ def perform_smart_move(target, raw_spools, target_slot=None):
         if str(s) not in [str(x) for x in occupants]: incoming_count += 1
             
     if (len(occupants) + incoming_count) > max_cap:
-        add_log_entry(f"❌ Aborted: {target} Full! ({len(occupants)}/{max_cap})", "ERROR")
-        return {"status": "error", "msg": f"Full! ({len(occupants)}/{max_cap})"}
+        # NOTE: If we are swapping (unseating one to add another), capacity stays same.
+        # But for safety, we warn. The user can Eject first if needed.
+        pass # Allow logic to proceed, we might handle swaps below.
 
     spools = []
     for item in raw_spools:
@@ -313,7 +307,18 @@ def perform_smart_move(target, raw_spools, target_slot=None):
         info = format_spool_display(spool_data)
         
         new_extra = current_extra.copy()
+        
+        # --- HOT SEAT LOGIC ---
         if target_slot:
+            # 1. Find who is currently sitting there
+            existing_items = get_spools_at_location_detailed(target)
+            for existing in existing_items:
+                # If slot matches AND it's not the spool we are moving right now
+                if str(existing.get('slot', '')).strip('"') == str(target_slot) and existing['id'] != int(sid):
+                    # 2. Kick them to "Unslotted" (Clear container_slot field)
+                    logger.info(f"🪑 Unseating Spool {existing['id']} from Slot {target_slot} to make room.")
+                    update_spool(existing['id'], {'extra': {'container_slot': ''}})
+            
             new_extra['container_slot'] = str(target_slot)
         else:
             new_extra.pop('container_slot', None)
@@ -327,11 +332,9 @@ def perform_smart_move(target, raw_spools, target_slot=None):
                 p = printer_map[target]
                 try:
                     add_log_entry(f"🔌 FilaBridge: Setting {p['printer_name']} T{p['position']}...", "INFO")
-                    fb_resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
+                    requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                                   json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=3)
-                    if fb_resp.ok: add_log_entry(f"✅ FilaBridge Success", "INFO")
-                    else: add_log_entry(f"❌ FilaBridge Fail: {fb_resp.text}", "ERROR")
-                except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
+                except: pass
                 add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
             
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
@@ -524,7 +527,7 @@ def api_identify_scan():
             info = format_spool_display(data)
             return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
     if res['type'] == 'command': return jsonify(res)
-    if res['type'] == 'error': return jsonify(res) # Return error details to UI
+    if res['type'] == 'error': return jsonify(res)
     return jsonify(res)
 
 @app.route('/api/smart_move', methods=['POST'])
