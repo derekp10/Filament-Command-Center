@@ -48,6 +48,7 @@
 </head>
 <body>
     <div id="focus-guard" onclick="document.body.focus()"><div><div style="font-size:5rem;">🚫</div><div style="font-size:3rem;color:#ff4444;font-weight:bold;">SCANNER PAUSED</div></div></div>
+    
     <div id="toast-container"></div>
 
     <nav class="navbar navbar-expand-lg">
@@ -70,6 +71,7 @@
             </div>
             <div id="live-logs" class="log-box" onmouseenter="pauseLogs(true)" onmouseleave="pauseLogs(false)"></div>
         </div>
+        
         <div class="col-buffer">
             <div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status" style="font-size:1rem; color:#888;">Ready...</span></div>
             <div id="buffer-zone" class="buffer-content"></div>
@@ -84,14 +86,21 @@
     <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-muted" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
     
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white" onclick="closeManage()"></button></div><div class="modal-body">
+        
         <div id="manage-grid-view" style="display:none;">
             <div class="alert alert-info py-1 mb-2 small text-center">Tap button or scan slot QR (CMD:SLOT:X)</div>
             <div id="slot-grid-container" class="slot-grid"></div>
         </div>
+        
         <div id="manage-list-view">
             <div id="manage-contents-list" class="mb-4"></div>
         </div>
-        <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div><div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
+        
+        <hr class="border-secondary">
+        <div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div>
+        <div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div>
+        <input type="hidden" id="manage-loc-id">
+    </div></div></div></div>
     
     <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-dialog-centered"><div class="modal-content" style="border: 4px solid #ffcc00;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRM ACTION</h5></div><div class="modal-body text-center"><p id="confirm-msg" style="font-size:1.5rem;">Are you sure?</p><div class="bg-white p-2 d-inline-block rounded mb-2"><div id="qr-confirm"></div><div class="small fw-bold text-dark">CMD:CONFIRM</div></div></div><div class="modal-footer justify-content-center"><button type="button" class="btn btn-secondary btn-lg" style="width:40%;" onclick="confirmAction(false)">NO</button><button type="button" class="btn btn-warning btn-lg" style="width:40%;" onclick="confirmAction(true)">YES</button></div></div></div></div>
     
@@ -114,8 +123,9 @@
         let lastScannedLoc = null;
         let pendingConfirmCallback = null;
         let allLocations = []; 
-        let logsPaused = false; // LOG PAUSE FLAG
+        let logsPaused = false;
 
+        // --- SCANNER INPUT HANDLER ---
         document.addEventListener('keydown', (e) => {
             if (document.getElementById('focus-guard').style.display === 'flex') return;
             if (e.target.tagName === 'INPUT') return; 
@@ -307,7 +317,7 @@
             if(!spoolId) return;
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'add', location: locId, spool_id: spoolId}) })
             .then(r => r.json()).then(res => {
-                if(res.status === 'error') alert(res.msg);
+                if(res.status === 'error') showToast(res.msg, "error"); // FIXED: Replaced alert with Toast
                 else {
                     document.getElementById('manual-spool-id').value = ""; 
                     if(document.getElementById('manage-grid-view').style.display !== 'none') {
