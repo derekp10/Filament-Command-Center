@@ -100,6 +100,8 @@
         </div>
         <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div><div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
     
+    <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-4 mb-4"></p><div id="action-buttons" class="d-grid gap-3"></div></div><div class="modal-footer justify-content-center"><button class="btn btn-secondary w-50" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div>
+    
     <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-dialog-centered"><div class="modal-content" style="border: 4px solid #ffcc00;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRM ACTION</h5></div><div class="modal-body text-center"><p id="confirm-msg" style="font-size:1.5rem;">Are you sure?</p><div class="bg-white p-2 d-inline-block rounded mb-2"><div id="qr-confirm"></div><div class="small fw-bold text-dark">CMD:CONFIRM</div></div></div><div class="modal-footer justify-content-center"><button type="button" class="btn btn-secondary btn-lg" style="width:40%;" onclick="confirmAction(false)">NO</button><button type="button" class="btn btn-warning btn-lg" style="width:40%;" onclick="confirmAction(true)">YES</button></div></div></div></div>
     
     <div class="modal fade" id="locModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="modalTitle">Edit Location</h5><button type="button" class="btn-close btn-close-white" onclick="closeEdit()"></button></div><div class="modal-body"><input type="hidden" id="edit-original-id"><div class="mb-3"><label>Location ID</label><input type="text" class="form-control" id="edit-id"></div><div class="mb-3"><label>Friendly Name</label><input type="text" class="form-control" id="edit-name"></div><div class="row"><div class="col-8 mb-3"><label>Type</label><select class="form-select" id="edit-type"><option value="Dryer Box">Dryer Box</option><option value="Cart">Cart</option><option value="Shelf">Shelf</option><option value="Printer">Printer</option><option value="MMU Slot">MMU Slot</option></select></div><div class="col-4 mb-3"><label>Max Spools</label><input type="number" class="form-control" id="edit-max"></div></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeEdit()">Cancel</button><button type="button" class="btn btn-primary" onclick="saveLocation()">Save</button></div></div></div></div>
@@ -123,25 +125,18 @@
         let allLocations = []; 
         let logsPaused = false;
         let currentGridState = {};
-        let isProcessing = false; // RACE CONDITION LOCK
+        let isProcessing = false;
+        let pendingAction = null; // Stores pending swap/eject data
 
         window.addEventListener('blur', () => { document.getElementById('focus-guard').style.display = 'flex'; });
         window.addEventListener('focus', () => { document.getElementById('focus-guard').style.display = 'none'; });
 
         document.addEventListener('keydown', (e) => {
             if (document.getElementById('focus-guard').style.display === 'flex') return;
-            if (isProcessing) return; // IGNORE INPUT WHILE PROCESSING
+            if (isProcessing) return; 
             if (e.target.tagName === 'INPUT') return; 
-            
-            if (e.key === 'Enter') { 
-                e.preventDefault(); 
-                if (scanBuffer.length > 0) processScan(scanBuffer); 
-                scanBuffer = ""; 
-            } else if (e.key.length === 1) { 
-                scanBuffer += e.key; 
-                clearTimeout(bufferTimeout); 
-                bufferTimeout = setTimeout(() => { scanBuffer = ""; }, 2000); 
-            }
+            if (e.key === 'Enter') { e.preventDefault(); if (scanBuffer.length > 0) processScan(scanBuffer); scanBuffer = ""; } 
+            else if (e.key.length === 1) { scanBuffer += e.key; clearTimeout(bufferTimeout); bufferTimeout = setTimeout(() => { scanBuffer = ""; }, 2000); }
         });
 
         function setProcessing(state) {
@@ -177,6 +172,9 @@
         }
 
         function processScan(text) {
+            // IF MODAL OPEN, IGNORE SCANS (Safety)
+            if(document.getElementById('actionModal').classList.contains('show')) return;
+
             setProcessing(true);
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) })
             .then(r => r.json()).then(res => {
@@ -204,30 +202,111 @@
             }).catch(() => setProcessing(false));
         }
 
-        function openManage(locId) {
-            document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
-            document.getElementById('manage-loc-id').value = locId;
-            document.getElementById('manual-spool-id').value = "";
-            const locData = allLocations.find(l => l.LocationID === locId);
-            const isGrid = locData && (locData.Type === 'Dryer Box' || locData.Type === 'MMU Slot') && parseInt(locData['Max Spools']) > 1;
-            
-            if (isGrid) {
-                document.getElementById('manage-grid-view').style.display = 'block';
-                document.getElementById('manage-list-view').style.display = 'none';
-                renderSlotGrid(locId, parseInt(locData['Max Spools']));
-            } else {
-                document.getElementById('manage-grid-view').style.display = 'none';
-                document.getElementById('manage-list-view').style.display = 'block';
-                refreshManageList(locId);
+        // --- NEW ACTION MODAL SYSTEM ---
+        const actionModal = new bootstrap.Modal(document.getElementById('actionModal'));
+
+        function promptAction(title, msg, buttons) {
+            document.getElementById('action-title').innerText = title;
+            document.getElementById('action-msg').innerHTML = msg;
+            const btnContainer = document.getElementById('action-buttons');
+            btnContainer.innerHTML = "";
+            buttons.forEach(btn => {
+                const b = document.createElement('button');
+                b.className = `btn btn-${btn.cls || 'primary'} p-3 fs-5`;
+                b.innerHTML = btn.label;
+                b.onclick = () => { actionModal.hide(); btn.action(); };
+                btnContainer.appendChild(b);
+            });
+            actionModal.show();
+        }
+        function cancelAction() { pendingAction = null; }
+
+        function handleSlotInteraction(slotNum) {
+            if (!document.getElementById('manageModal').classList.contains('show')) return;
+            const locId = document.getElementById('manage-loc-id').value;
+            const itemInSlot = currentGridState[slotNum.toString()];
+
+            // 1. BUFFER HAS ITEM (Trying to Assign)
+            if (heldSpools.length > 0) {
+                const newItem = heldSpools[0];
+
+                if (itemInSlot) {
+                    // CONFLICT: Slot Taken
+                    promptAction("⚠️ Slot Occupied", `Slot ${slotNum} holds <b>${itemInSlot.display}</b>.<br>Assigning <b>${newItem.display}</b>.`, [
+                        { label: "🔄 Swap (Put Old in Buffer)", cls: "info", action: () => {
+                            // Swap Logic
+                            heldSpools.shift(); // Remove new item (we are using it)
+                            heldSpools.push({id: itemInSlot.id, display: itemInSlot.display, color: itemInSlot.color}); // Add old item to buffer
+                            renderBuffer();
+                            doAssign(locId, newItem.id, slotNum);
+                        }},
+                        { label: "⬇️ Overwrite (Unslot Old)", cls: "warning", action: () => {
+                            // Overwrite Logic
+                            heldSpools.shift();
+                            renderBuffer();
+                            doAssign(locId, newItem.id, slotNum);
+                        }}
+                    ]);
+                } else {
+                    // EMPTY SLOT: Direct Assign
+                    heldSpools.shift();
+                    renderBuffer();
+                    doAssign(locId, newItem.id, slotNum);
+                }
+            } 
+            // 2. BUFFER EMPTY (Trying to Eject/Pick Up)
+            else {
+                if (itemInSlot) {
+                    // ACTION: Pick up or Eject?
+                     promptAction("Slot Action", `Slot ${slotNum}: <b>${itemInSlot.display}</b>`, [
+                        { label: "✋ Pick Up (Move to Buffer)", cls: "success", action: () => {
+                            // Pick Up Logic: Add to buffer, then remove from DB (using Eject logic)
+                            heldSpools.push({id: itemInSlot.id, display: itemInSlot.display, color: itemInSlot.color});
+                            renderBuffer();
+                            doEject(itemInSlot.id, locId);
+                        }},
+                        { label: "⏏️ Eject (Clear Slot)", cls: "danger", action: () => {
+                            // Just Eject
+                            doEject(itemInSlot.id, locId);
+                        }}
+                    ]);
+                } else {
+                    showToast("Slot Empty & Buffer Empty", "warning");
+                }
             }
-            manageModal.show();
         }
 
+        function doAssign(locId, spoolId, slotNum) {
+            setProcessing(true);
+            fetch('/api/manage_contents', { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify({action: 'add', location: locId, spool_id: "ID:" + spoolId, slot: slotNum}) 
+            }).then(r => r.json()).then(res => {
+                setProcessing(false);
+                if (res.status === 'success') {
+                    showToast(`Assigned to Slot ${slotNum}`, "info");
+                    refreshManageView(locId);
+                } else showToast(res.msg, "error");
+            }).catch(() => setProcessing(false));
+        }
+
+        // --- VIEW REFRESH ---
+        function refreshManageView(locId) {
+             const locData = allLocations.find(l => l.LocationID === locId);
+             if(!locData) return;
+             
+             fetchLogs();
+             const isGrid = (locData.Type === 'Dryer Box' || locData.Type === 'MMU Slot') && parseInt(locData['Max Spools']) > 1;
+             
+             if (isGrid) renderSlotGrid(locId, parseInt(locData['Max Spools']));
+             else refreshManageList(locId);
+        }
+
+        // --- GRID / LIST RENDERERS ---
         function renderSlotGrid(locId, maxSlots) {
             const grid = document.getElementById('slot-grid-container');
             const unslottedBox = document.getElementById('unslotted-container');
-            grid.innerHTML = "<div class='text-center text-white'>Loading Slots...</div>";
-            unslottedBox.style.display = 'none';
             
             fetch(`/api/get_contents?id=${locId}`).then(r => r.json()).then(data => {
                 grid.innerHTML = "";
@@ -239,7 +318,6 @@
                     if(item.slot && parseInt(item.slot) > 0) slotMap[item.slot.toString()] = item; 
                     else unslotted.push(item);
                 });
-                
                 currentGridState = slotMap;
 
                 for (let i = 1; i <= maxSlots; i++) {
@@ -250,7 +328,7 @@
                     if (item) {
                         div.className = "slot-btn full";
                         div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="${qrId}" class="slot-qr"></div></div><div class="slot-right"><div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div></div>`;
-                        div.onclick = () => ejectSpool(item.id, locId); 
+                        div.onclick = () => handleSlotInteraction(i); // UNIFIED HANDLER
                     } else {
                         div.className = "slot-btn empty";
                         div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="${qrId}" class="slot-qr"></div></div><div class="slot-right"><div class="text-muted fs-4">EMPTY</div></div>`;
@@ -263,13 +341,11 @@
                 if (unslotted.length > 0) {
                     unslottedBox.style.display = 'block';
                     unslottedBox.innerHTML = `<h5 class="text-warning fw-bold">⚠️ Unslotted Items (${unslotted.length})</h5><div class="text-muted small mb-2">Scan QR or Tap to Pick Up</div>`;
-                    
                     unslotted.forEach((item, idx) => {
                         const div = document.createElement('div');
                         div.className = "unslotted-item";
                         const qrId = `qr-unslot-${idx}`;
                         div.innerHTML = `<div class="d-flex align-items-center"><div id="${qrId}" class="bg-white p-1 me-2 rounded"></div><div class="buffer-swatch me-2" style="width:25px;height:25px;background-color:#${item.color};"></div><span class="text-white fw-bold">${item.display}</span></div><div class="text-info fw-bold">PICK UP ✋</div>`;
-                        
                         div.onclick = () => {
                             if (heldSpools.some(s => s.id === item.id)) showToast("Already in Buffer", "warning");
                             else { heldSpools.push({id: item.id, display: item.display, color: item.color}); renderBuffer(); showToast("Picked Up! Select Slot.", "info"); }
@@ -281,40 +357,29 @@
             });
         }
 
-        function handleSlotInteraction(slotNum) {
-            if (!document.getElementById('manageModal').classList.contains('show')) return;
-            const locId = document.getElementById('manage-loc-id').value;
-
-            if (heldSpools.length > 0) {
-                const spool = heldSpools[0];
-                setProcessing(true);
-                fetch('/api/manage_contents', { 
-                    method: 'POST', 
-                    headers: {'Content-Type': 'application/json'}, 
-                    body: JSON.stringify({action: 'add', location: locId, spool_id: "ID:" + spool.id, slot: slotNum}) 
-                }).then(r => r.json()).then(res => {
-                    setProcessing(false);
-                    if (res.status === 'success') {
-                        heldSpools.shift(); 
-                        renderBuffer();
-                        showToast(`Assigned to Slot ${slotNum}`, "info");
-                        const locData = allLocations.find(l => l.LocationID === locId);
-                        renderSlotGrid(locId, parseInt(locData['Max Spools']));
-                        fetchLogs();
-                    } else {
-                        showToast(res.msg, "error");
-                    }
-                }).catch(() => setProcessing(false));
-            } else {
-                const itemInSlot = currentGridState[slotNum.toString()];
-                if (itemInSlot) {
-                    doEject(itemInSlot.id, locId);
-                } else {
-                    showToast("Slot Empty & Buffer Empty", "warning");
-                }
-            }
+        function openManage(locId) {
+            document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
+            document.getElementById('manage-loc-id').value = locId;
+            document.getElementById('manual-spool-id').value = "";
+            const locData = allLocations.find(l => l.LocationID === locId);
+            refreshManageView(locId); // Use unified refresher
+            manageModal.show();
         }
 
+        // --- LEGACY EJECT (List View) ---
+        function ejectSpool(spoolId, locId) { if(locId !== "Scan") { requestConfirmation("Eject spool #" + spoolId + "?", () => { doEject(spoolId, locId); }); } else doEject(spoolId, locId); }
+        function doEject(spoolId, locId) {
+            setProcessing(true);
+            fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'remove', location: locId, spool_id: spoolId}) })
+            .then(r => r.json()).then((res) => { 
+                setProcessing(false);
+                if(locId === "Scan") showToast("⏏️ EJECTED", "warning");
+                else { showToast("⏏️ EJECTED", "warning"); refreshManageView(locId); }
+                fetchLogs(); 
+            }).catch(() => setProcessing(false));
+        }
+
+        // --- STANDARD MODALS ---
         const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
         const locModal = new bootstrap.Modal(document.getElementById('locModal'));
         const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
@@ -322,31 +387,19 @@
 
         function requestConfirmation(msg, callback) { document.getElementById('confirm-msg').innerText = msg; pendingConfirmCallback = callback; confirmModal.show(); }
         function confirmAction(isYes) { confirmModal.hide(); if(isYes && pendingConfirmCallback) pendingConfirmCallback(); pendingConfirmCallback = null; }
-
         function openLocationsModal() { locMgrModal.show(); fetchLocations(); }
         function scrollToRow(id) { setTimeout(() => { const row = document.getElementById(`row-${id}`); if(row) { row.scrollIntoView({behavior: "smooth", block: "center"}); row.classList.add('highlight-row'); } }, 500); }
-
         function fetchLocations() {
             fetch('/api/locations').then(r => r.json()).then(data => {
                 allLocations = data; 
                 document.getElementById('loc-count').innerText = data.length + " Locs";
                 document.getElementById('location-table').innerHTML = data.map(l => `
-                    <tr id="row-${l.LocationID}">
-                        <td style="font-weight:bold;color:#00d4ff;">${l.LocationID}</td>
-                        <td>${l.Name}</td>
-                        <td>${l.Occupancy || ''} <span class="badge bg-secondary ms-2">${l.Type}</span></td>
-                        <td class="text-end">
-                            <button class="btn btn-sm btn-outline-warning me-1" onclick="openEdit('${l.LocationID}')">✏️</button>
-                            <button class="btn btn-sm btn-outline-danger me-1" onclick="deleteLoc('${l.LocationID}')">🗑️</button>
-                            <button class="btn btn-sm btn-info" onclick="openManage('${l.LocationID}')">Manage</button>
-                        </td>
-                    </tr>`).join('');
+                    <tr id="row-${l.LocationID}"><td style="font-weight:bold;color:#00d4ff;">${l.LocationID}</td><td>${l.Name}</td><td>${l.Occupancy || ''} <span class="badge bg-secondary ms-2">${l.Type}</span></td>
+                    <td class="text-end"><button class="btn btn-sm btn-outline-warning me-1" onclick="openEdit('${l.LocationID}')">✏️</button><button class="btn btn-sm btn-outline-danger me-1" onclick="deleteLoc('${l.LocationID}')">🗑️</button><button class="btn btn-sm btn-info" onclick="openManage('${l.LocationID}')">Manage</button></td></tr>`).join('');
                 if(lastScannedLoc) scrollToRow(lastScannedLoc);
             });
         }
-
         function closeManage() { manageModal.hide(); fetchLocations(); }
-
         function refreshManageList(locId) {
             document.getElementById('manage-contents-list').innerHTML = "<div class='text-center'>Loading...</div>";
             fetch(`/api/get_contents?id=${locId}`).then(r => r.json()).then(data => {
@@ -356,71 +409,25 @@
                     list.innerHTML = data.map((s, idx) => `
                         <div class="manage-item mb-3 p-2 bg-dark border border-secondary rounded d-flex justify-content-between align-items-center">
                             <div class="d-flex align-items-center"><div id="qr-man-${idx}" class="bg-white p-1 me-3 rounded"></div><div><div class="d-flex align-items-center"><div class="buffer-swatch me-2" style="width:20px;height:20px;background-color:#${s.color};"></div><span class="text-white fw-bold" style="font-size: 1.3rem;">${s.display}</span></div></div></div>
-                            <button class="btn btn-danger eject-btn" onclick="ejectSpool(${s.id}, '${locId}')">⏏️ EJECT</button>
-                        </div>`).join('');
+                            <button class="btn btn-danger eject-btn" onclick="ejectSpool(${s.id}, '${locId}')">⏏️ EJECT</button></div>`).join('');
                     data.forEach((s, idx) => { new QRCode(document.getElementById(`qr-man-${idx}`), {text: "ID:" + s.id.toString(), width: 64, height: 64}); });
                 }
             });
         }
-
-        function ejectSpool(spoolId, locId) { if(locId !== "Scan") { requestConfirmation("Eject spool #" + spoolId + "?", () => { doEject(spoolId, locId); }); } else doEject(spoolId, locId); }
-        function doEject(spoolId, locId) {
-            setProcessing(true);
-            fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'remove', location: locId, spool_id: spoolId}) })
-            .then(r => r.json()).then((res) => { 
-                setProcessing(false);
-                if (document.getElementById('manage-grid-view').style.display !== 'none') {
-                    const locData = allLocations.find(l => l.LocationID === locId);
-                    renderSlotGrid(locId, parseInt(locData['Max Spools']));
-                } else if(locId !== "Scan") { refreshManageList(locId); }
-                fetchLogs(); 
-                if(locId === "Scan") showToast("⏏️ EJECTED", "warning");
-                else showToast("⏏️ EJECTED", "warning"); 
-            }).catch(() => setProcessing(false));
-        }
-
         function manualAddSpool() {
             const locId = document.getElementById('manage-loc-id').value;
-            const spoolId = document.getElementById('manual-spool-id').value;
-            if(!spoolId) return;
+            const spoolId = document.getElementById('manual-spool-id').value; if(!spoolId) return;
             setProcessing(true);
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'add', location: locId, spool_id: spoolId}) })
-            .then(r => r.json()).then(res => {
-                setProcessing(false);
-                if(res.status === 'error') showToast(res.msg, "error");
-                else {
-                    document.getElementById('manual-spool-id').value = ""; 
-                    if(document.getElementById('manage-grid-view').style.display !== 'none') {
-                         const locData = allLocations.find(l => l.LocationID === locId);
-                         renderSlotGrid(locId, parseInt(locData['Max Spools']));
-                    } else refreshManageList(locId);
-                    fetchLogs();
-                }
-            }).catch(() => setProcessing(false));
+            .then(r => r.json()).then(res => { setProcessing(false); if(res.status === 'error') showToast(res.msg, "error"); else { document.getElementById('manual-spool-id').value = ""; refreshManageView(locId); fetchLogs(); } }).catch(() => setProcessing(false));
         }
-
         function openAddModal() { locMgrModal.hide(); document.getElementById('modalTitle').innerText = "Add New Location"; document.getElementById('edit-original-id').value = ""; document.getElementById('edit-id').value = ""; document.getElementById('edit-name').value = ""; document.getElementById('edit-max').value = "1"; locModal.show(); }
-        function openEdit(locId) {
-            const item = allLocations.find(l => l.LocationID === locId); if(!item) return;
-            locMgrModal.hide(); document.getElementById('modalTitle').innerText = "Edit Location"; document.getElementById('edit-original-id').value = locId; document.getElementById('edit-id').value = locId;
-            document.getElementById('edit-name').value = item.Name || ""; document.getElementById('edit-type').value = item.Type || "Dryer Box"; document.getElementById('edit-max').value = item['Max Spools'] || "1"; locModal.show();
-        }
+        function openEdit(locId) { const item = allLocations.find(l => l.LocationID === locId); if(!item) return; locMgrModal.hide(); document.getElementById('modalTitle').innerText = "Edit Location"; document.getElementById('edit-original-id').value = locId; document.getElementById('edit-id').value = locId; document.getElementById('edit-name').value = item.Name || ""; document.getElementById('edit-type').value = item.Type || "Dryer Box"; document.getElementById('edit-max').value = item['Max Spools'] || "1"; locModal.show(); }
         function closeEdit() { locModal.hide(); locMgrModal.show(); }
-        function saveLocation() { 
-            const payload = { old_id: document.getElementById('edit-original-id').value, new_data: { LocationID: document.getElementById('edit-id').value, Name: document.getElementById('edit-name').value, Type: document.getElementById('edit-type').value, "Max Spools": document.getElementById('edit-max').value, "Label Printed": "No" }};
-            fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) }).then(() => { lastScannedLoc = payload.new_data.LocationID; locModal.hide(); locMgrModal.show(); setTimeout(fetchLocations, 200); });
-        }
+        function saveLocation() { const payload = { old_id: document.getElementById('edit-original-id').value, new_data: { LocationID: document.getElementById('edit-id').value, Name: document.getElementById('edit-name').value, Type: document.getElementById('edit-type').value, "Max Spools": document.getElementById('edit-max').value, "Label Printed": "No" }}; fetch('/api/locations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) }).then(() => { lastScannedLoc = payload.new_data.LocationID; locModal.hide(); locMgrModal.show(); setTimeout(fetchLocations, 200); }); }
         function deleteLoc(id) { requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => { fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => { lastScannedLoc = null; fetchLocations(); }); }); }
         function triggerUndo() { fetch('/api/undo', { method: 'POST' }).then(() => fetchLogs()); }
-        function fetchLogs() {
-            if(logsPaused) return; 
-            fetch('/api/logs').then(r => r.json()).then(data => {
-                document.getElementById('live-logs').innerHTML = data.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
-                document.getElementById('undo-btn').disabled = !data.undo_available;
-                document.getElementById('st-spoolman').className = `status-dot ${data.status.spoolman ? 'status-on' : 'status-off'}`;
-                document.getElementById('st-filabridge').className = `status-dot ${data.status.filabridge ? 'status-on' : 'status-off'}`;
-            });
-        }
+        function fetchLogs() { if(logsPaused) return; fetch('/api/logs').then(r => r.json()).then(data => { document.getElementById('live-logs').innerHTML = data.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join(''); document.getElementById('undo-btn').disabled = !data.undo_available; document.getElementById('st-spoolman').className = `status-dot ${data.status.spoolman ? 'status-on' : 'status-off'}`; document.getElementById('st-filabridge').className = `status-dot ${data.status.filabridge ? 'status-on' : 'status-off'}`; }); }
         setInterval(fetchLogs, 2500);
     </script>
 </body>
