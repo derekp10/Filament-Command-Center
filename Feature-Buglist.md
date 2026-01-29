@@ -5,6 +5,7 @@
 # **New Issues:**
 1. Logic behind CORE1-M0/M1 Needs to be refiend. Updating one, or the other will change the current Toolhead0 slot to what ever was last placed into M0 or M1. But with no flag to tell when in MMU mode, it's hard to know what should take priority here... This is assuming that using 5 toolheads to emulate a MMU is the correct answer here for this.
 2. May want to make the assignment grid more flexible instead of a 2 by X, perhaps 3 or 4 by X depending on how large. Try to keep as many of the slots available on the screen as we can to prevent scrolling, WITHOUT sacraficing the information being displayed.
+3. Cannot seem to move items between slots in a dryerbox. Perhaps using the unassigned section again for this would be good.
 
 
 # **Next Steps Items:**
