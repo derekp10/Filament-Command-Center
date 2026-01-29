@@ -49,6 +49,12 @@
         .unslotted-box { border: 2px solid #ffcc00; background: #222; padding: 10px; margin-top: 20px; border-radius: 8px; }
         .unslotted-item { background: #333; padding: 10px; margin: 5px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; border: 1px solid #555; }
         .unslotted-item:hover { background: #444; border-color: #fff; }
+        /* MODAL ACTION STYLES */
+        .modal-action-row { display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
+        .modal-action-card { background: #333; border: 2px solid #555; border-radius: 10px; padding: 15px; display: flex; flex-direction: column; align-items: center; min-width: 150px; cursor: pointer; transition: 0.2s; }
+        .modal-action-card:hover { background: #444; border-color: #fff; }
+        .modal-action-qr { background: white; padding: 5px; border-radius: 5px; margin-bottom: 10px; }
+        .modal-action-btn { width: 100%; font-size: 1.2rem; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -100,7 +106,7 @@
         </div>
         <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div><div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
     
-    <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-4 mb-4"></p><div id="action-buttons" class="d-grid gap-3"></div></div><div class="modal-footer justify-content-center"><button class="btn btn-secondary w-50" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div>
+    <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-4 mb-4"></p><div id="action-buttons" class="modal-action-row"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
     
     <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-dialog-centered"><div class="modal-content" style="border: 4px solid #ffcc00;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRM ACTION</h5></div><div class="modal-body text-center"><p id="confirm-msg" style="font-size:1.5rem;">Are you sure?</p><div class="bg-white p-2 d-inline-block rounded mb-2"><div id="qr-confirm"></div><div class="small fw-bold text-dark">CMD:CONFIRM</div></div></div><div class="modal-footer justify-content-center"><button type="button" class="btn btn-secondary btn-lg" style="width:40%;" onclick="confirmAction(false)">NO</button><button type="button" class="btn btn-warning btn-lg" style="width:40%;" onclick="confirmAction(true)">YES</button></div></div></div></div>
     
@@ -113,6 +119,7 @@
             new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             new QRCode(document.getElementById("qr-confirm"), {text: "CMD:CONFIRM", width: 128, height: 128});
+            new QRCode(document.getElementById("qr-modal-cancel"), {text: "CMD:MODAL:CANCEL", width: 80, height: 80});
             document.getElementById("manual-spool-id").addEventListener("keydown", function(event) { if (event.key === "Enter") { event.preventDefault(); manualAddSpool(); }});
         };
         
@@ -126,7 +133,7 @@
         let logsPaused = false;
         let currentGridState = {};
         let isProcessing = false;
-        let pendingAction = null; 
+        let modalCallbacks = []; // Stores actions for modal QR codes
 
         window.addEventListener('blur', () => { document.getElementById('focus-guard').style.display = 'flex'; });
         window.addEventListener('focus', () => { document.getElementById('focus-guard').style.display = 'none'; });
@@ -172,7 +179,19 @@
         }
 
         function processScan(text) {
-            if(document.getElementById('actionModal').classList.contains('show')) return;
+            // --- MODAL INTERCEPTOR ---
+            if(document.getElementById('actionModal').classList.contains('show')) {
+                const upper = text.toUpperCase();
+                if (upper === 'CMD:MODAL:CANCEL') { actionModal.hide(); return; }
+                if (upper.startsWith('CMD:MODAL:')) {
+                    const idx = parseInt(upper.split(':')[2]);
+                    if (modalCallbacks[idx]) {
+                        actionModal.hide();
+                        modalCallbacks[idx]();
+                    }
+                }
+                return; // Ignore other scans while modal is open
+            }
 
             setProcessing(true);
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) })
@@ -208,16 +227,35 @@
             document.getElementById('action-msg').innerHTML = msg;
             const btnContainer = document.getElementById('action-buttons');
             btnContainer.innerHTML = "";
-            buttons.forEach(btn => {
+            modalCallbacks = []; // Reset callbacks
+
+            buttons.forEach((btn, idx) => {
+                modalCallbacks.push(btn.action); // Store callback for scanner
+                
+                const card = document.createElement('div');
+                card.className = "modal-action-card";
+                card.onclick = () => { actionModal.hide(); btn.action(); };
+                
+                // QR Code Container
+                const qrDiv = document.createElement('div');
+                qrDiv.className = "modal-action-qr";
+                qrDiv.id = `qr-mod-${idx}`;
+                
+                // Button
                 const b = document.createElement('button');
-                b.className = `btn btn-${btn.cls || 'primary'} p-3 fs-5`;
+                b.className = `btn btn-${btn.cls || 'primary'} modal-action-btn`;
                 b.innerHTML = btn.label;
-                b.onclick = () => { actionModal.hide(); btn.action(); };
-                btnContainer.appendChild(b);
+                
+                card.appendChild(qrDiv);
+                card.appendChild(b);
+                btnContainer.appendChild(card);
+                
+                // Generate QR: CMD:MODAL:0, CMD:MODAL:1, etc.
+                new QRCode(qrDiv, {text: `CMD:MODAL:${idx}`, width: 100, height: 100});
             });
             actionModal.show();
         }
-        function cancelAction() { pendingAction = null; }
+        function cancelAction() { actionModal.hide(); }
 
         function handleSlotInteraction(slotNum) {
             if (!document.getElementById('manageModal').classList.contains('show')) return;
@@ -229,13 +267,13 @@
 
                 if (itemInSlot) {
                     promptAction("⚠️ Slot Occupied", `Slot ${slotNum} holds <b>${itemInSlot.display}</b>.<br>Assigning <b>${newItem.display}</b>.`, [
-                        { label: "🔄 Swap (Put Old in Buffer)", cls: "info", action: () => {
+                        { label: "🔄 Swap", cls: "info", action: () => {
                             heldSpools.shift(); 
                             heldSpools.push({id: itemInSlot.id, display: itemInSlot.display, color: itemInSlot.color}); 
                             renderBuffer();
                             doAssign(locId, newItem.id, slotNum);
                         }},
-                        { label: "⬇️ Overwrite (Unslot Old)", cls: "warning", action: () => {
+                        { label: "⬇️ Overwrite", cls: "warning", action: () => {
                             heldSpools.shift();
                             renderBuffer();
                             doAssign(locId, newItem.id, slotNum);
@@ -250,12 +288,12 @@
             else {
                 if (itemInSlot) {
                      promptAction("Slot Action", `Slot ${slotNum}: <b>${itemInSlot.display}</b>`, [
-                        { label: "✋ Pick Up (Move to Buffer)", cls: "success", action: () => {
+                        { label: "✋ Pick Up", cls: "success", action: () => {
                             heldSpools.push({id: itemInSlot.id, display: itemInSlot.display, color: itemInSlot.color});
                             renderBuffer();
                             doEject(itemInSlot.id, locId);
                         }},
-                        { label: "⏏️ Eject (Clear Slot)", cls: "danger", action: () => {
+                        { label: "⏏️ Eject", cls: "danger", action: () => {
                             doEject(itemInSlot.id, locId);
                         }}
                     ]);
@@ -280,28 +318,20 @@
             }).catch(() => setProcessing(false));
         }
 
-        // --- FIXED OPEN/REFRESH LOGIC ---
         function openManage(locId) {
-            // 1. Force UI Clean
             document.getElementById('manage-grid-view').style.display = 'none';
             document.getElementById('manage-list-view').style.display = 'none';
             document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
             document.getElementById('manage-loc-id').value = locId;
             document.getElementById('manual-spool-id').value = "";
-
-            // 2. Load View
             const success = refreshManageView(locId);
-
-            // 3. Show if successful
             if(success) manageModal.show();
             else showToast(`Error: Location '${locId}' data not found.`, 'error');
         }
 
         function refreshManageView(locId) {
-             // Loose Equality Check to prevent String/Number mismatches
              const locData = allLocations.find(l => String(l.LocationID) == String(locId));
              if(!locData) return false;
-             
              fetchLogs();
              const isGrid = (locData.Type === 'Dryer Box' || locData.Type === 'MMU Slot') && parseInt(locData['Max Spools']) > 1;
              
