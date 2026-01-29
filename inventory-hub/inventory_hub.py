@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v115.0 (Config-Aware & Simple)"
+VERSION = "v116.0 (Quote Cleaner)"
 
 @app.after_request
 def add_header(r):
@@ -95,24 +95,47 @@ def get_spool(sid):
     try: return requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", timeout=3).json()
     except: return None
 
+def sanitize_outbound_data(data):
+    """
+    Sanitizer v2:
+    - Strips extra quotes from strings (Fixes '\"Cardboard\"')
+    - Converts Booleans/Ints to clean strings
+    """
+    if 'extra' not in data or not data['extra']:
+        return data
+
+    clean_extra = {}
+    for key, value in data['extra'].items():
+        if value is None: continue 
+        
+        if isinstance(value, bool):
+            clean_extra[key] = "true" if value else "false"
+        elif isinstance(value, int):
+            clean_extra[key] = str(value)
+        elif isinstance(value, float):
+            clean_extra[key] = str(value)
+        else:
+            # STRING CLEANING
+            val_str = str(value).strip()
+            # Remove leading/trailing quotes that might have snuck in via CSV
+            val_str = val_str.strip('"').strip("'")
+            
+            if val_str.lower() == 'false': clean_extra[key] = "false"
+            elif val_str.lower() == 'true': clean_extra[key] = "true"
+            else: clean_extra[key] = val_str
+            
+    data['extra'] = clean_extra
+    return data
+
 def update_spool(sid, data):
     try:
-        # SIMPLE SANITIZER: Convert all extra values to strings.
-        if 'extra' in data and data['extra']:
-            clean_extra = {}
-            for k, v in data['extra'].items():
-                if v is None: continue
-                # Boolean specific: "true"/"false" (lower case)
-                if isinstance(v, bool):
-                    clean_extra[k] = "true" if v else "false"
-                else:
-                    clean_extra[k] = str(v)
-            data['extra'] = clean_extra
-
-        resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=data)
+        # SANITIZE FIRST
+        clean_data = sanitize_outbound_data(data)
+        
+        resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=clean_data)
         if not resp.ok:
             logger.error(f"❌ DB REJECTED: {resp.status_code} | Msg: {resp.text}")
-            logger.error(f"   Payload: {json.dumps(data)}")
+            logger.error(f"   Payload: {json.dumps(clean_data)}")
             add_log_entry(f"❌ DB Error {resp.status_code}: {resp.text[:50]}...", "ERROR")
             return False
         return True
