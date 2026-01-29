@@ -1,16 +1,10 @@
 # **Old Things:**
-3. The live activity list box under the buffer list, should just also print that the item is in the buffer alreaedy, instead of just looking like it's just continuing to add the same item over and over again. Keep the toast, but last update should also reflect that it was already scanned into the buffer.
-4. undo when working with a active buffer/container should remove the last item added
-5. toasts hould be a bit larger, and more prominate, maybe center of the screen?
-6. items added to a toolhead are not being added to the toolhead in filabridge
 7. Way to resync filabridge & spoolman current state into the command center, for changes done outside of the command center. possibly just incorperate in regular actions, or schedule it?
-8. still not prompting for MDB container location when assigning to a multislot dryer box
 10. still missing logic for assigning items from a MDB to a toolhead. (QR Code for slot assignments?) {See: 📦 The "Multi-Slot" Logic (MDB/MMU)}
 
 # **New Issues:**
 1. Logic behind CORE1-M0/M1 Needs to be refiend. Updating one, or the other will change the current Toolhead0 slot to what ever was last placed into M0 or M1. But with no flag to tell when in MMU mode, it's hard to know what should take priority here... This is assuming that using 5 toolheads to emulate a MMU is the correct answer here for this.
 2. May want to make the assignment grid more flexible instead of a 2 by X, perhaps 3 or 4 by X depending on how large. Try to keep as many of the slots available on the screen as we can to prevent scrolling, WITHOUT sacraficing the information being displayed.
-3. Screen not in focus waring doesn't seem to exist anymore or got disabled? Needs to be re-added back in.
 
 
 # **Next Steps Items:**
