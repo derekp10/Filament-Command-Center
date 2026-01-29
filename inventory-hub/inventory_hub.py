@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v120.0 (Scanner Hardening)"
+VERSION = "v122.0 (Logic Trap Fix)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -99,16 +99,10 @@ def get_spool(sid):
     except: return None
 
 def sanitize_outbound_data(data):
-    """
-    Sanitizer v3: The "JSON Encoded" Fix.
-    """
-    if 'extra' not in data or not data['extra']:
-        return data
-
+    if 'extra' not in data or not data['extra']: return data
     clean_extra = {}
     for key, value in data['extra'].items():
         if value is None: continue 
-        
         if isinstance(value, bool):
             clean_extra[key] = "true" if value else "false"
         elif key in JSON_STRING_FIELDS:
@@ -122,7 +116,6 @@ def sanitize_outbound_data(data):
             if val_str.lower() == 'false': clean_extra[key] = "false"
             elif val_str.lower() == 'true': clean_extra[key] = "true"
             else: clean_extra[key] = val_str
-            
     data['extra'] = clean_extra
     return data
 
@@ -154,7 +147,6 @@ def format_spool_display(spool_data):
         fil = spool_data.get('filament')
         extra = spool_data.get('extra', {})
         slot = extra.get('container_slot', '')
-        
         if slot: slot = slot.strip('"')
 
         if not fil:
@@ -230,42 +222,45 @@ def get_spools_at_location(loc_name):
     return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
 
 def resolve_scan(text):
-    # CLEANUP: Strip quotes and whitespace immediately
     text = text.strip().strip('"').strip("'")
     decoded = urllib.parse.unquote(text)
     upper_text = text.upper()
 
-    # COMMANDS
-    if "CMD:UNDO" in upper_text: return {'type': 'command', 'cmd': 'undo'}
-    if "CMD:CLEAR" in upper_text: return {'type': 'command', 'cmd': 'clear'}
-    if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'} 
-    if "CMD:CONFIRM" in upper_text: return {'type': 'command', 'cmd': 'confirm'}
-    
-    # SLOT COMMAND
-    if "CMD:SLOT:" in upper_text:
-        try:
-            # Handle "CMD:SLOT:1" and "CMD:SLOT: 1"
-            parts = upper_text.split(':')
-            val = parts[-1].strip()
-            if val.isdigit():
-                return {'type': 'command', 'cmd': 'slot', 'value': val}
-        except: pass
+    # --- LOGIC TRAP 1: COMMANDS ---
+    # If it contains CMD:, it is strictly a COMMAND. 
+    # If parsing fails, return ERROR, do NOT fall through.
+    if "CMD:" in upper_text:
+        if "CMD:UNDO" in upper_text: return {'type': 'command', 'cmd': 'undo'}
+        if "CMD:CLEAR" in upper_text: return {'type': 'command', 'cmd': 'clear'}
+        if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'} 
+        if "CMD:CONFIRM" in upper_text: return {'type': 'command', 'cmd': 'confirm'}
+        if "CMD:SLOT:" in upper_text:
+            try:
+                parts = upper_text.split(':')
+                val = parts[-1].strip()
+                if val.isdigit(): return {'type': 'command', 'cmd': 'slot', 'value': val}
+            except: pass
+        return {'type': 'error', 'msg': 'Malformed Command'}
 
-    # URL / JUNK / MALFORMED COMMAND FILTER
-    # If it contains "CMD:", it is strictly FORBIDDEN from being a Location ID.
-    if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']', 'cmd:']):
+    # --- LOGIC TRAP 2: SPOOL ID ---
+    # If it starts with ID:, it is strictly a SPOOL ID.
+    if upper_text.startswith("ID:"):
+        clean_id = text[3:].strip()
+        if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
+        return {'type': 'error', 'msg': 'Invalid Spool ID Format'}
+
+    # --- URL / LEGACY FILTER ---
+    if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
         
-        # Check against DB just in case it's a weird legacy ID
         rid = find_spool_by_legacy_id(text, strict_mode=True)
         if rid: return {'type': 'spool', 'id': rid}
-        
-        return {'type': 'error', 'msg': 'Unknown/Invalid Scan'}
+        return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
-    # FALLBACK: LOCATION or SPOOL ID
+    # --- FALLBACK ---
     if text.isdigit():
         rid = find_spool_by_legacy_id(text, strict_mode=False)
         if rid: return {'type': 'spool', 'id': rid}
@@ -529,6 +524,7 @@ def api_identify_scan():
             info = format_spool_display(data)
             return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
     if res['type'] == 'command': return jsonify(res)
+    if res['type'] == 'error': return jsonify(res) # Return error details to UI
     return jsonify(res)
 
 @app.route('/api/smart_move', methods=['POST'])
