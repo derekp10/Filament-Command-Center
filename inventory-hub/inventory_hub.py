@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v117.0 (Smart JSON Encoding)"
+VERSION = "v119.0 (Legacy Scan Fix)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -261,12 +261,17 @@ def resolve_scan(text):
         except: pass
 
     # URL / JUNK FILTER
-    if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\']):
+    if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
-            else: return {'type': 'error', 'msg': 'Legacy ID Found, but no Spools available.'}
+        
+        # Check if text matches ANY External ID in the database before erroring out
+        # This catches weird legacy codes that don't look like URLs or IDs
+        rid = find_spool_by_legacy_id(text, strict_mode=True)
+        if rid: return {'type': 'spool', 'id': rid}
+        
         return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
     # FALLBACK
