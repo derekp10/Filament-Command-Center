@@ -47,7 +47,7 @@
     </style>
 </head>
 <body>
-    <div id="focus-guard" onclick="document.body.focus()"><div><div style="font-size:5rem;">🚫</div><div style="font-size:3rem;color:#ff4444;font-weight:bold;">SCANNER PAUSED</div></div></div>
+    <div id="focus-guard" onclick="document.body.focus()"><div><div style="font-size:5rem;">🚫</div><div style="font-size:3rem;color:#ff4444;font-weight:bold;">SCANNER PAUSED</div><div class="text-white">Click anywhere to resume</div></div></div>
     
     <div id="toast-container"></div>
 
@@ -124,13 +124,26 @@
         let pendingConfirmCallback = null;
         let allLocations = []; 
         let logsPaused = false;
+        let currentGridState = {}; // Store current slot map for lookups
 
-        // --- SCANNER INPUT HANDLER ---
+        // --- SCANNER SECURITY & FOCUS GUARD ---
+        window.addEventListener('blur', () => { document.getElementById('focus-guard').style.display = 'flex'; });
+        window.addEventListener('focus', () => { document.getElementById('focus-guard').style.display = 'none'; });
+
         document.addEventListener('keydown', (e) => {
             if (document.getElementById('focus-guard').style.display === 'flex') return;
             if (e.target.tagName === 'INPUT') return; 
-            if (e.key === 'Enter') { processScan(scanBuffer); scanBuffer = ""; } 
-            else if (e.key.length === 1) { scanBuffer += e.key; clearTimeout(bufferTimeout); bufferTimeout = setTimeout(() => { scanBuffer = ""; }, 2000); }
+            
+            // KEYBOARD/SCANNER HANDLER
+            if (e.key === 'Enter') { 
+                e.preventDefault(); // STOP SCANNER FROM CLICKING BUTTONS
+                if (scanBuffer.length > 0) processScan(scanBuffer); 
+                scanBuffer = ""; 
+            } else if (e.key.length === 1) { 
+                scanBuffer += e.key; 
+                clearTimeout(bufferTimeout); 
+                bufferTimeout = setTimeout(() => { scanBuffer = ""; }, 2000); 
+            }
         });
 
         function showToast(msg, type = 'info') {
@@ -169,7 +182,9 @@
                     else { heldSpools.push({id: res.id, display: res.display, color: res.color}); renderBuffer(); }
                 } else if (res.type === 'location') {
                     openManage(res.id);
-                } 
+                } else if (res.type === 'error') {
+                     showToast(res.msg, "error");
+                }
             });
         }
 
@@ -201,6 +216,8 @@
                 grid.innerHTML = "";
                 const slotMap = {};
                 data.forEach(item => { if(item.slot) slotMap[item.slot.toString()] = item; });
+                
+                currentGridState = slotMap; // SAVE STATE FOR LOOKUPS
 
                 for (let i = 1; i <= maxSlots; i++) {
                     const item = slotMap[i.toString()];
@@ -226,28 +243,36 @@
             if (!document.getElementById('manageModal').classList.contains('show')) return;
             const locId = document.getElementById('manage-loc-id').value;
 
-            if (heldSpools.length === 0) {
-                showToast("Buffer Empty. Scan Spool First.", "warning");
-                return;
-            }
-
-            const spool = heldSpools[0];
-            fetch('/api/manage_contents', { 
-                method: 'POST', 
-                headers: {'Content-Type': 'application/json'}, 
-                body: JSON.stringify({action: 'add', location: locId, spool_id: "ID:" + spool.id, slot: slotNum}) 
-            }).then(r => r.json()).then(res => {
-                if (res.status === 'success') {
-                    heldSpools.shift(); 
-                    renderBuffer();
-                    showToast(`Assigned to Slot ${slotNum}`, "info");
-                    const locData = allLocations.find(l => l.LocationID === locId);
-                    renderSlotGrid(locId, parseInt(locData['Max Spools']));
-                    fetchLogs();
+            // SMART INTERACTION LOGIC
+            // 1. If buffer has spool -> ASSIGN
+            if (heldSpools.length > 0) {
+                const spool = heldSpools[0];
+                fetch('/api/manage_contents', { 
+                    method: 'POST', 
+                    headers: {'Content-Type': 'application/json'}, 
+                    body: JSON.stringify({action: 'add', location: locId, spool_id: "ID:" + spool.id, slot: slotNum}) 
+                }).then(r => r.json()).then(res => {
+                    if (res.status === 'success') {
+                        heldSpools.shift(); 
+                        renderBuffer();
+                        showToast(`Assigned to Slot ${slotNum}`, "info");
+                        const locData = allLocations.find(l => l.LocationID === locId);
+                        renderSlotGrid(locId, parseInt(locData['Max Spools']));
+                        fetchLogs();
+                    } else {
+                        showToast(res.msg, "error");
+                    }
+                });
+            } 
+            // 2. If buffer empty, check if slot is full -> EJECT
+            else {
+                const itemInSlot = currentGridState[slotNum.toString()];
+                if (itemInSlot) {
+                    ejectSpool(itemInSlot.id, locId);
                 } else {
-                    showToast(res.msg, "error");
+                    showToast("Buffer Empty & Slot Empty", "warning");
                 }
-            });
+            }
         }
 
         const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
@@ -317,7 +342,7 @@
             if(!spoolId) return;
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'add', location: locId, spool_id: spoolId}) })
             .then(r => r.json()).then(res => {
-                if(res.status === 'error') showToast(res.msg, "error"); // FIXED: Replaced alert with Toast
+                if(res.status === 'error') showToast(res.msg, "error"); 
                 else {
                     document.getElementById('manual-spool-id').value = ""; 
                     if(document.getElementById('manage-grid-view').style.display !== 'none') {
@@ -343,7 +368,7 @@
         function deleteLoc(id) { requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => { fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => { lastScannedLoc = null; fetchLocations(); }); }); }
         function triggerUndo() { fetch('/api/undo', { method: 'POST' }).then(() => fetchLogs()); }
         function fetchLogs() {
-            if(logsPaused) return; // CHECK PAUSE FLAG
+            if(logsPaused) return; 
             fetch('/api/logs').then(r => r.json()).then(data => {
                 document.getElementById('live-logs').innerHTML = data.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
                 document.getElementById('undo-btn').disabled = !data.undo_available;
