@@ -44,6 +44,9 @@
         .slot-content { font-size: 1.1rem; font-weight: bold; color: white; word-break: break-word; }
         .slot-swatch { width: 35px; height: 35px; border-radius: 50%; border: 2px solid #fff; margin-bottom: 5px; }
         .slot-qr { background: white; padding: 4px; border-radius: 4px; }
+        .unslotted-box { border: 2px solid #ffcc00; background: #222; padding: 10px; margin-top: 20px; border-radius: 8px; }
+        .unslotted-item { background: #333; padding: 10px; margin: 5px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; border: 1px solid #555; }
+        .unslotted-item:hover { background: #444; border-color: #fff; }
     </style>
 </head>
 <body>
@@ -87,6 +90,7 @@
         <div id="manage-grid-view" style="display:none;">
             <div class="alert alert-info py-1 mb-2 small text-center">Tap button or scan slot QR (CMD:SLOT:X)</div>
             <div id="slot-grid-container" class="slot-grid"></div>
+            <div id="unslotted-container" style="display:none;"></div>
         </div>
         <div id="manage-list-view">
             <div id="manage-contents-list" class="mb-4"></div>
@@ -207,14 +211,25 @@
 
         function renderSlotGrid(locId, maxSlots) {
             const grid = document.getElementById('slot-grid-container');
-            grid.innerHTML = "<div class='text-center text-white'>Loading Slots...</div>";
+            const unslottedBox = document.getElementById('unslotted-container');
             
+            grid.innerHTML = "<div class='text-center text-white'>Loading Slots...</div>";
+            unslottedBox.style.display = 'none';
+            unslottedBox.innerHTML = "";
+
             fetch(`/api/get_contents?id=${locId}`).then(r => r.json()).then(data => {
                 grid.innerHTML = "";
                 const slotMap = {};
-                data.forEach(item => { if(item.slot) slotMap[item.slot.toString()] = item; });
+                const unslotted = [];
+
+                data.forEach(item => { 
+                    if(item.slot && parseInt(item.slot) > 0) slotMap[item.slot.toString()] = item; 
+                    else unslotted.push(item);
+                });
+                
                 currentGridState = slotMap;
 
+                // RENDER SLOTS
                 for (let i = 1; i <= maxSlots; i++) {
                     const item = slotMap[i.toString()];
                     const div = document.createElement('div');
@@ -232,6 +247,27 @@
                     grid.appendChild(div);
                     new QRCode(document.getElementById(qrId), {text: "CMD:SLOT:" + i, width: 60, height: 60});
                 }
+
+                // RENDER UNSLOTTED (DIRTY DATA)
+                if (unslotted.length > 0) {
+                    unslottedBox.style.display = 'block';
+                    unslottedBox.innerHTML = `<h5 class="text-warning fw-bold">⚠️ Unslotted Items (${unslotted.length})</h5><div class="text-muted small mb-2">Tap to Pick Up (Add to Buffer)</div>`;
+                    
+                    unslotted.forEach(item => {
+                        const div = document.createElement('div');
+                        div.className = "unslotted-item";
+                        div.innerHTML = `<div class="d-flex align-items-center"><div class="buffer-swatch me-2" style="width:25px;height:25px;background-color:#${item.color};"></div><span class="text-white fw-bold">${item.display}</span></div><div class="text-info fw-bold">PICK UP ✋</div>`;
+                        div.onclick = () => {
+                            if (heldSpools.some(s => s.id === item.id)) showToast("Already in Buffer", "warning");
+                            else {
+                                heldSpools.push({id: item.id, display: item.display, color: item.color});
+                                renderBuffer();
+                                showToast("Picked Up! Select Slot.", "info");
+                            }
+                        };
+                        unslottedBox.appendChild(div);
+                    });
+                }
             });
         }
 
@@ -239,7 +275,6 @@
             if (!document.getElementById('manageModal').classList.contains('show')) return;
             const locId = document.getElementById('manage-loc-id').value;
 
-            // 1. ASSIGN LOGIC
             if (heldSpools.length > 0) {
                 const spool = heldSpools[0];
                 fetch('/api/manage_contents', { 
@@ -258,12 +293,9 @@
                         showToast(res.msg, "error");
                     }
                 });
-            } 
-            // 2. EJECT LOGIC (If buffer empty)
-            else {
+            } else {
                 const itemInSlot = currentGridState[slotNum.toString()];
                 if (itemInSlot) {
-                    // Bypass confirmation for "Scan to Eject" flow to make it fast
                     doEject(itemInSlot.id, locId);
                 } else {
                     showToast("Slot Empty & Buffer Empty", "warning");
@@ -301,7 +333,11 @@
             });
         }
 
-        function closeManage() { manageModal.hide(); heldSpools = []; renderBuffer(); fetchLocations(); }
+        function closeManage() { 
+            manageModal.hide(); 
+            // FIX: DO NOT CLEAR BUFFER (heldSpools = [])
+            fetchLocations(); 
+        }
 
         function refreshManageList(locId) {
             document.getElementById('manage-contents-list').innerHTML = "<div class='text-center'>Loading...</div>";
@@ -329,7 +365,7 @@
                 } else if(locId !== "Scan") { refreshManageList(locId); }
                 fetchLogs(); 
                 if(locId === "Scan") showToast("⏏️ EJECTED", "warning");
-                else showToast("⏏️ EJECTED", "warning"); // Visual feedback for manual eject too
+                else showToast("⏏️ EJECTED", "warning"); 
             });
         }
 
@@ -365,7 +401,7 @@
         function deleteLoc(id) { requestConfirmation("Delete Location " + id + " AND unassign all spools?", () => { fetch('/api/locations?id=' + id, { method: 'DELETE' }).then(() => { lastScannedLoc = null; fetchLocations(); }); }); }
         function triggerUndo() { fetch('/api/undo', { method: 'POST' }).then(() => fetchLogs()); }
         function fetchLogs() {
-            if(logsPaused) return; // CHECK PAUSE FLAG
+            if(logsPaused) return; 
             fetch('/api/logs').then(r => r.json()).then(data => {
                 document.getElementById('live-logs').innerHTML = data.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
                 document.getElementById('undo-btn').disabled = !data.undo_available;
