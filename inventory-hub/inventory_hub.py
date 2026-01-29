@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v119.0 (Legacy Scan Fix)"
+VERSION = "v120.0 (Scanner Hardening)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -101,8 +101,6 @@ def get_spool(sid):
 def sanitize_outbound_data(data):
     """
     Sanitizer v3: The "JSON Encoded" Fix.
-    - Fields in JSON_STRING_FIELDS get double-quoted (e.g. '"Cardboard"')
-    - Booleans get converted to "true"/"false" strings.
     """
     if 'extra' not in data or not data['extra']:
         return data
@@ -111,20 +109,14 @@ def sanitize_outbound_data(data):
     for key, value in data['extra'].items():
         if value is None: continue 
         
-        # 1. BOOLEANS -> "true"/"false"
         if isinstance(value, bool):
             clean_extra[key] = "true" if value else "false"
-            
-        # 2. CHOICE/TEXT FIELDS -> Double Quoted JSON String ('"Value"')
         elif key in JSON_STRING_FIELDS:
             val_str = str(value).strip()
-            # If it doesn't already have quotes, add them
             if not (val_str.startswith('"') and val_str.endswith('"')):
                 clean_extra[key] = f'"{val_str}"'
             else:
                 clean_extra[key] = val_str
-                
-        # 3. GENERIC STRINGS
         else:
             val_str = str(value)
             if val_str.lower() == 'false': clean_extra[key] = "false"
@@ -136,9 +128,7 @@ def sanitize_outbound_data(data):
 
 def update_spool(sid, data):
     try:
-        # SANITIZE FIRST
         clean_data = sanitize_outbound_data(data)
-        
         resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=clean_data)
         if not resp.ok:
             logger.error(f"❌ DB REJECTED: {resp.status_code} | Msg: {resp.text}")
@@ -165,7 +155,6 @@ def format_spool_display(spool_data):
         extra = spool_data.get('extra', {})
         slot = extra.get('container_slot', '')
         
-        # Clean up slot display (remove quotes if present)
         if slot: slot = slot.strip('"')
 
         if not fil:
@@ -241,40 +230,42 @@ def get_spools_at_location(loc_name):
     return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
 
 def resolve_scan(text):
-    text = text.strip(); decoded = urllib.parse.unquote(text)
-    
-    # ID PREFIX
-    if text.upper().startswith("ID:"):
-        clean_id = text[3:].strip()
-        if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
+    # CLEANUP: Strip quotes and whitespace immediately
+    text = text.strip().strip('"').strip("'")
+    decoded = urllib.parse.unquote(text)
+    upper_text = text.upper()
 
     # COMMANDS
-    if "CMD:UNDO" in text.upper(): return {'type': 'command', 'cmd': 'undo'}
-    if "CMD:CLEAR" in text.upper(): return {'type': 'command', 'cmd': 'clear'}
-    if "CMD:EJECT" in text.upper(): return {'type': 'command', 'cmd': 'eject'} 
-    if "CMD:CONFIRM" in text.upper(): return {'type': 'command', 'cmd': 'confirm'}
+    if "CMD:UNDO" in upper_text: return {'type': 'command', 'cmd': 'undo'}
+    if "CMD:CLEAR" in upper_text: return {'type': 'command', 'cmd': 'clear'}
+    if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'} 
+    if "CMD:CONFIRM" in upper_text: return {'type': 'command', 'cmd': 'confirm'}
     
-    if "CMD:SLOT:" in text.upper():
+    # SLOT COMMAND
+    if "CMD:SLOT:" in upper_text:
         try:
-            slot_num = text.split(':')[-1]
-            return {'type': 'command', 'cmd': 'slot', 'value': slot_num}
+            # Handle "CMD:SLOT:1" and "CMD:SLOT: 1"
+            parts = upper_text.split(':')
+            val = parts[-1].strip()
+            if val.isdigit():
+                return {'type': 'command', 'cmd': 'slot', 'value': val}
         except: pass
 
-    # URL / JUNK FILTER
-    if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
+    # URL / JUNK / MALFORMED COMMAND FILTER
+    # If it contains "CMD:", it is strictly FORBIDDEN from being a Location ID.
+    if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']', 'cmd:']):
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
         
-        # Check if text matches ANY External ID in the database before erroring out
-        # This catches weird legacy codes that don't look like URLs or IDs
+        # Check against DB just in case it's a weird legacy ID
         rid = find_spool_by_legacy_id(text, strict_mode=True)
         if rid: return {'type': 'spool', 'id': rid}
         
-        return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
+        return {'type': 'error', 'msg': 'Unknown/Invalid Scan'}
 
-    # FALLBACK
+    # FALLBACK: LOCATION or SPOOL ID
     if text.isdigit():
         rid = find_spool_by_legacy_id(text, strict_mode=False)
         if rid: return {'type': 'spool', 'id': rid}
