@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v114.0 (Anti-Regression)"
+VERSION = "v115.0 (Config-Aware & Simple)"
 
 @app.after_request
 def add_header(r):
@@ -95,47 +95,24 @@ def get_spool(sid):
     try: return requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", timeout=3).json()
     except: return None
 
-def sanitize_outbound_data(data):
-    """
-    Universal Sanitizer:
-    - Booleans -> "true"/"false" strings
-    - Integers -> Strings
-    - Strings -> Strings
-    - None -> Removed
-    """
-    if 'extra' not in data or not data['extra']:
-        return data
-
-    clean_extra = {}
-    for key, value in data['extra'].items():
-        if value is None: continue 
-        
-        # BRUTE FORCE CONVERSION
-        if isinstance(value, bool):
-            clean_extra[key] = "true" if value else "false"
-        elif isinstance(value, int):
-            clean_extra[key] = str(value)
-        elif isinstance(value, float):
-            clean_extra[key] = str(value)
-        else:
-            # It's likely a string, but normalize "false"/"true" text if found
-            val_str = str(value)
-            if val_str.lower() == 'false': clean_extra[key] = "false"
-            elif val_str.lower() == 'true': clean_extra[key] = "true"
-            else: clean_extra[key] = val_str
-            
-    data['extra'] = clean_extra
-    return data
-
 def update_spool(sid, data):
     try:
-        # SANITIZE FIRST
-        clean_data = sanitize_outbound_data(data)
-        
-        resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=clean_data)
+        # SIMPLE SANITIZER: Convert all extra values to strings.
+        if 'extra' in data and data['extra']:
+            clean_extra = {}
+            for k, v in data['extra'].items():
+                if v is None: continue
+                # Boolean specific: "true"/"false" (lower case)
+                if isinstance(v, bool):
+                    clean_extra[k] = "true" if v else "false"
+                else:
+                    clean_extra[k] = str(v)
+            data['extra'] = clean_extra
+
+        resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=data)
         if not resp.ok:
             logger.error(f"❌ DB REJECTED: {resp.status_code} | Msg: {resp.text}")
-            logger.error(f"   Payload Sent: {json.dumps(clean_data)}")
+            logger.error(f"   Payload: {json.dumps(data)}")
             add_log_entry(f"❌ DB Error {resp.status_code}: {resp.text[:50]}...", "ERROR")
             return False
         return True
@@ -147,7 +124,6 @@ def update_spool(sid, data):
 def format_spool_display(spool_data):
     try:
         sid = spool_data.get('id', '?')
-        
         ext_id = str(spool_data.get('external_id', '')).replace('"', '').strip()
         if not ext_id or ext_id.lower() == 'none':
             fil_data = spool_data.get('filament', {})
@@ -234,7 +210,7 @@ def get_spools_at_location(loc_name):
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
     
-    # ID PREFIX (Strict)
+    # ID PREFIX
     if text.upper().startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
@@ -251,18 +227,16 @@ def resolve_scan(text):
             return {'type': 'command', 'cmd': 'slot', 'value': slot_num}
         except: pass
 
-    # URL / JUNK FILTER (The Anti-Regression Fix)
-    # If it looks like a URL or Path, it is NOT a Location unless it matches the legacy regex.
+    # URL / JUNK FILTER
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\']):
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
             else: return {'type': 'error', 'msg': 'Legacy ID Found, but no Spools available.'}
-        # It's a link, but not one we know. DIE.
         return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
-    # FALLBACK: IS IT A LOCATION?
+    # FALLBACK
     if text.isdigit():
         rid = find_spool_by_legacy_id(text, strict_mode=False)
         if rid: return {'type': 'spool', 'id': rid}
