@@ -28,20 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v113.0 (Boolean-to-String Fix)"
-
-# --- THE LAW: STRICT TYPE MAPPING ---
-# Spoolman Extra Fields must be Strings, even if they represent Booleans.
-FIELD_TYPE_MAP = {
-    "label_printed": "bool_str", # Convert True -> "true"
-    "is_refill": "bool_str",
-    "spoolman_reprint": "bool_str",
-    "sample_printed": "bool_str",
-    "container_slot": "str", 
-    "physical_source": "str",
-    "spool_type": "str",
-    "original_color": "str"
-}
+VERSION = "v114.0 (Anti-Regression)"
 
 @app.after_request
 def add_header(r):
@@ -110,7 +97,11 @@ def get_spool(sid):
 
 def sanitize_outbound_data(data):
     """
-    Enforces strict types. Booleans must be strings ("true"/"false").
+    Universal Sanitizer:
+    - Booleans -> "true"/"false" strings
+    - Integers -> Strings
+    - Strings -> Strings
+    - None -> Removed
     """
     if 'extra' not in data or not data['extra']:
         return data
@@ -119,23 +110,19 @@ def sanitize_outbound_data(data):
     for key, value in data['extra'].items():
         if value is None: continue 
         
-        target_type = FIELD_TYPE_MAP.get(key)
-        
-        # BOOLEAN -> STRING ("true"/"false")
-        if target_type == "bool_str":
-            if isinstance(value, str):
-                bool_val = (value.lower() == 'true')
-            else:
-                bool_val = bool(value)
-            clean_extra[key] = "true" if bool_val else "false"
-        
-        # STRING -> STRING
-        elif target_type == "str" or target_type == str:
+        # BRUTE FORCE CONVERSION
+        if isinstance(value, bool):
+            clean_extra[key] = "true" if value else "false"
+        elif isinstance(value, int):
             clean_extra[key] = str(value)
-            
-        # PASS-THROUGH
+        elif isinstance(value, float):
+            clean_extra[key] = str(value)
         else:
-            clean_extra[key] = value
+            # It's likely a string, but normalize "false"/"true" text if found
+            val_str = str(value)
+            if val_str.lower() == 'false': clean_extra[key] = "false"
+            elif val_str.lower() == 'true': clean_extra[key] = "true"
+            else: clean_extra[key] = val_str
             
     data['extra'] = clean_extra
     return data
@@ -247,7 +234,7 @@ def get_spools_at_location(loc_name):
 def resolve_scan(text):
     text = text.strip(); decoded = urllib.parse.unquote(text)
     
-    # ID PREFIX
+    # ID PREFIX (Strict)
     if text.upper().startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
@@ -264,14 +251,16 @@ def resolve_scan(text):
             return {'type': 'command', 'cmd': 'slot', 'value': slot_num}
         except: pass
 
-    # LEGACY / URL HANDLING (Strict)
-    if text.startswith('http') or text.startswith('www'):
+    # URL / JUNK FILTER (The Anti-Regression Fix)
+    # If it looks like a URL or Path, it is NOT a Location unless it matches the legacy regex.
+    if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\']):
         m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
             else: return {'type': 'error', 'msg': 'Legacy ID Found, but no Spools available.'}
-        return {'type': 'error', 'msg': 'Unknown QR Code'}
+        # It's a link, but not one we know. DIE.
+        return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
     # FALLBACK: IS IT A LOCATION?
     if text.isdigit():
@@ -279,7 +268,7 @@ def resolve_scan(text):
         if rid: return {'type': 'spool', 'id': rid}
         return {'type': 'spool', 'id': int(text)}
         
-    if len(text) > 2 and not text.startswith('http'): 
+    if len(text) > 2: 
         return {'type': 'location', 'id': text.upper()}
         
     return {'type': 'error', 'msg': 'Unknown Code'}
