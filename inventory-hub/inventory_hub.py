@@ -28,19 +28,19 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v112.0 (Strict Typing)"
+VERSION = "v113.0 (Boolean-to-String Fix)"
 
 # --- THE LAW: STRICT TYPE MAPPING ---
-# This ensures we never send "true" (string) when Spoolman expects True (bool)
+# Spoolman Extra Fields must be Strings, even if they represent Booleans.
 FIELD_TYPE_MAP = {
-    "label_printed": bool,
-    "is_refill": bool,
-    "spoolman_reprint": bool,
-    "sample_printed": bool,
-    "container_slot": str,  # MUST BE STRING
-    "physical_source": str,
-    "spool_type": str,
-    "original_color": str
+    "label_printed": "bool_str", # Convert True -> "true"
+    "is_refill": "bool_str",
+    "spoolman_reprint": "bool_str",
+    "sample_printed": "bool_str",
+    "container_slot": "str", 
+    "physical_source": "str",
+    "spool_type": "str",
+    "original_color": "str"
 }
 
 @app.after_request
@@ -110,31 +110,30 @@ def get_spool(sid):
 
 def sanitize_outbound_data(data):
     """
-    Enforces strict types based on FIELD_TYPE_MAP.
+    Enforces strict types. Booleans must be strings ("true"/"false").
     """
     if 'extra' not in data or not data['extra']:
         return data
 
     clean_extra = {}
     for key, value in data['extra'].items():
-        if value is None: continue # Skip nulls
+        if value is None: continue 
         
         target_type = FIELD_TYPE_MAP.get(key)
         
-        # BOOLEAN ENFORCEMENT
-        if target_type == bool:
+        # BOOLEAN -> STRING ("true"/"false")
+        if target_type == "bool_str":
             if isinstance(value, str):
-                # Handle "true"/"false" strings
-                clean_extra[key] = (value.lower() == 'true')
+                bool_val = (value.lower() == 'true')
             else:
-                clean_extra[key] = bool(value)
+                bool_val = bool(value)
+            clean_extra[key] = "true" if bool_val else "false"
         
-        # STRING ENFORCEMENT
-        elif target_type == str:
-            # Handle integers sent as strings
+        # STRING -> STRING
+        elif target_type == "str" or target_type == str:
             clean_extra[key] = str(value)
             
-        # PASS-THROUGH (No strict rule)
+        # PASS-THROUGH
         else:
             clean_extra[key] = value
             
