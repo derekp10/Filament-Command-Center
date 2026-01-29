@@ -28,7 +28,10 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v116.0 (Quote Cleaner)"
+VERSION = "v117.0 (Smart JSON Encoding)"
+
+# Fields that MUST be double-quoted strings (JSON strings)
+JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
 
 @app.after_request
 def add_header(r):
@@ -97,9 +100,9 @@ def get_spool(sid):
 
 def sanitize_outbound_data(data):
     """
-    Sanitizer v2:
-    - Strips extra quotes from strings (Fixes '\"Cardboard\"')
-    - Converts Booleans/Ints to clean strings
+    Sanitizer v3: The "JSON Encoded" Fix.
+    - Fields in JSON_STRING_FIELDS get double-quoted (e.g. '"Cardboard"')
+    - Booleans get converted to "true"/"false" strings.
     """
     if 'extra' not in data or not data['extra']:
         return data
@@ -108,18 +111,22 @@ def sanitize_outbound_data(data):
     for key, value in data['extra'].items():
         if value is None: continue 
         
+        # 1. BOOLEANS -> "true"/"false"
         if isinstance(value, bool):
             clean_extra[key] = "true" if value else "false"
-        elif isinstance(value, int):
-            clean_extra[key] = str(value)
-        elif isinstance(value, float):
-            clean_extra[key] = str(value)
-        else:
-            # STRING CLEANING
-            val_str = str(value).strip()
-            # Remove leading/trailing quotes that might have snuck in via CSV
-            val_str = val_str.strip('"').strip("'")
             
+        # 2. CHOICE/TEXT FIELDS -> Double Quoted JSON String ('"Value"')
+        elif key in JSON_STRING_FIELDS:
+            val_str = str(value).strip()
+            # If it doesn't already have quotes, add them
+            if not (val_str.startswith('"') and val_str.endswith('"')):
+                clean_extra[key] = f'"{val_str}"'
+            else:
+                clean_extra[key] = val_str
+                
+        # 3. GENERIC STRINGS
+        else:
+            val_str = str(value)
             if val_str.lower() == 'false': clean_extra[key] = "false"
             elif val_str.lower() == 'true': clean_extra[key] = "true"
             else: clean_extra[key] = val_str
@@ -157,6 +164,9 @@ def format_spool_display(spool_data):
         fil = spool_data.get('filament')
         extra = spool_data.get('extra', {})
         slot = extra.get('container_slot', '')
+        
+        # Clean up slot display (remove quotes if present)
+        if slot: slot = slot.strip('"')
 
         if not fil:
             return {"text": f"#{sid} [No Filament Data]", "color": "888888", "slot": slot}
