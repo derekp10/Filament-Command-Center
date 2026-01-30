@@ -16,7 +16,6 @@
         .status-off { background-color: #ff4444; box-shadow: 0 0 5px #ff4444; }
         .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
         .col-logs { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
-        /* WRAP LOGS FIX */
         .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; line-height: 1.4; white-space: pre-wrap; word-break: break-all; }
         .log-INFO { color: #00ff00; } .log-WARNING { color: #ffcc00; } .log-ERROR { color: #ff4444; }
         .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
@@ -28,6 +27,8 @@
         .buffer-text { font-size: 1.6rem; color: white; font-weight: bold; }
         .qr-box { background: white; padding: 5px; border-radius: 4px; }
         .cmd-deck { padding: 15px; border-top: 1px solid #333; background: #222; display: flex; justify-content: space-around; }
+        .cmd-btn { cursor: pointer; transition: 0.2s; border-radius: 8px; padding: 10px; }
+        .cmd-btn:active { background-color: #444; transform: scale(0.95); }
         .modal-content { background-color: #121212; color: #fff; border: 1px solid #555; }
         .table-dark { --bs-table-bg: #181818; }
         .highlight-row { border: 4px solid #ffff00 !important; background-color: #333 !important; }
@@ -50,11 +51,13 @@
         .unslotted-box { border: 2px solid #ffcc00; background: #222; padding: 10px; margin-top: 20px; border-radius: 8px; }
         .unslotted-item { background: #333; padding: 10px; margin: 5px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; border: 1px solid #555; }
         .unslotted-item:hover { background: #444; border-color: #fff; }
-        .modal-action-row { display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
-        .modal-action-card { background: #333; border: 2px solid #555; border-radius: 10px; padding: 15px; display: flex; flex-direction: column; align-items: center; min-width: 150px; cursor: pointer; transition: 0.2s; }
+        /* MODAL STYLES */
+        .modal-action-row { display: flex; justify-content: center; gap: 50px; flex-wrap: wrap; margin-top: 20px; } /* Increased Gap */
+        .modal-action-card { background: #333; border: 2px solid #555; border-radius: 10px; padding: 20px; display: flex; flex-direction: column; align-items: center; min-width: 180px; cursor: pointer; transition: 0.2s; }
         .modal-action-card:hover { background: #444; border-color: #fff; }
-        .modal-action-qr { background: white; padding: 5px; border-radius: 5px; margin-bottom: 10px; }
-        .modal-action-btn { width: 100%; font-size: 1.2rem; font-weight: bold; }
+        .modal-action-qr { background: white; padding: 5px; border-radius: 5px; margin-bottom: 15px; }
+        .modal-action-btn { width: 100%; font-size: 1.4rem; font-weight: bold; }
+        .headsup-strip { background: #111; border-bottom: 1px solid #333; padding: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: #00d4ff; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -86,16 +89,22 @@
             <div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status" style="font-size:1rem; color:#888;">Ready...</span></div>
             <div id="buffer-zone" class="buffer-content"></div>
             <div class="cmd-deck">
-                <div class="text-center"><div class="qr-box" id="qr-clear"></div>CLEAR</div>
-                <div class="text-center"><div class="qr-box" id="qr-undo"></div>UNDO</div>
-                <div class="text-center"><div class="qr-box" id="qr-eject"></div>EJECT</div>
+                <div class="text-center cmd-btn" onclick="processScan('CMD:CLEAR')"><div class="qr-box" id="qr-clear"></div>CLEAR</div>
+                <div class="text-center cmd-btn" onclick="triggerUndo()"><div class="qr-box" id="qr-undo"></div>UNDO</div>
+                <div class="text-center cmd-btn" onclick="processScan('CMD:EJECT')"><div class="qr-box" id="qr-eject"></div>EJECT</div>
             </div>
         </div>
     </div>
 
     <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-muted" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
     
-    <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white" onclick="closeManage()"></button></div><div class="modal-body">
+    <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div>
+        <div id="headsup-buffer" class="headsup-strip" style="display:none;">
+            <span class="me-3">✋ HOLDING:</span>
+            <div id="headsup-swatch" style="width:30px;height:30px;border-radius:50%;border:2px solid #fff;margin-right:10px;"></div>
+            <span id="headsup-text"></span>
+        </div>
+        <div class="modal-body">
         <div id="manage-grid-view" style="display:none;">
             <div class="alert alert-info py-1 mb-2 small text-center">Tap button or scan slot QR (CMD:SLOT:X)</div>
             <div id="slot-grid-container" class="slot-grid"></div>
@@ -106,22 +115,36 @@
         </div>
         <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div><div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
     
-    <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-4 mb-4"></p><div id="action-buttons" class="modal-action-row"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
+    <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-3 mb-4"></p><div id="action-buttons" class="modal-action-row"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
     
-    <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-dialog-centered"><div class="modal-content" style="border: 4px solid #ffcc00;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRM ACTION</h5></div><div class="modal-body text-center"><p id="confirm-msg" style="font-size:1.5rem;">Are you sure?</p><div class="bg-white p-2 d-inline-block rounded mb-2"><div id="qr-confirm"></div><div class="small fw-bold text-dark">CMD:CONFIRM</div></div></div><div class="modal-footer justify-content-center"><button type="button" class="btn btn-secondary btn-lg" style="width:40%;" onclick="confirmAction(false)">NO</button><button type="button" class="btn btn-warning btn-lg" style="width:40%;" onclick="confirmAction(true)">YES</button></div></div></div></div>
+    <div class="modal fade" id="safetyModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #ff4444;"><div class="modal-header bg-danger text-white"><h5 class="modal-title fw-bold">⚠️ SAFETY CONFIRMATION</h5></div><div class="modal-body text-center"><p id="safety-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4">
+        <div class="modal-action-card" onclick="confirmSafety(false)" style="border-color:#ff4444;">
+            <div id="qr-safety-no" class="modal-action-qr"></div>
+            <button class="btn btn-secondary modal-action-btn">❌ NO</button>
+        </div>
+        <div style="width: 100px;"></div>
+        <div class="modal-action-card" onclick="confirmSafety(true)" style="border-color:#00ff00;">
+            <div id="qr-safety-yes" class="modal-action-qr"></div>
+            <button class="btn btn-danger modal-action-btn">✅ YES</button>
+        </div>
+    </div></div></div></div></div>
     
     <div class="modal fade" id="locModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="modalTitle">Edit Location</h5><button type="button" class="btn-close btn-close-white" onclick="closeEdit()"></button></div><div class="modal-body"><input type="hidden" id="edit-original-id"><div class="mb-3"><label>Location ID</label><input type="text" class="form-control" id="edit-id"></div><div class="mb-3"><label>Friendly Name</label><input type="text" class="form-control" id="edit-name"></div><div class="row"><div class="col-8 mb-3"><label>Type</label><select class="form-select" id="edit-type"><option value="Dryer Box">Dryer Box</option><option value="Cart">Cart</option><option value="Shelf">Shelf</option><option value="Printer">Printer</option><option value="MMU Slot">MMU Slot</option></select></div><div class="col-4 mb-3"><label>Max Spools</label><input type="number" class="form-control" id="edit-max"></div></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeEdit()">Cancel</button><button type="button" class="btn btn-primary" onclick="saveLocation()">Save</button></div></div></div></div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v131.0";
+        const DASHBOARD_VERSION = "v134.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         window.onload = function() {
             new QRCode(document.getElementById("qr-undo"), {text: "CMD:UNDO", width: 90, height: 90});
             new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
-            new QRCode(document.getElementById("qr-confirm"), {text: "CMD:CONFIRM", width: 128, height: 128});
+            
+            // Safety Modal QRs
+            new QRCode(document.getElementById("qr-safety-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
+            new QRCode(document.getElementById("qr-safety-no"), {text: "CMD:CANCEL", width: 120, height: 120});
+            
             new QRCode(document.getElementById("qr-modal-cancel"), {text: "CMD:MODAL:CANCEL", width: 80, height: 80});
             document.getElementById("manual-spool-id").addEventListener("keydown", function(event) { if (event.key === "Enter") { event.preventDefault(); manualAddSpool(); }});
         };
@@ -131,7 +154,8 @@
         let heldSpools = []; 
         let ejectMode = false;
         let lastScannedLoc = null;
-        let pendingConfirmCallback = null;
+        let pendingConfirmCallback = null; // Used for generic confirm
+        let safetyCallback = null; // Used for Safety Modal
         let allLocations = []; 
         let logsPaused = false;
         let currentGridState = {};
@@ -171,26 +195,44 @@
 
         function renderBuffer() {
             const zone = document.getElementById('buffer-zone');
+            const headsUp = document.getElementById('headsup-buffer');
+            
             if (heldSpools.length > 0) {
+                // Main Buffer
                 zone.innerHTML = heldSpools.map((s, idx) => `
                     <div class="buffer-item ${idx === 0 ? 'active-item' : ''}">
                         <div class="buffer-info"><div class="buffer-swatch" style="background-color:#${s.color}"></div><div class="buffer-text">${s.display}</div></div>
                         <div id="qr-buf-${idx}" class="qr-box"></div>
                     </div>`).join('');
                 heldSpools.forEach((s, idx) => { new QRCode(document.getElementById(`qr-buf-${idx}`), {text: "ID:" + s.id.toString(), width: 120, height: 120}); });
-            } else { zone.innerHTML = `<div class="text-center text-muted mt-5"><h3>Buffer Empty</h3><p>Scan a Spool or Location</p></div>`; }
+                
+                // Heads-Up Strip (Show first item)
+                headsUp.style.display = 'flex';
+                document.getElementById('headsup-swatch').style.backgroundColor = `#${heldSpools[0].color}`;
+                document.getElementById('headsup-text').innerText = heldSpools[0].display;
+                
+            } else { 
+                zone.innerHTML = `<div class="text-center text-muted mt-5"><h3>Buffer Empty</h3><p>Scan a Spool or Location</p></div>`; 
+                headsUp.style.display = 'none';
+            }
         }
 
         function processScan(text) {
+            const upper = text.toUpperCase();
+
+            // --- SAFETY MODAL INTERCEPTOR ---
+            if(document.getElementById('safetyModal').classList.contains('show')) {
+                if (upper === 'CMD:CONFIRM') confirmSafety(true);
+                else if (upper === 'CMD:CANCEL') confirmSafety(false);
+                return;
+            }
+
+            // --- ACTION MODAL INTERCEPTOR ---
             if(document.getElementById('actionModal').classList.contains('show')) {
-                const upper = text.toUpperCase();
                 if (upper === 'CMD:MODAL:CANCEL') { actionModal.hide(); return; }
                 if (upper.startsWith('CMD:MODAL:')) {
                     const idx = parseInt(upper.split(':')[2]);
-                    if (modalCallbacks[idx]) {
-                        actionModal.hide();
-                        modalCallbacks[idx]();
-                    }
+                    if (modalCallbacks[idx]) { actionModal.hide(); modalCallbacks[idx](); }
                 }
                 return; 
             }
@@ -201,7 +243,9 @@
                 setProcessing(false);
                 
                 if(res.type === 'command') {
-                    if(res.cmd === 'confirm') { if(pendingConfirmCallback) confirmAction(true); return; }
+                    // LEGACY CONFIRM (DELETE LOC)
+                    if(res.cmd === 'confirm') { if(pendingConfirmCallback) { pendingConfirmCallback(); pendingConfirmCallback = null; document.getElementById('legacyConfirmModal').hide(); } return; } 
+                    
                     if(res.cmd === 'slot') { handleSlotInteraction(res.value); return; }
                     if(res.cmd === 'clear') { heldSpools = []; renderBuffer(); showToast("Buffer Cleared", "info"); return; }
                     if(res.cmd === 'undo') { triggerUndo(); return; }
@@ -223,7 +267,21 @@
         }
 
         const actionModal = new bootstrap.Modal(document.getElementById('actionModal'));
+        const safetyModal = new bootstrap.Modal(document.getElementById('safetyModal'));
 
+        // --- SAFETY MODAL (EJECT ALL) ---
+        function promptSafety(msg, callback) {
+            document.getElementById('safety-msg').innerText = msg;
+            safetyCallback = callback;
+            safetyModal.show();
+        }
+        function confirmSafety(isYes) {
+            safetyModal.hide();
+            if(isYes && safetyCallback) safetyCallback();
+            safetyCallback = null;
+        }
+
+        // --- ACTION MODAL (SWAP/OVERWRITE) ---
         function promptAction(title, msg, buttons) {
             document.getElementById('action-title').innerText = title;
             document.getElementById('action-msg').innerHTML = msg;
@@ -249,7 +307,7 @@
                 card.appendChild(qrDiv);
                 card.appendChild(b);
                 btnContainer.appendChild(card);
-                new QRCode(qrDiv, {text: `CMD:MODAL:${idx}`, width: 100, height: 100});
+                new QRCode(qrDiv, {text: `CMD:MODAL:${idx}`, width: 120, height: 120});
             });
             actionModal.show();
         }
@@ -342,6 +400,8 @@
                  document.getElementById('manage-list-view').style.display = 'block';
                  refreshManageList(locId);
              }
+             // Ensure Buffer Strip is synced
+             renderBuffer();
              return true;
         }
 
@@ -381,7 +441,35 @@
 
                 if (unslotted.length > 0) {
                     unslottedBox.style.display = 'block';
-                    unslottedBox.innerHTML = `<h5 class="text-warning fw-bold">⚠️ Unslotted Items (${unslotted.length})</h5><div class="text-muted small mb-2">Scan QR or Tap to Pick Up</div>`;
+                    
+                    // HEADER ROW
+                    const hdr = document.createElement('div');
+                    hdr.className = "d-flex justify-content-between align-items-center mb-3";
+                    hdr.innerHTML = `<h5 class="text-warning fw-bold m-0">⚠️ Unslotted Items (${unslotted.length})</h5>`;
+                    
+                    // EJECT ALL BUTTON + QR
+                    const ejectAllDiv = document.createElement('div');
+                    ejectAllDiv.className = "text-center";
+                    const qrEjectAll = document.createElement('div'); qrEjectAll.className = "bg-white p-1 rounded d-inline-block"; qrEjectAll.id = "qr-eject-all";
+                    const btnEjectAll = document.createElement('button'); btnEjectAll.className = "btn btn-danger btn-sm ms-2 fw-bold"; btnEjectAll.innerText = "EJECT ALL 💥";
+                    
+                    const triggerEjectAll = () => {
+                        promptSafety(`Eject ALL ${unslotted.length} unslotted items from ${locId}?`, () => {
+                            doEjectAll(locId);
+                        });
+                    };
+                    btnEjectAll.onclick = triggerEjectAll;
+                    ejectAllDiv.appendChild(qrEjectAll);
+                    ejectAllDiv.appendChild(btnEjectAll);
+                    hdr.appendChild(ejectAllDiv);
+                    unslottedBox.appendChild(hdr);
+                    
+                    // Generate Eject All QR (Hack: We need scanning logic to catch CMD:EJECTALL)
+                    // Currently processScan only handles CMD:SLOT/CLEAR/UNDO/EJECT. 
+                    // I will add CMD:EJECTALL to processScan below.
+                    new QRCode(qrEjectAll, {text: "CMD:EJECTALL", width: 60, height: 60});
+
+                    // ITEMS
                     unslotted.forEach((item, idx) => {
                         const div = document.createElement('div');
                         div.className = "unslotted-item";
@@ -398,6 +486,19 @@
             });
         }
 
+        // --- NEW EJECT ALL FUNCTION ---
+        function doEjectAll(locId) {
+            setProcessing(true);
+            fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'clear_location', location: locId}) })
+            .then(r => r.json()).then((res) => { 
+                setProcessing(false);
+                refreshManageView(locId);
+                fetchLogs(); 
+                showToast("💥 All Unslotted Ejected!", "warning");
+            }).catch(() => setProcessing(false));
+        }
+
+        // --- LEGACY EJECT ---
         function ejectSpool(spoolId, locId) { if(locId !== "Scan") { requestConfirmation("Eject spool #" + spoolId + "?", () => { doEject(spoolId, locId); }); } else doEject(spoolId, locId); }
         function doEject(spoolId, locId) {
             setProcessing(true);
@@ -413,7 +514,7 @@
         const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
         const locModal = new bootstrap.Modal(document.getElementById('locModal'));
         const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
-        const confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
+        const confirmModal = new bootstrap.Modal(document.getElementById('confirmModal')); // Legacy delete
 
         function requestConfirmation(msg, callback) { document.getElementById('confirm-msg').innerText = msg; pendingConfirmCallback = callback; confirmModal.show(); }
         function confirmAction(isYes) { confirmModal.hide(); if(isYes && pendingConfirmCallback) pendingConfirmCallback(); pendingConfirmCallback = null; }
