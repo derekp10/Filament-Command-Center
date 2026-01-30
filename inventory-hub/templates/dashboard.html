@@ -21,8 +21,8 @@
         .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
         .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; font-weight: bold; color: #00d4ff; font-size: 1.2rem; display: flex; justify-content: space-between; }
         .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
-        .buffer-item { background: #2a2a2a; border: 1px solid #444; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; opacity: 0.6; }
-        .buffer-item.active-item { border: 2px solid #00ff00; opacity: 1.0; box-shadow: 0 0 10px rgba(0, 255, 0, 0.2); }
+        .buffer-item { background: #2a2a2a; border: 1px solid #444; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; opacity: 0.6; transition: 0.3s; }
+        .buffer-item.active-item { border: 2px solid #00ff00; opacity: 1.0; box-shadow: 0 0 10px rgba(0, 255, 0, 0.2); transform: scale(1.02); }
         .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; }
         .buffer-text { font-size: 1.6rem; color: white; font-weight: bold; }
         .qr-box { background: white; padding: 5px; border-radius: 4px; }
@@ -52,12 +52,13 @@
         .unslotted-item { background: #333; padding: 10px; margin: 5px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; border: 1px solid #555; }
         .unslotted-item:hover { background: #444; border-color: #fff; }
         /* MODAL STYLES */
-        .modal-action-row { display: flex; justify-content: center; gap: 50px; flex-wrap: wrap; margin-top: 20px; } /* Increased Gap */
+        .modal-action-row { display: flex; justify-content: center; gap: 60px; flex-wrap: wrap; margin-top: 20px; }
         .modal-action-card { background: #333; border: 2px solid #555; border-radius: 10px; padding: 20px; display: flex; flex-direction: column; align-items: center; min-width: 180px; cursor: pointer; transition: 0.2s; }
         .modal-action-card:hover { background: #444; border-color: #fff; }
         .modal-action-qr { background: white; padding: 5px; border-radius: 5px; margin-bottom: 15px; }
         .modal-action-btn { width: 100%; font-size: 1.4rem; font-weight: bold; }
-        .headsup-strip { background: #111; border-bottom: 1px solid #333; padding: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: #00d4ff; font-weight: bold; }
+        .headsup-strip { background: #111; border-bottom: 1px solid #333; padding: 8px 20px; display: flex; align-items: center; justify-content: space-between; font-size: 1.2rem; color: #00d4ff; font-weight: bold; }
+        .danger-zone { border: 2px solid #ff4444; background: #200; padding: 15px; border-radius: 8px; margin-top: 20px; text-align: center; }
     </style>
 </head>
 <body>
@@ -99,11 +100,19 @@
     <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-muted" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
     
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div>
+        
         <div id="headsup-buffer" class="headsup-strip" style="display:none;">
-            <span class="me-3">✋ HOLDING:</span>
-            <div id="headsup-swatch" style="width:30px;height:30px;border-radius:50%;border:2px solid #fff;margin-right:10px;"></div>
-            <span id="headsup-text"></span>
+            <div class="d-flex align-items-center flex-grow-1">
+                <span class="me-2" id="headsup-counter">✋ Holding:</span>
+                <div id="headsup-swatch" style="width:30px;height:30px;border-radius:50%;border:2px solid #fff;margin-right:10px;"></div>
+                <span id="headsup-text" class="text-white"></span>
+            </div>
+            <div class="d-flex align-items-center">
+                <button class="btn btn-sm btn-outline-info me-2 fw-bold" onclick="cycleBuffer()">🔁 CYCLE</button>
+                <div id="qr-cycle" class="bg-white p-1 rounded" style="width:45px;height:45px;cursor:pointer;" onclick="cycleBuffer()"></div>
+            </div>
         </div>
+
         <div class="modal-body">
         <div id="manage-grid-view" style="display:none;">
             <div class="alert alert-info py-1 mb-2 small text-center">Tap button or scan slot QR (CMD:SLOT:X)</div>
@@ -113,19 +122,23 @@
         <div id="manage-list-view">
             <div id="manage-contents-list" class="mb-4"></div>
         </div>
-        <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div><div class="d-grid gap-2"><button class="btn btn-success btn-lg" onclick="closeManage()">✅ Done / Sync Buffer</button></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
+        <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div>
+        
+        <div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary">
+            <button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button>
+            <div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div>
+        </div>
+        
+        <input type="hidden" id="manage-loc-id"></div></div></div></div>
     
     <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-3 mb-4"></p><div id="action-buttons" class="modal-action-row"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
     
     <div class="modal fade" id="safetyModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #ff4444;"><div class="modal-header bg-danger text-white"><h5 class="modal-title fw-bold">⚠️ SAFETY CONFIRMATION</h5></div><div class="modal-body text-center"><p id="safety-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4">
         <div class="modal-action-card" onclick="confirmSafety(false)" style="border-color:#ff4444;">
-            <div id="qr-safety-no" class="modal-action-qr"></div>
-            <button class="btn btn-secondary modal-action-btn">❌ NO</button>
+            <div id="qr-safety-no" class="modal-action-qr"></div><button class="btn btn-secondary modal-action-btn">❌ NO</button>
         </div>
-        <div style="width: 100px;"></div>
-        <div class="modal-action-card" onclick="confirmSafety(true)" style="border-color:#00ff00;">
-            <div id="qr-safety-yes" class="modal-action-qr"></div>
-            <button class="btn btn-danger modal-action-btn">✅ YES</button>
+        <div style="width: 150px;"></div> <div class="modal-action-card" onclick="confirmSafety(true)" style="border-color:#00ff00;">
+            <div id="qr-safety-yes" class="modal-action-qr"></div><button class="btn btn-danger modal-action-btn">✅ YES</button>
         </div>
     </div></div></div></div></div>
     
@@ -133,7 +146,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v134.0";
+        const DASHBOARD_VERSION = "v135.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         window.onload = function() {
@@ -141,11 +154,13 @@
             new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             
-            // Safety Modal QRs
+            // Safety & Nav
             new QRCode(document.getElementById("qr-safety-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
             new QRCode(document.getElementById("qr-safety-no"), {text: "CMD:CANCEL", width: 120, height: 120});
-            
             new QRCode(document.getElementById("qr-modal-cancel"), {text: "CMD:MODAL:CANCEL", width: 80, height: 80});
+            new QRCode(document.getElementById("qr-cycle"), {text: "CMD:CYCLE", width: 38, height: 38});
+            new QRCode(document.getElementById("qr-done"), {text: "CMD:DONE", width: 45, height: 45});
+
             document.getElementById("manual-spool-id").addEventListener("keydown", function(event) { if (event.key === "Enter") { event.preventDefault(); manualAddSpool(); }});
         };
         
@@ -154,8 +169,8 @@
         let heldSpools = []; 
         let ejectMode = false;
         let lastScannedLoc = null;
-        let pendingConfirmCallback = null; // Used for generic confirm
-        let safetyCallback = null; // Used for Safety Modal
+        let pendingConfirmCallback = null;
+        let safetyCallback = null;
         let allLocations = []; 
         let logsPaused = false;
         let currentGridState = {};
@@ -193,6 +208,12 @@
             else { status.innerText = "Auto-Refresh ON"; status.className = "small text-muted"; }
         }
 
+        function cycleBuffer() {
+            if (heldSpools.length < 2) return;
+            heldSpools.push(heldSpools.shift());
+            renderBuffer();
+        }
+
         function renderBuffer() {
             const zone = document.getElementById('buffer-zone');
             const headsUp = document.getElementById('headsup-buffer');
@@ -206,8 +227,9 @@
                     </div>`).join('');
                 heldSpools.forEach((s, idx) => { new QRCode(document.getElementById(`qr-buf-${idx}`), {text: "ID:" + s.id.toString(), width: 120, height: 120}); });
                 
-                // Heads-Up Strip (Show first item)
+                // Heads-Up Strip
                 headsUp.style.display = 'flex';
+                document.getElementById('headsup-counter').innerText = `✋ Holding (${1} of ${heldSpools.length}):`;
                 document.getElementById('headsup-swatch').style.backgroundColor = `#${heldSpools[0].color}`;
                 document.getElementById('headsup-text').innerText = heldSpools[0].display;
                 
@@ -220,14 +242,12 @@
         function processScan(text) {
             const upper = text.toUpperCase();
 
-            // --- SAFETY MODAL INTERCEPTOR ---
             if(document.getElementById('safetyModal').classList.contains('show')) {
                 if (upper === 'CMD:CONFIRM') confirmSafety(true);
                 else if (upper === 'CMD:CANCEL') confirmSafety(false);
                 return;
             }
 
-            // --- ACTION MODAL INTERCEPTOR ---
             if(document.getElementById('actionModal').classList.contains('show')) {
                 if (upper === 'CMD:MODAL:CANCEL') { actionModal.hide(); return; }
                 if (upper.startsWith('CMD:MODAL:')) {
@@ -243,17 +263,28 @@
                 setProcessing(false);
                 
                 if(res.type === 'command') {
-                    // LEGACY CONFIRM (DELETE LOC)
-                    if(res.cmd === 'confirm') { if(pendingConfirmCallback) { pendingConfirmCallback(); pendingConfirmCallback = null; document.getElementById('legacyConfirmModal').hide(); } return; } 
-                    
+                    if(res.cmd === 'confirm') { if(pendingConfirmCallback) confirmAction(true); return; }
                     if(res.cmd === 'slot') { handleSlotInteraction(res.value); return; }
                     if(res.cmd === 'clear') { heldSpools = []; renderBuffer(); showToast("Buffer Cleared", "info"); return; }
                     if(res.cmd === 'undo') { triggerUndo(); return; }
                     if(res.cmd === 'eject') { showToast("EJECT MODE: Scan a Spool", "warning"); ejectMode = true; return; }
+                    if(res.cmd === 'cycle') { cycleBuffer(); return; }
+                    if(res.cmd === 'done') { closeManage(); return; }
+                    // EJECTALL handled inside the button prompt logic, but we can catch it here if needed
+                    if(res.cmd === 'ejectall') { 
+                        // This requires context of which location is open. 
+                        // Since scan is global, we should check if modal is open.
+                        const locId = document.getElementById('manage-loc-id').value;
+                        if(document.getElementById('manageModal').classList.contains('show') && locId) {
+                             // Find the count from UI? Or just trigger.
+                             triggerEjectAll(locId);
+                        }
+                        return; 
+                    }
                 }
 
                 if(res.type === 'location') { lastScannedLoc = res.id; if(document.getElementById('locMgrModal').classList.contains('show')) scrollToRow(res.id); }
-                if (ejectMode && res.type === 'spool') { ejectSpool(res.id, "Scan"); ejectMode = false; return; }
+                if (ejectMode && res.type === 'spool') { ejectSpool(res.id, "Scan", false); ejectMode = false; return; }
                 
                 if (res.type === 'spool') {
                     if (heldSpools.some(s => s.id === res.id)) showToast("⚠️ ALREADY IN BUFFER", "warning");
@@ -269,7 +300,6 @@
         const actionModal = new bootstrap.Modal(document.getElementById('actionModal'));
         const safetyModal = new bootstrap.Modal(document.getElementById('safetyModal'));
 
-        // --- SAFETY MODAL (EJECT ALL) ---
         function promptSafety(msg, callback) {
             document.getElementById('safety-msg').innerText = msg;
             safetyCallback = callback;
@@ -281,7 +311,6 @@
             safetyCallback = null;
         }
 
-        // --- ACTION MODAL (SWAP/OVERWRITE) ---
         function promptAction(title, msg, buttons) {
             document.getElementById('action-title').innerText = title;
             document.getElementById('action-msg').innerHTML = msg;
@@ -291,7 +320,6 @@
 
             buttons.forEach((btn, idx) => {
                 modalCallbacks.push(btn.action); 
-                
                 const card = document.createElement('div');
                 card.className = "modal-action-card";
                 card.onclick = () => { actionModal.hide(); btn.action(); };
@@ -313,6 +341,11 @@
         }
         function cancelAction() { actionModal.hide(); }
 
+        // --- TRIGGER HELPERS ---
+        function triggerEjectAll(locId) {
+             promptSafety(`Eject ALL unslotted items from ${locId}?`, () => { doEjectAll(locId); });
+        }
+
         function handleSlotInteraction(slotNum) {
             if (!document.getElementById('manageModal').classList.contains('show')) return;
             const locId = document.getElementById('manage-loc-id').value;
@@ -320,7 +353,6 @@
 
             if (heldSpools.length > 0) {
                 const newItem = heldSpools[0];
-
                 if (itemInSlot) {
                     promptAction("⚠️ Slot Occupied", `Slot ${slotNum} holds <b>${itemInSlot.display}</b>.<br>Assigning <b>${newItem.display}</b>.`, [
                         { label: "🔄 Swap", cls: "info", action: () => {
@@ -347,10 +379,10 @@
                         { label: "✋ Pick Up", cls: "success", action: () => {
                             heldSpools.push({id: itemInSlot.id, display: itemInSlot.display, color: itemInSlot.color});
                             renderBuffer();
-                            doEject(itemInSlot.id, locId);
+                            doEject(itemInSlot.id, locId, false);
                         }},
                         { label: "⏏️ Eject", cls: "danger", action: () => {
-                            doEject(itemInSlot.id, locId);
+                            doEject(itemInSlot.id, locId, false);
                         }}
                     ]);
                 } else {
@@ -400,7 +432,6 @@
                  document.getElementById('manage-list-view').style.display = 'block';
                  refreshManageList(locId);
              }
-             // Ensure Buffer Strip is synced
              renderBuffer();
              return true;
         }
@@ -425,7 +456,6 @@
                     const item = slotMap[i.toString()];
                     const div = document.createElement('div');
                     const qrId = `qr-slot-${i}`;
-                    
                     if (item) {
                         div.className = "slot-btn full";
                         div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="${qrId}" class="slot-qr"></div></div><div class="slot-right"><div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div></div>`;
@@ -442,33 +472,6 @@
                 if (unslotted.length > 0) {
                     unslottedBox.style.display = 'block';
                     
-                    // HEADER ROW
-                    const hdr = document.createElement('div');
-                    hdr.className = "d-flex justify-content-between align-items-center mb-3";
-                    hdr.innerHTML = `<h5 class="text-warning fw-bold m-0">⚠️ Unslotted Items (${unslotted.length})</h5>`;
-                    
-                    // EJECT ALL BUTTON + QR
-                    const ejectAllDiv = document.createElement('div');
-                    ejectAllDiv.className = "text-center";
-                    const qrEjectAll = document.createElement('div'); qrEjectAll.className = "bg-white p-1 rounded d-inline-block"; qrEjectAll.id = "qr-eject-all";
-                    const btnEjectAll = document.createElement('button'); btnEjectAll.className = "btn btn-danger btn-sm ms-2 fw-bold"; btnEjectAll.innerText = "EJECT ALL 💥";
-                    
-                    const triggerEjectAll = () => {
-                        promptSafety(`Eject ALL ${unslotted.length} unslotted items from ${locId}?`, () => {
-                            doEjectAll(locId);
-                        });
-                    };
-                    btnEjectAll.onclick = triggerEjectAll;
-                    ejectAllDiv.appendChild(qrEjectAll);
-                    ejectAllDiv.appendChild(btnEjectAll);
-                    hdr.appendChild(ejectAllDiv);
-                    unslottedBox.appendChild(hdr);
-                    
-                    // Generate Eject All QR (Hack: We need scanning logic to catch CMD:EJECTALL)
-                    // Currently processScan only handles CMD:SLOT/CLEAR/UNDO/EJECT. 
-                    // I will add CMD:EJECTALL to processScan below.
-                    new QRCode(qrEjectAll, {text: "CMD:EJECTALL", width: 60, height: 60});
-
                     // ITEMS
                     unslotted.forEach((item, idx) => {
                         const div = document.createElement('div');
@@ -482,11 +485,21 @@
                         unslottedBox.appendChild(div);
                         new QRCode(document.getElementById(qrId), {text: "ID:" + item.id, width: 64, height: 64});
                     });
+
+                    // DANGER ZONE (EJECT ALL)
+                    const dangerZone = document.createElement('div');
+                    dangerZone.className = "danger-zone";
+                    const qrEjectAll = document.createElement('div'); qrEjectAll.className = "bg-white p-1 rounded d-inline-block"; qrEjectAll.id = "qr-eject-all";
+                    const btnEjectAll = document.createElement('button'); btnEjectAll.className = "btn btn-danger btn-sm ms-2 fw-bold"; btnEjectAll.innerText = "EJECT ALL 💥";
+                    btnEjectAll.onclick = () => triggerEjectAll(locId);
+                    dangerZone.appendChild(qrEjectAll);
+                    dangerZone.appendChild(btnEjectAll);
+                    unslottedBox.appendChild(dangerZone);
+                    new QRCode(qrEjectAll, {text: "CMD:EJECTALL", width: 60, height: 60});
                 }
             });
         }
 
-        // --- NEW EJECT ALL FUNCTION ---
         function doEjectAll(locId) {
             setProcessing(true);
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'clear_location', location: locId}) })
@@ -498,8 +511,31 @@
             }).catch(() => setProcessing(false));
         }
 
-        // --- LEGACY EJECT ---
-        function ejectSpool(spoolId, locId) { if(locId !== "Scan") { requestConfirmation("Eject spool #" + spoolId + "?", () => { doEject(spoolId, locId); }); } else doEject(spoolId, locId); }
+        // --- UNIFIED PICK UP / EJECT ---
+        // New Param: pickup (bool) - if true, adds to buffer before ejecting
+        function ejectSpool(spoolId, locId, pickup) {
+            if (pickup) {
+                // We need color/name to add to buffer. 
+                // In list view we have it in DOM? Or just fetch it? 
+                // Simplest: Fetch spool data or rely on UI context.
+                // For now, let's assume we are in List View and do a quick hack or fetch.
+                // Actually, the simplest is to just Add to Buffer then Eject.
+                // But we need the display text/color. 
+                // Let's fetch it quickly.
+                fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: "ID:"+spoolId}) })
+                .then(r=>r.json()).then(res => {
+                    if(res.type === 'spool') {
+                        if (heldSpools.some(s => s.id === res.id)) showToast("Already in Buffer", "warning");
+                        else { heldSpools.push({id: res.id, display: res.display, color: res.color}); renderBuffer(); }
+                        doEject(spoolId, locId);
+                    }
+                });
+            } else {
+                if(locId !== "Scan") { requestConfirmation("Eject spool #" + spoolId + "?", () => { doEject(spoolId, locId); }); } 
+                else doEject(spoolId, locId);
+            }
+        }
+
         function doEject(spoolId, locId) {
             setProcessing(true);
             fetch('/api/manage_contents', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'remove', location: locId, spool_id: spoolId}) })
@@ -514,7 +550,7 @@
         const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
         const locModal = new bootstrap.Modal(document.getElementById('locModal'));
         const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
-        const confirmModal = new bootstrap.Modal(document.getElementById('confirmModal')); // Legacy delete
+        const confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
 
         function requestConfirmation(msg, callback) { document.getElementById('confirm-msg').innerText = msg; pendingConfirmCallback = callback; confirmModal.show(); }
         function confirmAction(isYes) { confirmModal.hide(); if(isYes && pendingConfirmCallback) pendingConfirmCallback(); pendingConfirmCallback = null; }
@@ -540,7 +576,11 @@
                     list.innerHTML = data.map((s, idx) => `
                         <div class="manage-item mb-3 p-2 bg-dark border border-secondary rounded d-flex justify-content-between align-items-center">
                             <div class="d-flex align-items-center"><div id="qr-man-${idx}" class="bg-white p-1 me-3 rounded"></div><div><div class="d-flex align-items-center"><div class="buffer-swatch me-2" style="width:20px;height:20px;background-color:#${s.color};"></div><span class="text-white fw-bold" style="font-size: 1.3rem;">${s.display}</span></div></div></div>
-                            <button class="btn btn-danger eject-btn" onclick="ejectSpool(${s.id}, '${locId}')">⏏️ EJECT</button></div>`).join('');
+                            <div class="d-flex gap-2">
+                                <button class="btn btn-primary fw-bold" onclick="ejectSpool(${s.id}, '${locId}', true)">✋ PICK UP</button>
+                                <button class="btn btn-outline-danger" onclick="ejectSpool(${s.id}, '${locId}', false)">🗑️</button>
+                            </div>
+                        </div>`).join('');
                     data.forEach((s, idx) => { new QRCode(document.getElementById(`qr-man-${idx}`), {text: "ID:" + s.id.toString(), width: 64, height: 64}); });
                 }
             });
