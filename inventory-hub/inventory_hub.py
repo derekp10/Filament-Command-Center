@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v136.0 (Surgical Eject Fix)"
+VERSION = "v137.0 (Undo P-Fix)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -231,7 +231,7 @@ def resolve_scan(text):
         if "CMD:CLEAR" in upper_text: return {'type': 'command', 'cmd': 'clear'}
         if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'} 
         if "CMD:CONFIRM" in upper_text: return {'type': 'command', 'cmd': 'confirm'}
-        if "CMD:EJECTALL" in upper_text: return {'type': 'command', 'cmd': 'ejectall'} # HANDLER
+        if "CMD:EJECTALL" in upper_text: return {'type': 'command', 'cmd': 'ejectall'} 
         if "CMD:SLOT:" in upper_text:
             try:
                 parts = upper_text.split(':')
@@ -245,7 +245,6 @@ def resolve_scan(text):
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
         return {'type': 'error', 'msg': 'Invalid Spool ID Format'}
 
-    # URL / LEGACY FILTER
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
         m = re.search(r'range=(\d+)', decoded, re.IGNORECASE)
         if m:
@@ -348,7 +347,9 @@ def perform_undo():
     if not UNDO_STACK: return jsonify({"success": False, "msg": "History empty."})
     last = UNDO_STACK.pop(); moves = last['moves']; target = last.get('target')
     cfg = load_config(); printer_map = cfg.get("printer_map", {})
+    
     if target in printer_map:
+        p = printer_map[target]
         try:
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                           json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
@@ -357,6 +358,7 @@ def perform_undo():
     for sid, loc in moves.items():
         requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json={"location": loc})
         if loc in printer_map:
+            p = printer_map[loc]
             try: requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)})
             except: pass
@@ -441,12 +443,10 @@ def api_manage_contents():
     spool_input = data.get('spool_id') 
     slot_arg = data.get('slot') 
 
-    # --- CRITICAL FIX FOR EJECT ALL ---
     if action == 'clear_location':
         contents = get_spools_at_location_detailed(loc_id)
         ejected_count = 0
         for spool in contents:
-            # ONLY EJECT IF SLOT IS EMPTY/NULL
             slot_val = spool.get('slot', '')
             if not slot_val or slot_val == 'None' or slot_val == '':
                 if update_spool(spool['id'], {"location": ""}):
