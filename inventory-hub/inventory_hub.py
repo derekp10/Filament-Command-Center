@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v132.0 (X-Ray Scanner)"
+VERSION = "v133.0 (Double-Tap Lookup)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -177,23 +177,17 @@ def format_spool_display(spool_data):
 def find_spool_by_legacy_id(legacy_id, strict_mode=False):
     legacy_id = str(legacy_id).strip()
     try:
+        # 1. TRY EXTERNAL ID (The "Correct" Way)
         fil_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/filament", timeout=5)
         target_filament_id = None
         
         if fil_resp.ok:
-            filaments = fil_resp.json()
-            # X-RAY LOGGING: Check what we are actually seeing
-            if len(filaments) > 0 and strict_mode:
-                logger.info(f"🔎 X-Ray: Checking {len(filaments)} filaments for external_id='{legacy_id}'")
-            
-            for fil in filaments:
+            for fil in fil_resp.json():
                 ext = str(fil.get('external_id', '')).strip().replace('"','')
                 if ext == legacy_id:
                     target_filament_id = fil['id']
                     logger.info(f"✅ Match Found! Filament {fil['id']} has external_id '{ext}'")
                     break
-        else:
-            logger.error("❌ Failed to fetch filaments from Spoolman")
         
         if target_filament_id:
             spool_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
@@ -205,12 +199,14 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
                             return spool['id']
                         candidates.append(spool['id'])
                 if candidates: return candidates[0]
-                logger.warning(f"⚠️ Found Filament {target_filament_id} but NO active spools for it.")
                 if strict_mode: return None
 
-        if not strict_mode:
-            check_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{legacy_id}", timeout=2)
-            if check_resp.ok: return int(legacy_id)
+        # 2. TRY INTERNAL ID (The "Direct" Way)
+        # If external lookup failed, maybe the number IS the Spool ID?
+        check_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{legacy_id}", timeout=2)
+        if check_resp.ok: 
+            logger.info(f"✅ Match Found! Direct Spool ID {legacy_id} exists.")
+            return int(legacy_id)
 
     except Exception as e: logger.error(f"Legacy Lookup Error: {e}")
     return None
@@ -260,12 +256,13 @@ def resolve_scan(text):
         m = re.search(r'range=(\d+)', decoded, re.IGNORECASE)
         if m:
             logger.info(f"🔎 Regex Extracted ID: {m.group(1)} from URL")
-            rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
+            # PASS strict_mode=False so it tries BOTH External and Internal ID
+            rid = find_spool_by_legacy_id(m.group(1), strict_mode=False)
             if rid: return {'type': 'spool', 'id': rid}
             else: logger.warning(f"❌ Lookup Failed for extracted ID: {m.group(1)}")
         
         # Strategy 2: Direct Match
-        rid = find_spool_by_legacy_id(text, strict_mode=True)
+        rid = find_spool_by_legacy_id(text, strict_mode=False)
         if rid: return {'type': 'spool', 'id': rid}
 
         logger.warning(f"⚠️ Scanner Rejected: '{text}'") 
