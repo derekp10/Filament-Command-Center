@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v133.0 (Double-Tap Lookup)"
+VERSION = "v136.0 (Surgical Eject Fix)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -177,7 +177,6 @@ def format_spool_display(spool_data):
 def find_spool_by_legacy_id(legacy_id, strict_mode=False):
     legacy_id = str(legacy_id).strip()
     try:
-        # 1. TRY EXTERNAL ID (The "Correct" Way)
         fil_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/filament", timeout=5)
         target_filament_id = None
         
@@ -186,7 +185,6 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
                 ext = str(fil.get('external_id', '')).strip().replace('"','')
                 if ext == legacy_id:
                     target_filament_id = fil['id']
-                    logger.info(f"✅ Match Found! Filament {fil['id']} has external_id '{ext}'")
                     break
         
         if target_filament_id:
@@ -201,12 +199,9 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
                 if candidates: return candidates[0]
                 if strict_mode: return None
 
-        # 2. TRY INTERNAL ID (The "Direct" Way)
-        # If external lookup failed, maybe the number IS the Spool ID?
-        check_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{legacy_id}", timeout=2)
-        if check_resp.ok: 
-            logger.info(f"✅ Match Found! Direct Spool ID {legacy_id} exists.")
-            return int(legacy_id)
+        if not strict_mode:
+            check_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{legacy_id}", timeout=2)
+            if check_resp.ok: return int(legacy_id)
 
     except Exception as e: logger.error(f"Legacy Lookup Error: {e}")
     return None
@@ -236,6 +231,7 @@ def resolve_scan(text):
         if "CMD:CLEAR" in upper_text: return {'type': 'command', 'cmd': 'clear'}
         if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'} 
         if "CMD:CONFIRM" in upper_text: return {'type': 'command', 'cmd': 'confirm'}
+        if "CMD:EJECTALL" in upper_text: return {'type': 'command', 'cmd': 'ejectall'} # HANDLER
         if "CMD:SLOT:" in upper_text:
             try:
                 parts = upper_text.split(':')
@@ -251,21 +247,12 @@ def resolve_scan(text):
 
     # URL / LEGACY FILTER
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
-        
-        # Strategy 1: Simple Range Match (range=123 or range=123:123)
         m = re.search(r'range=(\d+)', decoded, re.IGNORECASE)
         if m:
-            logger.info(f"🔎 Regex Extracted ID: {m.group(1)} from URL")
-            # PASS strict_mode=False so it tries BOTH External and Internal ID
-            rid = find_spool_by_legacy_id(m.group(1), strict_mode=False)
+            rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
-            else: logger.warning(f"❌ Lookup Failed for extracted ID: {m.group(1)}")
-        
-        # Strategy 2: Direct Match
-        rid = find_spool_by_legacy_id(text, strict_mode=False)
+        rid = find_spool_by_legacy_id(text, strict_mode=True)
         if rid: return {'type': 'spool', 'id': rid}
-
-        logger.warning(f"⚠️ Scanner Rejected: '{text}'") 
         return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
     if text.isdigit():
@@ -339,7 +326,6 @@ def perform_smart_move(target, raw_spools, target_slot=None):
             if update_spool(sid, {"location": target, "extra": new_extra}):
                 p = printer_map[target]
                 try:
-                    add_log_entry(f"🔌 FilaBridge: Setting {p['printer_name']} T{p['position']}...", "INFO")
                     requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                                   json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=3)
                 except: pass
@@ -364,7 +350,6 @@ def perform_undo():
     cfg = load_config(); printer_map = cfg.get("printer_map", {})
     if target in printer_map:
         try:
-            p = printer_map[target]
             requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                           json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
         except: pass
@@ -372,7 +357,6 @@ def perform_undo():
     for sid, loc in moves.items():
         requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json={"location": loc})
         if loc in printer_map:
-            p = printer_map[loc]
             try: requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)})
             except: pass
@@ -431,15 +415,8 @@ def api_delete_location():
     target = request.args.get('id', '').strip()
     if not target: return jsonify({"success": False})
     try:
-        cfg = load_config(); printer_map = cfg.get("printer_map", {})
-        if target in printer_map:
-            p = printer_map[target]
-            requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
-
         contents = get_spools_at_location(target)
         for sid in contents: update_spool(sid, {"location": ""})
-        if contents: add_log_entry(f"🏚️ Evicted {len(contents)} spools from {target}", "WARNING")
     except: pass
     
     current = load_locations_list()
@@ -464,17 +441,18 @@ def api_manage_contents():
     spool_input = data.get('spool_id') 
     slot_arg = data.get('slot') 
 
+    # --- CRITICAL FIX FOR EJECT ALL ---
     if action == 'clear_location':
-        cfg = load_config(); printer_map = cfg.get("printer_map", {})
-        if loc_id in printer_map:
-            p = printer_map[loc_id]
-            try: requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
-            except: pass
-
-        contents = get_spools_at_location(loc_id)
-        for sid in contents: update_spool(sid, {"location": ""})
-        add_log_entry(f"🧹 Cleared {len(contents)} items from {loc_id}", "WARNING")
+        contents = get_spools_at_location_detailed(loc_id)
+        ejected_count = 0
+        for spool in contents:
+            # ONLY EJECT IF SLOT IS EMPTY/NULL
+            slot_val = spool.get('slot', '')
+            if not slot_val or slot_val == 'None' or slot_val == '':
+                if update_spool(spool['id'], {"location": ""}):
+                    ejected_count += 1
+        
+        add_log_entry(f"🧹 Cleared {ejected_count} unassigned items from {loc_id}", "WARNING")
         return jsonify({"success": True})
 
     spool_id = None
@@ -492,18 +470,6 @@ def api_manage_contents():
 
     if action == 'remove':
         spool_data = get_spool(spool_id)
-        current_db_loc = spool_data.get('location', '').strip().upper()
-        cfg = load_config(); printer_map = cfg.get("printer_map", {})
-        
-        if current_db_loc in printer_map:
-            p = printer_map[current_db_loc]
-            try:
-                add_log_entry(f"🔌 Unloading FilaBridge {current_db_loc}...", "INFO")
-                resp = requests.post(f"{FILABRIDGE_API_BASE}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
-                if resp.ok: add_log_entry(f"✅ Unload OK", "INFO")
-            except Exception as e: add_log_entry(f"❌ FilaBridge Error: {e}", "ERROR")
-
         spool_extra = spool_data.get('extra', {})
         spool_extra.pop('container_slot', None)
         
