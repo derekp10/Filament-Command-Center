@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v125.0 (Hot-Seat Logic)"
+VERSION = "v131.0 (Robust Legacy Regex)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -244,13 +244,32 @@ def resolve_scan(text):
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
         return {'type': 'error', 'msg': 'Invalid Spool ID Format'}
 
+    # URL / LEGACY FILTER
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
-        m = re.search(r'range=(?:.*!)?(\d+)', decoded, re.IGNORECASE)
+        
+        # Strategy 1: Robust Regex (Handles range=123, range=A123, range=Sheet!A123)
+        # Looks for 'range=', optional junk, optional letters, then digits
+        m = re.search(r'range=(?:.*!)?[A-Za-z]*(\d+)', decoded, re.IGNORECASE)
         if m:
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
+        
+        # Strategy 2: Direct Match (Is the whole URL the external ID?)
         rid = find_spool_by_legacy_id(text, strict_mode=True)
         if rid: return {'type': 'spool', 'id': rid}
+
+        # Strategy 3: "Hail Mary" - Find ANY valid Legacy ID in the string
+        # If the URL contains "google", look for any sequence of 1-5 digits
+        if "google" in text.lower():
+             candidates = re.findall(r'(\d{1,5})', decoded)
+             for cand in candidates:
+                 # Check if this number actually maps to a spool
+                 rid = find_spool_by_legacy_id(cand, strict_mode=True)
+                 if rid: 
+                     logger.info(f"🎯 Hail Mary Scan: Found Legacy ID {cand} in URL")
+                     return {'type': 'spool', 'id': rid}
+
+        logger.warning(f"⚠️ Scanner Rejected: '{text}'") 
         return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
     if text.isdigit():
@@ -276,7 +295,6 @@ def perform_smart_move(target, raw_spools, target_slot=None):
             except: pass
         return 9999
 
-    # Note: We check capacity roughly here, but precise slot management happens below.
     max_cap = get_max_capacity(target)
     occupants = get_spools_at_location(target)
     incoming_count = 0
@@ -284,9 +302,7 @@ def perform_smart_move(target, raw_spools, target_slot=None):
         if str(s) not in [str(x) for x in occupants]: incoming_count += 1
             
     if (len(occupants) + incoming_count) > max_cap:
-        # NOTE: If we are swapping (unseating one to add another), capacity stays same.
-        # But for safety, we warn. The user can Eject first if needed.
-        pass # Allow logic to proceed, we might handle swaps below.
+        pass 
 
     spools = []
     for item in raw_spools:
@@ -308,14 +324,10 @@ def perform_smart_move(target, raw_spools, target_slot=None):
         
         new_extra = current_extra.copy()
         
-        # --- HOT SEAT LOGIC ---
         if target_slot:
-            # 1. Find who is currently sitting there
             existing_items = get_spools_at_location_detailed(target)
             for existing in existing_items:
-                # If slot matches AND it's not the spool we are moving right now
                 if str(existing.get('slot', '')).strip('"') == str(target_slot) and existing['id'] != int(sid):
-                    # 2. Kick them to "Unslotted" (Clear container_slot field)
                     logger.info(f"🪑 Unseating Spool {existing['id']} from Slot {target_slot} to make room.")
                     update_spool(existing['id'], {'extra': {'container_slot': ''}})
             
