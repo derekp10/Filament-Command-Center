@@ -49,7 +49,7 @@
         .slot-swatch { width: 35px; height: 35px; border-radius: 50%; border: 2px solid #fff; margin-bottom: 5px; }
         .slot-qr { background: white; padding: 4px; border-radius: 4px; }
         .unslotted-box { border: 2px solid #ffcc00; background: #222; padding: 10px; margin-top: 20px; border-radius: 8px; }
-        .unslotted-item { background: #333; padding: 10px; margin: 5px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; border: 1px solid #555; }
+        .unslotted-item { background: #333; padding: 10px; margin: 10px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #555; }
         .unslotted-item:hover { background: #444; border-color: #fff; }
         .modal-action-row { display: flex; justify-content: center; gap: 60px; flex-wrap: wrap; margin-top: 20px; }
         .modal-action-card { background: #333; border: 2px solid #555; border-radius: 10px; padding: 20px; display: flex; flex-direction: column; align-items: center; min-width: 180px; cursor: pointer; transition: 0.2s; }
@@ -58,6 +58,8 @@
         .modal-action-btn { width: 100%; font-size: 1.4rem; font-weight: bold; }
         .headsup-strip { background: #111; border-bottom: 1px solid #333; padding: 8px 20px; display: flex; align-items: center; justify-content: space-between; font-size: 1.2rem; color: #00d4ff; font-weight: bold; }
         .danger-zone { border: 2px solid #ff4444; background: #200; padding: 15px; border-radius: 8px; margin-top: 20px; text-align: center; }
+        .control-group { display: flex; align-items: center; gap: 15px; background: #222; padding: 5px 15px; border-radius: 8px; border: 1px solid #444; }
+        .action-label { font-size: 0.8rem; color: #aaa; text-align: center; margin-top: 2px; }
     </style>
 </head>
 <body>
@@ -145,7 +147,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v136.0";
+        const DASHBOARD_VERSION = "v138.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         window.onload = function() {
@@ -255,6 +257,20 @@
                 }
                 return; 
             }
+            
+            // TRASH SCAN INTERCEPTOR
+            if (upper.startsWith("CMD:TRASH:")) {
+                const parts = upper.split(':');
+                if (parts.length === 3) {
+                    const trashId = parts[2];
+                    const locId = document.getElementById('manage-loc-id').value;
+                    // Only process trash if we are in manage mode for context
+                    if (locId && document.getElementById('manageModal').classList.contains('show')) {
+                        ejectSpool(trashId, locId, false); // False = No Pickup
+                    }
+                }
+                return;
+            }
 
             setProcessing(true);
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) })
@@ -282,8 +298,12 @@
                 if (ejectMode && res.type === 'spool') { ejectSpool(res.id, "Scan", false); ejectMode = false; return; }
                 
                 if (res.type === 'spool') {
+                    // "Pick Up" Behavior via Main Scan
                     if (heldSpools.some(s => s.id === res.id)) showToast("⚠️ ALREADY IN BUFFER", "warning");
-                    else { heldSpools.push({id: res.id, display: res.display, color: res.color}); renderBuffer(); }
+                    else { 
+                        heldSpools.unshift({id: res.id, display: res.display, color: res.color}); // ACTIVE FIRST
+                        renderBuffer(); 
+                    }
                 } else if (res.type === 'location') {
                     openManage(res.id);
                 } else if (res.type === 'error') {
@@ -371,7 +391,7 @@
                 if (itemInSlot) {
                      promptAction("Slot Action", `Slot ${slotNum}: <b>${itemInSlot.display}</b>`, [
                         { label: "✋ Pick Up", cls: "success", action: () => {
-                            heldSpools.push({id: itemInSlot.id, display: itemInSlot.display, color: itemInSlot.color});
+                            heldSpools.unshift({id: itemInSlot.id, display: itemInSlot.display, color: itemInSlot.color}); // ACTIVE FIRST
                             renderBuffer();
                             doEject(itemInSlot.id, locId, false);
                         }},
@@ -471,24 +491,44 @@
                     unslotted.forEach((item, idx) => {
                         const div = document.createElement('div');
                         div.className = "unslotted-item";
-                        const qrId = `qr-unslot-${idx}`;
-                        div.innerHTML = `<div class="d-flex align-items-center"><div id="${qrId}" class="bg-white p-1 me-2 rounded"></div><div class="buffer-swatch me-2" style="width:25px;height:25px;background-color:#${item.color};"></div><span class="text-white fw-bold">${item.display}</span></div><div class="d-flex gap-2"><button class="btn btn-primary fw-bold ms-2" onclick="ejectSpool(${item.id}, '${locId}', true)">✋ PICK UP</button><button class="btn btn-outline-danger" onclick="ejectSpool(${item.id}, '${locId}', false)">🗑️</button></div>`;
-                        // Remove onclick on the main div to avoid conflict with buttons
-                        // div.onclick = ... removed
+                        
+                        // ID QR (Pick Up)
+                        const qrPickId = `qr-pick-${idx}`;
+                        // Trash QR
+                        const qrTrashId = `qr-trash-${idx}`;
+                        
+                        div.innerHTML = `
+                            <div class="d-flex align-items-center">
+                                <div class="buffer-swatch me-3" style="width:30px;height:30px;background-color:#${item.color};border:2px solid white;"></div>
+                                <span class="text-white fw-bold fs-5">${item.display}</span>
+                            </div>
+                            <div class="control-group">
+                                <div class="text-center">
+                                    <div id="${qrPickId}" class="bg-white p-1 rounded d-inline-block"></div>
+                                    <div class="action-label">PICK UP</div>
+                                </div>
+                                <button class="btn btn-primary fw-bold" onclick="ejectSpool(${item.id}, '${locId}', true)">✋</button>
+                                <div style="width:20px;"></div>
+                                <button class="btn btn-danger fw-bold" onclick="ejectSpool(${item.id}, '${locId}', false)">🗑️</button>
+                                <div class="text-center">
+                                    <div id="${qrTrashId}" class="bg-white p-1 rounded d-inline-block"></div>
+                                    <div class="action-label">TRASH</div>
+                                </div>
+                            </div>
+                        `;
+                        
                         unslottedBox.appendChild(div);
-                        new QRCode(document.getElementById(qrId), {text: "ID:" + item.id, width: 64, height: 64});
+                        new QRCode(document.getElementById(qrPickId), {text: "ID:" + item.id, width: 50, height: 50});
+                        new QRCode(document.getElementById(qrTrashId), {text: "CMD:TRASH:" + item.id, width: 50, height: 50});
                     });
 
                     // DANGER ZONE (EJECT ALL)
                     const dangerZone = document.createElement('div');
                     dangerZone.className = "danger-zone";
-                    const qrEjectAll = document.createElement('div'); qrEjectAll.className = "bg-white p-1 rounded d-inline-block"; qrEjectAll.id = "qr-eject-all";
-                    const btnEjectAll = document.createElement('button'); btnEjectAll.className = "btn btn-danger btn-sm ms-2 fw-bold"; btnEjectAll.innerText = "EJECT ALL 💥";
-                    btnEjectAll.onclick = () => triggerEjectAll(locId);
-                    dangerZone.appendChild(qrEjectAll);
-                    dangerZone.appendChild(btnEjectAll);
+                    dangerZone.innerHTML = `<h4 class="text-danger fw-bold">DANGER ZONE</h4><div class="d-flex justify-content-center align-items-center gap-3"><div id="qr-eject-all" class="bg-white p-2 rounded"></div><button class="btn btn-danger btn-lg fw-bold" onclick="triggerEjectAll('${locId}')">EJECT ALL 💥</button></div><div class="text-muted mt-1 small">SCAN TO NUKE UNSLOTTED</div>`;
+                    
                     unslottedBox.appendChild(dangerZone);
-                    new QRCode(qrEjectAll, {text: "CMD:EJECTALL", width: 60, height: 60});
+                    new QRCode(document.getElementById("qr-eject-all"), {text: "CMD:EJECTALL", width: 100, height: 100});
                 }
             });
         }
@@ -505,13 +545,18 @@
         }
 
         // --- UNIFIED PICK UP / EJECT ---
+        // Pickup=True -> Add to Buffer Index 0, then Eject from Loc
+        // Pickup=False -> Just Eject from Loc (Trash)
         function ejectSpool(spoolId, locId, pickup) {
             if (pickup) {
                 fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: "ID:"+spoolId}) })
                 .then(r=>r.json()).then(res => {
                     if(res.type === 'spool') {
                         if (heldSpools.some(s => s.id === res.id)) showToast("Already in Buffer", "warning");
-                        else { heldSpools.push({id: res.id, display: res.display, color: res.color}); renderBuffer(); }
+                        else { 
+                            heldSpools.unshift({id: res.id, display: res.display, color: res.color}); // ACTIVE FIRST
+                            renderBuffer(); 
+                        }
                         doEject(spoolId, locId);
                     }
                 });
