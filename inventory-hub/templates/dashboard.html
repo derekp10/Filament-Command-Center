@@ -16,7 +16,8 @@
         .status-off { background-color: #ff4444; box-shadow: 0 0 5px #ff4444; }
         .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
         .col-logs { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
-        .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.2rem; line-height: 1.6; }
+        /* WRAP LOGS FIX */
+        .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; line-height: 1.4; white-space: pre-wrap; word-break: break-all; }
         .log-INFO { color: #00ff00; } .log-WARNING { color: #ffcc00; } .log-ERROR { color: #ff4444; }
         .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
         .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; font-weight: bold; color: #00d4ff; font-size: 1.2rem; display: flex; justify-content: space-between; }
@@ -49,7 +50,6 @@
         .unslotted-box { border: 2px solid #ffcc00; background: #222; padding: 10px; margin-top: 20px; border-radius: 8px; }
         .unslotted-item { background: #333; padding: 10px; margin: 5px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; border: 1px solid #555; }
         .unslotted-item:hover { background: #444; border-color: #fff; }
-        /* MODAL ACTION STYLES */
         .modal-action-row { display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
         .modal-action-card { background: #333; border: 2px solid #555; border-radius: 10px; padding: 15px; display: flex; flex-direction: column; align-items: center; min-width: 150px; cursor: pointer; transition: 0.2s; }
         .modal-action-card:hover { background: #444; border-color: #fff; }
@@ -114,8 +114,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // --- DASHBOARD VERSION CONTROL ---
-        const DASHBOARD_VERSION = "v130.0";
+        const DASHBOARD_VERSION = "v131.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         window.onload = function() {
@@ -137,7 +136,7 @@
         let logsPaused = false;
         let currentGridState = {};
         let isProcessing = false;
-        let modalCallbacks = []; // Stores actions for modal QR codes
+        let modalCallbacks = []; 
 
         window.addEventListener('blur', () => { document.getElementById('focus-guard').style.display = 'flex'; });
         window.addEventListener('focus', () => { document.getElementById('focus-guard').style.display = 'none'; });
@@ -183,7 +182,6 @@
         }
 
         function processScan(text) {
-            // --- MODAL INTERCEPTOR ---
             if(document.getElementById('actionModal').classList.contains('show')) {
                 const upper = text.toUpperCase();
                 if (upper === 'CMD:MODAL:CANCEL') { actionModal.hide(); return; }
@@ -194,7 +192,7 @@
                         modalCallbacks[idx]();
                     }
                 }
-                return; // Ignore other scans while modal is open
+                return; 
             }
 
             setProcessing(true);
@@ -231,21 +229,19 @@
             document.getElementById('action-msg').innerHTML = msg;
             const btnContainer = document.getElementById('action-buttons');
             btnContainer.innerHTML = "";
-            modalCallbacks = []; // Reset callbacks
+            modalCallbacks = []; 
 
             buttons.forEach((btn, idx) => {
-                modalCallbacks.push(btn.action); // Store callback for scanner
+                modalCallbacks.push(btn.action); 
                 
                 const card = document.createElement('div');
                 card.className = "modal-action-card";
                 card.onclick = () => { actionModal.hide(); btn.action(); };
                 
-                // QR Code Container
                 const qrDiv = document.createElement('div');
                 qrDiv.className = "modal-action-qr";
                 qrDiv.id = `qr-mod-${idx}`;
                 
-                // Button
                 const b = document.createElement('button');
                 b.className = `btn btn-${btn.cls || 'primary'} modal-action-btn`;
                 b.innerHTML = btn.label;
@@ -253,8 +249,6 @@
                 card.appendChild(qrDiv);
                 card.appendChild(b);
                 btnContainer.appendChild(card);
-                
-                // Generate QR: CMD:MODAL:0, CMD:MODAL:1, etc.
                 new QRCode(qrDiv, {text: `CMD:MODAL:${idx}`, width: 100, height: 100});
             });
             actionModal.show();

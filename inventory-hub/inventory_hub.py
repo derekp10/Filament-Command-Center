@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v131.0 (Robust Legacy Regex)"
+VERSION = "v132.0 (X-Ray Scanner)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -125,7 +125,6 @@ def update_spool(sid, data):
         resp = requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{sid}", json=clean_data)
         if not resp.ok:
             logger.error(f"❌ DB REJECTED: {resp.status_code} | Msg: {resp.text}")
-            logger.error(f"   Payload: {json.dumps(clean_data)}")
             add_log_entry(f"❌ DB Error {resp.status_code}: {resp.text[:50]}...", "ERROR")
             return False
         return True
@@ -180,12 +179,21 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
     try:
         fil_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/filament", timeout=5)
         target_filament_id = None
+        
         if fil_resp.ok:
-            for fil in fil_resp.json():
+            filaments = fil_resp.json()
+            # X-RAY LOGGING: Check what we are actually seeing
+            if len(filaments) > 0 and strict_mode:
+                logger.info(f"🔎 X-Ray: Checking {len(filaments)} filaments for external_id='{legacy_id}'")
+            
+            for fil in filaments:
                 ext = str(fil.get('external_id', '')).strip().replace('"','')
                 if ext == legacy_id:
                     target_filament_id = fil['id']
+                    logger.info(f"✅ Match Found! Filament {fil['id']} has external_id '{ext}'")
                     break
+        else:
+            logger.error("❌ Failed to fetch filaments from Spoolman")
         
         if target_filament_id:
             spool_resp = requests.get(f"{SPOOLMAN_URL}/api/v1/spool", timeout=5)
@@ -197,6 +205,7 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
                             return spool['id']
                         candidates.append(spool['id'])
                 if candidates: return candidates[0]
+                logger.warning(f"⚠️ Found Filament {target_filament_id} but NO active spools for it.")
                 if strict_mode: return None
 
         if not strict_mode:
@@ -247,27 +256,17 @@ def resolve_scan(text):
     # URL / LEGACY FILTER
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
         
-        # Strategy 1: Robust Regex (Handles range=123, range=A123, range=Sheet!A123)
-        # Looks for 'range=', optional junk, optional letters, then digits
-        m = re.search(r'range=(?:.*!)?[A-Za-z]*(\d+)', decoded, re.IGNORECASE)
+        # Strategy 1: Simple Range Match (range=123 or range=123:123)
+        m = re.search(r'range=(\d+)', decoded, re.IGNORECASE)
         if m:
+            logger.info(f"🔎 Regex Extracted ID: {m.group(1)} from URL")
             rid = find_spool_by_legacy_id(m.group(1), strict_mode=True)
             if rid: return {'type': 'spool', 'id': rid}
+            else: logger.warning(f"❌ Lookup Failed for extracted ID: {m.group(1)}")
         
-        # Strategy 2: Direct Match (Is the whole URL the external ID?)
+        # Strategy 2: Direct Match
         rid = find_spool_by_legacy_id(text, strict_mode=True)
         if rid: return {'type': 'spool', 'id': rid}
-
-        # Strategy 3: "Hail Mary" - Find ANY valid Legacy ID in the string
-        # If the URL contains "google", look for any sequence of 1-5 digits
-        if "google" in text.lower():
-             candidates = re.findall(r'(\d{1,5})', decoded)
-             for cand in candidates:
-                 # Check if this number actually maps to a spool
-                 rid = find_spool_by_legacy_id(cand, strict_mode=True)
-                 if rid: 
-                     logger.info(f"🎯 Hail Mary Scan: Found Legacy ID {cand} in URL")
-                     return {'type': 'spool', 'id': rid}
 
         logger.warning(f"⚠️ Scanner Rejected: '{text}'") 
         return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
