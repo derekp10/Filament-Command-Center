@@ -40,10 +40,17 @@
         .cmd-btn:active { background-color: #333; transform: scale(0.95); }
         .qr-label { font-size: 0.9rem; color: #ccc; text-transform: uppercase; font-weight: bold; margin-top: 5px; letter-spacing: 0.5px; }
         
-        /* MODALS & Z-INDEX */
+        /* MODALS & Z-INDEX HIERARCHY */
         .modal-content { background-color: #121212; color: #fff; border: 1px solid #555; }
-        #actionModal, #safetyModal, #confirmModal { z-index: 1070; } 
-        #manageModal { z-index: 1050; }
+        
+        /* Level 1: Location List & Edit */
+        #locMgrModal, #locModal { z-index: 1055; }
+        
+        /* Level 2: Manage Window (Must be higher than List) */
+        #manageModal { z-index: 1065; }
+        
+        /* Level 3: Alerts/Confirmations (Must be highest) */
+        #actionModal, #safetyModal, #confirmModal { z-index: 1075; } 
         
         /* SLOTS */
         .slot-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px; }
@@ -183,7 +190,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v146.0";
+        const DASHBOARD_VERSION = "v146.1";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // Global Declarations (Bulletproof Init)
