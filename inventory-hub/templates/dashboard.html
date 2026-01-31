@@ -190,7 +190,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v146.1";
+        const DASHBOARD_VERSION = "v146.2";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // Global Declarations (Bulletproof Init)
@@ -551,6 +551,11 @@
             const success = refreshManageView(locId);
             if(success) manageModal.show();
             else showToast(`Error: Location '${locId}' data not found.`, 'error');
+        }
+
+        function closeManage() {
+            manageModal.hide();
+            fetchLocations();
         }
 
         function refreshManageView(locId) {
