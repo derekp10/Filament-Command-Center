@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v137.0 (Undo P-Fix)"
+VERSION = "v140.0 (Smart Boomerang)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -319,6 +319,7 @@ def perform_smart_move(target, raw_spools, target_slot=None):
 
         if target in printer_map:
             src_info = loc_info_map.get(current_loc)
+            # SMART SOURCE: Save where it came from if it's a Box
             if src_info and src_info.get('Type') == 'Dryer Box':
                 new_extra['physical_source'] = current_loc
             
@@ -365,6 +366,33 @@ def perform_undo():
             
     add_log_entry(f"↩️ Undid: {last['summary']}", "WARNING")
     return jsonify({"success": True})
+
+# --- SMART EJECT LOGIC ---
+def perform_smart_eject(spool_id):
+    spool_data = get_spool(spool_id)
+    if not spool_data: return False
+    
+    extra = spool_data.get('extra', {})
+    saved_source = extra.get('physical_source')
+    
+    # Clean up fields
+    extra.pop('container_slot', None)
+    
+    if saved_source:
+        # BOOMERANG: Return to Sender
+        if saved_source.startswith('"'): saved_source = saved_source.strip('"') # Clean quotes
+        
+        extra.pop('physical_source', None) # Clear the note
+        if update_spool(spool_id, {"location": saved_source, "extra": extra}):
+            add_log_entry(f"↩️ Returned #{spool_id} -> {saved_source}", "WARNING")
+            return True
+    else:
+        # DUMP: Eject to Wild
+        if update_spool(spool_id, {"location": "", "extra": extra}):
+            add_log_entry(f"⏏️ Ejected #{spool_id}", "WARNING")
+            return True
+            
+    return False
 
 # --- ROUTES ---
 logger.info(f"🛠️ Server {VERSION} Started")
@@ -448,11 +476,11 @@ def api_manage_contents():
         ejected_count = 0
         for spool in contents:
             slot_val = spool.get('slot', '')
+            # Only affect Unslotted items
             if not slot_val or slot_val == 'None' or slot_val == '':
-                if update_spool(spool['id'], {"location": ""}):
+                if perform_smart_eject(spool['id']):
                     ejected_count += 1
         
-        add_log_entry(f"🧹 Cleared {ejected_count} unassigned items from {loc_id}", "WARNING")
         return jsonify({"success": True})
 
     spool_id = None
@@ -469,12 +497,7 @@ def api_manage_contents():
     if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
 
     if action == 'remove':
-        spool_data = get_spool(spool_id)
-        spool_extra = spool_data.get('extra', {})
-        spool_extra.pop('container_slot', None)
-        
-        if update_spool(spool_id, {"location": "", "extra": spool_extra}):
-            add_log_entry(f"⏏️ Ejected #{spool_id}", "WARNING")
+        if perform_smart_eject(spool_id):
             return jsonify({"success": True})
         else:
             return jsonify({"success": False, "msg": "DB Update Failed"})
