@@ -49,7 +49,7 @@
         .slot-swatch { width: 35px; height: 35px; border-radius: 50%; border: 2px solid #fff; margin-bottom: 5px; }
         .slot-qr { background: white; padding: 4px; border-radius: 4px; }
         .unslotted-box { border: 2px solid #ffcc00; background: #222; padding: 10px; margin-top: 20px; border-radius: 8px; }
-        .unslotted-item { background: #333; padding: 10px; margin: 10px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #555; }
+        .unslotted-item { background: #333; padding: 10px; margin: 5px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; border: 1px solid #555; }
         .unslotted-item:hover { background: #444; border-color: #fff; }
         .modal-action-row { display: flex; justify-content: center; gap: 60px; flex-wrap: wrap; margin-top: 20px; }
         .modal-action-card { background: #333; border: 2px solid #555; border-radius: 10px; padding: 20px; display: flex; flex-direction: column; align-items: center; min-width: 180px; cursor: pointer; transition: 0.2s; }
@@ -101,7 +101,6 @@
     <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-muted" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
     
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div>
-        
         <div id="headsup-buffer" class="headsup-strip" style="display:none;">
             <div class="d-flex align-items-center flex-grow-1">
                 <span class="me-2" id="headsup-counter">✋ Holding:</span>
@@ -113,7 +112,6 @@
                 <div id="qr-cycle" class="bg-white p-1 rounded" style="width:45px;height:45px;cursor:pointer;" onclick="cycleBuffer()"></div>
             </div>
         </div>
-
         <div class="modal-body">
         <div id="manage-grid-view" style="display:none;">
             <div class="alert alert-info py-1 mb-2 small text-center">Tap button or scan slot QR (CMD:SLOT:X)</div>
@@ -124,12 +122,10 @@
             <div id="manage-contents-list" class="mb-4"></div>
         </div>
         <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div>
-        
         <div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary">
             <button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button>
             <div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div>
         </div>
-        
         <input type="hidden" id="manage-loc-id"></div></div></div></div>
     
     <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-3 mb-4"></p><div id="action-buttons" class="modal-action-row"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
@@ -138,7 +134,8 @@
         <div class="modal-action-card" onclick="confirmSafety(false)" style="border-color:#ff4444;">
             <div id="qr-safety-no" class="modal-action-qr"></div><button class="btn btn-secondary modal-action-btn">❌ NO</button>
         </div>
-        <div style="width: 150px;"></div> <div class="modal-action-card" onclick="confirmSafety(true)" style="border-color:#00ff00;">
+        <div style="width: 150px;"></div>
+        <div class="modal-action-card" onclick="confirmSafety(true)" style="border-color:#00ff00;">
             <div id="qr-safety-yes" class="modal-action-qr"></div><button class="btn btn-danger modal-action-btn">✅ YES</button>
         </div>
     </div></div></div></div></div>
@@ -147,7 +144,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v138.0";
+        const DASHBOARD_VERSION = "v139.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         window.onload = function() {
@@ -155,7 +152,6 @@
             new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             
-            // Safety & Nav
             new QRCode(document.getElementById("qr-safety-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
             new QRCode(document.getElementById("qr-safety-no"), {text: "CMD:CANCEL", width: 120, height: 120});
             new QRCode(document.getElementById("qr-modal-cancel"), {text: "CMD:MODAL:CANCEL", width: 80, height: 80});
@@ -264,9 +260,8 @@
                 if (parts.length === 3) {
                     const trashId = parts[2];
                     const locId = document.getElementById('manage-loc-id').value;
-                    // Only process trash if we are in manage mode for context
                     if (locId && document.getElementById('manageModal').classList.contains('show')) {
-                        ejectSpool(trashId, locId, false); // False = No Pickup
+                        ejectSpool(trashId, locId, false); 
                     }
                 }
                 return;
@@ -298,16 +293,48 @@
                 if (ejectMode && res.type === 'spool') { ejectSpool(res.id, "Scan", false); ejectMode = false; return; }
                 
                 if (res.type === 'spool') {
-                    // "Pick Up" Behavior via Main Scan
                     if (heldSpools.some(s => s.id === res.id)) showToast("⚠️ ALREADY IN BUFFER", "warning");
                     else { 
-                        heldSpools.unshift({id: res.id, display: res.display, color: res.color}); // ACTIVE FIRST
+                        heldSpools.unshift({id: res.id, display: res.display, color: res.color}); 
                         renderBuffer(); 
                     }
                 } else if (res.type === 'location') {
-                    openManage(res.id);
+                    // CONTEXT AWARE: Holding Items? -> Assign. Else -> Open.
+                    if (heldSpools.length > 0) {
+                        performContextAssign(res.id);
+                    } else {
+                        openManage(res.id);
+                    }
                 } else if (res.type === 'error') {
                      showToast(res.msg, "error");
+                }
+            }).catch(() => setProcessing(false));
+        }
+
+        function performContextAssign(targetLoc) {
+            if(heldSpools.length === 0) return;
+            const spool = heldSpools[0]; // Active item (Index 0)
+            
+            // Check for Smart Move API
+            setProcessing(true);
+            fetch('/api/smart_move', { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify({location: targetLoc, spools: [spool.id]})
+            }).then(r => r.json()).then(res => {
+                setProcessing(false);
+                if (res.status === 'success') {
+                    showToast(`Assigned ${spool.display} to ${targetLoc}`, "success");
+                    heldSpools.shift(); // Remove from buffer on success
+                    renderBuffer();
+                    
+                    // If we are currently managing the target location, refresh the view
+                    const currentLoc = document.getElementById('manage-loc-id').value;
+                    if (currentLoc === targetLoc && document.getElementById('manageModal').classList.contains('show')) {
+                        refreshManageView(targetLoc);
+                    }
+                } else {
+                    showToast(res.msg, "error");
                 }
             }).catch(() => setProcessing(false));
         }
@@ -491,10 +518,7 @@
                     unslotted.forEach((item, idx) => {
                         const div = document.createElement('div');
                         div.className = "unslotted-item";
-                        
-                        // ID QR (Pick Up)
                         const qrPickId = `qr-pick-${idx}`;
-                        // Trash QR
                         const qrTrashId = `qr-trash-${idx}`;
                         
                         div.innerHTML = `
@@ -544,9 +568,6 @@
             }).catch(() => setProcessing(false));
         }
 
-        // --- UNIFIED PICK UP / EJECT ---
-        // Pickup=True -> Add to Buffer Index 0, then Eject from Loc
-        // Pickup=False -> Just Eject from Loc (Trash)
         function ejectSpool(spoolId, locId, pickup) {
             if (pickup) {
                 fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: "ID:"+spoolId}) })
@@ -554,7 +575,7 @@
                     if(res.type === 'spool') {
                         if (heldSpools.some(s => s.id === res.id)) showToast("Already in Buffer", "warning");
                         else { 
-                            heldSpools.unshift({id: res.id, display: res.display, color: res.color}); // ACTIVE FIRST
+                            heldSpools.unshift({id: res.id, display: res.display, color: res.color}); 
                             renderBuffer(); 
                         }
                         doEject(spoolId, locId);
