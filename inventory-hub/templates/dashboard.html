@@ -60,6 +60,8 @@
         .danger-zone { border: 2px solid #ff4444; background: #200; padding: 15px; border-radius: 8px; margin-top: 20px; text-align: center; }
         .control-group { display: flex; align-items: center; gap: 15px; background: #222; padding: 5px 15px; border-radius: 8px; border: 1px solid #444; }
         .action-label { font-size: 0.8rem; color: #aaa; text-align: center; margin-top: 2px; }
+        .next-preview { font-size: 0.9rem; color: #888; margin-left: 15px; display: flex; align-items: center; }
+        .next-swatch { width: 15px; height: 15px; border-radius: 50%; border: 1px solid #fff; margin: 0 5px; }
     </style>
 </head>
 <body>
@@ -101,17 +103,26 @@
     <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-muted" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
     
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div>
+        
         <div id="headsup-buffer" class="headsup-strip" style="display:none;">
             <div class="d-flex align-items-center flex-grow-1">
-                <span class="me-2" id="headsup-counter">✋ Holding:</span>
+                <span class="me-2 text-warning fw-bold">✋ READY:</span>
                 <div id="headsup-swatch" style="width:30px;height:30px;border-radius:50%;border:2px solid #fff;margin-right:10px;"></div>
-                <span id="headsup-text" class="text-white"></span>
+                <span id="headsup-text" class="text-white fw-bold me-3"></span>
+                
+                <div id="headsup-next" class="next-preview" style="display:none;">
+                    <span>Next:</span>
+                    <div id="headsup-next-swatch" class="next-swatch"></div>
+                    <span id="headsup-next-text"></span>
+                    <span id="headsup-count" class="badge bg-secondary ms-2"></span>
+                </div>
             </div>
             <div class="d-flex align-items-center">
                 <button class="btn btn-sm btn-outline-info me-2 fw-bold" onclick="cycleBuffer()">🔁 CYCLE</button>
                 <div id="qr-cycle" class="bg-white p-1 rounded" style="width:45px;height:45px;cursor:pointer;" onclick="cycleBuffer()"></div>
             </div>
         </div>
+
         <div class="modal-body">
         <div id="manage-grid-view" style="display:none;">
             <div class="alert alert-info py-1 mb-2 small text-center">Tap button or scan slot QR (CMD:SLOT:X)</div>
@@ -122,10 +133,12 @@
             <div id="manage-contents-list" class="mb-4"></div>
         </div>
         <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div>
+        
         <div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary">
             <button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button>
             <div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div>
         </div>
+        
         <input type="hidden" id="manage-loc-id"></div></div></div></div>
     
     <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-3 mb-4"></p><div id="action-buttons" class="modal-action-row"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
@@ -134,8 +147,7 @@
         <div class="modal-action-card" onclick="confirmSafety(false)" style="border-color:#ff4444;">
             <div id="qr-safety-no" class="modal-action-qr"></div><button class="btn btn-secondary modal-action-btn">❌ NO</button>
         </div>
-        <div style="width: 150px;"></div>
-        <div class="modal-action-card" onclick="confirmSafety(true)" style="border-color:#00ff00;">
+        <div style="width: 150px;"></div> <div class="modal-action-card" onclick="confirmSafety(true)" style="border-color:#00ff00;">
             <div id="qr-safety-yes" class="modal-action-qr"></div><button class="btn btn-danger modal-action-btn">✅ YES</button>
         </div>
     </div></div></div></div></div>
@@ -144,7 +156,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v139.0";
+        const DASHBOARD_VERSION = "v141.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         window.onload = function() {
@@ -152,6 +164,7 @@
             new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             
+            // Safety & Nav
             new QRCode(document.getElementById("qr-safety-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
             new QRCode(document.getElementById("qr-safety-no"), {text: "CMD:CANCEL", width: 120, height: 120});
             new QRCode(document.getElementById("qr-modal-cancel"), {text: "CMD:MODAL:CANCEL", width: 80, height: 80});
@@ -226,9 +239,31 @@
                 
                 // Heads-Up Strip
                 headsUp.style.display = 'flex';
-                document.getElementById('headsup-counter').innerText = `✋ Holding (${1} of ${heldSpools.length}):`;
+                
+                // Active Item
                 document.getElementById('headsup-swatch').style.backgroundColor = `#${heldSpools[0].color}`;
                 document.getElementById('headsup-text').innerText = heldSpools[0].display;
+
+                // Preview Next
+                const previewDiv = document.getElementById('headsup-next');
+                if (heldSpools.length > 1) {
+                    previewDiv.style.display = 'flex';
+                    document.getElementById('headsup-next-swatch').style.backgroundColor = `#${heldSpools[1].color}`;
+                    // Shorten name if too long for preview
+                    let nextName = heldSpools[1].display;
+                    if(nextName.length > 15) nextName = nextName.substring(0, 15) + "...";
+                    
+                    document.getElementById('headsup-next-text').innerText = nextName;
+                    
+                    if (heldSpools.length > 2) {
+                        document.getElementById('headsup-count').innerText = `+${heldSpools.length - 2} more`;
+                        document.getElementById('headsup-count').style.display = 'inline-block';
+                    } else {
+                        document.getElementById('headsup-count').style.display = 'none';
+                    }
+                } else {
+                    previewDiv.style.display = 'none';
+                }
                 
             } else { 
                 zone.innerHTML = `<div class="text-center text-muted mt-5"><h3>Buffer Empty</h3><p>Scan a Spool or Location</p></div>`; 
