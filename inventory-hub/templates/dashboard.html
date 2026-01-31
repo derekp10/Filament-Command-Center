@@ -22,14 +22,13 @@
         .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; line-height: 1.4; white-space: pre-wrap; word-break: break-all; color: #eee; }
         .log-INFO { color: #00ff00; } .log-WARNING { color: #ffcc00; } .log-ERROR { color: #ff4444; }
         
-        /* BUFFER ZONE (Restored Sizes) */
+        /* BUFFER ZONE */
         .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; font-weight: bold; color: #00d4ff; font-size: 1.2rem; display: flex; justify-content: space-between; }
         .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
         
         .buffer-item { background: #222; border: 1px solid #555; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; opacity: 0.8; }
         .buffer-item.active-item { border: 2px solid #00ff00; opacity: 1.0; box-shadow: 0 0 10px rgba(0, 255, 0, 0.2); background: #2a2a2a; }
         
-        /* Fixed Swatches & Big Text */
         .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; flex-shrink: 0; } 
         .buffer-text { font-size: 1.6rem; color: white; font-weight: bold; margin-left: 15px; }
         .buffer-info { display: flex; align-items: center; }
@@ -43,7 +42,6 @@
         
         /* MODALS & Z-INDEX */
         .modal-content { background-color: #121212; color: #fff; border: 1px solid #555; }
-        /* Alert Modals ON TOP */
         #actionModal, #safetyModal, #confirmModal { z-index: 1070; } 
         #manageModal { z-index: 1050; }
         
@@ -185,30 +183,11 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v144.0";
+        const DASHBOARD_VERSION = "v146.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
-        window.onload = function() {
-            new QRCode(document.getElementById("qr-undo"), {text: "CMD:UNDO", width: 90, height: 90});
-            new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
-            new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
-            
-            new QRCode(document.getElementById("qr-safety-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
-            new QRCode(document.getElementById("qr-safety-no"), {text: "CMD:CANCEL", width: 120, height: 120});
-            
-            // Confirm Modal QRs
-            new QRCode(document.getElementById("qr-confirm-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
-            new QRCode(document.getElementById("qr-confirm-no"), {text: "CMD:CANCEL", width: 120, height: 120});
-
-            new QRCode(document.getElementById("qr-modal-cancel"), {text: "CMD:MODAL:CANCEL", width: 80, height: 80});
-            new QRCode(document.getElementById("qr-done"), {text: "CMD:DONE", width: 45, height: 45});
-            
-            new QRCode(document.getElementById("qr-prev"), {text: "CMD:PREV", width: 45, height: 45});
-            new QRCode(document.getElementById("qr-next"), {text: "CMD:NEXT", width: 45, height: 45});
-
-            document.getElementById("manual-spool-id").addEventListener("keydown", function(event) { if (event.key === "Enter") { event.preventDefault(); manualAddSpool(); }});
-        };
-        
+        // Global Declarations (Bulletproof Init)
+        let locMgrModal, locModal, manageModal, confirmModal, actionModal, safetyModal;
         let scanBuffer = [];
         let bufferTimeout;
         let heldSpools = []; 
@@ -222,6 +201,36 @@
         let isProcessing = false;
         let modalCallbacks = []; 
 
+        window.onload = function() {
+            // INIT MODALS SAFELY
+            locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
+            locModal = new bootstrap.Modal(document.getElementById('locModal'));
+            manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
+            confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
+            actionModal = new bootstrap.Modal(document.getElementById('actionModal'));
+            safetyModal = new bootstrap.Modal(document.getElementById('safetyModal'));
+
+            // INIT QRS
+            new QRCode(document.getElementById("qr-undo"), {text: "CMD:UNDO", width: 90, height: 90});
+            new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
+            new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
+            new QRCode(document.getElementById("qr-safety-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
+            new QRCode(document.getElementById("qr-safety-no"), {text: "CMD:CANCEL", width: 120, height: 120});
+            new QRCode(document.getElementById("qr-confirm-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
+            new QRCode(document.getElementById("qr-confirm-no"), {text: "CMD:CANCEL", width: 120, height: 120});
+            new QRCode(document.getElementById("qr-modal-cancel"), {text: "CMD:MODAL:CANCEL", width: 80, height: 80});
+            new QRCode(document.getElementById("qr-done"), {text: "CMD:DONE", width: 45, height: 45});
+            new QRCode(document.getElementById("qr-prev"), {text: "CMD:PREV", width: 45, height: 45});
+            new QRCode(document.getElementById("qr-next"), {text: "CMD:NEXT", width: 45, height: 45});
+
+            document.getElementById("manual-spool-id").addEventListener("keydown", function(event) { 
+                if (event.key === "Enter") { 
+                    event.preventDefault(); 
+                    manualAddSpool(); 
+                }
+            });
+        };
+        
         window.addEventListener('blur', () => { document.getElementById('focus-guard').style.display = 'flex'; });
         window.addEventListener('focus', () => { document.getElementById('focus-guard').style.display = 'none'; });
 
@@ -229,8 +238,16 @@
             if (document.getElementById('focus-guard').style.display === 'flex') return;
             if (isProcessing) return; 
             if (e.target.tagName === 'INPUT') return; 
-            if (e.key === 'Enter') { e.preventDefault(); if (scanBuffer.length > 0) processScan(scanBuffer); scanBuffer = ""; } 
-            else if (e.key.length === 1) { scanBuffer += e.key; clearTimeout(bufferTimeout); bufferTimeout = setTimeout(() => { scanBuffer = ""; }, 2000); }
+            if (e.key === 'Enter') { 
+                e.preventDefault(); 
+                if (scanBuffer.length > 0) processScan(scanBuffer); 
+                scanBuffer = ""; 
+            } 
+            else if (e.key.length === 1) { 
+                scanBuffer += e.key; 
+                clearTimeout(bufferTimeout); 
+                bufferTimeout = setTimeout(() => { scanBuffer = ""; }, 2000); 
+            }
         });
 
         function setProcessing(state) {
@@ -271,7 +288,6 @@
             const navDeck = document.getElementById('buffer-nav-deck');
             
             if (heldSpools.length > 0) {
-                // Main Buffer
                 zone.innerHTML = heldSpools.map((s, idx) => `
                     <div class="buffer-item ${idx === 0 ? 'active-item' : ''}">
                         <div class="buffer-info"><div class="buffer-swatch" style="background-color:#${s.color}"></div><div class="buffer-text">${s.display}</div></div>
@@ -279,16 +295,13 @@
                     </div>`).join('');
                 heldSpools.forEach((s, idx) => { new QRCode(document.getElementById(`qr-buf-${idx}`), {text: "ID:" + s.id.toString(), width: 120, height: 120}); });
                 
-                // Heads-Up
                 headsUp.style.display = 'flex';
                 document.getElementById('headsup-swatch').style.backgroundColor = `#${heldSpools[0].color}`;
                 document.getElementById('headsup-text').innerText = heldSpools[0].display;
                 document.getElementById('headsup-total').innerText = `Buffer: ${heldSpools.length}`;
 
-                // Nav Deck
                 if (heldSpools.length > 1) navDeck.style.display = 'flex';
                 else navDeck.style.display = 'none';
-                
             } else { 
                 zone.innerHTML = `<div class="text-center text-muted mt-5"><h3>Buffer Empty</h3><p>Scan a Spool or Location</p></div>`; 
                 headsUp.style.display = 'none';
@@ -405,13 +418,6 @@
                 }
             }).catch(() => setProcessing(false));
         }
-
-        const actionModal = new bootstrap.Modal(document.getElementById('actionModal'));
-        const safetyModal = new bootstrap.Modal(document.getElementById('safetyModal'));
-        const confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
-        const manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
-        const locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
-        const locModal = new bootstrap.Modal(document.getElementById('locModal'));
 
         function promptSafety(msg, callback) {
             document.getElementById('safety-msg').innerText = msg;
@@ -680,6 +686,18 @@
             }).catch(() => setProcessing(false));
         }
 
+        function openLocationsModal() { locMgrModal.show(); fetchLocations(); }
+        function scrollToRow(id) { setTimeout(() => { const row = document.getElementById(`row-${id}`); if(row) { row.scrollIntoView({behavior: "smooth", block: "center"}); row.classList.add('highlight-row'); } }, 500); }
+        function fetchLocations() {
+            fetch('/api/locations').then(r => r.json()).then(data => {
+                allLocations = data; 
+                document.getElementById('loc-count').innerText = data.length + " Locs";
+                document.getElementById('location-table').innerHTML = data.map(l => `
+                    <tr id="row-${l.LocationID}"><td style="font-weight:bold;color:#00d4ff;">${l.LocationID}</td><td>${l.Name}</td><td>${l.Occupancy || ''} <span class="badge bg-secondary ms-2">${l.Type}</span></td>
+                    <td class="text-end"><button class="btn btn-sm btn-outline-warning me-1" onclick="openEdit('${l.LocationID}')">✏️</button><button class="btn btn-sm btn-outline-danger me-1" onclick="deleteLoc('${l.LocationID}')">🗑️</button><button class="btn btn-sm btn-info" onclick="openManage('${l.LocationID}')">Manage</button></td></tr>`).join('');
+                if(lastScannedLoc) scrollToRow(lastScannedLoc);
+            });
+        }
         function manualAddSpool() {
             const locId = document.getElementById('manage-loc-id').value;
             const spoolId = document.getElementById('manual-spool-id').value; if(!spoolId) return;
