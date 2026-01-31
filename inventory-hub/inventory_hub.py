@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v140.0 (Smart Boomerang)"
+VERSION = "v141.0 (Vocabulary Fix)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -232,6 +232,10 @@ def resolve_scan(text):
         if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'} 
         if "CMD:CONFIRM" in upper_text: return {'type': 'command', 'cmd': 'confirm'}
         if "CMD:EJECTALL" in upper_text: return {'type': 'command', 'cmd': 'ejectall'} 
+        # NEW COMMANDS ADDED HERE
+        if "CMD:CYCLE" in upper_text: return {'type': 'command', 'cmd': 'cycle'}
+        if "CMD:DONE" in upper_text: return {'type': 'command', 'cmd': 'done'}
+        
         if "CMD:SLOT:" in upper_text:
             try:
                 parts = upper_text.split(':')
@@ -319,7 +323,6 @@ def perform_smart_move(target, raw_spools, target_slot=None):
 
         if target in printer_map:
             src_info = loc_info_map.get(current_loc)
-            # SMART SOURCE: Save where it came from if it's a Box
             if src_info and src_info.get('Type') == 'Dryer Box':
                 new_extra['physical_source'] = current_loc
             
@@ -367,7 +370,6 @@ def perform_undo():
     add_log_entry(f"↩️ Undid: {last['summary']}", "WARNING")
     return jsonify({"success": True})
 
-# --- SMART EJECT LOGIC ---
 def perform_smart_eject(spool_id):
     spool_data = get_spool(spool_id)
     if not spool_data: return False
@@ -375,19 +377,16 @@ def perform_smart_eject(spool_id):
     extra = spool_data.get('extra', {})
     saved_source = extra.get('physical_source')
     
-    # Clean up fields
     extra.pop('container_slot', None)
     
     if saved_source:
-        # BOOMERANG: Return to Sender
-        if saved_source.startswith('"'): saved_source = saved_source.strip('"') # Clean quotes
+        if saved_source.startswith('"'): saved_source = saved_source.strip('"') 
         
-        extra.pop('physical_source', None) # Clear the note
+        extra.pop('physical_source', None) 
         if update_spool(spool_id, {"location": saved_source, "extra": extra}):
             add_log_entry(f"↩️ Returned #{spool_id} -> {saved_source}", "WARNING")
             return True
     else:
-        # DUMP: Eject to Wild
         if update_spool(spool_id, {"location": "", "extra": extra}):
             add_log_entry(f"⏏️ Ejected #{spool_id}", "WARNING")
             return True
@@ -476,7 +475,6 @@ def api_manage_contents():
         ejected_count = 0
         for spool in contents:
             slot_val = spool.get('slot', '')
-            # Only affect Unslotted items
             if not slot_val or slot_val == 'None' or slot_val == '':
                 if perform_smart_eject(spool['id']):
                     ejected_count += 1
