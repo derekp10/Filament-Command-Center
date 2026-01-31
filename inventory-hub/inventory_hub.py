@@ -28,7 +28,7 @@ CONFIG_FILE = 'config.json'
 CSV_FILE = '3D Print Supplies - Locations.csv'
 UNDO_STACK = []
 RECENT_LOGS = [] 
-VERSION = "v141.0 (Vocabulary Fix)"
+VERSION = "v142.0 (Nav Deck)"
 
 # Fields that MUST be double-quoted strings (JSON strings)
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
@@ -232,8 +232,11 @@ def resolve_scan(text):
         if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'} 
         if "CMD:CONFIRM" in upper_text: return {'type': 'command', 'cmd': 'confirm'}
         if "CMD:EJECTALL" in upper_text: return {'type': 'command', 'cmd': 'ejectall'} 
-        # NEW COMMANDS ADDED HERE
-        if "CMD:CYCLE" in upper_text: return {'type': 'command', 'cmd': 'cycle'}
+        
+        # NAV COMMANDS
+        if "CMD:CYCLE" in upper_text: return {'type': 'command', 'cmd': 'next'} # Legacy alias
+        if "CMD:NEXT" in upper_text: return {'type': 'command', 'cmd': 'next'}
+        if "CMD:PREV" in upper_text: return {'type': 'command', 'cmd': 'prev'}
         if "CMD:DONE" in upper_text: return {'type': 'command', 'cmd': 'done'}
         
         if "CMD:SLOT:" in upper_text:

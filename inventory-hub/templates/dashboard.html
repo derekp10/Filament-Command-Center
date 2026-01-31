@@ -56,12 +56,14 @@
         .modal-action-card:hover { background: #444; border-color: #fff; }
         .modal-action-qr { background: white; padding: 5px; border-radius: 5px; margin-bottom: 15px; }
         .modal-action-btn { width: 100%; font-size: 1.4rem; font-weight: bold; }
-        .headsup-strip { background: #111; border-bottom: 1px solid #333; padding: 8px 20px; display: flex; align-items: center; justify-content: space-between; font-size: 1.2rem; color: #00d4ff; font-weight: bold; }
+        .headsup-strip { background: #111; border-bottom: 1px solid #333; padding: 15px 20px; font-size: 1.4rem; color: #00d4ff; font-weight: bold; text-align: center; }
         .danger-zone { border: 2px solid #ff4444; background: #200; padding: 15px; border-radius: 8px; margin-top: 20px; text-align: center; }
         .control-group { display: flex; align-items: center; gap: 15px; background: #222; padding: 5px 15px; border-radius: 8px; border: 1px solid #444; }
         .action-label { font-size: 0.8rem; color: #aaa; text-align: center; margin-top: 2px; }
-        .next-preview { font-size: 0.9rem; color: #888; margin-left: 15px; display: flex; align-items: center; }
-        .next-swatch { width: 15px; height: 15px; border-radius: 50%; border: 1px solid #fff; margin: 0 5px; }
+        .nav-deck { display: flex; justify-content: space-between; padding: 10px 20px; background: #1a1a1a; border-bottom: 1px solid #333; gap: 20px; }
+        .nav-card { background: #333; border: 1px solid #555; border-radius: 8px; padding: 10px 20px; display: flex; align-items: center; cursor: pointer; flex: 1; justify-content: center; }
+        .nav-card:hover { background: #444; border-color: #fff; }
+        .nav-card:active { background: #222; }
     </style>
 </head>
 <body>
@@ -105,21 +107,27 @@
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div>
         
         <div id="headsup-buffer" class="headsup-strip" style="display:none;">
-            <div class="d-flex align-items-center flex-grow-1">
-                <span class="me-2 text-warning fw-bold">✋ READY:</span>
-                <div id="headsup-swatch" style="width:30px;height:30px;border-radius:50%;border:2px solid #fff;margin-right:10px;"></div>
-                <span id="headsup-text" class="text-white fw-bold me-3"></span>
-                
-                <div id="headsup-next" class="next-preview" style="display:none;">
-                    <span>Next:</span>
-                    <div id="headsup-next-swatch" class="next-swatch"></div>
-                    <span id="headsup-next-text"></span>
-                    <span id="headsup-count" class="badge bg-secondary ms-2"></span>
+            <div class="d-flex align-items-center justify-content-center w-100">
+                <span class="me-2 text-warning fw-bold" id="headsup-count-display">✋ Item 1 of 1:</span>
+                <div id="headsup-swatch" style="width:35px;height:35px;border-radius:50%;border:2px solid #fff;margin-right:15px;"></div>
+                <span id="headsup-text" class="text-white fw-bold fs-3"></span>
+            </div>
+        </div>
+
+        <div id="buffer-nav-deck" class="nav-deck" style="display:none;">
+            <div class="nav-card" onclick="prevBuffer()">
+                <div id="qr-prev" class="bg-white p-1 rounded me-3" style="width:50px;height:50px;"></div>
+                <div class="text-start">
+                    <div class="fw-bold fs-4">< PREV</div>
+                    <div class="small text-muted">Rotate Back</div>
                 </div>
             </div>
-            <div class="d-flex align-items-center">
-                <button class="btn btn-sm btn-outline-info me-2 fw-bold" onclick="cycleBuffer()">🔁 CYCLE</button>
-                <div id="qr-cycle" class="bg-white p-1 rounded" style="width:45px;height:45px;cursor:pointer;" onclick="cycleBuffer()"></div>
+            <div class="nav-card" onclick="nextBuffer()">
+                <div class="text-end me-3">
+                    <div class="fw-bold fs-4">NEXT ></div>
+                    <div class="small text-muted">Rotate Fwd</div>
+                </div>
+                <div id="qr-next" class="bg-white p-1 rounded" style="width:50px;height:50px;"></div>
             </div>
         </div>
 
@@ -156,7 +164,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v141.0";
+        const DASHBOARD_VERSION = "v142.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         window.onload = function() {
@@ -164,12 +172,14 @@
             new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
             new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
             
-            // Safety & Nav
             new QRCode(document.getElementById("qr-safety-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
             new QRCode(document.getElementById("qr-safety-no"), {text: "CMD:CANCEL", width: 120, height: 120});
             new QRCode(document.getElementById("qr-modal-cancel"), {text: "CMD:MODAL:CANCEL", width: 80, height: 80});
-            new QRCode(document.getElementById("qr-cycle"), {text: "CMD:CYCLE", width: 38, height: 38});
             new QRCode(document.getElementById("qr-done"), {text: "CMD:DONE", width: 45, height: 45});
+            
+            // NAV DECK
+            new QRCode(document.getElementById("qr-prev"), {text: "CMD:PREV", width: 45, height: 45});
+            new QRCode(document.getElementById("qr-next"), {text: "CMD:NEXT", width: 45, height: 45});
 
             document.getElementById("manual-spool-id").addEventListener("keydown", function(event) { if (event.key === "Enter") { event.preventDefault(); manualAddSpool(); }});
         };
@@ -218,18 +228,26 @@
             else { status.innerText = "Auto-Refresh ON"; status.className = "small text-muted"; }
         }
 
-        function cycleBuffer() {
+        // --- NAV LOGIC ---
+        function nextBuffer() {
             if (heldSpools.length < 2) return;
-            heldSpools.push(heldSpools.shift());
+            heldSpools.push(heldSpools.shift()); // First goes to Last
+            renderBuffer();
+        }
+        
+        function prevBuffer() {
+            if (heldSpools.length < 2) return;
+            heldSpools.unshift(heldSpools.pop()); // Last comes to First
             renderBuffer();
         }
 
         function renderBuffer() {
             const zone = document.getElementById('buffer-zone');
             const headsUp = document.getElementById('headsup-buffer');
+            const navDeck = document.getElementById('buffer-nav-deck');
             
             if (heldSpools.length > 0) {
-                // Main Buffer
+                // Main Buffer Side Panel
                 zone.innerHTML = heldSpools.map((s, idx) => `
                     <div class="buffer-item ${idx === 0 ? 'active-item' : ''}">
                         <div class="buffer-info"><div class="buffer-swatch" style="background-color:#${s.color}"></div><div class="buffer-text">${s.display}</div></div>
@@ -238,36 +256,19 @@
                 heldSpools.forEach((s, idx) => { new QRCode(document.getElementById(`qr-buf-${idx}`), {text: "ID:" + s.id.toString(), width: 120, height: 120}); });
                 
                 // Heads-Up Strip
-                headsUp.style.display = 'flex';
-                
-                // Active Item
+                headsUp.style.display = 'block';
                 document.getElementById('headsup-swatch').style.backgroundColor = `#${heldSpools[0].color}`;
                 document.getElementById('headsup-text').innerText = heldSpools[0].display;
+                document.getElementById('headsup-count-display').innerText = `✋ Item 1 of ${heldSpools.length}:`;
 
-                // Preview Next
-                const previewDiv = document.getElementById('headsup-next');
-                if (heldSpools.length > 1) {
-                    previewDiv.style.display = 'flex';
-                    document.getElementById('headsup-next-swatch').style.backgroundColor = `#${heldSpools[1].color}`;
-                    // Shorten name if too long for preview
-                    let nextName = heldSpools[1].display;
-                    if(nextName.length > 15) nextName = nextName.substring(0, 15) + "...";
-                    
-                    document.getElementById('headsup-next-text').innerText = nextName;
-                    
-                    if (heldSpools.length > 2) {
-                        document.getElementById('headsup-count').innerText = `+${heldSpools.length - 2} more`;
-                        document.getElementById('headsup-count').style.display = 'inline-block';
-                    } else {
-                        document.getElementById('headsup-count').style.display = 'none';
-                    }
-                } else {
-                    previewDiv.style.display = 'none';
-                }
+                // Nav Deck (Only show if > 1 item)
+                if (heldSpools.length > 1) navDeck.style.display = 'flex';
+                else navDeck.style.display = 'none';
                 
             } else { 
                 zone.innerHTML = `<div class="text-center text-muted mt-5"><h3>Buffer Empty</h3><p>Scan a Spool or Location</p></div>`; 
                 headsUp.style.display = 'none';
+                navDeck.style.display = 'none';
             }
         }
 
@@ -289,7 +290,6 @@
                 return; 
             }
             
-            // TRASH SCAN INTERCEPTOR
             if (upper.startsWith("CMD:TRASH:")) {
                 const parts = upper.split(':');
                 if (parts.length === 3) {
@@ -313,7 +313,10 @@
                     if(res.cmd === 'clear') { heldSpools = []; renderBuffer(); showToast("Buffer Cleared", "info"); return; }
                     if(res.cmd === 'undo') { triggerUndo(); return; }
                     if(res.cmd === 'eject') { showToast("EJECT MODE: Scan a Spool", "warning"); ejectMode = true; return; }
-                    if(res.cmd === 'cycle') { cycleBuffer(); return; }
+                    
+                    if(res.cmd === 'next') { nextBuffer(); return; }
+                    if(res.cmd === 'prev') { prevBuffer(); return; }
+                    
                     if(res.cmd === 'done') { closeManage(); return; }
                     if(res.cmd === 'ejectall') { 
                         const locId = document.getElementById('manage-loc-id').value;
@@ -334,7 +337,6 @@
                         renderBuffer(); 
                     }
                 } else if (res.type === 'location') {
-                    // CONTEXT AWARE: Holding Items? -> Assign. Else -> Open.
                     if (heldSpools.length > 0) {
                         performContextAssign(res.id);
                     } else {
@@ -348,9 +350,8 @@
 
         function performContextAssign(targetLoc) {
             if(heldSpools.length === 0) return;
-            const spool = heldSpools[0]; // Active item (Index 0)
+            const spool = heldSpools[0]; 
             
-            // Check for Smart Move API
             setProcessing(true);
             fetch('/api/smart_move', { 
                 method: 'POST', 
@@ -360,10 +361,9 @@
                 setProcessing(false);
                 if (res.status === 'success') {
                     showToast(`Assigned ${spool.display} to ${targetLoc}`, "success");
-                    heldSpools.shift(); // Remove from buffer on success
+                    heldSpools.shift(); 
                     renderBuffer();
                     
-                    // If we are currently managing the target location, refresh the view
                     const currentLoc = document.getElementById('manage-loc-id').value;
                     if (currentLoc === targetLoc && document.getElementById('manageModal').classList.contains('show')) {
                         refreshManageView(targetLoc);
