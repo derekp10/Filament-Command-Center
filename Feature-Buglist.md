@@ -9,6 +9,7 @@
 4. Find and change any hidden gray text in the UI. (Number of locations in location manager, Slot empty in dryerbox slot assignment screen.)
 5. Done QR code in location manager window is giving malformed command error
 
+
 # **Next Steps Items:**
 
 ## **Current:**
@@ -48,3 +49,9 @@ The Discussion: We briefly touched on moving entire boxes.
 The Missing Feature:
 
 The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
+
+
+# **Overarching issue**
+I think we've inadverntaly created 3 levels of logic/complexity here. 1. The physical, Scanning stuff and efficiently Moving it, 2. A UI layer, for debugging, but should only really need to be looked at to confirm things when where you were expecting, and 3, a full on interface that is easier to move spools around than having to use spoolmans lack luster interface.
+
+All 3 of these things are important and have value. And I think this is something that we should table for now, and come back to once we've gotten more of the functionality in place and working.
