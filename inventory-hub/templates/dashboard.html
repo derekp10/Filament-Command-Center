@@ -190,7 +190,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v146.2";
+        const DASHBOARD_VERSION = "v147.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // Global Declarations (Bulletproof Init)
@@ -209,33 +209,37 @@
         let modalCallbacks = []; 
 
         window.onload = function() {
-            // INIT MODALS SAFELY
-            locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
-            locModal = new bootstrap.Modal(document.getElementById('locModal'));
-            manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
-            confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
-            actionModal = new bootstrap.Modal(document.getElementById('actionModal'));
-            safetyModal = new bootstrap.Modal(document.getElementById('safetyModal'));
+            try {
+                // INIT MODALS SAFELY
+                locMgrModal = new bootstrap.Modal(document.getElementById('locMgrModal'));
+                locModal = new bootstrap.Modal(document.getElementById('locModal'));
+                manageModal = new bootstrap.Modal(document.getElementById('manageModal'));
+                confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
+                actionModal = new bootstrap.Modal(document.getElementById('actionModal'));
+                safetyModal = new bootstrap.Modal(document.getElementById('safetyModal'));
 
-            // INIT QRS
-            new QRCode(document.getElementById("qr-undo"), {text: "CMD:UNDO", width: 90, height: 90});
-            new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
-            new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
-            new QRCode(document.getElementById("qr-safety-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
-            new QRCode(document.getElementById("qr-safety-no"), {text: "CMD:CANCEL", width: 120, height: 120});
-            new QRCode(document.getElementById("qr-confirm-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
-            new QRCode(document.getElementById("qr-confirm-no"), {text: "CMD:CANCEL", width: 120, height: 120});
-            new QRCode(document.getElementById("qr-modal-cancel"), {text: "CMD:MODAL:CANCEL", width: 80, height: 80});
-            new QRCode(document.getElementById("qr-done"), {text: "CMD:DONE", width: 45, height: 45});
-            new QRCode(document.getElementById("qr-prev"), {text: "CMD:PREV", width: 45, height: 45});
-            new QRCode(document.getElementById("qr-next"), {text: "CMD:NEXT", width: 45, height: 45});
+                // INIT QRS
+                new QRCode(document.getElementById("qr-undo"), {text: "CMD:UNDO", width: 90, height: 90});
+                new QRCode(document.getElementById("qr-clear"), {text: "CMD:CLEAR", width: 90, height: 90});
+                new QRCode(document.getElementById("qr-eject"), {text: "CMD:EJECT", width: 90, height: 90});
+                new QRCode(document.getElementById("qr-safety-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
+                new QRCode(document.getElementById("qr-safety-no"), {text: "CMD:CANCEL", width: 120, height: 120});
+                new QRCode(document.getElementById("qr-confirm-yes"), {text: "CMD:CONFIRM", width: 120, height: 120});
+                new QRCode(document.getElementById("qr-confirm-no"), {text: "CMD:CANCEL", width: 120, height: 120});
+                new QRCode(document.getElementById("qr-modal-cancel"), {text: "CMD:MODAL:CANCEL", width: 80, height: 80});
+                new QRCode(document.getElementById("qr-done"), {text: "CMD:DONE", width: 45, height: 45});
+                new QRCode(document.getElementById("qr-prev"), {text: "CMD:PREV", width: 45, height: 45});
+                new QRCode(document.getElementById("qr-next"), {text: "CMD:NEXT", width: 45, height: 45});
 
-            document.getElementById("manual-spool-id").addEventListener("keydown", function(event) { 
-                if (event.key === "Enter") { 
-                    event.preventDefault(); 
-                    manualAddSpool(); 
-                }
-            });
+                document.getElementById("manual-spool-id").addEventListener("keydown", function(event) { 
+                    if (event.key === "Enter") { 
+                        event.preventDefault(); 
+                        manualAddSpool(); 
+                    }
+                });
+            } catch (e) {
+                console.error("Init Error: ", e);
+            }
         };
         
         window.addEventListener('blur', () => { document.getElementById('focus-guard').style.display = 'flex'; });
@@ -543,6 +547,7 @@
         }
 
         function openManage(locId) {
+            console.log("Open Manage for:", locId); // DEBUG LOG
             document.getElementById('manage-grid-view').style.display = 'none';
             document.getElementById('manage-list-view').style.display = 'none';
             document.getElementById('manageTitle').innerText = `Manage: ${locId}`;
@@ -706,7 +711,7 @@
                 document.getElementById('loc-count').innerText = data.length + " Locs";
                 document.getElementById('location-table').innerHTML = data.map(l => `
                     <tr id="row-${l.LocationID}"><td style="font-weight:bold;color:#00d4ff;">${l.LocationID}</td><td>${l.Name}</td><td>${l.Occupancy || ''} <span class="badge bg-secondary ms-2">${l.Type}</span></td>
-                    <td class="text-end"><button class="btn btn-sm btn-outline-warning me-1" onclick="openEdit('${l.LocationID}')">✏️</button><button class="btn btn-sm btn-outline-danger me-1" onclick="deleteLoc('${l.LocationID}')">🗑️</button><button class="btn btn-sm btn-info" onclick="openManage('${l.LocationID}')">Manage</button></td></tr>`).join('');
+                    <td class="text-end"><button class="btn btn-sm btn-outline-warning me-1" onclick="openEdit('${l.LocationID}')">✏️</button><button class="btn btn-sm btn-outline-danger me-1" onclick="deleteLoc('${l.LocationID}')">🗑️</button><button class="btn btn-sm btn-info" data-id="${l.LocationID}" onclick="openManage(this.getAttribute('data-id'))">Manage</button></td></tr>`).join('');
                 if(lastScannedLoc) scrollToRow(lastScannedLoc);
             });
         }
