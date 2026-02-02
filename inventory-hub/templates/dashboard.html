@@ -52,12 +52,13 @@
         .unslotted-item { background: #252525; padding: 15px; margin: 10px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #444; }
         .control-group { display: flex; align-items: center; gap: 20px; background: #111; padding: 10px 20px; border-radius: 8px; border: 1px solid #333; }
 
-        /* Heads Up & Nav (FIXED ALIGNMENT) */
+        /* Heads Up & Nav (FIXED ALIGNMENT & SIZING) */
         .headsup-strip { background: #111; border-bottom: 1px solid #333; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
         .nav-deck { display: flex; justify-content: space-between; padding: 10px 20px; background: #181818; border-bottom: 1px solid #333; gap: 20px; }
         .nav-card { background: #2a2a2a; border: 1px solid #444; border-radius: 8px; padding: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex: 1; transition: 0.2s; }
         .nav-card:active { background: #444; transform: translateY(2px); }
-        .nav-qr-container { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; min-width: 60px; min-height: 60px; }
+        .nav-qr-container { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; width: 55px; height: 55px; flex-shrink: 0; }
+        .nav-qr-container img { width: 45px !important; height: 45px !important; } /* Force Size */
         
         /* Status & Overlays */
         .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
@@ -123,7 +124,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v152.0";
+        const DASHBOARD_VERSION = "v153.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         let modals = {}; 
@@ -176,7 +177,16 @@
             // STATE-BASED MODAL CHECKS
             if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
             if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
-            if (state.activeModal === 'action') return upper.includes('CANCEL') ? closeModal('actionModal') : (upper.startsWith('CMD:MODAL:') ? state.modalCallbacks[parseInt(upper.split(':')[2])]() : null);
+            
+            // FIX: Explicitly close modal when CMD:MODAL detected
+            if (state.activeModal === 'action') {
+                if(upper.includes('CANCEL')) { closeModal('actionModal'); return; }
+                if(upper.startsWith('CMD:MODAL:')) { 
+                    closeModal('actionModal'); 
+                    state.modalCallbacks[parseInt(upper.split(':')[2])](); 
+                    return; 
+                }
+            }
             
             if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
