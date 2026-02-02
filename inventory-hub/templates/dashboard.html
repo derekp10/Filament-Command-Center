@@ -28,7 +28,7 @@
         .buffer-info { display: flex; align-items: center; }
 
         /* QR & Commands */
-        .qr-box { background: white; padding: 5px; border-radius: 4px; }
+        .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
         .cmd-deck { padding: 15px; background: #1a1a1a; border-top: 1px solid #333; display: flex; justify-content: space-around; }
         .cmd-btn { cursor: pointer; transition: 0.2s; border-radius: 8px; padding: 10px; text-align: center; }
         .cmd-btn:active { background: #333; transform: scale(0.95); }
@@ -52,11 +52,12 @@
         .unslotted-item { background: #252525; padding: 15px; margin: 10px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #444; }
         .control-group { display: flex; align-items: center; gap: 20px; background: #111; padding: 10px 20px; border-radius: 8px; border: 1px solid #333; }
 
-        /* Heads Up & Nav */
+        /* Heads Up & Nav (FIXED ALIGNMENT) */
         .headsup-strip { background: #111; border-bottom: 1px solid #333; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
         .nav-deck { display: flex; justify-content: space-between; padding: 10px 20px; background: #181818; border-bottom: 1px solid #333; gap: 20px; }
-        .nav-card { background: #2a2a2a; border: 1px solid #444; border-radius: 8px; padding: 15px 20px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex: 1; transition: 0.2s; }
+        .nav-card { background: #2a2a2a; border: 1px solid #444; border-radius: 8px; padding: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex: 1; transition: 0.2s; }
         .nav-card:active { background: #444; transform: translateY(2px); }
+        .nav-qr-container { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; min-width: 60px; min-height: 60px; }
         
         /* Status & Overlays */
         .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
@@ -106,11 +107,11 @@
     
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div>
         <div id="headsup-buffer" class="headsup-strip" style="display:none;"><div class="d-flex align-items-center"><span class="me-3 text-warning fw-bold fs-4">✋ READY:</span><div id="headsup-swatch" class="buffer-swatch me-3"></div><span id="headsup-text" class="text-white fw-bold fs-3"></span></div><div class="fs-4 fw-bold text-info border border-info px-3 py-1 rounded" id="headsup-total">Buffer: 0</div></div>
-        <div id="buffer-nav-deck" class="nav-deck" style="display:none;"><div class="nav-card" onclick="prevBuffer()"><div id="qr-prev" class="bg-white p-1 rounded me-3" style="width:50px;height:50px;"></div><div class="text-start"><div class="fw-bold fs-4">< PREV</div></div></div><div class="nav-card" onclick="nextBuffer()"><div class="text-end me-3"><div class="fw-bold fs-4">NEXT ></div></div><div id="qr-next" class="bg-white p-1 rounded" style="width:50px;height:50px;"></div></div></div>
+        <div id="buffer-nav-deck" class="nav-deck" style="display:none;"><div class="nav-card" onclick="prevBuffer()"><div class="nav-qr-container me-3" id="qr-prev"></div><div class="text-start"><div class="fw-bold fs-4">< PREV</div></div></div><div class="nav-card" onclick="nextBuffer()"><div class="text-end me-3"><div class="fw-bold fs-4">NEXT ></div></div><div class="nav-qr-container" id="qr-next"></div></div></div>
         <div class="modal-body">
             <div id="manage-grid-view" style="display:none;"><div class="alert alert-info py-1 mb-2 small text-center">Tap button or scan slot QR (CMD:SLOT:X)</div><div id="slot-grid-container" class="slot-grid"></div><div id="unslotted-container" style="display:none;"></div></div>
             <div id="manage-list-view"><div id="manage-contents-list" class="mb-4"></div></div>
-            <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add</button></div>
+            <hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add (To Buffer)</button></div>
             <div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary"><button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button><div class="text-center"><div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div><div class="qr-label">DONE</div></div></div>
             <input type="hidden" id="manage-loc-id">
         </div></div></div></div>
@@ -122,18 +123,18 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v151.0";
+        const DASHBOARD_VERSION = "v152.0";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         let modals = {}; 
-        let state = { scanBuffer: "", bufferTimeout: null, heldSpools: [], ejectMode: false, lastScannedLoc: null, pendingConfirm: null, pendingSafety: null, allLocations: [], logsPaused: false, currentGrid: {}, processing: false, modalCallbacks: [] };
+        let state = { scanBuffer: "", bufferTimeout: null, heldSpools: [], ejectMode: false, lastScannedLoc: null, pendingConfirm: null, pendingSafety: null, allLocations: [], logsPaused: false, currentGrid: {}, processing: false, modalCallbacks: [], activeModal: null };
 
         document.addEventListener('DOMContentLoaded', () => {
             ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
             const qrs = { 'qr-undo': 'CMD:UNDO', 'qr-clear': 'CMD:CLEAR', 'qr-eject': 'CMD:EJECT', 'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL', 'qr-modal-cancel': 'CMD:MODAL:CANCEL', 'qr-done': 'CMD:DONE', 'qr-prev': 'CMD:PREV', 'qr-next': 'CMD:NEXT' };
             for(const [id, txt] of Object.entries(qrs)) new QRCode(document.getElementById(id), {text: txt, width: document.getElementById(id).style.width?.replace('px','') || 120, height: document.getElementById(id).style.height?.replace('px','') || 120});
 
-            // Event Delegation (Robust Button Handling)
+            // Event Delegation
             document.getElementById('location-table').addEventListener('click', (e) => {
                 const btn = e.target.closest('.btn-manage');
                 if (btn) openManage(btn.dataset.id);
@@ -172,9 +173,11 @@
 
         const processScan = (text) => {
             const upper = text.toUpperCase();
-            if (document.getElementById('safetyModal').classList.contains('show')) return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
-            if (document.getElementById('confirmModal').classList.contains('show')) return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
-            if (document.getElementById('actionModal').classList.contains('show')) return upper.includes('CANCEL') ? modals.actionModal.hide() : (upper.startsWith('CMD:MODAL:') ? state.modalCallbacks[parseInt(upper.split(':')[2])]() : null);
+            // STATE-BASED MODAL CHECKS
+            if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
+            if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
+            if (state.activeModal === 'action') return upper.includes('CANCEL') ? closeModal('actionModal') : (upper.startsWith('CMD:MODAL:') ? state.modalCallbacks[parseInt(upper.split(':')[2])]() : null);
+            
             if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
             setProcessing(true);
@@ -205,10 +208,11 @@
             }).catch(()=>setProcessing(false));
         };
 
-        const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText=msg; state.pendingConfirm=cb; modals.confirmModal.show(); };
-        const confirmAction = (y) => { modals.confirmModal.hide(); if(y && state.pendingConfirm) state.pendingConfirm(); state.pendingConfirm=null; };
-        const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText=msg; state.pendingSafety=cb; modals.safetyModal.show(); };
-        const confirmSafety = (y) => { modals.safetyModal.hide(); if(y && state.pendingSafety) state.pendingSafety(); state.pendingSafety=null; };
+        const closeModal = (id) => { modals[id].hide(); state.activeModal = null; };
+        const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText=msg; state.pendingConfirm=cb; modals.confirmModal.show(); state.activeModal = 'confirm'; };
+        const confirmAction = (y) => { closeModal('confirmModal'); if(y && state.pendingConfirm) state.pendingConfirm(); state.pendingConfirm=null; };
+        const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText=msg; state.pendingSafety=cb; modals.safetyModal.show(); state.activeModal = 'safety'; };
+        const confirmSafety = (y) => { closeModal('safetyModal'); if(y && state.pendingSafety) state.pendingSafety(); state.pendingSafety=null; };
         
         const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
         const openManage = (id) => { 
@@ -278,35 +282,25 @@
 
         const promptAction = (t, m, btns) => {
             document.getElementById('action-title').innerText=t; document.getElementById('action-msg').innerHTML=m; state.modalCallbacks=[];
-            document.getElementById('action-buttons').innerHTML = btns.map((b,i) => { state.modalCallbacks.push(b.action); return `<div class="modal-action-card" onclick="modals.actionModal.hide();state.modalCallbacks[${i}]()"><div id="qr-act-${i}" class="bg-white p-1 rounded mb-2"></div><button class="btn btn-primary modal-action-btn">${b.label}</button></div>`; }).join('');
+            document.getElementById('action-buttons').innerHTML = btns.map((b,i) => { state.modalCallbacks.push(b.action); return `<div class="modal-action-card" onclick="closeModal('actionModal');state.modalCallbacks[${i}]()"><div id="qr-act-${i}" class="bg-white p-1 rounded mb-2"></div><button class="btn btn-primary modal-action-btn">${b.label}</button></div>`; }).join('');
             btns.forEach((_,i) => new QRCode(document.getElementById(`qr-act-${i}`), {text:`CMD:MODAL:${i}`, width:100, height:100}));
-            modals.actionModal.show();
+            modals.actionModal.show(); state.activeModal = 'action';
         };
 
         const doAssign = (loc, spool, slot) => { setProcessing(true); fetch('/api/manage_contents', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'add', location:loc, spool_id:"ID:"+spool, slot})}).then(r=>r.json()).then(res=>{setProcessing(false); if(res.status==='success') { showToast("Assigned"); refreshManageView(loc); } else showToast(res.msg, 'error');}).catch(()=>setProcessing(false)); };
         const ejectSpool = (sid, loc, pickup) => { if(pickup) { fetch('/api/identify_scan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:"ID:"+sid})}).then(r=>r.json()).then(res=>{ if(res.type==='spool'){ if(state.heldSpools.some(s=>s.id===res.id)) showToast("In Buffer"); else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); } doEject(sid, loc); } }); } else { if(loc!=="Scan") requestConfirmation(`Eject spool #${sid}?`, ()=>doEject(sid, loc)); else doEject(sid, loc); } };
         const doEject = (sid, loc) => { setProcessing(true); fetch('/api/manage_contents', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'remove', location:loc, spool_id:sid})}).then(r=>r.json()).then(()=>{ setProcessing(false); showToast("Ejected"); if(loc!=="Scan") refreshManageView(loc); }).catch(()=>setProcessing(false)); };
         
-        // UNIFIED MANUAL SCAN LOGIC
+        // SAFE MANUAL ADD: Pushes to Buffer instead of forcing into slot
         const manualAddSpool = () => {
-            const val = document.getElementById('manual-spool-id').value.trim();
-            if (!val) return;
-            setProcessing(true);
-            // Send exactly what we typed/scanned to the smart API
+            const val = document.getElementById('manual-spool-id').value.trim(); if (!val) return; setProcessing(true);
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: val}) })
             .then(r => r.json()).then(res => {
-                setProcessing(false);
-                document.getElementById('manual-spool-id').value = ""; // Clear input immediately
-                document.getElementById('manual-spool-id').focus(); // Keep focus for next scan
-                
+                setProcessing(false); document.getElementById('manual-spool-id').value = ""; document.getElementById('manual-spool-id').focus();
                 if (res.type === 'spool') {
-                    // It found a spool! Assign it using the resolved ID.
-                    doAssign(document.getElementById('manage-loc-id').value, res.id, null);
-                } else if (res.type === 'error') {
-                    showToast(res.msg, 'error');
-                } else {
-                    showToast("Not a valid Spool Code", 'warning');
-                }
+                     if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
+                     else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); showToast("Added to Buffer"); }
+                } else showToast(res.msg || "Invalid Code", 'warning');
             }).catch(() => setProcessing(false));
         };
 
