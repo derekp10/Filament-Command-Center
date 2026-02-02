@@ -1,34 +1,43 @@
 #!/bin/bash
-# -----------------------------------------------------
-# Inventory Hub Update Script (TrueNAS Scale)
-# -----------------------------------------------------
 
-# 1. Navigate to the folder (Uses current folder if run from inside it)
-# Change this path if you want to run it from anywhere else!
-TARGET_DIR="/mnt/MyPool/App_Data/InventoryHub"
+# --- CONFIGURATION ---
+# 1. Your App Name (CHECK THIS! Must match exactly what is in the UI)
+APP_NAME="inventory-hub"
 
+# 2. Your App Folder
+TARGET_DIR="/mnt/LeftPoolBank1/App_Data/InventoryHub"
+# ---------------------
+
+echo "🚀 STARTED: Auto-Update Sequence"
+
+# 1. Go to folder
 if [ -d "$TARGET_DIR" ]; then
     cd "$TARGET_DIR"
-    echo "📂 Navigated to $TARGET_DIR"
 else
-    echo "⚠️  Could not find target dir, assuming we are already here..."
+    echo "❌ Error: Could not find $TARGET_DIR"
+    exit 1
 fi
 
-# 2. Update Code
-echo "⬇️  Fetching latest version from GitHub..."
+# 2. Git Pull
+echo "⬇️  Pulling Code..."
 git fetch origin main
-
-echo "✨  Resetting to match 'main' branch..."
-# This wipes local changes on the server to ensure a clean update
 git reset --hard origin/main
 
-# 3. Cleanup
-echo "🧹  Cleaning up temporary Python files..."
+# 3. Cleanup Python cache
 find . -name "*.pyc" -delete
 find . -name "__pycache__" -delete
 
-# 4. Finish
-echo "-----------------------------------------------------"
-echo "✅  CODE UPDATE COMPLETE!"
-echo "👉  ACTION REQUIRED: Please RESTART the app in TrueNAS UI."
-echo "-----------------------------------------------------"
+# 4. The Magic: Restart the App (TrueNAS Electric Eel / 24.10+)
+echo "♻️  Restarting '$APP_NAME'..."
+
+# STOP the app (waits for it to finish)
+echo "   ... Stopping"
+midclt call -job app.stop "$APP_NAME"
+
+sleep 5
+
+# START the app
+echo "   ... Starting"
+midclt call -job app.start "$APP_NAME"
+
+echo "✅ COMPLETE! App has been rebooted."
