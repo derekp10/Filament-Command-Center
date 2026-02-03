@@ -1,50 +1,50 @@
-LocationID,Name,Type,Location,Device Identifier,Device Type,Order,Row,Max Spools,Label Printed
-CORE1-M0,🦝 Core One Upgraded No MMU Direct Load,MMU Slot,,,,,,1,No
-CORE1-M1,🦝 Core One Upgraded MMU Slot 1,MMU Slot,Computer Room,🦝,,1,,1,Yes
-CORE1-M2,🦝 Core One Upgraded MMU Slot 2,MMU Slot,Computer Room,🦝,,2,,1,Yes
-CORE1-M3,🦝 Core One Upgraded MMU Slot 3,MMU Slot,,,,,,1,No
-CORE1-M4,🦝 Core One Upgraded MMU Slot 4,MMU Slot,Computer Room,🦝,,4,,1,Yes
-CORE1-M5,🦝 Core One Upgraded MMU Slot 5,MMU Slot,Computer Room,🦝,,5,,1,Yes
-CR-CT-1,Computer Room Cart 1,Cart,Computer Room,,,,,,Yes
-CR-CT-1-R1,Computer Room Cart 1 Row 1,Cart,Computer Room,,,,,,Yes
-CR-CT-1-R2,Computer Room Cart 1 Row 2,Cart,Computer Room,,,,,,Yes
-CR-CT-1-R3,Computer Room Cart 1 Row 3,Cart,Computer Room,,,,,,Yes
-CR-CT-2,Computer Room Cart 2,Cart,Computer Room,,,,,,Yes
-CR-CT-2-R1,Computer Room Cart 2 Row 1,Cart,Computer Room,,,,,,Yes
-CR-CT-2-R2,Computer Room Cart 2 Row 2,Cart,Computer Room,,,,,,Yes
-CR-CT-2-R3,Computer Room Cart 2 Row 3,Cart,Computer Room,,,,,,Yes
-CR-CT-3,Computer Room Cart 3,Cart,Computer Room,,,,,,Yes
-CR-CT-3-R1,Computer Room Cart 3 Row 1,Cart,Computer Room,,,,,,Yes
-CR-CT-3-R2,Computer Room Cart 3 Row 2,Cart,Computer Room,,,,,,Yes
-CR-CT-3-R3,Computer Room Cart 3 Row 3,Cart,Computer Room,,,,,,Yes
-CR-CT-4,Computer Room Cart 4,Cart,Computer Room,,,,,,Yes
-CR-CT-4-R1,Computer Room Cart 4 Row 1,Cart,Computer Room,,,,,,Yes
-CR-CT-4-R2,Computer Room Cart 4 Row 2,Cart,Computer Room,,,,,,Yes
-CR-CT-4-R3,Computer Room Cart 4 Row 3,Cart,Computer Room,,,,,,Yes
-CR-MDB-1,Computer Room Multi-Dryer Box,Dryer Box,Computer Room,,Multi,,,4,Yes
-DR-CT-1,Dining Room Cart 1,Cart,Dinning Room,,,,,,Yes
-DR-CT-1-R1,Dining Room Cart 1 Row 1,Cart,Dinning Room,,,,,,Yes
-DR-CT-1-R2-L,Dining Room Cart 1 Row 2 Left,Cart,Dinning Room,,,,,,Yes
-DR-CT-1-R2-R,Dining Room Cart 1 Row 2 Right,Cart,Dinning Room,,,,,,Yes
-DR-CT-1-R3-L,Dining Room Cart 1 Row 3 Left,Cart,Dinning Room,,,,,,Yes
-DR-CT-1-R3-R,Dining Room Cart 1 Row 3 Right,Cart,Dinning Room,,,,,,Yes
-DR-CT-1-R4-L,Dining Room Cart 1 Row 4 Left,Cart,Dinning Room,,,,,,Yes
-DR-CT-1-R4-R,Dining Room Cart 1 Row 4 Right,Cart,Dinning Room,,,,,,Yes
-LR-MDB-1,Living Room Multi-Dryer Box,Dryer Box,Living Room,Creality Space Pi X4,Multi,,,4,Yes
-LR-MDB-2,Sunlu Filament Dryer E2,Dryer Box,,,,,,2,No
-LR-SD-2,Living Room Sliding Drawer 2,Sliding Drawer,Living Room,,,,,,Yes
-PJ-CT-1,Project Cart 1,Cart,,,,,,,Yes
-PM-DB-1,PolyMaker Dryer Box 1,Dryer Box,,PolyMaker,,1,,1,Yes
-PM-DB-2,PolyMaker Dryer Box 2,Dryer Box,,PolyMaker,,2,,1,Yes
-PM-DB-3,PolyMaker Dryer Box 3,Dryer Box,,PolyMaker,,3,,1,Yes
-PM-DB-4,PolyMaker Dryer Box 4,Dryer Box,,PolyMaker,,4,,1,Yes
-PM-DB-5,PolyMaker Dryer Box 5,Dryer Box,,PolyMaker,,5,,1,Yes
-PM-DB-6,PolyMaker Dryer Box 6,Dryer Box,,PolyMaker,,7,,1,Yes
-PM-DB-7,PolyMaker Dryer Box 7,Dryer Box,,PolyMaker,,8,,1,Yes
-PM-DB-8,PolyMaker Dryer Box 8,Dryer Box,,,,,,1,No
-TST-MDB-1,Test Filament Dryer,Dryer Box,,,,,,6,No
-XL-1,🦝 XL Tool Head 1,Tool Head,Living Room,🦝,XL,1,,1,Yes
-XL-2,🦝 XL Tool Head 2,Tool Head,Living Room,🦝,XL,2,,1,Yes
-XL-3,🦝 XL Tool Head 3,Tool Head,Living Room,🦝,XL,3,,1,Yes
-XL-4,🦝 XL Tool Head 4,Tool Head,Living Room,🦝,XL,4,,1,Yes
-XL-5,🦝 XL Tool Head 5,Tool Head,Living Room,🦝,XL,5,,1,Yes
+LocationID,Location,Device Identifier,Device Type,Type,Order,Row,Max Spools,Name,Label Printed
+CORE1-M0,Computer Room,🦝,Core One Upgraded,No MMU Direct Load,0,,1,🦝 Core One Upgraded No MMU Direct Load,Yes
+CORE1-M1,Computer Room,🦝,Core One Upgraded,MMU Slot,1,,1,🦝 Core One Upgraded MMU Slot 1,Yes
+CORE1-M2,Computer Room,🦝,Core One Upgraded,MMU Slot,2,,1,🦝 Core One Upgraded MMU Slot 2,Yes
+CORE1-M3,Computer Room,🦝,Core One Upgraded,MMU Slot,3,,1,🦝 Core One Upgraded MMU Slot 3,Yes
+CORE1-M4,Computer Room,🦝,Core One Upgraded,MMU Slot,4,,1,🦝 Core One Upgraded MMU Slot 4,Yes
+CORE1-M5,Computer Room,🦝,Core One Upgraded,MMU Slot,5,,1,🦝 Core One Upgraded MMU Slot 5,Yes
+CR-CT-1,Computer Room,,,Cart,,,,Computer Room Cart 1,Yes
+CR-CT-1-R1,Computer Room,,,Cart,,,,Computer Room Cart 1 Row 1,Yes
+CR-CT-1-R2,Computer Room,,,Cart,,,,Computer Room Cart 1 Row 2,Yes
+CR-CT-1-R3,Computer Room,,,Cart,,,,Computer Room Cart 1 Row 3,Yes
+CR-CT-2,Computer Room,,,Cart,,,,Computer Room Cart 2,Yes
+CR-CT-2-R1,Computer Room,,,Cart,,,,Computer Room Cart 2 Row 1,Yes
+CR-CT-2-R2,Computer Room,,,Cart,,,,Computer Room Cart 2 Row 2,Yes
+CR-CT-2-R3,Computer Room,,,Cart,,,,Computer Room Cart 2 Row 3,Yes
+CR-CT-3,Computer Room,,,Cart,,,,Computer Room Cart 3,Yes
+CR-CT-3-R1,Computer Room,,,Cart,,,,Computer Room Cart 3 Row 1,Yes
+CR-CT-3-R2,Computer Room,,,Cart,,,,Computer Room Cart 3 Row 2,Yes
+CR-CT-3-R3,Computer Room,,,Cart,,,,Computer Room Cart 3 Row 3,Yes
+CR-CT-4,Computer Room,,,Cart,,,,Computer Room Cart 4,Yes
+CR-CT-4-R1,Computer Room,,,Cart,,,,Computer Room Cart 4 Row 1,Yes
+CR-CT-4-R2,Computer Room,,,Cart,,,,Computer Room Cart 4 Row 2,Yes
+CR-CT-4-R3,Computer Room,,,Cart,,,,Computer Room Cart 4 Row 3,Yes
+CR-MDB-1,Computer Room,,Multi,Dryer Box,,,4,Computer Room Multi-Dryer Box,Yes
+DR-CT-1,Dinning Room,,,Cart,,,,Dining Room Cart 1,Yes
+DR-CT-1-R1,Dinning Room,,,Cart,,,,Dining Room Cart 1 Row 1,Yes
+DR-CT-1-R2-R,Dinning Room,,,Cart,,,,Dining Room Cart 1 Row 2 Right,Yes
+DR-CT-1-R2-L,Dinning Room,,,Cart,,,,Dining Room Cart 1 Row 2 Left,Yes
+DR-CT-1-R3-R,Dinning Room,,,Cart,,,,Dining Room Cart 1 Row 3 Right,Yes
+DR-CT-1-R3-L,Dinning Room,,,Cart,,,,Dining Room Cart 1 Row 3 Left,Yes
+DR-CT-1-R4-R,Dinning Room,,,Cart,,,,Dining Room Cart 1 Row 4 Right,Yes
+DR-CT-1-R4-L,Dinning Room,,,Cart,,,,Dining Room Cart 1 Row 4 Left,Yes
+LR-MDB-1,Living Room,Creality Space Pi X4,Multi,Dryer Box,,,4,Living Room Multi-Dryer Box,Yes
+LR-SD-2,Living Room,,,Sliding Drawer,,,,Living Room Sliding Drawer 2,Yes
+PJ-CT-1,,,,Cart,,,,Project Cart 1,Yes
+PM-DB-1,,PolyMaker,Single,Dryer Box,1,,1,PolyMaker Dryer Box 1,Yes
+PM-DB-2,,PolyMaker,Single,Dryer Box,2,,1,PolyMaker Dryer Box 2,Yes
+PM-DB-3,,PolyMaker,Single,Dryer Box,3,,1,PolyMaker Dryer Box 3,Yes
+PM-DB-4,,PolyMaker,Single,Dryer Box,4,,1,PolyMaker Dryer Box 4,Yes
+PM-DB-5,,PolyMaker,Single,Dryer Box,5,,1,PolyMaker Dryer Box 5,Yes
+PM-DB-6,,PolyMaker,Single,Dryer Box,7,,1,PolyMaker Dryer Box 6,Yes
+PM-DB-7,,PolyMaker,Single,Dryer Box,8,,1,PolyMaker Dryer Box 7,Yes
+PM-DB-8,,PolyMaker,Single,Dryer Box,9,,1,PolyMaker Dryer Box 8,Yes
+XL-1,Living Room,🦝,XL,Tool Head,1,,1,🦝 XL Tool Head 1,Yes
+XL-2,Living Room,🦝,XL,Tool Head,2,,1,🦝 XL Tool Head 2,Yes
+XL-3,Living Room,🦝,XL,Tool Head,3,,1,🦝 XL Tool Head 3,Yes
+XL-4,Living Room,🦝,XL,Tool Head,4,,1,🦝 XL Tool Head 4,Yes
+XL-5,Living Room,🦝,XL,Tool Head,5,,1,🦝 XL Tool Head 5,Yes
+LR-MDB-2,Living Room,Sunlu Filament Dryer E2,Multi,Dryer Box,,,2,Sunlu Filament Dryer E2,No
+TST-MDB-1,,Test Filament Dryer,Multi,Dryer Box,,,6,Test Filament Dryer,No
