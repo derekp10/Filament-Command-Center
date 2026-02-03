@@ -138,9 +138,9 @@ def api_identify_scan():
     text = request.json.get('text', '')
     res = logic.resolve_scan(text)
 
-    # --- AUDIT MODE INTERCEPTION (The Missing Link) ---
+    # --- AUDIT MODE INTERCEPTION (The Fix!) ---
     # 1. Activation Trigger
-    if res.get('type') == 'command' and res.get('cmd') == 'audit':
+    if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
         state.reset_audit()
         state.AUDIT_SESSION['active'] = True
         state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
