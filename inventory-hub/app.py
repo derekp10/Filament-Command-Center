@@ -6,7 +6,7 @@ import locations_db
 import spoolman_api
 import logic
 
-VERSION = "v153.0 (Deep Clean)"
+VERSION = "v153.1 (Audit Mode)"
 app = Flask(__name__)
 
 @app.after_request
@@ -89,6 +89,21 @@ def api_manage_contents():
     loc_id = data.get('location', '').strip().upper() 
     spool_input = data.get('spool_id') 
     slot_arg = data.get('slot') 
+
+    # --- NEW: HANDLE AUDIT COMMANDS ---
+    if spool_input and "CMD:AUDIT" in str(spool_input).upper():
+        state.reset_audit()
+        state.AUDIT_SESSION['active'] = True
+        state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
+        state.add_log_entry("Scan a Location label to begin checking.", "INFO")
+        return jsonify({"success": True})
+
+    # --- NEW: INTERCEPT FOR AUDIT MODE ---
+    if state.AUDIT_SESSION['active']:
+        # Resolve what was scanned
+        resolution = logic.resolve_scan(str(spool_input))
+        return jsonify(logic.process_audit_scan(resolution))
+    # ----------------------------------------------------
 
     if action == 'clear_location':
         contents = spoolman_api.get_spools_at_location_detailed(loc_id)

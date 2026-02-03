@@ -32,6 +32,10 @@ def resolve_scan(text):
                 val = parts[-1].strip()
                 if val.isdigit(): return {'type': 'command', 'cmd': 'slot', 'value': val}
             except: pass
+        
+        # NEW: Allow AUDIT command to pass through as a command
+        if "CMD:AUDIT" in upper_text: return {'type': 'command', 'cmd': 'audit'}
+
         return {'type': 'error', 'msg': 'Malformed Command'}
 
     # DIRECT ID
@@ -173,3 +177,77 @@ def perform_undo():
             
     state.add_log_entry(f"↩️ Undid: {last['summary']}", "WARNING")
     return {"success": True}
+
+def process_audit_scan(scan_result):
+    """Handles scans when in Audit Mode."""
+    session = state.AUDIT_SESSION
+    
+    # 1. COMMANDS
+    if scan_result['type'] == 'command':
+        cmd = scan_result['cmd']
+        if cmd == 'done' or cmd == 'cancel':
+            # Generate Report
+            missing = [sid for sid in session['expected_items'] if sid not in session['scanned_items']]
+            
+            summary = "📝 <b>Audit Report:</b><br>"
+            if not missing and not session['rogue_items']:
+                summary += "✅ Perfect Match! All items accounted for."
+                color = "00ff00" # Green
+            else:
+                color = "ffaa00" # Orange
+                if missing: summary += f"❌ <b>Missing:</b> {', '.join(map(str, missing))}<br>"
+                if session['rogue_items']: summary += f"⚠️ <b>Extra:</b> {', '.join(map(str, session['rogue_items']))}"
+            
+            state.add_log_entry(summary, "INFO", color)
+            state.reset_audit()
+            state.add_log_entry("Audit Mode Ended.", "INFO")
+            return {"status": "success", "msg": "Audit Complete"}
+            
+        return {"status": "error", "msg": "Command not allowed in Audit"}
+
+    # 2. LOCATION SCAN (Sets the target)
+    if scan_result['type'] == 'location':
+        loc_id = scan_result['id']
+        # If we already have a location, maybe switch? For now, stick to one.
+        if session['location_id']:
+            state.add_log_entry(f"⚠️ Already auditing {session['location_id']}. Finish first!", "WARNING")
+            return {"status": "error"}
+            
+        session['location_id'] = loc_id
+        # Fetch what SHOULD be there
+        expected = spoolman_api.get_spools_at_location(loc_id)
+        session['expected_items'] = expected
+        state.add_log_entry(f"🧐 Auditing <b>{loc_id}</b>. expecting {len(expected)} items. Start scanning!", "INFO", "00aaff")
+        return {"status": "success"}
+
+    # 3. SPOOL SCAN (The checking part)
+    if scan_result['type'] == 'spool':
+        if not session['location_id']:
+            state.add_log_entry("⚠️ Scan a Location first!", "WARNING")
+            return {"status": "error"}
+            
+        spool_id = scan_result['id']
+        
+        # Check if duplicate scan
+        if spool_id in session['scanned_items']:
+            return {"status": "success", "msg": "Already scanned"}
+            
+        session['scanned_items'].append(spool_id)
+        
+        if spool_id in session['expected_items']:
+            rem = len(session['expected_items']) - len(session['scanned_items'])
+            msg = f"✅ Found #{spool_id}"
+            if rem > 0: msg += f" ({rem} left)"
+            else: msg += " (All found!)"
+            state.add_log_entry(msg, "INFO", "00ff00")
+        else:
+            # It's a Rogue Spool! (Belongs somewhere else)
+            session['rogue_items'].append(spool_id)
+            # Fetch info to see where it THINKS it is
+            data = spoolman_api.get_spool(spool_id)
+            curr_loc = data.get('location', 'Unknown')
+            state.add_log_entry(f"⚠️ Found #{spool_id}! (DB says: {curr_loc})", "WARNING")
+            
+        return {"status": "success"}
+
+    return {"status": "error", "msg": "Unknown scan type"}
