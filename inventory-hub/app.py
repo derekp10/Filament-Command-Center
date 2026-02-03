@@ -135,7 +135,28 @@ def api_manage_contents():
 
 @app.route('/api/identify_scan', methods=['POST'])
 def api_identify_scan():
-    res = logic.resolve_scan(request.json.get('text', ''))
+    text = request.json.get('text', '')
+    res = logic.resolve_scan(text)
+
+    # --- AUDIT MODE INTERCEPTION (The Missing Link) ---
+    # 1. Activation Trigger
+    if res.get('type') == 'command' and res.get('cmd') == 'audit':
+        state.reset_audit()
+        state.AUDIT_SESSION['active'] = True
+        state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
+        state.add_log_entry("Scan a Location label to begin checking.", "INFO")
+        # Tell dashboard to just clear the text box
+        return jsonify({"type": "command", "cmd": "clear"}) 
+
+    # 2. Active Mode Processing
+    if state.AUDIT_SESSION.get('active'):
+        # Pass the scan result (Spool/Location/Command) to the Audit Brain
+        logic.process_audit_scan(res)
+        # Always tell dashboard to clear so you can scan the next item
+        return jsonify({"type": "command", "cmd": "clear"})
+    # --------------------------------------------------
+
+    # Standard Operation (If Audit is OFF)
     if not res: return jsonify({"type": "unknown"})
     if res['type'] == 'location':
         lid = res['id']; 
