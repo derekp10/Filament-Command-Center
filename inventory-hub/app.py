@@ -6,7 +6,7 @@ import locations_db
 import spoolman_api
 import logic
 
-VERSION = "v153.1 (Audit Mode)"
+VERSION = "v153.2 (Audit Mode)"
 app = Flask(__name__)
 
 @app.after_request
@@ -84,26 +84,12 @@ def api_get_contents_route():
 
 @app.route('/api/manage_contents', methods=['POST'])
 def api_manage_contents():
+    # This function handles Manual Add/Remove/Move actions from the UI buttons
     data = request.json
     action = data.get('action') 
     loc_id = data.get('location', '').strip().upper() 
     spool_input = data.get('spool_id') 
     slot_arg = data.get('slot') 
-
-    # --- NEW: HANDLE AUDIT COMMANDS ---
-    if spool_input and "CMD:AUDIT" in str(spool_input).upper():
-        state.reset_audit()
-        state.AUDIT_SESSION['active'] = True
-        state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
-        state.add_log_entry("Scan a Location label to begin checking.", "INFO")
-        return jsonify({"success": True})
-
-    # --- NEW: INTERCEPT FOR AUDIT MODE ---
-    if state.AUDIT_SESSION['active']:
-        # Resolve what was scanned
-        resolution = logic.resolve_scan(str(spool_input))
-        return jsonify(logic.process_audit_scan(resolution))
-    # ----------------------------------------------------
 
     if action == 'clear_location':
         contents = spoolman_api.get_spools_at_location_detailed(loc_id)
@@ -135,26 +121,25 @@ def api_manage_contents():
 
 @app.route('/api/identify_scan', methods=['POST'])
 def api_identify_scan():
+    # This function handles the "Enter Spool ID" text box input
     text = request.json.get('text', '')
     res = logic.resolve_scan(text)
 
-    # --- AUDIT MODE INTERCEPTION (The Fix!) ---
-    # 1. Activation Trigger
+    # --- AUDIT MODE INTERCEPTION ---
+    
+    # 1. Check for Activation Trigger (CMD:AUDIT)
     if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
         state.reset_audit()
         state.AUDIT_SESSION['active'] = True
         state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
         state.add_log_entry("Scan a Location label to begin checking.", "INFO")
-        # Tell dashboard to just clear the text box
         return jsonify({"type": "command", "cmd": "clear"}) 
 
-    # 2. Active Mode Processing
+    # 2. If Audit is Active, route all scans to the Audit Brain
     if state.AUDIT_SESSION.get('active'):
-        # Pass the scan result (Spool/Location/Command) to the Audit Brain
         logic.process_audit_scan(res)
-        # Always tell dashboard to clear so you can scan the next item
         return jsonify({"type": "command", "cmd": "clear"})
-    # --------------------------------------------------
+    # -------------------------------
 
     # Standard Operation (If Audit is OFF)
     if not res: return jsonify({"type": "unknown"})
