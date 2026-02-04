@@ -33,7 +33,7 @@ def resolve_scan(text):
                 if val.isdigit(): return {'type': 'command', 'cmd': 'slot', 'value': val}
             except: pass
         
-        # NEW: Allow AUDIT command to pass through as a command
+        # AUDIT
         if "CMD:AUDIT" in upper_text: return {'type': 'command', 'cmd': 'audit'}
 
         return {'type': 'error', 'msg': 'Malformed Command'}
@@ -80,6 +80,23 @@ def perform_smart_move(target, raw_spools, target_slot=None):
             if found: spools.extend(found)
 
     if not spools: return {"status": "error", "msg": "No spools found"}
+
+    # --- SMART LOAD LOGIC (Auto-Eject Resident) ---
+    # Determine if this is a single-occupancy target (Printer/Toolhead)
+    tgt_info = loc_info_map.get(target)
+    is_printer = target in printer_map
+    is_toolhead = tgt_info and tgt_info.get('Type') in ['Tool Head', 'MMU Slot', 'Printer']
+    
+    if is_printer or is_toolhead:
+        # Check if anyone is already home
+        residents = spoolman_api.get_spools_at_location(target)
+        for rid in residents:
+            # Don't eject the spool we are currently trying to move (if it's already there)
+            if str(rid) not in [str(s) for s in spools]:
+                state.add_log_entry(f"⚠️ <b>Smart Load:</b> Ejecting #{rid} from {target}...", "WARNING")
+                perform_smart_eject(rid)
+    # ----------------------------------------------
+
     undo_record = {"target": target, "moves": {}, "summary": f"Moved {len(spools)} -> {target}"}
 
     for sid in spools:
@@ -205,30 +222,26 @@ def process_audit_scan(scan_result):
             
         return {"status": "error", "msg": "Command not allowed in Audit"}
 
-    # 2. LOCATION SCAN (Sets the target)
+    # 2. LOCATION SCAN
     if scan_result['type'] == 'location':
         loc_id = scan_result['id']
-        # If we already have a location, maybe switch? For now, stick to one.
         if session['location_id']:
             state.add_log_entry(f"⚠️ Already auditing {session['location_id']}. Finish first!", "WARNING")
             return {"status": "error"}
             
         session['location_id'] = loc_id
-        # Fetch what SHOULD be there
         expected = spoolman_api.get_spools_at_location(loc_id)
         session['expected_items'] = expected
         state.add_log_entry(f"🧐 Auditing <b>{loc_id}</b>. expecting {len(expected)} items. Start scanning!", "INFO", "00aaff")
         return {"status": "success"}
 
-    # 3. SPOOL SCAN (The checking part)
+    # 3. SPOOL SCAN
     if scan_result['type'] == 'spool':
         if not session['location_id']:
             state.add_log_entry("⚠️ Scan a Location first!", "WARNING")
             return {"status": "error"}
             
         spool_id = scan_result['id']
-        
-        # Check if duplicate scan
         if spool_id in session['scanned_items']:
             return {"status": "success", "msg": "Already scanned"}
             
@@ -241,9 +254,7 @@ def process_audit_scan(scan_result):
             else: msg += " (All found!)"
             state.add_log_entry(msg, "INFO", "00ff00")
         else:
-            # It's a Rogue Spool! (Belongs somewhere else)
             session['rogue_items'].append(spool_id)
-            # Fetch info to see where it THINKS it is
             data = spoolman_api.get_spool(spool_id)
             curr_loc = data.get('location', 'Unknown')
             state.add_log_entry(f"⚠️ Found #{spool_id}! (DB says: {curr_loc})", "WARNING")
