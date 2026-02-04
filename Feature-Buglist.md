@@ -47,6 +47,10 @@ The Missing Feature:
 
 The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 
+6. Shapeshifting QR Codes in more places.
+
+7. Refactor dashboard to be more modular if possible, and reduce token size/context requirements for some modifications.
+
 
 # **Overarching issue**
 I think we've inadverntaly created 3 levels of logic/complexity here. 1. The physical, Scanning stuff and efficiently Moving it, 2. A UI layer, for debugging, but should only really need to be looked at to confirm things when where you were expecting, and 3, a full on interface that is easier to move spools around than having to use spoolmans lack luster interface.
