@@ -5,7 +5,7 @@
 APP_NAME="inventory-hub"
 
 # 2. Your App Folder
-TARGET_DIR="/mnt/LeftPoolBank1/App_Data/InventoryHub"
+TARGET_DIR="/mnt/LeftBankPool1/App_Data/InventoryHub"
 # ---------------------
 
 echo "🚀 STARTED: Auto-Update Sequence"
