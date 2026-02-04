@@ -6,6 +6,8 @@
 2. May want to make the assignment grid more flexible instead of a 2 by X, perhaps 3 or 4 by X depending on how large. Try to keep as many of the slots available on the screen as we can to prevent scrolling, WITHOUT sacraficing the information being displayed.
 3. Cannot seem to move items between slots in a dryerbox. Perhaps using the unassigned section again for this would be good.
 4. Find and change any hidden gray text in the UI. (Number of locations in location manager, Slot empty in dryerbox slot assignment screen.)
+5. Location manager search feature still buggs out with invalid spool error?
+6. If legacy barcode has no spools attached to it, UI should warn about this, perhapes give option to add new spool?
 
 
 # **Next Steps Items:**
