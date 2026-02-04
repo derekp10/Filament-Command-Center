@@ -7,10 +7,10 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
-        /* --- HIGH CONTRAST THEME --- */
+        /* --- HIGH CONTRAST KIOSK THEME --- */
         body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
         .navbar { background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
-        .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; }
+        .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; text-shadow: 0 0 10px rgba(0, 212, 255, 0.3); }
         
         /* Layout & Utilities */
         .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
@@ -18,21 +18,26 @@
         .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; color: #eee; white-space: pre-wrap; word-break: break-all; }
         .log-INFO { color: #0f0; } .log-WARNING { color: #fc0; } .log-ERROR { color: #f44; }
         
+        /* Text Visibility Fixes */
+        .text-muted { color: #aaa !important; } /* Overrides Bootstrap invisible gray */
+        .status-label { color: #fff; font-weight: 500; margin-right: 20px; }
+        
         /* Buffer Zone */
-        .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; color: #00d4ff; font-weight: bold; display: flex; justify-content: space-between; }
+        .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; color: #00d4ff; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
         .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
         .buffer-item { background: #222; border: 1px solid #555; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; opacity: 0.8; }
         .buffer-item.active-item { border: 2px solid #0f0; opacity: 1; background: #2a2a2a; box-shadow: 0 0 10px rgba(0,255,0,0.2); }
         .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; flex-shrink: 0; }
-        .buffer-text { font-size: 1.6rem; font-weight: bold; margin-left: 15px; }
+        .buffer-text { font-size: 1.6rem; font-weight: bold; margin-left: 15px; color: #fff; }
         .buffer-info { display: flex; align-items: center; }
+        #scan-status { font-size: 1.1rem; color: #00d4ff; font-weight: bold; text-transform: uppercase; }
 
         /* QR & Commands */
         .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
         .cmd-deck { padding: 15px; background: #1a1a1a; border-top: 1px solid #333; display: flex; justify-content: space-around; }
         .cmd-btn { cursor: pointer; transition: 0.2s; border-radius: 8px; padding: 10px; text-align: center; }
         .cmd-btn:active { background: #333; transform: scale(0.95); }
-        .qr-label { font-size: 0.9rem; color: #ccc; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
+        .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
         
         /* Button States */
         .btn-active-audit { background: #4a004a !important; border: 1px solid #ff00ff; }
@@ -44,12 +49,18 @@
         #manageModal { z-index: 1065; }
         #actionModal, #safetyModal, #confirmModal { z-index: 1075; }
 
-        /* Slots Grid */
-        .slot-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px; }
+        /* Slots Grid (RESPONSIVE UPDATE) */
+        .slot-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); /* Dynamic Columns! */
+            gap: 15px; 
+            margin-bottom: 20px; 
+        }
         .slot-btn { background: #222; border: 2px solid #444; border-radius: 10px; height: 180px; display: flex; align-items: center; justify-content: space-between; padding: 10px; cursor: pointer; position: relative; overflow: hidden; }
         .slot-btn.full { border-color: #00d4ff; background: #1a1a1a; }
         .slot-swatch { width: 40px; height: 40px; border-radius: 50%; border: 2px solid #fff; flex-shrink: 0; margin-bottom: 5px; }
-        .slot-content { font-size: 1.2rem; font-weight: bold; word-break: break-word; }
+        .slot-content { font-size: 1.1rem; font-weight: bold; word-break: break-word; color: #fff; }
+        .slot-num { color: #aaa; font-weight: bold; margin-bottom: 5px; }
         
         /* Unslotted List */
         .unslotted-box { border: 2px solid #fc0; background: #1a1a1a; padding: 10px; margin-top: 20px; border-radius: 8px; }
@@ -80,10 +91,10 @@
 
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid">
-            <div class="d-flex align-items-center"><span class="navbar-brand">Filament Command Center</span><span class="version-tag">{{ version }}</span></div>
+            <div class="d-flex align-items-center"><span class="navbar-brand">Filament Command Center</span><span class="version-tag badge bg-dark border border-info ms-2">{{ version }}</span></div>
             <div class="d-flex align-items-center">
-                <div style="margin-right:20px; color:#ccc;"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
-                <div style="margin-right:20px; color:#ccc;"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
+                <div class="status-label"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
+                <div class="status-label"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
                 <button class="btn btn-outline-info btn-sm me-3" onclick="openLocationsModal()">📂 Locations</button>
                 <button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button>
             </div>
@@ -92,13 +103,13 @@
 
     <div class="main-container">
         <div class="col-logs">
-            <div class="p-3 border-bottom border-secondary text-info fw-bold d-flex justify-content-between">
+            <div class="p-3 border-bottom border-secondary text-info fw-bold d-flex justify-content-between align-items-center">
                 <span>Live Activity 📡</span><span id="log-status" class="small text-muted">Auto-Refresh ON</span>
             </div>
             <div id="live-logs" class="log-box" onmouseenter="pauseLogs(true)" onmouseleave="pauseLogs(false)"></div>
         </div>
         <div class="col-buffer">
-            <div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status" style="font-size:1rem; color:#888;">Ready...</span></div>
+            <div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status">Ready...</span></div>
             <div id="buffer-zone" class="buffer-content"></div>
             <div class="cmd-deck">
                 <div class="cmd-btn" onclick="processScan('CMD:CLEAR')"><div class="qr-box" id="qr-clear"></div><div class="qr-label">CLEAR</div></div>
@@ -109,8 +120,10 @@
         </div>
     </div>
 
-    <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-muted" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
-    <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div><div id="headsup-buffer" class="headsup-strip" style="display:none;"><div class="d-flex align-items-center"><span class="me-3 text-warning fw-bold fs-4">✋ READY:</span><div id="headsup-swatch" class="buffer-swatch me-3"></div><span id="headsup-text" class="text-white fw-bold fs-3"></span></div><div class="fs-4 fw-bold text-info border border-info px-3 py-1 rounded" id="headsup-total">Buffer: 0</div></div><div id="buffer-nav-deck" class="nav-deck" style="display:none;"><div class="nav-card" onclick="prevBuffer()"><div class="nav-qr-container me-3" id="qr-prev"></div><div class="text-start"><div class="fw-bold fs-4">< PREV</div></div></div><div class="nav-card" onclick="nextBuffer()"><div class="text-end me-3"><div class="fw-bold fs-4">NEXT ></div></div><div class="nav-qr-container" id="qr-next"></div></div></div><div class="modal-body"><div id="manage-grid-view" style="display:none;"><div class="alert alert-info py-1 mb-2 small text-center">Tap button or scan slot QR (CMD:SLOT:X)</div><div id="slot-grid-container" class="slot-grid"></div><div id="unslotted-container" style="display:none;"></div></div><div id="manage-list-view"><div id="manage-contents-list" class="mb-4"></div></div><hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add (To Buffer)</button></div><div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary"><button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button><div class="text-center"><div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div><div class="qr-label">DONE</div></div></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
+    <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-info fw-bold" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
+    
+    <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3 text-info" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div><div id="headsup-buffer" class="headsup-strip" style="display:none;"><div class="d-flex align-items-center"><span class="me-3 text-warning fw-bold fs-4">✋ READY:</span><div id="headsup-swatch" class="buffer-swatch me-3"></div><span id="headsup-text" class="text-white fw-bold fs-3"></span></div><div class="fs-4 fw-bold text-info border border-info px-3 py-1 rounded" id="headsup-total">Buffer: 0</div></div><div id="buffer-nav-deck" class="nav-deck" style="display:none;"><div class="nav-card" onclick="prevBuffer()"><div class="nav-qr-container me-3" id="qr-prev"></div><div class="text-start"><div class="fw-bold fs-4">< PREV</div></div></div><div class="nav-card" onclick="nextBuffer()"><div class="text-end me-3"><div class="fw-bold fs-4">NEXT ></div></div><div class="nav-qr-container" id="qr-next"></div></div></div><div class="modal-body"><div id="manage-grid-view" style="display:none;"><div class="alert alert-info py-1 mb-2 small text-center fw-bold">Tap button or scan slot QR (CMD:SLOT:X)</div><div id="slot-grid-container" class="slot-grid"></div><div id="unslotted-container" style="display:none;"></div></div><div id="manage-list-view"><div id="manage-contents-list" class="mb-4"></div></div><hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add (To Buffer)</button></div><div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary"><button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button><div class="text-center"><div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div><div class="qr-label">DONE</div></div></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
+
     <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-3 mb-4"></p><div id="action-buttons" class="modal-action-row d-flex justify-content-center gap-5 flex-wrap"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
     <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #fc0;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRMATION</h5></div><div class="modal-body text-center"><p id="confirm-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4"><div class="text-center" onclick="confirmAction(false)" style="cursor:pointer"><div id="qr-confirm-no" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-secondary btn-lg">❌ NO</button></div><div class="text-center" onclick="confirmAction(true)" style="cursor:pointer"><div id="qr-confirm-yes" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-success btn-lg">✅ YES</button></div></div></div></div></div></div>
     <div class="modal fade" id="safetyModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #f44;"><div class="modal-header bg-danger text-white"><h5 class="modal-title fw-bold">⚠️ SAFETY CONFIRMATION</h5></div><div class="modal-body text-center"><p id="safety-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4"><div class="text-center" onclick="confirmSafety(false)" style="cursor:pointer"><div id="qr-safety-no" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-secondary btn-lg">❌ NO</button></div><div class="text-center" onclick="confirmSafety(true)" style="cursor:pointer"><div id="qr-safety-yes" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-danger btn-lg">✅ YES</button></div></div></div></div></div></div>
@@ -118,8 +131,24 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.4 (Quick Pick + Fixes)";
+        const DASHBOARD_VERSION = "v153.5 (Kiosk Polish)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
+
+        // --- WAKE LOCK LOGIC ---
+        let wakeLock = null;
+        const requestWakeLock = async () => {
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('💡 Screen Wake Lock Active');
+                } catch (err) { console.log('Wake Lock Error:', err); }
+            }
+        };
+        // Retry Wake Lock on visibility change or click (browsers are picky)
+        document.addEventListener('visibilitychange', async () => { if (wakeLock !== null && document.visibilityState === 'visible') { await requestWakeLock(); } });
+        document.addEventListener('click', requestWakeLock, { once: true });
+        requestWakeLock();
+        // -----------------------
 
         let modals = {}; 
         let state = { scanBuffer: "", bufferTimeout: null, heldSpools: [], ejectMode: false, lastScannedLoc: null, pendingConfirm: null, pendingSafety: null, allLocations: [], logsPaused: false, currentGrid: {}, processing: false, modalCallbacks: [], activeModal: null, auditActive: false, lastAuditState: null };
@@ -141,7 +170,6 @@
 
             document.getElementById("manual-spool-id").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); manualAddSpool(); }});
             
-            // Immediate Fetch to fix "Loc Error"
             updateLogState();
             fetchLocations(); 
         });
@@ -195,43 +223,18 @@
                     else if (res.cmd === 'slot') handleSlotInteraction(res.value);
                     else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
                 } else if (res.type === 'location') {
-                    // --- SMART PICK LOGIC ---
                     const locData = state.allLocations.find(l => l.LocationID === res.id);
                     const maxSpools = locData ? parseInt(locData['Max Spools']) : 0;
                     const isSingleSlot = maxSpools <= 1;
                     const isOccupied = res.contents && res.contents.length > 0;
-
-                    // 1. OVERRIDE: Double Scan Same Location -> FORCE MANAGE
-                    if (state.lastScannedLoc === res.id) {
-                        state.heldSpools = []; renderBuffer(); // Clear buffer for clean manage session
-                        openManage(res.id);
-                        state.lastScannedLoc = null; // Reset
-                        return;
-                    }
-                    
-                    // 2. STANDARD: Buffer -> Target
-                    if (state.heldSpools.length > 0) {
-                        performContextAssign(res.id);
-                        state.lastScannedLoc = null;
-                        return;
-                    }
-
-                    // 3. QUICK PICK: Occupied Single Slot -> Buffer
+                    if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
+                    if (state.heldSpools.length > 0) { performContextAssign(res.id); state.lastScannedLoc = null; return; }
                     if (isSingleSlot && isOccupied) {
-                        const spool = res.contents[0];
-                        state.heldSpools.unshift({id: spool.id, display: spool.display, color: spool.color});
-                        renderBuffer();
-                        showToast("⚡ Quick Pick: #" + spool.id);
-                        state.lastScannedLoc = res.id; // Flag for override next time
-                        return;
+                        const spool = res.contents[0]; state.heldSpools.unshift({id: spool.id, display: spool.display, color: spool.color}); renderBuffer(); showToast("⚡ Quick Pick: #" + spool.id); state.lastScannedLoc = res.id; return;
                     }
-
-                    // 4. DEFAULT: Open Manage
-                    openManage(res.id);
-                    state.lastScannedLoc = res.id;
-                    
+                    openManage(res.id); state.lastScannedLoc = res.id;
                 } else if (res.type === 'spool') {
-                    state.lastScannedLoc = null; // Clear loc memory
+                    state.lastScannedLoc = null; 
                     if (state.ejectMode) { ejectSpool(res.id, "Scan", false); state.ejectMode = false; }
                     else if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
                     else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); }
