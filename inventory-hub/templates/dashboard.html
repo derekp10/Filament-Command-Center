@@ -188,6 +188,18 @@
             document.getElementById('toast-container').appendChild(el); setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
         };
 
+        const pauseLogs = (isPaused) => {
+            state.logsPaused = isPaused;
+            const el = document.getElementById('log-status');
+            if (isPaused) {
+                el.innerText = "PAUSED ⏸";
+                el.style.color = "#fc0"; // Warning Yellow
+            } else {
+                el.innerText = "Auto-Refresh ON";
+                el.style.color = "#aaa"; // Muted Gray
+            }
+        };
+
         const renderBuffer = () => {
             const z = document.getElementById('buffer-zone'), h = document.getElementById('headsup-buffer'), n = document.getElementById('buffer-nav-deck');
             if (state.heldSpools.length === 0) { z.innerHTML = `<div class="text-center text-muted mt-5"><h3>Buffer Empty</h3></div>`; h.style.display = n.style.display = 'none'; return; }
