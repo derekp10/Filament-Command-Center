@@ -6,7 +6,7 @@ import locations_db
 import spoolman_api
 import logic
 
-VERSION = "v153.2 (Audit Mode)"
+VERSION = "v153.3 (Audit UI)"
 app = Flask(__name__)
 
 @app.after_request
@@ -167,9 +167,12 @@ def api_get_logs_route():
     except: pass
     try: fb_ok = requests.get(f"{fb_url}/status", timeout=1).ok
     except: pass
+    
+    # ADDED: audit_active status
     return jsonify({
         "logs": state.RECENT_LOGS,
         "undo_available": len(state.UNDO_STACK) > 0,
+        "audit_active": state.AUDIT_SESSION.get('active', False),
         "status": {"spoolman": sm_ok, "filabridge": fb_ok}
     })
 
