@@ -118,7 +118,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.3 (Audit UI Fixed)";
+        const DASHBOARD_VERSION = "v153.4 (Quick Pick + Fixes)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         let modals = {}; 
@@ -127,14 +127,11 @@
         document.addEventListener('DOMContentLoaded', () => {
             ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
             
-            // NOTE: 'qr-audit' is EXCLUDED here because it is handled dynamically by updateLogState()
             const qrs = { 'qr-undo': 'CMD:UNDO', 'qr-clear': 'CMD:CLEAR', 'qr-eject': 'CMD:EJECT', 'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL', 'qr-modal-cancel': 'CMD:MODAL:CANCEL', 'qr-done': 'CMD:DONE', 'qr-prev': 'CMD:PREV', 'qr-next': 'CMD:NEXT' };
             for(const [id, txt] of Object.entries(qrs)) new QRCode(document.getElementById(id), {text: txt, width: document.getElementById(id).style.width?.replace('px','') || 120, height: document.getElementById(id).style.height?.replace('px','') || 120});
 
-            // Init Audit QR Default
             new QRCode(document.getElementById('qr-audit'), {text: 'CMD:AUDIT', width: 120, height: 120});
 
-            // Event Delegation
             document.getElementById('location-table').addEventListener('click', (e) => {
                 const btn = e.target.closest('.btn-manage');
                 if (btn) openManage(btn.dataset.id);
@@ -144,8 +141,9 @@
 
             document.getElementById("manual-spool-id").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); manualAddSpool(); }});
             
-            // Immediate State Fetch
+            // Immediate Fetch to fix "Loc Error"
             updateLogState();
+            fetchLocations(); 
         });
 
         window.addEventListener('blur', () => document.getElementById('focus-guard').style.display = 'flex');
@@ -174,10 +172,7 @@
         const nextBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.push(state.heldSpools.shift()); renderBuffer(); } };
         const prevBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
         
-        const toggleAudit = () => {
-            if (state.auditActive) processScan("CMD:DONE");
-            else processScan("CMD:AUDIT");
-        };
+        const toggleAudit = () => { if (state.auditActive) processScan("CMD:DONE"); else processScan("CMD:AUDIT"); };
 
         const processScan = (text) => {
             const upper = text.toUpperCase();
@@ -194,14 +189,49 @@
             fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) }).then(r=>r.json()).then(res => {
                 setProcessing(false);
                 if (res.type === 'command') {
-                    const cmds = { 'clear': ()=>{state.heldSpools=[];renderBuffer();showToast("Buffer Cleared");}, 'undo': triggerUndo, 'eject': ()=>{showToast("EJECT MODE", "warning");state.ejectMode=true;}, 'next': nextBuffer, 'prev': prevBuffer, 'done': closeManage };
+                    const cmds = { 'clear': ()=>{state.heldSpools=[];renderBuffer();showToast("Buffer Cleared");state.lastScannedLoc=null;}, 'undo': triggerUndo, 'eject': ()=>{showToast("EJECT MODE", "warning");state.ejectMode=true;}, 'next': nextBuffer, 'prev': prevBuffer, 'done': closeManage };
                     if (cmds[res.cmd]) cmds[res.cmd]();
                     else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true);
                     else if (res.cmd === 'slot') handleSlotInteraction(res.value);
                     else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
                 } else if (res.type === 'location') {
-                    if (state.heldSpools.length > 0) performContextAssign(res.id); else openManage(res.id);
+                    // --- SMART PICK LOGIC ---
+                    const locData = state.allLocations.find(l => l.LocationID === res.id);
+                    const maxSpools = locData ? parseInt(locData['Max Spools']) : 0;
+                    const isSingleSlot = maxSpools <= 1;
+                    const isOccupied = res.contents && res.contents.length > 0;
+
+                    // 1. OVERRIDE: Double Scan Same Location -> FORCE MANAGE
+                    if (state.lastScannedLoc === res.id) {
+                        state.heldSpools = []; renderBuffer(); // Clear buffer for clean manage session
+                        openManage(res.id);
+                        state.lastScannedLoc = null; // Reset
+                        return;
+                    }
+                    
+                    // 2. STANDARD: Buffer -> Target
+                    if (state.heldSpools.length > 0) {
+                        performContextAssign(res.id);
+                        state.lastScannedLoc = null;
+                        return;
+                    }
+
+                    // 3. QUICK PICK: Occupied Single Slot -> Buffer
+                    if (isSingleSlot && isOccupied) {
+                        const spool = res.contents[0];
+                        state.heldSpools.unshift({id: spool.id, display: spool.display, color: spool.color});
+                        renderBuffer();
+                        showToast("⚡ Quick Pick: #" + spool.id);
+                        state.lastScannedLoc = res.id; // Flag for override next time
+                        return;
+                    }
+
+                    // 4. DEFAULT: Open Manage
+                    openManage(res.id);
+                    state.lastScannedLoc = res.id;
+                    
                 } else if (res.type === 'spool') {
+                    state.lastScannedLoc = null; // Clear loc memory
                     if (state.ejectMode) { ejectSpool(res.id, "Scan", false); state.ejectMode = false; }
                     else if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
                     else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); }
@@ -309,14 +339,13 @@
                 document.getElementById('st-spoolman').className=`status-dot ${d.status.spoolman?'status-on':'status-off'}`; 
                 document.getElementById('st-filabridge').className=`status-dot ${d.status.filabridge?'status-on':'status-off'}`;
                 
-                // DYNAMIC QR SWAP LOGIC
                 state.auditActive = d.audit_active;
                 if (state.auditActive !== state.lastAuditState) {
                     state.lastAuditState = state.auditActive;
                     const btn = document.getElementById('btn-audit');
                     const lbl = document.getElementById('lbl-audit');
                     const qrDiv = document.getElementById('qr-audit');
-                    qrDiv.innerHTML = ""; // Clear old QR
+                    qrDiv.innerHTML = ""; 
                     
                     if (state.auditActive) {
                         btn.classList.add('btn-active-audit');
