@@ -19,7 +19,7 @@
         .log-INFO { color: #0f0; } .log-WARNING { color: #fc0; } .log-ERROR { color: #f44; }
         
         /* Text Visibility Fixes */
-        .text-muted { color: #aaa !important; } /* Overrides Bootstrap invisible gray */
+        .text-muted { color: #aaa !important; } 
         .status-label { color: #fff; font-weight: 500; margin-right: 20px; }
         
         /* Buffer Zone */
@@ -49,13 +49,15 @@
         #manageModal { z-index: 1065; }
         #actionModal, #safetyModal, #confirmModal { z-index: 1075; }
 
-        /* Slots Grid (RESPONSIVE UPDATE) */
-        .slot-grid { 
-            display: grid; 
-            grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); /* Dynamic Columns! */
-            gap: 15px; 
-            margin-bottom: 20px; 
-        }
+        /* RESPONSIVE TABLE FIXES */
+        .table-fixed { table-layout: fixed; width: 100%; }
+        .col-id { width: 18%; font-weight: bold; color: #00d4ff; }
+        .col-name { width: 32%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .col-status { width: 20%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .col-actions { width: 30%; text-align: right; white-space: nowrap; }
+
+        /* Slots Grid (Responsive) */
+        .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 15px; margin-bottom: 20px; }
         .slot-btn { background: #222; border: 2px solid #444; border-radius: 10px; height: 180px; display: flex; align-items: center; justify-content: space-between; padding: 10px; cursor: pointer; position: relative; overflow: hidden; }
         .slot-btn.full { border-color: #00d4ff; background: #1a1a1a; }
         .slot-swatch { width: 40px; height: 40px; border-radius: 50%; border: 2px solid #fff; flex-shrink: 0; margin-bottom: 5px; }
@@ -120,7 +122,9 @@
         </div>
     </div>
 
-    <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-info fw-bold" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0" style="font-size:1.1rem;"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
+    <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-info fw-bold" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0">
+        <table class="table table-hover table-dark mb-0 table-fixed" style="font-size:1.1rem;"><thead><tr><th class="col-id">ID</th><th class="col-name">Name</th><th class="col-status">Status</th><th class="col-actions">Actions</th></tr></thead><tbody id="location-table"></tbody></table>
+    </div></div></div></div>
     
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3 text-info" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div><div id="headsup-buffer" class="headsup-strip" style="display:none;"><div class="d-flex align-items-center"><span class="me-3 text-warning fw-bold fs-4">✋ READY:</span><div id="headsup-swatch" class="buffer-swatch me-3"></div><span id="headsup-text" class="text-white fw-bold fs-3"></span></div><div class="fs-4 fw-bold text-info border border-info px-3 py-1 rounded" id="headsup-total">Buffer: 0</div></div><div id="buffer-nav-deck" class="nav-deck" style="display:none;"><div class="nav-card" onclick="prevBuffer()"><div class="nav-qr-container me-3" id="qr-prev"></div><div class="text-start"><div class="fw-bold fs-4">< PREV</div></div></div><div class="nav-card" onclick="nextBuffer()"><div class="text-end me-3"><div class="fw-bold fs-4">NEXT ></div></div><div class="nav-qr-container" id="qr-next"></div></div></div><div class="modal-body"><div id="manage-grid-view" style="display:none;"><div class="alert alert-info py-1 mb-2 small text-center fw-bold">Tap button or scan slot QR (CMD:SLOT:X)</div><div id="slot-grid-container" class="slot-grid"></div><div id="unslotted-container" style="display:none;"></div></div><div id="manage-list-view"><div id="manage-contents-list" class="mb-4"></div></div><hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add (To Buffer)</button></div><div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary"><button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button><div class="text-center"><div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div><div class="qr-label">DONE</div></div></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
 
@@ -131,7 +135,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.5 (Kiosk Polish)";
+        const DASHBOARD_VERSION = "v153.6 (Final Polish)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK LOGIC ---
@@ -144,7 +148,6 @@
                 } catch (err) { console.log('Wake Lock Error:', err); }
             }
         };
-        // Retry Wake Lock on visibility change or click (browsers are picky)
         document.addEventListener('visibilitychange', async () => { if (wakeLock !== null && document.visibilityState === 'visible') { await requestWakeLock(); } });
         document.addEventListener('click', requestWakeLock, { once: true });
         requestWakeLock();
@@ -155,10 +158,8 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
-            
             const qrs = { 'qr-undo': 'CMD:UNDO', 'qr-clear': 'CMD:CLEAR', 'qr-eject': 'CMD:EJECT', 'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL', 'qr-modal-cancel': 'CMD:MODAL:CANCEL', 'qr-done': 'CMD:DONE', 'qr-prev': 'CMD:PREV', 'qr-next': 'CMD:NEXT' };
             for(const [id, txt] of Object.entries(qrs)) new QRCode(document.getElementById(id), {text: txt, width: document.getElementById(id).style.width?.replace('px','') || 120, height: document.getElementById(id).style.height?.replace('px','') || 120});
-
             new QRCode(document.getElementById('qr-audit'), {text: 'CMD:AUDIT', width: 120, height: 120});
 
             document.getElementById('location-table').addEventListener('click', (e) => {
@@ -169,7 +170,6 @@
             });
 
             document.getElementById("manual-spool-id").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); manualAddSpool(); }});
-            
             updateLogState();
             fetchLocations(); 
         });
@@ -182,22 +182,26 @@
             else if (e.key.length === 1) { state.scanBuffer += e.key; clearTimeout(state.bufferTimeout); state.bufferTimeout = setTimeout(() => state.scanBuffer = "", 2000); }
         });
 
-        const setProcessing = (s) => { state.processing = s; document.getElementById('processing-overlay').style.display = s ? 'flex' : 'none'; };
-        const showToast = (msg, type='info') => {
-            const el = document.createElement('div'); el.className = 'toast-msg'; el.innerText = msg; el.style.borderColor = type==='error'?'#f44':(type==='warning'?'#fc0':'#00d4ff');
-            document.getElementById('toast-container').appendChild(el); setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
-        };
-
+        // --- RESTORED PAUSE LOGS FUNCTION ---
         const pauseLogs = (isPaused) => {
             state.logsPaused = isPaused;
             const el = document.getElementById('log-status');
             if (isPaused) {
                 el.innerText = "PAUSED ⏸";
-                el.style.color = "#fc0"; // Warning Yellow
+                el.classList.remove('text-muted'); // 🟡 Fix: Allow color to change
+                el.style.color = "#fc0"; 
             } else {
                 el.innerText = "Auto-Refresh ON";
-                el.style.color = "#aaa"; // Muted Gray
+                el.classList.add('text-muted');
+                el.style.color = ""; 
             }
+        };
+        // -------------------------------------
+
+        const setProcessing = (s) => { state.processing = s; document.getElementById('processing-overlay').style.display = s ? 'flex' : 'none'; };
+        const showToast = (msg, type='info') => {
+            const el = document.createElement('div'); el.className = 'toast-msg'; el.innerText = msg; el.style.borderColor = type==='error'?'#f44':(type==='warning'?'#fc0':'#00d4ff');
+            document.getElementById('toast-container').appendChild(el); setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
         };
 
         const renderBuffer = () => {
@@ -211,14 +215,12 @@
         };
         const nextBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.push(state.heldSpools.shift()); renderBuffer(); } };
         const prevBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
-        
         const toggleAudit = () => { if (state.auditActive) processScan("CMD:DONE"); else processScan("CMD:AUDIT"); };
 
         const processScan = (text) => {
             const upper = text.toUpperCase();
             if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
             if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
-            
             if (state.activeModal === 'action') {
                 if(upper.includes('CANCEL')) { closeModal('actionModal'); return; }
                 if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; }
@@ -275,7 +277,7 @@
         const fetchLocations = () => {
             fetch('/api/locations').then(r=>r.json()).then(d => {
                 state.allLocations=d; document.getElementById('loc-count').innerText = d.length + " Locs";
-                document.getElementById('location-table').innerHTML = d.map(l => `<tr><td style="color:#00d4ff;font-weight:bold;">${l.LocationID}</td><td>${l.Name}</td><td>${l.Occupancy||''} <span class="badge bg-secondary">${l.Type}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${l.LocationID}">✏️</button><button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${l.LocationID}">🗑️</button><button class="btn btn-sm btn-info btn-manage" data-id="${l.LocationID}">Manage</button></td></tr>`).join('');
+                document.getElementById('location-table').innerHTML = d.map(l => `<tr><td class="col-id">${l.LocationID}</td><td class="col-name">${l.Name}</td><td class="col-status">${l.Occupancy||''} <span class="badge bg-secondary">${l.Type}</span></td><td class="col-actions"><button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${l.LocationID}">✏️</button><button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${l.LocationID}">🗑️</button><button class="btn btn-sm btn-info btn-manage" data-id="${l.LocationID}">Manage</button></td></tr>`).join('');
             });
         };
         const refreshManageView = (id) => {
@@ -361,16 +363,11 @@
                     const lbl = document.getElementById('lbl-audit');
                     const qrDiv = document.getElementById('qr-audit');
                     qrDiv.innerHTML = ""; 
-                    
                     if (state.auditActive) {
-                        btn.classList.add('btn-active-audit');
-                        lbl.innerText = "FINISH";
-                        lbl.classList.add('label-active-audit');
+                        btn.classList.add('btn-active-audit'); lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit');
                         new QRCode(qrDiv, {text: "CMD:DONE", width: 120, height: 120});
                     } else {
-                        btn.classList.remove('btn-active-audit');
-                        lbl.innerText = "AUDIT";
-                        lbl.classList.remove('label-active-audit');
+                        btn.classList.remove('btn-active-audit'); lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit');
                         new QRCode(qrDiv, {text: "CMD:AUDIT", width: 120, height: 120});
                     }
                 }
