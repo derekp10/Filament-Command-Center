@@ -85,7 +85,7 @@
         #processing-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 12000; display: none; justify-content: center; align-items: center; cursor: wait; }
         #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 12000; display: none; justify-content: center; align-items: center; border: 20px solid #f44; text-align: center; }
 
-        /* --- STICKER FACTORY: PRINT CSS --- */
+        /* --- STICKER FACTORY: PRINT CSS (Corrected for 24mm Tape) --- */
         @media screen {
             #printable-label-container { display: none; }
         }
@@ -93,38 +93,55 @@
             body * { visibility: hidden; }
             #printable-label-container, #printable-label-container * { visibility: visible; }
             #printable-label-container { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; }
-            @page { margin: 0; size: auto; } /* Let the printer driver handle 24mm size */
+            @page { margin: 0; size: auto; } /* Critical for P-Touch drivers */
         }
 
-        /* LABEL LAYOUT (Based on Screenshot: ~24mm x 48mm) */
+        /* LABEL LAYOUT: 48mm Width x 22mm Height (Fits 24mm tape) */
         .label-box {
-            width: 360px; /* Scaled up for screen/print resolution */
-            height: 180px; 
-            border: 2px solid #000;
+            width: 48mm; 
+            height: 22mm; 
+            border: 1px solid #000;
             background: #fff;
             color: #000;
             font-family: 'Arial', sans-serif;
             display: flex;
-            padding: 4px;
+            padding: 0.5mm;
             box-sizing: border-box;
             overflow: hidden;
+            font-size: 8pt;
         }
-        .label-qr { width: 172px; height: 172px; padding: 2px; flex-shrink: 0; border-right: 1px dashed #ccc; }
-        .label-data { flex-grow: 1; display: flex; flex-direction: column; margin-left: 4px; }
         
-        .lbl-row { display: flex; border: 2px solid #000; margin-bottom: -2px; align-items: stretch; height: 34px; }
-        .lbl-key { font-weight: bold; font-size: 18px; padding: 4px; border-right: 2px solid #000; width: 65px; display: flex; align-items: center; }
-        .lbl-val { font-weight: bold; font-size: 20px; padding: 0 4px; white-space: nowrap; overflow: hidden; display: flex; align-items: center; flex-grow: 1; }
+        /* QR Area: Fixed 20.5mm square */
+        .label-qr { 
+            width: 20.5mm; 
+            height: 20.5mm; 
+            border-right: 1px dashed #000; 
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        /* FORCE QR TO FIT */
+        .label-qr img { width: 100% !important; height: auto !important; }
+
+        /* Data Area: Remaining Width */
+        .label-data { flex-grow: 1; display: flex; flex-direction: column; margin-left: 0.5mm; justify-content: space-between; }
         
-        .lbl-split-row { display: flex; height: 34px; margin-bottom: -2px; }
-        .lbl-half { display: flex; border: 2px solid #000; flex: 1; margin-right: -2px; }
+        .lbl-row { display: flex; border: 1px solid #000; margin-bottom: -1px; align-items: stretch; height: 4.2mm; line-height: 4.2mm; }
+        .lbl-row:last-child { margin-bottom: 0; }
+        
+        .lbl-key { font-weight: bold; font-size: 6pt; padding: 0 1mm; border-right: 1px solid #000; width: 11mm; flex-shrink: 0; display:flex; align-items:center; }
+        .lbl-val { font-weight: bold; font-size: 8pt; padding: 0 1mm; white-space: nowrap; overflow: hidden; display:flex; align-items:center; flex-grow: 1; }
+        
+        .lbl-split-row { display: flex; height: 4.2mm; margin-bottom: -1px; }
+        .lbl-half { display: flex; border: 1px solid #000; flex: 1; margin-right: -1px; }
         .lbl-half:last-child { margin-right: 0; }
-        .lbl-key-sm { font-weight: bold; font-size: 16px; padding: 2px; border-right: 2px solid #000; width: 45px; display: flex; align-items: center; }
-        .lbl-val-sm { font-weight: bold; font-size: 18px; padding: 0 2px; flex-grow: 1; display: flex; align-items: center; justify-content: center; }
+        .lbl-key-sm { font-weight: bold; font-size: 6pt; padding: 0 1mm; border-right: 1px solid #000; width: 7mm; display:flex; align-items:center; }
+        .lbl-val-sm { font-weight: bold; font-size: 7pt; padding: 0 1mm; flex-grow: 1; display:flex; align-items:center; justify-content:center; }
         
-        .lbl-rgb-row { border: 2px solid #000; display: flex; height: 34px; }
-        .lbl-rgb-key { font-weight: bold; font-size: 16px; padding: 2px; border-right: 2px solid #000; width: 50px; display: flex; align-items: center; }
-        .lbl-rgb-val { font-weight: bold; font-size: 18px; flex: 1; border-right: 2px solid #000; display: flex; align-items: center; justify-content: center; }
+        .lbl-rgb-row { border: 1px solid #000; display: flex; height: 4.2mm; }
+        .lbl-rgb-key { font-weight: bold; font-size: 6pt; padding: 0 1mm; border-right: 1px solid #000; width: 8mm; display:flex; align-items:center; }
+        .lbl-rgb-val { font-weight: bold; font-size: 7pt; flex: 1; border-right: 1px solid #000; display:flex; align-items:center; justify-content:center; }
         .lbl-rgb-val:last-child { border-right: none; }
     </style>
 </head>
@@ -198,7 +215,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.7 (Sticker Factory)";
+        const DASHBOARD_VERSION = "v153.8 (Printer Fix)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK LOGIC ---
@@ -268,12 +285,12 @@
                 const colorHex = fil.color_hex || '000000';
                 const rgb = hexToRgb(colorHex);
                 
-                // Populate Fields
                 document.getElementById('print-qr').innerHTML = "";
-                new QRCode(document.getElementById('print-qr'), {text: `ID:${sid}`, width: 172, height: 172});
+                // Generate QR Code inside the small box (Size handled by CSS scaling)
+                new QRCode(document.getElementById('print-qr'), {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L});
                 
                 document.getElementById('lbl-brand').innerText = fil.vendor ? fil.vendor.name : "Generic";
-                document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; // Clean quotes
+                document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; 
                 document.getElementById('lbl-type').innerText = fil.material;
                 document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
                 document.getElementById('lbl-id').innerText = sid;
@@ -281,8 +298,7 @@
                 document.getElementById('lbl-g').innerText = rgb.g;
                 document.getElementById('lbl-b').innerText = rgb.b;
                 
-                // Trigger Print
-                setTimeout(() => window.print(), 300);
+                setTimeout(() => window.print(), 500);
             }).catch(e => { setProcessing(false); showToast("Print Error", "error"); console.error(e); });
         };
         // ----------------------------
