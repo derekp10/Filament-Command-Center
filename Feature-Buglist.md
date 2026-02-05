@@ -5,6 +5,8 @@
 1. Logic behind CORE1-M0/M1 Needs to be refiend. Updating one, or the other will change the current Toolhead0 slot to what ever was last placed into M0 or M1. But with no flag to tell when in MMU mode, it's hard to know what should take priority here... This is assuming that using 5 toolheads to emulate a MMU is the correct answer here for this.
 2. If legacy barcode has no spools attached to it, UI should warn about this, perhapes give option to add new spool?
 3. Spoolman ExternalID is not a visible field to add to the data when viewing it in spoolman. As much as I don't want to duplicate data in the database, being able to see that data in the view lists might be handy. But this is very low priority, and may be achived by other means like inport/export or not needed depending on UI/config/features added. We should evaluate this after we've added more features to Command Center.
+4. Multi-color swatches don't appear to be working again. This needs to be fixed.
+5. Add unassigned Location in Location manager.
 
 
 # **Next Steps Items:**
