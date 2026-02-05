@@ -63,7 +63,7 @@
 
         #printable-label-container { display: none; }
 
-        /* --- STICKER FACTORY: COMPACT & CENTERED v153.21 --- */
+        /* --- STICKER FACTORY: FINAL CALIBRATION v153.22 --- */
         @media print {
             body * { visibility: hidden; }
             @page { size: 50mm 24mm; margin: 0; }
@@ -74,46 +74,46 @@
                 position: fixed; left: 0; top: 0; 
                 width: 50mm; height: 24mm;
                 background: white;
-                
                 display: flex;
                 justify-content: center; 
                 align-items: flex-start;
                 
-                /* Top: 7mm (Restored to v153.19 value which cleared top) 
-                   Left: 4.5mm (Centers a 41mm box in 50mm space)
+                /* CALIBRATED OFFSETS:
+                   Left: 5mm (Centers a 40mm box in 50mm space)
+                   Top: 7mm (Proven to clear Brother dead zone)
                 */
                 padding-top: 7mm;
-                padding-left: 4.5mm;
+                padding-left: 5mm;
             }
         }
 
-        /* BOX DIMENSIONS */
+        /* CALIBRATED CONTENT BOX */
         .label-box {
-            width: 41mm;    /* Narrower to ensure side borders print */
-            height: 16.5mm; /* Shorter to ensure bottom fits (7+16.5=23.5) */
-            border: 1.5px solid #000;
+            width: 40mm;    /* Narrowed to ensure side borders print clearly */
+            height: 16.5mm; /* Locked height */
+            border: 2px solid #000;
             background: #fff; color: #000;
             font-family: 'Arial', sans-serif;
             display: flex; box-sizing: border-box; overflow: hidden;
         }
         
         .label-qr { 
-            width: 16.5mm; /* Matches height */
-            height: 100%; border-right: 1.5px solid #000; 
+            width: 16.5mm; 
+            height: 100%; border-right: 2px solid #000; 
             flex-shrink: 0; display: flex; 
             align-items: center; justify-content: center; padding: 0.5mm; 
         }
         .label-qr img { width: 100% !important; height: auto !important; }
 
-        .label-data { flex-grow: 1; display: flex; flex-direction: column; }
+        .label-data { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; }
         
         .lbl-row { display: flex; border-bottom: 1.5px solid #000; align-items: center; width: 100%; height: 20%; }
         .lbl-row:last-child { border-bottom: none; }
 
         .lbl-key { 
-            font-weight: 900; font-size: 5pt; 
+            font-weight: 900; font-size: 4.5pt; /* Ultra-compact label */
             padding-left: 2px; border-right: 1.5px solid #000; 
-            width: 8mm; flex-shrink: 0; text-transform: uppercase;
+            width: 7mm; flex-shrink: 0; text-transform: uppercase;
             display: flex; align-items: center; height: 100%;
         }
         .lbl-val { 
@@ -122,10 +122,14 @@
             display: flex; align-items: center; flex-grow: 1; height: 100%;
         }
         
-        /* Footer Split */
+        /* Footer Split: More space for HEX value */
         .lbl-split { display: flex; width: 100%; height: 100%; }
-        .lbl-half { flex: 1; display: flex; align-items: center; border-right: 1.5px solid #000; font-size: 5pt; font-weight: bold; padding-left: 2px; }
+        .lbl-half { display: flex; align-items: center; border-right: 1.5px solid #000; font-size: 4.5pt; font-weight: bold; padding-left: 2px; }
+        .lbl-half-hex { flex: 1.4; } /* Give HEX more room */
+        .lbl-half-id { flex: 0.6; }  /* ID is small */
         .lbl-half:last-child { border-right: none; }
+        
+        .small-tag { font-weight: 900; font-size: 3.5pt; margin-right: 1mm; text-transform: uppercase; }
     </style>
 </head>
 <body>
@@ -138,8 +142,8 @@
                 <div class="lbl-row"><div class="lbl-key">Type</div><div class="lbl-val" id="lbl-type"></div></div>
                 <div class="lbl-row">
                     <div class="lbl-split">
-                        <div class="lbl-half" id="lbl-hex">HEX</div>
-                        <div class="lbl-half" id="lbl-id">ID</div>
+                        <div class="lbl-half lbl-half-hex"><span class="small-tag">HEX</span><span id="lbl-hex"></span></div>
+                        <div class="lbl-half lbl-half-id"><span class="small-tag">ID</span><span id="lbl-id"></span></div>
                     </div>
                 </div>
                 <div class="lbl-row"><div class="lbl-key">RGB</div><div class="lbl-val" id="lbl-rgb"></div></div>
@@ -162,7 +166,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.21 (The Nudge & Scrub)";
+        const DASHBOARD_VERSION = "v153.22 (Certified Clean)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK ---
@@ -242,9 +246,9 @@
                 document.getElementById('lbl-type').innerText = fil.material;
                 
                 // Footer Values
-                document.getElementById('lbl-hex').innerText = `HEX: ${colorHex.toUpperCase()}`;
-                document.getElementById('lbl-id').innerText = `ID: ${sid}`;
-                document.getElementById('lbl-rgb').innerText = `${rgb.r},${rgb.g},${rgb.b}`; // FIXED: No Prefix
+                document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
+                document.getElementById('lbl-id').innerText = sid;
+                document.getElementById('lbl-rgb').innerText = `${rgb.r},${rgb.g},${rgb.b}`; // Clean CSV style
                 
                 setTimeout(() => window.print(), 500);
             }).catch(e => { setProcessing(false); showToast("Print Error", "error"); console.error(e); });
