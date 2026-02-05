@@ -63,7 +63,7 @@
 
         #printable-label-container { display: none; }
 
-        /* --- STICKER FACTORY: VERTICAL OFFSET MODE (v153.15) --- */
+        /* --- STICKER FACTORY: AGGRESSIVE OFFSET (v153.16) --- */
         @media print {
             body * { visibility: hidden; }
             @page { size: 50mm 24mm; margin: 0; }
@@ -81,18 +81,18 @@
                 width: 50mm; height: 24mm;
                 background: white;
                 
-                /* ALIGNMENT TWEAK: */
+                /* BIG SHIFT DOWN */
                 display: flex;
-                justify-content: center; /* Center Horizontally */
-                align-items: flex-start; /* Align Top (Allows padding to push it down) */
-                padding-top: 3mm; /* PUSH DOWN 3mm to clear the top dead zone */
+                justify-content: center; /* Center Horizontal */
+                align-items: flex-start; /* Align Top */
+                padding-top: 5mm; /* 5mm Vertical Push (Clears Dead Zone) */
             }
         }
 
-        /* SAFE ZONE BOX (Expanded width, shifted down) */
+        /* EXPANDED CONTENT BOX */
         .label-box {
-            width: 46mm;  /* Wider (was 45mm) */
-            height: 19mm; /* Taller (was 18mm) */
+            width: 48mm;  /* Wider (was 46mm) */
+            height: 18mm; /* Shorter (was 19mm, keeps bottom safe) */
             border: 2px solid #000;
             background: #fff; color: #000;
             font-family: 'Arial', sans-serif;
@@ -100,7 +100,7 @@
         }
         
         .label-qr { 
-            width: 19mm; /* Matches height */
+            width: 18mm; /* Matches height */
             height: 100%; 
             border-right: 2px solid #000; 
             flex-shrink: 0; display: flex; 
@@ -202,7 +202,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.15 (Vertical Offset Fix)";
+        const DASHBOARD_VERSION = "v153.16 (Aggressive Offset)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK ---
