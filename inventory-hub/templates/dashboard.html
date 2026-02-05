@@ -16,23 +16,22 @@
             .col-logs, .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
             .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; color: #eee; white-space: pre-wrap; word-break: break-all; }
             .buffer-item { background: #222; border: 1px solid #555; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; }
-            .buffer-item.active-item { border: 2px solid #0f0; background: #2a2a2a; }
             .cmd-deck { padding: 15px; background: #1a1a1a; border-top: 1px solid #333; display: flex; justify-content: space-around; }
             .cmd-btn { cursor: pointer; border-radius: 8px; padding: 10px; text-align: center; }
             .qr-box { background: white; padding: 5px; border-radius: 4px; }
             
-            /* Hide the Print Label on Screen */
+            /* HIDE PRINT ON SCREEN */
             #printable-label-container { display: none; }
         }
 
-        /* --- PHASE 1: GEOMETRY CHECK (Print Only) --- */
+        /* --- PHASE 2: GRID LAYOUT (Print Only) --- */
         @media print {
-            body * { visibility: hidden; } /* Hide everything */
+            body * { visibility: hidden; }
             
-            /* FORCE PAGE GEOMETRY */
+            /* FORCE PAGE GEOMETRY (Proven to work) */
             @page { 
                 size: 50mm 24mm; 
-                margin: 0mm !important; /* Force 0 margins in CSS */
+                margin: 0mm !important; 
             }
             
             html, body {
@@ -41,74 +40,149 @@
                 overflow: hidden;
             }
 
-            /* Show Label Container */
+            /* CONTAINER */
             #printable-label-container, #printable-label-container * { visibility: visible; }
             
             #printable-label-container {
                 position: fixed; top: 0; left: 0;
                 width: 50mm; height: 24mm;
                 background: white;
-                color: black;
-                font-family: Arial, sans-serif;
-                /* Simple Flex Layout */
                 display: flex;
                 align-items: center;
-                padding: 1mm; /* Safety Margin */
-                box-sizing: border-box;
-                border: 1px dashed red; /* Debug Border - Shows printable area */
+                justify-content: center;
+                /* No border on container to avoid edge clipping */
             }
         }
 
-        /* SIMPLE CONTENT STYLING */
-        .phase1-qr {
-            width: 20mm;
-            height: 20mm;
-            border: 1px solid blue; /* Debug Border */
+        /* INNER CONTENT BOX */
+        .label-box {
+            width: 48mm; /* 1mm safety margin on sides */
+            height: 22mm; /* 1mm safety margin on top/bottom */
+            border: 2px solid black;
+            font-family: Arial, sans-serif;
             display: flex;
-            align-items: center;
-            justify-content: center;
+            box-sizing: border-box;
+            color: black;
         }
-        .phase1-qr img { width: 100%; height: auto; }
 
-        .phase1-text {
-            flex-grow: 1;
-            margin-left: 2mm;
-            font-size: 10pt;
-            font-weight: bold;
-            border: 1px solid green; /* Debug Border */
-            height: 20mm;
+        /* LEFT: QR CODE */
+        .label-qr {
+            width: 22mm;
+            height: 100%;
+            border-right: 2px solid black;
             display: flex;
             align-items: center;
             justify-content: center;
-            text-align: center;
-            word-break: break-all;
+            padding: 1mm;
+            flex-shrink: 0;
         }
+        .label-qr img { width: 100% !important; height: auto !important; }
+
+        /* RIGHT: DATA GRID */
+        .label-data {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ROWS */
+        .lbl-row {
+            display: flex;
+            border-bottom: 1px solid black;
+            align-items: center;
+            height: 25%; /* 4 rows = 100% */
+            width: 100%;
+        }
+        .lbl-row:last-child { border-bottom: none; }
+
+        /* KEYS (Brand:, Color:) */
+        .lbl-key {
+            font-weight: 900;
+            font-size: 6pt;
+            text-transform: uppercase;
+            padding: 0 1mm;
+            border-right: 1px solid black;
+            width: 9mm; /* Fixed width for alignment */
+            flex-shrink: 0;
+            display: flex; align-items: center; height: 100%;
+        }
+
+        /* VALUES (Prusament, Orange) */
+        .lbl-val {
+            font-weight: bold;
+            font-size: 7.5pt;
+            padding: 0 1mm;
+            white-space: nowrap;
+            overflow: hidden;
+            flex-grow: 1;
+            display: flex; align-items: center; height: 100%;
+        }
+
+        /* FOOTER (Hex/ID) */
+        .lbl-split {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+        .lbl-half {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            border-right: 1px solid black;
+            font-size: 6pt;
+            font-weight: bold;
+            padding: 0 1mm;
+            white-space: nowrap; overflow: hidden;
+        }
+        .lbl-half:last-child { border-right: none; }
+
     </style>
 </head>
 <body>
     <div id="printable-label-container">
-        <div class="phase1-qr" id="print-qr"></div>
-        <div class="phase1-text" id="print-text">WAITING...</div>
+        <div class="label-box">
+            <div class="label-qr" id="print-qr"></div>
+            <div class="label-data">
+                <div class="lbl-row">
+                    <div class="lbl-key">Brand</div>
+                    <div class="lbl-val" id="lbl-brand">Unknown</div>
+                </div>
+                <div class="lbl-row">
+                    <div class="lbl-key">Color</div>
+                    <div class="lbl-val" id="lbl-color">Unknown</div>
+                </div>
+                <div class="lbl-row">
+                    <div class="lbl-key">Type</div>
+                    <div class="lbl-val" id="lbl-type">PLA</div>
+                </div>
+                <div class="lbl-row">
+                    <div class="lbl-split">
+                        <div class="lbl-half" id="lbl-hex">HEX: 000000</div>
+                        <div class="lbl-half" id="lbl-id">ID: 000</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="processing-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999;"></div>
 
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid">
-            <span class="navbar-brand">Phase 1 Test</span>
+            <span class="navbar-brand">Filament Command Center</span>
         </div>
     </nav>
 
     <div class="main-container">
         <div class="col-logs">
-            <div class="p-3 text-info fw-bold">Scan Spool to Print</div>
+            <div class="p-3 text-info fw-bold">Ready to Print</div>
             <div id="live-logs" class="log-box"></div>
         </div>
         <div class="col-buffer">
             <div class="buffer-header">CONTROLS</div>
             <div class="p-3">
                 <input type="text" id="manual-spool-id" class="form-control mb-3" placeholder="Enter Spool ID">
-                <button class="btn btn-primary w-100" onclick="manualPrint()">🖨️ TEST PRINT</button>
+                <button class="btn btn-primary w-100" onclick="manualPrint()">🖨️ PRINT LABEL</button>
             </div>
         </div>
     </div>
@@ -117,25 +191,34 @@
     <script>
         const setProcessing = (s) => document.getElementById('processing-overlay').style.display = s ? 'block' : 'none';
 
-        // --- PHASE 1 PRINT LOGIC ---
+        // --- LABEL LOGIC ---
         const printLabel = (sid) => {
             setProcessing(true);
             fetch(`/api/spool_details?id=${sid}`).then(r=>r.json()).then(data => {
                 setProcessing(false);
                 const fil = data.filament || {};
-                const vendor = fil.vendor ? fil.vendor.name : "Generic";
-                const material = fil.material || "PLA";
+                const extra = fil.extra || {};
                 
+                // Data Prep
+                const vendor = fil.vendor ? fil.vendor.name : "Generic";
+                const colorName = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name;
+                const material = fil.material || "PLA";
+                const hex = (fil.color_hex || '000000').toUpperCase();
+
                 // 1. Generate QR
                 document.getElementById('print-qr').innerHTML = "";
                 new QRCode(document.getElementById('print-qr'), {
                     text: `ID:${sid}`,
-                    width: 100, height: 100,
+                    width: 120, height: 120,
                     correctLevel: QRCode.CorrectLevel.L
                 });
 
-                // 2. Set Text
-                document.getElementById('print-text').innerHTML = `${vendor}<br>${material}<br>#${sid}`;
+                // 2. Fill Data
+                document.getElementById('lbl-brand').innerText = vendor;
+                document.getElementById('lbl-color').innerText = colorName;
+                document.getElementById('lbl-type').innerText = material;
+                document.getElementById('lbl-hex').innerText = `HEX: ${hex}`;
+                document.getElementById('lbl-id').innerText = `ID: ${sid}`;
 
                 // 3. Print
                 setTimeout(() => window.print(), 500);
