@@ -68,74 +68,91 @@
         #processing-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 12000; display: none; justify-content: center; align-items: center; cursor: wait; }
         #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 12000; display: none; justify-content: center; align-items: center; border: 20px solid #f44; text-align: center; }
 
-        /* --- STICKER FACTORY: PRINT CSS (Corrected for 24mm Tape) --- */
+        /* --- STICKER FACTORY: MAX FILL CSS --- */
         @media screen {
             #printable-label-container { display: none; }
         }
         @media print {
             body * { visibility: hidden; }
             #printable-label-container, #printable-label-container * { visibility: visible; }
-            /* FORCE PAGE SIZE: 50mm wide x 24mm tall (Landscape orientation implied) */
             @page { size: 50mm 24mm; margin: 0; } 
             
             #printable-label-container { 
                 position: fixed; 
                 left: 0; top: 0; 
                 width: 50mm; height: 24mm;
-                display: flex;
-                align-items: center;
-                justify-content: center;
+                /* No margins or centering here, let the inner box handle padding */
                 background: white;
             }
         }
 
-        /* LABEL LAYOUT: 46mm Width x 20mm Height (Safe Area for 50x24) */
+        /* FLEX LAYOUT (Full Expansion) */
         .label-box {
-            width: 46mm; 
-            height: 20mm; 
+            width: 100%; height: 100%; /* Fill the page */
+            padding: 1mm; /* Safety Margin from hardware edge */
             border: 1px solid #000;
             background: #fff;
             color: #000;
             font-family: 'Arial', sans-serif;
             display: flex;
-            padding: 0.5mm;
             box-sizing: border-box;
             overflow: hidden;
-            font-size: 7pt; /* Smaller base font */
         }
         
-        /* QR Area: Fixed 18mm square */
+        /* QR Code: Expands to fit height */
         .label-qr { 
-            width: 18mm; 
-            height: 18mm; 
+            width: 22mm; /* Square-ish */
             border-right: 1px dashed #000; 
             flex-shrink: 0;
             display: flex;
             align-items: center;
             justify-content: center;
+            padding: 1mm;
         }
-        /* FORCE QR TO FIT */
         .label-qr img { width: 100% !important; height: auto !important; }
 
-        /* Data Area: Remaining Width */
-        .label-data { flex-grow: 1; display: flex; flex-direction: column; margin-left: 0.5mm; justify-content: space-between; }
+        /* Data Area: Fills remaining width */
+        .label-data { 
+            flex-grow: 1; 
+            display: flex; 
+            flex-direction: column; 
+            margin-left: 1mm; 
+            justify-content: space-between; /* Spread rows vertically */
+        }
         
-        .lbl-row { display: flex; border: 1px solid #000; margin-bottom: -1px; align-items: stretch; height: 3.8mm; line-height: 3.8mm; }
+        .lbl-row { 
+            display: flex; 
+            border: 1px solid #000; 
+            margin-bottom: -1px; 
+            align-items: stretch; 
+            flex: 1; /* Rows grow to fill height */
+        }
         .lbl-row:last-child { margin-bottom: 0; }
         
-        /* Compact Columns to fix clipping */
-        .lbl-key { font-weight: bold; font-size: 5pt; padding: 0 1mm; border-right: 1px solid #000; width: 8mm; flex-shrink: 0; display:flex; align-items:center; }
-        .lbl-val { font-weight: bold; font-size: 7pt; padding: 0 1mm; white-space: nowrap; overflow: hidden; display:flex; align-items:center; flex-grow: 1; }
+        /* Bold, Readable Fonts */
+        .lbl-key { 
+            font-weight: bold; font-size: 8pt; 
+            padding: 0 1mm; border-right: 1px solid #000; 
+            width: 12mm; flex-shrink: 0; 
+            display: flex; align-items: center; 
+        }
+        .lbl-val { 
+            font-weight: bold; font-size: 9pt; 
+            padding: 0 1mm; white-space: nowrap; overflow: hidden; 
+            display: flex; align-items: center; flex-grow: 1; 
+        }
         
-        .lbl-split-row { display: flex; height: 3.8mm; margin-bottom: -1px; }
+        /* Split Row (Hex/ID) */
+        .lbl-split-row { display: flex; flex: 1; margin-bottom: -1px; }
         .lbl-half { display: flex; border: 1px solid #000; flex: 1; margin-right: -1px; }
         .lbl-half:last-child { margin-right: 0; }
-        .lbl-key-sm { font-weight: bold; font-size: 5pt; padding: 0 1mm; border-right: 1px solid #000; width: 6mm; display:flex; align-items:center; }
-        .lbl-val-sm { font-weight: bold; font-size: 6pt; padding: 0 1mm; flex-grow: 1; display:flex; align-items:center; justify-content:center; }
+        .lbl-key-sm { font-weight: bold; font-size: 7pt; padding: 0 1mm; border-right: 1px solid #000; width: 8mm; display:flex; align-items:center; }
+        .lbl-val-sm { font-weight: bold; font-size: 8pt; padding: 0 1mm; flex-grow: 1; display:flex; align-items:center; justify-content:center; }
         
-        .lbl-rgb-row { border: 1px solid #000; display: flex; height: 3.8mm; }
-        .lbl-rgb-key { font-weight: bold; font-size: 5pt; padding: 0 1mm; border-right: 1px solid #000; width: 6mm; display:flex; align-items:center; }
-        .lbl-rgb-val { font-weight: bold; font-size: 6pt; flex: 1; border-right: 1px solid #000; display:flex; align-items:center; justify-content:center; }
+        /* RGB Row */
+        .lbl-rgb-row { border: 1px solid #000; display: flex; flex: 1; }
+        .lbl-rgb-key { font-weight: bold; font-size: 7pt; padding: 0 1mm; border-right: 1px solid #000; width: 9mm; display:flex; align-items:center; }
+        .lbl-rgb-val { font-weight: bold; font-size: 8pt; flex: 1; border-right: 1px solid #000; display:flex; align-items:center; justify-content:center; }
         .lbl-rgb-val:last-child { border-right: none; }
     </style>
 </head>
@@ -209,7 +226,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.9 (Precision Print)";
+        const DASHBOARD_VERSION = "v153.10 (Full Bleed Print)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK LOGIC ---
