@@ -63,7 +63,7 @@
 
         #printable-label-container { display: none; }
 
-        /* --- STICKER FACTORY: SAFE ZONE MODE (v153.14) --- */
+        /* --- STICKER FACTORY: VERTICAL OFFSET MODE (v153.15) --- */
         @media print {
             body * { visibility: hidden; }
             @page { size: 50mm 24mm; margin: 0; }
@@ -81,21 +81,18 @@
                 width: 50mm; height: 24mm;
                 background: white;
                 
-                /* CRITICAL: Center the Safe Zone in the middle of the page */
+                /* ALIGNMENT TWEAK: */
                 display: flex;
-                align-items: center;
-                justify-content: center;
+                justify-content: center; /* Center Horizontally */
+                align-items: flex-start; /* Align Top (Allows padding to push it down) */
+                padding-top: 3mm; /* PUSH DOWN 3mm to clear the top dead zone */
             }
         }
 
-        /* SAFE ZONE BOX
-           Hardware Dead Zone is ~2mm-3mm.
-           Tape is 24mm. Max safe height ~18mm.
-           Tape is 50mm. Max safe width ~45mm.
-        */
+        /* SAFE ZONE BOX (Expanded width, shifted down) */
         .label-box {
-            width: 45mm;  /* Shrunk from 48mm */
-            height: 18mm; /* Shrunk from 22mm */
+            width: 46mm;  /* Wider (was 45mm) */
+            height: 19mm; /* Taller (was 18mm) */
             border: 2px solid #000;
             background: #fff; color: #000;
             font-family: 'Arial', sans-serif;
@@ -103,7 +100,7 @@
         }
         
         .label-qr { 
-            width: 18mm; /* Matches height */
+            width: 19mm; /* Matches height */
             height: 100%; 
             border-right: 2px solid #000; 
             flex-shrink: 0; display: flex; 
@@ -121,15 +118,14 @@
         .row-md { height: 20%; } 
         .row-sm { height: 20%; border-bottom: none; }
 
-        /* Smaller Fonts for Smaller Box */
         .lbl-key { 
-            font-weight: 900; font-size: 5.5pt; /* Smaller */
+            font-weight: 900; font-size: 5.5pt; 
             padding-left: 2px; border-right: 1.5px solid #000; 
             width: 8mm; flex-shrink: 0; text-transform: uppercase;
             display: flex; align-items: center; height: 100%;
         }
         .lbl-val { 
-            font-weight: bold; font-size: 7pt; /* Smaller */
+            font-weight: bold; font-size: 7pt; 
             padding-left: 3px; white-space: nowrap; overflow: hidden; 
             display: flex; align-items: center; flex-grow: 1; height: 100%;
         }
@@ -206,7 +202,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.14 (Safe Zone Print)";
+        const DASHBOARD_VERSION = "v153.15 (Vertical Offset Fix)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK ---
