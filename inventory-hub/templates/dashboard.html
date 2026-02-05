@@ -8,7 +8,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         /* --- GLOBAL KIOSK THEME --- */
-        body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; margin: 0; padding: 0; }
         .navbar { background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
         .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; text-shadow: 0 0 10px rgba(0, 212, 255, 0.3); }
         .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
@@ -31,17 +31,23 @@
         .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
         .btn-active-audit { background: #4a004a !important; border: 1px solid #ff00ff; }
         .label-active-audit { color: #ff00ff !important; font-weight: bold; }
+        
+        /* RESTORED LOCATION MANAGER COLUMNS */
         .modal-content { background: #121212; color: #fff; border: 1px solid #555; }
         .table-fixed { table-layout: fixed; width: 100%; }
-        
+        .col-id { width: 18%; font-weight: bold; color: #00d4ff; }
+        .col-name { width: 35%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .col-status { width: 22%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .col-actions { width: 25%; text-align: right; white-space: nowrap; }
+
         /* UI FIXES for SLOTS */
         .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
         .slot-btn { 
             background: #222; border: 2px solid #444; border-radius: 10px; 
-            min-height: 200px; /* Taller to fit button */
-            display: flex; flex-direction: row; /* Split Left/Right */
+            min-height: 180px; 
+            display: flex; flex-direction: row; 
             align-items: center; justify-content: space-between; 
-            padding: 10px; cursor: pointer; position: relative; overflow: hidden; 
+            padding: 5px; cursor: pointer; position: relative; overflow: hidden; 
         }
         .slot-btn.full { border-color: #00d4ff; background: #1a1a1a; }
         .slot-left { width: 40%; display: flex; flex-direction: column; align-items: center; justify-content: center; }
@@ -53,10 +59,9 @@
         
         #printable-label-container { display: none; }
 
-        /* --- STICKER FACTORY: BORDERLESS & SMART v153.27 --- */
+        /* --- STICKER FACTORY: V153.28 (Restored Borders & UI Fixes) --- */
         @media print {
             body * { visibility: hidden; }
-            /* Using the 56mm Hack for Max Width */
             @page { size: 56mm 24mm; margin: 0; }
             html, body { width: 56mm; height: 24mm; margin: 0; padding: 0; overflow: hidden; }
             #printable-label-container, #printable-label-container * { visibility: visible; }
@@ -68,74 +73,64 @@
                 display: flex;
                 justify-content: center; 
                 align-items: flex-start;
-                
-                /* Keep the 7mm top / 2mm left offset that was working */
                 padding-top: 7mm;
-                padding-left: 2mm;
+                padding-left: 2mm; 
             }
         }
 
-        /* BOX: 50mm Width (Full) x 16.5mm Height
-           NO OUTER BORDER - Allows max font size without clipping
-        */
+        /* BOX: 48mm Width (Safe with Borders) x 16.5mm Height */
         .label-box {
-            width: 50mm; height: 16.5mm; 
-            /* border: 1pt solid #000;  <-- REMOVED OUTER BORDER */
+            width: 48mm; height: 16.5mm; 
+            border: 1.5pt solid #000; /* BORDER RESTORED */
             background: #fff; color: #000;
             font-family: 'Arial Narrow', 'Roboto Condensed', sans-serif;
             font-stretch: condensed;
             display: flex; box-sizing: border-box; overflow: hidden;
         }
         
-        /* QR Code: 2mm Padding for Quiet Zone */
+        /* QR Code with Quiet Zone */
         .label-qr { 
             width: 16.5mm; height: 100%; 
-            border-right: 1.5pt solid #000; /* Keep internal divider */
+            border-right: 1.5pt solid #000; 
             flex-shrink: 0; display: flex; 
             align-items: center; justify-content: center; 
-            padding: 2mm; /* QUIET ZONE INCREASED */
+            padding: 1.5mm; 
         }
         .label-qr img { width: 100% !important; height: auto !important; }
 
         .label-data { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; }
         
-        /* INTERNAL ROWS: Keep dividers */
-        .lbl-row { display: flex; border-bottom: 1pt solid #000; align-items: center; width: 100%; }
+        .lbl-row { display: flex; border-bottom: 1pt solid #000; align-items: center; width: 100%; height: 20%; }
         .lbl-row:last-child { border-bottom: none; }
-
-        /* Row Heights */
-        .row-brand { height: 20%; }
-        .row-color { height: 20%; } 
-        .row-type  { height: 25%; } /* Tall for long type strings */
-        .row-tech  { height: 17.5%; }
-        .row-rgb   { height: 17.5%; }
 
         .lbl-key { 
             font-weight: 900; font-size: 5pt; 
             padding-left: 1px; border-right: 1pt solid #000; 
-            width: 6mm; /* Minimal key width */
-            flex-shrink: 0; text-transform: uppercase;
+            width: 6.5mm; flex-shrink: 0; text-transform: uppercase;
             display: flex; align-items: center; height: 100%;
         }
         
         .lbl-val { 
-            font-weight: bold; font-size: 7.5pt; /* Readable Size */
+            font-weight: bold; font-size: 8pt; 
             padding-left: 2px; white-space: nowrap; overflow: hidden; 
             display: flex; align-items: center; flex-grow: 1; height: 100%;
-            letter-spacing: -0.3px; /* Squeeze text */
+            letter-spacing: -0.2px;
         }
         
-        /* Special handling for Type */
-        .val-type { font-size: 7pt; font-weight: 900; }
+        .val-type { font-size: 7.5pt; font-weight: 900; }
 
-        /* Tech Row (Hex/ID) */
+        /* Tech Row */
         .lbl-split { display: flex; width: 100%; height: 100%; }
-        .lbl-half { display: flex; align-items: center; border-right: 1pt solid #000; font-size: 5.5pt; font-weight: bold; padding-left: 1px; }
-        .lbl-half-hex { flex: 1; font-family: monospace; font-size: 6.5pt; } 
-        .lbl-half-id { flex: 1; font-weight: 900; font-size: 7.5pt; justify-content: center; }  
+        .lbl-half { display: flex; align-items: center; border-right: 1pt solid #000; font-size: 6pt; font-weight: bold; padding-left: 1px; }
+        .lbl-half-hex { flex: 1.4; } 
+        .lbl-half-id { flex: 0.6; }  
         .lbl-half:last-child { border-right: none; }
         
-        .small-tag { font-weight: 900; font-size: 4pt; margin-right: 2px; text-transform: uppercase; color: #444; }
+        .small-tag { font-weight: 900; font-size: 4pt; margin-right: 1mm; text-transform: uppercase; }
+        
+        /* FIX FOR UI QR CODES */
+        /* Only apply 100% width to the print label QR, not the UI ones */
+        #printable-label-container img { width: 100% !important; height: auto !important; }
     </style>
 </head>
 <body>
@@ -148,7 +143,7 @@
                 <div class="lbl-row row-type"><div class="lbl-key">TYPE</div><div class="lbl-val val-type" id="lbl-type"></div></div>
                 <div class="lbl-row row-tech">
                     <div class="lbl-split">
-                        <div class="lbl-half lbl-half-hex"><span class="small-tag">#</span><span id="lbl-hex"></span></div>
+                        <div class="lbl-half lbl-half-hex"><span class="small-tag">HEX</span><span id="lbl-hex"></span></div>
                         <div class="lbl-half lbl-half-id"><span class="small-tag">ID</span><span id="lbl-id"></span></div>
                     </div>
                 </div>
@@ -157,14 +152,19 @@
         </div>
     </div>
 
-    <div id="focus-guard" onclick="document.body.focus()"><div><div style="font-size:5rem;">🚫</div><div style="font-size:3rem;color:#f44;font-weight:bold;">SCANNER PAUSED</div><div class="text-white">Click anywhere to resume</div></div></div>
+    <div id="focus-guard" onclick="document.body.focus()" style="position:fixed; top:0; left:0; right:0; bottom:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:99999; display:none; justify-content:center; align-items:center; border:20px solid #f44; text-align:center;">
+        <div><div style="font-size:5rem;">🚫</div><div style="font-size:3rem;color:#f44;font-weight:bold;">SCANNER PAUSED</div><div class="text-white">Click anywhere to resume</div></div>
+    </div>
+    
     <div id="processing-overlay"><div class="spinner-border text-info" style="width: 5rem; height: 5rem;" role="status"></div></div>
     <div id="toast-container"></div>
     <nav class="navbar navbar-expand-lg"><div class="container-fluid"><div class="d-flex align-items-center"><span class="navbar-brand">Filament Command Center</span><span class="version-tag badge bg-dark border border-info ms-2">{{ version }}</span></div><div class="d-flex align-items-center"><div class="status-label"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div><div class="status-label"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div><button class="btn btn-outline-info btn-sm me-3" onclick="openLocationsModal()">📂 Locations</button><button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button></div></div></nav>
     <div class="main-container"><div class="col-logs"><div class="p-3 border-bottom border-secondary text-info fw-bold d-flex justify-content-between align-items-center"><span>Live Activity 📡</span><span id="log-status" class="small text-muted">Auto-Refresh ON</span></div><div id="live-logs" class="log-box" onmouseenter="pauseLogs(true)" onmouseleave="pauseLogs(false)"></div></div><div class="col-buffer"><div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status">Ready...</span></div><div id="buffer-zone" class="buffer-content"></div><div class="cmd-deck"><div class="cmd-btn" onclick="processScan('CMD:CLEAR')"><div class="qr-box" id="qr-clear"></div><div class="qr-label">CLEAR</div></div><div class="cmd-btn" onclick="triggerUndo()"><div class="qr-box" id="qr-undo"></div><div class="qr-label">UNDO</div></div><div class="cmd-btn" id="btn-audit" onclick="toggleAudit()"><div class="qr-box" id="qr-audit"></div><div class="qr-label" id="lbl-audit">AUDIT</div></div><div class="cmd-btn" onclick="processScan('CMD:EJECT')"><div class="qr-box" id="qr-eject"></div><div class="qr-label">EJECT MODE</div></div></div></div></div>
 
     <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-info fw-bold" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0 table-fixed" style="font-size:1.1rem;"><thead><tr><th class="col-id">ID</th><th class="col-name">Name</th><th class="col-status">Status</th><th class="col-actions">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
+    
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3 text-info" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div><div id="headsup-buffer" class="headsup-strip" style="display:none;"><div class="d-flex align-items-center"><span class="me-3 text-warning fw-bold fs-4">✋ READY:</span><div id="headsup-swatch" class="buffer-swatch me-3"></div><span id="headsup-text" class="text-white fw-bold fs-3"></span></div><div class="fs-4 fw-bold text-info border border-info px-3 py-1 rounded" id="headsup-total">Buffer: 0</div></div><div id="buffer-nav-deck" class="nav-deck" style="display:none;"><div class="nav-card" onclick="prevBuffer()"><div class="nav-qr-container me-3" id="qr-prev"></div><div class="text-start"><div class="fw-bold fs-4">< PREV</div></div></div><div class="nav-card" onclick="nextBuffer()"><div class="text-end me-3"><div class="fw-bold fs-4">NEXT ></div></div><div class="nav-qr-container" id="qr-next"></div></div></div><div class="modal-body"><div id="manage-grid-view" style="display:none;"><div class="alert alert-info py-1 mb-2 small text-center fw-bold">Tap button or scan slot QR (CMD:SLOT:X)</div><div id="slot-grid-container" class="slot-grid"></div><div id="unslotted-container" style="display:none;"></div></div><div id="manage-list-view"><div id="manage-contents-list" class="mb-4"></div></div><hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add (To Buffer)</button></div><div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary"><button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button><div class="text-center"><div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div><div class="qr-label">DONE</div></div></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
+    
     <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-3 mb-4"></p><div id="action-buttons" class="modal-action-row d-flex justify-content-center gap-5 flex-wrap"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
     <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #fc0;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRMATION</h5></div><div class="modal-body text-center"><p id="confirm-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4"><div class="text-center" onclick="confirmAction(false)" style="cursor:pointer"><div id="qr-confirm-no" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-secondary btn-lg">❌ NO</button></div><div class="text-center" onclick="confirmAction(true)" style="cursor:pointer"><div id="qr-confirm-yes" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-success btn-lg">✅ YES</button></div></div></div></div></div></div>
     <div class="modal fade" id="safetyModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #f44;"><div class="modal-header bg-danger text-white"><h5 class="modal-title fw-bold">⚠️ SAFETY CONFIRMATION</h5></div><div class="modal-body text-center"><p id="safety-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4"><div class="text-center" onclick="confirmSafety(false)" style="cursor:pointer"><div id="qr-safety-no" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-secondary btn-lg">❌ NO</button></div><div class="text-center" onclick="confirmSafety(true)" style="cursor:pointer"><div id="qr-safety-yes" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-danger btn-lg">✅ YES</button></div></div></div></div></div></div>
@@ -172,7 +172,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.27 (Borderless Smart)";
+        const DASHBOARD_VERSION = "v153.28 (UI & Label Restoration)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK ---
@@ -244,12 +244,11 @@
                 const colorHex = fil.color_hex || '000000';
                 const rgb = hexToRgb(colorHex);
                 
-                // SMART TYPE LOGIC: Combine Attributes + Material
+                // SMART TYPE LOGIC
                 let typeStr = fil.material || "Unknown";
                 try {
                     let attrs = [];
                     if (extra.filament_attributes) {
-                        // Handle both JSON string and raw list
                         attrs = (typeof extra.filament_attributes === 'string') 
                             ? JSON.parse(extra.filament_attributes) 
                             : extra.filament_attributes;
@@ -264,7 +263,7 @@
                 
                 document.getElementById('lbl-brand').innerText = fil.vendor ? fil.vendor.name : "Generic";
                 document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; 
-                document.getElementById('lbl-type').innerText = typeStr; // NEW SMART TYPE
+                document.getElementById('lbl-type').innerText = typeStr;
                 
                 document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
                 document.getElementById('lbl-id').innerText = sid;
@@ -362,7 +361,7 @@
             for(let i=1; i<=max; i++) {
                 const item = state.currentGrid[i], div = document.createElement('div');
                 div.className = item ? "slot-btn full" : "slot-btn empty";
-                div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="qr-slot-${i}" class="bg-white p-1 rounded"></div></div><div class="slot-right">${item?`<div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div><button class="btn btn-sm btn-light border-dark mt-2 fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>`:`<div class="text-muted fs-4">EMPTY</div>`}</div>`;
+                div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="qr-slot-${i}" class="bg-white rounded"></div></div><div class="slot-right">${item?`<div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div><button class="btn btn-sm btn-light border-dark mt-2 fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>`:`<div class="text-muted fs-4">EMPTY</div>`}</div>`;
                 div.onclick = () => handleSlotInteraction(i); grid.appendChild(div);
                 new QRCode(document.getElementById(`qr-slot-${i}`), {text:"CMD:SLOT:"+i, width:60, height:60});
             }
