@@ -25,7 +25,7 @@
         .buffer-info { display: flex; align-items: center; }
         #scan-status { font-size: 1.1rem; color: #00d4ff; font-weight: bold; text-transform: uppercase; }
         
-        /* UI QR BOXES (Tightened) */
+        /* UI QR BOXES */
         .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
         .nav-qr-container { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; width: 55px; height: 55px; flex-shrink: 0; }
         .nav-qr-container img { width: 45px !important; height: 45px !important; }
@@ -163,7 +163,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.30 (UI Restored + Borderless Label)";
+        const DASHBOARD_VERSION = "v153.31 (UI Fixes + Label Restored)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK ---
@@ -360,28 +360,9 @@
                 un.style.display='block';
                 unslotted.forEach((item, i) => {
                     const div = document.createElement('div'); div.className = "unslotted-item";
-                    // MOVED QR TO RIGHT SIDE
-                    div.innerHTML = `
-                        <div class="d-flex align-items-center">
-                            <div class="buffer-swatch me-3" style="background-color:#${item.color}"></div>
-                            <span class="fs-5 fw-bold">${item.display}</span>
-                        </div>
-                        <div class="control-group">
-                            <div class="text-center me-2">
-                                <div id="qr-pick-${i}" class="qr-box" style="padding:5px;"></div>
-                                <div class="qr-label">PICK</div>
-                            </div>
-                            <button class="btn btn-sm btn-light border-dark fw-bold me-2" onclick="printLabel(${item.id})">🖨️</button>
-                            <button class="btn btn-primary fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">✋</button>
-                            <button class="btn btn-danger fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">🗑️</button>
-                            <div class="text-center ms-2">
-                                <div id="qr-trash-${i}" class="qr-box" style="padding:5px;"></div>
-                                <div class="qr-label">TRASH</div>
-                            </div>
-                        </div>`;
+                    div.innerHTML = `<div class="d-flex align-items-center"><div id="qr-list-${i}" class="qr-box me-3" style="padding:5px;"></div><div class="buffer-swatch me-3" style="background-color:#${item.color}"></div><span class="fs-4 fw-bold">${item.display}</span></div><div class="d-flex gap-2 align-items-center"><button class="btn btn-light fw-bold border-dark" onclick="printLabel(${item.id})">🖨️ LABEL</button><button class="btn btn-primary fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">✋ PICK</button><button class="btn btn-outline-danger" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">🗑️</button></div>`;
                     un.appendChild(div); 
-                    new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+item.id, width:50, height:50}); 
-                    new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+item.id, width:50, height:50});
+                    new QRCode(document.getElementById(`qr-list-${i}`), {text:"ID:"+item.id, width:50, height:50}); 
                 });
                 const dz = document.createElement('div'); dz.className='danger-zone'; dz.innerHTML=`<h4 class="text-danger fw-bold">DANGER ZONE</h4><div class="d-flex justify-content-center align-items-center gap-3"><div class="text-center"><div id="qr-eject-all" class="bg-white p-2 rounded"></div><div class="qr-label text-white">ALL</div></div><button class="btn btn-danger btn-lg fw-bold" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">EJECT ALL 💥</button></div>`;
                 un.appendChild(dz); new QRCode(document.getElementById("qr-eject-all"), {text:"CMD:EJECTALL", width:100, height:100});
@@ -389,7 +370,7 @@
         };
         const renderList = (data, locId) => {
             const list = document.getElementById('manage-contents-list');
-            list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => `<div class="unslotted-item"><div class="d-flex align-items-center"><div class="buffer-swatch me-3" style="background-color:#${s.color}"></div><span class="fs-4 fw-bold">${s.display}</span></div><div class="d-flex gap-2 align-items-center"><div id="qr-list-${i}" class="qr-box me-3" style="padding:5px;"></div><button class="btn btn-light fw-bold border-dark" onclick="printLabel(${s.id})">🖨️ LABEL</button><button class="btn btn-primary fw-bold" onclick="ejectSpool(${s.id}, '${locId}', true)">✋ PICK</button><button class="btn btn-outline-danger" onclick="ejectSpool(${s.id}, '${locId}', false)">🗑️</button></div></div>`).join('');
+            list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => `<div class="unslotted-item"><div class="d-flex align-items-center"><div id="qr-list-${i}" class="qr-box me-3" style="padding:5px;"></div><div class="buffer-swatch me-3" style="background-color:#${s.color}"></div><span class="fs-4 fw-bold">${s.display}</span></div><div class="d-flex gap-2 align-items-center"><button class="btn btn-light fw-bold border-dark" onclick="printLabel(${s.id})">🖨️ LABEL</button><button class="btn btn-primary fw-bold" onclick="ejectSpool(${s.id}, '${locId}', true)">✋ PICK</button><button class="btn btn-outline-danger" onclick="ejectSpool(${s.id}, '${locId}', false)">🗑️</button></div></div>`).join('');
             data.forEach((s,i) => new QRCode(document.getElementById(`qr-list-${i}`), {text:"ID:"+s.id, width:60, height:60}));
         };
         const handleSlotInteraction = (slot) => {
