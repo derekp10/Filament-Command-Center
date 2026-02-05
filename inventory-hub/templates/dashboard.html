@@ -63,17 +63,11 @@
 
         #printable-label-container { display: none; }
 
-        /* --- STICKER FACTORY: SAFE & LOW v153.17 --- */
+        /* --- STICKER FACTORY: SHIFT & STRETCH v153.18 --- */
         @media print {
             body * { visibility: hidden; }
             @page { size: 50mm 24mm; margin: 0; }
-            
-            html, body {
-                width: 50mm; height: 24mm;
-                margin: 0; padding: 0;
-                overflow: hidden;
-            }
-
+            html, body { width: 50mm; height: 24mm; margin: 0; padding: 0; overflow: hidden; }
             #printable-label-container, #printable-label-container * { visibility: visible; }
             
             #printable-label-container { 
@@ -81,23 +75,21 @@
                 width: 50mm; height: 24mm;
                 background: white;
                 
-                /* Layout Strategy: */
+                /* POSITIONING MAGIC */
                 display: flex;
-                justify-content: center; /* Center horizontally */
-                align-items: flex-start; /* Align top (to allow padding to push down) */
+                justify-content: center; /* Horizontally Center */
+                align-items: flex-start; /* Align Top (for Top Padding) */
                 
-                /* PUSH DOWN 6mm to clear the top dead zone */
-                padding-top: 6mm; 
+                /* OFFSETS */
+                padding-top: 6mm;  /* Keep Top Safe Zone */
+                padding-left: 2mm; /* NEW: Shift Right to fix Left Clip */
             }
         }
 
-        /* CONTENT BOX 
-           Width: 46mm (Allows 2mm side margins)
-           Height: 17mm (6mm Top + 17mm Box = 23mm. Leaves 1mm bottom margin)
-        */
+        /* BOX DIMENSIONS */
         .label-box {
-            width: 46mm;  
-            height: 17mm; 
+            width: 46mm;   /* Keep width safe for now */
+            height: 17.5mm; /* INCREASE: Use recoverable bottom space */
             border: 2px solid #000;
             background: #fff; color: #000;
             font-family: 'Arial', sans-serif;
@@ -105,12 +97,10 @@
         }
         
         .label-qr { 
-            width: 17mm; /* Matches box height square-ish */
-            height: 100%; 
-            border-right: 2px solid #000; 
+            width: 17.5mm; /* Square-ish to match height */
+            height: 100%; border-right: 2px solid #000; 
             flex-shrink: 0; display: flex; 
-            align-items: center; justify-content: center; 
-            padding: 0.5mm; 
+            align-items: center; justify-content: center; padding: 0.5mm; 
         }
         .label-qr img { width: 100% !important; height: auto !important; }
 
@@ -123,7 +113,6 @@
         .row-md { height: 20%; } 
         .row-sm { height: 20%; border-bottom: none; }
 
-        /* Fonts adjusted for smaller box */
         .lbl-key { 
             font-weight: 900; font-size: 5pt; 
             padding-left: 2px; border-right: 1.5px solid #000; 
@@ -132,7 +121,7 @@
         }
         .lbl-val { 
             font-weight: bold; font-size: 6.5pt; 
-            padding-left: 2px; white-space: nowrap; overflow: hidden; 
+            padding-left: 3px; white-space: nowrap; overflow: hidden; 
             display: flex; align-items: center; flex-grow: 1; height: 100%;
         }
         
@@ -208,7 +197,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.17 (Safe & Low)";
+        const DASHBOARD_VERSION = "v153.18 (Shift & Stretch)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK ---
