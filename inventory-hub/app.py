@@ -6,7 +6,7 @@ import locations_db
 import spoolman_api
 import logic
 
-VERSION = "v153.3 (Audit UI)"
+VERSION = "v153.7 (Sticker Factory)"
 app = Flask(__name__)
 
 @app.after_request
@@ -81,6 +81,13 @@ def api_undo(): return jsonify(logic.perform_undo())
 def api_get_contents_route():
     loc = request.args.get('id', '').strip().upper()
     return jsonify(spoolman_api.get_spools_at_location_detailed(loc))
+
+# NEW: Route to fetch raw spool data for labels
+@app.route('/api/spool_details', methods=['GET'])
+def api_spool_details():
+    sid = request.args.get('id')
+    if not sid: return jsonify({})
+    return jsonify(spoolman_api.get_spool(sid))
 
 @app.route('/api/manage_contents', methods=['POST'])
 def api_manage_contents():
@@ -167,8 +174,6 @@ def api_get_logs_route():
     except: pass
     try: fb_ok = requests.get(f"{fb_url}/status", timeout=1).ok
     except: pass
-    
-    # ADDED: audit_active status
     return jsonify({
         "logs": state.RECENT_LOGS,
         "undo_available": len(state.UNDO_STACK) > 0,
