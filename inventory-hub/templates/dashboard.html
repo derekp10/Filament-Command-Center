@@ -7,161 +7,133 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
-        /* --- KIOSK THEME (Screen Only) --- */
-        @media screen {
-            body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-            .navbar { background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
-            .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; text-shadow: 0 0 10px rgba(0, 212, 255, 0.3); }
-            .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
-            .col-logs, .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
-            .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; color: #eee; white-space: pre-wrap; word-break: break-all; }
-            .log-INFO { color: #0f0; } .log-WARNING { color: #fc0; } .log-ERROR { color: #f44; }
-            .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; color: #00d4ff; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
-            .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
-            .buffer-item { background: #222; border: 1px solid #555; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; opacity: 0.8; }
-            .buffer-item.active-item { border: 2px solid #0f0; opacity: 1; background: #2a2a2a; box-shadow: 0 0 10px rgba(0,255,0,0.2); }
-            .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; flex-shrink: 0; }
-            .buffer-text { font-size: 1.6rem; font-weight: bold; margin-left: 15px; color: #fff; }
-            .qr-box { background: white; padding: 5px; border-radius: 4px; }
-            .cmd-deck { padding: 15px; background: #1a1a1a; border-top: 1px solid #333; display: flex; justify-content: space-around; }
-            .cmd-btn { cursor: pointer; transition: 0.2s; border-radius: 8px; padding: 10px; text-align: center; }
-            .cmd-btn:active { background: #333; transform: scale(0.95); }
-            .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
-            .btn-active-audit { background: #4a004a !important; border: 1px solid #ff00ff; }
-            .label-active-audit { color: #ff00ff !important; font-weight: bold; }
-            .modal-content { background: #121212; color: #fff; border: 1px solid #555; }
-            .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 15px; margin-bottom: 20px; }
-            .slot-btn { background: #222; border: 2px solid #444; border-radius: 10px; height: 180px; display: flex; align-items: center; justify-content: space-between; padding: 10px; cursor: pointer; position: relative; overflow: hidden; }
-            .slot-btn.full { border-color: #00d4ff; background: #1a1a1a; }
-            .slot-swatch { width: 40px; height: 40px; border-radius: 50%; border: 2px solid #fff; flex-shrink: 0; margin-bottom: 5px; }
-            .slot-content { font-size: 1.1rem; font-weight: bold; word-break: break-word; color: #fff; }
-            /* HIDE PRINT CONTAINER ON SCREEN */
-            #printable-label-container { display: none !important; }
-        }
+        /* --- GLOBAL KIOSK THEME (Restored to Global Scope) --- */
+        body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        .navbar { background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
+        .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; text-shadow: 0 0 10px rgba(0, 212, 255, 0.3); }
+        
+        /* Layout & Utilities */
+        .main-container { flex-grow: 1; display: flex; padding: 10px; gap: 10px; overflow: hidden; }
+        .col-logs, .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
+        .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; color: #eee; white-space: pre-wrap; word-break: break-all; }
+        .log-INFO { color: #0f0; } .log-WARNING { color: #fc0; } .log-ERROR { color: #f44; }
+        .text-muted { color: #aaa !important; } 
+        .status-label { color: #fff; font-weight: 500; margin-right: 20px; }
+        
+        /* Buffer & Commands */
+        .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; color: #00d4ff; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+        .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
+        .buffer-item { background: #222; border: 1px solid #555; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; opacity: 0.8; }
+        .buffer-item.active-item { border: 2px solid #0f0; opacity: 1; background: #2a2a2a; box-shadow: 0 0 10px rgba(0,255,0,0.2); }
+        .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; flex-shrink: 0; }
+        .buffer-text { font-size: 1.6rem; font-weight: bold; margin-left: 15px; color: #fff; }
+        .buffer-info { display: flex; align-items: center; }
+        #scan-status { font-size: 1.1rem; color: #00d4ff; font-weight: bold; text-transform: uppercase; }
+        .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
+        .cmd-deck { padding: 15px; background: #1a1a1a; border-top: 1px solid #333; display: flex; justify-content: space-around; }
+        .cmd-btn { cursor: pointer; transition: 0.2s; border-radius: 8px; padding: 10px; text-align: center; }
+        .cmd-btn:active { background: #333; transform: scale(0.95); }
+        .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
+        .btn-active-audit { background: #4a004a !important; border: 1px solid #ff00ff; }
+        .label-active-audit { color: #ff00ff !important; font-weight: bold; }
 
-        /* --- STICKER FACTORY: ABSOLUTE TAKEOVER MODE (v153.12) --- */
+        /* Modals */
+        .modal-content { background: #121212; color: #fff; border: 1px solid #555; }
+        #locMgrModal, #locModal { z-index: 1055; } #manageModal { z-index: 1065; } 
+        #actionModal, #safetyModal, #confirmModal { z-index: 1075; }
+        .table-fixed { table-layout: fixed; width: 100%; }
+        .col-id { width: 18%; font-weight: bold; color: #00d4ff; }
+        .col-name { width: 32%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .col-status { width: 20%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .col-actions { width: 30%; text-align: right; white-space: nowrap; }
+        .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .slot-btn { background: #222; border: 2px solid #444; border-radius: 10px; height: 180px; display: flex; align-items: center; justify-content: space-between; padding: 10px; cursor: pointer; position: relative; overflow: hidden; }
+        .slot-btn.full { border-color: #00d4ff; background: #1a1a1a; }
+        .slot-swatch { width: 40px; height: 40px; border-radius: 50%; border: 2px solid #fff; flex-shrink: 0; margin-bottom: 5px; }
+        .slot-content { font-size: 1.1rem; font-weight: bold; word-break: break-word; color: #fff; }
+        .slot-num { color: #aaa; font-weight: bold; margin-bottom: 5px; }
+        .unslotted-box { border: 2px solid #fc0; background: #1a1a1a; padding: 10px; margin-top: 20px; border-radius: 8px; }
+        .unslotted-item { background: #252525; padding: 15px; margin: 10px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #444; }
+        .control-group { display: flex; align-items: center; gap: 20px; background: #111; padding: 10px 20px; border-radius: 8px; border: 1px solid #333; }
+        .headsup-strip { background: #111; border-bottom: 1px solid #333; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .nav-deck { display: flex; justify-content: space-between; padding: 10px 20px; background: #181818; border-bottom: 1px solid #333; gap: 20px; }
+        .nav-card { background: #2a2a2a; border: 1px solid #444; border-radius: 8px; padding: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex: 1; transition: 0.2s; }
+        .nav-card:active { background: #444; transform: translateY(2px); }
+        .nav-qr-container { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; width: 55px; height: 55px; flex-shrink: 0; }
+        .nav-qr-container img { width: 45px !important; height: 45px !important; }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .status-on { background: #0f0; box-shadow: 0 0 5px #0f0; } .status-off { background: #f44; box-shadow: 0 0 5px #f44; }
+        #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; width: 80%; max-width: 600px; }
+        .toast-msg { background: rgba(0,0,0,0.95); color: #fff; padding: 30px; border: 4px solid #00d4ff; border-radius: 12px; font-size: 2rem; font-weight: bold; }
+        #processing-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 12000; display: none; justify-content: center; align-items: center; cursor: wait; }
+        #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 12000; display: none; justify-content: center; align-items: center; border: 20px solid #f44; text-align: center; }
+
+        /* HIDE PRINT CONTAINER ON SCREEN (Crucial) */
+        #printable-label-container { display: none; }
+
+        /* --- STICKER FACTORY: PRINT OVERRIDES --- */
         @media print {
-            /* 1. Nuke everything else */
             body * { visibility: hidden; }
+            @page { size: 50mm 24mm; margin: 0; } 
             
-            /* 2. Setup Page - Force Chrome to respect 50mm x 24mm */
-            @page { 
-                size: 50mm 24mm; 
-                margin: 0 !important; /* Critical: Tell browser NO margins */
-            }
-            
-            /* 3. Force Body to Fill Page */
             html, body {
-                width: 50mm !important;
-                height: 24mm !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                overflow: hidden !important; /* Prevent scrollbars/extra pages */
+                width: 50mm; height: 24mm;
+                margin: 0; padding: 0;
+                overflow: hidden;
             }
 
-            /* 4. Show and Pin Container */
             #printable-label-container, #printable-label-container * { visibility: visible; }
             
-            #printable-label-container {
-                position: fixed;
-                top: 0; left: 0;
-                width: 50mm;
-                height: 24mm;
+            #printable-label-container { 
+                position: fixed; left: 0; top: 0; 
+                width: 50mm; height: 24mm;
+                display: flex; align-items: center; justify-content: center;
                 background: white;
-                display: flex;
-                align-items: center;
-                justify-content: center;
             }
         }
 
-        /* LABEL CONTENT BOX 
-           Sized to 48mm x 22mm to fit inside the hardware safety margins (2mm feed).
-        */
+        /* LABEL CONTENT (Slightly Refined for spacing) */
         .label-box {
-            width: 48mm;
-            height: 22mm;
-            border: 2px solid #000;
-            background: #fff;
-            color: #000;
+            width: 48mm; height: 22mm;
+            border: 1.5px solid #000; /* Thinner border */
+            background: #fff; color: #000;
             font-family: 'Arial', sans-serif;
-            display: flex;
-            box-sizing: border-box;
-            overflow: hidden;
+            display: flex; box-sizing: border-box; overflow: hidden;
         }
-
-        /* QR COLUMN (Left) */
-        .label-qr {
-            width: 22mm; /* Square-ish */
-            height: 100%;
-            border-right: 2px solid #000;
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 1mm;
+        
+        .label-qr { 
+            width: 22mm; height: 100%; 
+            border-right: 1.5px dashed #000; 
+            flex-shrink: 0; display: flex; 
+            align-items: center; justify-content: center; 
+            padding: 1mm; 
         }
         .label-qr img { width: 100% !important; height: auto !important; }
 
-        /* DATA COLUMN (Right) */
-        .label-data {
-            flex-grow: 1;
-            display: flex;
-            flex-direction: column;
-        }
-
-        /* DATA ROWS */
-        .lbl-row {
-            display: flex;
-            border-bottom: 1px solid #000;
-            align-items: center;
-            width: 100%;
-        }
+        .label-data { flex-grow: 1; display: flex; flex-direction: column; }
         
-        /* Row Heights (Optimized for readability) */
-        .row-lg { height: 30%; } /* Brand, Color */
-        .row-md { height: 20%; } /* Type */
-        .row-sm { height: 20%; border-bottom: none; } /* Footer */
+        .lbl-row { display: flex; border-bottom: 1.5px solid #000; align-items: center; width: 100%; }
+        .lbl-row:last-child { border-bottom: none; }
+        
+        .row-lg { height: 30%; } 
+        .row-md { height: 20%; } 
+        .row-sm { height: 20%; border-bottom: none; }
 
-        .lbl-key {
-            font-weight: 900;
-            font-size: 7pt;
-            padding: 0 1mm;
-            border-right: 1px solid #000;
-            width: 9mm; /* Fixed label width */
-            flex-shrink: 0;
-            text-transform: uppercase;
+        .lbl-key { 
+            font-weight: 900; font-size: 6.5pt; 
+            padding-left: 2px; border-right: 1.5px solid #000; 
+            width: 9mm; flex-shrink: 0; text-transform: uppercase;
             display: flex; align-items: center; height: 100%;
         }
-        
-        .lbl-val {
-            font-weight: bold;
-            font-size: 8pt; /* Big text */
-            padding: 0 1mm;
-            white-space: nowrap; 
-            overflow: hidden;
-            display: flex; align-items: center; height: 100%;
-            flex-grow: 1;
+        .lbl-val { 
+            font-weight: bold; font-size: 7.5pt; 
+            padding-left: 3px; white-space: nowrap; overflow: hidden; 
+            display: flex; align-items: center; flex-grow: 1; height: 100%;
         }
         
-        /* Footer Grid (Dense Data) */
-        .lbl-footer {
-            display: flex;
-            width: 100%;
-            height: 100%;
-            font-size: 6pt;
-            font-weight: bold;
-        }
-        .footer-item {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-right: 1px solid #000;
-            padding: 0 1px;
-            white-space: nowrap; overflow: hidden;
-        }
+        .lbl-footer { display: flex; width: 100%; height: 100%; font-size: 6pt; font-weight: bold; }
+        .footer-item { flex: 1; display: flex; align-items: center; justify-content: center; border-right: 1.5px solid #000; padding: 0 1px; white-space: nowrap; overflow: hidden; }
         .footer-item:last-child { border-right: none; }
-
     </style>
 </head>
 <body>
@@ -218,8 +190,12 @@
         </div>
     </div>
 
-    <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-info fw-bold" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0 table-fixed" style="font-size:1.1rem;"><thead><tr><th class="col-id">ID</th><th class="col-name">Name</th><th class="col-status">Status</th><th class="col-actions">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
+    <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-info fw-bold" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0">
+        <table class="table table-hover table-dark mb-0 table-fixed" style="font-size:1.1rem;"><thead><tr><th class="col-id">ID</th><th class="col-name">Name</th><th class="col-status">Status</th><th class="col-actions">Actions</th></tr></thead><tbody id="location-table"></tbody></table>
+    </div></div></div></div>
+    
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3 text-info" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div><div id="headsup-buffer" class="headsup-strip" style="display:none;"><div class="d-flex align-items-center"><span class="me-3 text-warning fw-bold fs-4">✋ READY:</span><div id="headsup-swatch" class="buffer-swatch me-3"></div><span id="headsup-text" class="text-white fw-bold fs-3"></span></div><div class="fs-4 fw-bold text-info border border-info px-3 py-1 rounded" id="headsup-total">Buffer: 0</div></div><div id="buffer-nav-deck" class="nav-deck" style="display:none;"><div class="nav-card" onclick="prevBuffer()"><div class="nav-qr-container me-3" id="qr-prev"></div><div class="text-start"><div class="fw-bold fs-4">< PREV</div></div></div><div class="nav-card" onclick="nextBuffer()"><div class="text-end me-3"><div class="fw-bold fs-4">NEXT ></div></div><div class="nav-qr-container" id="qr-next"></div></div></div><div class="modal-body"><div id="manage-grid-view" style="display:none;"><div class="alert alert-info py-1 mb-2 small text-center fw-bold">Tap button or scan slot QR (CMD:SLOT:X)</div><div id="slot-grid-container" class="slot-grid"></div><div id="unslotted-container" style="display:none;"></div></div><div id="manage-list-view"><div id="manage-contents-list" class="mb-4"></div></div><hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add (To Buffer)</button></div><div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary"><button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button><div class="text-center"><div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div><div class="qr-label">DONE</div></div></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
+
     <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-3 mb-4"></p><div id="action-buttons" class="modal-action-row d-flex justify-content-center gap-5 flex-wrap"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
     <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #fc0;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRMATION</h5></div><div class="modal-body text-center"><p id="confirm-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4"><div class="text-center" onclick="confirmAction(false)" style="cursor:pointer"><div id="qr-confirm-no" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-secondary btn-lg">❌ NO</button></div><div class="text-center" onclick="confirmAction(true)" style="cursor:pointer"><div id="qr-confirm-yes" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-success btn-lg">✅ YES</button></div></div></div></div></div></div>
     <div class="modal fade" id="safetyModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #f44;"><div class="modal-header bg-danger text-white"><h5 class="modal-title fw-bold">⚠️ SAFETY CONFIRMATION</h5></div><div class="modal-body text-center"><p id="safety-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4"><div class="text-center" onclick="confirmSafety(false)" style="cursor:pointer"><div id="qr-safety-no" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-secondary btn-lg">❌ NO</button></div><div class="text-center" onclick="confirmSafety(true)" style="cursor:pointer"><div id="qr-safety-yes" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-danger btn-lg">✅ YES</button></div></div></div></div></div></div>
@@ -227,7 +203,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.12 (Absolute Takeover)";
+        const DASHBOARD_VERSION = "v153.13 (UI Restore + Clean Print)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK ---
@@ -315,7 +291,7 @@
             }).catch(e => { setProcessing(false); showToast("Print Error", "error"); console.error(e); });
         };
 
-        // --- CORE LOGIC (Shortened) ---
+        // --- CORE LOGIC ---
         const renderBuffer = () => {
             const z = document.getElementById('buffer-zone'), h = document.getElementById('headsup-buffer'), n = document.getElementById('buffer-nav-deck');
             if (state.heldSpools.length === 0) { z.innerHTML = `<div class="text-center text-muted mt-5"><h3>Buffer Empty</h3></div>`; h.style.display = n.style.display = 'none'; return; }
@@ -411,7 +387,7 @@
                 un.style.display='block';
                 unslotted.forEach((item, i) => {
                     const div = document.createElement('div'); div.className = "unslotted-item";
-                    div.innerHTML = `<div class="d-flex align-items-center"><div class="buffer-swatch me-3" style="background-color:#${item.color}"></div><span class="fs-5 fw-bold">${item.display}</span></div><div class="control-group"><button class="btn btn-sm btn-light border-dark fw-bold me-3" onclick="printLabel(${item.id})">🖨️</button><div class="text-center"><div id="qr-pick-${i}" class="bg-white p-1 rounded"></div><div class="qr-label">PICK</div></div><button class="btn btn-primary fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">✋</button><button class="btn btn-danger fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">🗑️</button><div class="text-center"><div id="qr-trash-${i}" class="bg-white p-1 rounded"></div><div class="qr-label">TRASH</div></div></div>`;
+                    div.innerHTML = `<div class="d-flex align-items-center"><div class="buffer-swatch me-3" style="background-color:#${item.color}"></div><span class="fs-5 fw-bold">${item.display}</span></div><div class="control-group"><button class="btn btn-sm btn-light border-dark fw-bold me-3" onclick="printLabel(${item.id})">🖨️ LABEL</button><div class="text-center"><div id="qr-pick-${i}" class="bg-white p-1 rounded"></div><div class="qr-label">PICK</div></div><button class="btn btn-primary fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">✋</button><button class="btn btn-danger fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">🗑️</button><div class="text-center"><div id="qr-trash-${i}" class="bg-white p-1 rounded"></div><div class="qr-label">TRASH</div></div></div>`;
                     un.appendChild(div); new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+item.id, width:50, height:50}); new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+item.id, width:50, height:50});
                 });
                 const dz = document.createElement('div'); dz.className='danger-zone'; dz.innerHTML=`<h4 class="text-danger fw-bold">DANGER ZONE</h4><div class="d-flex justify-content-center align-items-center gap-3"><div class="text-center"><div id="qr-eject-all" class="bg-white p-2 rounded"></div><div class="qr-label text-white">ALL</div></div><button class="btn btn-danger btn-lg fw-bold" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">EJECT ALL 💥</button></div>`;
