@@ -7,7 +7,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
-        /* --- GLOBAL KIOSK THEME (Restored) --- */
+        /* --- GLOBAL KIOSK THEME --- */
         body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
         .navbar { background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
         .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; text-shadow: 0 0 10px rgba(0, 212, 255, 0.3); }
@@ -22,22 +22,41 @@
         .buffer-item.active-item { border: 2px solid #0f0; opacity: 1; background: #2a2a2a; box-shadow: 0 0 10px rgba(0,255,0,0.2); }
         .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; flex-shrink: 0; }
         .buffer-text { font-size: 1.6rem; font-weight: bold; margin-left: 15px; color: #fff; }
+        .buffer-info { display: flex; align-items: center; }
+        #scan-status { font-size: 1.1rem; color: #00d4ff; font-weight: bold; text-transform: uppercase; }
         .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
         .cmd-deck { padding: 15px; background: #1a1a1a; border-top: 1px solid #333; display: flex; justify-content: space-around; }
         .cmd-btn { cursor: pointer; transition: 0.2s; border-radius: 8px; padding: 10px; text-align: center; }
+        .cmd-btn:active { background: #333; transform: scale(0.95); }
         .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
+        .btn-active-audit { background: #4a004a !important; border: 1px solid #ff00ff; }
+        .label-active-audit { color: #ff00ff !important; font-weight: bold; }
         .modal-content { background: #121212; color: #fff; border: 1px solid #555; }
         .table-fixed { table-layout: fixed; width: 100%; }
-        .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .slot-btn { background: #222; border: 2px solid #444; border-radius: 10px; height: 180px; display: flex; align-items: center; justify-content: space-between; padding: 10px; cursor: pointer; position: relative; overflow: hidden; }
+        
+        /* UI FIXES for SLOTS */
+        .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .slot-btn { 
+            background: #222; border: 2px solid #444; border-radius: 10px; 
+            min-height: 200px; /* Taller to fit button */
+            display: flex; flex-direction: row; /* Split Left/Right */
+            align-items: center; justify-content: space-between; 
+            padding: 10px; cursor: pointer; position: relative; overflow: hidden; 
+        }
         .slot-btn.full { border-color: #00d4ff; background: #1a1a1a; }
-        .slot-content { font-size: 1.1rem; font-weight: bold; word-break: break-word; color: #fff; }
+        .slot-left { width: 40%; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .slot-right { width: 60%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+        
+        .slot-swatch { width: 40px; height: 40px; border-radius: 50%; border: 2px solid #fff; flex-shrink: 0; margin-bottom: 5px; }
+        .slot-content { font-size: 1.0rem; font-weight: bold; word-break: break-word; color: #fff; line-height: 1.2; margin-bottom: 5px; }
+        .slot-num { color: #aaa; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
+        
         #printable-label-container { display: none; }
 
-        /* --- STICKER FACTORY: THE BIG STRETCH v153.26 --- */
+        /* --- STICKER FACTORY: BORDERLESS & SMART v153.27 --- */
         @media print {
             body * { visibility: hidden; }
-            /* TARGETING 56mm to trick Chrome into giving us full space */
+            /* Using the 56mm Hack for Max Width */
             @page { size: 56mm 24mm; margin: 0; }
             html, body { width: 56mm; height: 24mm; margin: 0; padding: 0; overflow: hidden; }
             #printable-label-container, #printable-label-container * { visibility: visible; }
@@ -49,55 +68,74 @@
                 display: flex;
                 justify-content: center; 
                 align-items: flex-start;
-                padding-top: 6mm; /* Clears top dead zone */
-                padding-left: 2mm; /* Offset for physical tape center */
+                
+                /* Keep the 7mm top / 2mm left offset that was working */
+                padding-top: 7mm;
+                padding-left: 2mm;
             }
         }
 
-        /* FINAL BOX: 50mm Width (Full Real Estate) */
+        /* BOX: 50mm Width (Full) x 16.5mm Height
+           NO OUTER BORDER - Allows max font size without clipping
+        */
         .label-box {
-            width: 50mm; height: 17.5mm; 
-            border: 1.5pt solid #000;
+            width: 50mm; height: 16.5mm; 
+            /* border: 1pt solid #000;  <-- REMOVED OUTER BORDER */
             background: #fff; color: #000;
             font-family: 'Arial Narrow', 'Roboto Condensed', sans-serif;
-            font-stretch: condensed; /* SQUISH TEXT */
+            font-stretch: condensed;
             display: flex; box-sizing: border-box; overflow: hidden;
         }
         
+        /* QR Code: 2mm Padding for Quiet Zone */
         .label-qr { 
-            width: 17.5mm; height: 100%; border-right: 1.5pt solid #000; 
+            width: 16.5mm; height: 100%; 
+            border-right: 1.5pt solid #000; /* Keep internal divider */
             flex-shrink: 0; display: flex; 
-            align-items: center; justify-content: center; padding: 1mm;
+            align-items: center; justify-content: center; 
+            padding: 2mm; /* QUIET ZONE INCREASED */
         }
         .label-qr img { width: 100% !important; height: auto !important; }
 
         .label-data { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; }
         
-        .lbl-row { display: flex; border-bottom: 1pt solid #000; align-items: center; width: 100%; height: 20%; }
+        /* INTERNAL ROWS: Keep dividers */
+        .lbl-row { display: flex; border-bottom: 1pt solid #000; align-items: center; width: 100%; }
         .lbl-row:last-child { border-bottom: none; }
+
+        /* Row Heights */
+        .row-brand { height: 20%; }
+        .row-color { height: 20%; } 
+        .row-type  { height: 25%; } /* Tall for long type strings */
+        .row-tech  { height: 17.5%; }
+        .row-rgb   { height: 17.5%; }
 
         .lbl-key { 
             font-weight: 900; font-size: 5pt; 
             padding-left: 1px; border-right: 1pt solid #000; 
-            width: 6.5mm; flex-shrink: 0; text-transform: uppercase;
+            width: 6mm; /* Minimal key width */
+            flex-shrink: 0; text-transform: uppercase;
             display: flex; align-items: center; height: 100%;
         }
         
         .lbl-val { 
-            font-weight: bold; font-size: 8pt; 
+            font-weight: bold; font-size: 7.5pt; /* Readable Size */
             padding-left: 2px; white-space: nowrap; overflow: hidden; 
             display: flex; align-items: center; flex-grow: 1; height: 100%;
-            letter-spacing: -0.2px;
+            letter-spacing: -0.3px; /* Squeeze text */
         }
+        
+        /* Special handling for Type */
+        .val-type { font-size: 7pt; font-weight: 900; }
 
-        /* Technical Data Grid */
+        /* Tech Row (Hex/ID) */
         .lbl-split { display: flex; width: 100%; height: 100%; }
-        .lbl-half { display: flex; align-items: center; border-right: 1pt solid #000; font-size: 6pt; font-weight: bold; padding-left: 2px; }
-        .lbl-half-hex { flex: 1.4; } 
-        .lbl-half-id { flex: 0.6; }  
+        .lbl-half { display: flex; align-items: center; border-right: 1pt solid #000; font-size: 5.5pt; font-weight: bold; padding-left: 1px; }
+        .lbl-half-hex { flex: 1; font-family: monospace; font-size: 6.5pt; } 
+        .lbl-half-id { flex: 1; font-weight: 900; font-size: 7.5pt; justify-content: center; }  
         .lbl-half:last-child { border-right: none; }
         
-        .small-tag { font-weight: 900; font-size: 4pt; margin-right: 1mm; text-transform: uppercase; }
+        .small-tag { font-weight: 900; font-size: 4pt; margin-right: 2px; text-transform: uppercase; color: #444; }
     </style>
 </head>
 <body>
@@ -105,16 +143,16 @@
         <div class="label-box">
             <div class="label-qr" id="print-qr"></div>
             <div class="label-data">
-                <div class="lbl-row"><div class="lbl-key">BRND</div><div class="lbl-val" id="lbl-brand"></div></div>
-                <div class="lbl-row"><div class="lbl-key">COLR</div><div class="lbl-val" id="lbl-color"></div></div>
-                <div class="lbl-row"><div class="lbl-key">TYPE</div><div class="lbl-val" id="lbl-type"></div></div>
-                <div class="lbl-row">
+                <div class="lbl-row row-brand"><div class="lbl-key">BRND</div><div class="lbl-val" id="lbl-brand"></div></div>
+                <div class="lbl-row row-color"><div class="lbl-key">COLR</div><div class="lbl-val" id="lbl-color"></div></div>
+                <div class="lbl-row row-type"><div class="lbl-key">TYPE</div><div class="lbl-val val-type" id="lbl-type"></div></div>
+                <div class="lbl-row row-tech">
                     <div class="lbl-split">
-                        <div class="lbl-half lbl-half-hex"><span class="small-tag">HEX</span><span id="lbl-hex"></span></div>
+                        <div class="lbl-half lbl-half-hex"><span class="small-tag">#</span><span id="lbl-hex"></span></div>
                         <div class="lbl-half lbl-half-id"><span class="small-tag">ID</span><span id="lbl-id"></span></div>
                     </div>
                 </div>
-                <div class="lbl-row"><div class="lbl-key">RGB</div><div class="lbl-val" id="lbl-rgb"></div></div>
+                <div class="lbl-row row-rgb"><div class="lbl-key">RGB</div><div class="lbl-val" id="lbl-rgb"></div></div>
             </div>
         </div>
     </div>
@@ -134,7 +172,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.26 (Final Squeeze)";
+        const DASHBOARD_VERSION = "v153.27 (Borderless Smart)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK ---
@@ -206,14 +244,28 @@
                 const colorHex = fil.color_hex || '000000';
                 const rgb = hexToRgb(colorHex);
                 
+                // SMART TYPE LOGIC: Combine Attributes + Material
+                let typeStr = fil.material || "Unknown";
+                try {
+                    let attrs = [];
+                    if (extra.filament_attributes) {
+                        // Handle both JSON string and raw list
+                        attrs = (typeof extra.filament_attributes === 'string') 
+                            ? JSON.parse(extra.filament_attributes) 
+                            : extra.filament_attributes;
+                    }
+                    if (Array.isArray(attrs) && attrs.length > 0) {
+                        typeStr = attrs.join(' ') + ' ' + typeStr;
+                    }
+                } catch (err) { console.log("Attr Parse Error", err); }
+
                 document.getElementById('print-qr').innerHTML = "";
                 new QRCode(document.getElementById('print-qr'), {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L});
                 
                 document.getElementById('lbl-brand').innerText = fil.vendor ? fil.vendor.name : "Generic";
                 document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; 
-                document.getElementById('lbl-type').innerText = fil.material;
+                document.getElementById('lbl-type').innerText = typeStr; // NEW SMART TYPE
                 
-                // Footer Values
                 document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
                 document.getElementById('lbl-id').innerText = sid;
                 document.getElementById('lbl-rgb').innerText = `${rgb.r},${rgb.g},${rgb.b}`; 
@@ -310,7 +362,7 @@
             for(let i=1; i<=max; i++) {
                 const item = state.currentGrid[i], div = document.createElement('div');
                 div.className = item ? "slot-btn full" : "slot-btn empty";
-                div.innerHTML = `<div class="d-flex flex-column align-items-center w-50"><div class="slot-num">Slot ${i}</div><div id="qr-slot-${i}" class="bg-white p-1 rounded"></div></div><div class="d-flex flex-column align-items-center w-50 text-center">${item?`<div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div><button class="btn btn-sm btn-light border-dark mt-2 fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>`:`<div class="text-muted fs-4">EMPTY</div>`}</div>`;
+                div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="qr-slot-${i}" class="bg-white p-1 rounded"></div></div><div class="slot-right">${item?`<div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div><button class="btn btn-sm btn-light border-dark mt-2 fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>`:`<div class="text-muted fs-4">EMPTY</div>`}</div>`;
                 div.onclick = () => handleSlotInteraction(i); grid.appendChild(div);
                 new QRCode(document.getElementById(`qr-slot-${i}`), {text:"CMD:SLOT:"+i, width:60, height:60});
             }
