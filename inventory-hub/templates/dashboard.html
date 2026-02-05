@@ -68,41 +68,57 @@
         #processing-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 12000; display: none; justify-content: center; align-items: center; cursor: wait; }
         #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 12000; display: none; justify-content: center; align-items: center; border: 20px solid #f44; text-align: center; }
 
-        /* --- STICKER FACTORY: MAX FILL CSS --- */
+        /* --- STICKER FACTORY: FINAL FIX v153.11 --- */
         @media screen {
             #printable-label-container { display: none; }
         }
         @media print {
             body * { visibility: hidden; }
             #printable-label-container, #printable-label-container * { visibility: visible; }
-            @page { size: 50mm 24mm; margin: 0; } 
             
+            /* FORCE EXACT DRIVER SIZE: 50mm x 24mm */
+            @page { 
+                size: 50mm 24mm; 
+                margin: 0mm; 
+            } 
+            
+            body { margin: 0; padding: 0; }
+
+            /* CONTAINER: 50mm wide x 24mm high */
             #printable-label-container { 
-                position: fixed; 
+                position: absolute; 
                 left: 0; top: 0; 
-                width: 50mm; height: 24mm;
-                /* No margins or centering here, let the inner box handle padding */
+                width: 50mm; 
+                height: 24mm;
+                display: flex;
+                align-items: center;
+                justify-content: center; /* Centers the inner content */
                 background: white;
             }
         }
 
-        /* FLEX LAYOUT (Full Expansion) */
+        /* INNER CONTENT BOX 
+           This is slightly smaller (48x22) to account for the driver's hard 2mm feed margins.
+           This prevents the browser from triggering "Shrink to Fit".
+        */
         .label-box {
-            width: 100%; height: 100%; /* Fill the page */
-            padding: 1mm; /* Safety Margin from hardware edge */
-            border: 1px solid #000;
+            width: 49mm; /* Use almost full width */
+            height: 23mm; /* Use almost full height */
+            border: 2px solid #000; /* Thicker border for visibility */
             background: #fff;
             color: #000;
             font-family: 'Arial', sans-serif;
             display: flex;
+            padding: 0;
             box-sizing: border-box;
             overflow: hidden;
         }
         
-        /* QR Code: Expands to fit height */
+        /* QR Code: Fixed 18mm square + padding */
         .label-qr { 
-            width: 22mm; /* Square-ish */
-            border-right: 1px dashed #000; 
+            width: 20mm; 
+            height: 100%; 
+            border-right: 2px dashed #000; 
             flex-shrink: 0;
             display: flex;
             align-items: center;
@@ -111,49 +127,42 @@
         }
         .label-qr img { width: 100% !important; height: auto !important; }
 
-        /* Data Area: Fills remaining width */
+        /* Data Area */
         .label-data { 
             flex-grow: 1; 
             display: flex; 
             flex-direction: column; 
-            margin-left: 1mm; 
-            justify-content: space-between; /* Spread rows vertically */
+            justify-content: center;
         }
         
         .lbl-row { 
             display: flex; 
-            border: 1px solid #000; 
-            margin-bottom: -1px; 
-            align-items: stretch; 
-            flex: 1; /* Rows grow to fill height */
+            border-bottom: 1px solid #000; 
+            align-items: center; 
+            height: 25%; /* 4 rows = 25% each */
         }
-        .lbl-row:last-child { margin-bottom: 0; }
+        .lbl-row:last-child { border-bottom: none; }
         
-        /* Bold, Readable Fonts */
+        /* HIGH VISIBILITY FONTS */
         .lbl-key { 
-            font-weight: bold; font-size: 8pt; 
-            padding: 0 1mm; border-right: 1px solid #000; 
-            width: 12mm; flex-shrink: 0; 
-            display: flex; align-items: center; 
+            font-weight: 900; font-size: 7pt; /* Bold Label */
+            padding-left: 2px; border-right: 1px solid #000; 
+            width: 10mm; flex-shrink: 0; 
+            text-transform: uppercase;
         }
         .lbl-val { 
-            font-weight: bold; font-size: 9pt; 
-            padding: 0 1mm; white-space: nowrap; overflow: hidden; 
-            display: flex; align-items: center; flex-grow: 1; 
+            font-weight: bold; font-size: 8pt; /* Large Value */
+            padding-left: 2px; white-space: nowrap; overflow: hidden; 
+            flex-grow: 1; 
         }
         
-        /* Split Row (Hex/ID) */
-        .lbl-split-row { display: flex; flex: 1; margin-bottom: -1px; }
-        .lbl-half { display: flex; border: 1px solid #000; flex: 1; margin-right: -1px; }
-        .lbl-half:last-child { margin-right: 0; }
-        .lbl-key-sm { font-weight: bold; font-size: 7pt; padding: 0 1mm; border-right: 1px solid #000; width: 8mm; display:flex; align-items:center; }
-        .lbl-val-sm { font-weight: bold; font-size: 8pt; padding: 0 1mm; flex-grow: 1; display:flex; align-items:center; justify-content:center; }
+        /* Split Row */
+        .lbl-split-row { display: flex; height: 25%; border-bottom: 1px solid #000; }
+        .lbl-half { display: flex; flex: 1; align-items: center; border-right: 1px solid #000; }
+        .lbl-half:last-child { border-right: none; }
+        .lbl-key-sm { font-weight: 900; font-size: 6pt; padding-left: 1px; width: 6mm; }
+        .lbl-val-sm { font-weight: bold; font-size: 7pt; padding-left: 1px; }
         
-        /* RGB Row */
-        .lbl-rgb-row { border: 1px solid #000; display: flex; flex: 1; }
-        .lbl-rgb-key { font-weight: bold; font-size: 7pt; padding: 0 1mm; border-right: 1px solid #000; width: 9mm; display:flex; align-items:center; }
-        .lbl-rgb-val { font-weight: bold; font-size: 8pt; flex: 1; border-right: 1px solid #000; display:flex; align-items:center; justify-content:center; }
-        .lbl-rgb-val:last-child { border-right: none; }
     </style>
 </head>
 <body>
@@ -161,18 +170,12 @@
         <div class="label-box">
             <div class="label-qr" id="print-qr"></div>
             <div class="label-data">
-                <div class="lbl-row"><div class="lbl-key">Brand:</div><div class="lbl-val" id="lbl-brand"></div></div>
-                <div class="lbl-row"><div class="lbl-key">Color:</div><div class="lbl-val" id="lbl-color"></div></div>
-                <div class="lbl-row"><div class="lbl-key">Type:</div><div class="lbl-val" id="lbl-type"></div></div>
+                <div class="lbl-row"><div class="lbl-key">Brand</div><div class="lbl-val" id="lbl-brand"></div></div>
+                <div class="lbl-row"><div class="lbl-key">Color</div><div class="lbl-val" id="lbl-color"></div></div>
+                <div class="lbl-row"><div class="lbl-key">Type</div><div class="lbl-val" id="lbl-type"></div></div>
                 <div class="lbl-split-row">
-                    <div class="lbl-half"><div class="lbl-key-sm">Hex:</div><div class="lbl-val-sm" id="lbl-hex"></div></div>
-                    <div class="lbl-half"><div class="lbl-key-sm">ID:</div><div class="lbl-val-sm" id="lbl-id"></div></div>
-                </div>
-                <div class="lbl-rgb-row">
-                    <div class="lbl-rgb-key">RGB:</div>
-                    <div class="lbl-rgb-val" id="lbl-r"></div>
-                    <div class="lbl-rgb-val" id="lbl-g"></div>
-                    <div class="lbl-rgb-val" id="lbl-b"></div>
+                    <div class="lbl-half"><div class="lbl-key-sm">HEX</div><div class="lbl-val-sm" id="lbl-hex"></div></div>
+                    <div class="lbl-half"><div class="lbl-key-sm">ID</div><div class="lbl-val-sm" id="lbl-id"></div></div>
                 </div>
             </div>
         </div>
@@ -226,7 +229,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.10 (Full Bleed Print)";
+        const DASHBOARD_VERSION = "v153.11 (Corrected Scaling)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK LOGIC ---
@@ -305,9 +308,6 @@
                 document.getElementById('lbl-type').innerText = fil.material;
                 document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
                 document.getElementById('lbl-id').innerText = sid;
-                document.getElementById('lbl-r').innerText = rgb.r;
-                document.getElementById('lbl-g').innerText = rgb.g;
-                document.getElementById('lbl-b').innerText = rgb.b;
                 
                 setTimeout(() => window.print(), 500);
             }).catch(e => { setProcessing(false); showToast("Print Error", "error"); console.error(e); });
