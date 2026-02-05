@@ -22,8 +22,6 @@
         .buffer-item.active-item { border: 2px solid #0f0; opacity: 1; background: #2a2a2a; box-shadow: 0 0 10px rgba(0,255,0,0.2); }
         .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; flex-shrink: 0; }
         .buffer-text { font-size: 1.6rem; font-weight: bold; margin-left: 15px; color: #fff; }
-        .buffer-info { display: flex; align-items: center; }
-        #scan-status { font-size: 1.1rem; color: #00d4ff; font-weight: bold; text-transform: uppercase; }
         .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
         .cmd-deck { padding: 15px; background: #1a1a1a; border-top: 1px solid #333; display: flex; justify-content: space-around; }
         .cmd-btn { cursor: pointer; transition: 0.2s; border-radius: 8px; padding: 10px; text-align: center; }
@@ -63,7 +61,7 @@
 
         #printable-label-container { display: none; }
 
-        /* --- STICKER FACTORY: SHIFT & STRETCH v153.18 --- */
+        /* --- STICKER FACTORY: CENTERING CALIBRATION v153.19 --- */
         @media print {
             body * { visibility: hidden; }
             @page { size: 50mm 24mm; margin: 0; }
@@ -74,31 +72,29 @@
                 position: fixed; left: 0; top: 0; 
                 width: 50mm; height: 24mm;
                 background: white;
-                
-                /* POSITIONING MAGIC */
                 display: flex;
-                justify-content: center; /* Horizontally Center */
-                align-items: flex-start; /* Align Top (for Top Padding) */
+                justify-content: center; /* Horizontally center the box */
+                align-items: flex-start; /* Align Top to allow push-down */
                 
-                /* OFFSETS */
-                padding-top: 6mm;  /* Keep Top Safe Zone */
-                padding-left: 2mm; /* NEW: Shift Right to fix Left Clip */
+                /* CALIBRATED OFFSETS: */
+                padding-top: 7mm;   /* Push content down to clear top clip */
+                padding-left: 2.5mm; /* Center the 45mm box in the 50mm tape */
             }
         }
 
-        /* BOX DIMENSIONS */
+        /* CALIBRATED CONTENT BOX */
         .label-box {
-            width: 46mm;   /* Keep width safe for now */
-            height: 17.5mm; /* INCREASE: Use recoverable bottom space */
-            border: 2px solid #000;
+            width: 45mm;    /* Reduced to fit side printable area */
+            height: 16.5mm; /* Reduced to fit bottom printable area after shift */
+            border: 1.5px solid #000;
             background: #fff; color: #000;
             font-family: 'Arial', sans-serif;
             display: flex; box-sizing: border-box; overflow: hidden;
         }
         
         .label-qr { 
-            width: 17.5mm; /* Square-ish to match height */
-            height: 100%; border-right: 2px solid #000; 
+            width: 16.5mm; /* Maintain square-ish ratio */
+            height: 100%; border-right: 1.5px solid #000; 
             flex-shrink: 0; display: flex; 
             align-items: center; justify-content: center; padding: 0.5mm; 
         }
@@ -121,7 +117,7 @@
         }
         .lbl-val { 
             font-weight: bold; font-size: 6.5pt; 
-            padding-left: 3px; white-space: nowrap; overflow: hidden; 
+            padding-left: 2px; white-space: nowrap; overflow: hidden; 
             display: flex; align-items: center; flex-grow: 1; height: 100%;
         }
         
@@ -152,44 +148,11 @@
     <div id="focus-guard" onclick="document.body.focus()"><div><div style="font-size:5rem;">🚫</div><div style="font-size:3rem;color:#f44;font-weight:bold;">SCANNER PAUSED</div><div class="text-white">Click anywhere to resume</div></div></div>
     <div id="processing-overlay"><div class="spinner-border text-info" style="width: 5rem; height: 5rem;" role="status"></div></div>
     <div id="toast-container"></div>
+    <nav class="navbar navbar-expand-lg"><div class="container-fluid"><div class="d-flex align-items-center"><span class="navbar-brand">Filament Command Center</span><span class="version-tag badge bg-dark border border-info ms-2">{{ version }}</span></div><div class="d-flex align-items-center"><div class="status-label"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div><div class="status-label"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div><button class="btn btn-outline-info btn-sm me-3" onclick="openLocationsModal()">📂 Locations</button><button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button></div></div></nav>
+    <div class="main-container"><div class="col-logs"><div class="p-3 border-bottom border-secondary text-info fw-bold d-flex justify-content-between align-items-center"><span>Live Activity 📡</span><span id="log-status" class="small text-muted">Auto-Refresh ON</span></div><div id="live-logs" class="log-box" onmouseenter="pauseLogs(true)" onmouseleave="pauseLogs(false)"></div></div><div class="col-buffer"><div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status">Ready...</span></div><div id="buffer-zone" class="buffer-content"></div><div class="cmd-deck"><div class="cmd-btn" onclick="processScan('CMD:CLEAR')"><div class="qr-box" id="qr-clear"></div><div class="qr-label">CLEAR</div></div><div class="cmd-btn" onclick="triggerUndo()"><div class="qr-box" id="qr-undo"></div><div class="qr-label">UNDO</div></div><div class="cmd-btn" id="btn-audit" onclick="toggleAudit()"><div class="qr-box" id="qr-audit"></div><div class="qr-label" id="lbl-audit">AUDIT</div></div><div class="cmd-btn" onclick="processScan('CMD:EJECT')"><div class="qr-box" id="qr-eject"></div><div class="qr-label">EJECT MODE</div></div></div></div></div>
 
-    <nav class="navbar navbar-expand-lg">
-        <div class="container-fluid">
-            <div class="d-flex align-items-center"><span class="navbar-brand">Filament Command Center</span><span class="version-tag badge bg-dark border border-info ms-2">{{ version }}</span></div>
-            <div class="d-flex align-items-center">
-                <div class="status-label"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
-                <div class="status-label"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
-                <button class="btn btn-outline-info btn-sm me-3" onclick="openLocationsModal()">📂 Locations</button>
-                <button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button>
-            </div>
-        </div>
-    </nav>
-
-    <div class="main-container">
-        <div class="col-logs">
-            <div class="p-3 border-bottom border-secondary text-info fw-bold d-flex justify-content-between align-items-center">
-                <span>Live Activity 📡</span><span id="log-status" class="small text-muted">Auto-Refresh ON</span>
-            </div>
-            <div id="live-logs" class="log-box" onmouseenter="pauseLogs(true)" onmouseleave="pauseLogs(false)"></div>
-        </div>
-        <div class="col-buffer">
-            <div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status">Ready...</span></div>
-            <div id="buffer-zone" class="buffer-content"></div>
-            <div class="cmd-deck">
-                <div class="cmd-btn" onclick="processScan('CMD:CLEAR')"><div class="qr-box" id="qr-clear"></div><div class="qr-label">CLEAR</div></div>
-                <div class="cmd-btn" onclick="triggerUndo()"><div class="qr-box" id="qr-undo"></div><div class="qr-label">UNDO</div></div>
-                <div class="cmd-btn" id="btn-audit" onclick="toggleAudit()"><div class="qr-box" id="qr-audit"></div><div class="qr-label" id="lbl-audit">AUDIT</div></div>
-                <div class="cmd-btn" onclick="processScan('CMD:EJECT')"><div class="qr-box" id="qr-eject"></div><div class="qr-label">EJECT MODE</div></div>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-info fw-bold" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0">
-        <table class="table table-hover table-dark mb-0 table-fixed" style="font-size:1.1rem;"><thead><tr><th class="col-id">ID</th><th class="col-name">Name</th><th class="col-status">Status</th><th class="col-actions">Actions</th></tr></thead><tbody id="location-table"></tbody></table>
-    </div></div></div></div>
-    
+    <div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-info fw-bold" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0 table-fixed" style="font-size:1.1rem;"><thead><tr><th class="col-id">ID</th><th class="col-name">Name</th><th class="col-status">Status</th><th class="col-actions">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
     <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3 text-info" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div><div id="headsup-buffer" class="headsup-strip" style="display:none;"><div class="d-flex align-items-center"><span class="me-3 text-warning fw-bold fs-4">✋ READY:</span><div id="headsup-swatch" class="buffer-swatch me-3"></div><span id="headsup-text" class="text-white fw-bold fs-3"></span></div><div class="fs-4 fw-bold text-info border border-info px-3 py-1 rounded" id="headsup-total">Buffer: 0</div></div><div id="buffer-nav-deck" class="nav-deck" style="display:none;"><div class="nav-card" onclick="prevBuffer()"><div class="nav-qr-container me-3" id="qr-prev"></div><div class="text-start"><div class="fw-bold fs-4">< PREV</div></div></div><div class="nav-card" onclick="nextBuffer()"><div class="text-end me-3"><div class="fw-bold fs-4">NEXT ></div></div><div class="nav-qr-container" id="qr-next"></div></div></div><div class="modal-body"><div id="manage-grid-view" style="display:none;"><div class="alert alert-info py-1 mb-2 small text-center fw-bold">Tap button or scan slot QR (CMD:SLOT:X)</div><div id="slot-grid-container" class="slot-grid"></div><div id="unslotted-container" style="display:none;"></div></div><div id="manage-list-view"><div id="manage-contents-list" class="mb-4"></div></div><hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add (To Buffer)</button></div><div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary"><button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button><div class="text-center"><div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div><div class="qr-label">DONE</div></div></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
-
     <div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-3 mb-4"></p><div id="action-buttons" class="modal-action-row d-flex justify-content-center gap-5 flex-wrap"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
     <div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #fc0;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRMATION</h5></div><div class="modal-body text-center"><p id="confirm-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4"><div class="text-center" onclick="confirmAction(false)" style="cursor:pointer"><div id="qr-confirm-no" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-secondary btn-lg">❌ NO</button></div><div class="text-center" onclick="confirmAction(true)" style="cursor:pointer"><div id="qr-confirm-yes" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-success btn-lg">✅ YES</button></div></div></div></div></div></div>
     <div class="modal fade" id="safetyModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #f44;"><div class="modal-header bg-danger text-white"><h5 class="modal-title fw-bold">⚠️ SAFETY CONFIRMATION</h5></div><div class="modal-body text-center"><p id="safety-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4"><div class="text-center" onclick="confirmSafety(false)" style="cursor:pointer"><div id="qr-safety-no" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-secondary btn-lg">❌ NO</button></div><div class="text-center" onclick="confirmSafety(true)" style="cursor:pointer"><div id="qr-safety-yes" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-danger btn-lg">✅ YES</button></div></div></div></div></div></div>
@@ -197,7 +160,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const DASHBOARD_VERSION = "v153.18 (Shift & Stretch)";
+        const DASHBOARD_VERSION = "v153.19 (Centering Calibration)";
         console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
         // --- WAKE LOCK ---
@@ -390,7 +353,7 @@
         };
         const renderList = (data, locId) => {
             const list = document.getElementById('manage-contents-list');
-            list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => `<div class="unslotted-item"><div class="d-flex align-items-center"><div id="qr-list-${i}" class="bg-white p-1 me-3 rounded"></div><div class="buffer-swatch me-3" style="background-color:#${s.color}"></div><span class="fs-4 fw-bold">${s.display}</span></div><div class="d-flex gap-2"><button class="btn btn-light fw-bold border-dark" onclick="printLabel(${s.id})">🖨️ LABEL</button><button class="btn btn-primary fw-bold" onclick="ejectSpool(${s.id}, '${locId}', true)">✋ PICK</button><button class="btn btn-outline-danger" onclick="ejectSpool(${s.id}, '${locId}', false)">🗑️</button></div></div>`).join('');
+            list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => `<div class="unslotted-item"><div class="d-flex align-items-center"><div id="qr-list-${i}" class="bg-white p-1 me-3 rounded"></div><div class="buffer-swatch me-3" style="background-color:#s.color"></div><span class="fs-4 fw-bold">${s.display}</span></div><div class="d-flex gap-2"><button class="btn btn-light fw-bold border-dark" onclick="printLabel(${s.id})">🖨️ LABEL</button><button class="btn btn-primary fw-bold" onclick="ejectSpool(${s.id}, '${locId}', true)">✋ PICK</button><button class="btn btn-outline-danger" onclick="ejectSpool(${s.id}, '${locId}', false)">🗑️</button></div></div>`).join('');
             data.forEach((s,i) => new QRCode(document.getElementById(`qr-list-${i}`), {text:"ID:"+s.id, width:60, height:60}));
         };
         const handleSlotInteraction = (slot) => {
