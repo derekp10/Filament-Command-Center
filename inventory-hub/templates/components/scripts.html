@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.31 (Logic Restored)";
+    const DASHBOARD_VERSION = "v153.32 (Crash Protected)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     // --- WAKE LOCK ---
@@ -21,7 +21,8 @@
             const el = document.getElementById(id);
             if(el) new QRCode(el, {text: txt, width: el.style.width?.replace('px','') || 120, height: el.style.height?.replace('px','') || 120});
         }
-        new QRCode(document.getElementById('qr-audit'), {text: 'CMD:AUDIT', width: 120, height: 120});
+        const auditEl = document.getElementById('qr-audit');
+        if(auditEl) new QRCode(auditEl, {text: 'CMD:AUDIT', width: 120, height: 120});
 
         document.getElementById('location-table').addEventListener('click', (e) => {
             const btn = e.target.closest('.btn-manage');
@@ -58,7 +59,18 @@
         else { el.innerText = "Auto-Refresh ON"; el.classList.add('text-muted'); el.style.color = ""; }
     };
 
-    const setProcessing = (s) => { state.processing = s; document.getElementById('processing-overlay').style.display = s ? 'flex' : 'none'; };
+    // --- CRASH FIX: Auto-Create Processing Overlay ---
+    const setProcessing = (s) => { 
+        let ov = document.getElementById('processing-overlay');
+        if (!ov) {
+            ov = document.createElement('div');
+            ov.id = 'processing-overlay';
+            ov.style.cssText = "display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999;";
+            document.body.appendChild(ov);
+        }
+        state.processing = s; 
+        ov.style.display = s ? 'block' : 'none'; 
+    };
     
     const showToast = (msg, type='info') => {
         let container = document.getElementById('toast-container');
@@ -108,8 +120,11 @@
                 }
             } catch (err) { console.log("Attr Parse Error", err); }
 
-            document.getElementById('print-qr').innerHTML = "";
-            new QRCode(document.getElementById('print-qr'), {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L});
+            const qrEl = document.getElementById('print-qr');
+            if (qrEl) {
+                qrEl.innerHTML = "";
+                new QRCode(qrEl, {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L});
+            }
             
             document.getElementById('lbl-brand').innerText = fil.vendor ? fil.vendor.name : "Generic";
             document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; 
@@ -221,31 +236,19 @@
             un.style.display='block';
             unslotted.forEach((item, i) => {
                 const div = document.createElement('div'); div.className = "unslotted-item";
-                // RESTORED PICK/TRASH QRs to Match Screenshot
+                // CLEAN LAYOUT: Buttons Only (Matches Request)
                 div.innerHTML = `
                     <div class="unslotted-info">
                         <div class="buffer-swatch" style="background-color:#${item.color}"></div>
                         <span class="fs-4 fw-bold text-white">${item.display}</span>
                     </div>
                     <div class="unslotted-actions">
-                         <div class="action-qr-group">
-                             <div id="qr-pick-${i}" class="qr-box" style="padding:2px; width:50px; height:50px;"></div>
-                             <div class="action-qr-label">PICK</div>
-                        </div>
                         <button class="btn btn-primary fw-bold" style="height:50px; width:50px; font-size:1.5rem;" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">✋</button>
-
                         <button class="btn btn-danger fw-bold" style="height:50px; width:50px; font-size:1.5rem;" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">🗑️</button>
-                        <div class="action-qr-group">
-                             <div id="qr-trash-${i}" class="qr-box" style="padding:2px; width:50px; height:50px;"></div>
-                             <div class="action-qr-label">TRASH</div>
-                        </div>
-
                         <button class="btn btn-light border-dark fw-bold ms-2" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️</button>
                     </div>`;
                 un.appendChild(div); 
-                // GENERATE THE QRS IMMEDIATELY
-                new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+item.id, width:45, height:45}); 
-                new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+item.id, width:45, height:45});
+                // Removed QR Generation Here to fix layout overflow
             });
             const dz = document.createElement('div'); dz.className='danger-zone'; dz.innerHTML=`<h4 class="text-danger fw-bold">DANGER ZONE</h4><div class="d-flex justify-content-center align-items-center gap-3"><div class="text-center"><div id="qr-eject-all" class="bg-white p-2 rounded"></div><div class="qr-label text-white">ALL</div></div><button class="btn btn-danger btn-lg fw-bold" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">EJECT ALL 💥</button></div>`;
             un.appendChild(dz); new QRCode(document.getElementById("qr-eject-all"), {text:"CMD:EJECTALL", width:100, height:100});
@@ -261,27 +264,11 @@
                 <span class="fs-4 fw-bold text-white">${s.display}</span>
             </div>
             <div class="unslotted-actions">
-                 <div class="action-qr-group">
-                     <div id="qr-pick-${i}" class="qr-box" style="padding:2px; width:50px; height:50px;"></div>
-                     <div class="action-qr-label">PICK</div>
-                </div>
                 <button class="btn btn-primary fw-bold" style="height:50px; width:50px; font-size:1.5rem;" onclick="ejectSpool(${s.id}, '${locId}', true)">✋</button>
-
                 <button class="btn btn-danger fw-bold" style="height:50px; width:50px; font-size:1.5rem;" onclick="ejectSpool(${s.id}, '${locId}', false)">🗑️</button>
-                <div class="action-qr-group">
-                     <div id="qr-trash-${i}" class="qr-box" style="padding:2px; width:50px; height:50px;"></div>
-                     <div class="action-qr-label">TRASH</div>
-                </div>
-
                 <button class="btn btn-light border-dark fw-bold ms-2" onclick="event.stopPropagation(); printLabel(${s.id})">🖨️</button>
             </div>
         </div>`).join('');
-        
-        // NOW SAFE TO DRAW QRS
-        data.forEach((s,i) => {
-            new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+s.id, width:45, height:45});
-            new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+s.id, width:45, height:45});
-        });
     };
 
     const handleSlotInteraction = (slot) => {
