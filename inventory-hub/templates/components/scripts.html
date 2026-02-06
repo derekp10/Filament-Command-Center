@@ -1,16 +1,14 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.41 (Vibrant Aura)";
+    const DASHBOARD_VERSION = "v153.42 (Unified Chameleon)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
-    // --- WAKE LOCK ---
     let wakeLock = null;
     const requestWakeLock = async () => { if ('wakeLock' in navigator) { try { wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { console.log(err); } } };
     document.addEventListener('visibilitychange', async () => { if (wakeLock !== null && document.visibilityState === 'visible') await requestWakeLock(); });
     document.addEventListener('click', requestWakeLock, { once: true });
     requestWakeLock();
 
-    // --- STATE & MODALS ---
     let modals = {}; 
     let state = { scanBuffer: "", bufferTimeout: null, heldSpools: [], ejectMode: false, lastScannedLoc: null, pendingConfirm: null, pendingSafety: null, allLocations: [], logsPaused: false, currentGrid: {}, processing: false, modalCallbacks: [], activeModal: null, auditActive: false, lastAuditState: null };
 
@@ -39,39 +37,20 @@
         updateLogState(); fetchLocations(); 
     });
 
-    // --- COLOR MIXER (TUNED FOR VIBRANCY) ---
     const getTintedBackground = (hex) => {
-        if (!hex) return "#1a1a1a"; // Default dark gray
+        if (!hex) return "#1a1a1a";
         hex = hex.replace('#', '');
         if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
-        
-        const r = parseInt(hex.substring(0,2), 16);
-        const g = parseInt(hex.substring(2,4), 16);
-        const b = parseInt(hex.substring(4,6), 16);
-        
-        // MIX WITH BLACK (65% Black, 35% Color)
-        // Increased from 0.15 to 0.35 to make colors POP while keeping text readable.
-        const mix = 0.35; 
-        const nr = Math.floor(r * mix);
-        const ng = Math.floor(g * mix);
-        const nb = Math.floor(b * mix);
-        
-        return `rgb(${nr}, ${ng}, ${nb})`;
+        const r = parseInt(hex.substring(0,2), 16), g = parseInt(hex.substring(2,4), 16), b = parseInt(hex.substring(4,6), 16);
+        const mix = 0.35; // 35% Color, 65% Black
+        return `rgb(${Math.floor(r*mix)}, ${Math.floor(g*mix)}, ${Math.floor(b*mix)})`;
     };
 
-    // --- GLOBAL HANDLERS ---
-    window.addEventListener('blur', () => {
-        const guard = document.getElementById('focus-guard');
-        if(guard) guard.style.display = 'flex';
-    });
-    window.addEventListener('focus', () => {
-        const guard = document.getElementById('focus-guard');
-        if(guard) guard.style.display = 'none';
-    });
-    
+    window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
+    window.addEventListener('focus', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'none'; });
     document.addEventListener('keydown', (e) => {
-        const guard = document.getElementById('focus-guard');
-        if ((guard && guard.style.display === 'flex') || state.processing || e.target.tagName === 'INPUT') return;
+        const g = document.getElementById('focus-guard');
+        if ((g && g.style.display === 'flex') || state.processing || e.target.tagName === 'INPUT') return;
         if (e.key === 'Enter') { e.preventDefault(); if (state.scanBuffer.length > 0) processScan(state.scanBuffer); state.scanBuffer = ""; }
         else if (e.key.length === 1) { state.scanBuffer += e.key; clearTimeout(state.bufferTimeout); state.bufferTimeout = setTimeout(() => state.scanBuffer = "", 2000); }
     });
@@ -79,118 +58,73 @@
     const pauseLogs = (isPaused) => {
         state.logsPaused = isPaused;
         const el = document.getElementById('log-status');
-        if (isPaused) { 
-            el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-muted');
-        } else { 
-            el.innerText = "Auto-Refresh ON"; el.style.color = "#0f0"; el.classList.remove('text-muted');
-        }
+        if (isPaused) { el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-muted'); } 
+        else { el.innerText = "Auto-Refresh ON"; el.style.color = "#0f0"; el.classList.remove('text-muted'); }
     };
 
     const setProcessing = (s) => { 
         let ov = document.getElementById('processing-overlay');
-        if (!ov) {
-            ov = document.createElement('div');
-            ov.id = 'processing-overlay';
-            ov.style.cssText = "display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999;";
-            document.body.appendChild(ov);
-        }
-        state.processing = s; 
-        ov.style.display = s ? 'block' : 'none'; 
+        if (!ov) { ov = document.createElement('div'); ov.id = 'processing-overlay'; ov.style.cssText = "display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999;"; document.body.appendChild(ov); }
+        state.processing = s; ov.style.display = s ? 'block' : 'none'; 
     };
     
     const showToast = (msg, type='info') => {
-        let container = document.getElementById('toast-container');
-        if (!container) {
-            container = document.createElement('div');
-            container.id = 'toast-container';
-            document.body.appendChild(container);
-        }
-        const el = document.createElement('div'); 
-        el.className = 'toast-msg'; 
-        el.innerText = msg; 
-        el.style.borderColor = type==='error'?'#f44':(type==='warning'?'#fc0':'#00d4ff');
-        container.appendChild(el); 
-        setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
+        let c = document.getElementById('toast-container');
+        if (!c) { c = document.createElement('div'); c.id = 'toast-container'; document.body.appendChild(c); }
+        const el = document.createElement('div'); el.className = 'toast-msg'; el.innerText = msg; el.style.borderColor = type==='error'?'#f44':(type==='warning'?'#fc0':'#00d4ff');
+        c.appendChild(el); setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
     };
 
-    // --- LABEL PRINTING ---
-    const hexToRgb = (hex) => {
-        if (!hex) return {r:'', g:'', b:''};
-        hex = hex.replace('#', '');
-        const bigint = parseInt(hex, 16);
-        return { r: (bigint >> 16) & 255, g: (bigint >> 8) & 255, b: bigint & 255 };
-    };
-
+    const hexToRgb = (hex) => { if (!hex) return {r:'', g:'', b:''}; hex = hex.replace('#', ''); const i = parseInt(hex, 16); return { r: (i >> 16) & 255, g: (i >> 8) & 255, b: i & 255 }; };
     const printLabel = (sid) => {
-        showToast("🖨️ Printing Label...");
-        setProcessing(true);
+        showToast("🖨️ Printing Label..."); setProcessing(true);
         fetch(`/api/spool_details?id=${sid}`).then(r=>r.json()).then(data => {
-            setProcessing(false);
-            if (!data || !data.filament) { showToast("No data for label", "error"); return; }
-            
-            const fil = data.filament;
-            const extra = fil.extra || {};
-            const colorHex = fil.color_hex || '000000';
-            const rgb = hexToRgb(colorHex);
-            
+            setProcessing(false); if (!data || !data.filament) { showToast("No data", "error"); return; }
+            const fil = data.filament, extra = fil.extra || {}, colorHex = fil.color_hex || '000000', rgb = hexToRgb(colorHex);
             let typeStr = fil.material || "Unknown";
-            try {
-                let attrs = [];
-                if (extra.filament_attributes) {
-                    attrs = (typeof extra.filament_attributes === 'string') 
-                        ? JSON.parse(extra.filament_attributes) 
-                        : extra.filament_attributes;
-                }
-                if (Array.isArray(attrs) && attrs.length > 0) {
-                    typeStr = attrs.join(' ') + ' ' + typeStr;
-                }
-            } catch (err) { console.log("Attr Parse Error", err); }
-
-            const qrEl = document.getElementById('print-qr');
-            if (qrEl) {
-                qrEl.innerHTML = "";
-                new QRCode(qrEl, {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L});
-            }
-            
+            try { let attrs = (typeof extra.filament_attributes === 'string') ? JSON.parse(extra.filament_attributes) : extra.filament_attributes; if (Array.isArray(attrs) && attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr; } catch (err) {}
+            const qrEl = document.getElementById('print-qr'); if (qrEl) { qrEl.innerHTML = ""; new QRCode(qrEl, {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L}); }
             document.getElementById('lbl-brand').innerText = fil.vendor ? fil.vendor.name : "Generic";
             document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; 
             document.getElementById('lbl-type').innerText = typeStr;
             document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
             document.getElementById('lbl-id').innerText = sid;
             document.getElementById('lbl-rgb').innerText = `${rgb.r},${rgb.g},${rgb.b}`; 
-            
             setTimeout(() => window.print(), 500);
-        }).catch(e => { setProcessing(false); showToast("Print Error", "error"); console.error(e); });
+        }).catch(e => { setProcessing(false); showToast("Print Error", "error"); });
     };
 
-    // --- CORE LOGIC ---
+    // --- RENDER BUFFER (New Chameleon Style) ---
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone'), h = document.getElementById('headsup-buffer'), n = document.getElementById('buffer-nav-deck');
-        if (state.heldSpools.length === 0) { 
-            z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; 
-            h.style.display = n.style.display = 'none'; return; 
-        }
-        z.innerHTML = state.heldSpools.map((s, i) => `<div class="buffer-item ${i===0?'active-item':''}"><div class="buffer-info"><div class="buffer-swatch" style="background-color:#${s.color}"></div><div class="buffer-text">${s.display}</div></div><div id="qr-buf-${i}" class="qr-box"></div></div>`).join('');
-        state.heldSpools.forEach((s, i) => new QRCode(document.getElementById(`qr-buf-${i}`), {text: "ID:"+s.id, width:120, height:120}));
+        if (state.heldSpools.length === 0) { z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; h.style.display = n.style.display = 'none'; return; }
+        z.innerHTML = state.heldSpools.map((s, i) => {
+            const innerColor = getTintedBackground(s.color);
+            return `
+            <div class="filament-frame buffer-item ${i===0?'active-item':''}" style="background-color:#${s.color}; padding:8px;">
+                <div class="filament-inner" style="background-color:${innerColor}">
+                    <div id="qr-buf-${i}" class="qr-box me-3"></div>
+                    <div class="buffer-text">${s.display}</div>
+                </div>
+            </div>`;
+        }).join('');
+        
+        state.heldSpools.forEach((s, i) => new QRCode(document.getElementById(`qr-buf-${i}`), {text: "ID:"+s.id, width:50, height:50, correctLevel: QRCode.CorrectLevel.L}));
         h.style.display = 'flex'; document.getElementById('headsup-swatch').style.backgroundColor = `#${state.heldSpools[0].color}`;
         document.getElementById('headsup-text').innerText = state.heldSpools[0].display; document.getElementById('headsup-total').innerText = `Buffer: ${state.heldSpools.length}`;
         n.style.display = state.heldSpools.length > 1 ? 'flex' : 'none';
     };
+    
     const nextBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.push(state.heldSpools.shift()); renderBuffer(); } };
     const prevBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
     const toggleAudit = () => { if (state.auditActive) processScan("CMD:DONE"); else processScan("CMD:AUDIT"); };
 
     const processScan = (text) => {
         const upper = text.toUpperCase();
-        if (upper.startsWith('CMD:PRINT:')) {
-            const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return;
-        }
+        if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
         if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
         if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
-        if (state.activeModal === 'action') {
-            if(upper.includes('CANCEL')) { closeModal('actionModal'); return; }
-            if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; }
-        }
+        if (state.activeModal === 'action') { if(upper.includes('CANCEL')) { closeModal('actionModal'); return; } if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
         if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
         setProcessing(true);
@@ -198,20 +132,12 @@
             setProcessing(false);
             if (res.type === 'command') {
                 const cmds = { 'clear': ()=>{state.heldSpools=[];renderBuffer();showToast("Buffer Cleared");state.lastScannedLoc=null;}, 'undo': triggerUndo, 'eject': ()=>{showToast("EJECT MODE", "warning");state.ejectMode=true;}, 'next': nextBuffer, 'prev': prevBuffer, 'done': closeManage };
-                if (cmds[res.cmd]) cmds[res.cmd]();
-                else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true);
-                else if (res.cmd === 'slot') handleSlotInteraction(res.value);
-                else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
+                if (cmds[res.cmd]) cmds[res.cmd](); else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true); else if (res.cmd === 'slot') handleSlotInteraction(res.value); else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
             } else if (res.type === 'location') {
-                const locData = state.allLocations.find(l => l.LocationID === res.id);
-                const maxSpools = locData ? parseInt(locData['Max Spools']) : 0;
-                const isSingleSlot = maxSpools <= 1;
-                const isOccupied = res.contents && res.contents.length > 0;
                 if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
                 if (state.heldSpools.length > 0) { performContextAssign(res.id); state.lastScannedLoc = null; return; }
-                if (isSingleSlot && isOccupied) {
-                    const spool = res.contents[0]; state.heldSpools.unshift({id: spool.id, display: spool.display, color: spool.color}); renderBuffer(); showToast("⚡ Quick Pick: #" + spool.id); state.lastScannedLoc = res.id; return;
-                }
+                const locData = state.allLocations.find(l => l.LocationID === res.id);
+                if ((!locData || parseInt(locData['Max Spools']) <= 1) && res.contents && res.contents.length > 0) { const spool = res.contents[0]; state.heldSpools.unshift({id: spool.id, display: spool.display, color: spool.color}); renderBuffer(); showToast("⚡ Quick Pick: #" + spool.id); state.lastScannedLoc = res.id; return; }
                 openManage(res.id); state.lastScannedLoc = res.id;
             } else if (res.type === 'spool') {
                 state.lastScannedLoc = null; 
@@ -223,12 +149,7 @@
     };
 
     const performContextAssign = (tid) => {
-        setProcessing(true);
-        fetch('/api/smart_move', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({location:tid, spools:[state.heldSpools[0].id]}) }).then(r=>r.json()).then(res=>{
-            setProcessing(false);
-            if(res.status==='success') { showToast("Assigned!", "success"); state.heldSpools.shift(); renderBuffer(); if(document.getElementById('manage-loc-id').value===tid) refreshManageView(tid); }
-            else showToast(res.msg, 'error');
-        }).catch(()=>setProcessing(false));
+        setProcessing(true); fetch('/api/smart_move', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({location:tid, spools:[state.heldSpools[0].id]}) }).then(r=>r.json()).then(res=>{ setProcessing(false); if(res.status==='success') { showToast("Assigned!", "success"); state.heldSpools.shift(); renderBuffer(); if(document.getElementById('manage-loc-id').value===tid) refreshManageView(tid); } else showToast(res.msg, 'error'); }).catch(()=>setProcessing(false));
     };
 
     const closeModal = (id) => { modals[id].hide(); state.activeModal = null; };
@@ -236,7 +157,6 @@
     const confirmAction = (y) => { closeModal('confirmModal'); if(y && state.pendingConfirm) state.pendingConfirm(); state.pendingConfirm=null; };
     const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText=msg; state.pendingSafety=cb; modals.safetyModal.show(); state.activeModal = 'safety'; };
     const confirmSafety = (y) => { closeModal('safetyModal'); if(y && state.pendingSafety) state.pendingSafety(); state.pendingSafety=null; };
-    
     const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
     const openManage = (id) => { document.getElementById('manageTitle').innerText=`Manage: ${id}`; document.getElementById('manage-loc-id').value=id; document.getElementById('manual-spool-id').value=""; if(refreshManageView(id)) modals.manageModal.show(); else showToast("Loc Error", "error"); };
     const closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
@@ -250,6 +170,7 @@
         return true;
     };
     
+    // --- RENDER GRID (Updated for Chameleon) ---
     const renderGrid = (data, max) => {
         const grid=document.getElementById('slot-grid-container'), un=document.getElementById('unslotted-container');
         grid.innerHTML=""; un.innerHTML=""; state.currentGrid={};
@@ -257,43 +178,63 @@
         data.forEach(i => { if(i.slot && parseInt(i.slot)>0) state.currentGrid[i.slot]=i; else unslotted.push(i); });
         for(let i=1; i<=max; i++) {
             const item = state.currentGrid[i], div = document.createElement('div');
-            div.className = item ? "slot-btn full" : "slot-btn empty";
             
-            div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="qr-slot-${i}" class="bg-white p-1 rounded"></div></div><div class="slot-right">${item?`<div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div><button class="btn btn-sm btn-light border-dark mt-2 fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>`:`<div class="text-muted fs-4">EMPTY</div>`}</div>`;
+            if (item) {
+                // OCCUPIED SLOT: USES CHAMELEON FRAME
+                const innerColor = getTintedBackground(item.color);
+                div.className = "filament-frame slot-btn full";
+                div.style.backgroundColor = `#${item.color}`;
+                div.style.padding = "8px"; // Slightly thinner border for grid to save space
+                div.innerHTML = `
+                    <div class="filament-inner" style="background-color:${innerColor}">
+                        <div class="slot-left">
+                            <div class="slot-num">Slot ${i}</div>
+                            <div id="qr-slot-${i}" class="bg-white p-1 rounded"></div>
+                        </div>
+                        <div class="slot-right">
+                            <div class="slot-content">${item.display}</div>
+                            <button class="btn btn-sm btn-light border-dark mt-2 fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>
+                        </div>
+                    </div>`;
+            } else {
+                // EMPTY SLOT
+                div.className = "slot-btn empty";
+                div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="qr-slot-${i}" class="bg-white p-1 rounded"></div></div><div class="slot-right"><div class="text-muted fs-4">EMPTY</div></div>`;
+            }
             
             div.onclick = () => handleSlotInteraction(i); grid.appendChild(div);
             new QRCode(document.getElementById(`qr-slot-${i}`), {text:"CMD:SLOT:"+i, width:60, height:60});
         }
+        
+        // Render Unslotted
         if(unslotted.length>0) {
             un.style.display='block';
             unslotted.forEach((item, i) => {
-                const div = document.createElement('div'); div.className = "unslotted-item";
-                // ADAPTIVE BACKGROUND APPLIED HERE
+                const div = document.createElement('div'); div.className = "unslotted-item filament-frame";
                 div.style.backgroundColor = `#${item.color}`;
                 const innerColor = getTintedBackground(item.color);
-                
                 div.innerHTML = `
                     <div class="item-card-inner" style="background-color: ${innerColor}">
-                        <div class="item-info">${item.display}</div>
+                        <div class="item-info-big">${item.display}</div>
                         <div class="item-actions">
-                            <div class="action-stack" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">
-                                <div id="qr-pick-${i}" class="mini-qr"></div>
-                                <button class="stack-btn btn-pick">✋ PICK</button>
+                            <div class="action-badge" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">
+                                <div id="qr-pick-${i}" class="badge-qr"></div>
+                                <button class="badge-btn btn-pick">✋ PICK</button>
                             </div>
-                            <div class="action-stack" onclick="printLabel(${item.id})">
-                                <div id="qr-print-${i}" class="mini-qr"></div>
-                                <button class="stack-btn btn-print">🖨️ PRINT</button>
+                            <div class="action-badge" onclick="printLabel(${item.id})">
+                                <div id="qr-print-${i}" class="badge-qr"></div>
+                                <button class="badge-btn btn-print">🖨️ PRINT</button>
                             </div>
-                            <div class="action-stack" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">
-                                <div id="qr-trash-${i}" class="mini-qr"></div>
-                                <button class="stack-btn btn-trash">🗑️ TRASH</button>
+                            <div class="action-badge" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">
+                                <div id="qr-trash-${i}" class="badge-qr"></div>
+                                <button class="badge-btn btn-trash">🗑️ TRASH</button>
                             </div>
                         </div>
                     </div>`;
                 un.appendChild(div); 
-                new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+item.id, width:72, height:72, correctLevel: QRCode.CorrectLevel.L}); 
-                new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+item.id, width:72, height:72, correctLevel: QRCode.CorrectLevel.L}); 
-                new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+item.id, width:72, height:72, correctLevel: QRCode.CorrectLevel.L});
+                new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+item.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L}); 
+                new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+item.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L}); 
+                new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+item.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L});
             });
             const dz = document.createElement('div'); dz.className='danger-zone'; dz.innerHTML=`<h4 class="text-danger fw-bold">DANGER ZONE</h4><div class="d-flex justify-content-center align-items-center gap-3"><div class="text-center"><div id="qr-eject-all" class="bg-white p-2 rounded"></div><div class="qr-label text-white">ALL</div></div><button class="btn btn-danger btn-lg fw-bold" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">EJECT ALL 💥</button></div>`;
             un.appendChild(dz); new QRCode(document.getElementById("qr-eject-all"), {text:"CMD:EJECTALL", width:100, height:100});
@@ -305,21 +246,21 @@
         list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => {
             const innerColor = getTintedBackground(s.color);
             return `
-            <div class="unslotted-item" style="background-color:#${s.color}">
+            <div class="unslotted-item filament-frame" style="background-color:#${s.color}">
                 <div class="item-card-inner" style="background-color: ${innerColor}">
-                    <div class="item-info">${s.display}</div>
+                    <div class="item-info-big">${s.display}</div>
                     <div class="item-actions">
-                        <div class="action-stack" onclick="ejectSpool(${s.id}, '${locId}', true)">
-                            <div id="qr-pick-${i}" class="mini-qr"></div>
-                            <button class="stack-btn btn-pick">✋ PICK</button>
+                        <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', true)">
+                            <div id="qr-pick-${i}" class="badge-qr"></div>
+                            <button class="badge-btn btn-pick">✋ PICK</button>
                         </div>
-                        <div class="action-stack" onclick="printLabel(${s.id})">
-                            <div id="qr-print-${i}" class="mini-qr"></div>
-                            <button class="stack-btn btn-print">🖨️ PRINT</button>
+                        <div class="action-badge" onclick="printLabel(${s.id})">
+                            <div id="qr-print-${i}" class="badge-qr"></div>
+                            <button class="badge-btn btn-print">🖨️ PRINT</button>
                         </div>
-                        <div class="action-stack" onclick="ejectSpool(${s.id}, '${locId}', false)">
-                            <div id="qr-trash-${i}" class="mini-qr"></div>
-                            <button class="stack-btn btn-trash">🗑️ TRASH</button>
+                        <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', false)">
+                            <div id="qr-trash-${i}" class="badge-qr"></div>
+                            <button class="badge-btn btn-trash">🗑️ TRASH</button>
                         </div>
                     </div>
                 </div>
@@ -327,9 +268,9 @@
         }).join('');
         
         data.forEach((s,i) => {
-            new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+s.id, width:72, height:72, correctLevel: QRCode.CorrectLevel.L});
-            new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+s.id, width:72, height:72, correctLevel: QRCode.CorrectLevel.L});
-            new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+s.id, width:72, height:72, correctLevel: QRCode.CorrectLevel.L});
+            new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+s.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L});
+            new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+s.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L});
+            new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+s.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L});
         });
     };
 
