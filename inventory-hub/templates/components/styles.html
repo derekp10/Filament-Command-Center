@@ -27,7 +27,6 @@
     .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
     .buffer-item { background: #222; border: 1px solid #555; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; opacity: 0.8; }
     .buffer-item.active-item { border: 2px solid #0f0; opacity: 1; background: #2a2a2a; box-shadow: 0 0 10px rgba(0,255,0,0.2); }
-    /* Legacy Swatch for Buffer List Only */
     .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; flex-shrink: 0; }
     .buffer-text { font-size: 1.6rem; font-weight: bold; margin-left: 15px; color: #fff; }
     
@@ -36,7 +35,7 @@
     
     .mini-qr { 
         width: 65px; height: 65px; 
-        background: white; padding: 4px; /* More padding to prevent clipping */
+        background: white; padding: 4px; 
         border-radius: 6px 6px 0 0; 
         display: flex; justify-content: center; align-items: center;
         flex-shrink: 0;
@@ -70,16 +69,26 @@
     .slot-content { font-size: 0.95rem; font-weight: bold; word-break: break-word; color: #fff; line-height: 1.2; margin-bottom: 5px; }
     .slot-num { color: #aaa; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
     
-    /* --- NEW SANDWICH LAYOUT (Top/Bottom Strips) --- */
+    /* --- NEW FULL-FRAME LAYOUT --- */
     .unslotted-item { 
-        background: #252525; margin: 10px 0; border-radius: 8px; 
-        border: 1px solid #444; overflow: hidden; /* Contains the strips */
-        display: flex; flex-direction: column; /* Stack vertically */
+        /* The Container IS the Color Frame */
+        padding: 12px 18px; /* Control Thickness of the colored border here */
+        margin: 10px 0; 
+        border-radius: 8px; 
+        border: 1px solid #444; /* Outer definition */
+        display: flex; /* Centers the inner card */
+        box-shadow: 0 4px 8px rgba(0,0,0,0.3);
     }
     
-    .color-strip { width: 100%; height: 8px; background-color: #888; }
-    
-    .item-body { padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+    .item-card-inner {
+        /* The Dark Card Floating Inside */
+        background: #1a1a1a; /* Darker than the frame */
+        flex-grow: 1; /* Fills remaining width */
+        border-radius: 6px;
+        padding: 15px;
+        display: flex; flex-direction: column; align-items: center; gap: 15px;
+        box-shadow: inset 0 0 10px rgba(0,0,0,0.5); /* Inner shadow for depth */
+    }
     
     .item-info { 
         font-size: 1.2rem; font-weight: bold; color: #fff; 
@@ -88,17 +97,16 @@
     
     .item-actions { 
         display: flex; justify-content: center; gap: 15px; 
-        flex-wrap: wrap; /* Wraps on tiny screens */
+        flex-wrap: wrap; 
     }
 
-    /* The Vertical Stack */
     .action-stack {
         display: flex; flex-direction: column; 
         align-items: center; width: 65px; 
     }
     
     .stack-btn {
-        width: 65px; height: 32px; /* TALLER to fix cutting text */
+        width: 65px; height: 32px;
         font-size: 0.8rem; font-weight: 900;
         border-radius: 0 0 6px 6px; 
         border: none;
@@ -111,7 +119,6 @@
     .btn-trash { background-color: #dc3545; color: white; } 
     .btn-print { background-color: #ffc107; color: black; } 
 
-    /* Helper for invisible buffer text */
     .buffer-empty-msg { color: #888 !important; font-size: 1.5rem; margin-top: 2rem; text-align: center; }
 
     /* TOASTS */
