@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.28 (Bug Fix Edition)";
+    const DASHBOARD_VERSION = "v153.29 (Lights & Labels Fixed)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     // --- WAKE LOCK ---
@@ -48,9 +48,21 @@
     };
 
     const setProcessing = (s) => { state.processing = s; document.getElementById('processing-overlay').style.display = s ? 'flex' : 'none'; };
+    
+    // BUG FIX: Auto-Create Toast Container if missing
     const showToast = (msg, type='info') => {
-        const el = document.createElement('div'); el.className = 'toast-msg'; el.innerText = msg; el.style.borderColor = type==='error'?'#f44':(type==='warning'?'#fc0':'#00d4ff');
-        document.getElementById('toast-container').appendChild(el); setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
+        let container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            document.body.appendChild(container);
+        }
+        const el = document.createElement('div'); 
+        el.className = 'toast-msg'; 
+        el.innerText = msg; 
+        el.style.borderColor = type==='error'?'#f44':(type==='warning'?'#fc0':'#00d4ff');
+        container.appendChild(el); 
+        setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
     };
 
     // --- LABEL PRINTING ---
