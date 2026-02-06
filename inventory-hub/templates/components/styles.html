@@ -1,3 +1,7 @@
+{
+type: file_update
+fileName: derekp10/filament-command-center/Filament-Command-Center-dev/inventory-hub/templates/components/styles.html
+fullContent:
 <style>
     /* --- GLOBAL KIOSK THEME --- */
     body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; margin: 0; padding: 0; }
@@ -39,16 +43,32 @@
 
     /* SLOT GRID */
     .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
+    
     .slot-btn { 
-        background: #222; border: 2px solid #444; border-radius: 10px; 
+        background: #222; border: 2px solid #444; 
+        /* BUG FIX: Remove right border overlap */
+        border-right: none !important;
+        border-radius: 10px; 
         min-height: 160px; display: flex; flex-direction: row; 
         align-items: center; justify-content: space-between; 
         padding: 8px; cursor: pointer; position: relative; overflow: hidden; 
     }
+    
     .slot-btn.full { border-color: #00d4ff; background: #1a1a1a; }
-    .slot-left { width: 40%; display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid #444; padding-right: 5px; }
+    
+    .slot-left { 
+        width: 40%; display: flex; flex-direction: column; 
+        align-items: center; justify-content: center; 
+        /* BUG FIX: Remove the "Ghost Line" */
+        border-right: none !important; 
+        padding-right: 5px; 
+    }
+    
     .slot-right { width: 60%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding-left: 5px; }
     
+    /* Force buttons to sit on top of the card click area */
+    .slot-right button { z-index: 10; position: relative; }
+
     .slot-swatch { width: 35px; height: 35px; border-radius: 50%; border: 2px solid #fff; flex-shrink: 0; margin-bottom: 5px; }
     .slot-content { font-size: 0.95rem; font-weight: bold; word-break: break-word; color: #fff; line-height: 1.2; margin-bottom: 5px; }
     .slot-num { color: #aaa; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
@@ -59,3 +79,4 @@
     /* Ensure UI QR codes don't get messed up by print styles */
     #printable-label-container img { width: 100% !important; height: auto !important; }
 </style>
+}
