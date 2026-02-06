@@ -15,22 +15,19 @@
     .status-on { background-color: #0f0; box-shadow: 0 0 5px #0f0; }
     .status-off { background-color: #555; border: 1px solid #777; }
 
-    /* --- BUFFER (Unified Layout) --- */
+    /* --- BUFFER (Sidebar) --- */
     .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; color: #00d4ff; font-weight: bold; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
     .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 15px; }
     
     .buffer-item { 
         display: flex; flex-direction: row !important; 
         align-items: stretch; justify-content: space-between; 
-        padding: 8px 12px !important; 
-        min-height: 80px;
+        padding: 8px 12px !important; min-height: 80px;
     }
     
-    /* Active Glow */
     .buffer-item.active-item { 
         box-shadow: 0 0 25px rgba(0, 255, 0, 0.4); 
-        border: 2px solid #0f0 !important; 
-        transform: scale(1.02); z-index: 10;
+        border: 2px solid #0f0 !important; transform: scale(1.02); z-index: 10;
     }
 
     .buffer-inner {
@@ -40,7 +37,7 @@
 
     .buffer-info-group { display: flex; align-items: center; gap: 15px; flex-grow: 1; }
     
-    /* SHARP ID BADGE */
+    /* ID BADGE */
     .buffer-id-tag {
         background: #000; color: #fff; border: 2px solid #fff; border-radius: 6px;
         padding: 4px 10px; font-family: 'Consolas', monospace; font-weight: 900;
@@ -49,17 +46,23 @@
     }
 
     .buffer-text { font-size: 1.3rem; font-weight: 800; color: #fff; word-break: break-word; line-height: 1.1; text-shadow: 1px 1px 2px #000; }
-    
-    /* BIGGER QR CONTAINER (90px) to safely hold 80px code */
     .buffer-qr { width: 90px; height: 90px; background: white; padding: 5px; border-radius: 6px; flex-shrink: 0; display:flex; justify-content:center; align-items:center; }
-    
     .buffer-empty-msg { color: #888 !important; font-size: 1.5rem; margin-top: 2rem; text-align: center; }
 
-    /* --- MANAGER MODAL HEADS UP --- */
-    .headsup-strip {
-        padding: 10px; background: #222; border-bottom: 1px solid #444;
-        display: none; /* Toggled by JS */
+    /* --- MANAGER MODAL NAV DECK (Restored) --- */
+    #buffer-nav-deck {
+        background: #111; border-top: 1px solid #444; padding: 10px;
+        display: none; /* JS toggles this */
+        justify-content: space-between; align-items: center; gap: 10px;
     }
+
+    .btn-cycle {
+        flex: 1; background: #222; border: 1px solid #555; color: #fff;
+        padding: 15px; font-weight: bold; font-size: 1.2rem; border-radius: 8px;
+        transition: 0.2s; text-transform: uppercase;
+    }
+    .btn-cycle:active { background: #444; transform: scale(0.98); }
+    .btn-cycle:hover { border-color: #00d4ff; color: #00d4ff; }
 
     /* --- QR & COMMANDS --- */
     .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
@@ -92,15 +95,12 @@
 
     .slot-left { 
         width: 35%; display: flex; flex-direction: column; align-items: center; justify-content: center; 
-        border: none !important; /* NUKE GRAY LINES */
-        border-right: none !important; 
-        padding-right: 10px; 
+        border: none !important; padding-right: 10px; 
     }
     .slot-right { 
         width: 65%; display: flex; flex-direction: column; align-items: center; justify-content: center; 
         text-align: center; padding-left: 10px; gap: 10px;
         border: none !important; 
-        border-left: none !important;
     }
     .slot-right button { z-index: 10; position: relative; }
     
@@ -116,7 +116,7 @@
         background: #1a1a1a; border-radius: 8px; padding: 10px; flex-grow: 1;
         display: flex; align-items: center; justify-content: space-between;
         box-shadow: inset 0 0 20px rgba(0,0,0,0.6);
-        border: none !important; /* Ensure no internal gray borders */
+        border: none !important; 
     }
 
     .unslotted-item { 
@@ -154,7 +154,6 @@
     /* HELPER QR */
     .mini-qr { width: 80px; height: 80px; background: white; padding: 5px; border-radius: 8px; display: flex; justify-content: center; align-items: center; }
 
-    /* FOCUS GUARD */
     #focus-guard {
         position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
         background: rgba(0, 0, 0, 0.85); z-index: 10000;
