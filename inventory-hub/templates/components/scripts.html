@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.43 (Balanced & Scannable)";
+    const DASHBOARD_VERSION = "v153.44 (Robust & Badged)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -13,7 +13,6 @@
     let state = { scanBuffer: "", bufferTimeout: null, heldSpools: [], ejectMode: false, lastScannedLoc: null, pendingConfirm: null, pendingSafety: null, allLocations: [], logsPaused: false, currentGrid: {}, processing: false, modalCallbacks: [], activeModal: null, auditActive: false, lastAuditState: null };
 
     document.addEventListener('DOMContentLoaded', () => {
-        // --- AUTO-CREATE FOCUS GUARD IF MISSING ---
         if (!document.getElementById('focus-guard')) {
             const fg = document.createElement('div');
             fg.id = 'focus-guard';
@@ -27,12 +26,8 @@
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
         const qrs = { 'qr-undo': 'CMD:UNDO', 'qr-clear': 'CMD:CLEAR', 'qr-eject': 'CMD:EJECT', 'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL', 'qr-modal-cancel': 'CMD:MODAL:CANCEL', 'qr-done': 'CMD:DONE', 'qr-prev': 'CMD:PREV', 'qr-next': 'CMD:NEXT' };
-        for(const [id, txt] of Object.entries(qrs)) {
-            const el = document.getElementById(id);
-            if(el) new QRCode(el, {text: txt, width: el.style.width?.replace('px','') || 120, height: el.style.height?.replace('px','') || 120});
-        }
-        const auditEl = document.getElementById('qr-audit');
-        if(auditEl) new QRCode(auditEl, {text: 'CMD:AUDIT', width: 120, height: 120});
+        for(const [id, txt] of Object.entries(qrs)) { generateSafeQR(id, txt, 120); }
+        generateSafeQR('qr-audit', 'CMD:AUDIT', 120);
 
         document.getElementById('location-table').addEventListener('click', (e) => {
             const btn = e.target.closest('.btn-manage');
@@ -45,6 +40,24 @@
         updateLogState(); fetchLocations(); 
     });
 
+    // --- ROBUST QR GENERATOR (Fixes Missing QRs) ---
+    const generateSafeQR = (elementId, text, size) => {
+        setTimeout(() => {
+            const el = document.getElementById(elementId);
+            if (el) {
+                el.innerHTML = ""; // Clear first
+                try {
+                    new QRCode(el, {
+                        text: text,
+                        width: size,
+                        height: size,
+                        correctLevel: QRCode.CorrectLevel.L
+                    });
+                } catch(e) { console.error("QR Fail:", e); }
+            }
+        }, 50); // 50ms delay to let DOM settle
+    };
+
     const getTintedBackground = (hex) => {
         if (!hex) return "#1a1a1a";
         hex = hex.replace('#', '');
@@ -54,7 +67,6 @@
         return `rgb(${Math.floor(r*mix)}, ${Math.floor(g*mix)}, ${Math.floor(b*mix)})`;
     };
 
-    // --- GLOBAL HANDLERS ---
     window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
     window.addEventListener('focus', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'none'; });
     
@@ -104,18 +116,17 @@
         }).catch(e => { setProcessing(false); showToast("Print Error", "error"); });
     };
 
-    // --- RENDER BUFFER (Restored Right-Side QR) ---
+    // --- RENDER BUFFER (New ID Badge) ---
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone'), h = document.getElementById('headsup-buffer'), n = document.getElementById('buffer-nav-deck');
         if (state.heldSpools.length === 0) { z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; h.style.display = n.style.display = 'none'; return; }
         z.innerHTML = state.heldSpools.map((s, i) => {
             const innerColor = getTintedBackground(s.color);
-            // JS Injected Styles for Layout
             return `
             <div class="filament-frame buffer-item ${i===0?'active-item':''}" style="background-color:#${s.color}; border:none;">
                 <div class="filament-inner" style="background-color:${innerColor}; justify-content:space-between;">
                     <div class="buffer-info-group">
-                        <div class="buffer-swatch" style="background-color:#${s.color}"></div>
+                        <div class="buffer-id-tag">#${s.id}</div>
                         <div class="buffer-text">${s.display}</div>
                     </div>
                     <div id="qr-buf-${i}" class="buffer-qr"></div>
@@ -123,7 +134,7 @@
             </div>`;
         }).join('');
         
-        state.heldSpools.forEach((s, i) => new QRCode(document.getElementById(`qr-buf-${i}`), {text: "ID:"+s.id, width:90, height:90, correctLevel: QRCode.CorrectLevel.L}));
+        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 90));
         h.style.display = 'flex'; document.getElementById('headsup-swatch').style.backgroundColor = `#${state.heldSpools[0].color}`;
         document.getElementById('headsup-text').innerText = state.heldSpools[0].display; document.getElementById('headsup-total').innerText = `Buffer: ${state.heldSpools.length}`;
         n.style.display = state.heldSpools.length > 1 ? 'flex' : 'none';
@@ -184,7 +195,7 @@
         return true;
     };
     
-    // --- RENDER GRID (Fixed QRs) ---
+    // --- RENDER GRID (Robust) ---
     const renderGrid = (data, max) => {
         const grid=document.getElementById('slot-grid-container'), un=document.getElementById('unslotted-container');
         grid.innerHTML=""; un.innerHTML=""; state.currentGrid={};
@@ -214,20 +225,18 @@
                 div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="qr-slot-${i}" class="bg-white p-1 rounded"></div></div><div class="slot-right"><div class="text-muted fs-4">EMPTY</div></div>`;
             }
             div.onclick = () => handleSlotInteraction(i); grid.appendChild(div);
-            new QRCode(document.getElementById(`qr-slot-${i}`), {text:"CMD:SLOT:"+i, width:60, height:60});
+            generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 60);
         }
-        
         if(unslotted.length>0) renderUnslotted(unslotted); else un.style.display='none';
     };
 
-    // --- RENDER LIST (Reuses the Unslotted logic) ---
+    // --- RENDER LIST (Robust) ---
     const renderList = (data, locId) => {
         const list = document.getElementById('manage-contents-list');
         list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
         data.forEach((s,i) => renderBadgeQRs(s, i));
     };
 
-    // --- HELPER: RENDER UNSLOTTED GRID ITEMS ---
     const renderUnslotted = (items) => {
         const un = document.getElementById('unslotted-container');
         un.style.display='block';
@@ -235,7 +244,7 @@
         items.forEach((s,i) => renderBadgeQRs(s, i));
         
         const dz = document.createElement('div'); dz.className='danger-zone'; dz.innerHTML=`<h4 class="text-danger fw-bold">DANGER ZONE</h4><div class="d-flex justify-content-center align-items-center gap-3"><div class="text-center"><div id="qr-eject-all" class="bg-white p-2 rounded"></div><div class="qr-label text-white">ALL</div></div><button class="btn btn-danger btn-lg fw-bold" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">EJECT ALL 💥</button></div>`;
-        un.appendChild(dz); new QRCode(document.getElementById("qr-eject-all"), {text:"CMD:EJECTALL", width:100, height:100});
+        un.appendChild(dz); generateSafeQR("qr-eject-all", "CMD:EJECTALL", 100);
     };
 
     const renderBadgeHTML = (s, i, locId) => {
@@ -263,9 +272,9 @@
     };
 
     const renderBadgeQRs = (s, i) => {
-        new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+s.id, width:46, height:46, correctLevel: QRCode.CorrectLevel.L});
-        new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+s.id, width:46, height:46, correctLevel: QRCode.CorrectLevel.L});
-        new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+s.id, width:46, height:46, correctLevel: QRCode.CorrectLevel.L});
+        generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 46);
+        generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 46);
+        generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 46);
     };
 
     const handleSlotInteraction = (slot) => {
@@ -280,7 +289,7 @@
     const promptAction = (t, m, btns) => {
         document.getElementById('action-title').innerText=t; document.getElementById('action-msg').innerHTML=m; state.modalCallbacks=[];
         document.getElementById('action-buttons').innerHTML = btns.map((b,i) => { state.modalCallbacks.push(b.action); return `<div class="modal-action-card" onclick="closeModal('actionModal');state.modalCallbacks[${i}]()"><div id="qr-act-${i}" class="bg-white p-1 rounded mb-2"></div><button class="btn btn-primary modal-action-btn">${b.label}</button></div>`; }).join('');
-        btns.forEach((_,i) => new QRCode(document.getElementById(`qr-act-${i}`), {text:`CMD:MODAL:${i}`, width:100, height:100}));
+        btns.forEach((_,i) => generateSafeQR(`qr-act-${i}`, `CMD:MODAL:${i}`, 100));
         modals.actionModal.show(); state.activeModal = 'action';
     };
     const doAssign = (loc, spool, slot) => { setProcessing(true); fetch('/api/manage_contents', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'add', location:loc, spool_id:"ID:"+spool, slot})}).then(r=>r.json()).then(res=>{setProcessing(false); if(res.status==='success') { showToast("Assigned"); refreshManageView(loc); } else showToast(res.msg, 'error');}).catch(()=>setProcessing(false)); };
@@ -317,10 +326,10 @@
                 qrDiv.innerHTML = ""; 
                 if (state.auditActive) {
                     btn.classList.add('btn-active-audit'); lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit');
-                    new QRCode(qrDiv, {text: "CMD:DONE", width: 120, height: 120});
+                    generateSafeQR('qr-audit', "CMD:DONE", 120);
                 } else {
                     btn.classList.remove('btn-active-audit'); lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit');
-                    new QRCode(qrDiv, {text: "CMD:AUDIT", width: 120, height: 120});
+                    generateSafeQR('qr-audit', "CMD:AUDIT", 120);
                 }
             }
         });
