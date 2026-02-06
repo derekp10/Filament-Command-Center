@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.34 (Stacked Layout)";
+    const DASHBOARD_VERSION = "v153.35 (Dark Modes & Safe Spaces)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     // --- WAKE LOCK ---
@@ -65,7 +65,7 @@
             el.classList.remove('text-muted');
         } else { 
             el.innerText = "Auto-Refresh ON"; 
-            el.style.color = "#0f0"; /* Bright Green for Active */
+            el.style.color = "#0f0"; 
             el.classList.remove('text-muted');
         }
     };
@@ -150,7 +150,11 @@
     // --- CORE LOGIC ---
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone'), h = document.getElementById('headsup-buffer'), n = document.getElementById('buffer-nav-deck');
-        if (state.heldSpools.length === 0) { z.innerHTML = `<div class="text-center text-muted mt-5 fs-3">Buffer Empty</div>`; h.style.display = n.style.display = 'none'; return; }
+        if (state.heldSpools.length === 0) { 
+            // FIX: Use text-secondary which is a nice readable gray in dark mode
+            z.innerHTML = `<div class="text-center text-secondary mt-5 fs-3">Buffer Empty</div>`; 
+            h.style.display = n.style.display = 'none'; return; 
+        }
         z.innerHTML = state.heldSpools.map((s, i) => `<div class="buffer-item ${i===0?'active-item':''}"><div class="buffer-info"><div class="buffer-swatch" style="background-color:#${s.color}"></div><div class="buffer-text">${s.display}</div></div><div id="qr-buf-${i}" class="qr-box"></div></div>`).join('');
         state.heldSpools.forEach((s, i) => new QRCode(document.getElementById(`qr-buf-${i}`), {text: "ID:"+s.id, width:120, height:120}));
         h.style.display = 'flex'; document.getElementById('headsup-swatch').style.backgroundColor = `#${state.heldSpools[0].color}`;
@@ -163,6 +167,14 @@
 
     const processScan = (text) => {
         const upper = text.toUpperCase();
+        
+        // --- PRINT SHORTCUT ---
+        if (upper.startsWith('CMD:PRINT:')) {
+            const parts = upper.split(':');
+            if(parts[2]) printLabel(parts[2]);
+            return;
+        }
+
         if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
         if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
         if (state.activeModal === 'action') {
@@ -246,7 +258,7 @@
             un.style.display='block';
             unslotted.forEach((item, i) => {
                 const div = document.createElement('div'); div.className = "unslotted-item";
-                // STACKED LAYOUT
+                // TRIPLE STACK: PICK - PRINT - TRASH
                 div.innerHTML = `
                     <div class="unslotted-info">
                         <div class="buffer-swatch" style="background-color:#${item.color}"></div>
@@ -258,16 +270,20 @@
                             <button class="stack-btn btn-pick">✋ PICK</button>
                         </div>
                         
+                        <div class="action-stack" onclick="printLabel(${item.id})">
+                            <div id="qr-print-${i}" class="mini-qr"></div>
+                            <button class="stack-btn btn-print">🖨️ PRINT</button>
+                        </div>
+
                         <div class="action-stack" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">
                             <div id="qr-trash-${i}" class="mini-qr"></div>
                             <button class="stack-btn btn-trash">🗑️ TRASH</button>
                         </div>
-
-                        <button class="btn btn-light border-dark fw-bold btn-print" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️</button>
                     </div>`;
                 un.appendChild(div); 
-                new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+item.id, width:45, height:45, correctLevel: QRCode.CorrectLevel.L}); 
-                new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+item.id, width:45, height:45, correctLevel: QRCode.CorrectLevel.L});
+                new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+item.id, width:58, height:58, correctLevel: QRCode.CorrectLevel.L}); 
+                new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+item.id, width:58, height:58, correctLevel: QRCode.CorrectLevel.L}); 
+                new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+item.id, width:58, height:58, correctLevel: QRCode.CorrectLevel.L});
             });
             const dz = document.createElement('div'); dz.className='danger-zone'; dz.innerHTML=`<h4 class="text-danger fw-bold">DANGER ZONE</h4><div class="d-flex justify-content-center align-items-center gap-3"><div class="text-center"><div id="qr-eject-all" class="bg-white p-2 rounded"></div><div class="qr-label text-white">ALL</div></div><button class="btn btn-danger btn-lg fw-bold" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">EJECT ALL 💥</button></div>`;
             un.appendChild(dz); new QRCode(document.getElementById("qr-eject-all"), {text:"CMD:EJECTALL", width:100, height:100});
@@ -288,18 +304,22 @@
                     <button class="stack-btn btn-pick">✋ PICK</button>
                 </div>
                 
+                <div class="action-stack" onclick="printLabel(${s.id})">
+                    <div id="qr-print-${i}" class="mini-qr"></div>
+                    <button class="stack-btn btn-print">🖨️ PRINT</button>
+                </div>
+
                 <div class="action-stack" onclick="ejectSpool(${s.id}, '${locId}', false)">
                     <div id="qr-trash-${i}" class="mini-qr"></div>
                     <button class="stack-btn btn-trash">🗑️ TRASH</button>
                 </div>
-
-                <button class="btn btn-light border-dark fw-bold btn-print" onclick="event.stopPropagation(); printLabel(${s.id})">🖨️</button>
             </div>
         </div>`).join('');
         
         data.forEach((s,i) => {
-            new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+s.id, width:45, height:45, correctLevel: QRCode.CorrectLevel.L});
-            new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+s.id, width:45, height:45, correctLevel: QRCode.CorrectLevel.L});
+            new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+s.id, width:58, height:58, correctLevel: QRCode.CorrectLevel.L});
+            new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+s.id, width:58, height:58, correctLevel: QRCode.CorrectLevel.L});
+            new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+s.id, width:58, height:58, correctLevel: QRCode.CorrectLevel.L});
         });
     };
 

@@ -8,7 +8,7 @@
     /* --- COLUMNS --- */
     .col-logs, .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
     
-    /* --- TERMINAL LOGS (Restored Green) --- */
+    /* --- TERMINAL LOGS --- */
     .log-box { 
         flex-grow: 1; overflow-y: auto; padding: 15px; 
         font-family: 'Consolas', monospace; font-size: 1.1rem; 
@@ -18,9 +18,7 @@
     
     /* --- STATUS & VISIBILITY --- */
     .log-INFO { color: #0f0; } .log-WARNING { color: #fc0; } .log-ERROR { color: #f44; }
-    
-    /* FIX: Make "Muted" text readable on black */
-    .text-muted { color: #ccc !important; } 
+    .text-muted { color: #aaa !important; } 
     
     .status-label { color: #fff; font-weight: 500; margin-right: 20px; }
     .status-dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
@@ -38,9 +36,10 @@
     /* --- QR & COMMANDS --- */
     .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
     
+    /* WIDER MINI QR to fit Buttons */
     .mini-qr { 
-        width: 50px; height: 50px; 
-        background: white; padding: 2px; border-radius: 4px 4px 0 0; /* Rounded top only */
+        width: 65px; height: 65px; 
+        background: white; padding: 3px; border-radius: 6px 6px 0 0; 
         display: flex; justify-content: center; align-items: center;
         flex-shrink: 0;
     }
@@ -49,6 +48,20 @@
     .cmd-btn { cursor: pointer; transition: 0.2s; border-radius: 8px; padding: 10px; text-align: center; }
     .cmd-btn:active { background: #333; transform: scale(0.95); }
     .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
+
+    /* --- MODALS (THE DARK MODE ENFORCER) --- */
+    .modal-content, .modal-header, .modal-body, .modal-footer {
+        background-color: #121212 !important;
+        color: #fff !important;
+        border-color: #444 !important;
+    }
+    .modal-header .btn-close { filter: invert(1) grayscale(100%) brightness(200%); }
+
+    .table-fixed { table-layout: fixed; width: 100%; }
+    .col-id { width: 18%; font-weight: bold; color: #00d4ff; }
+    .col-name { width: 35%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .col-status { width: 22%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .col-actions { width: 25%; text-align: right; white-space: nowrap; }
 
     /* --- SLOT GRID --- */
     .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
@@ -61,34 +74,37 @@
     .slot-content { font-size: 0.95rem; font-weight: bold; word-break: break-word; color: #fff; line-height: 1.2; margin-bottom: 5px; }
     .slot-num { color: #aaa; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
     
-    /* --- UNSLOTTED ITEMS (The "Stack" Layout) --- */
+    /* --- UNSLOTTED ITEMS --- */
     .unslotted-item { 
-        background: #252525; padding: 8px 12px; margin: 8px 0; border-radius: 8px; 
+        background: #252525; padding: 12px 15px; margin: 10px 0; border-radius: 8px; 
         display: flex; justify-content: space-between; align-items: center; 
         border: 1px solid #444; 
     }
-    .unslotted-info { display: flex; align-items: center; gap: 15px; flex-grow: 1; }
-    .unslotted-actions { display: flex; align-items: center; gap: 15px; }
+    .unslotted-info { display: flex; align-items: center; gap: 20px; flex-grow: 1; }
+    
+    /* NEW: Increased gap for the spacer logic */
+    .unslotted-actions { display: flex; align-items: center; gap: 20px; }
 
-    /* The Vertical Stack: QR on Top, Button on Bottom */
+    /* The Vertical Stack */
     .action-stack {
         display: flex; flex-direction: column; 
-        align-items: center; width: 50px;
+        align-items: center; width: 65px; /* WIDER FOR EMOJIS */
     }
     
     .stack-btn {
-        width: 50px; height: 22px;
-        font-size: 0.7rem; font-weight: 900;
-        border-radius: 0 0 4px 4px; /* Rounded bottom only */
+        width: 65px; height: 28px;
+        font-size: 0.8rem; font-weight: 900;
+        border-radius: 0 0 6px 6px; 
         border: none;
         display: flex; align-items: center; justify-content: center;
         text-transform: uppercase;
         cursor: pointer;
+        padding-top: 2px;
     }
     
     .btn-pick { background-color: #0d6efd; color: white; } /* Blue */
     .btn-trash { background-color: #dc3545; color: white; } /* Red */
-    .btn-print { height: 50px; width: 50px; font-size: 1.5rem; border-radius: 4px; } /* Square Print Button */
+    .btn-print { background-color: #ffc107; color: black; } /* Yellow/Orange */
 
     /* TOASTS */
     #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 9999; display: flex; flex-direction: column; gap: 10px; text-align: center; }
