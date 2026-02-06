@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.47 (Captain's Deck)";
+    const DASHBOARD_VERSION = "v153.48 (Visual Navigation)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -108,20 +108,20 @@
         }).catch(e => { setProcessing(false); showToast("Print Error", "error"); });
     };
 
-    // --- RENDER BUFFER (Restored Cycle Buttons) ---
+    // --- RENDER BUFFER (Visual Nav Deck) ---
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone');
         const h = document.getElementById('headsup-buffer'); 
-        const n = document.getElementById('buffer-nav-deck'); // RESTORED
+        const n = document.getElementById('buffer-nav-deck'); 
 
         if (state.heldSpools.length === 0) { 
             z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; 
             if(h) h.style.display = 'none'; 
-            if(n) n.style.display = 'none'; // Hide if empty
+            if(n) n.style.display = 'none'; 
             return; 
         }
         
-        // 1. RENDER MAIN BUFFER LIST
+        // 1. MAIN BUFFER LIST
         z.innerHTML = state.heldSpools.map((s, i) => {
             const innerColor = getTintedBackground(s.color);
             const cleanText = s.display.replace(/^#\d+\s*/, '').trim();
@@ -136,10 +136,9 @@
                 </div>
             </div>`;
         }).join('');
-        
         state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 80));
 
-        // 2. RENDER HEADS-UP DISPLAY (MODAL HEADER)
+        // 2. HEADS-UP DISPLAY (Active Item)
         if (h) {
             const top = state.heldSpools[0];
             const cleanText = top.display.replace(/^#\d+\s*/, '').trim();
@@ -154,26 +153,58 @@
                     <div class="buffer-id-tag" style="font-size:1.2rem; min-width:60px;">#${top.id}</div>
                     <div class="buffer-text" style="font-size:1.2rem;">${cleanText}</div>
                 </div>
-                <div id="qr-headsup" class="bg-white p-1 rounded"></div>
+                <div class="d-flex align-items-center gap-3">
+                    <div class="btn-drop" onclick="dropBufferItem()">❌</div>
+                    <div id="qr-headsup" class="bg-white p-1 rounded"></div>
+                </div>
             </div>`;
             generateSafeQR("qr-headsup", "ID:"+top.id, 50);
         }
 
-        // 3. SHOW NAV DECK IF MULTIPLE ITEMS
+        // 3. NAVIGATION DECK (Preview Cards)
         if (n) {
             if (state.heldSpools.length > 1) {
+                const nextSpool = state.heldSpools[1];
+                const prevSpool = state.heldSpools[state.heldSpools.length - 1];
+                
                 n.style.display = 'flex';
                 n.innerHTML = `
-                    <button class="btn-cycle" onclick="prevBuffer()">◀ PREV</button>
-                    <div class="text-white fw-bold">1 of ${state.heldSpools.length}</div>
-                    <button class="btn-cycle" onclick="nextBuffer()">NEXT ▶</button>
+                    <div class="nav-card" style="background-color:#${prevSpool.color}" onclick="prevBuffer()">
+                        <div class="nav-inner" style="background-color:${getTintedBackground(prevSpool.color)}">
+                            <div id="qr-nav-prev" class="nav-qr"></div>
+                            <div>
+                                <div class="nav-label">◀ PREV</div>
+                                <div class="nav-name">${prevSpool.display.replace(/^#\d+\s*/, '')}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="nav-card" style="background-color:#${nextSpool.color}" onclick="nextBuffer()">
+                        <div class="nav-inner" style="background-color:${getTintedBackground(nextSpool.color)}">
+                            <div style="text-align:right;">
+                                <div class="nav-label">NEXT ▶</div>
+                                <div class="nav-name">${nextSpool.display.replace(/^#\d+\s*/, '')}</div>
+                            </div>
+                            <div id="qr-nav-next" class="nav-qr"></div>
+                        </div>
+                    </div>
                 `;
+                generateSafeQR("qr-nav-prev", "CMD:PREV", 45);
+                generateSafeQR("qr-nav-next", "CMD:NEXT", 45);
             } else {
                 n.style.display = 'none';
             }
         }
     };
     
+    const dropBufferItem = () => {
+        if(state.heldSpools.length > 0) {
+            state.heldSpools.shift(); // Remove top
+            renderBuffer();
+            showToast("Item Dropped 🗑️");
+        }
+    };
+
     const nextBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.push(state.heldSpools.shift()); renderBuffer(); } };
     const prevBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
     const toggleAudit = () => { if (state.auditActive) processScan("CMD:DONE"); else processScan("CMD:AUDIT"); };
