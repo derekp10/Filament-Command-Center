@@ -1,6 +1,10 @@
+{
+type: file_update
+fileName: derekp10/filament-command-center/Filament-Command-Center-dev/inventory-hub/templates/components/scripts.html
+fullContent:
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.31 (Modular Architecture)";
+    const DASHBOARD_VERSION = "v153.28 (Bug Fix Edition)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     // --- WAKE LOCK ---
@@ -62,6 +66,7 @@
     };
 
     const printLabel = (sid) => {
+        showToast("🖨️ Preparing Label...");
         setProcessing(true);
         fetch(`/api/spool_details?id=${sid}`).then(r=>r.json()).then(data => {
             setProcessing(false);
@@ -189,8 +194,10 @@
         for(let i=1; i<=max; i++) {
             const item = state.currentGrid[i], div = document.createElement('div');
             div.className = item ? "slot-btn full" : "slot-btn empty";
-            // FIXED PADDING: p-1
+            
+            // BUG FIX: Added event.stopPropagation to Button
             div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="qr-slot-${i}" class="bg-white p-1 rounded"></div></div><div class="slot-right">${item?`<div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div><button class="btn btn-sm btn-light border-dark mt-2 fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>`:`<div class="text-muted fs-4">EMPTY</div>`}</div>`;
+            
             div.onclick = () => handleSlotInteraction(i); grid.appendChild(div);
             new QRCode(document.getElementById(`qr-slot-${i}`), {text:"CMD:SLOT:"+i, width:60, height:60});
         }
@@ -198,7 +205,6 @@
             un.style.display='block';
             unslotted.forEach((item, i) => {
                 const div = document.createElement('div'); div.className = "unslotted-item";
-                // FIXED QR POSITION (LEFT) & PADDING
                 div.innerHTML = `
                     <div class="d-flex align-items-center">
                         <div id="qr-list-${i}" class="qr-box me-3" style="padding:5px;"></div>
@@ -210,7 +216,7 @@
                             <div id="qr-pick-${i}" class="qr-box" style="padding:5px;"></div>
                             <div class="qr-label">PICK</div>
                         </div>
-                        <button class="btn btn-sm btn-light border-dark fw-bold me-2" onclick="printLabel(${item.id})">🖨️</button>
+                        <button class="btn btn-sm btn-light border-dark fw-bold me-2" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️</button>
                         <button class="btn btn-primary fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">✋</button>
                         <button class="btn btn-danger fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">🗑️</button>
                         <div class="text-center ms-2">
@@ -229,7 +235,7 @@
     };
     const renderList = (data, locId) => {
         const list = document.getElementById('manage-contents-list');
-        list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => `<div class="unslotted-item"><div class="d-flex align-items-center"><div id="qr-list-${i}" class="qr-box me-3" style="padding:5px;"></div><div class="buffer-swatch me-3" style="background-color:#${s.color}"></div><span class="fs-4 fw-bold">${s.display}</span></div><div class="d-flex gap-2 align-items-center"><button class="btn btn-light fw-bold border-dark" onclick="printLabel(${s.id})">🖨️ LABEL</button><button class="btn btn-primary fw-bold" onclick="ejectSpool(${s.id}, '${locId}', true)">✋ PICK</button><button class="btn btn-outline-danger" onclick="ejectSpool(${s.id}, '${locId}', false)">🗑️</button></div></div>`).join('');
+        list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => `<div class="unslotted-item"><div class="d-flex align-items-center"><div id="qr-list-${i}" class="qr-box me-3" style="padding:5px;"></div><div class="buffer-swatch me-3" style="background-color:#${s.color}"></div><span class="fs-4 fw-bold">${s.display}</span></div><div class="d-flex gap-2 align-items-center"><button class="btn btn-light fw-bold border-dark" onclick="event.stopPropagation(); printLabel(${s.id})">🖨️ LABEL</button><button class="btn btn-primary fw-bold" onclick="ejectSpool(${s.id}, '${locId}', true)">✋ PICK</button><button class="btn btn-outline-danger" onclick="ejectSpool(${s.id}, '${locId}', false)">🗑️</button></div></div>`).join('');
         data.forEach((s,i) => new QRCode(document.getElementById(`qr-list-${i}`), {text:"ID:"+s.id, width:60, height:60}));
     };
     const handleSlotInteraction = (slot) => {
@@ -291,3 +297,4 @@
     };
     setInterval(updateLogState, 2500);
 </script>
+}
