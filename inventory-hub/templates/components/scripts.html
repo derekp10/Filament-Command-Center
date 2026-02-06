@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.45 (Crisp Buffer)";
+    const DASHBOARD_VERSION = "v153.46 (Room to Breathe)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -108,20 +108,21 @@
         }).catch(e => { setProcessing(false); showToast("Print Error", "error"); });
     };
 
-    // --- RENDER BUFFER (Cleaned & Sharp) ---
+    // --- RENDER BUFFER (Restored Heads Up + Clean Layout) ---
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone');
-        // Hide old headsup/nav elements as buffer list is now self-sufficient
-        document.getElementById('headsup-buffer').style.display = 'none';
-        document.getElementById('buffer-nav-deck').style.display = 'none';
-
-        if (state.heldSpools.length === 0) { z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; return; }
+        const h = document.getElementById('headsup-buffer'); // MODAL HEADER
         
+        if (state.heldSpools.length === 0) { 
+            z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; 
+            if(h) h.style.display = 'none'; 
+            return; 
+        }
+        
+        // --- 1. RENDER MAIN BUFFER LIST ---
         z.innerHTML = state.heldSpools.map((s, i) => {
             const innerColor = getTintedBackground(s.color);
-            // Remove leading ID from text (e.g., "#123 Prusament" -> "Prusament")
             const cleanText = s.display.replace(/^#\d+\s*/, '').trim();
-            
             return `
             <div class="filament-frame buffer-item ${i===0?'active-item':''}" style="background-color:#${s.color}; border:none;">
                 <div class="buffer-inner" style="background-color:${innerColor};">
@@ -135,6 +136,26 @@
         }).join('');
         
         state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 80));
+
+        // --- 2. RENDER HEADS-UP DISPLAY (MODAL) ---
+        if (h) {
+            const top = state.heldSpools[0];
+            const cleanText = top.display.replace(/^#\d+\s*/, '').trim();
+            const innerColor = getTintedBackground(top.color);
+            h.style.display = 'block';
+            h.style.backgroundColor = `#${top.color}`;
+            h.style.padding = "5px"; // Thinner frame for header
+            h.innerHTML = `
+            <div class="filament-inner" style="background-color:${innerColor}; padding: 5px 15px;">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="fs-4 fw-bold text-warning">✋ READY:</div>
+                    <div class="buffer-id-tag" style="font-size:1.2rem; min-width:60px;">#${top.id}</div>
+                    <div class="buffer-text" style="font-size:1.2rem;">${cleanText}</div>
+                </div>
+                <div id="qr-headsup" class="bg-white p-1 rounded"></div>
+            </div>`;
+            generateSafeQR("qr-headsup", "ID:"+top.id, 50);
+        }
     };
     
     // Legacy Nav functions kept but not used in UI
