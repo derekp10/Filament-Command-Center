@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.38 (Bold Frame)";
+    const DASHBOARD_VERSION = "v153.39 (Juicy Badge)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     // --- WAKE LOCK ---
@@ -248,30 +248,30 @@
             un.style.display='block';
             unslotted.forEach((item, i) => {
                 const div = document.createElement('div'); div.className = "unslotted-item";
-                // COLOR FRAME LAYOUT
+                // BOLD FRAME + HORIZONTAL BADGES
                 div.style.backgroundColor = `#${item.color}`;
                 div.innerHTML = `
                     <div class="item-card-inner">
                         <div class="item-info">${item.display}</div>
                         <div class="item-actions">
-                            <div class="action-stack" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">
-                                <div id="qr-pick-${i}" class="mini-qr"></div>
-                                <button class="stack-btn btn-pick">✋ PICK</button>
+                            <div class="action-badge" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">
+                                <div id="qr-pick-${i}" class="badge-qr"></div>
+                                <button class="badge-btn btn-pick">✋ PICK</button>
                             </div>
-                            <div class="action-stack" onclick="printLabel(${item.id})">
-                                <div id="qr-print-${i}" class="mini-qr"></div>
-                                <button class="stack-btn btn-print">🖨️ PRINT</button>
+                            <div class="action-badge" onclick="printLabel(${item.id})">
+                                <div id="qr-print-${i}" class="badge-qr"></div>
+                                <button class="badge-btn btn-print">🖨️ PRINT</button>
                             </div>
-                            <div class="action-stack" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">
-                                <div id="qr-trash-${i}" class="mini-qr"></div>
-                                <button class="stack-btn btn-trash">🗑️ TRASH</button>
+                            <div class="action-badge" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">
+                                <div id="qr-trash-${i}" class="badge-qr"></div>
+                                <button class="badge-btn btn-trash">🗑️ TRASH</button>
                             </div>
                         </div>
                     </div>`;
                 un.appendChild(div); 
-                new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+item.id, width:57, height:57, correctLevel: QRCode.CorrectLevel.L}); 
-                new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+item.id, width:57, height:57, correctLevel: QRCode.CorrectLevel.L}); 
-                new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+item.id, width:57, height:57, correctLevel: QRCode.CorrectLevel.L});
+                new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+item.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L}); 
+                new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+item.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L}); 
+                new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+item.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L});
             });
             const dz = document.createElement('div'); dz.className='danger-zone'; dz.innerHTML=`<h4 class="text-danger fw-bold">DANGER ZONE</h4><div class="d-flex justify-content-center align-items-center gap-3"><div class="text-center"><div id="qr-eject-all" class="bg-white p-2 rounded"></div><div class="qr-label text-white">ALL</div></div><button class="btn btn-danger btn-lg fw-bold" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">EJECT ALL 💥</button></div>`;
             un.appendChild(dz); new QRCode(document.getElementById("qr-eject-all"), {text:"CMD:EJECTALL", width:100, height:100});
@@ -285,26 +285,26 @@
             <div class="item-card-inner">
                 <div class="item-info">${s.display}</div>
                 <div class="item-actions">
-                    <div class="action-stack" onclick="ejectSpool(${s.id}, '${locId}', true)">
-                        <div id="qr-pick-${i}" class="mini-qr"></div>
-                        <button class="stack-btn btn-pick">✋ PICK</button>
+                    <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', true)">
+                        <div id="qr-pick-${i}" class="badge-qr"></div>
+                        <button class="badge-btn btn-pick">✋ PICK</button>
                     </div>
-                    <div class="action-stack" onclick="printLabel(${s.id})">
-                        <div id="qr-print-${i}" class="mini-qr"></div>
-                        <button class="stack-btn btn-print">🖨️ PRINT</button>
+                    <div class="action-badge" onclick="printLabel(${s.id})">
+                        <div id="qr-print-${i}" class="badge-qr"></div>
+                        <button class="badge-btn btn-print">🖨️ PRINT</button>
                     </div>
-                    <div class="action-stack" onclick="ejectSpool(${s.id}, '${locId}', false)">
-                        <div id="qr-trash-${i}" class="mini-qr"></div>
-                        <button class="stack-btn btn-trash">🗑️ TRASH</button>
+                    <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', false)">
+                        <div id="qr-trash-${i}" class="badge-qr"></div>
+                        <button class="badge-btn btn-trash">🗑️ TRASH</button>
                     </div>
                 </div>
             </div>
         </div>`).join('');
         
         data.forEach((s,i) => {
-            new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+s.id, width:57, height:57, correctLevel: QRCode.CorrectLevel.L});
-            new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+s.id, width:57, height:57, correctLevel: QRCode.CorrectLevel.L});
-            new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+s.id, width:57, height:57, correctLevel: QRCode.CorrectLevel.L});
+            new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+s.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L});
+            new QRCode(document.getElementById(`qr-print-${i}`), {text:"CMD:PRINT:"+s.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L});
+            new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+s.id, width:38, height:38, correctLevel: QRCode.CorrectLevel.L});
         });
     };
 

@@ -7,14 +7,7 @@
     
     /* --- COLUMNS --- */
     .col-logs, .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
-    
-    /* --- TERMINAL LOGS --- */
-    .log-box { 
-        flex-grow: 1; overflow-y: auto; padding: 15px; 
-        font-family: 'Consolas', monospace; font-size: 1.1rem; 
-        color: #0f0; 
-        white-space: pre-wrap; word-break: break-all; 
-    }
+    .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; color: #0f0; white-space: pre-wrap; word-break: break-all; }
     
     .text-muted { color: #aaa !important; } 
     .status-label { color: #fff; font-weight: 500; margin-right: 20px; }
@@ -33,14 +26,6 @@
     /* --- QR & COMMANDS --- */
     .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
     
-    .mini-qr { 
-        width: 65px; height: 65px; 
-        background: white; padding: 4px; 
-        border-radius: 6px 6px 0 0; 
-        display: flex; justify-content: center; align-items: center;
-        flex-shrink: 0;
-    }
-
     .cmd-deck { padding: 15px; background: #1a1a1a; border-top: 1px solid #333; display: flex; justify-content: space-around; }
     .cmd-btn { cursor: pointer; transition: 0.2s; border-radius: 8px; padding: 10px; text-align: center; }
     .cmd-btn:active { background: #333; transform: scale(0.95); }
@@ -69,61 +54,75 @@
     .slot-content { font-size: 0.95rem; font-weight: bold; word-break: break-word; color: #fff; line-height: 1.2; margin-bottom: 5px; }
     .slot-num { color: #aaa; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
     
-    /* --- NEW BOLD FRAME LAYOUT --- */
+    /* --- NEW FULL-FRAME LAYOUT --- */
     .unslotted-item { 
-        /* Thicker Padding = More Color Visibility */
-        padding: 16px 35px; 
-        margin: 10px 0; 
-        border-radius: 12px; 
+        /* JUICY BORDERS: Thick padding to show color */
+        padding: 20px 40px; 
+        margin: 15px 0; 
+        border-radius: 16px; 
         border: 1px solid #444; 
         display: flex; 
-        box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.6);
     }
     
     .item-card-inner {
         background: #1a1a1a; 
         flex-grow: 1; 
-        border-radius: 8px;
+        border-radius: 10px;
         padding: 15px;
-        display: flex; flex-direction: column; align-items: center; gap: 12px;
-        box-shadow: inset 0 0 15px rgba(0,0,0,0.6); 
+        display: flex; flex-direction: column; align-items: center; gap: 15px;
+        box-shadow: inset 0 0 20px rgba(0,0,0,0.8); 
     }
     
     .item-info { 
-        /* Bigger, bolder text */
-        font-size: 1.5rem; 
+        /* BIG TEXT */
+        font-size: 1.8rem; 
         font-weight: 800; 
         color: #fff; 
         text-align: center; 
         word-break: break-word;
-        text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+        text-shadow: 0 3px 6px rgba(0,0,0,0.9);
+        line-height: 1.1;
     }
     
     .item-actions { 
-        display: flex; justify-content: center; gap: 15px; 
-        flex-wrap: wrap; 
+        display: flex; justify-content: center; gap: 25px; 
+        flex-wrap: wrap; width: 100%;
     }
 
-    .action-stack {
-        display: flex; flex-direction: column; 
-        align-items: center; width: 65px; 
+    /* --- HORIZONTAL ACTION BADGE (QR + BTN) --- */
+    .action-badge {
+        display: flex; align-items: stretch;
+        background: #fff;
+        border-radius: 6px;
+        overflow: hidden;
+        height: 42px; /* SLEEK HEIGHT */
+        box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+        cursor: pointer;
+        transition: transform 0.1s;
+    }
+    .action-badge:active { transform: scale(0.95); }
+
+    .badge-qr {
+        width: 42px; height: 42px;
+        padding: 2px;
+        background: #fff;
+        flex-shrink: 0;
     }
     
-    .stack-btn {
-        width: 65px; 
-        height: 26px; /* Slimmed down height */
-        font-size: 0.75rem; /* Slightly smaller font */
-        font-weight: 900;
-        border-radius: 0 0 6px 6px; 
+    .badge-btn {
         border: none;
-        display: flex; align-items: center; justify-content: center;
-        text-transform: uppercase; cursor: pointer;
-        padding-top: 2px;
+        font-weight: 900;
+        font-size: 0.9rem;
+        padding: 0 15px;
+        display: flex; align-items: center; gap: 8px;
+        text-transform: uppercase;
+        color: #fff;
     }
-    
-    .btn-pick { background-color: #0d6efd; color: white; } 
-    .btn-trash { background-color: #dc3545; color: white; } 
-    .btn-print { background-color: #ffc107; color: black; } 
+
+    .btn-pick { background-color: #0d6efd; } 
+    .btn-trash { background-color: #dc3545; } 
+    .btn-print { background-color: #ffc107; color: #000; } 
 
     .buffer-empty-msg { color: #888 !important; font-size: 1.5rem; margin-top: 2rem; text-align: center; }
 
