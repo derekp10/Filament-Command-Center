@@ -12,14 +12,11 @@
     .log-box { 
         flex-grow: 1; overflow-y: auto; padding: 15px; 
         font-family: 'Consolas', monospace; font-size: 1.1rem; 
-        color: #0f0; /* MATRIX GREEN */
+        color: #0f0; 
         white-space: pre-wrap; word-break: break-all; 
     }
     
-    /* --- STATUS & VISIBILITY --- */
-    .log-INFO { color: #0f0; } .log-WARNING { color: #fc0; } .log-ERROR { color: #f44; }
     .text-muted { color: #aaa !important; } 
-    
     .status-label { color: #fff; font-weight: 500; margin-right: 20px; }
     .status-dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
     .status-on { background-color: #0f0; box-shadow: 0 0 5px #0f0; }
@@ -30,16 +27,17 @@
     .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
     .buffer-item { background: #222; border: 1px solid #555; border-radius: 8px; margin-bottom: 15px; padding: 15px; display: flex; justify-content: space-between; align-items: center; opacity: 0.8; }
     .buffer-item.active-item { border: 2px solid #0f0; opacity: 1; background: #2a2a2a; box-shadow: 0 0 10px rgba(0,255,0,0.2); }
+    /* Legacy Swatch for Buffer List Only */
     .buffer-swatch { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #fff; flex-shrink: 0; }
     .buffer-text { font-size: 1.6rem; font-weight: bold; margin-left: 15px; color: #fff; }
     
     /* --- QR & COMMANDS --- */
     .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
     
-    /* WIDER MINI QR to fit Buttons */
     .mini-qr { 
         width: 65px; height: 65px; 
-        background: white; padding: 3px; border-radius: 6px 6px 0 0; 
+        background: white; padding: 4px; /* More padding to prevent clipping */
+        border-radius: 6px 6px 0 0; 
         display: flex; justify-content: center; align-items: center;
         flex-shrink: 0;
     }
@@ -49,11 +47,9 @@
     .cmd-btn:active { background: #333; transform: scale(0.95); }
     .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
 
-    /* --- MODALS (THE DARK MODE ENFORCER) --- */
+    /* --- MODALS --- */
     .modal-content, .modal-header, .modal-body, .modal-footer {
-        background-color: #121212 !important;
-        color: #fff !important;
-        border-color: #444 !important;
+        background-color: #121212 !important; color: #fff !important; border-color: #444 !important;
     }
     .modal-header .btn-close { filter: invert(1) grayscale(100%) brightness(200%); }
 
@@ -74,37 +70,49 @@
     .slot-content { font-size: 0.95rem; font-weight: bold; word-break: break-word; color: #fff; line-height: 1.2; margin-bottom: 5px; }
     .slot-num { color: #aaa; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
     
-    /* --- UNSLOTTED ITEMS --- */
+    /* --- NEW SANDWICH LAYOUT (Top/Bottom Strips) --- */
     .unslotted-item { 
-        background: #252525; padding: 12px 15px; margin: 10px 0; border-radius: 8px; 
-        display: flex; justify-content: space-between; align-items: center; 
-        border: 1px solid #444; 
+        background: #252525; margin: 10px 0; border-radius: 8px; 
+        border: 1px solid #444; overflow: hidden; /* Contains the strips */
+        display: flex; flex-direction: column; /* Stack vertically */
     }
-    .unslotted-info { display: flex; align-items: center; gap: 20px; flex-grow: 1; }
     
-    /* NEW: Increased gap for the spacer logic */
-    .unslotted-actions { display: flex; align-items: center; gap: 20px; }
+    .color-strip { width: 100%; height: 8px; background-color: #888; }
+    
+    .item-body { padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+    
+    .item-info { 
+        font-size: 1.2rem; font-weight: bold; color: #fff; 
+        text-align: center; word-break: break-word;
+    }
+    
+    .item-actions { 
+        display: flex; justify-content: center; gap: 15px; 
+        flex-wrap: wrap; /* Wraps on tiny screens */
+    }
 
     /* The Vertical Stack */
     .action-stack {
         display: flex; flex-direction: column; 
-        align-items: center; width: 65px; /* WIDER FOR EMOJIS */
+        align-items: center; width: 65px; 
     }
     
     .stack-btn {
-        width: 65px; height: 28px;
+        width: 65px; height: 32px; /* TALLER to fix cutting text */
         font-size: 0.8rem; font-weight: 900;
         border-radius: 0 0 6px 6px; 
         border: none;
         display: flex; align-items: center; justify-content: center;
-        text-transform: uppercase;
-        cursor: pointer;
-        padding-top: 2px;
+        text-transform: uppercase; cursor: pointer;
+        line-height: 1.1; padding: 0 2px;
     }
     
-    .btn-pick { background-color: #0d6efd; color: white; } /* Blue */
-    .btn-trash { background-color: #dc3545; color: white; } /* Red */
-    .btn-print { background-color: #ffc107; color: black; } /* Yellow/Orange */
+    .btn-pick { background-color: #0d6efd; color: white; } 
+    .btn-trash { background-color: #dc3545; color: white; } 
+    .btn-print { background-color: #ffc107; color: black; } 
+
+    /* Helper for invisible buffer text */
+    .buffer-empty-msg { color: #888 !important; font-size: 1.5rem; margin-top: 2rem; text-align: center; }
 
     /* TOASTS */
     #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 9999; display: flex; flex-direction: column; gap: 10px; text-align: center; }
