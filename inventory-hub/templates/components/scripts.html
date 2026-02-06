@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.30 (Cleaner UI)";
+    const DASHBOARD_VERSION = "v153.31 (Logic Restored)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     // --- WAKE LOCK ---
@@ -17,7 +17,10 @@
     document.addEventListener('DOMContentLoaded', () => {
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         const qrs = { 'qr-undo': 'CMD:UNDO', 'qr-clear': 'CMD:CLEAR', 'qr-eject': 'CMD:EJECT', 'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL', 'qr-modal-cancel': 'CMD:MODAL:CANCEL', 'qr-done': 'CMD:DONE', 'qr-prev': 'CMD:PREV', 'qr-next': 'CMD:NEXT' };
-        for(const [id, txt] of Object.entries(qrs)) new QRCode(document.getElementById(id), {text: txt, width: document.getElementById(id).style.width?.replace('px','') || 120, height: document.getElementById(id).style.height?.replace('px','') || 120});
+        for(const [id, txt] of Object.entries(qrs)) {
+            const el = document.getElementById(id);
+            if(el) new QRCode(el, {text: txt, width: el.style.width?.replace('px','') || 120, height: el.style.height?.replace('px','') || 120});
+        }
         new QRCode(document.getElementById('qr-audit'), {text: 'CMD:AUDIT', width: 120, height: 120});
 
         document.getElementById('location-table').addEventListener('click', (e) => {
@@ -32,10 +35,18 @@
     });
 
     // --- GLOBAL HANDLERS ---
-    window.addEventListener('blur', () => document.getElementById('focus-guard').style.display = 'flex');
-    window.addEventListener('focus', () => document.getElementById('focus-guard').style.display = 'none');
+    window.addEventListener('blur', () => {
+        const guard = document.getElementById('focus-guard');
+        if(guard) guard.style.display = 'flex';
+    });
+    window.addEventListener('focus', () => {
+        const guard = document.getElementById('focus-guard');
+        if(guard) guard.style.display = 'none';
+    });
+    
     document.addEventListener('keydown', (e) => {
-        if (document.getElementById('focus-guard').style.display === 'flex' || state.processing || e.target.tagName === 'INPUT') return;
+        const guard = document.getElementById('focus-guard');
+        if ((guard && guard.style.display === 'flex') || state.processing || e.target.tagName === 'INPUT') return;
         if (e.key === 'Enter') { e.preventDefault(); if (state.scanBuffer.length > 0) processScan(state.scanBuffer); state.scanBuffer = ""; }
         else if (e.key.length === 1) { state.scanBuffer += e.key; clearTimeout(state.bufferTimeout); state.bufferTimeout = setTimeout(() => state.scanBuffer = "", 2000); }
     });
@@ -49,7 +60,6 @@
 
     const setProcessing = (s) => { state.processing = s; document.getElementById('processing-overlay').style.display = s ? 'flex' : 'none'; };
     
-    // TOAST CONTAINER CHECK
     const showToast = (msg, type='info') => {
         let container = document.getElementById('toast-container');
         if (!container) {
@@ -104,12 +114,10 @@
             document.getElementById('lbl-brand').innerText = fil.vendor ? fil.vendor.name : "Generic";
             document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; 
             document.getElementById('lbl-type').innerText = typeStr;
-            
             document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
             document.getElementById('lbl-id').innerText = sid;
             document.getElementById('lbl-rgb').innerText = `${rgb.r},${rgb.g},${rgb.b}`; 
             
-            // Allow DOM update before printing
             setTimeout(() => window.print(), 500);
         }).catch(e => { setProcessing(false); showToast("Print Error", "error"); console.error(e); });
     };
@@ -195,7 +203,6 @@
         return true;
     };
     
-    // REMOVED EXTRA QRs (Pick/Trash) FROM HERE
     const renderGrid = (data, max) => {
         const grid=document.getElementById('slot-grid-container'), un=document.getElementById('unslotted-container');
         grid.innerHTML=""; un.innerHTML=""; state.currentGrid={};
@@ -204,7 +211,9 @@
         for(let i=1; i<=max; i++) {
             const item = state.currentGrid[i], div = document.createElement('div');
             div.className = item ? "slot-btn full" : "slot-btn empty";
+            
             div.innerHTML = `<div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="qr-slot-${i}" class="bg-white p-1 rounded"></div></div><div class="slot-right">${item?`<div class="slot-swatch" style="background-color:#${item.color}"></div><div class="slot-content">${item.display}</div><button class="btn btn-sm btn-light border-dark mt-2 fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>`:`<div class="text-muted fs-4">EMPTY</div>`}</div>`;
+            
             div.onclick = () => handleSlotInteraction(i); grid.appendChild(div);
             new QRCode(document.getElementById(`qr-slot-${i}`), {text:"CMD:SLOT:"+i, width:60, height:60});
         }
@@ -212,43 +221,67 @@
             un.style.display='block';
             unslotted.forEach((item, i) => {
                 const div = document.createElement('div'); div.className = "unslotted-item";
-                // CLEANER HTML (No Pick/Trash QRs)
+                // RESTORED PICK/TRASH QRs to Match Screenshot
                 div.innerHTML = `
-                    <div class="d-flex align-items-center">
-                        <div id="qr-list-${i}" class="qr-box me-3" style="padding:5px;"></div>
-                        <div class="buffer-swatch me-3" style="background-color:#${item.color}"></div>
-                        <span class="fs-5 fw-bold">${item.display}</span>
+                    <div class="unslotted-info">
+                        <div class="buffer-swatch" style="background-color:#${item.color}"></div>
+                        <span class="fs-4 fw-bold text-white">${item.display}</span>
                     </div>
-                    <div class="d-flex gap-2 align-items-center">
-                        <button class="btn btn-sm btn-light border-dark fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>
-                        <button class="btn btn-primary fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">✋ PICK</button>
-                        <button class="btn btn-danger fw-bold" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">🗑️ TRASH</button>
+                    <div class="unslotted-actions">
+                         <div class="action-qr-group">
+                             <div id="qr-pick-${i}" class="qr-box" style="padding:2px; width:50px; height:50px;"></div>
+                             <div class="action-qr-label">PICK</div>
+                        </div>
+                        <button class="btn btn-primary fw-bold" style="height:50px; width:50px; font-size:1.5rem;" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', true)">✋</button>
+
+                        <button class="btn btn-danger fw-bold" style="height:50px; width:50px; font-size:1.5rem;" onclick="ejectSpool(${item.id}, '${document.getElementById('manage-loc-id').value}', false)">🗑️</button>
+                        <div class="action-qr-group">
+                             <div id="qr-trash-${i}" class="qr-box" style="padding:2px; width:50px; height:50px;"></div>
+                             <div class="action-qr-label">TRASH</div>
+                        </div>
+
+                        <button class="btn btn-light border-dark fw-bold ms-2" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️</button>
                     </div>`;
                 un.appendChild(div); 
-                new QRCode(document.getElementById(`qr-list-${i}`), {text:"ID:"+item.id, width:50, height:50}); 
+                // GENERATE THE QRS IMMEDIATELY
+                new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+item.id, width:45, height:45}); 
+                new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+item.id, width:45, height:45});
             });
             const dz = document.createElement('div'); dz.className='danger-zone'; dz.innerHTML=`<h4 class="text-danger fw-bold">DANGER ZONE</h4><div class="d-flex justify-content-center align-items-center gap-3"><div class="text-center"><div id="qr-eject-all" class="bg-white p-2 rounded"></div><div class="qr-label text-white">ALL</div></div><button class="btn btn-danger btn-lg fw-bold" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">EJECT ALL 💥</button></div>`;
             un.appendChild(dz); new QRCode(document.getElementById("qr-eject-all"), {text:"CMD:EJECTALL", width:100, height:100});
         } else un.style.display='none';
     };
 
-    // REMOVED EXTRA QRs (Pick/Trash) FROM HERE
     const renderList = (data, locId) => {
         const list = document.getElementById('manage-contents-list');
         list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => `
         <div class="unslotted-item">
-            <div class="d-flex align-items-center">
-                <div id="qr-list-${i}" class="qr-box me-3" style="padding:5px;"></div>
-                <div class="buffer-swatch me-3" style="background-color:#${s.color}"></div>
-                <span class="fs-4 fw-bold">${s.display}</span>
+            <div class="unslotted-info">
+                <div class="buffer-swatch" style="background-color:#${s.color}"></div>
+                <span class="fs-4 fw-bold text-white">${s.display}</span>
             </div>
-            <div class="d-flex gap-2 align-items-center">
-                <button class="btn btn-light fw-bold border-dark" onclick="event.stopPropagation(); printLabel(${s.id})">🖨️ LABEL</button>
-                <button class="btn btn-primary fw-bold" onclick="ejectSpool(${s.id}, '${locId}', true)">✋ PICK</button>
-                <button class="btn btn-outline-danger" onclick="ejectSpool(${s.id}, '${locId}', false)">🗑️</button>
+            <div class="unslotted-actions">
+                 <div class="action-qr-group">
+                     <div id="qr-pick-${i}" class="qr-box" style="padding:2px; width:50px; height:50px;"></div>
+                     <div class="action-qr-label">PICK</div>
+                </div>
+                <button class="btn btn-primary fw-bold" style="height:50px; width:50px; font-size:1.5rem;" onclick="ejectSpool(${s.id}, '${locId}', true)">✋</button>
+
+                <button class="btn btn-danger fw-bold" style="height:50px; width:50px; font-size:1.5rem;" onclick="ejectSpool(${s.id}, '${locId}', false)">🗑️</button>
+                <div class="action-qr-group">
+                     <div id="qr-trash-${i}" class="qr-box" style="padding:2px; width:50px; height:50px;"></div>
+                     <div class="action-qr-label">TRASH</div>
+                </div>
+
+                <button class="btn btn-light border-dark fw-bold ms-2" onclick="event.stopPropagation(); printLabel(${s.id})">🖨️</button>
             </div>
         </div>`).join('');
-        data.forEach((s,i) => new QRCode(document.getElementById(`qr-list-${i}`), {text:"ID:"+s.id, width:60, height:60}));
+        
+        // NOW SAFE TO DRAW QRS
+        data.forEach((s,i) => {
+            new QRCode(document.getElementById(`qr-pick-${i}`), {text:"ID:"+s.id, width:45, height:45});
+            new QRCode(document.getElementById(`qr-trash-${i}`), {text:"CMD:TRASH:"+s.id, width:45, height:45});
+        });
     };
 
     const handleSlotInteraction = (slot) => {
