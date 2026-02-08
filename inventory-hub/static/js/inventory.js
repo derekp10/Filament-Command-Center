@@ -482,6 +482,10 @@ const refreshManageView = (id) => {
 };
 
 // --- RENDERING: GRID & LIST ---
+/* * Filament Command Center - Inventory Logic
+ * Version: v153.76 (Manager Styles Fixed)
+ */
+// --- RENDER GRID (Fixed for .slot-grid) ---
 const renderGrid = (data, max) => {
     const grid=document.getElementById('slot-grid-container'), un=document.getElementById('unslotted-container');
     grid.innerHTML=""; un.innerHTML=""; state.currentGrid={};
@@ -505,8 +509,9 @@ const renderGrid = (data, max) => {
         } else {
             div.className = "slot-btn empty";
             div.innerHTML = `
-                <div class="slot-left"><div class="slot-num">Slot ${i}</div><div id="qr-slot-${i}" class="bg-white p-1 rounded"></div></div>
-                <div class="slot-right"><div class="text-muted fs-4">EMPTY</div></div>`;
+                <div class="slot-num">Slot ${i}</div>
+                <div id="qr-slot-${i}" class="bg-white p-1 rounded"></div>
+                <div class="text-muted fs-4 mt-2">EMPTY</div>`;
         }
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
@@ -514,32 +519,47 @@ const renderGrid = (data, max) => {
     }
     if(unslotted.length>0) renderUnslotted(unslotted); 
     else un.style.display='none';
+    
+    // GENERATE DONE QR (Missing Fix)
+    generateSafeQR('qr-done', 'CMD:DONE', 40);
 };
 
+// --- RENDER LIST (Add Done QR Here too) ---
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
     list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
     data.forEach((s,i) => renderBadgeQRs(s, i));
+    
+    // GENERATE DONE QR
+    generateSafeQR('qr-done', 'CMD:DONE', 40);
 };
 
+// --- RENDER UNSLOTTED (Unified) ---
 const renderUnslotted = (items) => {
     const un = document.getElementById('unslotted-container');
     if (!un) return;
     un.style.display='block';
-    un.innerHTML = items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
-    items.forEach((s,i) => renderBadgeQRs(s, i));
     
-    const dz = document.createElement('div'); dz.className='danger-zone'; 
-    dz.innerHTML=`
-        <h4 class="text-danger fw-bold">DANGER ZONE</h4>
-        <div class="d-flex justify-content-center align-items-center gap-3">
-            <div class="text-center"><div id="qr-eject-all" class="bg-white p-2 rounded"></div><div class="qr-label text-white">ALL</div></div>
-            <button class="btn btn-danger btn-lg fw-bold" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">EJECT ALL 💥</button>
+    // Title Section
+    let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3">Unslotted Items</h4>`;
+    html += items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
+    
+    // Danger Zone
+    html += `
+        <div class="danger-zone">
+            <h4 class="text-danger fw-bold mb-3">DANGER ZONE</h4>
+            <div class="action-badge" style="border-color:#dc3545; display:inline-flex;" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">
+                <div id="qr-eject-all" class="badge-qr"></div>
+                <button class="badge-btn btn-trash">EJECT ALL</button>
+            </div>
         </div>`;
-    un.appendChild(dz); 
-    generateSafeQR("qr-eject-all", "CMD:EJECTALL", 100);
+        
+    un.innerHTML = html;
+    items.forEach((s,i) => renderBadgeQRs(s, i));
+    generateSafeQR("qr-eject-all", "CMD:EJECTALL", 56);
 };
 
+// --- BADGE RENDERER (Vertical Structure) ---
 const renderBadgeHTML = (s, i, locId) => {
     const styles = getFilamentStyle(s.color);
     return `
@@ -552,15 +572,15 @@ const renderBadgeHTML = (s, i, locId) => {
             <div class="cham-actions">
                 <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', true)">
                     <div id="qr-pick-${i}" class="badge-qr"></div>
-                    <button class="badge-btn btn-pick">✋ PICK</button>
+                    <button class="badge-btn btn-pick">PICK</button>
                 </div>
                 <div class="action-badge" onclick="printLabel(${s.id})">
                     <div id="qr-print-${i}" class="badge-qr"></div>
-                    <button class="badge-btn btn-print">🖨️ PRINT</button>
+                    <button class="badge-btn btn-print">PRINT</button>
                 </div>
                 <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', false)">
                     <div id="qr-trash-${i}" class="badge-qr"></div>
-                    <button class="badge-btn btn-trash">🗑️ TRASH</button>
+                    <button class="badge-btn btn-trash">TRASH</button>
                 </div>
             </div>
         </div>
@@ -568,9 +588,10 @@ const renderBadgeHTML = (s, i, locId) => {
 };
 
 const renderBadgeQRs = (s, i) => {
-    generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 46);
-    generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 46);
-    generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 46);
+    // 56 fits nicely in 60px box
+    generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 56);
+    generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 56);
+    generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 56);
 };
 
 // --- LOGIC: ACTIONS ---

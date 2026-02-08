@@ -96,26 +96,84 @@
     }
     .btn-buffer-x:hover { background: #ff0000; }
 
-    /* COMMAND CONSOLE */
-    .cmd-deck { 
-        padding: 15px; background: #151515; border: 1px solid #333; border-radius: 8px; 
-        display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; flex-shrink: 0;
-    }
-
-    .deck-btn {
-        background: #222; border: 2px solid #444; border-radius: 12px;
-        display: flex; flex-direction: column; 
-        align-items: center; justify-content: center;
-        padding: 10px 15px; gap: 8px;
-        cursor: pointer; transition: transform 0.1s, background-color 0.2s;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.5); min-width: 120px; flex-grow: 1; max-width: 180px;
-    }
-    .deck-btn:active { transform: scale(0.95); }
-    .deck-btn:hover { background: #333; border-color: #666; }
-
-    .deck-label { font-weight: 900; font-size: 1rem; text-transform: uppercase; color: #ccc; white-space: nowrap; }
+    /* --- MANAGER MODAL STYLES (NEW) --- */
     
-    /* UPDATED: INCREASED TO 80px */
+    /* 1. NAV DECK (Prev/Next) */
+    .nav-deck { display: flex; gap: 15px; margin-bottom: 15px; width: 100%; }
+    .nav-card { flex: 1; cursor: pointer; min-height: 80px; }
+    .nav-inner { 
+        display: flex; flex-direction: row; 
+        align-items: center; justify-content: space-between; 
+        padding: 10px; height: 100%;
+    }
+    .nav-qr { width: 60px; height: 60px; background: white; padding: 2px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
+    .nav-label { font-size: 0.9rem; font-weight: 900; color: #ccc; }
+    .nav-name { font-size: 1.2rem; font-weight: bold; color: #fff; text-shadow: 1px 1px 2px #000; }
+
+    /* 2. SLOT GRID (Restored) */
+    .slot-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); /* Auto Grid */
+        gap: 15px;
+        margin-bottom: 20px;
+    }
+    .slot-btn { min-height: 180px; cursor: pointer; display: flex; flex-direction: column; }
+    .slot-btn.empty { background: #222; border: 2px solid #444; border-radius: 12px; align-items: center; justify-content: center; padding: 10px; color: #666; }
+    .slot-inner { 
+        flex-direction: column !important; 
+        align-items: center !important; 
+        text-align: center; 
+        padding: 15px !important; 
+        justify-content: center;
+    }
+    .slot-num { color: #ccc; font-weight: 900; margin-bottom: 10px; font-size: 1.2rem; text-transform: uppercase; text-shadow: 1px 1px 2px #000; }
+    .slot-content { font-size: 1.1rem; font-weight: bold; color: #fff; line-height: 1.2; text-shadow: 2px 2px 4px #000; margin-bottom: 10px;}
+
+    /* 3. UNSLOTTED LIST (Action Buttons) */
+    .manage-list-item { margin-bottom: 15px; } 
+    .manage-list-item .cham-text { font-size: 1.3rem; } 
+    .manage-list-item .cham-id-badge { font-size: 1.3rem; padding: 4px; min-width: 60px; }
+
+    /* Vertical Action Badges (Pick/Print/Trash) */
+    .action-badge { 
+        display: flex; 
+        flex-direction: column; /* VERTICAL STACK */
+        align-items: center; 
+        justify-content: center;
+        background: #222; /* Dark bg */
+        border: 2px solid #444;
+        border-radius: 8px; 
+        overflow: hidden; 
+        min-width: 80px;
+        padding: 8px;
+        gap: 5px;
+        cursor: pointer; 
+        transition: transform 0.1s; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.5);
+    }
+    .action-badge:active { transform: scale(0.95); }
+    
+    .badge-qr { width: 60px; height: 60px; padding: 2px; background: #fff; flex-shrink: 0; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
+    
+    .badge-btn { 
+        border: none; border-radius: 4px;
+        font-weight: 900; font-size: 0.9rem; 
+        padding: 4px 10px; width: 100%;
+        text-transform: uppercase; color: #fff; 
+        text-align: center;
+    }
+    .btn-pick { background-color: #0d6efd; } 
+    .btn-trash { background-color: #dc3545; } 
+    .btn-print { background-color: #ffc107; color: #000; } 
+
+    /* DANGER ZONE */
+    .danger-zone { margin-top: 30px; border-top: 2px dashed #dc3545; padding-top: 20px; text-align: center; }
+
+    /* --- COMMAND CONSOLE --- */
+    .cmd-deck { padding: 15px; background: #151515; border: 1px solid #333; border-radius: 8px; display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; flex-shrink: 0; }
+    .deck-btn { background: #222; border: 2px solid #444; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px 15px; gap: 8px; cursor: pointer; transition: transform 0.1s; box-shadow: 0 4px 6px rgba(0,0,0,0.5); min-width: 120px; flex-grow: 1; max-width: 180px; }
+    .deck-btn:active { transform: scale(0.95); }
+    .deck-label { font-weight: 900; font-size: 1rem; text-transform: uppercase; color: #ccc; white-space: nowrap; }
     .deck-qr { width: 80px; height: 80px; background: #fff; border-radius: 4px; padding: 2px; display: flex; justify-content: center; align-items: center; }
 
     .deck-btn:nth-child(1) { border-color: #0dcaf0; } 
@@ -127,7 +185,6 @@
 
     .btn-audit-active { background: #4a004a !important; border: 4px solid #ff00ff !important; box-shadow: 0 0 20px #ff00ff; }
     .btn-audit-active .deck-label { color: #ff00ff !important; }
-    
     .drop-mode-active { border: 4px solid #fd7e14 !important; box-shadow: 0 0 30px rgba(253, 126, 20, 0.6); }
     .eject-mode-active { border: 4px solid #dc3545 !important; box-shadow: 0 0 30px rgba(220, 53, 69, 0.6); }
 
@@ -141,26 +198,9 @@
     
     .modal-content { background-color: #121212 !important; color: #fff !important; border-color: #444 !important; }
     .modal-header .btn-close { filter: invert(1); }
-    .action-badge { display: flex; align-items: stretch; background: #fff; border-radius: 8px; overflow: hidden; height: 52px; box-shadow: 0 5px 15px rgba(0,0,0,0.6); cursor: pointer; transition: transform 0.1s; }
-    .badge-qr { width: 52px; height: 52px; padding: 3px; background: #fff; flex-shrink: 0; }
-    .badge-btn { border: none; font-weight: 900; font-size: 0.95rem; padding: 0 20px; display: flex; align-items: center; gap: 8px; text-transform: uppercase; color: #fff; }
-    .btn-pick { background-color: #0d6efd; } .btn-trash { background-color: #dc3545; } .btn-print { background-color: #ffc107; color: #000; } 
-    .mini-qr { width: 80px; height: 80px; background: white; padding: 5px; border-radius: 8px; display: flex; justify-content: center; align-items: center; }
     
     #focus-guard { position: fixed; inset: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.85); z-index: 99999; display: none; justify-content: center; align-items: center; flex-direction: column; color: #ff0000; }
     .focus-msg { font-size: 3rem; font-weight: bold; text-shadow: 0 0 20px #f00; border: 5px solid #f00; padding: 40px; border-radius: 20px; background: #000; }
     #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 9999; display: flex; flex-direction: column; gap: 10px; text-align: center; }
     .toast-msg { background: #222; color: #fff; border: 2px solid #00d4ff; padding: 20px 30px; border-radius: 8px; box-shadow: 0 0 20px rgba(0,0,0,0.8); font-weight: bold; font-size: 1.5rem; transition: opacity 0.5s; }
-    .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
-    .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
-    
-    /* Manager Items */
-    .manage-list-item { margin-bottom: 15px; } 
-    .manage-list-item .cham-text { font-size: 1.3rem; } 
-    .manage-list-item .cham-id-badge { font-size: 1.3rem; padding: 4px; min-width: 60px; }
-    .slot-btn { min-height: 160px; cursor: pointer; }
-    .slot-btn.empty { background: #222; border: 2px solid #444; border-radius: 12px; display: flex; align-items: center; justify-content: center; padding: 10px; color: #666; }
-    .slot-inner { flex-direction: column !important; align-items: center !important; text-align: center; padding: 10px !important; }
-    .slot-num { color: #ccc; font-weight: 900; margin-bottom: 5px; font-size: 1rem; text-transform: uppercase; text-shadow: 1px 1px 2px #000; }
-    .slot-content { font-size: 1.1rem; font-weight: bold; color: #fff; line-height: 1.2; text-shadow: 2px 2px 4px #000; }
 </style>
