@@ -300,10 +300,8 @@ const renderBuffer = () => {
         </div>`;
     }).join('');
     
-    // Size 74 fits the 80px box
     state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 74)); 
 
-    // Update Nav Deck if visible (in modal)
     if (n) {
         if (state.heldSpools.length > 1) {
             const nextSpool = state.heldSpools[1];
@@ -332,8 +330,9 @@ const renderBuffer = () => {
                     </div>
                 </div>
             `;
-            generateSafeQR("qr-nav-prev", "CMD:PREV", 45);
-            generateSafeQR("qr-nav-next", "CMD:NEXT", 45);
+            // UPDATED SIZE: 56 fits best in 60px box
+            generateSafeQR("qr-nav-prev", "CMD:PREV", 56);
+            generateSafeQR("qr-nav-next", "CMD:NEXT", 56);
         } else {
             n.style.display = 'none';
         }
