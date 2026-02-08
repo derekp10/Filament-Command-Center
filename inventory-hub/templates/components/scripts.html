@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.64 (Vertical Gradient)";
+    const DASHBOARD_VERSION = "v153.65 (Loop Breaker)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -25,12 +25,12 @@
 
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
-        generateSafeQR('qr-undo', 'CMD:UNDO', 74);
-        generateSafeQR('qr-clear', 'CMD:CLEAR', 74);
-        generateSafeQR('qr-drop', 'CMD:DROP', 74);
-        generateSafeQR('qr-eject', 'CMD:EJECT', 74); 
-        generateSafeQR('qr-audit', 'CMD:AUDIT', 74);
-        generateSafeQR('qr-locs', 'CMD:LOCATIONS', 74);
+        generateSafeQR('qr-undo', 'CMD:UNDO', 42);
+        generateSafeQR('qr-clear', 'CMD:CLEAR', 42);
+        generateSafeQR('qr-drop', 'CMD:DROP', 42);
+        generateSafeQR('qr-eject', 'CMD:EJECT', 42); 
+        generateSafeQR('qr-audit', 'CMD:AUDIT', 42);
+        generateSafeQR('qr-locs', 'CMD:LOCATIONS', 42);
 
         const modalQRs = {'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL'};
         for(const [id, txt] of Object.entries(modalQRs)) generateSafeQR(id, txt, 120);
@@ -56,7 +56,7 @@
         }, 50);
     };
 
-    // --- CHAMELEON ENGINE V6 (VERTICAL FADE) ---
+    // --- CHAMELEON ENGINE V7 (VERTICAL FADE) ---
     const getHexDark = (hex) => {
         hex = hex.replace('#', '');
         if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
@@ -75,14 +75,11 @@
             colors = [hex, hex];
         }
 
-        // FRAME: Full vibrancy
         const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
         
-        // INNER: Top-to-Bottom Fade (Black to Color)
-        // Top (0%) is Black (95%) for text readability
-        // Bottom (100%) is the Filament Color (Transparent)
+        // INNER: Top (Black) -> Bottom (Color)
         const lastColorDark = getHexDark(colors[colors.length - 1]);
-        const innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 20%, ${lastColorDark} 100%)`;
+        const innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
         
         return { frame: frameGrad, inner: innerGrad };
     };
@@ -168,10 +165,30 @@
         updateDeckVisuals();
     };
 
+    // --- AUDIT FIX (Direct API Call, No Loop) ---
     const toggleAudit = () => { 
-        state.auditActive = !state.auditActive;
-        updateLogState(true); 
-        if (state.auditActive) processScan("CMD:AUDIT"); else processScan("CMD:DONE"); 
+        // 1. Calculate New State
+        const newState = !state.auditActive;
+        state.auditActive = newState; // Optimistic flip
+
+        // 2. Update UI Immediately
+        const deckBtn = document.getElementById('btn-deck-audit');
+        const lbl = document.getElementById('lbl-audit');
+        const qrDiv = document.getElementById('qr-audit');
+
+        if (newState) {
+            if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
+            if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('text-white'); }
+            if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 42); }
+            // Send Command Directly
+            fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: "CMD:AUDIT"}) });
+        } else {
+            if(deckBtn) deckBtn.classList.remove('btn-audit-active');
+            if(lbl) { lbl.innerText = "AUDIT MODE"; lbl.classList.remove('text-white'); }
+            if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 42); }
+            // Send Command Directly
+            fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: "CMD:DONE"}) });
+        }
     };
 
     const updateDeckVisuals = () => {
@@ -216,10 +233,10 @@
             </div>`;
         }).join('');
         
-        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 90)); 
+        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 70)); 
     };
 
-    // --- RENDER GRID (Uses Unified Cham Card) ---
+    // --- RENDER GRID ---
     const renderGrid = (data, max) => {
         const grid=document.getElementById('slot-grid-container'), un=document.getElementById('unslotted-container');
         grid.innerHTML=""; un.innerHTML=""; state.currentGrid={};
@@ -246,12 +263,11 @@
             div.onclick = () => handleSlotInteraction(i); grid.appendChild(div);
             generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 60);
         }
-        
         if(unslotted.length>0) renderList(unslotted, document.getElementById('manage-loc-id').value);
         else un.style.display='none';
     };
 
-    // --- RENDER LIST (Uses Unified Cham Card) ---
+    // --- RENDER LIST ---
     const renderList = (data, locId) => {
         const list = document.getElementById('manage-contents-list');
         list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
@@ -356,11 +372,11 @@
                 if (state.auditActive) {
                     if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
                     if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
-                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 74); }
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 42); }
                 } else {
                     if(deckBtn) deckBtn.classList.remove('btn-audit-active');
-                    if(lbl) { lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit'); }
-                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 74); }
+                    if(lbl) { lbl.innerText = "AUDIT MODE"; lbl.classList.remove('label-active-audit'); }
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 42); }
                 }
             }
         });
