@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v153.75 (Refactored Brain)
+ * Version: v153.81 (Event Listeners & Green Footer)
  */
 
-const DASHBOARD_VERSION = "v153.75 (Refactored Brain)";
+const DASHBOARD_VERSION = "v153.81 (Stable)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -50,7 +50,6 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.appendChild(fg);
     }
 
-    // Version Tag Update (if present)
     const vTag = document.querySelector('.version-tag');
     if(vTag) vTag.innerText = DASHBOARD_VERSION;
 
@@ -60,7 +59,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if(el) modals[id] = new bootstrap.Modal(el);
     });
     
-    // Generate Deck QRs (Size 42 for Horizontal Layout)
+    // --- CRITICAL FIX: EVENT LISTENER FOR MANAGER ---
+    // This waits for the modal to be fully visible before drawing QRs
+    const manageEl = document.getElementById('manageModal');
+    if (manageEl) {
+        manageEl.addEventListener('shown.bs.modal', () => {
+            const id = document.getElementById('manage-loc-id').value;
+            // 1. Render the Buffer (Nav Deck QRs)
+            renderBuffer();
+            // 2. Render the Grid/List (Item QRs)
+            refreshManageView(id);
+            // 3. Render the Footer QR (Done Button)
+            generateSafeQR('qr-modal-done', 'CMD:DONE', 42);
+        });
+    }
+
+    // Generate Deck QRs
     generateSafeQR('qr-undo', 'CMD:UNDO', 42);
     generateSafeQR('qr-clear', 'CMD:CLEAR', 42);
     generateSafeQR('qr-drop', 'CMD:DROP', 42);
@@ -68,11 +82,9 @@ document.addEventListener('DOMContentLoaded', () => {
     generateSafeQR('qr-audit', 'CMD:AUDIT', 42);
     generateSafeQR('qr-locs', 'CMD:LOCATIONS', 42);
 
-    // Modal QRs
     const modalQRs = {'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL'};
     for(const [id, txt] of Object.entries(modalQRs)) generateSafeQR(id, txt, 120);
 
-    // Event Listeners
     const locTable = document.getElementById('location-table');
     if(locTable) {
         locTable.addEventListener('click', (e) => {
@@ -90,7 +102,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Start Polling
     updateLogState(); 
     fetchLocations(); 
 });
@@ -98,6 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // --- CORE FUNCTIONS ---
 
 const generateSafeQR = (elementId, text, size) => {
+    // Small timeout just to ensure DOM paint, but main logic handled by Event Listener now
     setTimeout(() => {
         const el = document.getElementById(elementId);
         if (el) {
@@ -109,7 +121,7 @@ const generateSafeQR = (elementId, text, size) => {
     }, 50);
 };
 
-// --- CHAMELEON ENGINE V8 (The "Sunglasses" Fix) ---
+// --- CHAMELEON ENGINE V8 (Rainbow Fix) ---
 const getHexDark = (hex, opacity=0.3) => {
     if (!hex) return 'rgba(0,0,0,0.5)';
     hex = hex.replace('#', '');
@@ -129,27 +141,16 @@ const getFilamentStyle = (colorStr) => {
         colors = [hex, hex];
     }
 
-    // 1. The Frame (Border) - Always Vivid and Bright
     const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
-    
-    // 2. The Inner Background (The "Sunglasses" Logic)
     let innerGrad;
     
     if (colors.length > 1 && colors[0] !== colors[1]) {
-        // MULTI-COLOR MODE: 
-        // Layer 1 (Top): Heavy Black fade to ensure text readability
-        // Layer 2 (Bottom): The Rainbow Gradient, slightly dimmed
-        
-        // We make the colors slightly transparent so they blend with the black background behind them
         const gradColors = colors.map(c => getHexDark(c, 0.8)); 
-        
         innerGrad = `
             linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), 
             linear-gradient(135deg, ${gradColors.join(', ')})
         `;
     } else {
-        // SINGLE COLOR MODE: 
-        // Standard Top-to-Bottom fade (Black -> Color)
         const lastColorDark = getHexDark(colors[0], 0.3);
         innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
     }
@@ -158,19 +159,11 @@ const getFilamentStyle = (colorStr) => {
 };
 
 // --- INPUT HANDLING ---
-window.addEventListener('blur', () => { 
-    const g = document.getElementById('focus-guard'); 
-    if(g) g.style.display = 'flex'; 
-});
-
-window.addEventListener('focus', () => { 
-    const g = document.getElementById('focus-guard'); 
-    if(g) g.style.display = 'none'; 
-});
+window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
+window.addEventListener('focus', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'none'; });
 
 document.addEventListener('keydown', (e) => {
     const g = document.getElementById('focus-guard');
-    // Block scanner input if focus guard is active OR processing OR typing in an input field
     if ((g && g.style.display === 'flex') || state.processing || e.target.tagName === 'INPUT') return;
     
     if (e.key === 'Enter') { 
@@ -189,36 +182,21 @@ document.addEventListener('keydown', (e) => {
 const pauseLogs = (isPaused) => {
     state.logsPaused = isPaused;
     const el = document.getElementById('log-status');
-    if (isPaused) { 
-        el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-muted'); 
-    } else { 
-        el.innerText = "Auto-Refresh ON"; el.style.color = "#0f0"; el.classList.remove('text-muted'); 
-    }
+    if (isPaused) { el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-muted'); } 
+    else { el.innerText = "Auto-Refresh ON"; el.style.color = "#0f0"; el.classList.remove('text-muted'); }
 };
 
 const setProcessing = (s) => { 
     let ov = document.getElementById('processing-overlay');
-    if (!ov) { 
-        ov = document.createElement('div'); 
-        ov.id = 'processing-overlay'; 
-        ov.style.cssText = "display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999;"; 
-        document.body.appendChild(ov); 
-    }
-    state.processing = s; 
-    ov.style.display = s ? 'block' : 'none'; 
+    if (!ov) { ov = document.createElement('div'); ov.id = 'processing-overlay'; ov.style.cssText = "display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999;"; document.body.appendChild(ov); }
+    state.processing = s; ov.style.display = s ? 'block' : 'none'; 
 };
 
 const showToast = (msg, type='info') => {
     let c = document.getElementById('toast-container');
-    if (!c) { 
-        c = document.createElement('div'); c.id = 'toast-container'; document.body.appendChild(c); 
-    }
-    const el = document.createElement('div'); 
-    el.className = 'toast-msg'; 
-    el.innerText = msg; 
-    el.style.borderColor = type==='error'?'#f44':(type==='warning'?'#fc0':'#00d4ff');
-    c.appendChild(el); 
-    setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
+    if (!c) { c = document.createElement('div'); c.id = 'toast-container'; document.body.appendChild(c); }
+    const el = document.createElement('div'); el.className = 'toast-msg'; el.innerText = msg; el.style.borderColor = type==='error'?'#f44':(type==='warning'?'#fc0':'#00d4ff');
+    c.appendChild(el); setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
 };
 
 // --- LOGIC: BUFFER MANAGEMENT ---
@@ -232,39 +210,17 @@ const removeBufferItem = (id) => {
     } else { showToast("Item not in buffer", "warning"); }
 };
 
-const requestClearBuffer = () => {
-    if (state.heldSpools.length === 0) return;
-    requestConfirmation("Clear entire Buffer?", clearBuffer);
-};
-
-const clearBuffer = () => {
-    state.heldSpools = [];
-    renderBuffer();
-    showToast("Buffer Cleared");
-};
+const requestClearBuffer = () => { if (state.heldSpools.length === 0) return; requestConfirmation("Clear entire Buffer?", clearBuffer); };
+const clearBuffer = () => { state.heldSpools = []; renderBuffer(); showToast("Buffer Cleared"); };
 
 // --- LOGIC: MODES ---
-const toggleDropMode = () => {
-    state.dropMode = !state.dropMode;
-    state.ejectMode = false;
-    updateDeckVisuals();
-};
-
-const toggleEjectMode = () => {
-    state.ejectMode = !state.ejectMode;
-    state.dropMode = false;
-    updateDeckVisuals();
-};
-
+const toggleDropMode = () => { state.dropMode = !state.dropMode; state.ejectMode = false; updateDeckVisuals(); };
+const toggleEjectMode = () => { state.ejectMode = !state.ejectMode; state.dropMode = false; updateDeckVisuals(); };
 const toggleAudit = () => { 
     state.auditActive = !state.auditActive;
     updateLogState(true); 
     const cmd = state.auditActive ? "CMD:AUDIT" : "CMD:DONE";
-    fetch('/api/identify_scan', { 
-        method: 'POST', 
-        headers: {'Content-Type': 'application/json'}, 
-        body: JSON.stringify({text: cmd}) 
-    });
+    fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: cmd}) });
 };
 
 const updateDeckVisuals = () => {
@@ -301,7 +257,6 @@ const renderBuffer = () => {
         return; 
     }
     
-    // Main Buffer
     z.innerHTML = state.heldSpools.map((s, i) => {
         const styles = getFilamentStyle(s.color);
         const cleanText = (s.display||"").replace(/^#\d+\s*/, '').trim();
@@ -323,7 +278,6 @@ const renderBuffer = () => {
     
     state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 74)); 
 
-    // Nav Deck - Updated for 80px QR and 50/50 Split
     if (n) {
         if (state.heldSpools.length > 1) {
             const nextSpool = state.heldSpools[1];
@@ -352,7 +306,6 @@ const renderBuffer = () => {
                     </div>
                 </div>
             `;
-            // BIGGER QR (74 for 80px box)
             generateSafeQR("qr-nav-prev", "CMD:PREV", 74);
             generateSafeQR("qr-nav-next", "CMD:NEXT", 74);
         } else {
@@ -365,7 +318,6 @@ const renderBuffer = () => {
 const processScan = (text) => {
     const upper = text.toUpperCase();
     
-    // Command Traps
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
     if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
     if (upper === 'CMD:DROP') { toggleDropMode(); return; }
@@ -375,14 +327,12 @@ const processScan = (text) => {
     if (upper === 'CMD:PREV') { prevBuffer(); return; }
     if (upper === 'CMD:NEXT') { nextBuffer(); return; }
 
-    // Modal/Print Traps
     if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
     if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
     if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
     if (state.activeModal === 'action') { if(upper.includes('CANCEL')) { closeModal('actionModal'); return; } if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
-    // Server Trap
     setProcessing(true);
     fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) })
     .then(r=>r.json())
@@ -418,20 +368,12 @@ const processScan = (text) => {
             else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); }
         } else if (res.type === 'error') showToast(res.msg, 'error');
     })
-    .catch((e)=>{ 
-        setProcessing(false); 
-        console.error(e); 
-        showToast("Scan Error", "error"); 
-    });
+    .catch((e)=>{ setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
 };
 
 const performContextAssign = (tid) => {
     setProcessing(true); 
-    fetch('/api/smart_move', { 
-        method:'POST', 
-        headers:{'Content-Type':'application/json'}, 
-        body:JSON.stringify({location:tid, spools:[state.heldSpools[0].id]}) 
-    })
+    fetch('/api/smart_move', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({location:tid, spools:[state.heldSpools[0].id]}) })
     .then(r=>r.json())
     .then(res=>{ 
         setProcessing(false); 
@@ -455,12 +397,13 @@ const confirmSafety = (y) => { closeModal('safetyModal'); if(y && state.pendingS
 const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
 const openManage = (id) => { 
-    document.getElementById('manageTitle').innerText=`Location Manager: ${id}`;
+    document.getElementById('manageTitle').innerText=`Location Manager: ${id}`; 
     document.getElementById('manage-loc-id').value=id; 
     document.getElementById('manual-spool-id').value=""; 
-    renderBuffer(); // UPDATE NAV DECK ON OPEN
-    if(refreshManageView(id)) modals.manageModal.show(); 
-    else showToast("Loc Error", "error"); 
+    
+    // CRITICAL: We do NOT render here anymore.
+    // The 'shown.bs.modal' event listener handles rendering.
+    modals.manageModal.show(); 
 };
 
 const closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
@@ -470,9 +413,7 @@ const fetchLocations = () => {
     .then(r=>r.json())
     .then(d => { 
         state.allLocations=d; 
-        // UPDATED TEXT FORMAT
         document.getElementById('loc-count').innerText = "Total Locations: " + d.length; 
-        
         document.getElementById('location-table').innerHTML = d.map(l => `
             <tr>
                 <td class="col-id">${l.LocationID}</td>
@@ -505,10 +446,6 @@ const refreshManageView = (id) => {
 };
 
 // --- RENDERING: GRID & LIST ---
-/* * Filament Command Center - Inventory Logic
- * Version: v153.76 (Manager Styles Fixed)
- */
-// --- RENDER GRID (Fixed for .slot-grid) ---
 const renderGrid = (data, max) => {
     const grid=document.getElementById('slot-grid-container'), un=document.getElementById('unslotted-container');
     grid.innerHTML=""; un.innerHTML=""; state.currentGrid={};
@@ -542,32 +479,22 @@ const renderGrid = (data, max) => {
     }
     if(unslotted.length>0) renderUnslotted(unslotted); 
     else un.style.display='none';
-    
-    // GENERATE DONE QR (Missing Fix)
-    generateSafeQR('qr-done', 'CMD:DONE', 40);
 };
 
-// --- RENDER LIST (Add Done QR Here too) ---
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
     list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
     data.forEach((s,i) => renderBadgeQRs(s, i));
-    
-    // GENERATE DONE QR
-    generateSafeQR('qr-done', 'CMD:DONE', 40);
 };
 
-// --- RENDER UNSLOTTED (Unified) ---
 const renderUnslotted = (items) => {
     const un = document.getElementById('unslotted-container');
     if (!un) return;
     un.style.display='block';
     
-    // Title Section
     let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3">Unslotted Items</h4>`;
     html += items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
     
-    // Danger Zone
     html += `
         <div class="danger-zone">
             <h4 class="text-danger fw-bold mb-3">DANGER ZONE</h4>
@@ -582,7 +509,6 @@ const renderUnslotted = (items) => {
     generateSafeQR("qr-eject-all", "CMD:EJECTALL", 56);
 };
 
-// --- BADGE RENDERER (Vertical Structure) ---
 const renderBadgeHTML = (s, i, locId) => {
     const styles = getFilamentStyle(s.color);
     return `
@@ -611,7 +537,6 @@ const renderBadgeHTML = (s, i, locId) => {
 };
 
 const renderBadgeQRs = (s, i) => {
-    // 56 fits nicely in 60px box
     generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 56);
     generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 56);
     generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 56);
@@ -811,5 +736,4 @@ const updateLogState = (force=false) => {
     });
 };
 
-// Global polling
 setInterval(updateLogState, 2500);

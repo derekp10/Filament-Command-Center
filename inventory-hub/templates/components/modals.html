@@ -32,7 +32,8 @@
     </div>
 </div>
 
-<div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"> <div class="modal-dialog modal-lg">
+<div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header bg-dark border-bottom border-secondary">
                 <h5 class="modal-title text-info fw-bold" id="manageTitle">Location Manager</h5>
@@ -55,12 +56,20 @@
                     </div>
                 </div>
 
-                <div class="modal-footer border-top border-secondary justify-content-between">
-                    <div class="input-group" style="max-width: 300px;">
-                        <span class="input-group-text bg-dark text-white border-secondary">Add Spool</span>
-                        <input type="text" id="manual-spool-id" class="form-control bg-dark text-white border-secondary" placeholder="Scan/Type ID">
+                <div class="modal-footer d-flex flex-column p-0 bg-dark border-top border-secondary">
+                    
+                    <div class="d-flex w-100 p-2 gap-2">
+                        <input type="text" id="manual-spool-id" class="form-control form-control-lg fw-bold" placeholder="Enter Spool ID / Scan Legacy">
+                        <button class="btn btn-primary btn-lg fw-bold px-4" onclick="manualAddSpool()">+ ADD</button>
                     </div>
-                    <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+
+                    <div class="w-100 px-2 pb-2">
+                        <div class="btn btn-success w-100 btn-lg fw-bold d-flex justify-content-between align-items-center p-1" onclick="closeManage()">
+                            <div style="width:50px;"></div> 
+                            <span class="fs-4">✔ DONE / SYNC</span>
+                            <div id="qr-modal-done" class="bg-white rounded p-1 d-flex align-items-center justify-content-center" style="height: 50px; width: 50px;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
