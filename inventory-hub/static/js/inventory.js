@@ -455,7 +455,7 @@ const confirmSafety = (y) => { closeModal('safetyModal'); if(y && state.pendingS
 const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
 const openManage = (id) => { 
-    document.getElementById('manageTitle').innerText=`Manage: ${id}`; 
+    document.getElementById('manageTitle').innerText=`Location Manager: ${id}`;
     document.getElementById('manage-loc-id').value=id; 
     document.getElementById('manual-spool-id').value=""; 
     renderBuffer(); // UPDATE NAV DECK ON OPEN
