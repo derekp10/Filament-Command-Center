@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.57 (Gradient Restored)";
+    const DASHBOARD_VERSION = "v153.58 (Full Glow)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -25,7 +25,7 @@
 
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
-        // DECK QRs (Big)
+        // DECK QRs
         generateSafeQR('qr-undo', 'CMD:UNDO', 74);
         generateSafeQR('qr-clear', 'CMD:CLEAR', 74);
         generateSafeQR('qr-drop', 'CMD:DROP', 74);
@@ -57,47 +57,52 @@
         }, 50);
     };
 
-    // --- CHAMELEON ENGINE 2.0 (RESTORED) ---
+    // --- CHAMELEON ENGINE 3.0 (FULL GLOW) ---
     
-    // Helper: Returns semi-transparent dark version of a hex
+    // Returns semi-transparent dark version (opacity 0.25)
     const getHexDark = (hex) => {
         hex = hex.replace('#', '');
         if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
         const r = parseInt(hex.substring(0,2), 16), g = parseInt(hex.substring(2,4), 16), b = parseInt(hex.substring(4,6), 16);
-        return `rgba(${r}, ${g}, ${b}, 0.2)`; // 20% Opacity of original color
+        return `rgba(${r}, ${g}, ${b}, 0.25)`; 
     };
-    
-    // Helper: Returns a solid dark mix for single colors
-    const getTintedBackground = (hex) => {
-        if (!hex) return "#1a1a1a";
+
+    // Returns very dark transparent version (opacity 0.05)
+    const getHexDeep = (hex) => {
         hex = hex.replace('#', '');
         if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
         const r = parseInt(hex.substring(0,2), 16), g = parseInt(hex.substring(2,4), 16), b = parseInt(hex.substring(4,6), 16);
-        const mix = 0.35; 
-        return `rgb(${Math.floor(r*mix)}, ${Math.floor(g*mix)}, ${Math.floor(b*mix)})`;
+        return `rgba(${r}, ${g}, ${b}, 0.05)`; 
     };
     
     const getFilamentStyle = (colorStr) => {
         if (!colorStr) return { frame: '#333', inner: '#1a1a1a' };
         
-        // MULTI-COLOR (Gradient)
-        if (colorStr.includes(',')) {
-            const colors = colorStr.split(',').map(c => c.trim().startsWith('#') ? c.trim() : '#' + c.trim());
-            
-            // Frame: Full Brightness Gradient
-            const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
-            
-            // Inner: Dark Transparent Gradient (THIS WAS MISSING)
-            const darkColors = colors.map(c => getHexDark(c));
-            const innerGrad = `linear-gradient(135deg, ${darkColors.join(', ')})`;
-            
-            return { frame: frameGrad, inner: innerGrad };
-        } 
+        let colors = [];
         
-        // SINGLE COLOR
-        const hex = colorStr.startsWith('#') ? colorStr : '#' + colorStr;
-        const innerSolid = getTintedBackground(hex);
-        return { frame: hex, inner: innerSolid };
+        if (colorStr.includes(',')) {
+            // Multi-Color: Parse them all
+            colors = colorStr.split(',').map(c => c.trim().startsWith('#') ? c.trim() : '#' + c.trim());
+        } else {
+            // Single Color: Duplicate it to create a gradient start/stop
+            const hex = colorStr.startsWith('#') ? colorStr : '#' + colorStr;
+            colors = [hex, hex]; 
+        }
+
+        // 1. Frame Gradient (The Border)
+        // We use 135deg for a nice diagonal shine
+        const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
+        
+        // 2. Inner Gradient (The Background)
+        // Fade from "Dark" (Top Left) to "Deep" (Bottom Right)
+        const darkColors = colors.map(c => getHexDark(c));
+        const deepColors = colors.map(c => getHexDeep(c));
+        
+        // Combine them: Start with Dark[0], End with Deep[Last]
+        // This gives depth even on single colors
+        const innerGrad = `linear-gradient(135deg, ${darkColors[0]}, ${deepColors[deepColors.length-1]})`;
+        
+        return { frame: frameGrad, inner: innerGrad };
     };
 
     window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
@@ -181,7 +186,6 @@
         updateDeckVisuals();
     };
 
-    // --- AUDIT FIX ---
     const toggleAudit = () => { 
         state.auditActive = !state.auditActive;
         updateLogState(true); 
@@ -218,7 +222,6 @@
             const styles = getFilamentStyle(s.color);
             const cleanText = s.display.replace(/^#\d+\s*/, '').trim();
             
-            // IMPORTANT: Using 'background' property for Gradient support
             return `
             <div class="filament-frame buffer-item ${i===0?'active-item':''}" style="background: ${styles.frame}; border:none;">
                 <div class="buffer-inner" style="background: ${styles.inner};">
@@ -435,11 +438,11 @@
                 if (state.auditActive) {
                     if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
                     if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
-                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 64); }
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 74); }
                 } else {
                     if(deckBtn) deckBtn.classList.remove('btn-audit-active');
-                    if(lbl) { lbl.innerText = "AUDIT MODE"; lbl.classList.remove('label-active-audit'); }
-                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 64); }
+                    if(lbl) { lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit'); }
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 74); }
                 }
             }
         });
