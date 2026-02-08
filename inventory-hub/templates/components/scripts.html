@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.68 (Golden Master)";
+    const DASHBOARD_VERSION = "v153.69 (Big Scan & Scroll)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -25,7 +25,6 @@
 
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
-        // DECK QRs (Scaled for Row Layout)
         generateSafeQR('qr-undo', 'CMD:UNDO', 42);
         generateSafeQR('qr-clear', 'CMD:CLEAR', 42);
         generateSafeQR('qr-drop', 'CMD:DROP', 42);
@@ -78,8 +77,6 @@
         }
 
         const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
-        
-        // INNER: Top (Black) -> Bottom (Color)
         const lastColorDark = getHexDark(colors[colors.length - 1]);
         const innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
         
@@ -185,7 +182,7 @@
         }
     };
 
-    // --- CRASH PROOF RENDERERS ---
+    // --- BIG SCANNER RENDERER ---
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone');
         if (state.heldSpools.length === 0) { z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; return; }
@@ -210,13 +207,13 @@
             </div>`;
         }).join('');
         
-        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 70)); 
+        // BIG QR GENERATION (90)
+        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 90)); 
     };
-
-    // --- CRASH PROOF SCANNER ---
+    
+    // ... [Rest of Logic is Unchanged from v153.68] ...
     const processScan = (text) => {
         const upper = text.toUpperCase();
-        
         if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
         if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
         if (upper === 'CMD:DROP') { toggleDropMode(); return; }
