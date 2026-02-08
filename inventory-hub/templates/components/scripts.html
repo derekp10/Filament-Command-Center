@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.70 (Aligned & Polished)";
+    const DASHBOARD_VERSION = "v153.71 (Manager Fixes)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -25,6 +25,7 @@
 
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
+        // DECK QRs (42px for Horizontal Layout)
         generateSafeQR('qr-undo', 'CMD:UNDO', 42);
         generateSafeQR('qr-clear', 'CMD:CLEAR', 42);
         generateSafeQR('qr-drop', 'CMD:DROP', 42);
@@ -56,7 +57,7 @@
         }, 50);
     };
 
-    // --- CHAMELEON V7 (Top-to-Bottom Fade) ---
+    // --- CHAMELEON ENGINE V7 (Top-to-Bottom Fade) ---
     const getHexDark = (hex) => {
         if (!hex) return 'rgba(0,0,0,0.5)';
         hex = hex.replace('#', '');
@@ -83,6 +84,7 @@
         return { frame: frameGrad, inner: innerGrad };
     };
 
+    // --- LOGIC FUNCTIONS ---
     window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
     window.addEventListener('focus', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'none'; });
     
@@ -182,15 +184,25 @@
         }
     };
 
-    // --- ALIGNED RENDERER ---
+    const nextBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.push(state.heldSpools.shift()); renderBuffer(); } };
+    const prevBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
+
+    // --- RENDER BUFFER (Includes Nav Deck Logic) ---
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone');
-        if (state.heldSpools.length === 0) { z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; return; }
+        // Render Nav Deck in Modal if it exists
+        const n = document.getElementById('buffer-nav-deck'); 
         
+        if (state.heldSpools.length === 0) { 
+            z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; 
+            if(n) n.style.display = 'none';
+            return; 
+        }
+        
+        // 1. Render Main Buffer List
         z.innerHTML = state.heldSpools.map((s, i) => {
             const styles = getFilamentStyle(s.color);
-            const rawText = s.display || `Spool #${s.id}`;
-            const cleanText = rawText.replace(/^#\d+\s*/, '').trim();
+            const cleanText = (s.display||"").replace(/^#\d+\s*/, '').trim();
             
             return `
             <div class="cham-card buffer-item ${i===0?'active-item':''}" style="background: ${styles.frame};">
@@ -206,9 +218,43 @@
                 </div>
             </div>`;
         }).join('');
-        
-        // SIZE 74 FITS PERFECTLY IN 80PX BOX
         state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 74)); 
+
+        // 2. Render Manager Modal Header (Nav Deck)
+        if (n) {
+            if (state.heldSpools.length > 1) {
+                const nextSpool = state.heldSpools[1];
+                const prevSpool = state.heldSpools[state.heldSpools.length - 1];
+                const prevStyles = getFilamentStyle(prevSpool.color);
+                const nextStyles = getFilamentStyle(nextSpool.color);
+                
+                n.style.display = 'flex';
+                n.innerHTML = `
+                    <div class="cham-card nav-card" style="background: ${prevStyles.frame}" onclick="prevBuffer()">
+                        <div class="cham-body nav-inner" style="background:${prevStyles.inner}; padding: 5px;">
+                            <div id="qr-nav-prev" class="nav-qr"></div>
+                            <div>
+                                <div class="nav-label">◀ PREV</div>
+                                <div class="nav-name" style="font-weight:bold; font-size:1.1rem;">${prevSpool.display.replace(/^#\d+\s*/, '')}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="cham-card nav-card" style="background: ${nextStyles.frame}" onclick="nextBuffer()">
+                        <div class="cham-body nav-inner" style="background:${nextStyles.inner}; padding: 5px;">
+                            <div style="text-align:right;">
+                                <div class="nav-label">NEXT ▶</div>
+                                <div class="nav-name" style="font-weight:bold; font-size:1.1rem;">${nextSpool.display.replace(/^#\d+\s*/, '')}</div>
+                            </div>
+                            <div id="qr-nav-next" class="nav-qr"></div>
+                        </div>
+                    </div>
+                `;
+                generateSafeQR("qr-nav-prev", "CMD:PREV", 45);
+                generateSafeQR("qr-nav-next", "CMD:NEXT", 45);
+            } else {
+                n.style.display = 'none';
+            }
+        }
     };
     
     const processScan = (text) => {
@@ -220,6 +266,8 @@
         if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
         if (upper === 'CMD:UNDO') { triggerUndo(); return; }
         if (upper === 'CMD:CLEAR') { requestClearBuffer(); return; } 
+        if (upper === 'CMD:PREV') { prevBuffer(); return; }
+        if (upper === 'CMD:NEXT') { nextBuffer(); return; }
 
         if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
         if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
@@ -244,20 +292,12 @@
                 if (state.ejectMode) { ejectSpool(res.id, "Scan", false); toggleEjectMode(); return; } 
                 
                 state.lastScannedLoc = null; 
-                
-                if (!res.display) {
-                    showToast("Spool ID found but data missing!", "error");
-                    return;
-                }
+                if (!res.display) { showToast("Spool ID found but data missing!", "error"); return; }
 
                 if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
                 else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); }
             } else if (res.type === 'error') showToast(res.msg, 'error');
-        }).catch((e)=>{
-            setProcessing(false);
-            console.error(e);
-            showToast("Scan Error", "error");
-        });
+        }).catch((e)=>{ setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
     };
 
     const performContextAssign = (tid) => {
@@ -309,7 +349,7 @@
             div.onclick = () => handleSlotInteraction(i); grid.appendChild(div);
             generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 60);
         }
-        if(unslotted.length>0) renderList(unslotted, document.getElementById('manage-loc-id').value);
+        if(unslotted.length>0) renderUnslotted(unslotted); // FIXED: Call unslotted renderer
         else un.style.display='none';
     };
 
@@ -320,8 +360,10 @@
         data.forEach((s,i) => renderBadgeQRs(s, i));
     };
 
+    // --- RENDER UNSLOTTED (FIXED) ---
     const renderUnslotted = (items) => {
         const un = document.getElementById('unslotted-container');
+        if (!un) return;
         un.style.display='block';
         un.innerHTML = items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
         items.forEach((s,i) => renderBadgeQRs(s, i));
@@ -418,11 +460,11 @@
                 if (state.auditActive) {
                     if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
                     if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
-                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 74); }
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 42); }
                 } else {
                     if(deckBtn) deckBtn.classList.remove('btn-audit-active');
                     if(lbl) { lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit'); }
-                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 74); }
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 42); }
                 }
             }
         });
