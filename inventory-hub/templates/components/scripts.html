@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.54 (Command Console)";
+    const DASHBOARD_VERSION = "v153.55 (Big Block)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -25,13 +25,13 @@
 
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
-        // Generate All QRs
-        generateSafeQR('qr-undo', 'CMD:UNDO', 45);
-        generateSafeQR('qr-clear', 'CMD:CLEAR', 45);
-        generateSafeQR('qr-drop', 'CMD:DROP', 45);
-        generateSafeQR('qr-eject', 'CMD:EJECT', 45); 
-        generateSafeQR('qr-audit', 'CMD:AUDIT', 45);
-        generateSafeQR('qr-locs', 'CMD:LOCATIONS', 45); // NEW
+        // DECK QRs (Big)
+        generateSafeQR('qr-undo', 'CMD:UNDO', 64);
+        generateSafeQR('qr-clear', 'CMD:CLEAR', 64);
+        generateSafeQR('qr-drop', 'CMD:DROP', 64);
+        generateSafeQR('qr-eject', 'CMD:EJECT', 64); 
+        generateSafeQR('qr-audit', 'CMD:AUDIT', 64);
+        generateSafeQR('qr-locs', 'CMD:LOCATIONS', 64);
 
         const modalQRs = {'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL'};
         for(const [id, txt] of Object.entries(modalQRs)) generateSafeQR(id, txt, 120);
@@ -57,35 +57,25 @@
         }, 50);
     };
 
-    // Helper for single hex darkness
-    const getHexDark = (hex) => {
+    const getTintedBackground = (hex) => {
+        if (!hex) return "#1a1a1a";
         hex = hex.replace('#', '');
+        if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
         const r = parseInt(hex.substring(0,2), 16), g = parseInt(hex.substring(2,4), 16), b = parseInt(hex.substring(4,6), 16);
-        return `rgba(${r}, ${g}, ${b}, 0.25)`; // 25% Opacity of original color
+        const mix = 0.35; 
+        return `rgb(${Math.floor(r*mix)}, ${Math.floor(g*mix)}, ${Math.floor(b*mix)})`;
     };
     
-    // CHAMELEON ENGINE 2.0 (Handles Gradient Inners)
     const getFilamentStyle = (colorStr) => {
         if (!colorStr) return { frame: '#333', inner: '#1a1a1a' };
-        
         if (colorStr.includes(',')) {
-            // MULTI-COLOR
             const colors = colorStr.split(',').map(c => c.trim().startsWith('#') ? c.trim() : '#' + c.trim());
-            
-            // Frame: Full Brightness Gradient
-            const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
-            
-            // Inner: Dark Transparent Gradient
-            const darkColors = colors.map(c => getHexDark(c));
-            const innerGrad = `linear-gradient(135deg, ${darkColors.join(', ')})`;
-            
-            return { frame: frameGrad, inner: innerGrad };
+            const gradient = `linear-gradient(135deg, ${colors.join(', ')})`;
+            const tint = getTintedBackground(colors[0]);
+            return { frame: gradient, inner: tint };
         } 
-        
-        // SINGLE COLOR
         const hex = colorStr.startsWith('#') ? colorStr : '#' + colorStr;
-        const innerDark = getHexDark(hex).replace('0.25', '0.15'); // Slightly darker for single color to ensure contrast
-        return { frame: hex, inner: `linear-gradient(to bottom right, #1a1a1a, ${innerDark})` };
+        return { frame: hex, inner: getTintedBackground(hex) };
     };
 
     window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
@@ -142,7 +132,6 @@
             state.heldSpools.splice(idx, 1);
             renderBuffer();
             showToast("Item Dropped 🗑️");
-            // AUTO EXIT DROP MODE
             if (state.dropMode && state.heldSpools.length === 0) toggleDropMode();
         } else { showToast("Item not in buffer", "warning"); }
     };
@@ -170,10 +159,10 @@
         updateDeckVisuals();
     };
 
-    // --- AUDIT LOGIC (INSTANT) ---
+    // --- AUDIT FIX (Instant Visual) ---
     const toggleAudit = () => { 
         state.auditActive = !state.auditActive;
-        updateLogState(true); // Force UI update
+        updateLogState(true); 
         
         if (state.auditActive) processScan("CMD:AUDIT"); 
         else processScan("CMD:DONE"); 
@@ -201,14 +190,23 @@
 
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone');
-        if (state.heldSpools.length === 0) { z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; return; }
+        const h = document.getElementById('headsup-buffer'); 
+        const n = document.getElementById('buffer-nav-deck'); 
+
+        if (state.heldSpools.length === 0) { 
+            z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; 
+            if(h) h.style.display = 'none'; 
+            if(n) n.style.display = 'none'; 
+            return; 
+        }
         
         z.innerHTML = state.heldSpools.map((s, i) => {
-            const styles = getFilamentStyle(s.color); // USES NEW GRADIENT ENGINE
+            const styles = getFilamentStyle(s.color);
             const cleanText = s.display.replace(/^#\d+\s*/, '').trim();
             return `
             <div class="filament-frame buffer-item ${i===0?'active-item':''}" style="background: ${styles.frame}; border:none;">
-                <div class="buffer-inner" style="background: ${styles.inner};"> <div class="buffer-info-group">
+                <div class="buffer-inner" style="background: ${styles.inner};">
+                    <div class="buffer-info-group">
                         <div class="buffer-id-tag">#${s.id}</div>
                         <div class="buffer-text">${cleanText}</div>
                     </div>
@@ -220,13 +218,72 @@
             </div>`;
         }).join('');
         
-        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 60));
+        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 90)); // Increased to 90px
+
+        if (h) {
+            const top = state.heldSpools[0];
+            const styles = getFilamentStyle(top.color);
+            const cleanText = top.display.replace(/^#\d+\s*/, '').trim();
+            h.style.display = 'block';
+            h.style.background = styles.frame;
+            h.style.padding = "5px"; 
+            h.innerHTML = `
+            <div class="filament-inner" style="background-color:${styles.inner}; padding: 5px 15px;">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="fs-4 fw-bold text-warning">✋ READY:</div>
+                    <div class="buffer-id-tag" style="font-size:1.2rem; min-width:60px;">#${top.id}</div>
+                    <div class="buffer-text" style="font-size:1.2rem;">${cleanText}</div>
+                </div>
+                <div class="d-flex align-items-center gap-3">
+                    <div class="btn-drop" onclick="removeBufferItem(${top.id})">❌</div>
+                    <div id="qr-headsup" class="bg-white p-1 rounded"></div>
+                </div>
+            </div>`;
+            generateSafeQR("qr-headsup", "ID:"+top.id, 50);
+        }
+
+        if (n) {
+            if (state.heldSpools.length > 1) {
+                const nextSpool = state.heldSpools[1];
+                const prevSpool = state.heldSpools[state.heldSpools.length - 1];
+                const prevStyles = getFilamentStyle(prevSpool.color);
+                const nextStyles = getFilamentStyle(nextSpool.color);
+                
+                n.style.display = 'flex';
+                n.innerHTML = `
+                    <div class="nav-card" style="background: ${prevStyles.frame}" onclick="prevBuffer()">
+                        <div class="nav-inner" style="background-color:${prevStyles.inner}">
+                            <div id="qr-nav-prev" class="nav-qr"></div>
+                            <div>
+                                <div class="nav-label">◀ PREV</div>
+                                <div class="nav-name">${prevSpool.display.replace(/^#\d+\s*/, '')}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="nav-card" style="background: ${nextStyles.frame}" onclick="nextBuffer()">
+                        <div class="nav-inner" style="background-color:${nextStyles.inner}">
+                            <div style="text-align:right;">
+                                <div class="nav-label">NEXT ▶</div>
+                                <div class="nav-name">${nextSpool.display.replace(/^#\d+\s*/, '')}</div>
+                            </div>
+                            <div id="qr-nav-next" class="nav-qr"></div>
+                        </div>
+                    </div>
+                `;
+                generateSafeQR("qr-nav-prev", "CMD:PREV", 45);
+                generateSafeQR("qr-nav-next", "CMD:NEXT", 45);
+            } else {
+                n.style.display = 'none';
+            }
+        }
     };
+    
+    const nextBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.push(state.heldSpools.shift()); renderBuffer(); } };
+    const prevBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
     
     const processScan = (text) => {
         const upper = text.toUpperCase();
         
-        // --- COMMAND INTERCEPTION ---
         if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
         if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
         if (upper === 'CMD:DROP') { toggleDropMode(); return; }
@@ -244,7 +301,7 @@
         fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) }).then(r=>r.json()).then(res => {
             setProcessing(false);
             if (res.type === 'command') {
-                const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'done': closeManage };
+                const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'next': nextBuffer, 'prev': prevBuffer, 'done': closeManage };
                 if (cmds[res.cmd]) cmds[res.cmd](); else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true); else if (res.cmd === 'slot') handleSlotInteraction(res.value); else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
             } else if (res.type === 'location') {
                 if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
@@ -422,11 +479,11 @@
                 if (state.auditActive) {
                     if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
                     if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
-                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 45); }
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 64); }
                 } else {
                     if(deckBtn) deckBtn.classList.remove('btn-audit-active');
                     if(lbl) { lbl.innerText = "AUDIT MODE"; lbl.classList.remove('label-active-audit'); }
-                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 45); }
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 64); }
                 }
             }
         });

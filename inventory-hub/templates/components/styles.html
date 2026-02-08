@@ -2,33 +2,37 @@
     /* --- GLOBAL KIOSK THEME --- */
     body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; margin: 0; padding: 0; }
     .navbar { background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
+    
+    /* RESPONSIVE BRANDING */
+    .navbar-brand-group { display: flex; align-items: center; }
     .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; text-shadow: 0 0 10px rgba(0, 212, 255, 0.3); }
     
-    /* MAIN CONTAINER (Column Layout) */
-    .main-container { 
-        flex-grow: 1; display: flex; flex-direction: column; 
-        padding: 10px; gap: 10px; overflow: hidden; 
-    }
-    
-    /* CONTENT ROW (Logs + Buffer) */
-    .content-row {
-        flex-grow: 1; display: flex; gap: 10px; overflow: hidden;
+    /* On mobile/narrow, stack version below title */
+    @media (max-width: 800px) {
+        .navbar-brand-group { flex-direction: column; align-items: flex-start; }
+        .version-tag { margin-left: 0 !important; margin-top: 2px; }
     }
 
-    /* 50/50 Split */
-    .col-logs { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
-    .col-buffer { flex: 1; display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; }
+    /* MAIN LAYOUT */
+    .main-container { flex-grow: 1; display: flex; flex-direction: column; padding: 10px; gap: 10px; overflow: hidden; }
+    .content-row { flex-grow: 1; display: flex; gap: 10px; overflow: hidden; }
+
+    /* --- 40/60 SPLIT --- */
+    .col-logs { 
+        flex: 2; /* 40% */
+        display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; 
+    }
+    .col-buffer { 
+        flex: 3; /* 60% */
+        display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; 
+        transition: border-color 0.3s, box-shadow 0.3s;
+    }
     
     .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; color: #0f0; white-space: pre-wrap; word-break: break-all; }
     
-    /* RESPONSIVE: STACK ON MOBILE/PORTRAIT */
-    @media (max-aspect-ratio: 1/1) {
-        .content-row { flex-direction: column; }
-    }
-
     /* MODES */
-    .drop-mode-active { border: 2px solid #fd7e14 !important; box-shadow: 0 0 20px rgba(253, 126, 20, 0.5); }
-    .eject-mode-active { border: 2px solid #dc3545 !important; box-shadow: 0 0 20px rgba(220, 53, 69, 0.5); }
+    .drop-mode-active { border: 4px solid #fd7e14 !important; box-shadow: 0 0 30px rgba(253, 126, 20, 0.6); }
+    .eject-mode-active { border: 4px solid #dc3545 !important; box-shadow: 0 0 30px rgba(220, 53, 69, 0.6); }
 
     .text-muted { color: #aaa !important; } 
     .text-orange { color: #fd7e14 !important; }
@@ -39,84 +43,93 @@
     .status-on { background-color: #0f0; box-shadow: 0 0 5px #0f0; }
     .status-off { background-color: #555; border: 1px solid #777; }
 
-    /* --- BUFFER LIST (Touch Friendly) --- */
+    /* --- BUFFER LIST (Tall & Fat) --- */
     .buffer-header { padding: 10px 15px; background: #222; border-bottom: 1px solid #333; color: #00d4ff; font-weight: bold; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
-    .buffer-content { flex-grow: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+    .buffer-content { flex-grow: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 12px; }
     
+    /* Tall Items */
     .buffer-item { 
         display: flex; flex-direction: row !important; align-items: stretch; justify-content: space-between; 
-        padding: 6px !important; 
-        min-height: 75px; /* Thicker for touch */
+        padding: 5px !important; 
+        min-height: 120px; /* BIG HEIGHT for big QRs */
     }
-    .buffer-item.active-item { box-shadow: 0 0 20px rgba(0, 255, 0, 0.4); border: 2px solid #0f0 !important; z-index: 10; }
+    .buffer-item.active-item { box-shadow: 0 0 25px rgba(0, 255, 0, 0.5); border: 2px solid #0f0 !important; z-index: 10; }
     
     .buffer-inner { 
-        flex-grow: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px; 
-        border-radius: 6px; padding: 5px 15px;
+        flex-grow: 1; display: flex; align-items: center; justify-content: space-between; gap: 15px; 
+        border-radius: 8px; padding: 10px 20px;
         transition: background-color 0.3s;
     }
     
-    .buffer-info-group { display: flex; align-items: center; gap: 15px; flex-grow: 1; overflow: hidden; }
+    .buffer-info-group { display: flex; align-items: center; gap: 20px; flex-grow: 1; overflow: hidden; }
     
     .buffer-id-tag { 
-        background: #000; color: #fff; border: 1px solid #fff; border-radius: 4px; 
-        padding: 4px 8px; font-family: 'Consolas', monospace; font-weight: 900; 
-        font-size: 1.4rem; min-width: 70px; text-align: center; flex-shrink: 0; 
+        background: #000; color: #fff; border: 2px solid #fff; border-radius: 6px; 
+        padding: 8px 12px; font-family: 'Consolas', monospace; font-weight: 900; 
+        font-size: 1.8rem; min-width: 90px; text-align: center; flex-shrink: 0; 
     }
     
     .buffer-text { 
-        font-size: 1.4rem; font-weight: 700; color: #fff; 
+        font-size: 1.6rem; font-weight: 700; color: #fff; 
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
-        text-shadow: 1px 1px 2px #000; 
+        text-shadow: 2px 2px 4px #000; 
     }
     
-    .buffer-actions { display: flex; align-items: center; gap: 10px; }
-    
+    /* BIG BUFFER QR (100px) */
     .buffer-qr { 
-        width: 65px; height: 65px; background: white; 
-        padding: 3px; border-radius: 4px; flex-shrink: 0; 
+        width: 100px; height: 100px; background: white; 
+        padding: 4px; border-radius: 6px; flex-shrink: 0; 
         display:flex; justify-content:center; align-items:center; 
     }
+
+    .buffer-actions { display: flex; align-items: center; gap: 15px; }
+    
+    /* X Button Matches QR Height */
     .btn-buffer-x { 
-        width: 50px; height: 65px; background: #dc3545; color: white; border: 1px solid #ffaaaa; 
-        border-radius: 4px; font-size: 1.5rem; font-weight: bold; 
+        width: 60px; height: 100px; background: #dc3545; color: white; border: 2px solid #ffaaaa; 
+        border-radius: 6px; font-size: 1.8rem; font-weight: bold; 
         display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; 
     }
     .btn-buffer-x:hover { background: #ff0000; }
     
     .buffer-empty-msg { color: #666 !important; font-size: 1.5rem; margin-top: 20%; text-align: center; text-transform: uppercase; letter-spacing: 2px; }
 
-    /* --- COMMAND CONSOLE (Bottom Bar) --- */
+    /* --- COMMAND CONSOLE (Vertical Stack Buttons) --- */
     .cmd-deck { 
         padding: 15px; background: #151515; border: 1px solid #333; border-radius: 8px;
-        display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; flex-shrink: 0;
+        display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; flex-shrink: 0;
     }
 
+    /* SQUARE BUTTONS */
     .deck-btn {
-        background: #222; border: 1px solid #444; border-radius: 8px;
-        display: flex; align-items: center; padding: 10px 20px; gap: 15px;
+        background: #222; border: 1px solid #444; border-radius: 12px;
+        display: flex; flex-direction: column; /* VERTICAL STACK */
+        align-items: center; justify-content: center;
+        padding: 10px; gap: 8px;
         cursor: pointer; transition: transform 0.1s, background-color 0.2s;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.5); flex-grow: 1; max-width: 250px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.6); 
+        min-width: 110px; /* Square-ish */
+        flex-grow: 1; max-width: 160px;
     }
     .deck-btn:active { transform: scale(0.95); }
     .deck-btn:hover { background: #333; border-color: #666; }
 
-    .deck-label { font-weight: 800; font-size: 1.1rem; text-transform: uppercase; color: #ccc; white-space: nowrap; }
+    .deck-label { font-weight: 900; font-size: 1rem; text-transform: uppercase; color: #ccc; white-space: nowrap; }
     
-    /* CENTERED QR */
+    /* BIG DECK QR (70px) */
     .deck-qr { 
-        width: 50px; height: 50px; background: #fff; border-radius: 4px; padding: 2px; 
+        width: 70px; height: 70px; background: #fff; border-radius: 6px; padding: 3px; 
         display: flex; justify-content: center; align-items: center;
     }
 
     /* STATE COLORS */
-    .btn-audit-active { background: #4a004a !important; border: 2px solid #ff00ff !important; box-shadow: 0 0 15px #ff00ff; }
+    .btn-audit-active { background: #4a004a !important; border: 3px solid #ff00ff !important; box-shadow: 0 0 20px #ff00ff; }
     .btn-audit-active .deck-label { color: #ff00ff !important; }
     
-    .btn-eject-active { background: #5a0000 !important; border: 2px solid #dc3545 !important; box-shadow: 0 0 15px #dc3545; }
-    .btn-drop-active { background: #5a3000 !important; border: 2px solid #fd7e14 !important; box-shadow: 0 0 15px #fd7e14; }
+    .btn-eject-active { background: #5a0000 !important; border: 3px solid #dc3545 !important; box-shadow: 0 0 20px #dc3545; }
+    .btn-drop-active { background: #5a3000 !important; border: 3px solid #fd7e14 !important; box-shadow: 0 0 20px #fd7e14; }
     
-    /* --- NAV DECK (Modal) --- */
+    /* --- NAV DECK --- */
     #buffer-nav-deck { background: #111; border-top: 1px solid #444; padding: 15px; display: none; justify-content: space-between; align-items: stretch; gap: 15px; }
     .nav-card { flex: 1; border-radius: 10px; padding: 6px; cursor: pointer; transition: transform 0.1s; display: flex; flex-direction: column; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
     .nav-card:active { transform: scale(0.95); }
@@ -126,22 +139,17 @@
     .nav-qr { width: 50px; height: 50px; background: white; padding: 2px; border-radius: 4px; flex-shrink: 0; }
     
     .btn-drop { background: #dc3545; color: white; border: 2px solid #ffaaaa; width: 40px; height: 40px; border-radius: 6px; font-weight: bold; font-size: 1.2rem; display: flex; justify-content: center; align-items: center; cursor: pointer; margin-left: 10px; }
-
-    /* --- COMMON UI --- */
+    
+    /* MODALS & HELPERS */
     .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
     .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
-
-    /* --- MODALS --- */
     .modal-content, .modal-header, .modal-body, .modal-footer { background-color: #121212 !important; color: #fff !important; border-color: #444 !important; }
     .modal-header .btn-close { filter: invert(1) grayscale(100%) brightness(200%); }
-
     .table-fixed { table-layout: fixed; width: 100%; }
     .col-id { width: 18%; font-weight: bold; color: #00d4ff; }
     .col-name { width: 35%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .col-status { width: 22%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .col-actions { width: 25%; text-align: right; white-space: nowrap; }
-
-    /* --- SLOT GRID --- */
     .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 20px; margin-bottom: 20px; }
     .slot-btn.empty { background: #222; border: 2px solid #444; border-radius: 12px; min-height: 160px; display: flex; align-items: center; justify-content: center; padding: 10px; cursor: pointer; color: #666; }
     .slot-btn.full { min-height: 160px; cursor: pointer; }
@@ -150,23 +158,17 @@
     .slot-right button { z-index: 10; position: relative; }
     .slot-num { color: #ccc; font-weight: 900; margin-bottom: 5px; font-size: 1rem; text-transform: uppercase; }
     .slot-content { font-size: 1.1rem; font-weight: bold; color: #fff; line-height: 1.2; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
-
-    /* --- CHAMELEON FRAME --- */
     .filament-frame { border-radius: 12px; padding: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); display: flex; flex-direction: column; transition: transform 0.1s; }
     .filament-inner { background: #1a1a1a; border-radius: 8px; padding: 10px; flex-grow: 1; display: flex; align-items: center; justify-content: space-between; box-shadow: inset 0 0 20px rgba(0,0,0,0.6); border: none !important; }
-
     .unslotted-item { padding: 20px 40px; margin: 15px 0; border-radius: 16px; border: 1px solid #444; display: flex; box-shadow: 0 5px 15px rgba(0,0,0,0.6); }
     .item-card-inner { flex-grow: 1; border-radius: 10px; padding: 15px; display: flex; flex-direction: column; align-items: center; gap: 15px; box-shadow: inset 0 0 40px rgba(0,0,0,0.5); transition: background-color 0.3s ease; }
     .item-info { font-size: 1.4rem; font-weight: 800; color: #fff; text-align: center; word-break: break-word; text-shadow: 0 3px 8px rgba(0,0,0,1); line-height: 1.1; }
     .item-actions { display: flex; justify-content: center; gap: 30px; flex-wrap: wrap; width: 100%; }
-
-    /* --- ACTION BADGES --- */
     .action-badge { display: flex; align-items: stretch; background: #fff; border-radius: 8px; overflow: hidden; height: 52px; box-shadow: 0 5px 15px rgba(0,0,0,0.6); cursor: pointer; transition: transform 0.1s; }
     .action-badge:active { transform: scale(0.95); }
     .badge-qr { width: 52px; height: 52px; padding: 3px; background: #fff; flex-shrink: 0; }
     .badge-btn { border: none; font-weight: 900; font-size: 0.95rem; padding: 0 20px; display: flex; align-items: center; gap: 8px; text-transform: uppercase; color: #fff; }
     .btn-pick { background-color: #0d6efd; } .btn-trash { background-color: #dc3545; } .btn-print { background-color: #ffc107; color: #000; } 
-
     .mini-qr { width: 80px; height: 80px; background: white; padding: 5px; border-radius: 8px; display: flex; justify-content: center; align-items: center; }
     #focus-guard { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.85); z-index: 10000; display: none; justify-content: center; align-items: center; flex-direction: column; color: #ff0000; }
     .focus-msg { font-size: 3rem; font-weight: bold; text-shadow: 0 0 20px #f00; border: 5px solid #f00; padding: 40px; border-radius: 20px; background: #000; }
