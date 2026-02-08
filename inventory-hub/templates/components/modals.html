@@ -1,4 +1,33 @@
-<div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Location Manager</h5><div class="ms-auto text-info fw-bold" id="loc-count">0 Locs</div><button class="btn btn-success btn-lg ms-3" onclick="openAddModal()">+ New Slot</button><button type="button" class="btn-close btn-close-white ms-3" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-hover table-dark mb-0 table-fixed" style="font-size:1.1rem;"><thead><tr><th class="col-id">ID</th><th class="col-name">Name</th><th class="col-status">Status</th><th class="col-actions">Actions</th></tr></thead><tbody id="location-table"></tbody></table></div></div></div></div>
+<div class="modal fade" id="locMgrModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Location List</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div class="modal-body-scrollable p-3">
+                    <div class="d-flex justify-content-between mb-3">
+                        <span id="loc-count" class="text-muted align-self-center">0 Locs</span>
+                        <button class="btn btn-success" onclick="openAddModal()">+ New Location</button>
+                    </div>
+                    <table class="table table-dark table-striped table-hover">
+                        <thead class="sticky-th">
+                            <tr>
+                                <th>ID</th>
+                                <th>Name</th>
+                                <th>Status</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="location-table">
+                            </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 
 <div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header p-2 bg-dark border-bottom border-secondary"><h5 class="modal-title ms-3 text-info" id="manageTitle">Manage</h5><button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button></div><div id="headsup-buffer" class="headsup-strip" style="display:none;"><div class="d-flex align-items-center"><span class="me-3 text-warning fw-bold fs-4">✋ READY:</span><div id="headsup-swatch" class="buffer-swatch me-3"></div><span id="headsup-text" class="text-white fw-bold fs-3"></span></div><div class="fs-4 fw-bold text-info border border-info px-3 py-1 rounded" id="headsup-total">Buffer: 0</div></div><div id="buffer-nav-deck" class="nav-deck" style="display:none;"><div class="nav-card" onclick="prevBuffer()"><div class="nav-qr-container me-3" id="qr-prev"></div><div class="text-start"><div class="fw-bold fs-4">< PREV</div></div></div><div class="nav-card" onclick="nextBuffer()"><div class="text-end me-3"><div class="fw-bold fs-4">NEXT ></div></div><div class="nav-qr-container" id="qr-next"></div></div></div><div class="modal-body"><div id="manage-grid-view" style="display:none;"><div class="alert alert-info py-1 mb-2 small text-center fw-bold">Tap button or scan slot QR (CMD:SLOT:X)</div><div id="slot-grid-container" class="slot-grid"></div><div id="unslotted-container" style="display:none;"></div></div><div id="manage-list-view"><div id="manage-contents-list" class="mb-4"></div></div><hr class="border-secondary"><div class="input-group mb-3"><input type="text" id="manual-spool-id" class="form-control form-control-lg" placeholder="Enter Spool ID / Scan Legacy"><button class="btn btn-primary btn-lg" onclick="manualAddSpool()">➕ Add (To Buffer)</button></div><div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary"><button class="btn btn-success btn-lg flex-grow-1 me-3" onclick="closeManage()">✅ Done / Sync</button><div class="text-center"><div id="qr-done" class="bg-white p-1 rounded" style="cursor:pointer;" onclick="closeManage()"></div><div class="qr-label">DONE</div></div></div><input type="hidden" id="manage-loc-id"></div></div></div></div>
 
