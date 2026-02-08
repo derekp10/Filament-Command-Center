@@ -3,7 +3,7 @@
     body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; margin: 0; padding: 0; }
     .navbar { background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
     
-    /* RESPONSIVE BRANDING */
+    /* BRANDING */
     .navbar-brand-group { display: flex; align-items: center; }
     .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; text-shadow: 0 0 10px rgba(0, 212, 255, 0.3); }
     @media (max-width: 800px) {
@@ -17,21 +17,19 @@
 
     /* --- HARD LOCK 40/60 SPLIT --- */
     .col-logs { 
-        flex: 0 0 40%; /* Force 40% width, no growing/shrinking */
-        max-width: 40%;
+        flex: 0 0 40%; max-width: 40%; min-width: 40%; /* STRICT LOCK */
         display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; 
     }
     .col-buffer { 
-        flex: 0 0 60%; /* Force 60% width */
-        max-width: 60%;
+        flex: 0 0 60%; max-width: 60%; min-width: 60%; /* STRICT LOCK */
         display: flex; flex-direction: column; background: #111; border: 1px solid #333; border-radius: 8px; 
         transition: border-color 0.3s, box-shadow 0.3s;
     }
     
-    /* On Mobile/Portrait, flip to vertical stack */
+    /* Mobile Stack */
     @media (max-aspect-ratio: 1/1) {
         .content-row { flex-direction: column; }
-        .col-logs, .col-buffer { flex: 1; max-width: 100%; width: 100%; }
+        .col-logs, .col-buffer { flex: 1; max-width: 100%; min-width: 100%; width: 100%; }
     }
 
     .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; color: #0f0; white-space: pre-wrap; word-break: break-all; }
@@ -49,21 +47,24 @@
     .status-on { background-color: #0f0; box-shadow: 0 0 5px #0f0; }
     .status-off { background-color: #555; border: 1px solid #777; }
 
-    /* --- BUFFER LIST (Tall & Fat) --- */
+    /* --- BUFFER LIST (Thick Borders) --- */
     .buffer-header { padding: 10px 15px; background: #222; border-bottom: 1px solid #333; color: #00d4ff; font-weight: bold; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
     .buffer-content { flex-grow: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 12px; }
     
+    /* THE FRAME */
     .buffer-item { 
         display: flex; flex-direction: row !important; align-items: stretch; justify-content: space-between; 
-        padding: 5px !important; 
+        padding: 8px !important; /* THICKER BORDER */
         min-height: 120px; 
+        border-radius: 14px;
     }
-    .buffer-item.active-item { box-shadow: 0 0 25px rgba(0, 255, 0, 0.5); border: 2px solid #0f0 !important; z-index: 10; }
+    .buffer-item.active-item { box-shadow: 0 0 30px rgba(0, 255, 0, 0.5); border: 2px solid #0f0 !important; z-index: 10; }
     
+    /* THE INNER BOX */
     .buffer-inner { 
         flex-grow: 1; display: flex; align-items: center; justify-content: space-between; gap: 15px; 
         border-radius: 8px; padding: 10px 20px;
-        transition: background-color 0.3s;
+        transition: background 0.3s;
     }
     
     .buffer-info-group { display: flex; align-items: center; gap: 20px; flex-grow: 1; overflow: hidden; }
@@ -76,12 +77,16 @@
     
     .buffer-text { 
         font-size: 1.6rem; font-weight: 700; color: #fff; 
-        /* Allow wrapping so it doesn't break layout */
         white-space: normal; word-break: break-word; line-height: 1.1;
         text-shadow: 2px 2px 4px #000; 
     }
     
-    .buffer-qr { width: 100px; height: 100px; background: white; padding: 4px; border-radius: 6px; flex-shrink: 0; display:flex; justify-content:center; align-items:center; }
+    .buffer-qr { 
+        width: 100px; height: 100px; background: white; 
+        padding: 4px; border-radius: 6px; flex-shrink: 0; 
+        display:flex; justify-content:center; align-items:center; 
+    }
+
     .buffer-actions { display: flex; align-items: center; gap: 15px; flex-shrink: 0; }
     
     .btn-buffer-x { 
@@ -90,20 +95,18 @@
         display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; 
     }
     .btn-buffer-x:hover { background: #ff0000; }
+    
     .buffer-empty-msg { color: #666 !important; font-size: 1.5rem; margin-top: 20%; text-align: center; text-transform: uppercase; letter-spacing: 2px; }
 
-    /* --- COMMAND CONSOLE (Vertical Stack Buttons) --- */
+    /* --- COMMAND CONSOLE --- */
     .cmd-deck { 
         padding: 15px; background: #151515; border: 1px solid #333; border-radius: 8px;
         display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; flex-shrink: 0;
     }
 
-    /* SQUARE VERTICAL BUTTONS */
     .deck-btn {
         background: #222; border: 1px solid #444; border-radius: 12px;
-        display: flex; 
-        flex-direction: column; /* Stack QR on Top */
-        align-items: center; justify-content: center;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
         padding: 12px; gap: 8px;
         cursor: pointer; transition: transform 0.1s, background-color 0.2s;
         box-shadow: 0 4px 8px rgba(0,0,0,0.6); 
@@ -114,20 +117,19 @@
 
     .deck-label { font-weight: 900; font-size: 1.1rem; text-transform: uppercase; color: #ccc; white-space: nowrap; }
     
-    /* BIG DECK QR */
     .deck-qr { 
         width: 80px; height: 80px; background: #fff; border-radius: 6px; padding: 4px; 
         display: flex; justify-content: center; align-items: center;
     }
 
-    /* STATE COLORS (High Specificity) */
+    /* STATE COLORS */
     .deck-btn.btn-audit-active { background: #4a004a !important; border: 3px solid #ff00ff !important; box-shadow: 0 0 20px #ff00ff; }
     .deck-btn.btn-audit-active .deck-label { color: #ff00ff !important; }
     
     .deck-btn.btn-eject-active { background: #5a0000 !important; border: 3px solid #dc3545 !important; box-shadow: 0 0 20px #dc3545; }
     .deck-btn.btn-drop-active { background: #5a3000 !important; border: 3px solid #fd7e14 !important; box-shadow: 0 0 20px #fd7e14; }
     
-    /* --- NAV DECK --- */
+    /* MODALS & HELPERS */
     #buffer-nav-deck { background: #111; border-top: 1px solid #444; padding: 15px; display: none; justify-content: space-between; align-items: stretch; gap: 15px; }
     .nav-card { flex: 1; border-radius: 10px; padding: 6px; cursor: pointer; transition: transform 0.1s; display: flex; flex-direction: column; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
     .nav-card:active { transform: scale(0.95); }
@@ -138,7 +140,6 @@
     
     .btn-drop { background: #dc3545; color: white; border: 2px solid #ffaaaa; width: 40px; height: 40px; border-radius: 6px; font-weight: bold; font-size: 1.2rem; display: flex; justify-content: center; align-items: center; cursor: pointer; margin-left: 10px; }
     
-    /* COMMON UI */
     .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
     .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
     .modal-content, .modal-header, .modal-body, .modal-footer { background-color: #121212 !important; color: #fff !important; border-color: #444 !important; }

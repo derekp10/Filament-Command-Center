@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.58 (Full Glow)";
+    const DASHBOARD_VERSION = "v153.59 (Solid & Stable)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -57,9 +57,8 @@
         }, 50);
     };
 
-    // --- CHAMELEON ENGINE 3.0 (FULL GLOW) ---
+    // --- CHAMELEON ENGINE 3.1 (Single = Flat, Multi = Grad) ---
     
-    // Returns semi-transparent dark version (opacity 0.25)
     const getHexDark = (hex) => {
         hex = hex.replace('#', '');
         if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
@@ -67,42 +66,31 @@
         return `rgba(${r}, ${g}, ${b}, 0.25)`; 
     };
 
-    // Returns very dark transparent version (opacity 0.05)
-    const getHexDeep = (hex) => {
+    const getTintedBackground = (hex) => {
+        if (!hex) return "#1a1a1a";
         hex = hex.replace('#', '');
         if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
         const r = parseInt(hex.substring(0,2), 16), g = parseInt(hex.substring(2,4), 16), b = parseInt(hex.substring(4,6), 16);
-        return `rgba(${r}, ${g}, ${b}, 0.05)`; 
+        const mix = 0.35; 
+        return `rgb(${Math.floor(r*mix)}, ${Math.floor(g*mix)}, ${Math.floor(b*mix)})`;
     };
     
     const getFilamentStyle = (colorStr) => {
         if (!colorStr) return { frame: '#333', inner: '#1a1a1a' };
         
-        let colors = [];
-        
+        // MULTI-COLOR (Gradient Frame + Gradient Inner)
         if (colorStr.includes(',')) {
-            // Multi-Color: Parse them all
-            colors = colorStr.split(',').map(c => c.trim().startsWith('#') ? c.trim() : '#' + c.trim());
-        } else {
-            // Single Color: Duplicate it to create a gradient start/stop
-            const hex = colorStr.startsWith('#') ? colorStr : '#' + colorStr;
-            colors = [hex, hex]; 
-        }
-
-        // 1. Frame Gradient (The Border)
-        // We use 135deg for a nice diagonal shine
-        const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
+            const colors = colorStr.split(',').map(c => c.trim().startsWith('#') ? c.trim() : '#' + c.trim());
+            const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
+            const darkColors = colors.map(c => getHexDark(c));
+            const innerGrad = `linear-gradient(135deg, ${darkColors.join(', ')})`;
+            return { frame: frameGrad, inner: innerGrad };
+        } 
         
-        // 2. Inner Gradient (The Background)
-        // Fade from "Dark" (Top Left) to "Deep" (Bottom Right)
-        const darkColors = colors.map(c => getHexDark(c));
-        const deepColors = colors.map(c => getHexDeep(c));
-        
-        // Combine them: Start with Dark[0], End with Deep[Last]
-        // This gives depth even on single colors
-        const innerGrad = `linear-gradient(135deg, ${darkColors[0]}, ${deepColors[deepColors.length-1]})`;
-        
-        return { frame: frameGrad, inner: innerGrad };
+        // SINGLE COLOR (Solid Frame + Flat Inner)
+        const hex = colorStr.startsWith('#') ? colorStr : '#' + colorStr;
+        const innerSolid = getHexDark(hex); // Use flat transparent
+        return { frame: hex, inner: innerSolid };
     };
 
     window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
@@ -187,11 +175,8 @@
     };
 
     const toggleAudit = () => { 
-        state.auditActive = !state.auditActive;
-        updateLogState(true); 
-        
-        if (state.auditActive) processScan("CMD:AUDIT"); 
-        else processScan("CMD:DONE"); 
+        if (state.auditActive) processScan("CMD:DONE"); 
+        else processScan("CMD:AUDIT"); 
     };
 
     const updateDeckVisuals = () => {
@@ -243,7 +228,8 @@
     const processScan = (text) => {
         const upper = text.toUpperCase();
         
-        if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
+        // --- COMMAND INTERCEPTION (Removed Audit Recursion) ---
+        // if (upper === 'CMD:AUDIT') { toggleAudit(); return; } // REMOVED to stop loop
         if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
         if (upper === 'CMD:DROP') { toggleDropMode(); return; }
         if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
