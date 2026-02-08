@@ -301,6 +301,7 @@ const renderBuffer = () => {
         return; 
     }
     
+    // Main Buffer
     z.innerHTML = state.heldSpools.map((s, i) => {
         const styles = getFilamentStyle(s.color);
         const cleanText = (s.display||"").replace(/^#\d+\s*/, '').trim();
@@ -322,6 +323,7 @@ const renderBuffer = () => {
     
     state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 74)); 
 
+    // Nav Deck - Updated for 80px QR and 50/50 Split
     if (n) {
         if (state.heldSpools.length > 1) {
             const nextSpool = state.heldSpools[1];
@@ -332,27 +334,27 @@ const renderBuffer = () => {
             n.style.display = 'flex';
             n.innerHTML = `
                 <div class="cham-card nav-card" style="background: ${prevStyles.frame}" onclick="prevBuffer()">
-                    <div class="cham-body nav-inner" style="background:${prevStyles.inner}; padding: 5px;">
+                    <div class="cham-body nav-inner" style="background:${prevStyles.inner};">
                         <div id="qr-nav-prev" class="nav-qr"></div>
                         <div>
                             <div class="nav-label">◀ PREV</div>
-                            <div class="nav-name" style="font-weight:bold; font-size:1.1rem;">${prevSpool.display.replace(/^#\d+\s*/, '')}</div>
+                            <div class="nav-name">${prevSpool.display.replace(/^#\d+\s*/, '')}</div>
                         </div>
                     </div>
                 </div>
                 <div class="cham-card nav-card" style="background: ${nextStyles.frame}" onclick="nextBuffer()">
-                    <div class="cham-body nav-inner" style="background:${nextStyles.inner}; padding: 5px;">
+                    <div class="cham-body nav-inner" style="background:${nextStyles.inner};">
                         <div style="text-align:right;">
                             <div class="nav-label">NEXT ▶</div>
-                            <div class="nav-name" style="font-weight:bold; font-size:1.1rem;">${nextSpool.display.replace(/^#\d+\s*/, '')}</div>
+                            <div class="nav-name">${nextSpool.display.replace(/^#\d+\s*/, '')}</div>
                         </div>
                         <div id="qr-nav-next" class="nav-qr"></div>
                     </div>
                 </div>
             `;
-            // UPDATED SIZE: 56 fits best in 60px box
-            generateSafeQR("qr-nav-prev", "CMD:PREV", 56);
-            generateSafeQR("qr-nav-next", "CMD:NEXT", 56);
+            // BIGGER QR (74 for 80px box)
+            generateSafeQR("qr-nav-prev", "CMD:PREV", 74);
+            generateSafeQR("qr-nav-next", "CMD:NEXT", 74);
         } else {
             n.style.display = 'none';
         }
