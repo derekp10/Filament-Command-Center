@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.49 (Gradient & Safety)";
+    const DASHBOARD_VERSION = "v153.50 (Command Bridge)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -13,7 +13,6 @@
     let state = { scanBuffer: "", bufferTimeout: null, heldSpools: [], ejectMode: false, dropMode: false, lastScannedLoc: null, pendingConfirm: null, pendingSafety: null, allLocations: [], logsPaused: false, currentGrid: {}, processing: false, modalCallbacks: [], activeModal: null, auditActive: false, lastAuditState: null };
 
     document.addEventListener('DOMContentLoaded', () => {
-        // 1. Focus Guard
         if (!document.getElementById('focus-guard')) {
             const fg = document.createElement('div');
             fg.id = 'focus-guard';
@@ -21,21 +20,39 @@
             document.body.appendChild(fg);
         }
 
-        // 2. Inject DROP Command (With Safety Spacer & Clickability)
+        // --- REBUILD COMMAND DECK ---
         const deck = document.querySelector('.cmd-deck');
-        if (deck && !document.getElementById('qr-drop')) {
-            // Safety Spacer
-            const spacer = document.createElement('div');
-            spacer.style.width = "40px"; // Gap for safety
-            spacer.style.borderRight = "1px solid #333";
-            deck.appendChild(spacer);
+        if (deck) {
+            deck.innerHTML = `
+                <div class="deck-group">
+                    <div class="deck-btn" onclick="triggerUndo()">
+                        <div id="qr-undo" class="deck-qr"></div>
+                        <div class="deck-label text-warning">UNDO</div>
+                    </div>
+                    <div class="deck-btn" onclick="clearBuffer()">
+                        <div id="qr-clear" class="deck-qr"></div>
+                        <div class="deck-label text-secondary">CLEAR</div>
+                    </div>
+                </div>
 
-            // Drop Button
-            const dropDiv = document.createElement('div');
-            dropDiv.className = "cmd-btn text-center"; // Matches other buttons alignment
-            dropDiv.onclick = toggleDropMode; // CLICKABLE!
-            dropDiv.innerHTML = `<div id="qr-drop" class="qr-box"></div><div class="qr-label text-danger">DROP</div>`;
-            deck.appendChild(dropDiv);
+                <div class="deck-group">
+                    <div id="btn-deck-audit" class="deck-btn" onclick="toggleAudit()">
+                        <div id="qr-audit" class="deck-qr"></div>
+                        <div id="lbl-audit" class="deck-label text-info">AUDIT</div>
+                    </div>
+                </div>
+
+                <div class="deck-group">
+                    <div id="btn-deck-drop" class="deck-btn" onclick="toggleDropMode()">
+                        <div class="deck-label text-danger">DROP</div>
+                        <div id="qr-drop" class="deck-qr"></div>
+                    </div>
+                    <div id="btn-deck-eject" class="deck-btn" onclick="toggleEjectMode()">
+                        <div class="deck-label text-danger">EJECT</div>
+                        <div id="qr-eject" class="deck-qr"></div>
+                    </div>
+                </div>
+            `;
         }
 
         const vTag = document.querySelector('.version-tag');
@@ -43,10 +60,16 @@
 
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
-        // 3. Generate QRs
-        const qrs = { 'qr-undo': 'CMD:UNDO', 'qr-clear': 'CMD:CLEAR', 'qr-eject': 'CMD:EJECT', 'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL', 'qr-modal-cancel': 'CMD:MODAL:CANCEL', 'qr-done': 'CMD:DONE', 'qr-prev': 'CMD:PREV', 'qr-next': 'CMD:NEXT', 'qr-drop': 'CMD:DROP' };
-        for(const [id, txt] of Object.entries(qrs)) { generateSafeQR(id, txt, 120); }
-        generateSafeQR('qr-audit', 'CMD:AUDIT', 120);
+        // Generate All QRs
+        generateSafeQR('qr-undo', 'CMD:UNDO', 45);
+        generateSafeQR('qr-clear', 'CMD:CLEAR', 45);
+        generateSafeQR('qr-drop', 'CMD:DROP', 45);
+        generateSafeQR('qr-eject', 'CMD:EJECT', 45); // Fixed Content!
+        generateSafeQR('qr-audit', 'CMD:AUDIT', 45);
+
+        // Generate Modal QRs
+        const modalQRs = {'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL'};
+        for(const [id, txt] of Object.entries(modalQRs)) generateSafeQR(id, txt, 120);
 
         document.getElementById('location-table').addEventListener('click', (e) => {
             const btn = e.target.closest('.btn-manage');
@@ -69,29 +92,6 @@
         }, 50);
     };
 
-    // --- GRADIENT ENGINE (Fixes White Box Issue) ---
-    const getFilamentStyle = (colorStr) => {
-        if (!colorStr) return { frame: '#333', inner: '#1a1a1a' };
-        
-        // Check for Multi-Color (comma separated)
-        if (colorStr.includes(',')) {
-            // Cleanup hexes (remove # if present, add # if missing)
-            const colors = colorStr.split(',').map(c => c.trim().startsWith('#') ? c.trim() : '#' + c.trim());
-            
-            // Generate Gradient Frame
-            const gradient = `linear-gradient(135deg, ${colors.join(', ')})`;
-            
-            // Tint: Use the first color mixed with black
-            const tint = getTintedBackground(colors[0]);
-            
-            return { frame: gradient, inner: tint };
-        } 
-        
-        // Single Color
-        const hex = colorStr.startsWith('#') ? colorStr : '#' + colorStr;
-        return { frame: hex, inner: getTintedBackground(hex) };
-    };
-
     const getTintedBackground = (hex) => {
         if (!hex) return "#1a1a1a";
         hex = hex.replace('#', '');
@@ -100,10 +100,21 @@
         const mix = 0.35; 
         return `rgb(${Math.floor(r*mix)}, ${Math.floor(g*mix)}, ${Math.floor(b*mix)})`;
     };
+    
+    const getFilamentStyle = (colorStr) => {
+        if (!colorStr) return { frame: '#333', inner: '#1a1a1a' };
+        if (colorStr.includes(',')) {
+            const colors = colorStr.split(',').map(c => c.trim().startsWith('#') ? c.trim() : '#' + c.trim());
+            const gradient = `linear-gradient(135deg, ${colors.join(', ')})`;
+            const tint = getTintedBackground(colors[0]);
+            return { frame: gradient, inner: tint };
+        } 
+        const hex = colorStr.startsWith('#') ? colorStr : '#' + colorStr;
+        return { frame: hex, inner: getTintedBackground(hex) };
+    };
 
     window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
     window.addEventListener('focus', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'none'; });
-    
     document.addEventListener('keydown', (e) => {
         const g = document.getElementById('focus-guard');
         if ((g && g.style.display === 'flex') || state.processing || e.target.tagName === 'INPUT') return;
@@ -156,28 +167,50 @@
             state.heldSpools.splice(idx, 1);
             renderBuffer();
             showToast("Item Dropped 🗑️");
-            if (state.dropMode && state.heldSpools.length === 0) { // Exit only if empty? Or immediately?
-                toggleDropMode(); // Toggle off
-            }
-        } else {
-            showToast("Item not in buffer", "warning");
-        }
+            if (state.dropMode && state.heldSpools.length === 0) toggleDropMode();
+        } else { showToast("Item not in buffer", "warning"); }
     };
 
-    // --- TOGGLE DROP MODE ---
+    const clearBuffer = () => {
+        state.heldSpools = [];
+        renderBuffer();
+        showToast("Buffer Cleared");
+    };
+
+    // --- TOGGLE MODES ---
     const toggleDropMode = () => {
         state.dropMode = !state.dropMode;
+        state.ejectMode = false; // Mutually exclusive
+        updateDeckVisuals();
+    };
+
+    const toggleEjectMode = () => {
+        state.ejectMode = !state.ejectMode;
+        state.dropMode = false; // Mutually exclusive
+        updateDeckVisuals();
+    };
+
+    const updateDeckVisuals = () => {
+        const dropBtn = document.getElementById('btn-deck-drop');
+        const ejectBtn = document.getElementById('btn-deck-eject');
         const bufCol = document.querySelector('.col-buffer');
+        
+        // Reset
+        if(dropBtn) dropBtn.classList.remove('drop-mode-active');
+        if(ejectBtn) ejectBtn.classList.remove('eject-mode-active');
+        if(bufCol) bufCol.classList.remove('drop-mode-active', 'eject-mode-active');
+
         if (state.dropMode) {
-            bufCol.classList.add('drop-mode-active');
-            showToast("DROP MODE ACTIVE: Scan to delete", "warning");
-        } else {
-            bufCol.classList.remove('drop-mode-active');
-            showToast("Drop Mode Deactivated");
+            if(dropBtn) dropBtn.classList.add('drop-mode-active');
+            if(bufCol) bufCol.classList.add('drop-mode-active');
+            showToast("DROP MODE: Scan to delete", "warning");
+        } else if (state.ejectMode) {
+            if(ejectBtn) ejectBtn.classList.add('eject-mode-active');
+            if(bufCol) bufCol.classList.add('eject-mode-active');
+            showToast("EJECT MODE: Scan to remove spool", "warning");
         }
     };
 
-    // --- RENDER BUFFER (Using Gradient Engine) ---
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone');
         const h = document.getElementById('headsup-buffer'); 
@@ -191,7 +224,7 @@
         }
         
         z.innerHTML = state.heldSpools.map((s, i) => {
-            const styles = getFilamentStyle(s.color); // NEW ENGINE
+            const styles = getFilamentStyle(s.color);
             const cleanText = s.display.replace(/^#\d+\s*/, '').trim();
             return `
             <div class="filament-frame buffer-item ${i===0?'active-item':''}" style="background: ${styles.frame}; border:none;">
@@ -212,7 +245,7 @@
 
         if (h) {
             const top = state.heldSpools[0];
-            const styles = getFilamentStyle(top.color); // NEW ENGINE
+            const styles = getFilamentStyle(top.color);
             const cleanText = top.display.replace(/^#\d+\s*/, '').trim();
             h.style.display = 'block';
             h.style.background = styles.frame;
@@ -276,6 +309,9 @@
         const upper = text.toUpperCase();
         
         if (upper === 'CMD:DROP') { toggleDropMode(); return; }
+        if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
+        if (upper === 'CMD:UNDO') { triggerUndo(); return; }
+        if (upper === 'CMD:CLEAR') { clearBuffer(); return; }
 
         if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
         if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
@@ -287,7 +323,7 @@
         fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) }).then(r=>r.json()).then(res => {
             setProcessing(false);
             if (res.type === 'command') {
-                const cmds = { 'clear': ()=>{state.heldSpools=[];renderBuffer();showToast("Buffer Cleared");state.lastScannedLoc=null;}, 'undo': triggerUndo, 'eject': ()=>{showToast("EJECT MODE", "warning");state.ejectMode=true;}, 'next': nextBuffer, 'prev': prevBuffer, 'done': closeManage };
+                const cmds = { 'clear': clearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'next': nextBuffer, 'prev': prevBuffer, 'done': closeManage };
                 if (cmds[res.cmd]) cmds[res.cmd](); else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true); else if (res.cmd === 'slot') handleSlotInteraction(res.value); else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
             } else if (res.type === 'location') {
                 if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
@@ -297,9 +333,11 @@
                 openManage(res.id); state.lastScannedLoc = res.id;
             } else if (res.type === 'spool') {
                 if (state.dropMode) { removeBufferItem(res.id); return; }
+                if (state.ejectMode) { ejectSpool(res.id, "Scan", false); toggleEjectMode(); return; } // Auto-exit Eject Mode
+                
+                // Normal Add to Buffer
                 state.lastScannedLoc = null; 
-                if (state.ejectMode) { ejectSpool(res.id, "Scan", false); state.ejectMode = false; }
-                else if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
+                if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
                 else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); }
             } else if (res.type === 'error') showToast(res.msg, 'error');
         }).catch(()=>setProcessing(false));
@@ -452,16 +490,24 @@
             state.auditActive = d.audit_active;
             if (state.auditActive !== state.lastAuditState) {
                 state.lastAuditState = state.auditActive;
-                const btn = document.getElementById('btn-audit');
+                const btn = document.getElementById('btn-audit'); // LOOK FOR ID
+                const deckBtn = document.getElementById('btn-deck-audit'); // NEW DECK ID
                 const lbl = document.getElementById('lbl-audit');
                 const qrDiv = document.getElementById('qr-audit');
-                qrDiv.innerHTML = ""; 
+                
+                // Update BOTH buttons if they exist
                 if (state.auditActive) {
-                    btn.classList.add('btn-active-audit'); lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit');
-                    generateSafeQR('qr-audit', "CMD:DONE", 120);
+                    if(btn) btn.classList.add('btn-active-audit'); 
+                    if(deckBtn) deckBtn.classList.add('btn-audit-active'); // Use new deck class
+                    if(lbl) lbl.innerText = "FINISH"; 
+                    if(lbl) lbl.classList.add('label-active-audit');
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 120); }
                 } else {
-                    btn.classList.remove('btn-active-audit'); lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit');
-                    generateSafeQR('qr-audit', "CMD:AUDIT", 120);
+                    if(btn) btn.classList.remove('btn-active-audit');
+                    if(deckBtn) deckBtn.classList.remove('btn-audit-active');
+                    if(lbl) lbl.innerText = "AUDIT"; 
+                    if(lbl) lbl.classList.remove('label-active-audit');
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 120); }
                 }
             }
         });
