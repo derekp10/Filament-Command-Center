@@ -470,7 +470,9 @@ const fetchLocations = () => {
     .then(r=>r.json())
     .then(d => { 
         state.allLocations=d; 
-        document.getElementById('loc-count').innerText = d.length + " Locs"; 
+        // UPDATED TEXT FORMAT
+        document.getElementById('loc-count').innerText = "Total Locations: " + d.length; 
+        
         document.getElementById('location-table').innerHTML = d.map(l => `
             <tr>
                 <td class="col-id">${l.LocationID}</td>
