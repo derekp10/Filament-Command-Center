@@ -29,7 +29,7 @@
 
     .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; color: #0f0; white-space: pre-wrap; word-break: break-all; }
 
-    /* --- THE CHAMELEON CARD --- */
+    /* --- THE CHAMELEON CARD (UNIFIED) --- */
     .cham-card {
         border-radius: 12px;
         padding: 4px; /* Frame Thickness */
@@ -38,13 +38,14 @@
         transition: transform 0.1s;
     }
     
-    /* INNER BOX (Horizontal Layout) */
+    /* INNER BOX */
     .cham-body {
         flex-grow: 1;
         border-radius: 8px;
         padding: 5px 15px;
         display: flex; flex-direction: row; 
-        align-items: center; justify-content: space-between; gap: 15px;
+        align-items: center; /* VERTICAL CENTER ALIGNMENT */
+        justify-content: space-between; gap: 15px;
         /* Background set by JS */
     }
 
@@ -57,21 +58,23 @@
         box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
     }
 
+    /* FIX: TEXT WRAPPING ENABLED */
     .cham-text {
         font-size: 1.4rem; font-weight: 800; color: #fff;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        white-space: normal; /* ALLOW WRAP */
+        word-break: break-word; 
+        line-height: 1.1; /* TIGHTER LINES */
         text-shadow: 2px 2px 4px #000;
     }
 
     .cham-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
     /* BUFFER SPECIFIC */
-    /* MATCHING LIVE ACTIVITY HEADER STYLE */
     .buffer-header {
         padding: 0.5rem !important; 
         background: transparent; 
-        border-bottom: 1px solid #6c757d !important; /* Secondary Border */
-        color: #0dcaf0 !important; /* Info Text Color */
+        border-bottom: 1px solid #6c757d !important; 
+        color: #0dcaf0 !important; 
         font-weight: 700; 
         display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; 
     }
@@ -79,59 +82,69 @@
     .buffer-item { min-height: 95px; margin-bottom: 10px; }
     .buffer-item.active-item { box-shadow: 0 0 25px rgba(0, 255, 0, 0.5); border: 2px solid #0f0 !important; z-index: 10; }
     
-    /* ALIGNED QR & BUTTONS */
+    /* QR ALIGNMENT */
     .buffer-qr { 
-        width: 80px; height: 80px; /* MATCH BUTTON HEIGHT */
-        background: white; padding: 3px; border-radius: 4px; flex-shrink: 0; 
-        display:flex; justify-content:center; align-items:center; 
+        width: 70px; height: 70px; background: white; padding: 3px; 
+        border-radius: 4px; flex-shrink: 0; 
+        display:flex; justify-content:center; align-items:center;
+        align-self: center; /* ENSURE CENTER VERTICAL */
     }
     
     .btn-buffer-x { 
-        width: 60px; height: 80px; /* MATCH QR HEIGHT */
-        background: #dc3545; color: white; border: 2px solid #ffaaaa; 
+        width: 50px; height: 70px; background: #dc3545; color: white; border: 2px solid #ffaaaa; 
         border-radius: 6px; font-size: 1.5rem; font-weight: bold; 
-        display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; 
+        display: flex; align-items: center; justify-content: center; 
+        cursor: pointer; transition: 0.2s;
+        align-self: center;
     }
     .btn-buffer-x:hover { background: #ff0000; }
 
-    /* MANAGER LIST */
-    .manage-list-item { margin-bottom: 10px; }
-    .slot-btn { min-height: 160px; cursor: pointer; }
-    .slot-btn.empty { background: #222; border: 2px solid #444; border-radius: 12px; display: flex; align-items: center; justify-content: center; padding: 10px; color: #666; }
-    .slot-inner { flex-direction: column !important; align-items: center !important; text-align: center; padding: 10px !important; }
-    .slot-num { color: #ccc; font-weight: 900; margin-bottom: 5px; font-size: 1rem; text-transform: uppercase; text-shadow: 1px 1px 2px #000; }
-    .slot-content { font-size: 1.1rem; font-weight: bold; color: #fff; line-height: 1.2; text-shadow: 2px 2px 4px #000; }
-
-    /* --- COMMAND CONSOLE (Horizontal) --- */
+    /* --- COMMAND CONSOLE (Vertical Stack Buttons) --- */
     .cmd-deck { 
         padding: 15px; background: #151515; border: 1px solid #333; border-radius: 8px; 
         display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; flex-shrink: 0;
     }
 
+    /* VERTICAL BUTTONS (QR on Top) */
     .deck-btn {
-        background: #222; border: 1px solid #444; border-radius: 8px;
-        display: flex; flex-direction: row; align-items: center; padding: 8px 15px; gap: 12px;
+        background: #222; border: 2px solid #444; border-radius: 12px;
+        display: flex; flex-direction: column; /* STACK */
+        align-items: center; justify-content: center;
+        padding: 10px 15px; gap: 8px;
         cursor: pointer; transition: transform 0.1s, background-color 0.2s;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.5); min-width: 150px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.5); min-width: 120px; flex-grow: 1; max-width: 180px;
     }
     .deck-btn:active { transform: scale(0.95); }
     .deck-btn:hover { background: #333; border-color: #666; }
 
     .deck-label { font-weight: 900; font-size: 1rem; text-transform: uppercase; color: #ccc; white-space: nowrap; }
-    .deck-qr { width: 45px; height: 45px; background: #fff; border-radius: 4px; padding: 2px; display: flex; justify-content: center; align-items: center; }
+    
+    /* LARGER DECK QR */
+    .deck-qr { width: 64px; height: 64px; background: #fff; border-radius: 4px; padding: 2px; display: flex; justify-content: center; align-items: center; }
 
-    /* STATES */
-    .deck-btn.btn-audit-active { background: #4a004a !important; border: 2px solid #ff00ff !important; box-shadow: 0 0 15px #ff00ff; }
-    .deck-btn.btn-audit-active .deck-label { color: #ff00ff !important; }
-    .deck-btn.btn-eject-active { background: #5a0000 !important; border: 2px solid #dc3545 !important; box-shadow: 0 0 15px #dc3545; }
-    .deck-btn.btn-drop-active { background: #5a3000 !important; border: 2px solid #fd7e14 !important; box-shadow: 0 0 15px #fd7e14; }
+    /* COLORED BORDERS FOR BUTTONS */
+    .deck-btn:nth-child(1) { border-color: #0dcaf0; } /* Locations - Info */
+    .deck-btn:nth-child(2) { border-color: #ffc107; } /* Undo - Warning */
+    .deck-btn:nth-child(3) { border-color: #6c757d; } /* Clear - Secondary */
+    .deck-btn:nth-child(4) { border-color: #fd7e14; } /* Drop - Orange */
+    .deck-btn:nth-child(5) { border-color: #dc3545; } /* Eject - Red */
+    .deck-btn:nth-child(6) { border-color: #d63384; } /* Audit - Purple */
 
+    /* ACTIVE STATES */
+    .btn-audit-active { 
+        background: #4a004a !important; 
+        border: 4px solid #ff00ff !important; /* Thicker Border */
+        box-shadow: 0 0 20px #ff00ff; /* AURA GLOW */
+    }
+    .btn-audit-active .deck-label { color: #ff00ff !important; }
+    
     .drop-mode-active { border: 4px solid #fd7e14 !important; box-shadow: 0 0 30px rgba(253, 126, 20, 0.6); }
     .eject-mode-active { border: 4px solid #dc3545 !important; box-shadow: 0 0 30px rgba(220, 53, 69, 0.6); }
 
     /* UTILS & MODALS */
     .text-muted { color: #aaa !important; } .text-orange { color: #fd7e14 !important; } .text-purple { color: #d63384 !important; }
     .buffer-empty-msg { color: #666 !important; font-size: 1.5rem; margin-top: 20%; text-align: center; text-transform: uppercase; letter-spacing: 2px; }
+    
     .status-label { color: #fff; font-weight: 500; display: flex; align-items: center; gap: 5px; }
     .status-dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; }
     .status-on { background-color: #0f0; box-shadow: 0 0 5px #0f0; }
@@ -151,4 +164,14 @@
     .toast-msg { background: #222; color: #fff; border: 2px solid #00d4ff; padding: 20px 30px; border-radius: 8px; box-shadow: 0 0 20px rgba(0,0,0,0.8); font-weight: bold; font-size: 1.5rem; transition: opacity 0.5s; }
     .qr-box { background: white; padding: 5px; border-radius: 4px; display: flex; justify-content: center; align-items: center; }
     .qr-label { font-size: 0.9rem; color: #eee; font-weight: bold; text-transform: uppercase; margin-top: 5px; }
+    
+    /* Manager Items */
+    .manage-list-item { margin-bottom: 15px; } 
+    .manage-list-item .cham-text { font-size: 1.3rem; } 
+    .manage-list-item .cham-id-badge { font-size: 1.3rem; padding: 4px; min-width: 60px; }
+    .slot-btn { min-height: 160px; cursor: pointer; }
+    .slot-btn.empty { background: #222; border: 2px solid #444; border-radius: 12px; display: flex; align-items: center; justify-content: center; padding: 10px; color: #666; }
+    .slot-inner { flex-direction: column !important; align-items: center !important; text-align: center; padding: 10px !important; }
+    .slot-num { color: #ccc; font-weight: 900; margin-bottom: 5px; font-size: 1rem; text-transform: uppercase; text-shadow: 1px 1px 2px #000; }
+    .slot-content { font-size: 1.1rem; font-weight: bold; color: #fff; line-height: 1.2; text-shadow: 2px 2px 4px #000; }
 </style>
