@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.67 (Stable Unified)";
+    const DASHBOARD_VERSION = "v153.68 (Golden Master)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -25,6 +25,7 @@
 
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
+        // DECK QRs (Scaled for Row Layout)
         generateSafeQR('qr-undo', 'CMD:UNDO', 42);
         generateSafeQR('qr-clear', 'CMD:CLEAR', 42);
         generateSafeQR('qr-drop', 'CMD:DROP', 42);
@@ -56,7 +57,7 @@
         }, 50);
     };
 
-    // --- CHAMELEON ENGINE V7 (UNIFIED TOP-TO-BOTTOM) ---
+    // --- CHAMELEON V7 (Top-to-Bottom Fade) ---
     const getHexDark = (hex) => {
         if (!hex) return 'rgba(0,0,0,0.5)';
         hex = hex.replace('#', '');
@@ -122,25 +123,6 @@
         if (!c) { c = document.createElement('div'); c.id = 'toast-container'; document.body.appendChild(c); }
         const el = document.createElement('div'); el.className = 'toast-msg'; el.innerText = msg; el.style.borderColor = type==='error'?'#f44':(type==='warning'?'#fc0':'#00d4ff');
         c.appendChild(el); setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
-    };
-
-    const hexToRgb = (hex) => { if (!hex) return {r:'', g:'', b:''}; hex = hex.replace('#', ''); const i = parseInt(hex, 16); return { r: (i >> 16) & 255, g: (i >> 8) & 255, b: i & 255 }; };
-    const printLabel = (sid) => {
-        showToast("🖨️ Printing Label..."); setProcessing(true);
-        fetch(`/api/spool_details?id=${sid}`).then(r=>r.json()).then(data => {
-            setProcessing(false); if (!data || !data.filament) { showToast("No data for label", "error"); return; }
-            const fil = data.filament, extra = fil.extra || {}, colorHex = fil.color_hex || '000000', rgb = hexToRgb(colorHex);
-            let typeStr = fil.material || "Unknown";
-            try { let attrs = (typeof extra.filament_attributes === 'string') ? JSON.parse(extra.filament_attributes) : extra.filament_attributes; if (Array.isArray(attrs) && attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr; } catch (err) {}
-            const qrEl = document.getElementById('print-qr'); if (qrEl) { qrEl.innerHTML = ""; new QRCode(qrEl, {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L}); }
-            document.getElementById('lbl-brand').innerText = fil.vendor ? fil.vendor.name : "Generic";
-            document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; 
-            document.getElementById('lbl-type').innerText = typeStr;
-            document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
-            document.getElementById('lbl-id').innerText = sid;
-            document.getElementById('lbl-rgb').innerText = `${rgb.r},${rgb.g},${rgb.b}`; 
-            setTimeout(() => window.print(), 500);
-        }).catch(e => { setProcessing(false); showToast("Print Error", "error"); });
     };
 
     const removeBufferItem = (id) => {
@@ -231,6 +213,79 @@
         state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 70)); 
     };
 
+    // --- CRASH PROOF SCANNER ---
+    const processScan = (text) => {
+        const upper = text.toUpperCase();
+        
+        if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
+        if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
+        if (upper === 'CMD:DROP') { toggleDropMode(); return; }
+        if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
+        if (upper === 'CMD:UNDO') { triggerUndo(); return; }
+        if (upper === 'CMD:CLEAR') { requestClearBuffer(); return; } 
+
+        if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
+        if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
+        if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
+        if (state.activeModal === 'action') { if(upper.includes('CANCEL')) { closeModal('actionModal'); return; } if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
+        if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
+
+        setProcessing(true);
+        fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) }).then(r=>r.json()).then(res => {
+            setProcessing(false);
+            if (res.type === 'command') {
+                const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'done': closeManage };
+                if (cmds[res.cmd]) cmds[res.cmd](); else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true); else if (res.cmd === 'slot') handleSlotInteraction(res.value); else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
+            } else if (res.type === 'location') {
+                if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
+                if (state.heldSpools.length > 0) { performContextAssign(res.id); state.lastScannedLoc = null; return; }
+                const locData = state.allLocations.find(l => l.LocationID === res.id);
+                if ((!locData || parseInt(locData['Max Spools']) <= 1) && res.contents && res.contents.length > 0) { const spool = res.contents[0]; state.heldSpools.unshift({id: spool.id, display: spool.display, color: spool.color}); renderBuffer(); showToast("⚡ Quick Pick: #" + spool.id); state.lastScannedLoc = res.id; return; }
+                openManage(res.id); state.lastScannedLoc = res.id;
+            } else if (res.type === 'spool') {
+                if (state.dropMode) { removeBufferItem(res.id); return; }
+                if (state.ejectMode) { ejectSpool(res.id, "Scan", false); toggleEjectMode(); return; } 
+                
+                state.lastScannedLoc = null; 
+                
+                if (!res.display) {
+                    showToast("Spool ID found but data missing!", "error");
+                    return;
+                }
+
+                if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
+                else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); }
+            } else if (res.type === 'error') showToast(res.msg, 'error');
+        }).catch((e)=>{
+            setProcessing(false);
+            console.error(e);
+            showToast("Scan Error", "error");
+        });
+    };
+
+    const performContextAssign = (tid) => {
+        setProcessing(true); fetch('/api/smart_move', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({location:tid, spools:[state.heldSpools[0].id]}) }).then(r=>r.json()).then(res=>{ setProcessing(false); if(res.status==='success') { showToast("Assigned!", "success"); state.heldSpools.shift(); renderBuffer(); if(document.getElementById('manage-loc-id').value===tid) refreshManageView(tid); } else showToast(res.msg, 'error'); }).catch(()=>setProcessing(false));
+    };
+
+    const closeModal = (id) => { modals[id].hide(); state.activeModal = null; };
+    const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText=msg; state.pendingConfirm=cb; modals.confirmModal.show(); state.activeModal = 'confirm'; };
+    const confirmAction = (y) => { closeModal('confirmModal'); if(y && state.pendingConfirm) state.pendingConfirm(); state.pendingConfirm=null; };
+    const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText=msg; state.pendingSafety=cb; modals.safetyModal.show(); state.activeModal = 'safety'; };
+    const confirmSafety = (y) => { closeModal('safetyModal'); if(y && state.pendingSafety) state.pendingSafety(); state.pendingSafety=null; };
+    const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
+    const openManage = (id) => { document.getElementById('manageTitle').innerText=`Manage: ${id}`; document.getElementById('manage-loc-id').value=id; document.getElementById('manual-spool-id').value=""; if(refreshManageView(id)) modals.manageModal.show(); else showToast("Loc Error", "error"); };
+    const closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
+    const fetchLocations = () => { fetch('/api/locations').then(r=>r.json()).then(d => { state.allLocations=d; document.getElementById('loc-count').innerText = d.length + " Locs"; document.getElementById('location-table').innerHTML = d.map(l => `<tr><td class="col-id">${l.LocationID}</td><td class="col-name">${l.Name}</td><td class="col-status">${l.Occupancy||''} <span class="badge bg-secondary">${l.Type}</span></td><td class="col-actions"><button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${l.LocationID}">✏️</button><button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${l.LocationID}">🗑️</button><button class="btn btn-sm btn-info btn-manage" data-id="${l.LocationID}">Manage</button></td></tr>`).join(''); }); };
+    const refreshManageView = (id) => {
+        const loc = state.allLocations.find(l=>l.LocationID==id); if(!loc) return false;
+        const isGrid = (loc.Type==='Dryer Box' || loc.Type==='MMU Slot') && parseInt(loc['Max Spools']) > 1;
+        document.getElementById('manage-grid-view').style.display = isGrid ? 'block' : 'none';
+        document.getElementById('manage-list-view').style.display = isGrid ? 'none' : 'block';
+        fetch(`/api/get_contents?id=${id}`).then(r=>r.json()).then(d => { if(isGrid) renderGrid(d, parseInt(loc['Max Spools'])); else renderList(d, id); });
+        return true;
+    };
+    
+    // --- RENDER GRID (Uses Unified Cham Card) ---
     const renderGrid = (data, max) => {
         const grid=document.getElementById('slot-grid-container'), un=document.getElementById('unslotted-container');
         grid.innerHTML=""; un.innerHTML=""; state.currentGrid={};
@@ -261,6 +316,7 @@
         else un.style.display='none';
     };
 
+    // --- RENDER LIST (Uses Unified Cham Card) ---
     const renderList = (data, locId) => {
         const list = document.getElementById('manage-contents-list');
         list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
@@ -368,7 +424,7 @@
                     if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 42); }
                 } else {
                     if(deckBtn) deckBtn.classList.remove('btn-audit-active');
-                    if(lbl) { lbl.innerText = "AUDIT MODE"; lbl.classList.remove('label-active-audit'); }
+                    if(lbl) { lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit'); }
                     if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 42); }
                 }
             }
