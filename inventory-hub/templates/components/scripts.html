@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.71 (Manager Fixes)";
+    const DASHBOARD_VERSION = "v153.72 (Unified Logic)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -78,13 +78,14 @@
         }
 
         const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
+        
+        // INNER: Top (Black) -> Bottom (Color)
         const lastColorDark = getHexDark(colors[colors.length - 1]);
         const innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
         
         return { frame: frameGrad, inner: innerGrad };
     };
 
-    // --- LOGIC FUNCTIONS ---
     window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
     window.addEventListener('focus', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'none'; });
     
@@ -184,10 +185,10 @@
         }
     };
 
+    // --- ALIGNED RENDERER ---
     const nextBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.push(state.heldSpools.shift()); renderBuffer(); } };
     const prevBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
 
-    // --- RENDER BUFFER (Includes Nav Deck Logic) ---
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone');
         // Render Nav Deck in Modal if it exists
@@ -218,6 +219,8 @@
                 </div>
             </div>`;
         }).join('');
+        
+        // SIZE 74 FITS PERFECTLY IN 80PX BOX
         state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 74)); 
 
         // 2. Render Manager Modal Header (Nav Deck)
@@ -310,7 +313,14 @@
     const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText=msg; state.pendingSafety=cb; modals.safetyModal.show(); state.activeModal = 'safety'; };
     const confirmSafety = (y) => { closeModal('safetyModal'); if(y && state.pendingSafety) state.pendingSafety(); state.pendingSafety=null; };
     const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
-    const openManage = (id) => { document.getElementById('manageTitle').innerText=`Manage: ${id}`; document.getElementById('manage-loc-id').value=id; document.getElementById('manual-spool-id').value=""; if(refreshManageView(id)) modals.manageModal.show(); else showToast("Loc Error", "error"); };
+    const openManage = (id) => { 
+        document.getElementById('manageTitle').innerText=`Manage: ${id}`; 
+        document.getElementById('manage-loc-id').value=id; 
+        document.getElementById('manual-spool-id').value=""; 
+        renderBuffer(); // UPDATE NAV DECK ON OPEN
+        if(refreshManageView(id)) modals.manageModal.show(); 
+        else showToast("Loc Error", "error"); 
+    };
     const closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
     const fetchLocations = () => { fetch('/api/locations').then(r=>r.json()).then(d => { state.allLocations=d; document.getElementById('loc-count').innerText = d.length + " Locs"; document.getElementById('location-table').innerHTML = d.map(l => `<tr><td class="col-id">${l.LocationID}</td><td class="col-name">${l.Name}</td><td class="col-status">${l.Occupancy||''} <span class="badge bg-secondary">${l.Type}</span></td><td class="col-actions"><button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${l.LocationID}">✏️</button><button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${l.LocationID}">🗑️</button><button class="btn btn-sm btn-info btn-manage" data-id="${l.LocationID}">Manage</button></td></tr>`).join(''); }); };
     const refreshManageView = (id) => {
