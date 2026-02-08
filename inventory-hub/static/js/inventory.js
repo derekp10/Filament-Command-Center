@@ -109,7 +109,7 @@ const generateSafeQR = (elementId, text, size) => {
     }, 50);
 };
 
-// --- CHAMELEON ENGINE V8 (Multi-Color Restoration) ---
+// --- CHAMELEON ENGINE V8 (The "Sunglasses" Fix) ---
 const getHexDark = (hex, opacity=0.3) => {
     if (!hex) return 'rgba(0,0,0,0.5)';
     hex = hex.replace('#', '');
@@ -129,22 +129,22 @@ const getFilamentStyle = (colorStr) => {
         colors = [hex, hex];
     }
 
-    // 1. The Frame (Border) - Always Vivid
+    // 1. The Frame (Border) - Always Vivid and Bright
     const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
     
-    // 2. The Inner Background
+    // 2. The Inner Background (The "Sunglasses" Logic)
     let innerGrad;
     
     if (colors.length > 1 && colors[0] !== colors[1]) {
         // MULTI-COLOR MODE: 
-        // Layer 1: Heavy Black fade (Top) -> Medium Black (Bottom)
-        // Layer 2: The Multi-Color Gradient (Visible at bottom)
+        // Layer 1 (Top): Heavy Black fade to ensure text readability
+        // Layer 2 (Bottom): The Rainbow Gradient, slightly dimmed
         
-        // We make the colors slightly transparent so they blend
-        const gradColors = colors.map(c => getHexDark(c, 0.6)); 
+        // We make the colors slightly transparent so they blend with the black background behind them
+        const gradColors = colors.map(c => getHexDark(c, 0.8)); 
         
         innerGrad = `
-            linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.6) 100%), 
+            linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), 
             linear-gradient(135deg, ${gradColors.join(', ')})
         `;
     } else {
