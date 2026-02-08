@@ -3,7 +3,6 @@
     body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; margin: 0; padding: 0; }
     .navbar { background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
     
-    /* GHOST ELEMENT FIX */
     #printable-label-container { display: none !important; }
 
     /* BRANDING */
@@ -29,24 +28,21 @@
 
     .log-box { flex-grow: 1; overflow-y: auto; padding: 15px; font-family: 'Consolas', monospace; font-size: 1.1rem; color: #0f0; white-space: pre-wrap; word-break: break-all; }
 
-    /* --- THE CHAMELEON CARD (UNIFIED) --- */
+    /* --- THE CHAMELEON CARD --- */
     .cham-card {
         border-radius: 12px;
-        padding: 4px; /* Frame Thickness */
+        padding: 4px; 
         box-shadow: 0 4px 10px rgba(0,0,0,0.5);
         display: flex; flex-direction: column;
         transition: transform 0.1s;
     }
     
-    /* INNER BOX */
     .cham-body {
         flex-grow: 1;
         border-radius: 8px;
         padding: 5px 15px;
         display: flex; flex-direction: row; 
-        align-items: center; /* VERTICAL CENTER ALIGNMENT */
-        justify-content: space-between; gap: 15px;
-        /* Background set by JS */
+        align-items: center; justify-content: space-between; gap: 15px;
     }
 
     .cham-text-group { display: flex; align-items: center; gap: 15px; flex-grow: 1; overflow: hidden; }
@@ -58,18 +54,21 @@
         box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
     }
 
-    /* FIX: TEXT WRAPPING ENABLED */
     .cham-text {
         font-size: 1.4rem; font-weight: 800; color: #fff;
-        white-space: normal; /* ALLOW WRAP */
-        word-break: break-word; 
-        line-height: 1.1; /* TIGHTER LINES */
+        white-space: normal; /* WRAP TEXT */
+        word-break: break-word;
+        line-height: 1.1; 
         text-shadow: 2px 2px 4px #000;
     }
 
+    /* Common Actions Container */
     .cham-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
     /* BUFFER SPECIFIC */
+    /* MISSING CLASS FIXED HERE: */
+    .buffer-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
     .buffer-header {
         padding: 0.5rem !important; 
         background: transparent; 
@@ -82,33 +81,29 @@
     .buffer-item { min-height: 95px; margin-bottom: 10px; }
     .buffer-item.active-item { box-shadow: 0 0 25px rgba(0, 255, 0, 0.5); border: 2px solid #0f0 !important; z-index: 10; }
     
-    /* QR ALIGNMENT */
     .buffer-qr { 
-        width: 70px; height: 70px; background: white; padding: 3px; 
-        border-radius: 4px; flex-shrink: 0; 
-        display:flex; justify-content:center; align-items:center;
-        align-self: center; /* ENSURE CENTER VERTICAL */
+        width: 80px; height: 80px; 
+        background: white; padding: 3px; border-radius: 4px; flex-shrink: 0; 
+        display:flex; justify-content:center; align-items:center; 
     }
     
     .btn-buffer-x { 
-        width: 50px; height: 70px; background: #dc3545; color: white; border: 2px solid #ffaaaa; 
+        width: 60px; height: 80px; 
+        background: #dc3545; color: white; border: 2px solid #ffaaaa; 
         border-radius: 6px; font-size: 1.5rem; font-weight: bold; 
-        display: flex; align-items: center; justify-content: center; 
-        cursor: pointer; transition: 0.2s;
-        align-self: center;
+        display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; 
     }
     .btn-buffer-x:hover { background: #ff0000; }
 
-    /* --- COMMAND CONSOLE (Vertical Stack Buttons) --- */
+    /* COMMAND CONSOLE */
     .cmd-deck { 
         padding: 15px; background: #151515; border: 1px solid #333; border-radius: 8px; 
         display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; flex-shrink: 0;
     }
 
-    /* VERTICAL BUTTONS (QR on Top) */
     .deck-btn {
         background: #222; border: 2px solid #444; border-radius: 12px;
-        display: flex; flex-direction: column; /* STACK */
+        display: flex; flex-direction: column; /* Vertical Stack */
         align-items: center; justify-content: center;
         padding: 10px 15px; gap: 8px;
         cursor: pointer; transition: transform 0.1s, background-color 0.2s;
@@ -118,24 +113,17 @@
     .deck-btn:hover { background: #333; border-color: #666; }
 
     .deck-label { font-weight: 900; font-size: 1rem; text-transform: uppercase; color: #ccc; white-space: nowrap; }
-    
-    /* LARGER DECK QR */
     .deck-qr { width: 64px; height: 64px; background: #fff; border-radius: 4px; padding: 2px; display: flex; justify-content: center; align-items: center; }
 
-    /* COLORED BORDERS FOR BUTTONS */
-    .deck-btn:nth-child(1) { border-color: #0dcaf0; } /* Locations - Info */
-    .deck-btn:nth-child(2) { border-color: #ffc107; } /* Undo - Warning */
-    .deck-btn:nth-child(3) { border-color: #6c757d; } /* Clear - Secondary */
-    .deck-btn:nth-child(4) { border-color: #fd7e14; } /* Drop - Orange */
-    .deck-btn:nth-child(5) { border-color: #dc3545; } /* Eject - Red */
-    .deck-btn:nth-child(6) { border-color: #d63384; } /* Audit - Purple */
+    /* BORDER COLORS */
+    .deck-btn:nth-child(1) { border-color: #0dcaf0; } /* Locs */
+    .deck-btn:nth-child(2) { border-color: #ffc107; } /* Undo */
+    .deck-btn:nth-child(3) { border-color: #6c757d; } /* Clear */
+    .deck-btn:nth-child(4) { border-color: #fd7e14; } /* Drop */
+    .deck-btn:nth-child(5) { border-color: #dc3545; } /* Eject */
+    .deck-btn:nth-child(6) { border-color: #d63384; } /* Audit */
 
-    /* ACTIVE STATES */
-    .btn-audit-active { 
-        background: #4a004a !important; 
-        border: 4px solid #ff00ff !important; /* Thicker Border */
-        box-shadow: 0 0 20px #ff00ff; /* AURA GLOW */
-    }
+    .btn-audit-active { background: #4a004a !important; border: 4px solid #ff00ff !important; box-shadow: 0 0 20px #ff00ff; }
     .btn-audit-active .deck-label { color: #ff00ff !important; }
     
     .drop-mode-active { border: 4px solid #fd7e14 !important; box-shadow: 0 0 30px rgba(253, 126, 20, 0.6); }
@@ -144,7 +132,6 @@
     /* UTILS & MODALS */
     .text-muted { color: #aaa !important; } .text-orange { color: #fd7e14 !important; } .text-purple { color: #d63384 !important; }
     .buffer-empty-msg { color: #666 !important; font-size: 1.5rem; margin-top: 20%; text-align: center; text-transform: uppercase; letter-spacing: 2px; }
-    
     .status-label { color: #fff; font-weight: 500; display: flex; align-items: center; gap: 5px; }
     .status-dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; }
     .status-on { background-color: #0f0; box-shadow: 0 0 5px #0f0; }
