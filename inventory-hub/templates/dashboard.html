@@ -20,48 +20,52 @@
             <div class="d-flex align-items-center gap-3">
                 <div class="status-label"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
                 <div class="status-label"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
-                <button class="btn btn-outline-info btn-sm" onclick="openLocationsModal()">📂 Locations</button>
             </div>
         </div>
     </nav>
 
     <div class="main-container">
-        <div class="col-logs">
-            <div class="p-3 border-bottom border-secondary text-info fw-bold d-flex justify-content-between align-items-center">
-                <span>Live Activity 📡</span><span id="log-status" class="small text-muted">Auto-Refresh ON</span>
+        <div class="content-row">
+            <div class="col-logs">
+                <div class="p-2 border-bottom border-secondary text-info fw-bold d-flex justify-content-between align-items-center">
+                    <span>Live Activity 📡</span><span id="log-status" class="small text-muted">Auto-Refresh ON</span>
+                </div>
+                <div id="live-logs" class="log-box" onmouseenter="pauseLogs(true)" onmouseleave="pauseLogs(false)"></div>
             </div>
-            <div id="live-logs" class="log-box" onmouseenter="pauseLogs(true)" onmouseleave="pauseLogs(false)"></div>
+            
+            <div class="col-buffer">
+                <div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status">Ready...</span></div>
+                <div id="buffer-zone" class="buffer-content"></div>
+            </div>
         </div>
         
-        <div class="col-buffer">
-            <div class="buffer-header"><span>BUFFER ZONE</span><span id="scan-status">Ready...</span></div>
-            <div id="buffer-zone" class="buffer-content"></div>
-            
-            <div class="cmd-deck">
-                <div class="deck-btn" onclick="triggerUndo()">
-                    <div id="qr-undo" class="deck-qr"></div>
-                    <div class="deck-label text-warning">UNDO LAST</div>
-                </div>
-                
-                <div class="deck-btn" onclick="requestClearBuffer()">
-                    <div id="qr-clear" class="deck-qr"></div>
-                    <div class="deck-label text-secondary">CLEAR ALL</div>
-                </div>
+        <div class="cmd-deck">
+            <div class="deck-btn" onclick="openLocationsModal()">
+                <div id="qr-locs" class="deck-qr"></div>
+                <div class="deck-label text-info">LOCATIONS</div>
+            </div>
 
-                <div id="btn-deck-drop" class="deck-btn" onclick="toggleDropMode()">
-                    <div class="deck-label text-orange">DROP ITEM</div>
-                    <div id="qr-drop" class="deck-qr"></div>
-                </div>
+            <div class="deck-btn" onclick="triggerUndo()">
+                <div id="qr-undo" class="deck-qr"></div>
+                <div class="deck-label text-warning">UNDO</div>
+            </div>
+            <div class="deck-btn" onclick="requestClearBuffer()">
+                <div id="qr-clear" class="deck-qr"></div>
+                <div class="deck-label text-secondary">CLEAR</div>
+            </div>
 
-                <div id="btn-deck-eject" class="deck-btn" onclick="toggleEjectMode()">
-                    <div class="deck-label text-danger">EJECT SPOOL</div>
-                    <div id="qr-eject" class="deck-qr"></div>
-                </div>
+            <div id="btn-deck-drop" class="deck-btn" onclick="toggleDropMode()">
+                <div class="deck-label text-orange">DROP ITEM</div>
+                <div id="qr-drop" class="deck-qr"></div>
+            </div>
+            <div id="btn-deck-eject" class="deck-btn" onclick="toggleEjectMode()">
+                <div class="deck-label text-danger">EJECT SPOOL</div>
+                <div id="qr-eject" class="deck-qr"></div>
+            </div>
 
-                <div id="btn-deck-audit" class="deck-btn" onclick="toggleAudit()">
-                    <div id="qr-audit" class="deck-qr"></div>
-                    <div id="lbl-audit" class="deck-label text-info">AUDIT MODE</div>
-                </div>
+            <div id="btn-deck-audit" class="deck-btn" onclick="toggleAudit()">
+                <div id="qr-audit" class="deck-qr"></div>
+                <div id="lbl-audit" class="deck-label text-purple">AUDIT MODE</div>
             </div>
         </div>
     </div>

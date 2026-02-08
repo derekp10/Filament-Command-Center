@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.53 (Slim & Smart)";
+    const DASHBOARD_VERSION = "v153.54 (Command Console)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -26,11 +26,12 @@
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
         // Generate All QRs
-        generateSafeQR('qr-undo', 'CMD:UNDO', 40);
-        generateSafeQR('qr-clear', 'CMD:CLEAR', 40);
-        generateSafeQR('qr-drop', 'CMD:DROP', 40);
-        generateSafeQR('qr-eject', 'CMD:EJECT', 40); 
-        generateSafeQR('qr-audit', 'CMD:AUDIT', 40);
+        generateSafeQR('qr-undo', 'CMD:UNDO', 45);
+        generateSafeQR('qr-clear', 'CMD:CLEAR', 45);
+        generateSafeQR('qr-drop', 'CMD:DROP', 45);
+        generateSafeQR('qr-eject', 'CMD:EJECT', 45); 
+        generateSafeQR('qr-audit', 'CMD:AUDIT', 45);
+        generateSafeQR('qr-locs', 'CMD:LOCATIONS', 45); // NEW
 
         const modalQRs = {'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL'};
         for(const [id, txt] of Object.entries(modalQRs)) generateSafeQR(id, txt, 120);
@@ -56,25 +57,35 @@
         }, 50);
     };
 
-    const getTintedBackground = (hex) => {
-        if (!hex) return "#1a1a1a";
+    // Helper for single hex darkness
+    const getHexDark = (hex) => {
         hex = hex.replace('#', '');
-        if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
         const r = parseInt(hex.substring(0,2), 16), g = parseInt(hex.substring(2,4), 16), b = parseInt(hex.substring(4,6), 16);
-        const mix = 0.35; 
-        return `rgb(${Math.floor(r*mix)}, ${Math.floor(g*mix)}, ${Math.floor(b*mix)})`;
+        return `rgba(${r}, ${g}, ${b}, 0.25)`; // 25% Opacity of original color
     };
     
+    // CHAMELEON ENGINE 2.0 (Handles Gradient Inners)
     const getFilamentStyle = (colorStr) => {
         if (!colorStr) return { frame: '#333', inner: '#1a1a1a' };
+        
         if (colorStr.includes(',')) {
+            // MULTI-COLOR
             const colors = colorStr.split(',').map(c => c.trim().startsWith('#') ? c.trim() : '#' + c.trim());
-            const gradient = `linear-gradient(135deg, ${colors.join(', ')})`;
-            const tint = getTintedBackground(colors[0]);
-            return { frame: gradient, inner: tint };
+            
+            // Frame: Full Brightness Gradient
+            const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
+            
+            // Inner: Dark Transparent Gradient
+            const darkColors = colors.map(c => getHexDark(c));
+            const innerGrad = `linear-gradient(135deg, ${darkColors.join(', ')})`;
+            
+            return { frame: frameGrad, inner: innerGrad };
         } 
+        
+        // SINGLE COLOR
         const hex = colorStr.startsWith('#') ? colorStr : '#' + colorStr;
-        return { frame: hex, inner: getTintedBackground(hex) };
+        const innerDark = getHexDark(hex).replace('0.25', '0.15'); // Slightly darker for single color to ensure contrast
+        return { frame: hex, inner: `linear-gradient(to bottom right, #1a1a1a, ${innerDark})` };
     };
 
     window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
@@ -131,7 +142,7 @@
             state.heldSpools.splice(idx, 1);
             renderBuffer();
             showToast("Item Dropped 🗑️");
-            // AUTO EXIT DROP MODE IF EMPTY
+            // AUTO EXIT DROP MODE
             if (state.dropMode && state.heldSpools.length === 0) toggleDropMode();
         } else { showToast("Item not in buffer", "warning"); }
     };
@@ -159,10 +170,13 @@
         updateDeckVisuals();
     };
 
-    // --- AUDIT FIX ---
+    // --- AUDIT LOGIC (INSTANT) ---
     const toggleAudit = () => { 
-        if (state.auditActive) processScan("CMD:DONE"); 
-        else processScan("CMD:AUDIT"); 
+        state.auditActive = !state.auditActive;
+        updateLogState(true); // Force UI update
+        
+        if (state.auditActive) processScan("CMD:AUDIT"); 
+        else processScan("CMD:DONE"); 
     };
 
     const updateDeckVisuals = () => {
@@ -187,24 +201,14 @@
 
     const renderBuffer = () => {
         const z = document.getElementById('buffer-zone');
-        const h = document.getElementById('headsup-buffer'); 
-        const n = document.getElementById('buffer-nav-deck'); 
-
-        if (state.heldSpools.length === 0) { 
-            z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; 
-            if(h) h.style.display = 'none'; 
-            if(n) n.style.display = 'none'; 
-            return; 
-        }
+        if (state.heldSpools.length === 0) { z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; return; }
         
         z.innerHTML = state.heldSpools.map((s, i) => {
-            const styles = getFilamentStyle(s.color);
+            const styles = getFilamentStyle(s.color); // USES NEW GRADIENT ENGINE
             const cleanText = s.display.replace(/^#\d+\s*/, '').trim();
-            // INJECTED INNER STYLE FOR CHAMELEON LOOK
             return `
             <div class="filament-frame buffer-item ${i===0?'active-item':''}" style="background: ${styles.frame}; border:none;">
-                <div class="buffer-inner" style="background-color:${styles.inner};">
-                    <div class="buffer-info-group">
+                <div class="buffer-inner" style="background: ${styles.inner};"> <div class="buffer-info-group">
                         <div class="buffer-id-tag">#${s.id}</div>
                         <div class="buffer-text">${cleanText}</div>
                     </div>
@@ -216,72 +220,15 @@
             </div>`;
         }).join('');
         
-        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 56)); // Smaller QR for slimmer bar
-
-        if (h) {
-            const top = state.heldSpools[0];
-            const styles = getFilamentStyle(top.color);
-            const cleanText = top.display.replace(/^#\d+\s*/, '').trim();
-            h.style.display = 'block';
-            h.style.background = styles.frame;
-            h.style.padding = "5px"; 
-            h.innerHTML = `
-            <div class="filament-inner" style="background-color:${styles.inner}; padding: 5px 15px;">
-                <div class="d-flex align-items-center gap-3">
-                    <div class="fs-4 fw-bold text-warning">✋ READY:</div>
-                    <div class="buffer-id-tag" style="font-size:1.2rem; min-width:60px;">#${top.id}</div>
-                    <div class="buffer-text" style="font-size:1.2rem;">${cleanText}</div>
-                </div>
-                <div class="d-flex align-items-center gap-3">
-                    <div class="btn-drop" onclick="removeBufferItem(${top.id})">❌</div>
-                    <div id="qr-headsup" class="bg-white p-1 rounded"></div>
-                </div>
-            </div>`;
-            generateSafeQR("qr-headsup", "ID:"+top.id, 50);
-        }
-
-        if (n) {
-            if (state.heldSpools.length > 1) {
-                const nextSpool = state.heldSpools[1];
-                const prevSpool = state.heldSpools[state.heldSpools.length - 1];
-                const prevStyles = getFilamentStyle(prevSpool.color);
-                const nextStyles = getFilamentStyle(nextSpool.color);
-                
-                n.style.display = 'flex';
-                n.innerHTML = `
-                    <div class="nav-card" style="background: ${prevStyles.frame}" onclick="prevBuffer()">
-                        <div class="nav-inner" style="background-color:${prevStyles.inner}">
-                            <div id="qr-nav-prev" class="nav-qr"></div>
-                            <div>
-                                <div class="nav-label">◀ PREV</div>
-                                <div class="nav-name">${prevSpool.display.replace(/^#\d+\s*/, '')}</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="nav-card" style="background: ${nextStyles.frame}" onclick="nextBuffer()">
-                        <div class="nav-inner" style="background-color:${nextStyles.inner}">
-                            <div style="text-align:right;">
-                                <div class="nav-label">NEXT ▶</div>
-                                <div class="nav-name">${nextSpool.display.replace(/^#\d+\s*/, '')}</div>
-                            </div>
-                            <div id="qr-nav-next" class="nav-qr"></div>
-                        </div>
-                    </div>
-                `;
-                generateSafeQR("qr-nav-prev", "CMD:PREV", 45);
-                generateSafeQR("qr-nav-next", "CMD:NEXT", 45);
-            } else {
-                n.style.display = 'none';
-            }
-        }
+        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 60));
     };
-    
-    const nextBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.push(state.heldSpools.shift()); renderBuffer(); } };
-    const prevBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
     
     const processScan = (text) => {
         const upper = text.toUpperCase();
         
+        // --- COMMAND INTERCEPTION ---
+        if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
+        if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
         if (upper === 'CMD:DROP') { toggleDropMode(); return; }
         if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
         if (upper === 'CMD:UNDO') { triggerUndo(); return; }
@@ -293,32 +240,11 @@
         if (state.activeModal === 'action') { if(upper.includes('CANCEL')) { closeModal('actionModal'); return; } if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
         if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
-        // --- AUDIT INTERCEPTION ---
-        // If we are in Audit Mode, ONLY allow audit commands
-        if (state.auditActive) {
-            if (upper === 'CMD:DONE' || upper === 'CMD:AUDIT') {
-                // Let these through to the server to end the session
-            } else if (!upper.startsWith('ID:') && !upper.startsWith('CMD:')) {
-                // Allow Location/Spool scans
-            } else if (upper.startsWith('ID:')) {
-                // Allow Spool scans
-            } else {
-                showToast("Cannot run commands in Audit Mode", "warning");
-                return;
-            }
-        } else {
-            // Normal Mode: Intercept AUDIT start
-            if (upper === 'CMD:AUDIT') { 
-                // Don't send CMD:AUDIT to server via identify_scan if logic handles it?
-                // actually logic.py handles it. Let it pass.
-            }
-        }
-
         setProcessing(true);
         fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) }).then(r=>r.json()).then(res => {
             setProcessing(false);
             if (res.type === 'command') {
-                const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'next': nextBuffer, 'prev': prevBuffer, 'done': closeManage };
+                const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'done': closeManage };
                 if (cmds[res.cmd]) cmds[res.cmd](); else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true); else if (res.cmd === 'slot') handleSlotInteraction(res.value); else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
             } else if (res.type === 'location') {
                 if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
@@ -374,7 +300,7 @@
                 div.style.background = styles.frame;
                 div.style.padding = "8px"; 
                 div.innerHTML = `
-                    <div class="filament-inner" style="background-color:${styles.inner}">
+                    <div class="filament-inner" style="background:${styles.inner}">
                         <div class="slot-left">
                             <div class="slot-num">Slot ${i}</div>
                             <div id="qr-slot-${i}" class="bg-white p-1 rounded"></div>
@@ -415,7 +341,7 @@
         const styles = getFilamentStyle(s.color);
         return `
         <div class="unslotted-item filament-frame" style="background:${styles.frame}">
-            <div class="item-card-inner" style="background-color: ${styles.inner}">
+            <div class="item-card-inner" style="background: ${styles.inner}">
                 <div class="item-info">${s.display}</div>
                 <div class="item-actions">
                     <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', true)">
@@ -474,32 +400,33 @@
     const deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, {method:'DELETE'}).then(fetchLocations));
     const triggerUndo = () => fetch('/api/undo', {method:'POST'}).then(updateLogState);
     
-    const updateLogState = () => {
-        if(!state.logsPaused) fetch('/api/logs').then(r=>r.json()).then(d=>{ 
+    const updateLogState = (force=false) => {
+        if(!state.logsPaused || force) fetch('/api/logs').then(r=>r.json()).then(d=>{ 
             document.getElementById('live-logs').innerHTML = d.logs.map(l=>`<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join(''); 
-            document.getElementById('undo-btn').disabled=!d.undo_available; 
-            document.getElementById('st-spoolman').className=`status-dot ${d.status.spoolman?'status-on':'status-off'}`; 
-            document.getElementById('st-filabridge').className=`status-dot ${d.status.filabridge?'status-on':'status-off'}`;
             
-            state.auditActive = d.audit_active;
-            if (state.auditActive !== state.lastAuditState) {
-                state.lastAuditState = state.auditActive;
-                const btn = document.getElementById('btn-audit'); // LOOK FOR ID
-                const deckBtn = document.getElementById('btn-deck-audit'); // NEW DECK ID
+            const sSpool = document.getElementById('st-spoolman');
+            const sFila = document.getElementById('st-filabridge');
+            
+            if(sSpool) sSpool.className = `status-dot ${d.status.spoolman?'status-on':'status-off'}`;
+            if(sFila) sFila.className = `status-dot ${d.status.filabridge?'status-on':'status-off'}`;
+            
+            // SYNC AUDIT STATE
+            if (d.audit_active !== state.lastAuditState) {
+                state.lastAuditState = d.audit_active;
+                state.auditActive = d.audit_active; 
+                
+                const deckBtn = document.getElementById('btn-deck-audit');
                 const lbl = document.getElementById('lbl-audit');
                 const qrDiv = document.getElementById('qr-audit');
                 
-                // Update BOTH buttons if they exist
                 if (state.auditActive) {
-                    if(btn) btn.classList.add('btn-active-audit'); 
-                    if(deckBtn) deckBtn.classList.add('btn-audit-active'); // Use new deck class
+                    if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
                     if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
-                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 120); }
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 45); }
                 } else {
-                    if(btn) btn.classList.remove('btn-active-audit');
                     if(deckBtn) deckBtn.classList.remove('btn-audit-active');
                     if(lbl) { lbl.innerText = "AUDIT MODE"; lbl.classList.remove('label-active-audit'); }
-                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 120); }
+                    if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 45); }
                 }
             }
         });
