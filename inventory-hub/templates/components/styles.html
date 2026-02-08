@@ -3,7 +3,6 @@
     body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; margin: 0; padding: 0; }
     .navbar { background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
     
-    /* GHOST ELEMENT FIX */
     #printable-label-container { display: none !important; }
 
     /* BRANDING */
@@ -38,7 +37,6 @@
         transition: transform 0.1s;
     }
     
-    /* INNER BOX */
     .cham-body {
         flex-grow: 1;
         border-radius: 8px;
@@ -49,7 +47,7 @@
 
     .cham-text-group { 
         display: flex; align-items: center; gap: 15px; flex-grow: 1; overflow: hidden; 
-        padding-bottom: 2px; /* Prevent descender clipping */
+        padding-bottom: 2px; 
     }
     
     .cham-id-badge {
@@ -61,7 +59,7 @@
 
     .cham-text {
         font-size: 1.4rem; font-weight: 800; color: #fff;
-        white-space: normal; /* WRAP TEXT */
+        white-space: normal;
         word-break: break-word;
         line-height: 1.15; 
         text-shadow: 2px 2px 4px #000;
@@ -102,28 +100,28 @@
     }
     .btn-buffer-x:hover { background: #ff0000; }
 
-    /* --- MANAGER MODAL STYLES --- */
+    /* --- MANAGER MODAL STYLES (Fixed Spacing) --- */
     
-    /* NAV DECK (Prev/Next) */
     .nav-deck { 
         display: flex; gap: 15px; margin-bottom: 15px; width: 100%; 
     }
     
     .nav-card { 
-        flex: 1 1 0; /* CRITICAL FIX: Forces exact 50/50 split */
+        flex: 1 1 0; /* Forces 50/50 */
         cursor: pointer; 
-        min-height: 90px; 
         display: flex; flex-direction: column; 
     }
     
+    /* NAV INNER: Increased padding & centering fix */
     .nav-inner { 
         display: flex; flex-direction: row; 
-        align-items: center; justify-content: space-between; 
-        padding: 5px 10px; height: 100%; 
+        align-items: center; /* True Vertical Center */
+        justify-content: space-between; 
+        padding: 12px; /* Increased Breathing Room */
         width: 100%;
+        /* Removed height: 100% to let flexbox center content naturally */
     }
     
-    /* NAV QR (Matches Buffer/Deck Size) */
     .nav-qr { 
         width: 80px; height: 80px; 
         background: white; padding: 3px; border-radius: 4px; 
@@ -131,8 +129,6 @@
         flex-shrink: 0; 
     }
     
-    .nav-qr-container { display: flex; align-items: center; }
-
     .nav-label { font-size: 0.85rem; font-weight: 900; color: #ccc; text-transform: uppercase; letter-spacing: 1px; }
     .nav-name { font-size: 1.15rem; font-weight: bold; color: #fff; text-shadow: 1px 1px 2px #000; line-height: 1.1; }
 
@@ -187,8 +183,6 @@
     .deck-btn { background: #222; border: 2px solid #444; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px 15px; gap: 8px; cursor: pointer; transition: transform 0.1s; box-shadow: 0 4px 6px rgba(0,0,0,0.5); min-width: 120px; flex-grow: 1; max-width: 180px; }
     .deck-btn:active { transform: scale(0.95); }
     .deck-label { font-weight: 900; font-size: 1rem; text-transform: uppercase; color: #ccc; white-space: nowrap; }
-    
-    /* BIG DECK QR (80px) */
     .deck-qr { width: 80px; height: 80px; background: #fff; border-radius: 4px; padding: 2px; display: flex; justify-content: center; align-items: center; }
 
     .deck-btn:nth-child(1) { border-color: #0dcaf0; } 
