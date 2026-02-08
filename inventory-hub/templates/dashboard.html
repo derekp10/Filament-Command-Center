@@ -17,10 +17,10 @@
                 <span class="navbar-brand">Filament Command Center</span>
                 <span class="version-tag badge bg-dark border border-info ms-2">{{ version }}</span>
             </div>
-            <div class="d-flex align-items-center">
+            <div class="d-flex align-items-center gap-3">
                 <div class="status-label"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
                 <div class="status-label"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
-                <button class="btn btn-outline-info btn-sm me-3" onclick="openLocationsModal()">📂 Locations</button>
+                <button class="btn btn-outline-info btn-sm" onclick="openLocationsModal()">📂 Locations</button>
             </div>
         </div>
     </nav>
@@ -38,33 +38,29 @@
             <div id="buffer-zone" class="buffer-content"></div>
             
             <div class="cmd-deck">
-                <div class="deck-group">
-                    <div class="deck-btn" onclick="triggerUndo()">
-                        <div id="qr-undo" class="deck-qr"></div>
-                        <div class="deck-label text-warning">UNDO LAST</div>
-                    </div>
-                    <div class="deck-btn" onclick="requestClearBuffer()">
-                        <div id="qr-clear" class="deck-qr"></div>
-                        <div class="deck-label text-secondary">CLEAR ALL</div>
-                    </div>
+                <div class="deck-btn" onclick="triggerUndo()">
+                    <div id="qr-undo" class="deck-qr"></div>
+                    <div class="deck-label text-warning">UNDO LAST</div>
+                </div>
+                
+                <div class="deck-btn" onclick="requestClearBuffer()">
+                    <div id="qr-clear" class="deck-qr"></div>
+                    <div class="deck-label text-secondary">CLEAR ALL</div>
                 </div>
 
-                <div class="deck-group">
-                    <div id="btn-deck-drop" class="deck-btn" onclick="toggleDropMode()">
-                        <div class="deck-label text-orange">DROP 1 ITEM</div>
-                        <div id="qr-drop" class="deck-qr"></div>
-                    </div>
-                    <div id="btn-deck-eject" class="deck-btn" onclick="toggleEjectMode()">
-                        <div class="deck-label text-danger">EJECT SPOOL</div>
-                        <div id="qr-eject" class="deck-qr"></div>
-                    </div>
+                <div id="btn-deck-drop" class="deck-btn" onclick="toggleDropMode()">
+                    <div class="deck-label text-orange">DROP ITEM</div>
+                    <div id="qr-drop" class="deck-qr"></div>
                 </div>
 
-                <div class="deck-group">
-                    <div id="btn-deck-audit" class="deck-btn" onclick="toggleAudit()">
-                        <div id="qr-audit" class="deck-qr"></div>
-                        <div id="lbl-audit" class="deck-label text-info">AUDIT</div>
-                    </div>
+                <div id="btn-deck-eject" class="deck-btn" onclick="toggleEjectMode()">
+                    <div class="deck-label text-danger">EJECT SPOOL</div>
+                    <div id="qr-eject" class="deck-qr"></div>
+                </div>
+
+                <div id="btn-deck-audit" class="deck-btn" onclick="toggleAudit()">
+                    <div id="qr-audit" class="deck-qr"></div>
+                    <div id="lbl-audit" class="deck-label text-info">AUDIT MODE</div>
                 </div>
             </div>
         </div>

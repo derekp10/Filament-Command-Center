@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.50 (Command Bridge)";
+    const DASHBOARD_VERSION = "v153.51 (Clean Foundation)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -25,7 +25,7 @@
 
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
-        // Generate All QRs
+        // Generate All QRs (Now matching the hardcoded HTML IDs)
         generateSafeQR('qr-undo', 'CMD:UNDO', 45);
         generateSafeQR('qr-clear', 'CMD:CLEAR', 45);
         generateSafeQR('qr-drop', 'CMD:DROP', 45);
@@ -132,12 +132,10 @@
             state.heldSpools.splice(idx, 1);
             renderBuffer();
             showToast("Item Dropped 🗑️");
-            // Auto-Exit Drop Mode!
-            if (state.dropMode) toggleDropMode();
+            if (state.dropMode && state.heldSpools.length === 0) toggleDropMode();
         } else { showToast("Item not in buffer", "warning"); }
     };
 
-    // --- GUARDED CLEAR ---
     const requestClearBuffer = () => {
         if (state.heldSpools.length === 0) return;
         requestConfirmation("Clear entire Buffer?", clearBuffer);
@@ -149,16 +147,15 @@
         showToast("Buffer Cleared");
     };
 
-    // --- TOGGLE MODES ---
     const toggleDropMode = () => {
         state.dropMode = !state.dropMode;
-        state.ejectMode = false; // Mutually exclusive
+        state.ejectMode = false;
         updateDeckVisuals();
     };
 
     const toggleEjectMode = () => {
         state.ejectMode = !state.ejectMode;
-        state.dropMode = false; // Mutually exclusive
+        state.dropMode = false;
         updateDeckVisuals();
     };
 
@@ -167,7 +164,6 @@
         const ejectBtn = document.getElementById('btn-deck-eject');
         const bufCol = document.querySelector('.col-buffer');
         
-        // Reset
         if(dropBtn) dropBtn.classList.remove('drop-mode-active');
         if(ejectBtn) ejectBtn.classList.remove('eject-mode-active');
         if(bufCol) bufCol.classList.remove('drop-mode-active', 'eject-mode-active');
@@ -275,7 +271,15 @@
     
     const nextBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.push(state.heldSpools.shift()); renderBuffer(); } };
     const prevBuffer = () => { if(state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
-    const toggleAudit = () => { if (state.auditActive) processScan("CMD:DONE"); else processScan("CMD:AUDIT"); };
+    
+    // --- AUDIT FIX (Instant Toggle) ---
+    const toggleAudit = () => { 
+        state.auditActive = !state.auditActive; // Optimistic flip
+        updateLogState(); // Force UI update immediately
+        
+        if (state.auditActive) processScan("CMD:AUDIT"); 
+        else processScan("CMD:DONE"); 
+    };
 
     const processScan = (text) => {
         const upper = text.toUpperCase();
@@ -283,7 +287,7 @@
         if (upper === 'CMD:DROP') { toggleDropMode(); return; }
         if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
         if (upper === 'CMD:UNDO') { triggerUndo(); return; }
-        if (upper === 'CMD:CLEAR') { requestClearBuffer(); return; } // CHANGED to Request
+        if (upper === 'CMD:CLEAR') { requestClearBuffer(); return; } 
 
         if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
         if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
@@ -454,30 +458,34 @@
     const updateLogState = () => {
         if(!state.logsPaused) fetch('/api/logs').then(r=>r.json()).then(d=>{ 
             document.getElementById('live-logs').innerHTML = d.logs.map(l=>`<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join(''); 
-            document.getElementById('undo-btn').disabled=!d.undo_available; 
-            document.getElementById('st-spoolman').className=`status-dot ${d.status.spoolman?'status-on':'status-off'}`; 
-            document.getElementById('st-filabridge').className=`status-dot ${d.status.filabridge?'status-on':'status-off'}`;
             
-            state.auditActive = d.audit_active;
-            if (state.auditActive !== state.lastAuditState) {
-                state.lastAuditState = state.auditActive;
-                const btn = document.getElementById('btn-audit'); // LOOK FOR ID
-                const deckBtn = document.getElementById('btn-deck-audit'); // NEW DECK ID
+            // LOGGING TO DEBUG STATUS LIGHTS
+            // console.log("Status Data:", d.status);
+
+            const sSpool = document.getElementById('st-spoolman');
+            const sFila = document.getElementById('st-filabridge');
+            
+            if(sSpool) sSpool.className = `status-dot ${d.status.spoolman?'status-on':'status-off'}`;
+            if(sFila) sFila.className = `status-dot ${d.status.filabridge?'status-on':'status-off'}`;
+            
+            document.getElementById('undo-btn').disabled = !d.undo_available;
+
+            // SYNC AUDIT STATE IF CHANGED REMOTELY
+            if (d.audit_active !== state.lastAuditState) {
+                state.lastAuditState = d.audit_active;
+                state.auditActive = d.audit_active; // Sync local state
+                
+                const deckBtn = document.getElementById('btn-deck-audit');
                 const lbl = document.getElementById('lbl-audit');
                 const qrDiv = document.getElementById('qr-audit');
                 
-                // Update BOTH buttons if they exist
                 if (state.auditActive) {
-                    if(btn) btn.classList.add('btn-active-audit'); 
-                    if(deckBtn) deckBtn.classList.add('btn-audit-active'); // Use new deck class
-                    if(lbl) lbl.innerText = "FINISH"; 
-                    if(lbl) lbl.classList.add('label-active-audit');
+                    if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
+                    if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
                     if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 120); }
                 } else {
-                    if(btn) btn.classList.remove('btn-active-audit');
                     if(deckBtn) deckBtn.classList.remove('btn-audit-active');
-                    if(lbl) lbl.innerText = "AUDIT"; 
-                    if(lbl) lbl.classList.remove('label-active-audit');
+                    if(lbl) { lbl.innerText = "AUDIT MODE"; lbl.classList.remove('label-active-audit'); }
                     if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 120); }
                 }
             }
