@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const DASHBOARD_VERSION = "v153.52 (Control Freak)";
+    const DASHBOARD_VERSION = "v153.53 (Slim & Smart)";
     console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
     let wakeLock = null;
@@ -26,13 +26,12 @@
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => modals[id] = new bootstrap.Modal(document.getElementById(id)));
         
         // Generate All QRs
-        generateSafeQR('qr-undo', 'CMD:UNDO', 45);
-        generateSafeQR('qr-clear', 'CMD:CLEAR', 45);
-        generateSafeQR('qr-drop', 'CMD:DROP', 45);
-        generateSafeQR('qr-eject', 'CMD:EJECT', 45); 
-        generateSafeQR('qr-audit', 'CMD:AUDIT', 45);
+        generateSafeQR('qr-undo', 'CMD:UNDO', 40);
+        generateSafeQR('qr-clear', 'CMD:CLEAR', 40);
+        generateSafeQR('qr-drop', 'CMD:DROP', 40);
+        generateSafeQR('qr-eject', 'CMD:EJECT', 40); 
+        generateSafeQR('qr-audit', 'CMD:AUDIT', 40);
 
-        // Generate Modal QRs
         const modalQRs = {'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL'};
         for(const [id, txt] of Object.entries(modalQRs)) generateSafeQR(id, txt, 120);
 
@@ -132,7 +131,8 @@
             state.heldSpools.splice(idx, 1);
             renderBuffer();
             showToast("Item Dropped 🗑️");
-            // NO AUTO EXIT - User wants manual toggle only
+            // AUTO EXIT DROP MODE IF EMPTY
+            if (state.dropMode && state.heldSpools.length === 0) toggleDropMode();
         } else { showToast("Item not in buffer", "warning"); }
     };
 
@@ -147,7 +147,6 @@
         showToast("Buffer Cleared");
     };
 
-    // --- TOGGLE MODES ---
     const toggleDropMode = () => {
         state.dropMode = !state.dropMode;
         state.ejectMode = false;
@@ -160,13 +159,10 @@
         updateDeckVisuals();
     };
 
-    // --- AUDIT FIX: OPTIMISTIC TOGGLE ---
+    // --- AUDIT FIX ---
     const toggleAudit = () => { 
-        state.auditActive = !state.auditActive;
-        updateLogState(true); // Force UI update
-        
-        if (state.auditActive) processScan("CMD:AUDIT"); 
-        else processScan("CMD:DONE"); 
+        if (state.auditActive) processScan("CMD:DONE"); 
+        else processScan("CMD:AUDIT"); 
     };
 
     const updateDeckVisuals = () => {
@@ -204,6 +200,7 @@
         z.innerHTML = state.heldSpools.map((s, i) => {
             const styles = getFilamentStyle(s.color);
             const cleanText = s.display.replace(/^#\d+\s*/, '').trim();
+            // INJECTED INNER STYLE FOR CHAMELEON LOOK
             return `
             <div class="filament-frame buffer-item ${i===0?'active-item':''}" style="background: ${styles.frame}; border:none;">
                 <div class="buffer-inner" style="background-color:${styles.inner};">
@@ -219,7 +216,7 @@
             </div>`;
         }).join('');
         
-        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 80));
+        state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 56)); // Smaller QR for slimmer bar
 
         if (h) {
             const top = state.heldSpools[0];
@@ -285,9 +282,6 @@
     const processScan = (text) => {
         const upper = text.toUpperCase();
         
-        // --- AUDIT INTERCEPTION ---
-        if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
-
         if (upper === 'CMD:DROP') { toggleDropMode(); return; }
         if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
         if (upper === 'CMD:UNDO') { triggerUndo(); return; }
@@ -298,6 +292,27 @@
         if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
         if (state.activeModal === 'action') { if(upper.includes('CANCEL')) { closeModal('actionModal'); return; } if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
         if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
+
+        // --- AUDIT INTERCEPTION ---
+        // If we are in Audit Mode, ONLY allow audit commands
+        if (state.auditActive) {
+            if (upper === 'CMD:DONE' || upper === 'CMD:AUDIT') {
+                // Let these through to the server to end the session
+            } else if (!upper.startsWith('ID:') && !upper.startsWith('CMD:')) {
+                // Allow Location/Spool scans
+            } else if (upper.startsWith('ID:')) {
+                // Allow Spool scans
+            } else {
+                showToast("Cannot run commands in Audit Mode", "warning");
+                return;
+            }
+        } else {
+            // Normal Mode: Intercept AUDIT start
+            if (upper === 'CMD:AUDIT') { 
+                // Don't send CMD:AUDIT to server via identify_scan if logic handles it?
+                // actually logic.py handles it. Let it pass.
+            }
+        }
 
         setProcessing(true);
         fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) }).then(r=>r.json()).then(res => {
@@ -459,35 +474,29 @@
     const deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, {method:'DELETE'}).then(fetchLocations));
     const triggerUndo = () => fetch('/api/undo', {method:'POST'}).then(updateLogState);
     
-    const updateLogState = (force=false) => {
-        if(!state.logsPaused || force) fetch('/api/logs').then(r=>r.json()).then(d=>{ 
+    const updateLogState = () => {
+        if(!state.logsPaused) fetch('/api/logs').then(r=>r.json()).then(d=>{ 
             document.getElementById('live-logs').innerHTML = d.logs.map(l=>`<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join(''); 
+            document.getElementById('undo-btn').disabled=!d.undo_available; 
+            document.getElementById('st-spoolman').className=`status-dot ${d.status.spoolman?'status-on':'status-off'}`; 
+            document.getElementById('st-filabridge').className=`status-dot ${d.status.filabridge?'status-on':'status-off'}`;
             
-            // LOGGING TO DEBUG STATUS LIGHTS
-            // console.log("Status Data:", d.status);
-
-            const sSpool = document.getElementById('st-spoolman');
-            const sFila = document.getElementById('st-filabridge');
-            
-            if(sSpool) sSpool.className = `status-dot ${d.status.spoolman?'status-on':'status-off'}`;
-            if(sFila) sFila.className = `status-dot ${d.status.filabridge?'status-on':'status-off'}`;
-            
-            document.getElementById('undo-btn').disabled = !d.undo_available;
-
-            // SYNC AUDIT STATE IF CHANGED REMOTELY
-            if (d.audit_active !== state.lastAuditState) {
-                state.lastAuditState = d.audit_active;
-                state.auditActive = d.audit_active; // Sync local state
-                
-                const deckBtn = document.getElementById('btn-deck-audit');
+            state.auditActive = d.audit_active;
+            if (state.auditActive !== state.lastAuditState) {
+                state.lastAuditState = state.auditActive;
+                const btn = document.getElementById('btn-audit'); // LOOK FOR ID
+                const deckBtn = document.getElementById('btn-deck-audit'); // NEW DECK ID
                 const lbl = document.getElementById('lbl-audit');
                 const qrDiv = document.getElementById('qr-audit');
                 
+                // Update BOTH buttons if they exist
                 if (state.auditActive) {
-                    if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
+                    if(btn) btn.classList.add('btn-active-audit'); 
+                    if(deckBtn) deckBtn.classList.add('btn-audit-active'); // Use new deck class
                     if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
                     if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 120); }
                 } else {
+                    if(btn) btn.classList.remove('btn-active-audit');
                     if(deckBtn) deckBtn.classList.remove('btn-audit-active');
                     if(lbl) { lbl.innerText = "AUDIT MODE"; lbl.classList.remove('label-active-audit'); }
                     if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 120); }
