@@ -109,13 +109,13 @@ const generateSafeQR = (elementId, text, size) => {
     }, 50);
 };
 
-// --- CHAMELEON ENGINE V7 (Top-to-Bottom Fade) ---
-const getHexDark = (hex) => {
+// --- CHAMELEON ENGINE V8 (Multi-Color Restoration) ---
+const getHexDark = (hex, opacity=0.3) => {
     if (!hex) return 'rgba(0,0,0,0.5)';
     hex = hex.replace('#', '');
     if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
     const r = parseInt(hex.substring(0,2), 16), g = parseInt(hex.substring(2,4), 16), b = parseInt(hex.substring(4,6), 16);
-    return `rgba(${r}, ${g}, ${b}, 0.3)`; 
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`; 
 };
 
 const getFilamentStyle = (colorStr) => {
@@ -129,10 +129,30 @@ const getFilamentStyle = (colorStr) => {
         colors = [hex, hex];
     }
 
+    // 1. The Frame (Border) - Always Vivid
     const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
-    // Inner: Top (Black) -> Bottom (Color)
-    const lastColorDark = getHexDark(colors[colors.length - 1]);
-    const innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
+    
+    // 2. The Inner Background
+    let innerGrad;
+    
+    if (colors.length > 1 && colors[0] !== colors[1]) {
+        // MULTI-COLOR MODE: 
+        // Layer 1: Heavy Black fade (Top) -> Medium Black (Bottom)
+        // Layer 2: The Multi-Color Gradient (Visible at bottom)
+        
+        // We make the colors slightly transparent so they blend
+        const gradColors = colors.map(c => getHexDark(c, 0.6)); 
+        
+        innerGrad = `
+            linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.6) 100%), 
+            linear-gradient(135deg, ${gradColors.join(', ')})
+        `;
+    } else {
+        // SINGLE COLOR MODE: 
+        // Standard Top-to-Bottom fade (Black -> Color)
+        const lastColorDark = getHexDark(colors[0], 0.3);
+        innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
+    }
     
     return { frame: frameGrad, inner: innerGrad };
 };
