@@ -20,41 +20,6 @@
             document.body.appendChild(fg);
         }
 
-        // --- REBUILD COMMAND DECK ---
-        const deck = document.querySelector('.cmd-deck');
-        if (deck) {
-            deck.innerHTML = `
-                <div class="deck-group">
-                    <div class="deck-btn" onclick="triggerUndo()">
-                        <div id="qr-undo" class="deck-qr"></div>
-                        <div class="deck-label text-warning">UNDO</div>
-                    </div>
-                    <div class="deck-btn" onclick="clearBuffer()">
-                        <div id="qr-clear" class="deck-qr"></div>
-                        <div class="deck-label text-secondary">CLEAR</div>
-                    </div>
-                </div>
-
-                <div class="deck-group">
-                    <div id="btn-deck-audit" class="deck-btn" onclick="toggleAudit()">
-                        <div id="qr-audit" class="deck-qr"></div>
-                        <div id="lbl-audit" class="deck-label text-info">AUDIT</div>
-                    </div>
-                </div>
-
-                <div class="deck-group">
-                    <div id="btn-deck-drop" class="deck-btn" onclick="toggleDropMode()">
-                        <div class="deck-label text-danger">DROP</div>
-                        <div id="qr-drop" class="deck-qr"></div>
-                    </div>
-                    <div id="btn-deck-eject" class="deck-btn" onclick="toggleEjectMode()">
-                        <div class="deck-label text-danger">EJECT</div>
-                        <div id="qr-eject" class="deck-qr"></div>
-                    </div>
-                </div>
-            `;
-        }
-
         const vTag = document.querySelector('.version-tag');
         if(vTag) vTag.innerText = DASHBOARD_VERSION;
 
@@ -64,7 +29,7 @@
         generateSafeQR('qr-undo', 'CMD:UNDO', 45);
         generateSafeQR('qr-clear', 'CMD:CLEAR', 45);
         generateSafeQR('qr-drop', 'CMD:DROP', 45);
-        generateSafeQR('qr-eject', 'CMD:EJECT', 45); // Fixed Content!
+        generateSafeQR('qr-eject', 'CMD:EJECT', 45); 
         generateSafeQR('qr-audit', 'CMD:AUDIT', 45);
 
         // Generate Modal QRs
@@ -167,8 +132,15 @@
             state.heldSpools.splice(idx, 1);
             renderBuffer();
             showToast("Item Dropped 🗑️");
-            if (state.dropMode && state.heldSpools.length === 0) toggleDropMode();
+            // Auto-Exit Drop Mode!
+            if (state.dropMode) toggleDropMode();
         } else { showToast("Item not in buffer", "warning"); }
+    };
+
+    // --- GUARDED CLEAR ---
+    const requestClearBuffer = () => {
+        if (state.heldSpools.length === 0) return;
+        requestConfirmation("Clear entire Buffer?", clearBuffer);
     };
 
     const clearBuffer = () => {
@@ -311,7 +283,7 @@
         if (upper === 'CMD:DROP') { toggleDropMode(); return; }
         if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
         if (upper === 'CMD:UNDO') { triggerUndo(); return; }
-        if (upper === 'CMD:CLEAR') { clearBuffer(); return; }
+        if (upper === 'CMD:CLEAR') { requestClearBuffer(); return; } // CHANGED to Request
 
         if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
         if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
@@ -323,7 +295,7 @@
         fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) }).then(r=>r.json()).then(res => {
             setProcessing(false);
             if (res.type === 'command') {
-                const cmds = { 'clear': clearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'next': nextBuffer, 'prev': prevBuffer, 'done': closeManage };
+                const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'next': nextBuffer, 'prev': prevBuffer, 'done': closeManage };
                 if (cmds[res.cmd]) cmds[res.cmd](); else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true); else if (res.cmd === 'slot') handleSlotInteraction(res.value); else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
             } else if (res.type === 'location') {
                 if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
@@ -333,9 +305,8 @@
                 openManage(res.id); state.lastScannedLoc = res.id;
             } else if (res.type === 'spool') {
                 if (state.dropMode) { removeBufferItem(res.id); return; }
-                if (state.ejectMode) { ejectSpool(res.id, "Scan", false); toggleEjectMode(); return; } // Auto-exit Eject Mode
+                if (state.ejectMode) { ejectSpool(res.id, "Scan", false); toggleEjectMode(); return; } 
                 
-                // Normal Add to Buffer
                 state.lastScannedLoc = null; 
                 if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
                 else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); }

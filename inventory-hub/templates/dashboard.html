@@ -8,7 +8,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     
     {% include 'components/styles.html' %}
-    
     {% include 'components/label_spool.html' %}
 </head>
 <body>
@@ -22,7 +21,6 @@
                 <div class="status-label"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
                 <div class="status-label"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
                 <button class="btn btn-outline-info btn-sm me-3" onclick="openLocationsModal()">📂 Locations</button>
-                <button onclick="triggerUndo()" class="btn btn-warning btn-sm me-3" id="undo-btn" disabled>↩️ UNDO</button>
             </div>
         </div>
     </nav>
@@ -40,16 +38,39 @@
             <div id="buffer-zone" class="buffer-content"></div>
             
             <div class="cmd-deck">
-                <div class="cmd-btn" onclick="processScan('CMD:CLEAR')"><div class="qr-box" id="qr-clear"></div><div class="qr-label">CLEAR</div></div>
-                <div class="cmd-btn" onclick="triggerUndo()"><div class="qr-box" id="qr-undo"></div><div class="qr-label">UNDO</div></div>
-                <div class="cmd-btn" id="btn-audit" onclick="toggleAudit()"><div class="qr-box" id="qr-audit"></div><div class="qr-label" id="lbl-audit">AUDIT</div></div>
-                <div class="cmd-btn" onclick="processScan('CMD:EJECT')"><div class="qr-box" id="qr-eject"></div><div class="qr-label">EJECT MODE</div></div>
+                <div class="deck-group">
+                    <div class="deck-btn" onclick="triggerUndo()">
+                        <div id="qr-undo" class="deck-qr"></div>
+                        <div class="deck-label text-warning">UNDO LAST</div>
+                    </div>
+                    <div class="deck-btn" onclick="requestClearBuffer()">
+                        <div id="qr-clear" class="deck-qr"></div>
+                        <div class="deck-label text-secondary">CLEAR ALL</div>
+                    </div>
+                </div>
+
+                <div class="deck-group">
+                    <div id="btn-deck-drop" class="deck-btn" onclick="toggleDropMode()">
+                        <div class="deck-label text-orange">DROP 1 ITEM</div>
+                        <div id="qr-drop" class="deck-qr"></div>
+                    </div>
+                    <div id="btn-deck-eject" class="deck-btn" onclick="toggleEjectMode()">
+                        <div class="deck-label text-danger">EJECT SPOOL</div>
+                        <div id="qr-eject" class="deck-qr"></div>
+                    </div>
+                </div>
+
+                <div class="deck-group">
+                    <div id="btn-deck-audit" class="deck-btn" onclick="toggleAudit()">
+                        <div id="qr-audit" class="deck-qr"></div>
+                        <div id="lbl-audit" class="deck-label text-info">AUDIT</div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
     {% include 'components/modals.html' %}
-
     {% include 'components/scripts.html' %}
 </body>
 </html>
