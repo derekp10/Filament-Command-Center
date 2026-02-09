@@ -5,6 +5,8 @@ import config_loader
 import locations_db
 import spoolman_api
 import logic
+import csv
+import os
 
 VERSION = "v153.7 (Sticker Factory)"
 app = Flask(__name__)
@@ -16,6 +18,64 @@ def add_header(r):
 
 @app.route('/')
 def dashboard(): return render_template('dashboard.html', version=VERSION)
+
+@app.route('/api/print_label', methods=['POST'])
+def api_print_label():
+    sid = request.json.get('id')
+    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
+
+    # 1. Get Spool Data
+    spool = spoolman_api.get_spool(sid)
+    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
+
+    # 2. Check Config Mode
+    cfg = config_loader.load_config()
+    print_cfg = cfg.get("print_settings", {})
+    mode = print_cfg.get("mode", "browser").lower()
+
+    # --- OPTION B: CSV AUTOMATION ---
+    if mode == "csv":
+        csv_path = print_cfg.get("csv_path", "labels.csv")
+        try:
+            # Check if file exists to write headers
+            file_exists = os.path.exists(csv_path)
+            
+            with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                # If new file, write header (Adjust to match your P-Touch template)
+                if not file_exists:
+                    writer.writerow(["ID", "Vendor", "Name", "Material", "Color", "Weight", "Comment", "QR_Content"])
+                
+                # Extract Data
+                fil = spool.get('filament', {})
+                vend = fil.get('vendor', {})
+                
+                # Write Row
+                writer.writerow([
+                    spool.get('id'),
+                    vend.get('name', 'Unknown'),
+                    fil.get('name', 'Unknown'),
+                    fil.get('material', 'Unknown'),
+                    fil.get('color_hex', ''),
+                    fil.get('weight', 0),
+                    spool.get('comment', ''),
+                    f"ID:{spool.get('id')}" # QR Content
+                ])
+                
+            return jsonify({"success": True, "method": "csv", "msg": "Sent to P-Touch Queue 🖨️"})
+            
+        except Exception as e:
+            state.logger.error(f"CSV Print Error: {e}")
+            return jsonify({"success": False, "msg": f"CSV Error: {e}"})
+
+    # --- OPTION A: BROWSER PRINTING ---
+    else:
+        # Return the data so the browser can render the sticker
+        return jsonify({
+            "success": True, 
+            "method": "browser", 
+            "data": spool
+        })
 
 @app.route('/api/locations', methods=['GET'])
 def api_get_locations(): 

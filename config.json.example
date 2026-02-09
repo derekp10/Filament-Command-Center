@@ -1,11 +1,23 @@
 {
+    "comment": "--- GLOBAL CONFIGURATION ---",
     "server_ip": "192.168.1.100",
     "spoolman_port": 7912,
     "filabridge_port": 5000,
     "sync_delay": 0.5,
-    "spoolman_db_path": "\\\\NAS\\App_Data\\Spoolman\\spoolman.db",
-    "backup_directory": "C:\\Backups",
-    "export_directory": "C:\\Exports",
+    
+    "comment_paths": "--- PATHS & BACKUPS ---",
+    "comment_note": "For Docker, use container paths (e.g., /app/data/). For Windows, use full paths (e.g., D:\\Backups)",
+    "spoolman_db_path": "\\\\NAS\\Path\\To\\spoolman.db",
+    "backup_directory": "./backups",
+    "export_directory": "./exports",
+
+    "comment_print": "--- LABEL PRINTING (browser or csv) ---",
+    "print_settings": {
+        "mode": "browser",
+        "csv_path": "./labels/print_queue.csv"
+    },
+    
+    "comment_maps": "--- INVENTORY HUB SETTINGS ---",
     "printer_map": {
         "PRINTER_1": {"printer_name": "My Printer", "position": 0}
     },

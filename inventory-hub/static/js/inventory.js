@@ -704,21 +704,69 @@ const hexToRgb = (hex) => {
 };
 
 const printLabel = (sid) => {
-    showToast("🖨️ Printing Label..."); setProcessing(true);
-    fetch(`/api/spool_details?id=${sid}`).then(r=>r.json()).then(data => {
-        setProcessing(false); if (!data || !data.filament) { showToast("No data for label", "error"); return; }
-        const fil = data.filament, extra = fil.extra || {}, colorHex = fil.color_hex || '000000', rgb = hexToRgb(colorHex);
-        let typeStr = fil.material || "Unknown";
-        try { let attrs = (typeof extra.filament_attributes === 'string') ? JSON.parse(extra.filament_attributes) : extra.filament_attributes; if (Array.isArray(attrs) && attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr; } catch (err) {}
-        const qrEl = document.getElementById('print-qr'); if (qrEl) { qrEl.innerHTML = ""; new QRCode(qrEl, {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L}); }
-        document.getElementById('lbl-brand').innerText = fil.vendor ? fil.vendor.name : "Generic";
-        document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; 
-        document.getElementById('lbl-type').innerText = typeStr;
-        document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
-        document.getElementById('lbl-id').innerText = sid;
-        document.getElementById('lbl-rgb').innerText = `${rgb.r},${rgb.g},${rgb.b}`; 
-        setTimeout(() => window.print(), 500);
-    }).catch(e => { setProcessing(false); showToast("Print Error", "error"); });
+    showToast("🖨️ Requesting Label..."); 
+    setProcessing(true);
+
+    fetch('/api/print_label', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: sid})
+    })
+    .then(r => r.json())
+    .then(res => {
+        setProcessing(false);
+        
+        if (!res.success) {
+            showToast(res.msg || "Print Failed", "error");
+            return;
+        }
+
+        // MODE B: CSV / SERVER SIDE
+        if (res.method === 'csv') {
+            showToast(res.msg, "success");
+            return;
+        }
+
+        // MODE A: BROWSER SIDE (Render and Print)
+        if (res.method === 'browser') {
+            const data = res.data;
+            if (!data || !data.filament) { showToast("Invalid Data", "error"); return; }
+            
+            const fil = data.filament;
+            const extra = fil.extra || {};
+            const colorHex = fil.color_hex || '000000';
+            const rgb = hexToRgb(colorHex);
+
+            // Construct Label Type String
+            let typeStr = fil.material || "Unknown";
+            try { 
+                let attrs = (typeof extra.filament_attributes === 'string') ? JSON.parse(extra.filament_attributes) : extra.filament_attributes; 
+                if (Array.isArray(attrs) && attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr; 
+            } catch (err) {}
+
+            // Populate the Hidden Label Div
+            const qrEl = document.getElementById('print-qr'); 
+            if (qrEl) { 
+                qrEl.innerHTML = ""; 
+                new QRCode(qrEl, {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L}); 
+            }
+
+            document.getElementById('lbl-brand').innerText = fil.vendor ? fil.vendor.name : "Generic";
+            document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; 
+            document.getElementById('lbl-type').innerText = typeStr;
+            document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
+            document.getElementById('lbl-id').innerText = sid;
+            document.getElementById('lbl-rgb').innerText = `${rgb.r},${rgb.g},${rgb.b}`; 
+            
+            // Trigger Browser Print
+            setTimeout(() => window.print(), 500);
+        }
+    })
+    .catch(e => { 
+        setProcessing(false); 
+        console.error(e);
+        showToast("Connection Error", "error"); 
+    });
 };
 
 const updateLogState = (force=false) => {
