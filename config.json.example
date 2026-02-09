@@ -3,8 +3,8 @@
     "spoolman_port": 7912,
     "filabridge_port": 5000,
     "sync_delay": 0.5,
-    "spoolman_db_path": "\\\\NAS\\Path\\To\\spoolman.db",
-    "backup_directory": "./backups",
+    "spoolman_db_path": "\\\\NAS\\App_Data\\Spoolman\\spoolman.db",
+    "backup_directory": "C:\\Backups",
     "printer_map": {
         "PRINTER_1": {"printer_name": "My Printer", "position": 0}
     },
