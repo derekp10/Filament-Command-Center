@@ -7,13 +7,12 @@ import project_config  # Uses your global config system
 # --- LOAD CONFIG ---
 config = project_config.load_config()
 SPOOLMAN_URL = config.get("spoolman_url")
-EXPORT_DIR = config.get("export_directory", ".") # Default to current folder if missing
+EXPORT_DIR = config.get("export_directory", ".") 
 
 def fetch_all_spools():
     """Fetch every single spool from Spoolman."""
     print(f"🔌 Connecting to {SPOOLMAN_URL}...")
     try:
-        # Get Spools (including archived ones, just in case)
         r = requests.get(f"{SPOOLMAN_URL}/api/v1/spool")
         if r.status_code != 200:
             print(f"❌ Error fetching spools: {r.status_code}")
@@ -24,10 +23,6 @@ def fetch_all_spools():
         return []
 
 def flatten_spool(spool):
-    """
-    Takes a nested Spoolman object and flattens it into a CSV-friendly row.
-    Handles missing vendors, filaments, etc. gracefully.
-    """
     filament = spool.get("filament", {}) or {}
     vendor = filament.get("vendor", {}) or {}
     extra = spool.get("extra", {}) or {}
@@ -39,7 +34,8 @@ def flatten_spool(spool):
 
     # Base Fields
     row = {
-        "SpoolID": spool.get("id"), # FIXED: Renamed from "ID" to prevent Excel SYLK error
+        "SpoolID": spool.get("id"),
+        "External ID": spool.get("external_id", ""), # <--- ADDED THIS (Your Legacy ID)
         "Vendor": vendor.get("name", "Unknown"),
         "Filament Name": filament.get("name", "Unknown"),
         "Material": filament.get("material", "Unknown"),
@@ -51,7 +47,7 @@ def flatten_spool(spool):
         "Total Weight (g)": total_weight,
         "Used (g)": used_weight,
         "Remaining (g)": remaining,
-        "Registered": spool.get("registered", "")[:19].replace("T", " "), # Clean Date
+        "Registered": spool.get("registered", "")[:19].replace("T", " "),
         "Last Used": (spool.get("last_used") or "")[:19].replace("T", " "),
         "Spoolman_Filament_ID": filament.get("id"),
         "Spoolman_Vendor_ID": vendor.get("id")
@@ -59,39 +55,29 @@ def flatten_spool(spool):
 
     # --- HANDLING EXTRA FIELDS ---
     for k, v in extra.items():
+        # Clean up JSON strings if needed
         row[f"Extra: {k}"] = v
     
     return row
 
 def main():
-    # 1. Setup Export Directory
     if EXPORT_DIR and not os.path.exists(EXPORT_DIR):
-        try:
-            os.makedirs(EXPORT_DIR)
-            print(f"📂 Created export directory: {EXPORT_DIR}")
-        except Exception as e:
-            print(f"❌ Could not create directory {EXPORT_DIR}: {e}")
-            return
+        try: os.makedirs(EXPORT_DIR)
+        except Exception as e: print(f"❌ Error: {e}"); return
 
-    # 2. Fetch Data
     spools = fetch_all_spools()
-    if not spools:
-        print("⚠️ No data found. Exiting.")
-        return
+    if not spools: return
 
     print(f"📦 Processing {len(spools)} spools...")
 
-    # 3. Flatten Data
     flattened_data = [flatten_spool(s) for s in spools]
     
-    # 4. Collect Headers (Dynamic)
+    # Collect Headers
     headers = list(flattened_data[0].keys())
     for item in flattened_data:
         for k in item.keys():
-            if k not in headers:
-                headers.append(k)
+            if k not in headers: headers.append(k)
 
-    # 5. Write File
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     filename = f"Spoolman_Master_Export_{timestamp}.csv"
     full_path = os.path.join(EXPORT_DIR, filename)
@@ -101,7 +87,6 @@ def main():
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
             writer.writerows(flattened_data)
-        
         print(f"✅ Success! Exported to: {os.path.abspath(full_path)}")
     except Exception as e:
         print(f"❌ Failed to write CSV: {e}")
