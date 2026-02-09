@@ -3,13 +3,16 @@ import shutil
 import os
 import sqlite3
 from datetime import datetime
-import time
+import project_config  # Import our new config loader
 
-# --- CONFIGURATION (NO ASSUMPTIONS) ---
-# Update these to match your exact setup
-SPOOLMAN_URL = "http://192.168.1.29:5000"  # Source: Your dump_spoolman.py
-SMB_SHARE_PATH = r"\\TRUENAS\App_Data\Spoolman\SPOOLMAN_DIR_DATA" # Source: Your prompt
-LOCAL_BACKUP_DIR = "./Backups"
+# --- LOAD CONFIGURATION ---
+config = project_config.load_config()
+
+SPOOLMAN_URL = config.get("spoolman_url")
+# We assume the config path points to the DB file itself, so we get the dir
+NAS_DB_PATH = config.get("spoolman_db_path") 
+NAS_DIR_PATH = os.path.dirname(NAS_DB_PATH) # Strip filename to get folder
+LOCAL_BACKUP_DIR = config.get("backup_directory")
 
 def log(msg, type="INFO"):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [{type}] {msg}")
@@ -17,12 +20,13 @@ def log(msg, type="INFO"):
 def verify_backup(filepath):
     """Try to connect to the database to ensure it's not corrupt."""
     try:
+        # Connect in Read-Only mode to verify headers
         conn = sqlite3.connect(f"file:{filepath}?mode=ro", uri=True)
         cursor = conn.cursor()
         cursor.execute("SELECT count(*) FROM spool")
         count = cursor.fetchone()[0]
         conn.close()
-        log(f"Verification Successful! Database contains {count} spools.", "SUCCESS")
+        log(f"Verification Successful! Snapshot contains {count} spools.", "SUCCESS")
         return True
     except Exception as e:
         log(f"Verification FAILED: {e}", "ERROR")
@@ -30,25 +34,24 @@ def verify_backup(filepath):
 
 def trigger_remote_backup():
     """Ask Spoolman to create a safe backup internally."""
-    log(f"Requesting safe backup from {SPOOLMAN_URL}...")
+    log(f"Requesting API backup from {SPOOLMAN_URL}...")
     try:
-        # The endpoint might be /api/v1/backup or just /backup depending on version
-        # We try the v1 endpoint first based on your other scripts
+        # Try v1 endpoint
         url = f"{SPOOLMAN_URL}/api/v1/backup"
         response = requests.post(url)
         
         if response.status_code == 404:
-            # Fallback for older versions
+            # Fallback for older Spoolman versions
             url = f"{SPOOLMAN_URL}/backup"
             response = requests.post(url)
 
         if response.status_code == 200:
             data = response.json()
-            # The path returned is the INTERNAL container path (e.g. /home/app/...)
-            # We need to grab just the filename
+            # The path returned is internal to the Docker container
+            # We just need the filename to find it on the NAS share
             internal_path = data.get("path", "")
             filename = os.path.basename(internal_path)
-            log(f"Server created backup: {filename}", "SUCCESS")
+            log(f"Server generated backup file: {filename}", "SUCCESS")
             return filename
         else:
             log(f"Server failed to backup. Status: {response.status_code} Body: {response.text}", "ERROR")
@@ -59,46 +62,45 @@ def trigger_remote_backup():
 
 def main():
     if not os.path.exists(LOCAL_BACKUP_DIR):
-        os.makedirs(LOCAL_BACKUP_DIR)
+        try:
+            os.makedirs(LOCAL_BACKUP_DIR)
+            log(f"Created local backup directory: {LOCAL_BACKUP_DIR}", "INFO")
+        except Exception as e:
+            log(f"Could not create backup directory: {e}", "CRITICAL")
+            return
 
     # 1. Trigger the backup on the server
     backup_filename = trigger_remote_backup()
     
-    if not backup_filename:
-        log("Could not trigger remote backup. Checking for auto-backups...", "WARN")
-        # Fallback: Look for the most recent file in the backups folder
-        # Spoolman usually creates a 'backups' folder inside the data directory
-        server_backup_dir = os.path.join(SMB_SHARE_PATH, "backups")
-    else:
-        server_backup_dir = os.path.join(SMB_SHARE_PATH, "backups")
+    server_backup_dir = os.path.join(NAS_DIR_PATH, "backups")
 
     # 2. Locate the file on the NAS
     if not os.path.exists(server_backup_dir):
         log(f"Could not find backups folder at: {server_backup_dir}", "CRITICAL")
-        log("Check your SMB path mapping.", "INFO")
+        log("Check 'spoolman_db_path' in config.json.", "INFO")
         return
 
-    # If we have a specific filename, look for it. Otherwise, grab the newest.
+    # If we have a specific filename from API, use it. Otherwise, find the newest .db
     if backup_filename:
         source_file = os.path.join(server_backup_dir, backup_filename)
     else:
-        # Find newest .db file
+        log("API backup failed/unknown. Checking for existing backups...", "WARN")
         files = [os.path.join(server_backup_dir, f) for f in os.listdir(server_backup_dir) if f.endswith('.db')]
         if not files:
-            log("No .db files found in backup folder.", "CRITICAL")
+            log("No .db files found in NAS backup folder.", "CRITICAL")
             return
         source_file = max(files, key=os.path.getctime)
         log(f"Using latest existing backup: {os.path.basename(source_file)}", "INFO")
 
-    # 3. Copy to Local Machine
+    # 3. Copy to Local Safe Zone
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     dest_filename = f"spoolman_backup_{timestamp}.db"
     dest_path = os.path.join(LOCAL_BACKUP_DIR, dest_filename)
 
-    log(f"Copying from NAS to Local...", "INFO")
+    log(f"Copying from NAS...", "INFO")
     try:
         shutil.copy2(source_file, dest_path)
-        log(f"Copied to: {dest_path}", "SUCCESS")
+        log(f"Saved to: {dest_path}", "SUCCESS")
         
         # 4. Verify Integrity
         verify_backup(dest_path)
