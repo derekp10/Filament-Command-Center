@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v153.81 (Event Listeners & Green Footer)
+ * Version: v153.83 (Deterministic Rendering & Standard UI)
  */
 
-const DASHBOARD_VERSION = "v153.81 (Stable)";
+const DASHBOARD_VERSION = "v153.83 (Stable)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -59,17 +59,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if(el) modals[id] = new bootstrap.Modal(el);
     });
     
-    // --- CRITICAL FIX: EVENT LISTENER FOR MANAGER ---
-    // This waits for the modal to be fully visible before drawing QRs
+    // --- EVENT LISTENER FOR MANAGER (Safety Net) ---
     const manageEl = document.getElementById('manageModal');
     if (manageEl) {
         manageEl.addEventListener('shown.bs.modal', () => {
             const id = document.getElementById('manage-loc-id').value;
-            // 1. Render the Buffer (Nav Deck QRs)
             renderBuffer();
-            // 2. Render the Grid/List (Item QRs)
-            refreshManageView(id);
-            // 3. Render the Footer QR (Done Button)
+            refreshManageView(id); // Re-trigger to be safe
             generateSafeQR('qr-modal-done', 'CMD:DONE', 42);
         });
     }
@@ -109,19 +105,22 @@ document.addEventListener('DOMContentLoaded', () => {
 // --- CORE FUNCTIONS ---
 
 const generateSafeQR = (elementId, text, size) => {
-    // Small timeout just to ensure DOM paint, but main logic handled by Event Listener now
-    setTimeout(() => {
-        const el = document.getElementById(elementId);
-        if (el) {
-            el.innerHTML = "";
-            try { 
-                new QRCode(el, { text: text, width: size, height: size, correctLevel: QRCode.CorrectLevel.L }); 
-            } catch(e) {}
-        }
-    }, 50);
+    // DETERMINISTIC RENDERING (Double RAF)
+    // Ensures browser has finished Layout and Reflow before drawing
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            const el = document.getElementById(elementId);
+            if (el) {
+                el.innerHTML = "";
+                try { 
+                    new QRCode(el, { text: text, width: size, height: size, correctLevel: QRCode.CorrectLevel.L }); 
+                } catch(e) {}
+            }
+        });
+    });
 };
 
-// --- CHAMELEON ENGINE V8 (Rainbow Fix) ---
+// --- CHAMELEON ENGINE V8 ---
 const getHexDark = (hex, opacity=0.3) => {
     if (!hex) return 'rgba(0,0,0,0.5)';
     hex = hex.replace('#', '');
@@ -401,8 +400,7 @@ const openManage = (id) => {
     document.getElementById('manage-loc-id').value=id; 
     document.getElementById('manual-spool-id').value=""; 
     
-    // CRITICAL: We do NOT render here anymore.
-    // The 'shown.bs.modal' event listener handles rendering.
+    // We do NOT render here anymore. The listener handles it.
     modals.manageModal.show(); 
 };
 
