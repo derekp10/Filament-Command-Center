@@ -7,6 +7,7 @@ import spoolman_api
 import logic
 import csv
 import os
+import json
 
 VERSION = "v153.7 (Sticker Factory)"
 app = Flask(__name__)
@@ -19,8 +20,116 @@ def add_header(r):
 @app.route('/')
 def dashboard(): return render_template('dashboard.html', version=VERSION)
 
+def clean_string(s):
+    if isinstance(s, str): return s.strip('"').strip("'")
+    return s
+
+def hex_to_rgb(hex_str):
+    if not hex_str or len(hex_str) < 6: return "", "", ""
+    try:
+        clean_hex = hex_str.lstrip('#')
+        return int(clean_hex[0:2], 16), int(clean_hex[2:4], 16), int(clean_hex[4:6], 16)
+    except ValueError:
+        return "", "", ""
+
+def get_smart_type(material, extra_data):
+    material = clean_string(material) or ""
+    raw_attrs = extra_data.get('filament_attributes', '[]')
+    try:
+        attrs_list = json.loads(raw_attrs) if isinstance(raw_attrs, str) else raw_attrs
+        if not isinstance(attrs_list, list): attrs_list = []
+    except json.JSONDecodeError: attrs_list = []
+    
+    clean_attrs = [clean_string(a) for a in attrs_list if a]
+    if clean_attrs: return f"{' '.join(clean_attrs)} {material}"
+    return material
+
+def get_color_name(item_data):
+    extra = item_data.get('extra', {})
+    if 'original_color' in extra:
+        val = clean_string(extra['original_color'])
+        if val: return val
+    return item_data.get('name', 'Unknown')
+
+def get_best_hex(item_data):
+    extra = item_data.get('extra', {})
+    multi_hex = item_data.get('multi_color_hexes') or extra.get('multi_color_hexes')
+    if multi_hex:
+        first_hex = multi_hex.split(',')[0].strip()
+        if first_hex: return first_hex
+    return item_data.get('color_hex', '')
+
+# --- UPDATED API ROUTE ---
 @app.route('/api/print_label', methods=['POST'])
 def api_print_label():
+    sid = request.json.get('id')
+    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
+
+    spool = spoolman_api.get_spool(sid)
+    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
+
+    cfg = config_loader.load_config()
+    print_cfg = cfg.get("print_settings", {})
+    mode = print_cfg.get("mode", "browser").lower()
+
+    # --- OPTION B: CSV AUTOMATION (Matches auto_generate_labels.py) ---
+    if mode == "csv":
+        csv_path = print_cfg.get("csv_path", "labels.csv")
+        try:
+            file_exists = os.path.exists(csv_path)
+            
+            with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                # HEADERS: ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
+                if not file_exists:
+                    writer.writerow(['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code'])
+                
+                # EXTRACT DATA
+                fil = spool.get('filament', {})
+                vend = fil.get('vendor', {})
+                extra = spool.get('extra', {}) # Spool extra
+                fil_extra = fil.get('extra', {}) # Filament extra
+                
+                # CALCULATE FIELDS
+                brand = vend.get('name', 'Unknown')
+                # For color name, we usually look at filament name/extra, but your script checks spool? 
+                # Actually auto_generate_labels checks item_data (which is spool in that context).
+                # Spoolman structure: Spool -> Filament. 
+                # Let's check Filament Name/Extra for Color Name logic.
+                name = get_color_name(fil) 
+                
+                material = fil.get('material', 'Unknown')
+                smart_type = get_smart_type(material, fil_extra)
+                
+                hex_val = get_best_hex(fil)
+                r, g, b = hex_to_rgb(hex_val)
+                
+                weight = f"{fil.get('weight', 0):.0f}g"
+                
+                # QR CODE (Matches your HUB_BASE logic)
+                server_ip = cfg.get('server_ip', '192.168.1.29')
+                # Assuming HUB port 8000 based on your script
+                qr_link = f"http://{server_ip}:8000/scan/{sid}"
+
+                # WRITE ROW
+                writer.writerow([sid, brand, name, smart_type, hex_val, r, g, b, weight, qr_link])
+                
+            return jsonify({"success": True, "method": "csv", "msg": "Sent to P-Touch Queue 🖨️"})
+            
+        except Exception as e:
+            state.logger.error(f"CSV Print Error: {e}")
+            return jsonify({"success": False, "msg": f"CSV Error: {e}"})
+
+    # --- OPTION A: BROWSER PRINTING ---
+    else:
+        # Pass formatted data for browser JS convenience too?
+        # For now, let's stick to raw spool data and let JS handle it, 
+        # unless you want the Python logic to pre-calc for browser too.
+        return jsonify({
+            "success": True, 
+            "method": "browser", 
+            "data": spool
+        })
     sid = request.json.get('id')
     if not sid: return jsonify({"success": False, "msg": "No ID provided"})
 
