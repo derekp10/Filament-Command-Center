@@ -1,0 +1,13 @@
+{
+    "server_ip": "192.168.1.100",
+    "spoolman_port": 7912,
+    "filabridge_port": 5000,
+    "sync_delay": 0.5,
+    "spoolman_db_path": "\\\\NAS\\Path\\To\\spoolman.db",
+    "backup_directory": "./backups",
+    "printer_map": {
+        "PRINTER_1": {"printer_name": "My Printer", "position": 0}
+    },
+    "feeder_map": {},
+    "dryer_slots": []
+}

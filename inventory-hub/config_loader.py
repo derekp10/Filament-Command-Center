@@ -1,8 +1,11 @@
 import json
 import os
+import sys
 import state
 
-CONFIG_FILE = 'config.json'
+# Logic to find the ROOT config.json (Go up one level)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
 
 def load_config():
     defaults = {
@@ -19,19 +22,21 @@ def load_config():
     
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, 'r') as f: 
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f: 
                 loaded = json.load(f)
                 final_config.update(loaded)
         except Exception as e: 
-            state.logger.error(f"Config Load Error: {e}")
-            
-    # Force Uppercase Keys for Printer Map lookups
+            # Fallback for Docker or if file missing
+            state.logger.error(f"Root Config Load Error: {e}")
+    else:
+        state.logger.warning(f"Root config.json not found at {CONFIG_FILE}")
+
+    # Force Uppercase Keys for Printer Map
     if 'printer_map' in final_config:
         final_config['printer_map'] = {k.upper(): v for k, v in final_config['printer_map'].items()}
         
     return final_config
 
-# Helper to get base URLs quickly
 def get_api_urls():
     cfg = load_config()
     server_ip = cfg.get("server_ip")
