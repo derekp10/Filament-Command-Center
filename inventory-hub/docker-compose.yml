@@ -6,18 +6,16 @@ services:
       - "8000:8000"
     restart: unless-stopped
     volumes:
-      # 1. The App Code (Current Directory -> /app)
+      # 1. The App Code (Current Folder -> /app)
       - ./:/app
       
-      # 2. THE CONFIG FIX (Parent Directory -> Root of Container)
-      # This maps the config.json from one folder up, into the container's root
+      # 2. THE CONFIG FIX (Parent Folder -> Root of Container)
+      # This fixes the "Root config.json not found" error
       - ../config.json:/config.json
       
-      # 3. The Label Output Bridge (For your CSV Tests)
-      # On Windows Dev, you can map this to a local folder like:
-      # - ./labels_output:/output
-      # On TrueNAS, you will change this to the /mnt/... path
-      - ./labels_output:/output
+      # 3. THE LABEL OUTPUT (Your Specific D: Path -> /output)
+      # We map your D: folder to the internal /output folder
+      - "D:/My Documents/Documents/3D Printing/3D Print Data/labels_output:/output"
 
     environment:
       - PYTHONUNBUFFERED=1
