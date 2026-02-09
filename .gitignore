@@ -1,3 +1,4 @@
 *.pyc
 inventory-hub/hub.log
 config.json
+inventory-hub/.env

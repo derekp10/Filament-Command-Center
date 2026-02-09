@@ -6,16 +6,15 @@ services:
       - "8000:8000"
     restart: unless-stopped
     volumes:
-      # 1. The App Code (Current Folder -> /app)
+      # 1. App Code
       - ./:/app
       
-      # 2. THE CONFIG FIX (Parent Folder -> Root of Container)
-      # This fixes the "Root config.json not found" error
+      # 2. Config File (Parent Dir)
       - ../config.json:/config.json
       
-      # 3. THE LABEL OUTPUT (Your Specific D: Path -> /output)
-      # We map your D: folder to the internal /output folder
-      - "D:/My Documents/Documents/3D Printing/3D Print Data/labels_output:/output"
+      # 3. THE MAGIC VARIABLE 🎩
+      # This tells Docker: "Look in the .env file to find out where this folder is."
+      - "${LABEL_OUTPUT_PATH}:/output"
 
     environment:
       - PYTHONUNBUFFERED=1
