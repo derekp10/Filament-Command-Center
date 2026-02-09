@@ -39,7 +39,7 @@ def flatten_spool(spool):
 
     # Base Fields
     row = {
-        "ID": spool.get("id"),
+        "SpoolID": spool.get("id"), # FIXED: Renamed from "ID" to prevent Excel SYLK error
         "Vendor": vendor.get("name", "Unknown"),
         "Filament Name": filament.get("name", "Unknown"),
         "Material": filament.get("material", "Unknown"),
