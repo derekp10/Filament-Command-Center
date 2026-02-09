@@ -6,8 +6,13 @@ services:
       - "8000:8000"
     restart: unless-stopped
     volumes:
-      # Map the WHOLE current directory to /app
-      # This lets Python see app.py, logic.py, state.py, etc.
+      # 1. The Code (Existing)
       - ./:/app
+      
+      # 2. THE BRIDGE (New)
+      # Map your NAS folder to /output inside the container
+      # CHANGE THE LEFT SIDE to match your actual TrueNAS path
+      - /mnt/pool/AppData/FilamentManager/outputs:/output
+      
     environment:
       - PYTHONUNBUFFERED=1
