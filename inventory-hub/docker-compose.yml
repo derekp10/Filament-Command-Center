@@ -6,13 +6,18 @@ services:
       - "8000:8000"
     restart: unless-stopped
     volumes:
-      # 1. The Code (Existing)
+      # 1. The App Code (Current Directory -> /app)
       - ./:/app
       
-      # 2. THE BRIDGE (New)
-      # Map your NAS folder to /output inside the container
-      # CHANGE THE LEFT SIDE to match your actual TrueNAS path
-      - /mnt/pool/AppData/FilamentManager/outputs:/output
+      # 2. THE CONFIG FIX (Parent Directory -> Root of Container)
+      # This maps the config.json from one folder up, into the container's root
+      - ../config.json:/config.json
       
+      # 3. The Label Output Bridge (For your CSV Tests)
+      # On Windows Dev, you can map this to a local folder like:
+      # - ./labels_output:/output
+      # On TrueNAS, you will change this to the /mnt/... path
+      - ./labels_output:/output
+
     environment:
       - PYTHONUNBUFFERED=1
