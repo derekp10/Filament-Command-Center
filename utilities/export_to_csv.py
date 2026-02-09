@@ -23,41 +23,61 @@ def fetch_all_spools():
         return []
 
 def flatten_spool(spool):
-    filament = spool.get("filament", {}) or {}
-    vendor = filament.get("vendor", {}) or {}
-    extra = spool.get("extra", {}) or {}
+    """
+    Dynamically flattens a spool object.
+    Prefixes Filament data with 'Filament_' and Vendor data with 'Vendor_'.
+    """
+    row = {}
+
+    # 1. ROOT SPOOL DATA (Iterate everything to catch future fields)
+    for key, val in spool.items():
+        if key == "id":
+            row["SpoolID"] = val # SYLK Fix
+        elif key == "extra":
+            continue # Handle separately
+        elif key == "filament":
+            continue # Handle separately
+        elif isinstance(val, (str, int, float, bool, type(None))):
+            row[key] = val
     
-    # Calculate Remaining Weight
-    total_weight = filament.get("weight", 0)
-    used_weight = spool.get("used_weight", 0)
-    remaining = max(0, total_weight - used_weight)
+    # Calculate Remaining (Convenience)
+    fil = spool.get("filament", {}) or {}
+    total_w = fil.get("weight", 0)
+    used_w = spool.get("used_weight", 0)
+    row["calculated_remaining_weight"] = max(0, total_w - used_w)
 
-    # Base Fields
-    row = {
-        "SpoolID": spool.get("id"),
-        "External ID": spool.get("external_id", ""), # <--- ADDED THIS (Your Legacy ID)
-        "Vendor": vendor.get("name", "Unknown"),
-        "Filament Name": filament.get("name", "Unknown"),
-        "Material": filament.get("material", "Unknown"),
-        "Color (Hex)": filament.get("color_hex", ""),
-        "Location": spool.get("location", ""),
-        "Lot #": spool.get("lot_nr", ""),
-        "Comment": spool.get("comment", ""),
-        "Archived": spool.get("archived", False),
-        "Total Weight (g)": total_weight,
-        "Used (g)": used_weight,
-        "Remaining (g)": remaining,
-        "Registered": spool.get("registered", "")[:19].replace("T", " "),
-        "Last Used": (spool.get("last_used") or "")[:19].replace("T", " "),
-        "Spoolman_Filament_ID": filament.get("id"),
-        "Spoolman_Vendor_ID": vendor.get("id")
-    }
-
-    # --- HANDLING EXTRA FIELDS ---
-    for k, v in extra.items():
-        # Clean up JSON strings if needed
+    # 2. SPOOL EXTRA DATA
+    spool_extra = spool.get("extra", {}) or {}
+    for k, v in spool_extra.items():
         row[f"Extra: {k}"] = v
-    
+
+    # 3. FILAMENT DATA (Flatten with prefix)
+    for key, val in fil.items():
+        if key == "vendor":
+            continue # Handle separately
+        elif key == "extra":
+            continue # Handle separately
+        elif isinstance(val, (str, int, float, bool, type(None))):
+            row[f"Filament_{key}"] = val
+
+    # 4. FILAMENT EXTRA DATA
+    fil_extra = fil.get("extra", {}) or {}
+    for k, v in fil_extra.items():
+        row[f"Filament_Extra: {k}"] = v
+
+    # 5. VENDOR DATA
+    vend = fil.get("vendor", {}) or {}
+    for key, val in vend.items():
+        if key == "extra":
+            continue
+        elif isinstance(val, (str, int, float, bool, type(None))):
+            row[f"Vendor_{key}"] = val
+
+    # 6. TIMESTAMP CLEANUP (Optional Polish)
+    for col in ["registered", "first_used", "last_used", "Filament_registered", "Vendor_registered"]:
+        if col in row and isinstance(row[col], str):
+            row[col] = row[col][:19].replace("T", " ")
+
     return row
 
 def main():
@@ -70,16 +90,31 @@ def main():
 
     print(f"📦 Processing {len(spools)} spools...")
 
+    # Flatten Data
     flattened_data = [flatten_spool(s) for s in spools]
     
-    # Collect Headers
-    headers = list(flattened_data[0].keys())
+    # Collect ALL Headers dynamically
+    headers = []
+    # We loop through all rows to find every unique key (in case some spools have unique extra fields)
+    key_set = set()
     for item in flattened_data:
-        for k in item.keys():
-            if k not in headers: headers.append(k)
+        key_set.update(item.keys())
+    
+    # Sort headers for sanity
+    # Order: SpoolID, External ID, basic spool stuff, Extra:, Filament_, Filament_Extra, Vendor_
+    def header_sort(k):
+        if k == "SpoolID": return "000"
+        if k == "external_id": return "001"
+        if k.startswith("Extra:"): return "800" + k
+        if k.startswith("Filament_Extra:"): return "900" + k
+        if k.startswith("Filament_"): return "500" + k
+        if k.startswith("Vendor_"): return "600" + k
+        return "100" + k
+    
+    headers = sorted(list(key_set), key=header_sort)
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    filename = f"Spoolman_Master_Export_{timestamp}.csv"
+    filename = f"Spoolman_Full_Firehose_{timestamp}.csv"
     full_path = os.path.join(EXPORT_DIR, filename)
 
     try:
@@ -87,7 +122,7 @@ def main():
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
             writer.writerows(flattened_data)
-        print(f"✅ Success! Exported to: {os.path.abspath(full_path)}")
+        print(f"✅ Success! Full Firehose Exported to: {os.path.abspath(full_path)}")
     except Exception as e:
         print(f"❌ Failed to write CSV: {e}")
 
