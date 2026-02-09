@@ -285,4 +285,33 @@
         align-items: center; 
         justify-content: center;
     }
+
+    /* --- LOCATION LIST TYPOGRAPHY (Readability Upgrade) --- */
+    
+    /* The Sticky Header Text */
+    .sticky-th th {
+        font-size: 1.4rem; /* Big Headers */
+        padding-top: 15px;
+        padding-bottom: 15px;
+    }
+
+    /* The Table Rows */
+    #location-table td {
+        font-size: 1.3rem; /* Big Data Text */
+        vertical-align: middle; /* Center text vertically */
+        padding: 12px 8px; /* More breathing room */
+    }
+
+    /* The ID Column (Make it monospaced and bold) */
+    .col-id {
+        font-family: 'Consolas', monospace;
+        font-weight: 700;
+        color: #00d4ff; /* Cyan color for IDs */
+    }
+
+    /* Scale up the Action Buttons slightly to match */
+    .col-actions .btn {
+        font-size: 1rem;
+        padding: 5px 15px;
+    }
 </style>
