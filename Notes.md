@@ -49,3 +49,9 @@ Now when the script sends "Metal", Spoolman says, "Ah, that is on the list now. 
 
 ⚡ Summary
 The Updater is a Data Pusher, not a Rule Maker. It plays by the rules that exist; it does not change them.
+
+# ** Label Printer Options **
+In config.json - PrintSettings -> Mode:
+    csv - exports to CSV file
+    browser - uses attached ptouch print drivers to print directly
+
