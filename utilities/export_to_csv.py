@@ -7,6 +7,7 @@ import project_config  # Uses your global config system
 # --- LOAD CONFIG ---
 config = project_config.load_config()
 SPOOLMAN_URL = config.get("spoolman_url")
+EXPORT_DIR = config.get("export_directory", ".") # Default to current folder if missing
 
 def fetch_all_spools():
     """Fetch every single spool from Spoolman."""
@@ -30,10 +31,8 @@ def flatten_spool(spool):
     filament = spool.get("filament", {}) or {}
     vendor = filament.get("vendor", {}) or {}
     extra = spool.get("extra", {}) or {}
-    fil_extra = filament.get("extra", {}) or {}
-
+    
     # Calculate Remaining Weight
-    # Spoolman gives 'used_weight' and 'initial_weight' (from filament)
     total_weight = filament.get("weight", 0)
     used_weight = spool.get("used_weight", 0)
     remaining = max(0, total_weight - used_weight)
@@ -59,18 +58,22 @@ def flatten_spool(spool):
     }
 
     # --- HANDLING EXTRA FIELDS ---
-    # We combine Spool-level extra fields and Filament-level extra fields
-    # Format: "Extra: KeyName"
     for k, v in extra.items():
         row[f"Extra: {k}"] = v
     
-    # Optional: Include Filament Extra fields if you want them
-    # for k, v in fil_extra.items():
-    #     row[f"Filament Extra: {k}"] = v
-
     return row
 
 def main():
+    # 1. Setup Export Directory
+    if EXPORT_DIR and not os.path.exists(EXPORT_DIR):
+        try:
+            os.makedirs(EXPORT_DIR)
+            print(f"📂 Created export directory: {EXPORT_DIR}")
+        except Exception as e:
+            print(f"❌ Could not create directory {EXPORT_DIR}: {e}")
+            return
+
+    # 2. Fetch Data
     spools = fetch_all_spools()
     if not spools:
         print("⚠️ No data found. Exiting.")
@@ -78,28 +81,28 @@ def main():
 
     print(f"📦 Processing {len(spools)} spools...")
 
-    # 1. Flatten all data first to find all possible columns (dynamic extra fields)
+    # 3. Flatten Data
     flattened_data = [flatten_spool(s) for s in spools]
     
-    # 2. Collect all unique headers
-    headers = list(flattened_data[0].keys()) # Start with standard keys from first item
+    # 4. Collect Headers (Dynamic)
+    headers = list(flattened_data[0].keys())
     for item in flattened_data:
         for k in item.keys():
             if k not in headers:
                 headers.append(k)
 
-    # 3. Generate Filename
+    # 5. Write File
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     filename = f"Spoolman_Master_Export_{timestamp}.csv"
+    full_path = os.path.join(EXPORT_DIR, filename)
 
-    # 4. Write CSV
     try:
-        with open(filename, 'w', newline='', encoding='utf-8') as f:
+        with open(full_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
             writer.writerows(flattened_data)
         
-        print(f"✅ Success! Exported to: {os.path.abspath(filename)}")
+        print(f"✅ Success! Exported to: {os.path.abspath(full_path)}")
     except Exception as e:
         print(f"❌ Failed to write CSV: {e}")
 
