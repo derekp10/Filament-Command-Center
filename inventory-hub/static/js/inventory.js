@@ -481,7 +481,14 @@ const renderGrid = (data, max) => {
 
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
-    list.innerHTML = data.length===0 ? "<div class='text-center text-muted'>Empty</div>" : data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
+    
+    // FIX: Made "EMPTY" large (3rem), Bold, Gray, and gave it vertical spacing
+    const emptyHtml = `
+        <div class="d-flex flex-column align-items-center justify-content-center py-5">
+            <h1 class="text-muted fw-bold" style="font-size: 4rem; opacity: 0.3; letter-spacing: 5px;">EMPTY</h1>
+        </div>`;
+
+    list.innerHTML = data.length === 0 ? emptyHtml : data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
     data.forEach((s,i) => renderBadgeQRs(s, i));
 };
 

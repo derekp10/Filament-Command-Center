@@ -60,14 +60,16 @@
                     
                     <div class="d-flex w-100 p-2 gap-2">
                         <input type="text" id="manual-spool-id" class="form-control fw-bold" placeholder="Enter Spool ID / Scan Legacy">
-                        <button class="btn btn-primary fw-bold px-4" onclick="manualAddSpool()">+ ADD</button>
+                        <button class="btn btn-primary fw-bold px-4" onclick="manualAddSpool()">+ Add (To Buffer)</button>
                     </div>
 
                     <div class="w-100 px-2 pb-2">
                         <div class="btn btn-success w-100 fw-bold d-flex justify-content-between align-items-center p-1" onclick="closeManage()">
-                            <div style="width:42px;"></div> 
+                            <div style="width:48px;"></div> 
+                            
                             <span>✔ DONE / SYNC</span>
-                            <div id="qr-modal-done" class="bg-white rounded p-1 d-flex align-items-center justify-content-center" style="height: 42px; width: 42px;"></div>
+                            
+                            <div id="qr-modal-done" class="bg-white rounded p-2 d-flex align-items-center justify-content-center" style="height: 48px; width: 48px;"></div>
                         </div>
                     </div>
                 </div>
