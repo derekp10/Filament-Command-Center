@@ -1,4 +1,7 @@
+# ... existing ignores ...
+__pycache__/
 *.pyc
 inventory-hub/hub.log
+# Secrets & Local Config
 config.json
-inventory-hub/.env
+.env
