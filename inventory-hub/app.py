@@ -9,7 +9,7 @@ import csv
 import os
 import json
 
-VERSION = "v154.15 (Queue + Spoolman Link)"
+VERSION = "v154.16 (Queue + Spoolman Link)"
 app = Flask(__name__)
 
 @app.after_request
