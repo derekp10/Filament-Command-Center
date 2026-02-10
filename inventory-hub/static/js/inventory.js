@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.10 (Layout & Link Fix)
+ * Version: v154.11 (Restored Visuals)
  */
 
-const DASHBOARD_VERSION = "v154.10 (Layout & Link Fix)";
+const DASHBOARD_VERSION = "v154.11 (Restored Visuals)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -73,7 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 10);
     });
 
-    // --- EVENT LISTENER FOR MANAGER (Safety Net) ---
+    // --- EVENT LISTENER FOR MANAGER ---
     const manageEl = document.getElementById('manageModal');
     if (manageEl) {
         manageEl.addEventListener('shown.bs.modal', () => {
@@ -534,6 +534,9 @@ const renderList = (data, locId) => {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
         data.forEach((s,i) => renderBadgeQRs(s, i));
+        
+        // FIX: Ensure Eject All QR is generated for List View
+        generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
     }
 };
 
@@ -627,16 +630,16 @@ const openSpoolDetails = (id) => {
         
         // --- LINK FIX START ---
         // Dynamically update the href of the "Open Spoolman" button
-        // FIX: Updated to match /spool/show/ structure
+        // FIX: Updated to match /#/spool/show/ structure
         const btnLink = document.getElementById('btn-open-spoolman');
         if (btnLink) {
             if (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) {
                 // Ensure no double slashes if user config has trailing slash
                 const baseUrl = SPOOLMAN_URL.endsWith('/') ? SPOOLMAN_URL.slice(0, -1) : SPOOLMAN_URL;
-                btnLink.href = `${baseUrl}/spool/show/${d.id}`;
+                btnLink.href = `${baseUrl}/#/spool/show/${d.id}`;
             } else {
                 console.warn("SPOOLMAN_URL is undefined. Using relative path.");
-                btnLink.href = `/spool/show/${d.id}`;
+                btnLink.href = `/#/spool/show/${d.id}`;
             }
         }
         // --- LINK FIX END ---
