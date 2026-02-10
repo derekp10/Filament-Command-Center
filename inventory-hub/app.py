@@ -18,7 +18,15 @@ def add_header(r):
     return r
 
 @app.route('/')
-def dashboard(): return render_template('dashboard.html', version=VERSION)
+def dashboard():
+    cfg = config_loader.load_config()
+    # Construct Spoolman UI URL from config
+    ip = cfg.get('server_ip', '127.0.0.1')
+    if ip == '0.0.0.0': ip = '127.0.0.1' # Fallback if bound to all interfaces
+    port = cfg.get('spoolman_port', 7912)
+    sm_url = f"http://{ip}:{port}"
+    
+    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url)
 
 # --- HELPER FUNCTIONS FOR LABELS ---
 def clean_string(s):
