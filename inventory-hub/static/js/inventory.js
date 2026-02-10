@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.9 (Spoolman Link Fixed)
+ * Version: v154.10 (Layout & Link Fix)
  */
 
-const DASHBOARD_VERSION = "v154.9 (Spoolman Link Fixed)";
+const DASHBOARD_VERSION = "v154.10 (Layout & Link Fix)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -46,7 +46,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!document.getElementById('focus-guard')) {
         const fg = document.createElement('div');
         fg.id = 'focus-guard';
-        fg.innerHTML = `<div class="focus-msg">⚠️ CLICK HERE TO ACTIVATE SCANNER ⚠️</div>`;
+        fg.innerHTML = `<div class="focus-msg"><div><div style="font-size:5rem;">🚫</div><div style="font-size:3rem;color:#f44;font-weight:bold;">SCANNER PAUSED</div><div class="text-white">Click anywhere to resume</div></div></div>`;
+        fg.onclick = () => { document.body.focus(); fg.style.display = 'none'; };
         document.body.appendChild(fg);
     }
 
@@ -626,16 +627,16 @@ const openSpoolDetails = (id) => {
         
         // --- LINK FIX START ---
         // Dynamically update the href of the "Open Spoolman" button
-        // FIX: Added /#/ for Spoolman SPA routing
+        // FIX: Updated to match /spool/show/ structure
         const btnLink = document.getElementById('btn-open-spoolman');
         if (btnLink) {
             if (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) {
                 // Ensure no double slashes if user config has trailing slash
                 const baseUrl = SPOOLMAN_URL.endsWith('/') ? SPOOLMAN_URL.slice(0, -1) : SPOOLMAN_URL;
-                btnLink.href = `${baseUrl}/#/spool/${d.id}`;
+                btnLink.href = `${baseUrl}/spool/show/${d.id}`;
             } else {
                 console.warn("SPOOLMAN_URL is undefined. Using relative path.");
-                btnLink.href = `/#/spool/${d.id}`;
+                btnLink.href = `/spool/show/${d.id}`;
             }
         }
         // --- LINK FIX END ---
