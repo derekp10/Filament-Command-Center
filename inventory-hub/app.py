@@ -9,7 +9,7 @@ import csv
 import os
 import json
 
-VERSION = "v154.9 (Spoolman Link Fixed)"
+VERSION = "v154.15 (Queue + Spoolman Link)"
 app = Flask(__name__)
 
 @app.after_request
@@ -24,7 +24,7 @@ def dashboard():
     ip = cfg.get('server_ip', '127.0.0.1')
     if ip == '0.0.0.0': ip = '127.0.0.1'
     port = cfg.get('spoolman_port', 7912)
-    # FIX: Added /#/ for Spoolman's SPA routing
+    # Correct format for Spoolman
     sm_url = f"http://{ip}:{port}"
     
     return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url)
