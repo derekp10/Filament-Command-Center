@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.1 (Dev Branch Fix)
+ * Version: v154.3 (Details & Queue Fix)
  */
 
-const DASHBOARD_VERSION = "v154.1 (Dev Branch Fix)";
+const DASHBOARD_VERSION = "v154.3 (Details & Queue Fix)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -54,7 +54,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if(vTag) vTag.innerText = DASHBOARD_VERSION;
 
     // Bootstrap Modals
-    // We initialize them all here so we can call them later by ID
     ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal', 'queueModal', 'spoolModal'].forEach(id => {
         const el = document.getElementById(id);
         if(el) modals[id] = new bootstrap.Modal(el);
@@ -105,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btnPrintAction.onclick = () => {
             const idText = document.getElementById('detail-id').innerText;
             if (idText) {
+                // Scrape current details
                 const spoolObj = {
                     id: parseInt(idText),
                     filament: {
@@ -141,7 +141,6 @@ const generateSafeQR = (elementId, text, size) => {
     });
 };
 
-// --- CHAMELEON ENGINE V8 ---
 const getHexDark = (hex, opacity=0.3) => {
     if (!hex) return 'rgba(0,0,0,0.5)';
     hex = hex.replace('#', '');
@@ -301,7 +300,6 @@ const renderBuffer = () => {
     
     state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 74)); 
 
-    // Update Nav Deck if it exists (in Manage Modal)
     if (n) {
         if (state.heldSpools.length > 1) {
             const nextSpool = state.heldSpools[1];
@@ -342,12 +340,10 @@ const renderBuffer = () => {
 const processScan = (text) => {
     const upper = text.toUpperCase();
     
-    // --- COMMAND INTERCEPTS ---
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
     if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
     if (upper === 'CMD:DROP') { toggleDropMode(); return; }
     if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
-    // FIX: Intercept EJECTALL specifically so it doesn't trigger Eject Mode
     if (upper === 'CMD:EJECTALL') { triggerEjectAll(document.getElementById('manage-loc-id').value); return; }
     
     if (upper === 'CMD:UNDO') { triggerUndo(); return; }
@@ -355,18 +351,14 @@ const processScan = (text) => {
     if (upper === 'CMD:PREV') { prevBuffer(); return; }
     if (upper === 'CMD:NEXT') { nextBuffer(); return; }
 
-    // --- CONTEXT COMMANDS ---
     if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
     
-    // Modal Interactions
     if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
     if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
     if (state.activeModal === 'action') { if(upper.includes('CANCEL')) { closeModal('actionModal'); return; } if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
     
-    // Specific Item Trash
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
-    // --- SERVER IDENTIFICATION ---
     setProcessing(true);
     fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) })
     .then(r=>r.json())
@@ -434,6 +426,8 @@ const openManage = (id) => {
     document.getElementById('manageTitle').innerText=`Location Manager: ${id}`; 
     document.getElementById('manage-loc-id').value=id; 
     document.getElementById('manual-spool-id').value=""; 
+    
+    // We do NOT render here anymore. The listener handles it.
     modals.manageModal.show(); 
     refreshManageView(id);
 };
@@ -498,7 +492,7 @@ const renderGrid = (data, max) => {
                 <div class="cham-body slot-inner" style="background:${styles.inner};">
                     <div class="slot-num">Slot ${i}</div>
                     <div id="qr-slot-${i}" class="bg-white p-1 rounded mb-2"></div>
-                    <div class="slot-content cham-text" style="font-size:1.1rem;">${item.display}</div>
+                    <div class="slot-content cham-text" style="font-size:1.1rem; cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">${item.display}</div>
                     <button class="btn btn-sm btn-light border-dark mt-2 fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>
                 </div>`;
         } else {
@@ -555,13 +549,11 @@ const renderUnslotted = (items) => {
 
 const renderBadgeHTML = (s, i, locId) => {
     const styles = getFilamentStyle(s.color);
-    const safeName = (s.display || "").replace(/'/g, "\\'");
-    const safeHex = (s.color || "").replace('#', '');
     
     return `
     <div class="cham-card manage-list-item" style="background:${styles.frame}">
         <div class="cham-body" style="background: ${styles.inner}">
-            <div class="cham-text-group">
+            <div class="cham-text-group" style="cursor:pointer;" onclick="openSpoolDetails(${s.id})">
                 <div class="cham-id-badge">#${s.id}</div>
                 <div class="cham-text">${s.display}</div>
             </div>
@@ -570,7 +562,7 @@ const renderBadgeHTML = (s, i, locId) => {
                     <div id="qr-pick-${i}" class="badge-qr"></div>
                     <button class="badge-btn btn-pick">PICK</button>
                 </div>
-                <div class="action-badge" onclick="addToQueue({id:${s.id}, filament:{name:'${safeName}', color_hex:'${safeHex}'}})">
+                <div class="action-badge" onclick="event.stopPropagation(); quickQueue(${s.id})">
                     <div id="qr-print-${i}" class="badge-qr"></div>
                     <button class="badge-btn btn-print">QUEUE</button>
                 </div>
@@ -589,6 +581,54 @@ const renderBadgeQRs = (s, i) => {
     generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 56);
 };
 
+// --- RESTORED: OPEN SPOOL DETAILS ---
+const openSpoolDetails = (id) => {
+    setProcessing(true);
+    fetch(`/api/spool_details?id=${id}`)
+    .then(r=>r.json())
+    .then(d => {
+        setProcessing(false);
+        if(!d.id) { showToast("Error loading details", "error"); return; }
+        
+        // Populate Modal
+        document.getElementById('detail-id').innerText = d.id;
+        document.getElementById('detail-material').innerText = d.filament?.material || "Unknown";
+        document.getElementById('detail-vendor').innerText = d.filament?.vendor?.name || "Unknown";
+        document.getElementById('detail-weight').innerText = (d.filament?.weight || 0) + "g";
+        document.getElementById('detail-used').innerText = (d.used_weight || 0).toFixed(1) + "g";
+        document.getElementById('detail-remaining').innerText = (d.remaining_weight || 0).toFixed(1) + "g";
+        document.getElementById('detail-color-name').innerText = d.filament?.name || "Unknown";
+        document.getElementById('detail-hex').innerText = (d.filament?.color_hex || "").toUpperCase();
+        document.getElementById('detail-comment').value = d.comment || "";
+        
+        const swatch = document.getElementById('detail-swatch');
+        if(swatch) swatch.style.backgroundColor = "#" + (d.filament?.color_hex || "333");
+        
+        // Open Modal
+        modals.spoolModal.show();
+    })
+    .catch(e => { setProcessing(false); console.error(e); });
+};
+
+// --- NEW: QUICK QUEUE (Fixes list button) ---
+const quickQueue = (id) => {
+    // Fetch data just to get the name/color for the queue list
+    fetch(`/api/spool_details?id=${id}`)
+    .then(r=>r.json())
+    .then(d => {
+        if(!d.id) return;
+        addToQueue({
+            id: d.id,
+            filament: {
+                name: d.filament?.name,
+                material: d.filament?.material,
+                vendor: { name: d.filament?.vendor?.name },
+                color_hex: d.filament?.color_hex
+            }
+        });
+    });
+};
+
 // --- LOGIC: ACTIONS ---
 const handleSlotInteraction = (slot) => {
     if(!document.getElementById('manageModal').classList.contains('show')) return;
@@ -603,7 +643,7 @@ const handleSlotInteraction = (slot) => {
     } else if(item) promptAction("Slot Action", `Manage ${item.display}`, [
         {label:"✋ Pick Up", action:()=>{state.heldSpools.unshift({id:item.id, display:item.display, color:item.color}); renderBuffer(); doEject(item.id, locId, false);}}, 
         {label:"🗑️ Eject", action:()=>{doEject(item.id, locId, false);}}, 
-        {label:"🖨️ Print Label", action:()=>{printLabel(item.id);}}
+        {label:"🖨️ Details", action:()=>{openSpoolDetails(item.id);}}
     ]);
 };
 
