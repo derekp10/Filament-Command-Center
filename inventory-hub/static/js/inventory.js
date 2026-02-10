@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.7 (Dynamic Stacking)
+ * Version: v154.8 (Spoolman Link Fix)
  */
 
-const DASHBOARD_VERSION = "v154.7 (Dynamic Stacking)";
+const DASHBOARD_VERSION = "v154.8 (Spoolman Link Fix)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -60,7 +60,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // --- SMART STACKER LOGIC ---
-    // Automatically handles Z-Index so newest window is always on top
     document.addEventListener('show.bs.modal', (event) => {
         const zIndex = 1050 + (10 * document.querySelectorAll('.modal.show').length);
         event.target.style.zIndex = zIndex;
@@ -118,7 +117,6 @@ document.addEventListener('DOMContentLoaded', () => {
         btnPrintAction.onclick = () => {
             const idText = document.getElementById('detail-id').innerText;
             if (idText) {
-                // Scrape current details
                 const spoolObj = {
                     id: parseInt(idText),
                     filament: {
@@ -626,13 +624,20 @@ const openSpoolDetails = (id) => {
         const swatch = document.getElementById('detail-swatch');
         if(swatch) swatch.style.backgroundColor = "#" + (d.filament?.color_hex || "333");
         
-        // LINK FIX: Update the Spoolman Button
+        // --- LINK FIX START ---
+        // Dynamically update the href of the "Open Spoolman" button
         const btnLink = document.getElementById('btn-open-spoolman');
-        if(btnLink && typeof SPOOLMAN_URL !== 'undefined') {
-            btnLink.href = `${SPOOLMAN_URL}/spool/${d.id}`;
+        if (btnLink) {
+            // Check if global SPOOLMAN_URL exists (injected by dashboard.html)
+            if (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) {
+                btnLink.href = `${SPOOLMAN_URL}/spool/${d.id}`;
+            } else {
+                console.warn("SPOOLMAN_URL is undefined. Using relative path.");
+                btnLink.href = `/spool/${d.id}`; // Fallback, though likely wrong port
+            }
         }
+        // --- LINK FIX END ---
 
-        // Open Modal
         if(modals.spoolModal) modals.spoolModal.show();
         else {
             const el = document.getElementById('spoolModal');
