@@ -1,16 +1,22 @@
 <style>
-    /* --- STICKER FACTORY: v2.0 (GRID EDITION) --- */
+    /* --- STICKER FACTORY: v2.1 (MANUAL OFFSET EDITION) --- */
     @media print {
         body * { visibility: hidden; }
-        @page { size: auto; margin: 0mm; } /* Let printer driver handle margins */
+        @page { size: auto; margin: 0mm; } /* Try to kill driver margins */
         html, body { margin: 0; padding: 0; }
         
         /* Show the container */
         #printable-queue-container {
             visibility: visible !important;
             display: block !important;
-            position: absolute; left: 0; top: 0;
-            width: 100%;
+            position: absolute; 
+            
+            /* --- 🖨️ CALIBRATION ZONE 🖨️ --- */
+            left: 46px;   /* User Request: Move over 46px */
+            top: 10px;    /* User Request: Move down (Start with 10px) */
+            width: 60mm !important; /* User Request: 60mm Wide Page Limit */
+            /* ------------------------------- */
+            
             background: white;
             z-index: 9999;
         }
@@ -21,9 +27,10 @@
         /* Page Break for multiple labels */
         .print-job-item {
             page-break-inside: avoid;
-            margin-bottom: 2mm; /* Tiny gap between labels */
-            border-bottom: 1px dashed #ccc; /* Cut line helper */
+            margin-bottom: 3mm; /* Gap between labels */
+            border-bottom: 1px dashed #999; /* Cut line */
             padding-bottom: 1mm;
+            width: 100%;
         }
     }
 
@@ -32,12 +39,15 @@
 
     /* --- THE LABEL DESIGN (CSS GRID) --- */
     .label-box {
-        width: 56mm; height: 24mm; /* Standard 24mm Tape Size */
+        /* Fixed Label Size */
+        width: 58mm; /* Slightly under 60mm to prevent overflow */
+        height: 24mm; 
+        
         background: #fff; color: #000;
         font-family: 'Arial Narrow', sans-serif;
         display: grid;
-        grid-template-columns: 18mm 1fr; /* Left: QR (Fixed), Right: Data (Flexible) */
-        border: 1px solid #ddd; /* faint border for preview */
+        grid-template-columns: 18mm 1fr; /* Left: QR, Right: Data */
+        border: 2px solid #000; /* Thicker border for visibility */
         box-sizing: border-box;
         overflow: hidden;
     }
@@ -64,6 +74,7 @@
         justify-content: space-between;
         padding-left: 1mm;
         padding-right: 1mm;
+        line-height: 1;
     }
 
     /* TEXT ROWS */
@@ -76,8 +87,8 @@
     .lbl-row:last-child { border-bottom: none; }
 
     .lbl-key {
-        font-size: 6pt; font-weight: 900;
-        width: 8mm; flex-shrink: 0;
+        font-size: 7pt; font-weight: 900;
+        width: 9mm; flex-shrink: 0;
         text-transform: uppercase;
     }
     .lbl-val {
@@ -85,7 +96,7 @@
         white-space: nowrap;
         overflow: hidden; text-overflow: ellipsis;
     }
-    .lbl-hex { font-family: monospace; font-size: 7pt; }
+    .lbl-hex { font-family: monospace; font-size: 7pt; letter-spacing: 1px; }
 </style>
 
 <div id="printable-queue-container"></div>
