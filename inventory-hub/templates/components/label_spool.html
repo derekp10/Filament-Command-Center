@@ -1,5 +1,5 @@
 <style>
-    /* --- STICKER FACTORY: v2.1 (MANUAL OFFSET EDITION) --- */
+    /* --- STICKER FACTORY: v2.2 (MARGIN EATER EDITION) --- */
     @media print {
         body * { visibility: hidden; }
         @page { size: auto; margin: 0mm; } /* Try to kill driver margins */
@@ -12,9 +12,9 @@
             position: absolute; 
             
             /* --- 🖨️ CALIBRATION ZONE 🖨️ --- */
-            left: 46px;   /* User Request: Move over 46px */
-            top: 10px;    /* User Request: Move down (Start with 10px) */
-            width: 60mm !important; /* User Request: 60mm Wide Page Limit */
+            left: 2mm;    /* Was 46px. Reduced to 2mm to fill left margin */
+            top: 8mm;     /* Was 10px. Increased to 8mm (~30px) to push down */
+            width: 60mm !important; /* Fixed at 60mm */
             /* ------------------------------- */
             
             background: white;
@@ -39,8 +39,7 @@
 
     /* --- THE LABEL DESIGN (CSS GRID) --- */
     .label-box {
-        /* Fixed Label Size */
-        width: 58mm; /* Slightly under 60mm to prevent overflow */
+        width: 100%; /* Fill the 60mm container */
         height: 24mm; 
         
         background: #fff; color: #000;
