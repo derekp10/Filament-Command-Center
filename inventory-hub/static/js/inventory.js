@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.4 (Details Restored)
+ * Version: v154.5 (Debug Mode)
  */
 
-const DASHBOARD_VERSION = "v154.4 (Details Restored)";
+const DASHBOARD_VERSION = "v154.5 (Debug Mode)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -54,7 +54,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if(vTag) vTag.innerText = DASHBOARD_VERSION;
 
     // Bootstrap Modals
-    // FIX 1: Added 'spoolModal' to initialization list
     ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal', 'queueModal', 'spoolModal'].forEach(id => {
         const el = document.getElementById(id);
         if(el) modals[id] = new bootstrap.Modal(el);
@@ -582,22 +581,35 @@ const renderBadgeQRs = (s, i) => {
     generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 56);
 };
 
-// --- FIX 4: RESTORED OPEN SPOOL DETAILS FUNCTION ---
+// --- ROBUST OPEN SPOOL DETAILS FUNCTION ---
 const openSpoolDetails = (id) => {
     setProcessing(true);
     fetch(`/api/spool_details?id=${id}`)
-    .then(r=>r.json())
+    .then(r => {
+        if (!r.ok) throw new Error(`Server Error: ${r.status}`);
+        return r.json();
+    })
     .then(d => {
         setProcessing(false);
-        if(!d.id) { showToast("Error loading details", "error"); return; }
+        // SAFETY CHECK: Ensure data is valid
+        if (!d || !d.id) { 
+            showToast("Details Data Missing!", "error"); 
+            console.error("Invalid Spool Data Received:", d);
+            return; 
+        }
         
         // Populate Modal
         document.getElementById('detail-id').innerText = d.id;
         document.getElementById('detail-material').innerText = d.filament?.material || "Unknown";
         document.getElementById('detail-vendor').innerText = d.filament?.vendor?.name || "Unknown";
         document.getElementById('detail-weight').innerText = (d.filament?.weight || 0) + "g";
-        document.getElementById('detail-used').innerText = (d.used_weight || 0).toFixed(1) + "g";
-        document.getElementById('detail-remaining').innerText = (d.remaining_weight || 0).toFixed(1) + "g";
+        
+        // Safety for used/remaining weights which might be null
+        const used = d.used_weight !== null ? d.used_weight : 0;
+        const rem = d.remaining_weight !== null ? d.remaining_weight : 0;
+        document.getElementById('detail-used').innerText = Number(used).toFixed(1) + "g";
+        document.getElementById('detail-remaining').innerText = Number(rem).toFixed(1) + "g";
+        
         document.getElementById('detail-color-name').innerText = d.filament?.name || "Unknown";
         document.getElementById('detail-hex').innerText = (d.filament?.color_hex || "").toUpperCase();
         document.getElementById('detail-comment').value = d.comment || "";
@@ -606,9 +618,18 @@ const openSpoolDetails = (id) => {
         if(swatch) swatch.style.backgroundColor = "#" + (d.filament?.color_hex || "333");
         
         // Open Modal
-        modals.spoolModal.show();
+        if(modals.spoolModal) modals.spoolModal.show();
+        else {
+            const el = document.getElementById('spoolModal');
+            if(el) { modals.spoolModal = new bootstrap.Modal(el); modals.spoolModal.show(); }
+            else showToast("Modal HTML Missing!", "error");
+        }
     })
-    .catch(e => { setProcessing(false); console.error(e); });
+    .catch(e => { 
+        setProcessing(false); 
+        console.error(e);
+        showToast("Connection/Data Error", "error");
+    });
 };
 
 // --- NEW: QUICK QUEUE (Fixes list button) ---
