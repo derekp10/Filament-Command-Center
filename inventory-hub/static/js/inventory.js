@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v153.84 (Scope Fix & Queue System)
+ * Version: v153.9 (Restored + Queue)
  */
 
-const DASHBOARD_VERSION = "v153.84 (Stable)";
+const DASHBOARD_VERSION = "v153.9 (Queue Active)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -97,6 +97,30 @@ document.addEventListener('DOMContentLoaded', () => {
         manualInput.addEventListener("keydown", (e) => { 
             if (e.key === "Enter") { e.preventDefault(); manualAddSpool(); }
         });
+    }
+    
+    // Wire up Spool Detail "Add to Queue" button
+    const btnPrintAction = document.getElementById('btn-print-action');
+    if (btnPrintAction) {
+        btnPrintAction.onclick = () => {
+            // We need the current spool ID from the modal
+            const idText = document.getElementById('detail-id').innerText;
+            if (idText) {
+                // Fetch full data again or construct basic object?
+                // Constructing basic object is faster for now
+                const spoolObj = {
+                    id: parseInt(idText),
+                    filament: {
+                        name: document.getElementById('detail-color-name').innerText,
+                        material: document.getElementById('detail-material').innerText,
+                        vendor: { name: document.getElementById('detail-vendor').innerText },
+                        color_hex: document.getElementById('detail-hex').innerText
+                    }
+                };
+                addToQueue(spoolObj);
+                modals.spoolModal.hide();
+            }
+        };
     }
 
     updateLogState(); 
@@ -253,7 +277,10 @@ const renderBuffer = () => {
     
     if (state.heldSpools.length === 0) { 
         z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; 
-        if(n) n.style.display = 'none';
+        if(n) {
+             n.style.display = 'none';
+             n.innerHTML = "";
+        }
         return; 
     }
     
@@ -278,6 +305,7 @@ const renderBuffer = () => {
     
     state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 74)); 
 
+    // Update Nav Deck if it exists (in Manage Modal)
     if (n) {
         if (state.heldSpools.length > 1) {
             const nextSpool = state.heldSpools[1];
@@ -405,6 +433,7 @@ const openManage = (id) => {
     document.getElementById('manage-loc-id').value=id; 
     document.getElementById('manual-spool-id').value=""; 
     modals.manageModal.show(); 
+    refreshManageView(id);
 };
 
 const closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
@@ -442,6 +471,9 @@ const refreshManageView = (id) => {
     .then(d => { 
         if(isGrid) renderGrid(d, parseInt(loc['Max Spools'])); 
         else renderList(d, id); 
+        
+        // Also update buffer nav deck since we are in manage mode
+        renderBuffer();
     });
     return true;
 };
@@ -520,6 +552,10 @@ const renderUnslotted = (items) => {
 
 const renderBadgeHTML = (s, i, locId) => {
     const styles = getFilamentStyle(s.color);
+    // Escape single quotes in name for the onclick handler
+    const safeName = (s.display || "").replace(/'/g, "\\'");
+    const safeHex = (s.color || "").replace('#', '');
+    
     return `
     <div class="cham-card manage-list-item" style="background:${styles.frame}">
         <div class="cham-body" style="background: ${styles.inner}">
@@ -532,7 +568,7 @@ const renderBadgeHTML = (s, i, locId) => {
                     <div id="qr-pick-${i}" class="badge-qr"></div>
                     <button class="badge-btn btn-pick">PICK</button>
                 </div>
-                <div class="action-badge" onclick="addToQueue({id:${s.id}, filament:{name:'${s.display.replace(/'/g, "")}', color_hex:'${s.color}'}})">
+                <div class="action-badge" onclick="addToQueue({id:${s.id}, filament:{name:'${safeName}', color_hex:'${safeHex}'}})">
                     <div id="qr-print-${i}" class="badge-qr"></div>
                     <button class="badge-btn btn-print">QUEUE</button>
                 </div>
@@ -696,6 +732,9 @@ const hexToRgb = (hex) => {
 };
 
 const printLabel = (sid) => {
+    // This is the direct print command. 
+    // If you want "Print Label" to go to Queue, call addToQueue instead.
+    // For now, leaving as direct print per old logic.
     showToast("🖨️ Requesting Label..."); 
     setProcessing(true);
 
@@ -708,7 +747,6 @@ const printLabel = (sid) => {
     .then(res => {
         setProcessing(false);
         if (!res.success) { showToast(res.msg || "Print Failed", "error"); return; }
-        if (res.method === 'csv') { showToast(res.msg, "success"); return; }
         if (res.method === 'browser') {
             const data = res.data;
             if (!data || !data.filament) { showToast("Invalid Data", "error"); return; }
@@ -798,13 +836,12 @@ function openQueueModal() {
                 </li>`;
         });
     }
-    const modal = new bootstrap.Modal(document.getElementById('queueModal'));
-    modal.show();
+    modals.queueModal.show();
 }
 
 function removeFromQueue(index) {
     labelQueue.splice(index, 1);
-    openQueueModal(); 
+    openQueueModal(); // Re-render list
     updateQueueUI();
 }
 
@@ -816,15 +853,21 @@ function clearQueue() {
 
 function printQueueBrowser() {
     const container = document.getElementById('printable-queue-container');
-    container.innerHTML = ""; 
+    if (!container) { showToast("Error: No print container", "error"); return; }
+    container.innerHTML = ""; // Clear old
+
     if (labelQueue.length === 0) return;
+
     labelQueue.forEach(spool => {
         const fil = spool.filament;
         const vid = spool.id;
         const hex = fil.color_hex || "";
+        
+        // Create Wrapper
         const wrap = document.createElement('div');
         wrap.className = 'print-job-item';
         const qrId = `qr-${vid}`;
+        
         wrap.innerHTML = `
             <div class="label-box">
                 <div class="label-qr" id="${qrId}"></div>
@@ -834,16 +877,26 @@ function printQueueBrowser() {
                     <div class="lbl-row"><div class="lbl-key">MATL</div><div class="lbl-val">${fil.material}</div></div>
                     <div class="lbl-row"><div class="lbl-key">ID#${vid}</div><div class="lbl-val lbl-hex">${hex}</div></div>
                 </div>
-            </div>`;
+            </div>
+        `;
         container.appendChild(wrap);
-        new QRCode(document.getElementById(qrId), {text: `ID:${vid}`, width: 60, height: 60, correctLevel: QRCode.CorrectLevel.L});
+
+        // Render QR
+        new QRCode(document.getElementById(qrId), {
+            text: `ID:${vid}`,
+            width: 60, height: 60,
+            correctLevel: QRCode.CorrectLevel.L
+        });
     });
+
+    // Wait for QRs to render
     setTimeout(() => window.print(), 800);
 }
 
 function printQueueCSV() {
     if (labelQueue.length === 0) return;
     const ids = labelQueue.map(s => s.id);
+    
     fetch('/api/print_batch_csv', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -854,13 +907,12 @@ function printQueueCSV() {
         if(res.success) {
             showToast("✅ Sent " + res.count + " labels to CSV!");
             clearQueue();
-            const el = document.getElementById('queueModal');
-            const modal = bootstrap.Modal.getInstance(el);
-            if (modal) modal.hide();
+            modals.queueModal.hide();
         } else {
             showToast("Error: " + res.msg, "error");
         }
     });
 }
 
+// Start Loop
 setInterval(updateLogState, 2500);
