@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.11 (Restored Visuals)
+ * Version: v154.12 (Link Pattern Corrected)
  */
 
-const DASHBOARD_VERSION = "v154.11 (Restored Visuals)";
+const DASHBOARD_VERSION = "v154.12 (Link Pattern Corrected)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -628,22 +628,21 @@ const openSpoolDetails = (id) => {
         const swatch = document.getElementById('detail-swatch');
         if(swatch) swatch.style.backgroundColor = "#" + (d.filament?.color_hex || "333");
         
-        // --- LINK FIX START ---
+        // --- LINK FIX: NO HASH ---
         // Dynamically update the href of the "Open Spoolman" button
-        // FIX: Updated to match /#/spool/show/ structure
+        // FIX: Removed the /#/ to match user's working example /spool/show/
         const btnLink = document.getElementById('btn-open-spoolman');
         if (btnLink) {
             if (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) {
                 // Ensure no double slashes if user config has trailing slash
                 const baseUrl = SPOOLMAN_URL.endsWith('/') ? SPOOLMAN_URL.slice(0, -1) : SPOOLMAN_URL;
-                btnLink.href = `${baseUrl}/#/spool/show/${d.id}`;
+                btnLink.href = `${baseUrl}/spool/show/${d.id}`;
             } else {
                 console.warn("SPOOLMAN_URL is undefined. Using relative path.");
-                btnLink.href = `/#/spool/show/${d.id}`;
+                btnLink.href = `/spool/show/${d.id}`;
             }
         }
-        // --- LINK FIX END ---
-
+        
         if(modals.spoolModal) modals.spoolModal.show();
         else {
             const el = document.getElementById('spoolModal');
