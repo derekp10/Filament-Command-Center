@@ -9,13 +9,16 @@ import csv
 import os
 import json
 
-VERSION = "v153.7 (Sticker Factory)"
+VERSION = "v153.9 (Queue Active)"
 app = Flask(__name__)
 
 @app.after_request
 def add_header(r):
     r.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return r
+
+@app.route('/')
+def dashboard(): return render_template('dashboard.html', version=VERSION)
 
 # --- HELPER FUNCTIONS FOR LABELS ---
 def clean_string(s):
@@ -57,49 +60,21 @@ def get_best_hex(item_data):
         if first_hex: return first_hex
     return item_data.get('color_hex', '')
 
-@app.route('/')
-def dashboard(): return render_template('dashboard.html', version=VERSION)
+# --- ROUTE 1: SINGLE PRINT ---
+@app.route('/api/print_label', methods=['POST'])
+def api_print_label():
+    sid = request.json.get('id')
+    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
 
-def clean_string(s):
-    if isinstance(s, str): return s.strip('"').strip("'")
-    return s
+    spool = spoolman_api.get_spool(sid)
+    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
 
-def hex_to_rgb(hex_str):
-    if not hex_str or len(hex_str) < 6: return "", "", ""
-    try:
-        clean_hex = hex_str.lstrip('#')
-        return int(clean_hex[0:2], 16), int(clean_hex[2:4], 16), int(clean_hex[4:6], 16)
-    except ValueError:
-        return "", "", ""
+    # Browser Mode: Just return data
+    return jsonify({"success": True, "method": "browser", "data": spool})
 
-def get_smart_type(material, extra_data):
-    material = clean_string(material) or ""
-    raw_attrs = extra_data.get('filament_attributes', '[]')
-    try:
-        attrs_list = json.loads(raw_attrs) if isinstance(raw_attrs, str) else raw_attrs
-        if not isinstance(attrs_list, list): attrs_list = []
-    except json.JSONDecodeError: attrs_list = []
-    
-    clean_attrs = [clean_string(a) for a in attrs_list if a]
-    if clean_attrs: return f"{' '.join(clean_attrs)} {material}"
-    return material
-
-def get_color_name(item_data):
-    extra = item_data.get('extra', {})
-    if 'original_color' in extra:
-        val = clean_string(extra['original_color'])
-        if val: return val
-    return item_data.get('name', 'Unknown')
-
-def get_best_hex(item_data):
-    extra = item_data.get('extra', {})
-    multi_hex = item_data.get('multi_color_hexes') or extra.get('multi_color_hexes')
-    if multi_hex:
-        first_hex = multi_hex.split(',')[0].strip()
-        if first_hex: return first_hex
-    return item_data.get('color_hex', '')
-
-
+# --- ROUTE 2: BATCH CSV ---
+@app.route('/api/print_batch_csv', methods=['POST'])
+def api_print_batch_csv():
     data = request.json
     ids = data.get('ids', [])
     if not ids: return jsonify({"success": False, "msg": "Empty Queue"})
@@ -129,53 +104,7 @@ def get_best_hex(item_data):
                 fil_extra = fil.get('extra', {})
 
                 brand = vend.get('name', 'Unknown')
-                name = get_color_name(fil) # THIS FUNCTION MUST EXIST ABOVE
-                material = fil.get('material', 'Unknown')
-                smart_type = get_smart_type(material, fil_extra) # THIS ONE TOO
-                hex_val = get_best_hex(fil)
-                r, g, b = hex_to_rgb(hex_val)
-                weight = f"{fil.get('weight', 0):.0f}g"
-                qr = f"ID:{sid}"
-                
-                writer.writerow([sid, brand, name, smart_type, hex_val, r, g, b, weight, qr])
-
-        return jsonify({"success": True, "count": len(ids)})
-        
-    except PermissionError:
-        return jsonify({"success": False, "msg": "CSV File Locked! Close Excel."})
-    except Exception as e:
-        state.logger.error(f"Batch CSV Error: {e}")
-        return jsonify({"success": False, "msg": str(e)})
-    data = request.json
-    ids = data.get('ids', [])
-    if not ids: return jsonify({"success": False, "msg": "Empty Queue"})
-
-    cfg = config_loader.load_config()
-    # Force use of CSV path from config
-    csv_path = cfg.get("print_settings", {}).get("csv_path", "labels.csv")
-
-    try:
-        file_exists = os.path.exists(csv_path)
-        # Open in Append mode
-        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            
-            # Add Header if file is new
-            if not file_exists:
-                writer.writerow(['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code'])
-            
-            for sid in ids:
-                # Get Spool Data
-                spool = spoolman_api.get_spool(sid)
-                if not spool: continue
-                
-                # Extract Fields (Reuse logic)
-                fil = spool.get('filament', {})
-                vend = fil.get('vendor', {})
-                fil_extra = fil.get('extra', {})
-
-                brand = vend.get('name', 'Unknown')
-                name = get_color_name(fil) # Uses helper from previous step
+                name = get_color_name(fil) # Uses helper
                 material = fil.get('material', 'Unknown')
                 smart_type = get_smart_type(material, fil_extra) # Uses helper
                 hex_val = get_best_hex(fil)
@@ -192,268 +121,8 @@ def get_best_hex(item_data):
     except Exception as e:
         state.logger.error(f"Batch CSV Error: {e}")
         return jsonify({"success": False, "msg": str(e)})
-    sid = request.json.get('id')
-    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
 
-    # 1. Get Spool Data
-    spool = spoolman_api.get_spool(sid)
-    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
-
-    # 2. Check Config Mode
-    cfg = config_loader.load_config()
-    print_cfg = cfg.get("print_settings", {})
-    mode = print_cfg.get("mode", "browser").lower()
-
-    # --- OPTION B: CSV AUTOMATION (SMART APPEND) ---
-    if mode == "csv":
-        csv_path = print_cfg.get("csv_path", "labels.csv")
-        try:
-            # A. Prepare Data Row
-            fil = spool.get('filament', {})
-            vend = fil.get('vendor', {})
-            extra = spool.get('extra', {})
-            fil_extra = fil.get('extra', {})
-            
-            brand = vend.get('name', 'Unknown')
-            name = get_color_name(fil)
-            material = fil.get('material', 'Unknown')
-            smart_type = get_smart_type(material, fil_extra)
-            hex_val = get_best_hex(fil)
-            r, g, b = hex_to_rgb(hex_val)
-            weight = f"{fil.get('weight', 0):.0f}g"
-            qr_code = f"ID:{sid}"
-
-            new_row = [sid, brand, name, smart_type, hex_val, r, g, b, weight, qr_code]
-            headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
-
-            # B. Read & Clean Existing File
-            existing_rows = []
-            if os.path.exists(csv_path):
-                with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    reader = csv.reader(f)
-                    for row in reader:
-                        if any(cell.strip() for cell in row): # Only keep non-empty rows
-                            existing_rows.append(row)
-            
-            # C. Check if we need headers
-            # If file was empty (or just whitespace), existing_rows will be empty
-            if not existing_rows:
-                existing_rows.append(headers)
-            elif existing_rows[0] != headers:
-                # If file exists but first row isn't our headers (weird?), force headers? 
-                # Better safe than sorry: If first row looks like data, prepend headers.
-                if "ID" not in existing_rows[0]: 
-                    existing_rows.insert(0, headers)
-
-            # D. Append New Data
-            existing_rows.append(new_row)
-
-            # E. Rewrite File (Clean)
-            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerows(existing_rows)
-                
-            return jsonify({"success": True, "method": "csv", "msg": "Sent to P-Touch Queue 🖨️"})
-            
-        except PermissionError:
-            return jsonify({"success": False, "msg": "❌ CSV File is Locked! Close Excel and try again."})
-        except Exception as e:
-            state.logger.error(f"CSV Print Error: {e}")
-            return jsonify({"success": False, "msg": f"CSV Error: {e}"})
-
-    # --- OPTION A: BROWSER PRINTING ---
-    else:
-        return jsonify({
-            "success": True, 
-            "method": "browser", 
-            "data": spool
-        })
-    sid = request.json.get('id')
-    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
-
-    # 1. Get Spool Data
-    spool = spoolman_api.get_spool(sid)
-    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
-
-    # 2. Check Config Mode
-    cfg = config_loader.load_config()
-    print_cfg = cfg.get("print_settings", {})
-    mode = print_cfg.get("mode", "browser").lower()
-
-    # --- OPTION B: CSV AUTOMATION ---
-    if mode == "csv":
-        csv_path = print_cfg.get("csv_path", "labels.csv")
-        try:
-            file_exists = os.path.exists(csv_path)
-            
-            with open(csv_path, 'a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                # HEADERS
-                if not file_exists:
-                    writer.writerow(['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code'])
-                
-                # EXTRACT DATA
-                fil = spool.get('filament', {})
-                vend = fil.get('vendor', {})
-                extra = spool.get('extra', {})
-                fil_extra = fil.get('extra', {})
-                
-                # CALCULATE FIELDS
-                brand = vend.get('name', 'Unknown')
-                name = get_color_name(fil)
-                material = fil.get('material', 'Unknown')
-                smart_type = get_smart_type(material, fil_extra)
-                
-                hex_val = get_best_hex(fil)
-                r, g, b = hex_to_rgb(hex_val)
-                
-                weight = f"{fil.get('weight', 0):.0f}g"
-                
-                # QR CODE FIX: Now uses ID format for Scanner compatibility
-                qr_code = f"ID:{sid}"
-
-                # WRITE ROW
-                writer.writerow([sid, brand, name, smart_type, hex_val, r, g, b, weight, qr_code])
-                
-            return jsonify({"success": True, "method": "csv", "msg": "Sent to P-Touch Queue 🖨️"})
-            
-        except PermissionError:
-            return jsonify({"success": False, "msg": "❌ CSV File is Locked! Close Excel and try again."})
-        except Exception as e:
-            state.logger.error(f"CSV Print Error: {e}")
-            return jsonify({"success": False, "msg": f"CSV Error: {e}"})
-
-    # --- OPTION A: BROWSER PRINTING ---
-    else:
-        # Pass data back so the browser knows what to render
-        return jsonify({
-            "success": True, 
-            "method": "browser", 
-            "data": spool
-        })
-    sid = request.json.get('id')
-    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
-
-    spool = spoolman_api.get_spool(sid)
-    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
-
-    cfg = config_loader.load_config()
-    print_cfg = cfg.get("print_settings", {})
-    mode = print_cfg.get("mode", "browser").lower()
-
-    # --- OPTION B: CSV AUTOMATION (Matches auto_generate_labels.py) ---
-    if mode == "csv":
-        csv_path = print_cfg.get("csv_path", "labels.csv")
-        try:
-            file_exists = os.path.exists(csv_path)
-            
-            with open(csv_path, 'a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                # HEADERS: ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
-                if not file_exists:
-                    writer.writerow(['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code'])
-                
-                # EXTRACT DATA
-                fil = spool.get('filament', {})
-                vend = fil.get('vendor', {})
-                extra = spool.get('extra', {}) # Spool extra
-                fil_extra = fil.get('extra', {}) # Filament extra
-                
-                # CALCULATE FIELDS
-                brand = vend.get('name', 'Unknown')
-                # For color name, we usually look at filament name/extra, but your script checks spool? 
-                # Actually auto_generate_labels checks item_data (which is spool in that context).
-                # Spoolman structure: Spool -> Filament. 
-                # Let's check Filament Name/Extra for Color Name logic.
-                name = get_color_name(fil) 
-                
-                material = fil.get('material', 'Unknown')
-                smart_type = get_smart_type(material, fil_extra)
-                
-                hex_val = get_best_hex(fil)
-                r, g, b = hex_to_rgb(hex_val)
-                
-                weight = f"{fil.get('weight', 0):.0f}g"
-                
-                # QR CODE (Matches your HUB_BASE logic)
-                server_ip = cfg.get('server_ip', '192.168.1.29')
-                # Assuming HUB port 8000 based on your script
-                qr_link = f"http://{server_ip}:8000/scan/{sid}"
-
-                # WRITE ROW
-                writer.writerow([sid, brand, name, smart_type, hex_val, r, g, b, weight, qr_link])
-                
-            return jsonify({"success": True, "method": "csv", "msg": "Sent to P-Touch Queue 🖨️"})
-            
-        except Exception as e:
-            state.logger.error(f"CSV Print Error: {e}")
-            return jsonify({"success": False, "msg": f"CSV Error: {e}"})
-
-    # --- OPTION A: BROWSER PRINTING ---
-    else:
-        # Pass formatted data for browser JS convenience too?
-        # For now, let's stick to raw spool data and let JS handle it, 
-        # unless you want the Python logic to pre-calc for browser too.
-        return jsonify({
-            "success": True, 
-            "method": "browser", 
-            "data": spool
-        })
-    sid = request.json.get('id')
-    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
-
-    # 1. Get Spool Data
-    spool = spoolman_api.get_spool(sid)
-    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
-
-    # 2. Check Config Mode
-    cfg = config_loader.load_config()
-    print_cfg = cfg.get("print_settings", {})
-    mode = print_cfg.get("mode", "browser").lower()
-
-    # --- OPTION B: CSV AUTOMATION ---
-    if mode == "csv":
-        csv_path = print_cfg.get("csv_path", "labels.csv")
-        try:
-            # Check if file exists to write headers
-            file_exists = os.path.exists(csv_path)
-            
-            with open(csv_path, 'a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                # If new file, write header (Adjust to match your P-Touch template)
-                if not file_exists:
-                    writer.writerow(["ID", "Vendor", "Name", "Material", "Color", "Weight", "Comment", "QR_Content"])
-                
-                # Extract Data
-                fil = spool.get('filament', {})
-                vend = fil.get('vendor', {})
-                
-                # Write Row
-                writer.writerow([
-                    spool.get('id'),
-                    vend.get('name', 'Unknown'),
-                    fil.get('name', 'Unknown'),
-                    fil.get('material', 'Unknown'),
-                    fil.get('color_hex', ''),
-                    fil.get('weight', 0),
-                    spool.get('comment', ''),
-                    f"ID:{spool.get('id')}" # QR Content
-                ])
-                
-            return jsonify({"success": True, "method": "csv", "msg": "Sent to P-Touch Queue 🖨️"})
-            
-        except Exception as e:
-            state.logger.error(f"CSV Print Error: {e}")
-            return jsonify({"success": False, "msg": f"CSV Error: {e}"})
-
-    # --- OPTION A: BROWSER PRINTING ---
-    else:
-        # Return the data so the browser can render the sticker
-        return jsonify({
-            "success": True, 
-            "method": "browser", 
-            "data": spool
-        })
+# --- EXISTING ROUTES ---
 
 @app.route('/api/locations', methods=['GET'])
 def api_get_locations(): 
@@ -520,7 +189,6 @@ def api_get_contents_route():
     loc = request.args.get('id', '').strip().upper()
     return jsonify(spoolman_api.get_spools_at_location_detailed(loc))
 
-# NEW: Route to fetch raw spool data for labels
 @app.route('/api/spool_details', methods=['GET'])
 def api_spool_details():
     sid = request.args.get('id')
@@ -571,8 +239,6 @@ def api_identify_scan():
     res = logic.resolve_scan(text)
 
     # --- AUDIT MODE INTERCEPTION ---
-    
-    # 1. Check for Activation Trigger (CMD:AUDIT)
     if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
         state.reset_audit()
         state.AUDIT_SESSION['active'] = True
@@ -580,13 +246,11 @@ def api_identify_scan():
         state.add_log_entry("Scan a Location label to begin checking.", "INFO")
         return jsonify({"type": "command", "cmd": "clear"}) 
 
-    # 2. If Audit is Active, route all scans to the Audit Brain
     if state.AUDIT_SESSION.get('active'):
         logic.process_audit_scan(res)
         return jsonify({"type": "command", "cmd": "clear"})
-    # -------------------------------
 
-    # Standard Operation (If Audit is OFF)
+    # Standard Operation
     if not res: return jsonify({"type": "unknown"})
     if res['type'] == 'location':
         lid = res['id']; 
@@ -618,67 +282,6 @@ def api_get_logs_route():
         "audit_active": state.AUDIT_SESSION.get('active', False),
         "status": {"spoolman": sm_ok, "filabridge": fb_ok}
     })
-
-# --- PRINT QUEUE ROUTES ---
-@app.route('/api/print_label', methods=['POST'])
-def api_print_label():
-    sid = request.json.get('id')
-    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
-
-    spool = spoolman_api.get_spool(sid)
-    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
-
-    # Browser Mode: Just return data
-    return jsonify({"success": True, "method": "browser", "data": spool})
-
-@app.route('/api/print_batch_csv', methods=['POST'])
-def api_print_batch_csv():
-    data = request.json
-    ids = data.get('ids', [])
-    if not ids: return jsonify({"success": False, "msg": "Empty Queue"})
-
-    cfg = config_loader.load_config()
-    # Force use of CSV path from config
-    csv_path = cfg.get("print_settings", {}).get("csv_path", "labels.csv")
-
-    try:
-        file_exists = os.path.exists(csv_path)
-        # Open in Append mode
-        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            
-            # Add Header if file is new
-            if not file_exists:
-                writer.writerow(['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code'])
-            
-            for sid in ids:
-                # Get Spool Data
-                spool = spoolman_api.get_spool(sid)
-                if not spool: continue
-                
-                # Extract Fields 
-                fil = spool.get('filament', {})
-                vend = fil.get('vendor', {})
-                fil_extra = fil.get('extra', {})
-
-                brand = vend.get('name', 'Unknown')
-                name = get_color_name(fil) # Uses helper
-                material = fil.get('material', 'Unknown')
-                smart_type = get_smart_type(material, fil_extra) # Uses helper
-                hex_val = get_best_hex(fil)
-                r, g, b = hex_to_rgb(hex_val)
-                weight = f"{fil.get('weight', 0):.0f}g"
-                qr = f"ID:{sid}"
-                
-                writer.writerow([sid, brand, name, smart_type, hex_val, r, g, b, weight, qr])
-
-        return jsonify({"success": True, "count": len(ids)})
-        
-    except PermissionError:
-        return jsonify({"success": False, "msg": "CSV File Locked! Close Excel."})
-    except Exception as e:
-        state.logger.error(f"Batch CSV Error: {e}")
-        return jsonify({"success": False, "msg": str(e)})
 
 if __name__ == '__main__':
     state.logger.info(f"🛠️ Server {VERSION} Started")
