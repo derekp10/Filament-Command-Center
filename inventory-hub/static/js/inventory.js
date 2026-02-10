@@ -54,8 +54,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if(vTag) vTag.innerText = DASHBOARD_VERSION;
 
     // Bootstrap Modals
-    // IMPORTANT: queueModal must be in this list!
-    ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal', 'queueModal', 'spoolModal'].forEach(id => {
+    // ADDED: 'queueModal' to this list so the popup initializes!
+    ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal', 'queueModal'].forEach(id => {
         const el = document.getElementById(id);
         if(el) modals[id] = new bootstrap.Modal(el);
     });
