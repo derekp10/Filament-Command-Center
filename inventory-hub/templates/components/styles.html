@@ -1,5 +1,5 @@
 <style>
-    /* --- DARK MODE KIOSK THEME (Final Polish) --- */
+    /* --- DARK MODE KIOSK THEME (Layout & Print Fix) --- */
     body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
     
     /* Navigation */
@@ -8,9 +8,9 @@
     
     /* Main Layout */
     .main-container { 
-        height: calc(100vh - 70px); 
+        height: calc(100vh - 70px); /* Full height minus navbar */
         display: flex; 
-        flex-direction: column; 
+        flex-direction: column; /* STACK VERTICALLY */
         padding: 10px; 
         gap: 10px; 
         overflow: hidden; 
@@ -18,10 +18,10 @@
         z-index: 1; 
     }
     
-    /* Content Row */
+    /* Content Row (Logs + Buffer) */
     .content-row {
-        flex: 1; 
-        display: flex;
+        flex: 1; /* Takes all available space */
+        display: flex; /* Side by side */
         gap: 10px;
         overflow: hidden;
         min-height: 0; 
@@ -45,7 +45,7 @@
     .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; color: #00d4ff; font-weight: bold; display: flex; justify-content: space-between; flex-shrink: 0; }
     .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
     
-    /* Command Deck */
+    /* Command Deck - Pinned to Bottom */
     .cmd-deck { 
         height: 140px; 
         flex-shrink: 0;
@@ -56,7 +56,7 @@
         justify-content: space-around; 
         gap: 10px; 
         z-index: 10; 
-        margin-top: auto; /* Ensures it sits at bottom */
+        margin-top: auto; 
     }
     .deck-btn { 
         flex: 1; 
@@ -90,10 +90,8 @@
     
     .badge-qr { background: #fff; padding: 2px; border-radius: 4px; margin-bottom: 3px; }
     
-    /* COLOR FIX: Removed !important from generic white */
+    /* Colors */
     .badge-btn { background: none; border: none; font-weight: bold; font-size: 0.8rem; text-transform: uppercase; color: #fff; }
-    
-    /* COLOR FIX: Added !important to specific colors to override generic */
     .btn-pick { color: #00d4ff !important; border-color: #00d4ff; }
     .btn-print { color: #d633ff !important; border-color: #d633ff; }
     .btn-trash { color: #f44 !important; border-color: #f44; }
@@ -124,16 +122,5 @@
     
     @keyframes popIn { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
     
-    @media print {
-        body * { visibility: hidden; }
-        #printable-queue-container, #printable-queue-container * { visibility: visible; }
-        #printable-queue-container { position: absolute; left: 0; top: 0; width: 100%; }
-        .print-job-item { break-inside: avoid; page-break-inside: avoid; border: 1px solid #000; padding: 5px; margin: 5px; display: flex; width: 100%; max-width: 300px; }
-        .label-box { display: flex; align-items: center; width: 100%; }
-        .label-qr { margin-right: 10px; width: 60px; height: 60px; }
-        .label-data { font-family: sans-serif; font-size: 10px; flex-grow: 1; }
-        .lbl-row { display: flex; justify-content: space-between; border-bottom: 1px solid #ccc; }
-        .lbl-key { font-weight: bold; margin-right: 5px; }
-        .lbl-hex { font-family: monospace; }
-    }
+    /* NOTE: @media print removed to prevent conflicts with label_spool.html */
 </style>
