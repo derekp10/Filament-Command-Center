@@ -151,7 +151,7 @@
                         <p class="text-muted mt-2">Scan a spool to add it here.</p>
                     </div>
                     <div id="manage-contents-list"></div>
-                    <div class="danger-zone pb-5">
+                    <div class="danger-zone pb-5 text-center">
                          <div class="action-badge" style="border-color:#dc3545; display:inline-flex;" onclick="triggerEjectAll(document.getElementById('manage-loc-id').value)">
                             <div id="qr-eject-all-list" class="badge-qr"></div>
                             <button class="badge-btn btn-trash">EJECT ALL</button>
@@ -170,7 +170,7 @@
                         <span style="flex:1"></span>
                         <span>✓ DONE / SYNC</span>
                         <span style="flex:1; text-align:right;">
-                            <div id="qr-modal-done" class="footer-qr-box d-inline-block"></div>
+                            <div id="qr-modal-done" class="bg-white p-1 rounded d-inline-block" style="cursor:pointer;" onclick="closeManage()"></div>
                         </span>
                     </button>
                 </div>
