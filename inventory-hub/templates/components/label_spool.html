@@ -1,26 +1,35 @@
 <style>
-    /* --- STICKER FACTORY: v153.27 (BORDERLESS & SMART) --- */
+    /* --- STICKER FACTORY: v153.28 (VISIBILITY FIX) --- */
     @media print {
         body * { visibility: hidden; }
         @page { size: 56mm 24mm; margin: 0; }
         html, body { width: 56mm; height: 24mm; margin: 0; padding: 0; overflow: hidden; }
-        #printable-label-container, #printable-label-container * { visibility: visible; }
+        
+        /* THE FIX: We added !important to override the global 'display: none' */
+        #printable-label-container, #printable-label-container * { 
+            visibility: visible; 
+            display: flex !important; 
+        }
         
         #printable-label-container { 
             position: fixed; left: 0; top: 0; 
             width: 56mm; height: 24mm;
             background: white;
-            display: flex;
             justify-content: center; 
             align-items: flex-start;
             padding-top: 7mm;
             padding-left: 2mm;
+            z-index: 9999; /* Ensure it sits on top */
         }
+    }
+
+    /* Screen Styles (Hidden) */
+    #printable-label-container {
+        display: none; /* Keep hidden on screen */
     }
 
     .label-box {
         width: 50mm; height: 16.5mm; 
-        /* NO BORDER */
         background: #fff; color: #000;
         font-family: 'Arial Narrow', 'Roboto Condensed', sans-serif;
         font-stretch: condensed;
@@ -32,7 +41,7 @@
         border-right: 1.5pt solid #000; 
         flex-shrink: 0; display: flex; 
         align-items: center; justify-content: center; 
-        padding: 2mm; /* QUIET ZONE */
+        padding: 2mm; 
     }
     .label-qr img { width: 100% !important; height: auto !important; }
 

@@ -74,6 +74,82 @@ def api_print_label():
     print_cfg = cfg.get("print_settings", {})
     mode = print_cfg.get("mode", "browser").lower()
 
+    # --- OPTION B: CSV AUTOMATION (SMART APPEND) ---
+    if mode == "csv":
+        csv_path = print_cfg.get("csv_path", "labels.csv")
+        try:
+            # A. Prepare Data Row
+            fil = spool.get('filament', {})
+            vend = fil.get('vendor', {})
+            extra = spool.get('extra', {})
+            fil_extra = fil.get('extra', {})
+            
+            brand = vend.get('name', 'Unknown')
+            name = get_color_name(fil)
+            material = fil.get('material', 'Unknown')
+            smart_type = get_smart_type(material, fil_extra)
+            hex_val = get_best_hex(fil)
+            r, g, b = hex_to_rgb(hex_val)
+            weight = f"{fil.get('weight', 0):.0f}g"
+            qr_code = f"ID:{sid}"
+
+            new_row = [sid, brand, name, smart_type, hex_val, r, g, b, weight, qr_code]
+            headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
+
+            # B. Read & Clean Existing File
+            existing_rows = []
+            if os.path.exists(csv_path):
+                with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if any(cell.strip() for cell in row): # Only keep non-empty rows
+                            existing_rows.append(row)
+            
+            # C. Check if we need headers
+            # If file was empty (or just whitespace), existing_rows will be empty
+            if not existing_rows:
+                existing_rows.append(headers)
+            elif existing_rows[0] != headers:
+                # If file exists but first row isn't our headers (weird?), force headers? 
+                # Better safe than sorry: If first row looks like data, prepend headers.
+                if "ID" not in existing_rows[0]: 
+                    existing_rows.insert(0, headers)
+
+            # D. Append New Data
+            existing_rows.append(new_row)
+
+            # E. Rewrite File (Clean)
+            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerows(existing_rows)
+                
+            return jsonify({"success": True, "method": "csv", "msg": "Sent to P-Touch Queue 🖨️"})
+            
+        except PermissionError:
+            return jsonify({"success": False, "msg": "❌ CSV File is Locked! Close Excel and try again."})
+        except Exception as e:
+            state.logger.error(f"CSV Print Error: {e}")
+            return jsonify({"success": False, "msg": f"CSV Error: {e}"})
+
+    # --- OPTION A: BROWSER PRINTING ---
+    else:
+        return jsonify({
+            "success": True, 
+            "method": "browser", 
+            "data": spool
+        })
+    sid = request.json.get('id')
+    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
+
+    # 1. Get Spool Data
+    spool = spoolman_api.get_spool(sid)
+    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
+
+    # 2. Check Config Mode
+    cfg = config_loader.load_config()
+    print_cfg = cfg.get("print_settings", {})
+    mode = print_cfg.get("mode", "browser").lower()
+
     # --- OPTION B: CSV AUTOMATION ---
     if mode == "csv":
         csv_path = print_cfg.get("csv_path", "labels.csv")
