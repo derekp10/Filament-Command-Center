@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.16 (Queue + Spoolman Link)
+ * Version: v154.17 (Label Data Restore)
  */
 
-const DASHBOARD_VERSION = "v154.16 (Queue + Spoolman Link)";
+const DASHBOARD_VERSION = "v154.17 (Label Data Restore)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
