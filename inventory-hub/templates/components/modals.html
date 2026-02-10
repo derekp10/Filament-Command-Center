@@ -1,46 +1,6 @@
-<div class="modal fade" id="spoolModal" tabindex="-1">
-    <div class="modal-dialog modal-lg modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="modal-title">Spool Details</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="row">
-                    <div class="col-md-6">
-                        <p><strong>ID:</strong> <span id="detail-id"></span></p>
-                        <p><strong>Material:</strong> <span id="detail-material"></span></p>
-                        <p><strong>Vendor:</strong> <span id="detail-vendor"></span></p>
-                        <p><strong>Weight:</strong> <span id="detail-weight"></span></p>
-                        <p><strong>Used:</strong> <span id="detail-used"></span></p>
-                        <p><strong>Remaining:</strong> <span id="detail-remaining" class="fw-bold"></span></p>
-                    </div>
-                    <div class="col-md-6 text-center">
-                        <div id="detail-swatch" style="width: 100px; height: 100px; border-radius: 50%; margin: 0 auto; border: 3px solid #ccc;"></div>
-                        <p class="mt-2" id="detail-color-name"></p>
-                        <p class="text-muted" id="detail-hex"></p>
-                    </div>
-                </div>
-                <hr>
-                <div class="mb-3">
-                    <label class="form-label">Comment / Notes</label>
-                    <textarea class="form-control" id="detail-comment" rows="2" readonly></textarea>
-                </div>
-            </div>
-            <div class="modal-footer justify-content-between">
-                <a href="#" id="btn-open-spoolman" target="_blank" class="btn btn-outline-secondary">Open in Spoolman ↗️</a>
-                <div>
-                    <button type="button" class="btn btn-warning" id="btn-print-action">➕ Add to Print Queue</button>
-                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="modal fade" id="queueModal" tabindex="-1">
+<div class="modal fade" id="queueModal" tabindex="-1" style="z-index: 1080;">
     <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
+        <div class="modal-content border-warning">
             <div class="modal-header bg-warning">
                 <h5 class="modal-title text-dark">🖨️ Print Queue</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -59,7 +19,44 @@
     </div>
 </div>
 
-<div class="modal fade" id="locMgrModal" tabindex="-1">
+<div class="modal fade" id="spoolModal" tabindex="-1" style="z-index: 1070;">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content border-info">
+            <div class="modal-header bg-dark border-bottom border-secondary">
+                <h5 class="modal-title text-info" id="modal-title">Spool Details</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body bg-dark text-white">
+                <div class="row">
+                    <div class="col-md-6">
+                        <p class="mb-1"><strong>ID:</strong> <span id="detail-id" class="text-info"></span></p>
+                        <p class="mb-1"><strong>Material:</strong> <span id="detail-material"></span></p>
+                        <p class="mb-1"><strong>Vendor:</strong> <span id="detail-vendor"></span></p>
+                        <p class="mb-1"><strong>Weight:</strong> <span id="detail-weight"></span></p>
+                        <p class="mb-1"><strong>Used:</strong> <span id="detail-used"></span></p>
+                        <p class="mb-1"><strong>Remaining:</strong> <span id="detail-remaining" class="fw-bold text-success"></span></p>
+                    </div>
+                    <div class="col-md-6 text-center">
+                        <div id="detail-swatch" style="width: 80px; height: 80px; border-radius: 50%; margin: 0 auto; border: 3px solid #fff; box-shadow: 0 0 10px rgba(255,255,255,0.2);"></div>
+                        <p class="mt-2 mb-0 fw-bold" id="detail-color-name"></p>
+                        <p class="text-muted small" id="detail-hex"></p>
+                    </div>
+                </div>
+                <hr class="border-secondary">
+                <div class="mb-3">
+                    <label class="form-label text-muted small">Comment / Notes</label>
+                    <textarea class="form-control bg-black text-white border-secondary" id="detail-comment" rows="2" readonly></textarea>
+                </div>
+            </div>
+            <div class="modal-footer bg-dark border-top border-secondary justify-content-between">
+                <button type="button" class="btn btn-warning fw-bold" id="btn-print-action">➕ Add to Queue</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="locMgrModal" tabindex="-1" style="z-index: 1060;">
     <div class="modal-dialog modal-xl modal-dialog-scrollable modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
@@ -89,7 +86,7 @@
     </div>
 </div>
 
-<div class="modal fade" id="locModal" tabindex="-1">
+<div class="modal fade" id="locModal" tabindex="-1" style="z-index: 1065;">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
@@ -128,7 +125,7 @@
     </div>
 </div>
 
-<div class="modal fade" id="manageModal" tabindex="-1">
+<div class="modal fade" id="manageModal" tabindex="-1" style="z-index: 1055;">
     <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header bg-dark border-secondary">
@@ -138,24 +135,19 @@
                 </div>
                 <button type="button" class="btn-close btn-close-white" onclick="closeManage()"></button>
             </div>
-            
             <div class="modal-body bg-black d-flex flex-column">
                 <input type="hidden" id="manage-loc-id">
-                
                 <div id="buffer-nav-deck" class="nav-deck mb-3" style="display:none;"></div>
-
                 <div id="manage-grid-view" class="container-fluid px-4 flex-grow-1" style="display:none;">
                     <div id="slot-grid-container" class="slot-grid"></div>
                     <div id="unslotted-container" class="mt-4"></div>
                 </div>
-
                 <div id="manage-list-view" class="container px-3 flex-grow-1" style="display:none;">
                     <div id="manage-empty-msg" class="empty-state-box">
                         <div class="empty-state-text">EMPTY</div>
                         <p class="text-muted mt-2">Scan a spool to add it here.</p>
                     </div>
                     <div id="manage-contents-list"></div>
-                    
                     <div class="danger-zone pb-5">
                          <div class="action-badge" style="border-color:#dc3545; display:inline-flex;" onclick="triggerEjectAll(document.getElementById('manage-loc-id').value)">
                             <div id="qr-eject-all-list" class="badge-qr"></div>
@@ -163,10 +155,8 @@
                         </div>
                     </div>
                 </div>
-                
                 <div style="height: 10px;"></div>
             </div>
-
             <div class="modal-footer bg-dark border-top border-secondary p-2 d-block">
                 <div class="container-fluid">
                     <div class="input-group input-group-lg mb-2">
@@ -174,7 +164,8 @@
                         <button class="btn btn-primary fw-bold" onclick="manualAddSpool()">+ ADD</button>
                     </div>
                     <button class="btn btn-success w-100 btn-lg fw-bold d-flex justify-content-between align-items-center" onclick="closeManage()">
-                        <span style="flex:1"></span> <span>✓ DONE / SYNC</span>
+                        <span style="flex:1"></span>
+                        <span>✓ DONE / SYNC</span>
                         <span style="flex:1; text-align:right;">
                             <div id="qr-modal-done" class="footer-qr-box d-inline-block"></div>
                         </span>
@@ -185,7 +176,7 @@
     </div>
 </div>
 
-<div class="modal fade" id="actionModal" tabindex="-1">
+<div class="modal fade" id="actionModal" tabindex="-1" style="z-index: 1090;">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
@@ -202,7 +193,7 @@
     </div>
 </div>
 
-<div class="modal fade" id="confirmModal" tabindex="-1">
+<div class="modal fade" id="confirmModal" tabindex="-1" style="z-index: 1095;">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-warning">
             <div class="modal-header bg-warning text-dark">
@@ -225,7 +216,7 @@
     </div>
 </div>
 
-<div class="modal fade" id="safetyModal" tabindex="-1">
+<div class="modal fade" id="safetyModal" tabindex="-1" style="z-index: 1100;">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-danger">
             <div class="modal-header bg-danger text-white">
