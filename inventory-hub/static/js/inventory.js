@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v153.9 (Restored + Queue)
+ * Version: v154.0 (Robust Queue)
  */
 
-const DASHBOARD_VERSION = "v153.9 (Queue Active)";
+const DASHBOARD_VERSION = "v154.0 (Robust Queue)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -53,11 +53,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const vTag = document.querySelector('.version-tag');
     if(vTag) vTag.innerText = DASHBOARD_VERSION;
 
-    // Bootstrap Modals
-    // ADDED: 'queueModal' to this list so the popup initializes!
-    ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal', 'queueModal'].forEach(id => {
+    // Bootstrap Modals - Attempt Initial Load
+    ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal', 'queueModal', 'spoolModal'].forEach(id => {
         const el = document.getElementById(id);
         if(el) modals[id] = new bootstrap.Modal(el);
+        else console.warn(`⚠️ Warning: Modal element #${id} not found during init.`);
     });
     
     // --- EVENT LISTENER FOR MANAGER (Safety Net) ---
@@ -66,7 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
         manageEl.addEventListener('shown.bs.modal', () => {
             const id = document.getElementById('manage-loc-id').value;
             renderBuffer();
-            refreshManageView(id); // Re-trigger to be safe
+            refreshManageView(id); 
             generateSafeQR('qr-modal-done', 'CMD:DONE', 42);
         });
     }
@@ -103,11 +103,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnPrintAction = document.getElementById('btn-print-action');
     if (btnPrintAction) {
         btnPrintAction.onclick = () => {
-            // We need the current spool ID from the modal
             const idText = document.getElementById('detail-id').innerText;
             if (idText) {
-                // Fetch full data again or construct basic object?
-                // Constructing basic object is faster for now
                 const spoolObj = {
                     id: parseInt(idText),
                     filament: {
@@ -125,13 +122,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateLogState(); 
     fetchLocations(); 
-    updateQueueUI(); // Init Queue Counter
+    updateQueueUI(); 
 });
 
 // --- CORE FUNCTIONS ---
 
 const generateSafeQR = (elementId, text, size) => {
-    // DETERMINISTIC RENDERING (Double RAF)
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             const el = document.getElementById(elementId);
@@ -351,7 +347,6 @@ const processScan = (text) => {
     if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
     if (upper === 'CMD:DROP') { toggleDropMode(); return; }
     if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
-    // FIX: Intercept EJECTALL specifically so it doesn't trigger Eject Mode
     if (upper === 'CMD:EJECTALL') { triggerEjectAll(document.getElementById('manage-loc-id').value); return; }
     
     if (upper === 'CMD:UNDO') { triggerUndo(); return; }
@@ -359,7 +354,6 @@ const processScan = (text) => {
     if (upper === 'CMD:PREV') { prevBuffer(); return; }
     if (upper === 'CMD:NEXT') { nextBuffer(); return; }
 
-    // --- CONTEXT COMMANDS ---
     if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
     
     // Modal Interactions
@@ -367,10 +361,8 @@ const processScan = (text) => {
     if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
     if (state.activeModal === 'action') { if(upper.includes('CANCEL')) { closeModal('actionModal'); return; } if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
     
-    // Specific Item Trash
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
-    // --- SERVER IDENTIFICATION ---
     setProcessing(true);
     fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) })
     .then(r=>r.json())
@@ -438,8 +430,6 @@ const openManage = (id) => {
     document.getElementById('manageTitle').innerText=`Location Manager: ${id}`; 
     document.getElementById('manage-loc-id').value=id; 
     document.getElementById('manual-spool-id').value=""; 
-    
-    // We do NOT render here anymore. The listener handles it.
     modals.manageModal.show(); 
     refreshManageView(id);
 };
@@ -529,9 +519,9 @@ const renderList = (data, locId) => {
     // LOGIC: Toggle visibility based on data length
     if (data.length === 0) {
         list.innerHTML = "";
-        if(emptyMsg) emptyMsg.style.display = 'flex'; // Show the HTML element
+        if(emptyMsg) emptyMsg.style.display = 'flex'; 
     } else {
-        if(emptyMsg) emptyMsg.style.display = 'none'; // Hide the HTML element
+        if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
         data.forEach((s,i) => renderBadgeQRs(s, i));
     }
@@ -561,7 +551,6 @@ const renderUnslotted = (items) => {
 
 const renderBadgeHTML = (s, i, locId) => {
     const styles = getFilamentStyle(s.color);
-    // Escape single quotes in name for the onclick handler
     const safeName = (s.display || "").replace(/'/g, "\\'");
     const safeHex = (s.color || "").replace('#', '');
     
@@ -832,7 +821,13 @@ function addToQueue(spool) {
 
 function openQueueModal() {
     const list = document.getElementById('queue-list-items');
-    if (!list) return;
+    // Safety check for UI elements
+    if (!list) {
+        showToast("Error: Queue List Element Missing!", "error");
+        console.error("Missing #queue-list-items");
+        return;
+    }
+    
     list.innerHTML = "";
     if (labelQueue.length === 0) {
         list.innerHTML = "<li class='list-group-item'>Queue is empty</li>";
@@ -846,8 +841,18 @@ function openQueueModal() {
                 </li>`;
         });
     }
-    const modal = new bootstrap.Modal(document.getElementById('queueModal'));
-    modal.show();
+
+    // Lazy Init: If the modal wasn't caught at startup, find it now
+    if (!modals.queueModal) {
+        const el = document.getElementById('queueModal');
+        if(el) {
+            modals.queueModal = new bootstrap.Modal(el);
+        } else {
+            showToast("CRITICAL: Queue Modal HTML Missing!", "error");
+            return;
+        }
+    }
+    modals.queueModal.show();
 }
 
 function removeFromQueue(index) {
