@@ -1,5 +1,5 @@
 <style>
-    /* --- STICKER FACTORY: v2.6 (MAX HEIGHT + WIDTH EDITION) --- */
+    /* --- STICKER FACTORY: v3.0 (WIDEBODY + BIG TEXT EDITION) --- */
     @media print {
         body * { visibility: hidden; }
         @page { size: auto; margin: 0mm; } 
@@ -12,9 +12,12 @@
             position: absolute; 
             
             /* --- 🖨️ CALIBRATION ZONE 🖨️ --- */
-            left: 6mm;    /* Nudged to 6mm to center the wider label */
-            top: 0mm;     /* Pushed all the way to the top edge */
-            width: 60mm !important; 
+            /* LEFT: Reduced to 1mm to reclaim that huge empty left margin */
+            left: 1mm;    
+            /* TOP: Increased to 3.5mm to push down away from the split/header */
+            top: 3.5mm;   
+            /* WIDTH: Blown out to 72mm to match the "Gold Standard" length */
+            width: 72mm !important; 
             /* ------------------------------- */
             
             background: white;
@@ -25,7 +28,7 @@
         
         .print-job-item {
             page-break-inside: avoid;
-            margin-bottom: 3mm; 
+            margin-bottom: 4mm; /* Good gap for the cutter */
             width: 100%;
         }
     }
@@ -35,13 +38,13 @@
 
     /* --- THE LABEL DESIGN (CSS GRID) --- */
     .label-box {
-        width: 58mm; /* WIDENED to fill the space */
+        width: 70mm; /* Using 70mm of the 72mm container */
         height: 24mm; 
         background: #fff; color: #000;
-        font-family: 'Arial Narrow', sans-serif;
+        font-family: 'Arial', sans-serif; /* Switched to Arial for better readability */
         display: grid;
-        grid-template-columns: 19mm 1fr; /* QR takes fixed width */
-        border: 1px solid #000;
+        grid-template-columns: 20mm 1fr; /* Fixed QR, Rest for Text */
+        border: 2px solid #000; /* Thicker border to see edges in preview */
         box-sizing: border-box;
         overflow: hidden;
     }
@@ -52,11 +55,11 @@
         width: 100%; height: 100%;
         display: flex; align-items: center; justify-content: center;
         padding: 1mm;
-        border-right: 1px solid #000;
+        border-right: 2px solid #000;
     }
     .label-qr img {
-        width: 17mm !important;
-        height: 17mm !important;
+        width: 18mm !important;
+        height: 18mm !important;
         object-fit: contain;
     }
 
@@ -64,9 +67,9 @@
     .label-data {
         grid-column: 2;
         display: flex; flex-direction: column;
-        justify-content: space-between;
-        padding: 1mm;
-        line-height: 1;
+        justify-content: space-evenly; /* Even spacing */
+        padding-left: 2mm; /* More breathing room */
+        padding-right: 1mm;
     }
 
     /* TEXT ROWS */
@@ -74,27 +77,31 @@
         display: flex; 
         justify-content: space-between;
         align-items: center;
-        border-bottom: 1px solid #eee;
-        height: 19%; /* Squeezed slightly to fit 5 rows */
+        border-bottom: 1px solid #ccc;
+        height: 19%; 
         overflow: hidden;
     }
     .lbl-row:last-child { border-bottom: none; }
 
     .lbl-key {
-        font-size: 6pt; font-weight: 900;
+        font-size: 7pt; /* Bumped up */
+        font-weight: 900;
         text-transform: uppercase;
-        color: #666;
+        color: #444;
+        margin-right: 2mm;
     }
     .lbl-val {
-        font-size: 7.5pt; font-weight: bold;
+        font-size: 9pt; /* Bumped up for readability */
+        font-weight: bold;
         white-space: nowrap;
         overflow: hidden; text-overflow: ellipsis;
         text-align: right;
+        color: #000;
     }
     
-    /* Restored Data Styles */
-    .lbl-id { font-size: 8pt; color: #000; }
-    .lbl-rgb { font-family: 'Consolas', monospace; font-size: 6pt; }
+    /* Specific Data Styling */
+    .lbl-id { font-size: 10pt; font-weight: 900; } /* Make ID pop */
+    .lbl-rgb { font-family: 'Consolas', monospace; font-size: 7pt; }
 </style>
 
 <div id="printable-queue-container"></div>
