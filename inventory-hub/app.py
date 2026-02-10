@@ -595,50 +595,6 @@ def api_get_logs_route():
         "status": {"spoolman": sm_ok, "filabridge": fb_ok}
     })
 
-@app.route('/api/print_batch_csv', methods=['POST'])
-def api_print_batch_csv():
-    data = request.json
-    ids = data.get('ids', [])
-    if not ids: return jsonify({"success": False, "msg": "Empty Queue"})
-
-    cfg = config_loader.load_config()
-    # Force use of CSV path from config, regardless of 'mode' setting
-    csv_path = cfg.get("print_settings", {}).get("csv_path", "labels.csv")
-
-    try:
-        # Open file once for the whole batch
-        file_exists = os.path.exists(csv_path)
-        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            if not file_exists:
-                writer.writerow(['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code'])
-            
-            # Process each ID
-            for sid in ids:
-                spool = spoolman_api.get_spool(sid)
-                if not spool: continue
-                
-                # (Reuse your extraction logic here or make it a helper function)
-                fil = spool.get('filament', {})
-                vend = fil.get('vendor', {})
-                brand = vend.get('name', 'Unknown')
-                name = get_color_name(fil) # Use your helper
-                material = fil.get('material', 'Unknown')
-                smart_type = get_smart_type(material, fil.get('extra', {}))
-                hex_val = get_best_hex(fil)
-                r, g, b = hex_to_rgb(hex_val)
-                weight = f"{fil.get('weight', 0):.0f}g"
-                qr = f"ID:{sid}"
-                
-                writer.writerow([sid, brand, name, smart_type, hex_val, r, g, b, weight, qr])
-
-        return jsonify({"success": True, "count": len(ids)})
-        
-    except PermissionError:
-        return jsonify({"success": False, "msg": "CSV Locked! Close Excel."})
-    except Exception as e:
-        return jsonify({"success": False, "msg": str(e)})
-
 if __name__ == '__main__':
     state.logger.info(f"🛠️ Server {VERSION} Started")
     app.run(host='0.0.0.0', port=8000)
