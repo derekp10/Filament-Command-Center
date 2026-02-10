@@ -707,6 +707,7 @@ const printLabel = (sid) => {
     showToast("🖨️ Requesting Label..."); 
     setProcessing(true);
 
+    // CALL THE NEW API ROUTE (POST)
     fetch('/api/print_label', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -721,13 +722,13 @@ const printLabel = (sid) => {
             return;
         }
 
-        // MODE B: CSV / SERVER SIDE
+        // MODE B: CSV (Server handled it)
         if (res.method === 'csv') {
             showToast(res.msg, "success");
             return;
         }
 
-        // MODE A: BROWSER SIDE (Render and Print)
+        // MODE A: BROWSER (We must render and print)
         if (res.method === 'browser') {
             const data = res.data;
             if (!data || !data.filament) { showToast("Invalid Data", "error"); return; }
@@ -744,10 +745,11 @@ const printLabel = (sid) => {
                 if (Array.isArray(attrs) && attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr; 
             } catch (err) {}
 
-            // Populate the Hidden Label Div
+            // POPULATE THE DOM ELEMENTS (Hidden in Body)
             const qrEl = document.getElementById('print-qr'); 
             if (qrEl) { 
                 qrEl.innerHTML = ""; 
+                // Matches Scanner Format
                 new QRCode(qrEl, {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L}); 
             }
 
@@ -758,7 +760,7 @@ const printLabel = (sid) => {
             document.getElementById('lbl-id').innerText = sid;
             document.getElementById('lbl-rgb').innerText = `${rgb.r},${rgb.g},${rgb.b}`; 
             
-            // Trigger Browser Print
+            // LAUNCH BROWSER DIALOG
             setTimeout(() => window.print(), 500);
         }
     })
