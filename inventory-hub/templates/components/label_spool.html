@@ -1,80 +1,91 @@
 <style>
-    /* --- STICKER FACTORY: v153.28 (VISIBILITY FIX) --- */
+    /* --- STICKER FACTORY: v2.0 (GRID EDITION) --- */
     @media print {
         body * { visibility: hidden; }
-        @page { size: 56mm 24mm; margin: 0; }
-        html, body { width: 56mm; height: 24mm; margin: 0; padding: 0; overflow: hidden; }
+        @page { size: auto; margin: 0mm; } /* Let printer driver handle margins */
+        html, body { margin: 0; padding: 0; }
         
-        /* THE FIX: We added !important to override the global 'display: none' */
-        #printable-label-container, #printable-label-container * { 
-            visibility: visible; 
-            display: flex !important; 
+        /* Show the container */
+        #printable-queue-container {
+            visibility: visible !important;
+            display: block !important;
+            position: absolute; left: 0; top: 0;
+            width: 100%;
+            background: white;
+            z-index: 9999;
         }
         
-        #printable-label-container { 
-            position: fixed; left: 0; top: 0; 
-            width: 56mm; height: 24mm;
-            background: white;
-            justify-content: center; 
-            align-items: flex-start;
-            padding-top: 7mm;
-            padding-left: 2mm;
-            z-index: 9999; /* Ensure it sits on top */
+        /* Make children visible */
+        #printable-queue-container * { visibility: visible !important; }
+        
+        /* Page Break for multiple labels */
+        .print-job-item {
+            page-break-inside: avoid;
+            margin-bottom: 2mm; /* Tiny gap between labels */
+            border-bottom: 1px dashed #ccc; /* Cut line helper */
+            padding-bottom: 1mm;
         }
     }
 
     /* Screen Styles (Hidden) */
-    #printable-label-container {
-        display: none; /* Keep hidden on screen */
-    }
+    #printable-queue-container { display: none; }
 
+    /* --- THE LABEL DESIGN (CSS GRID) --- */
     .label-box {
-        width: 50mm; height: 16.5mm; 
+        width: 56mm; height: 24mm; /* Standard 24mm Tape Size */
         background: #fff; color: #000;
-        font-family: 'Arial Narrow', 'Roboto Condensed', sans-serif;
-        font-stretch: condensed;
-        display: flex; box-sizing: border-box; overflow: hidden;
+        font-family: 'Arial Narrow', sans-serif;
+        display: grid;
+        grid-template-columns: 18mm 1fr; /* Left: QR (Fixed), Right: Data (Flexible) */
+        border: 1px solid #ddd; /* faint border for preview */
+        box-sizing: border-box;
+        overflow: hidden;
     }
     
-    .label-qr { 
-        width: 16.5mm; height: 100%; 
-        border-right: 1.5pt solid #000; 
-        flex-shrink: 0; display: flex; 
-        align-items: center; justify-content: center; 
-        padding: 2mm; 
+    /* QR COLUMN */
+    .label-qr {
+        grid-column: 1;
+        width: 100%; height: 100%;
+        display: flex; align-items: center; justify-content: center;
+        padding: 1mm;
+        border-right: 2px solid #000;
     }
-    .label-qr img { width: 100% !important; height: auto !important; }
+    /* Force QR image to fit */
+    .label-qr img {
+        width: 16mm !important;
+        height: 16mm !important;
+        object-fit: contain;
+    }
 
-    .label-data { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; }
-    .lbl-row { display: flex; border-bottom: 1pt solid #000; align-items: center; width: 100%; height: 20%; }
+    /* DATA COLUMN */
+    .label-data {
+        grid-column: 2;
+        display: flex; flex-direction: column;
+        justify-content: space-between;
+        padding-left: 1mm;
+        padding-right: 1mm;
+    }
+
+    /* TEXT ROWS */
+    .lbl-row {
+        display: flex; align-items: center;
+        border-bottom: 1px solid #000;
+        height: 25%; /* 4 rows = 100% */
+        overflow: hidden;
+    }
     .lbl-row:last-child { border-bottom: none; }
 
-    .lbl-key { font-weight: 900; font-size: 5pt; padding-left: 1px; border-right: 1pt solid #000; width: 6mm; flex-shrink: 0; text-transform: uppercase; display: flex; align-items: center; height: 100%; }
-    .lbl-val { font-weight: bold; font-size: 7.5pt; padding-left: 2px; white-space: nowrap; overflow: hidden; display: flex; align-items: center; flex-grow: 1; height: 100%; letter-spacing: -0.3px; }
-    .val-type { font-size: 7pt; font-weight: 900; }
-
-    .lbl-split { display: flex; width: 100%; height: 100%; }
-    .lbl-half { display: flex; align-items: center; border-right: 1pt solid #000; font-size: 5.5pt; font-weight: bold; padding-left: 1px; }
-    .lbl-half-hex { flex: 1; font-family: monospace; font-size: 6.5pt; } 
-    .lbl-half-id { flex: 1; font-weight: 900; font-size: 7.5pt; justify-content: center; }  
-    .lbl-half:last-child { border-right: none; }
-    .small-tag { font-weight: 900; font-size: 4pt; margin-right: 1mm; text-transform: uppercase; color: #444; }
+    .lbl-key {
+        font-size: 6pt; font-weight: 900;
+        width: 8mm; flex-shrink: 0;
+        text-transform: uppercase;
+    }
+    .lbl-val {
+        font-size: 8pt; font-weight: bold;
+        white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis;
+    }
+    .lbl-hex { font-family: monospace; font-size: 7pt; }
 </style>
 
-<div id="printable-label-container">
-    <div class="label-box">
-        <div class="label-qr" id="print-qr"></div>
-        <div class="label-data">
-            <div class="lbl-row row-brand"><div class="lbl-key">BRND</div><div class="lbl-val" id="lbl-brand"></div></div>
-            <div class="lbl-row row-color"><div class="lbl-key">COLR</div><div class="lbl-val" id="lbl-color"></div></div>
-            <div class="lbl-row row-type"><div class="lbl-key">TYPE</div><div class="lbl-val val-type" id="lbl-type"></div></div>
-            <div class="lbl-row row-tech">
-                <div class="lbl-split">
-                    <div class="lbl-half lbl-half-hex"><span class="small-tag">#</span><span id="lbl-hex"></span></div>
-                    <div class="lbl-half lbl-half-id"><span class="small-tag">ID</span><span id="lbl-id"></span></div>
-                </div>
-            </div>
-            <div class="lbl-row row-rgb"><div class="lbl-key">RGB</div><div class="lbl-val" id="lbl-rgb"></div></div>
-        </div>
-    </div>
-</div>
+<div id="printable-queue-container"></div>

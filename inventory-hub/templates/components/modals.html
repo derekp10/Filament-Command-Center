@@ -1,93 +1,82 @@
-<div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static">
-    <div class="modal-dialog modal-xl">
-        <div class="modal-content">
-            <div class="modal-header bg-dark border-bottom border-secondary d-flex justify-content-between align-items-center">
-                
-                <h5 class="modal-title text-info fw-bold">Location List</h5>
-                
-                <div class="d-flex align-items-center gap-3">
-                    <span id="loc-count" class="text-info fw-bold">Total Locations: 0</span>
-                    <button class="btn btn-success btn-sm fw-bold" onclick="openAddModal()">+ New Location</button>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
-
-            </div>
-            
-            <div class="modal-body bg-black p-0">
-                <div class="modal-body-scrollable px-3 pb-3 pt-0">
-                    <table class="table table-dark table-striped table-hover mb-0 mt-0">
-                        <thead class="sticky-th">
-                            <tr>
-                                <th>ID</th>
-                                <th>Name</th>
-                                <th>Status</th>
-                                <th class="text-end">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="location-table"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static">
+<div class="modal fade" id="spoolModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <div class="modal-header bg-dark border-bottom border-secondary">
-                <h5 class="modal-title text-info fw-bold" id="manageTitle">Location Manager</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            <div class="modal-header">
+                <h5 class="modal-title" id="modal-title">Spool Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <div class="modal-body bg-black p-0">
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <p><strong>ID:</strong> <span id="detail-id"></span></p>
+                        <p><strong>Material:</strong> <span id="detail-material"></span></p>
+                        <p><strong>Vendor:</strong> <span id="detail-vendor"></span></p>
+                        <p><strong>Weight:</strong> <span id="detail-weight"></span></p>
+                        <p><strong>Used:</strong> <span id="detail-used"></span></p>
+                        <p><strong>Remaining:</strong> <span id="detail-remaining" class="fw-bold"></span></p>
+                    </div>
+                    <div class="col-md-6 text-center">
+                        <div id="detail-swatch" style="width: 100px; height: 100px; border-radius: 50%; margin: 0 auto; border: 3px solid #ccc;"></div>
+                        <p class="mt-2" id="detail-color-name"></p>
+                        <p class="text-muted" id="detail-hex"></p>
+                    </div>
+                </div>
                 
-                <div id="buffer-nav-deck" class="nav-deck"></div>
-
-                <div class="p-3">
-                    <div class="alert alert-info text-center fw-bold p-1 mb-3 border-info" style="background-color: #cff4fc; color: #055160; font-size: 0.9rem;">
-                        Tap button or scan slot QR (CMD:SLOT:X)
-                    </div>
-
-                    <input type="hidden" id="manage-loc-id">
-                    
-                    <div id="manage-grid-view" class="slot-grid" style="display:none;">
-                        <div id="slot-grid-container" class="slot-grid"></div>
-                        <div id="unslotted-container" class="mt-4"></div>
-                    </div>
-
-                    <div id="manage-list-view" style="display:none;">
-                        <div id="manage-empty-msg" class="empty-state-box">
-                            <h1 class="empty-state-text">EMPTY</h1>
-                        </div>
-
-                        <div id="manage-contents-list"></div>
-                    </div>
+                <hr>
+                
+                <div class="mb-3">
+                    <label class="form-label">Comment / Notes</label>
+                    <textarea class="form-control" id="detail-comment" rows="2" readonly></textarea>
                 </div>
-
-                <div class="modal-footer d-flex flex-column p-0 bg-dark border-top border-secondary">
-                    
-                    <div class="d-flex w-100 p-2 gap-2">
-                        <input type="text" id="manual-spool-id" class="form-control fw-bold" placeholder="Enter Spool ID / Scan Legacy">
-                        <button class="btn btn-primary fw-bold px-4" onclick="manualAddSpool()">+ Add (To Buffer)</button>
-                    </div>
-
-                    <div class="w-100 px-2 pb-2">
-                        <div class="btn btn-success w-100 fw-bold d-flex justify-content-between align-items-center p-1" onclick="closeManage()">
-                            <div style="width:48px;"></div> 
-                            
-                            <span>✔ DONE / SYNC</span>
-                            
-                            <div id="qr-modal-done" class="footer-qr-box"></div>
-                        </div>
-                    </div>
+            </div>
+            
+            <div class="modal-footer justify-content-between">
+                <div>
+                    <a href="#" id="btn-open-spoolman" target="_blank" class="btn btn-outline-secondary">
+                        Open in Spoolman ↗️
+                    </a>
                 </div>
-
+                <div>
+                    <button type="button" class="btn btn-warning" id="btn-print-action">
+                        ➕ Add to Print Queue
+                    </button>
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">
+                        Close
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
-<div class="modal fade" id="actionModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 2px solid #00d4ff;"><div class="modal-header bg-dark"><h5 class="modal-title fw-bold" id="action-title">Action Needed</h5></div><div class="modal-body text-center"><p id="action-msg" class="fs-3 mb-4"></p><div id="action-buttons" class="modal-action-row d-flex justify-content-center gap-5 flex-wrap"></div></div><div class="modal-footer justify-content-center"><div class="text-center"><div id="qr-modal-cancel" class="bg-white p-1 rounded mb-1 d-inline-block"></div><br><button class="btn btn-secondary" data-bs-dismiss="modal" onclick="cancelAction()">❌ Cancel</button></div></div></div></div></div>
-<div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #fc0;"><div class="modal-header bg-warning text-dark"><h5 class="modal-title fw-bold">⚠️ CONFIRMATION</h5></div><div class="modal-body text-center"><p id="confirm-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4"><div class="text-center" onclick="confirmAction(false)" style="cursor:pointer"><div id="qr-confirm-no" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-secondary btn-lg">❌ NO</button></div><div class="text-center" onclick="confirmAction(true)" style="cursor:pointer"><div id="qr-confirm-yes" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-success btn-lg">✅ YES</button></div></div></div></div></div></div>
-<div class="modal fade" id="safetyModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content" style="border: 4px solid #f44;"><div class="modal-header bg-danger text-white"><h5 class="modal-title fw-bold">⚠️ SAFETY CONFIRMATION</h5></div><div class="modal-body text-center"><p id="safety-msg" class="fs-2 fw-bold mb-4"></p><div class="d-flex justify-content-center gap-5 mt-4"><div class="text-center" onclick="confirmSafety(false)" style="cursor:pointer"><div id="qr-safety-no" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-secondary btn-lg">❌ NO</button></div><div class="text-center" onclick="confirmSafety(true)" style="cursor:pointer"><div id="qr-safety-yes" class="bg-white p-2 rounded mb-2"></div><button class="btn btn-danger btn-lg">✅ YES</button></div></div></div></div></div></div>
-<div class="modal fade" id="locModal" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="modalTitle">Edit Location</h5><button type="button" class="btn-close btn-close-white" onclick="closeEdit()"></button></div><div class="modal-body"><input type="hidden" id="edit-original-id"><div class="mb-3"><label>Location ID</label><input type="text" class="form-control" id="edit-id"></div><div class="mb-3"><label>Friendly Name</label><input type="text" class="form-control" id="edit-name"></div><div class="row"><div class="col-8 mb-3"><label>Type</label><select class="form-select" id="edit-type"><option value="Dryer Box">Dryer Box</option><option value="Cart">Cart</option><option value="Shelf">Shelf</option><option value="Printer">Printer</option><option value="MMU Slot">MMU Slot</option></select></div><div class="col-4 mb-3"><label>Max Spools</label><input type="number" class="form-control" id="edit-max"></div></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeEdit()">Cancel</button><button type="button" class="btn btn-primary" onclick="saveLocation()">Save</button></div></div></div></div>
+<div class="modal fade" id="queueModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-warning">
+                <h5 class="modal-title text-dark">🖨️ Print Queue</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="queue-empty-msg" class="text-center text-muted py-4">
+                    Your print queue is empty.<br>Go add some spools! 🧶
+                </div>
+                
+                <ul id="queue-list-items" class="list-group mb-3">
+                    </ul>
+                
+                <div class="d-grid gap-2">
+                    <button class="btn btn-primary btn-lg" onclick="printQueueBrowser()">
+                        🌐 Print via Browser (Now)
+                    </button>
+                    <button class="btn btn-secondary" onclick="printQueueCSV()">
+                        📄 Send to P-Touch CSV (Batch)
+                    </button>
+                    <hr>
+                    <button class="btn btn-outline-danger" onclick="clearQueue()">
+                        🗑️ Clear Queue
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

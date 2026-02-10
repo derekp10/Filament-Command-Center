@@ -801,6 +801,124 @@ const updateLogState = (force=false) => {
             }
         }
     });
+/* --- PRINT QUEUE SYSTEM --- */
+let labelQueue = [];
+
+function updateQueueUI() {
+    const btn = document.getElementById('btn-queue-count');
+    if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
+}
+
+function addToQueue(spool) {
+    if (labelQueue.find(s => s.id === spool.id)) {
+        showToast("⚠️ Already in Queue", "warning");
+        return;
+    }
+    labelQueue.push(spool);
+    updateQueueUI();
+    showToast(`Added to Print Queue (${labelQueue.length})`);
+}
+
+function openQueueModal() {
+    const list = document.getElementById('queue-list-items');
+    if (!list) return;
+    
+    list.innerHTML = "";
+    if (labelQueue.length === 0) {
+        list.innerHTML = "<li class='list-group-item'>Queue is empty</li>";
+    } else {
+        labelQueue.forEach((s, index) => {
+            const name = s.filament ? s.filament.name : "Unknown";
+            list.innerHTML += `
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span>#${s.id} - ${name}</span>
+                    <button class="btn btn-sm btn-outline-danger" onclick="removeFromQueue(${index})">❌</button>
+                </li>`;
+        });
+    }
+    
+    const modal = new bootstrap.Modal(document.getElementById('queueModal'));
+    modal.show();
+}
+
+function removeFromQueue(index) {
+    labelQueue.splice(index, 1);
+    openQueueModal(); // Re-render list
+    updateQueueUI();
+}
+
+function clearQueue() {
+    labelQueue = [];
+    openQueueModal();
+    updateQueueUI();
+}
+
+/* --- BROWSER BATCH PRINT --- */
+function printQueueBrowser() {
+    const container = document.getElementById('printable-queue-container');
+    container.innerHTML = ""; // Clear old
+
+    if (labelQueue.length === 0) return;
+
+    labelQueue.forEach(spool => {
+        const fil = spool.filament;
+        const vid = spool.id;
+        const hex = fil.color_hex || "";
+        
+        // Create Wrapper
+        const wrap = document.createElement('div');
+        wrap.className = 'print-job-item';
+        const qrId = `qr-${vid}`;
+        
+        wrap.innerHTML = `
+            <div class="label-box">
+                <div class="label-qr" id="${qrId}"></div>
+                <div class="label-data">
+                    <div class="lbl-row"><div class="lbl-key">BRND</div><div class="lbl-val">${fil.vendor ? fil.vendor.name : 'Unknown'}</div></div>
+                    <div class="lbl-row"><div class="lbl-key">COLR</div><div class="lbl-val">${fil.name}</div></div>
+                    <div class="lbl-row"><div class="lbl-key">MATL</div><div class="lbl-val">${fil.material}</div></div>
+                    <div class="lbl-row"><div class="lbl-key">ID#${vid}</div><div class="lbl-val lbl-hex">${hex}</div></div>
+                </div>
+            </div>
+        `;
+        container.appendChild(wrap);
+
+        // Render QR
+        new QRCode(document.getElementById(qrId), {
+            text: `ID:${vid}`,
+            width: 60, height: 60,
+            correctLevel: QRCode.CorrectLevel.L
+        });
+    });
+
+    // Wait for QRs to render
+    setTimeout(() => window.print(), 800);
+}
+
+/* --- CSV BATCH PRINT --- */
+function printQueueCSV() {
+    if (labelQueue.length === 0) return;
+    const ids = labelQueue.map(s => s.id);
+    
+    fetch('/api/print_batch_csv', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ ids: ids })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if(res.success) {
+            showToast("✅ Sent " + res.count + " labels to CSV!");
+            clearQueue();
+            // Close modal manually if needed
+            const el = document.getElementById('queueModal');
+            const modal = bootstrap.Modal.getInstance(el);
+            if (modal) modal.hide();
+        } else {
+            showToast("Error: " + res.msg, "error");
+        }
+    });
+}
 };
 
 setInterval(updateLogState, 2500);
