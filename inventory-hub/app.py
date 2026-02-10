@@ -9,7 +9,7 @@ import csv
 import os
 import json
 
-VERSION = "v154.2 (Dev Queue Fix)"
+VERSION = "v154.8 (Spoolman Link Fix)"
 app = Flask(__name__)
 
 @app.after_request
@@ -19,10 +19,10 @@ def add_header(r):
 
 @app.route('/')
 def dashboard():
+    # Load config to generate the correct Spoolman URL
     cfg = config_loader.load_config()
-    # Construct Spoolman UI URL from config
     ip = cfg.get('server_ip', '127.0.0.1')
-    if ip == '0.0.0.0': ip = '127.0.0.1' # Fallback if bound to all interfaces
+    if ip == '0.0.0.0': ip = '127.0.0.1'
     port = cfg.get('spoolman_port', 7912)
     sm_url = f"http://{ip}:{port}"
     
