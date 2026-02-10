@@ -1,5 +1,5 @@
 <style>
-    /* --- STICKER FACTORY: v2.3 (PRECISION OFFSET + DATA RESTORE) --- */
+    /* --- STICKER FACTORY: v2.4 (VERTICAL RE-CALIBRATION) --- */
     @media print {
         body * { visibility: hidden; }
         @page { size: auto; margin: 0mm; } 
@@ -12,8 +12,8 @@
             position: absolute; 
             
             /* --- 🖨️ CALIBRATION ZONE 🖨️ --- */
-            left: 4mm;    /* Increased to 4mm to prevent clipping on the left */
-            top: 15mm;    /* Increased to 15mm to push further down the page */
+            left: 4mm;    /* Horizontal confirmed OK */
+            top: 11mm;    /* Dialed back from 15mm (Too low). Trying 11mm. */
             width: 60mm !important; 
             /* ------------------------------- */
             
@@ -25,7 +25,7 @@
         
         .print-job-item {
             page-break-inside: avoid;
-            margin-bottom: 5mm; /* Increased gap to ensure clear separation */
+            margin-bottom: 3mm; /* Tightened gap slightly to prevent drift */
             width: 100%;
         }
     }
@@ -35,12 +35,12 @@
 
     /* --- THE LABEL DESIGN (CSS GRID) --- */
     .label-box {
-        width: 54mm; /* Slightly narrower to ensure fit within the 60mm zone */
+        width: 55mm; /* Slightly wider (was 54mm) since we have horizontal room */
         height: 24mm; 
         background: #fff; color: #000;
         font-family: 'Arial Narrow', sans-serif;
         display: grid;
-        grid-template-columns: 20mm 1fr; /* QR takes fixed width */
+        grid-template-columns: 19mm 1fr; /* QR takes fixed width */
         border: 1px solid #000;
         box-sizing: border-box;
         overflow: hidden;
@@ -55,8 +55,8 @@
         border-right: 1px solid #000;
     }
     .label-qr img {
-        width: 18mm !important;
-        height: 18mm !important;
+        width: 17mm !important;
+        height: 17mm !important;
         object-fit: contain;
     }
 
@@ -92,7 +92,7 @@
         text-align: right;
     }
     
-    /* Restore Gold Standard Elements */
+    /* Restored Data Styles */
     .lbl-id { font-size: 9pt; color: #000; }
     .lbl-rgb { font-family: 'Consolas', monospace; font-size: 6pt; }
 </style>
