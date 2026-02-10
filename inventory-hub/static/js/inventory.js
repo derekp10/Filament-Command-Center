@@ -626,6 +626,13 @@ const openSpoolDetails = (id) => {
         const swatch = document.getElementById('detail-swatch');
         if(swatch) swatch.style.backgroundColor = "#" + (d.filament?.color_hex || "333");
         
+        // LINK FIX: Update the Spoolman Button
+        const btnLink = document.getElementById('btn-open-spoolman');
+        if(btnLink && typeof SPOOLMAN_URL !== 'undefined') {
+            btnLink.href = `${SPOOLMAN_URL}/spool/${d.id}`;
+        }
+
+        // Open Modal
         if(modals.spoolModal) modals.spoolModal.show();
         else {
             const el = document.getElementById('spoolModal');
