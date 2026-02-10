@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.3 (Details & Queue Fix)
+ * Version: v154.4 (Details Restored)
  */
 
-const DASHBOARD_VERSION = "v154.3 (Details & Queue Fix)";
+const DASHBOARD_VERSION = "v154.4 (Details Restored)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -54,6 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if(vTag) vTag.innerText = DASHBOARD_VERSION;
 
     // Bootstrap Modals
+    // FIX 1: Added 'spoolModal' to initialization list
     ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal', 'queueModal', 'spoolModal'].forEach(id => {
         const el = document.getElementById(id);
         if(el) modals[id] = new bootstrap.Modal(el);
@@ -65,7 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
         manageEl.addEventListener('shown.bs.modal', () => {
             const id = document.getElementById('manage-loc-id').value;
             renderBuffer();
-            refreshManageView(id); // Re-trigger to be safe
+            refreshManageView(id); 
             generateSafeQR('qr-modal-done', 'CMD:DONE', 42);
         });
     }
@@ -581,7 +582,7 @@ const renderBadgeQRs = (s, i) => {
     generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 56);
 };
 
-// --- RESTORED: OPEN SPOOL DETAILS ---
+// --- FIX 4: RESTORED OPEN SPOOL DETAILS FUNCTION ---
 const openSpoolDetails = (id) => {
     setProcessing(true);
     fetch(`/api/spool_details?id=${id}`)
