@@ -99,23 +99,7 @@ def get_best_hex(item_data):
         if first_hex: return first_hex
     return item_data.get('color_hex', '')
 
-# --- ROUTE 1: SINGLE PRINT ---
-@app.route('/api/print_label', methods=['POST'])
-def api_print_label():
-    sid = request.json.get('id')
-    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
 
-    spool = spoolman_api.get_spool(sid)
-    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
-
-    # ... (Your existing single print logic here) ...
-    # If you need this code again, let me know!
-    return jsonify({"success": True, "method": "browser", "data": spool})
-
-
-# --- ROUTE 2: BATCH CSV (The New One) ---
-@app.route('/api/print_batch_csv', methods=['POST'])
-def api_print_batch_csv():
     data = request.json
     ids = data.get('ids', [])
     if not ids: return jsonify({"success": False, "msg": "Empty Queue"})
