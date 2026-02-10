@@ -1,16 +1,16 @@
 <style>
-    /* --- DARK MODE KIOSK THEME (Restored Layout) --- */
+    /* --- DARK MODE KIOSK THEME (Final Polish) --- */
     body { background-color: #000; color: #fff; font-family: 'Segoe UI', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
     
     /* Navigation */
-    .navbar { height: 70px; background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; }
+    .navbar { height: 70px; background-color: #111; border-bottom: 2px solid #00d4ff; flex-shrink: 0; z-index: 100; }
     .navbar-brand { color: #00d4ff !important; font-weight: bold; font-size: 1.5rem; text-shadow: 0 0 10px rgba(0, 212, 255, 0.3); }
     
-    /* Main Layout Container */
+    /* Main Layout */
     .main-container { 
         height: calc(100vh - 70px); 
         display: flex; 
-        flex-direction: column; /* Stacks Content above Deck */
+        flex-direction: column; 
         padding: 10px; 
         gap: 10px; 
         overflow: hidden; 
@@ -18,13 +18,13 @@
         z-index: 1; 
     }
     
-    /* Content Row (Logs + Buffer) */
+    /* Content Row */
     .content-row {
-        flex: 1; /* Takes all available height */
+        flex: 1; 
         display: flex;
         gap: 10px;
         overflow: hidden;
-        min-height: 0; /* Prevents overflow issues */
+        min-height: 0; 
     }
     
     .col-logs, .col-buffer { 
@@ -42,10 +42,10 @@
     .log-INFO { color: #0f0; } .log-WARNING { color: #fc0; } .log-ERROR { color: #f44; }
     
     /* Buffer Zone */
-    .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; color: #00d4ff; font-weight: bold; display: flex; justify-content: space-between; }
+    .buffer-header { padding: 15px; background: #222; border-bottom: 1px solid #333; color: #00d4ff; font-weight: bold; display: flex; justify-content: space-between; flex-shrink: 0; }
     .buffer-content { flex-grow: 1; overflow-y: auto; padding: 15px; }
     
-    /* Command Deck - Fixed Bottom */
+    /* Command Deck */
     .cmd-deck { 
         height: 140px; 
         flex-shrink: 0;
@@ -56,6 +56,7 @@
         justify-content: space-around; 
         gap: 10px; 
         z-index: 10; 
+        margin-top: auto; /* Ensures it sits at bottom */
     }
     .deck-btn { 
         flex: 1; 
@@ -88,18 +89,24 @@
     .action-badge:active { transform: scale(0.95); background: #333; }
     
     .badge-qr { background: #fff; padding: 2px; border-radius: 4px; margin-bottom: 3px; }
-    /* Classic Button Style: White Text */
-    .badge-btn { background: none; border: none; font-weight: bold; font-size: 0.8rem; text-transform: uppercase; color: #fff !important; }
+    
+    /* COLOR FIX: Removed !important from generic white */
+    .badge-btn { background: none; border: none; font-weight: bold; font-size: 0.8rem; text-transform: uppercase; color: #fff; }
+    
+    /* COLOR FIX: Added !important to specific colors to override generic */
+    .btn-pick { color: #00d4ff !important; border-color: #00d4ff; }
+    .btn-print { color: #d633ff !important; border-color: #d633ff; }
+    .btn-trash { color: #f44 !important; border-color: #f44; }
     
     /* Slots Grid */
     .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 15px; margin-bottom: 20px; }
     .slot-btn { background: #222; border: 2px solid #444; border-radius: 10px; height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 10px; cursor: pointer; position: relative; overflow: hidden; }
     .slot-btn.full { border-color: #00d4ff; background: #1a1a1a; }
     
-    /* Modal Styling Fixes */
+    /* Modal Styling */
     .modal-content { background-color: #1a1a1a !important; color: #fff !important; border: 1px solid #444; }
     .table-dark { background-color: #1a1a1a; color: #fff; }
-    .table-dark th, .table-dark td { color: #eee !important; border-color: #444; }
+    .table-dark th, .table-dark td { color: #eee !important; border-color: #444; vertical-align: middle; }
     .modal-title { color: #00d4ff; font-weight: bold; }
     
     /* Utilities */
@@ -110,7 +117,7 @@
     /* Overlays */
     #focus-guard { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 20000; display: none; justify-content: center; align-items: center; border: 20px solid #f44; text-align: center; }
     #processing-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 12000; display: none; }
-    #processing-overlay::after { content: "PROCESSING..."; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #00d4ff; font-size: 3rem; font-weight: bold; }
+    #processing-overlay::after { content: "PROCESSING..."; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #00d4ff; font-size: 3rem; font-weight: bold; text-shadow: 0 0 20px #00d4ff; }
     
     #toast-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 11000; text-align: center; width: 80%; max-width: 600px; pointer-events: none; }
     .toast-msg { background: rgba(0,0,0,0.95); color: #fff; padding: 30px; border: 4px solid #00d4ff; border-radius: 12px; font-size: 2rem; font-weight: bold; margin-bottom: 20px; animation: popIn 0.3s ease-out; }
