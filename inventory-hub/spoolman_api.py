@@ -10,6 +10,12 @@ def get_spool(sid):
     try: return requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3).json()
     except: return None
 
+def get_filament(fid):
+    """Fetches a specific filament definition."""
+    sm_url, _ = config_loader.get_api_urls()
+    try: return requests.get(f"{sm_url}/api/v1/filament/{fid}", timeout=3).json()
+    except: return None
+
 def sanitize_outbound_data(data):
     """Ensures extra fields are properly formatted as JSON strings for Spoolman."""
     if 'extra' not in data or not data['extra']: return data
@@ -83,11 +89,10 @@ def format_spool_display(spool_data):
 
         display_text = " ".join(parts)
         
-        # --- COLOR LOGIC FIX ---
-        # Prioritize multi-color hex string if available
+        # Color Logic
         multi_hex = fil.get('multi_color_hexes')
         if multi_hex:
-            final_color = multi_hex # Pass the raw comma string (e.g. "FF0000,0000FF")
+            final_color = multi_hex 
         else:
             final_color = fil.get('color_hex', 'ffffff')
             
@@ -114,6 +119,7 @@ def get_spools_at_location(loc_name):
     return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
 
 def find_spool_by_legacy_id(legacy_id, strict_mode=False):
+    """Finds a spool based on the Filament's legacy ID."""
     sm_url, _ = config_loader.get_api_urls()
     legacy_id = str(legacy_id).strip()
     try:
@@ -139,5 +145,19 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
         if not strict_mode:
             check_resp = requests.get(f"{sm_url}/api/v1/spool/{legacy_id}", timeout=2)
             if check_resp.ok: return int(legacy_id)
-    except Exception as e: state.logger.error(f"Legacy Lookup Error: {e}")
+    except Exception as e: state.logger.error(f"Legacy Spool Lookup Error: {e}")
+    return None
+
+def find_filament_by_legacy_id(legacy_id):
+    """Finds a filament definition directly by legacy ID."""
+    sm_url, _ = config_loader.get_api_urls()
+    legacy_id = str(legacy_id).strip()
+    try:
+        resp = requests.get(f"{sm_url}/api/v1/filament", timeout=5)
+        if resp.ok:
+            for fil in resp.json():
+                ext = str(fil.get('external_id', '')).strip().replace('"','')
+                if ext == legacy_id:
+                    return fil['id']
+    except Exception as e: state.logger.error(f"Legacy Filament Lookup Error: {e}")
     return None
