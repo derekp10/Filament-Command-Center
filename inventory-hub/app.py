@@ -181,6 +181,99 @@ def api_delete_location():
     state.add_log_entry(f"🗑️ Deleted: {target}", "WARNING")
     return jsonify({"success": True})
 
+# --- HELPER FUNCTIONS FOR LABELS ---
+def clean_string(s):
+    if isinstance(s, str): return s.strip('"').strip("'")
+    return s
+
+def hex_to_rgb(hex_str):
+    if not hex_str or len(hex_str) < 6: return "", "", ""
+    try:
+        clean_hex = hex_str.lstrip('#')
+        return int(clean_hex[0:2], 16), int(clean_hex[2:4], 16), int(clean_hex[4:6], 16)
+    except ValueError:
+        return "", "", ""
+
+def get_smart_type(material, extra_data):
+    material = clean_string(material) or ""
+    raw_attrs = extra_data.get('filament_attributes', '[]')
+    try:
+        attrs_list = json.loads(raw_attrs) if isinstance(raw_attrs, str) else raw_attrs
+        if not isinstance(attrs_list, list): attrs_list = []
+    except json.JSONDecodeError: attrs_list = []
+    
+    clean_attrs = [clean_string(a) for a in attrs_list if a]
+    if clean_attrs: return f"{' '.join(clean_attrs)} {material}"
+    return material
+
+def get_color_name(item_data):
+    extra = item_data.get('extra', {})
+    if 'original_color' in extra:
+        val = clean_string(extra['original_color'])
+        if val: return val
+    return item_data.get('name', 'Unknown')
+
+def get_best_hex(item_data):
+    extra = item_data.get('extra', {})
+    multi_hex = item_data.get('multi_color_hexes') or extra.get('multi_color_hexes')
+    if multi_hex:
+        first_hex = multi_hex.split(',')[0].strip()
+        if first_hex: return first_hex
+    return item_data.get('color_hex', '')
+
+# --- PRINT ROUTES ---
+@app.route('/api/print_label', methods=['POST'])
+def api_print_label():
+    sid = request.json.get('id')
+    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
+
+    spool = spoolman_api.get_spool(sid)
+    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
+
+    return jsonify({"success": True, "method": "browser", "data": spool})
+
+@app.route('/api/print_batch_csv', methods=['POST'])
+def api_print_batch_csv():
+    data = request.json
+    ids = data.get('ids', [])
+    if not ids: return jsonify({"success": False, "msg": "Empty Queue"})
+
+    cfg = config_loader.load_config()
+    csv_path = cfg.get("print_settings", {}).get("csv_path", "labels.csv")
+
+    try:
+        file_exists = os.path.exists(csv_path)
+        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code'])
+            
+            for sid in ids:
+                spool = spoolman_api.get_spool(sid)
+                if not spool: continue
+                
+                fil = spool.get('filament', {})
+                vend = fil.get('vendor', {})
+                fil_extra = fil.get('extra', {})
+
+                brand = vend.get('name', 'Unknown')
+                name = get_color_name(fil)
+                material = fil.get('material', 'Unknown')
+                smart_type = get_smart_type(material, fil_extra)
+                hex_val = get_best_hex(fil)
+                r, g, b = hex_to_rgb(hex_val)
+                weight = f"{fil.get('weight', 0):.0f}g"
+                qr = f"ID:{sid}"
+                
+                writer.writerow([sid, brand, name, smart_type, hex_val, r, g, b, weight, qr])
+
+        return jsonify({"success": True, "count": len(ids)})
+    except PermissionError:
+        return jsonify({"success": False, "msg": "CSV File Locked! Close Excel."})
+    except Exception as e:
+        state.logger.error(f"Batch CSV Error: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+
 @app.route('/api/undo', methods=['POST'])
 def api_undo(): return jsonify(logic.perform_undo())
 
