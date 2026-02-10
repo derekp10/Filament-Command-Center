@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.6 (Z-Index Fixed)
+ * Version: v154.7 (Dynamic Stacking)
  */
 
-const DASHBOARD_VERSION = "v154.6 (Z-Index Fixed)";
+const DASHBOARD_VERSION = "v154.7 (Dynamic Stacking)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -59,6 +59,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if(el) modals[id] = new bootstrap.Modal(el);
     });
     
+    // --- SMART STACKER LOGIC ---
+    // Automatically handles Z-Index so newest window is always on top
+    document.addEventListener('show.bs.modal', (event) => {
+        const zIndex = 1050 + (10 * document.querySelectorAll('.modal.show').length);
+        event.target.style.zIndex = zIndex;
+        setTimeout(() => {
+            const backdrops = document.querySelectorAll('.modal-backdrop');
+            if(backdrops.length > 0) {
+                const lastBackdrop = backdrops[backdrops.length - 1];
+                lastBackdrop.style.zIndex = zIndex - 5;
+            }
+        }, 10);
+    });
+
     // --- EVENT LISTENER FOR MANAGER (Safety Net) ---
     const manageEl = document.getElementById('manageModal');
     if (manageEl) {
@@ -423,9 +437,7 @@ const confirmSafety = (y) => { closeModal('safetyModal'); if(y && state.pendingS
 const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
 const openManage = (id) => { 
-    // FIX: Hide the Location List first so there's no ghost window behind
-    if (modals.locMgrModal) modals.locMgrModal.hide();
-    
+    // REMOVED: The hide() call for locMgrModal. It stays open in the background now.
     document.getElementById('manageTitle').innerText=`Location Manager: ${id}`; 
     document.getElementById('manage-loc-id').value=id; 
     document.getElementById('manual-spool-id').value=""; 
