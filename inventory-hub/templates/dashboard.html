@@ -77,5 +77,10 @@
     {% include 'components/modals.html' %}
     {% include 'components/label_spool.html' %}
     {% include 'components/scripts.html' %}
+    
+    <script>
+        // Inject the Spoolman URL from Python
+        const SPOOLMAN_URL = "{{ spoolman_url }}";
+    </script>
 </body>
 </html>
