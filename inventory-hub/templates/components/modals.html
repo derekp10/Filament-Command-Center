@@ -143,26 +143,22 @@
             </div>
             <div class="modal-body bg-black modal-body-scrollable">
                 <input type="hidden" id="manage-loc-id">
-                
                 <div class="container mt-3">
                     <div class="input-group mb-3">
                         <input type="text" id="manual-spool-id" class="form-control" placeholder="Scan Barcode or Type ID + Enter" style="font-size: 1.2rem;">
                         <button class="btn btn-outline-success" onclick="manualAddSpool()">➕ ADD</button>
                     </div>
                 </div>
-
                 <div id="manage-grid-view" class="container-fluid px-4" style="display:none;">
                     <div id="slot-grid-container" class="slot-grid"></div>
                     <div id="unslotted-container" class="mt-4"></div>
                 </div>
-
                 <div id="manage-list-view" class="container px-3" style="display:none;">
                     <div id="manage-empty-msg" class="empty-state-box">
                         <div class="empty-state-text">EMPTY</div>
                         <p class="text-muted mt-2">Scan a spool to add it here.</p>
                     </div>
                     <div id="manage-contents-list"></div>
-                    
                     <div class="danger-zone pb-5">
                          <div class="action-badge" style="border-color:#dc3545; display:inline-flex;" onclick="triggerEjectAll(document.getElementById('manage-loc-id').value)">
                             <div id="qr-eject-all-list" class="badge-qr"></div>

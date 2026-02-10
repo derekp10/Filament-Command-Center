@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v153.83 (Deterministic Rendering & Standard UI)
+ * Version: v153.84 (Scope Fix & Queue System)
  */
 
-const DASHBOARD_VERSION = "v153.83 (Stable)";
+const DASHBOARD_VERSION = "v153.84 (Stable)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -54,7 +54,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if(vTag) vTag.innerText = DASHBOARD_VERSION;
 
     // Bootstrap Modals
-    ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal'].forEach(id => {
+    // IMPORTANT: queueModal must be in this list!
+    ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal', 'queueModal', 'spoolModal'].forEach(id => {
         const el = document.getElementById(id);
         if(el) modals[id] = new bootstrap.Modal(el);
     });
@@ -100,13 +101,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateLogState(); 
     fetchLocations(); 
+    updateQueueUI(); // Init Queue Counter
 });
 
 // --- CORE FUNCTIONS ---
 
 const generateSafeQR = (elementId, text, size) => {
     // DETERMINISTIC RENDERING (Double RAF)
-    // Ensures browser has finished Layout and Reflow before drawing
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             const el = document.getElementById(elementId);
@@ -317,12 +318,10 @@ const renderBuffer = () => {
 const processScan = (text) => {
     const upper = text.toUpperCase();
     
-    // --- COMMAND INTERCEPTS ---
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
     if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
     if (upper === 'CMD:DROP') { toggleDropMode(); return; }
     if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
-    // FIX: Intercept EJECTALL specifically so it doesn't trigger Eject Mode
     if (upper === 'CMD:EJECTALL') { triggerEjectAll(document.getElementById('manage-loc-id').value); return; }
     
     if (upper === 'CMD:UNDO') { triggerUndo(); return; }
@@ -330,18 +329,14 @@ const processScan = (text) => {
     if (upper === 'CMD:PREV') { prevBuffer(); return; }
     if (upper === 'CMD:NEXT') { nextBuffer(); return; }
 
-    // --- CONTEXT COMMANDS ---
     if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
     
-    // Modal Interactions
     if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
     if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
     if (state.activeModal === 'action') { if(upper.includes('CANCEL')) { closeModal('actionModal'); return; } if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
     
-    // Specific Item Trash
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
-    // --- SERVER IDENTIFICATION ---
     setProcessing(true);
     fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) })
     .then(r=>r.json())
@@ -409,8 +404,6 @@ const openManage = (id) => {
     document.getElementById('manageTitle').innerText=`Location Manager: ${id}`; 
     document.getElementById('manage-loc-id').value=id; 
     document.getElementById('manual-spool-id').value=""; 
-    
-    // We do NOT render here anymore. The listener handles it.
     modals.manageModal.show(); 
 };
 
@@ -493,12 +486,11 @@ const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
     const emptyMsg = document.getElementById('manage-empty-msg');
     
-    // LOGIC: Toggle visibility based on data length
     if (data.length === 0) {
         list.innerHTML = "";
-        if(emptyMsg) emptyMsg.style.display = 'flex'; // Show the HTML element
+        if(emptyMsg) emptyMsg.style.display = 'flex'; 
     } else {
-        if(emptyMsg) emptyMsg.style.display = 'none'; // Hide the HTML element
+        if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
         data.forEach((s,i) => renderBadgeQRs(s, i));
     }
@@ -540,9 +532,9 @@ const renderBadgeHTML = (s, i, locId) => {
                     <div id="qr-pick-${i}" class="badge-qr"></div>
                     <button class="badge-btn btn-pick">PICK</button>
                 </div>
-                <div class="action-badge" onclick="printLabel(${s.id})">
+                <div class="action-badge" onclick="addToQueue({id:${s.id}, filament:{name:'${s.display.replace(/'/g, "")}', color_hex:'${s.color}'}})">
                     <div id="qr-print-${i}" class="badge-qr"></div>
-                    <button class="badge-btn btn-print">PRINT</button>
+                    <button class="badge-btn btn-print">QUEUE</button>
                 </div>
                 <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', false)">
                     <div id="qr-trash-${i}" class="badge-qr"></div>
@@ -707,7 +699,6 @@ const printLabel = (sid) => {
     showToast("🖨️ Requesting Label..."); 
     setProcessing(true);
 
-    // CALL THE NEW API ROUTE (POST)
     fetch('/api/print_label', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -716,80 +707,50 @@ const printLabel = (sid) => {
     .then(r => r.json())
     .then(res => {
         setProcessing(false);
-        
-        if (!res.success) {
-            showToast(res.msg || "Print Failed", "error");
-            return;
-        }
-
-        // MODE B: CSV (Server handled it)
-        if (res.method === 'csv') {
-            showToast(res.msg, "success");
-            return;
-        }
-
-        // MODE A: BROWSER (We must render and print)
+        if (!res.success) { showToast(res.msg || "Print Failed", "error"); return; }
+        if (res.method === 'csv') { showToast(res.msg, "success"); return; }
         if (res.method === 'browser') {
             const data = res.data;
             if (!data || !data.filament) { showToast("Invalid Data", "error"); return; }
-            
             const fil = data.filament;
             const extra = fil.extra || {};
             const colorHex = fil.color_hex || '000000';
             const rgb = hexToRgb(colorHex);
-
-            // Construct Label Type String
             let typeStr = fil.material || "Unknown";
             try { 
                 let attrs = (typeof extra.filament_attributes === 'string') ? JSON.parse(extra.filament_attributes) : extra.filament_attributes; 
                 if (Array.isArray(attrs) && attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr; 
             } catch (err) {}
-
-            // POPULATE THE DOM ELEMENTS (Hidden in Body)
             const qrEl = document.getElementById('print-qr'); 
             if (qrEl) { 
                 qrEl.innerHTML = ""; 
-                // Matches Scanner Format
                 new QRCode(qrEl, {text: `ID:${sid}`, width: 120, height: 120, correctLevel: QRCode.CorrectLevel.L}); 
             }
-
             document.getElementById('lbl-brand').innerText = fil.vendor ? fil.vendor.name : "Generic";
             document.getElementById('lbl-color').innerText = extra.original_color ? extra.original_color.replace(/"/g, '') : fil.name; 
             document.getElementById('lbl-type').innerText = typeStr;
             document.getElementById('lbl-hex').innerText = colorHex.toUpperCase();
             document.getElementById('lbl-id').innerText = sid;
             document.getElementById('lbl-rgb').innerText = `${rgb.r},${rgb.g},${rgb.b}`; 
-            
-            // LAUNCH BROWSER DIALOG
             setTimeout(() => window.print(), 500);
         }
     })
-    .catch(e => { 
-        setProcessing(false); 
-        console.error(e);
-        showToast("Connection Error", "error"); 
-    });
+    .catch(e => { setProcessing(false); console.error(e); showToast("Connection Error", "error"); });
 };
 
 const updateLogState = (force=false) => {
     if(!state.logsPaused || force) fetch('/api/logs').then(r=>r.json()).then(d=>{ 
         document.getElementById('live-logs').innerHTML = d.logs.map(l=>`<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join(''); 
-        
         const sSpool = document.getElementById('st-spoolman');
         const sFila = document.getElementById('st-filabridge');
-        
         if(sSpool) sSpool.className = `status-dot ${d.status.spoolman?'status-on':'status-off'}`;
         if(sFila) sFila.className = `status-dot ${d.status.filabridge?'status-on':'status-off'}`;
-        
-        // SYNC AUDIT STATE
         if (d.audit_active !== state.lastAuditState) {
             state.lastAuditState = d.audit_active;
             state.auditActive = d.audit_active; 
-            
             const deckBtn = document.getElementById('btn-deck-audit');
             const lbl = document.getElementById('lbl-audit');
             const qrDiv = document.getElementById('qr-audit');
-            
             if (state.auditActive) {
                 if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
                 if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
@@ -801,6 +762,8 @@ const updateLogState = (force=false) => {
             }
         }
     });
+};
+
 /* --- PRINT QUEUE SYSTEM --- */
 let labelQueue = [];
 
@@ -822,7 +785,6 @@ function addToQueue(spool) {
 function openQueueModal() {
     const list = document.getElementById('queue-list-items');
     if (!list) return;
-    
     list.innerHTML = "";
     if (labelQueue.length === 0) {
         list.innerHTML = "<li class='list-group-item'>Queue is empty</li>";
@@ -836,14 +798,13 @@ function openQueueModal() {
                 </li>`;
         });
     }
-    
     const modal = new bootstrap.Modal(document.getElementById('queueModal'));
     modal.show();
 }
 
 function removeFromQueue(index) {
     labelQueue.splice(index, 1);
-    openQueueModal(); // Re-render list
+    openQueueModal(); 
     updateQueueUI();
 }
 
@@ -853,23 +814,17 @@ function clearQueue() {
     updateQueueUI();
 }
 
-/* --- BROWSER BATCH PRINT --- */
 function printQueueBrowser() {
     const container = document.getElementById('printable-queue-container');
-    container.innerHTML = ""; // Clear old
-
+    container.innerHTML = ""; 
     if (labelQueue.length === 0) return;
-
     labelQueue.forEach(spool => {
         const fil = spool.filament;
         const vid = spool.id;
         const hex = fil.color_hex || "";
-        
-        // Create Wrapper
         const wrap = document.createElement('div');
         wrap.className = 'print-job-item';
         const qrId = `qr-${vid}`;
-        
         wrap.innerHTML = `
             <div class="label-box">
                 <div class="label-qr" id="${qrId}"></div>
@@ -879,27 +834,16 @@ function printQueueBrowser() {
                     <div class="lbl-row"><div class="lbl-key">MATL</div><div class="lbl-val">${fil.material}</div></div>
                     <div class="lbl-row"><div class="lbl-key">ID#${vid}</div><div class="lbl-val lbl-hex">${hex}</div></div>
                 </div>
-            </div>
-        `;
+            </div>`;
         container.appendChild(wrap);
-
-        // Render QR
-        new QRCode(document.getElementById(qrId), {
-            text: `ID:${vid}`,
-            width: 60, height: 60,
-            correctLevel: QRCode.CorrectLevel.L
-        });
+        new QRCode(document.getElementById(qrId), {text: `ID:${vid}`, width: 60, height: 60, correctLevel: QRCode.CorrectLevel.L});
     });
-
-    // Wait for QRs to render
     setTimeout(() => window.print(), 800);
 }
 
-/* --- CSV BATCH PRINT --- */
 function printQueueCSV() {
     if (labelQueue.length === 0) return;
     const ids = labelQueue.map(s => s.id);
-    
     fetch('/api/print_batch_csv', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -910,7 +854,6 @@ function printQueueCSV() {
         if(res.success) {
             showToast("✅ Sent " + res.count + " labels to CSV!");
             clearQueue();
-            // Close modal manually if needed
             const el = document.getElementById('queueModal');
             const modal = bootstrap.Modal.getInstance(el);
             if (modal) modal.hide();
@@ -919,6 +862,5 @@ function printQueueCSV() {
         }
     });
 }
-};
 
 setInterval(updateLogState, 2500);
