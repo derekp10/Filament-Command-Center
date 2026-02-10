@@ -954,29 +954,44 @@ function clearQueue() {
 
 function printQueueBrowser() {
     const container = document.getElementById('printable-queue-container');
+    if (!container) return;
     container.innerHTML = ""; 
     if (labelQueue.length === 0) return;
+    
     labelQueue.forEach(spool => {
         const fil = spool.filament;
         const vid = spool.id;
-        const hex = fil.color_hex || "";
+        const hex = fil.color_hex || "000000";
+        const rgb = hexToRgb(hex); // Uses the helper already in your file
+        
         const wrap = document.createElement('div');
         wrap.className = 'print-job-item';
-        const qrId = `qr-${vid}`;
+        const qrId = `qr-print-${vid}`;
+        
         wrap.innerHTML = `
             <div class="label-box">
                 <div class="label-qr" id="${qrId}"></div>
                 <div class="label-data">
-                    <div class="lbl-row"><div class="lbl-key">BRND</div><div class="lbl-val">${fil.vendor ? fil.vendor.name : 'Unknown'}</div></div>
+                    <div class="lbl-row"><div class="lbl-key">BRND</div><div class="lbl-val">${fil.vendor ? fil.vendor.name : 'Generic'}</div></div>
                     <div class="lbl-row"><div class="lbl-key">COLR</div><div class="lbl-val">${fil.name}</div></div>
                     <div class="lbl-row"><div class="lbl-key">MATL</div><div class="lbl-val">${fil.material}</div></div>
-                    <div class="lbl-row"><div class="lbl-key">ID#${vid}</div><div class="lbl-val lbl-hex">${hex}</div></div>
+                    <div class="lbl-row"><div class="lbl-key">ID#</div><div class="lbl-val lbl-id">${vid}</div></div>
+                    <div class="lbl-row"><div class="lbl-key">RGB</div><div class="lbl-val lbl-rgb">${rgb.r},${rgb.g},${rgb.b}</div></div>
                 </div>
             </div>`;
+            
         container.appendChild(wrap);
-        new QRCode(document.getElementById(qrId), {text: `ID:${vid}`, width: 60, height: 60, correctLevel: QRCode.CorrectLevel.L});
+        // Generate high-resolution QR for the printer
+        new QRCode(document.getElementById(qrId), {
+            text: `ID:${vid}`, 
+            width: 120, 
+            height: 120, 
+            correctLevel: QRCode.CorrectLevel.H 
+        });
     });
-    setTimeout(() => window.print(), 800);
+    
+    // Slight delay to allow QR codes to render before the print dialog pops up
+    setTimeout(() => window.print(), 1000);
 }
 
 function printQueueCSV() {
