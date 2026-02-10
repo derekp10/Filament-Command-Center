@@ -2,7 +2,7 @@
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="modal-title">Spool Details</h5>
+                <h5 class="modal-title">Spool Details</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -11,26 +11,23 @@
                         <p><strong>ID:</strong> <span id="detail-id"></span></p>
                         <p><strong>Material:</strong> <span id="detail-material"></span></p>
                         <p><strong>Vendor:</strong> <span id="detail-vendor"></span></p>
-                        <p><strong>Weight:</strong> <span id="detail-weight"></span></p>
-                        <p><strong>Used:</strong> <span id="detail-used"></span></p>
                         <p><strong>Remaining:</strong> <span id="detail-remaining" class="fw-bold"></span></p>
                     </div>
                     <div class="col-md-6 text-center">
                         <div id="detail-swatch" style="width: 100px; height: 100px; border-radius: 50%; margin: 0 auto; border: 3px solid #ccc;"></div>
                         <p class="mt-2" id="detail-color-name"></p>
-                        <p class="text-muted" id="detail-hex"></p>
                     </div>
                 </div>
                 <hr>
                 <div class="mb-3">
-                    <label class="form-label">Comment / Notes</label>
+                    <label>Notes</label>
                     <textarea class="form-control" id="detail-comment" rows="2" readonly></textarea>
                 </div>
             </div>
             <div class="modal-footer justify-content-between">
                 <a href="#" id="btn-open-spoolman" target="_blank" class="btn btn-outline-secondary">Open in Spoolman ↗️</a>
                 <div>
-                    <button type="button" class="btn btn-warning" id="btn-print-action">➕ Add to Print Queue</button>
+                    <button type="button" class="btn btn-warning" id="btn-print-action">➕ Add to Queue</button>
                     <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
@@ -46,13 +43,12 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <div id="queue-empty-msg" class="text-center text-muted py-4">Your print queue is empty.<br>Go add some spools! 🧶</div>
+                <div id="queue-empty-msg" class="text-center text-muted py-4">Queue is empty.</div>
                 <ul id="queue-list-items" class="list-group mb-3"></ul>
                 <div class="d-grid gap-2">
-                    <button class="btn btn-primary btn-lg" onclick="printQueueBrowser()">🌐 Print via Browser (Now)</button>
-                    <button class="btn btn-secondary" onclick="printQueueCSV()">📄 Send to P-Touch CSV (Batch)</button>
-                    <hr>
-                    <button class="btn btn-outline-danger" onclick="clearQueue()">🗑️ Clear Queue</button>
+                    <button class="btn btn-primary" onclick="printQueueBrowser()">🌐 Browser Print</button>
+                    <button class="btn btn-secondary" onclick="printQueueCSV()">📄 P-Touch CSV</button>
+                    <button class="btn btn-outline-danger" onclick="clearQueue()">🗑️ Clear</button>
                 </div>
             </div>
         </div>
@@ -63,7 +59,7 @@
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">📍 Location Manager</h5>
+                <h5 class="modal-title">📍 Location List</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body p-0">
@@ -98,16 +94,9 @@
             </div>
             <div class="modal-body">
                 <input type="hidden" id="edit-original-id">
-                <div class="mb-3">
-                    <label class="form-label">Location ID (e.g., BOX-1)</label>
-                    <input type="text" class="form-control" id="edit-id">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Friendly Name</label>
-                    <input type="text" class="form-control" id="edit-name">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Type</label>
+                <div class="mb-3"><label>ID</label><input type="text" class="form-control" id="edit-id"></div>
+                <div class="mb-3"><label>Name</label><input type="text" class="form-control" id="edit-name"></div>
+                <div class="mb-3"><label>Type</label>
                     <select class="form-select" id="edit-type">
                         <option value="Storage">Storage Box</option>
                         <option value="Dryer Box">Dryer Box</option>
@@ -115,14 +104,11 @@
                         <option value="Cart">Cart</option>
                     </select>
                 </div>
-                <div class="mb-3">
-                    <label class="form-label">Max Spools (Capacity)</label>
-                    <input type="number" class="form-control" id="edit-max" value="1">
-                </div>
+                <div class="mb-3"><label>Capacity</label><input type="number" class="form-control" id="edit-max" value="1"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" onclick="closeEdit()">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="saveLocation()">💾 Save Changes</button>
+                <button type="button" class="btn btn-primary" onclick="saveLocation()">Save</button>
             </div>
         </div>
     </div>
@@ -132,33 +118,29 @@
     <div class="modal-dialog modal-fullscreen">
         <div class="modal-content">
             <div class="modal-header bg-dark border-secondary">
-                <div class="d-flex align-items-center gap-3">
-                    <div id="qr-modal-done" class="footer-qr-box"></div>
-                    <div>
-                        <h4 class="modal-title text-info mb-0" id="manageTitle">Managing...</h4>
-                        <small class="text-muted">Scan item to add • Click slot to manage</small>
-                    </div>
+                <div>
+                    <h4 class="modal-title text-info mb-0" id="manageTitle">Managing...</h4>
                 </div>
                 <button type="button" class="btn-close btn-close-white" onclick="closeManage()"></button>
             </div>
-            <div class="modal-body bg-black modal-body-scrollable">
+            
+            <div class="modal-body bg-black modal-body-scrollable d-flex flex-column">
                 <input type="hidden" id="manage-loc-id">
-                <div class="container mt-3">
-                    <div class="input-group mb-3">
-                        <input type="text" id="manual-spool-id" class="form-control" placeholder="Scan Barcode or Type ID + Enter" style="font-size: 1.2rem;">
-                        <button class="btn btn-outline-success" onclick="manualAddSpool()">➕ ADD</button>
-                    </div>
-                </div>
-                <div id="manage-grid-view" class="container-fluid px-4" style="display:none;">
+                
+                <div id="buffer-nav-deck" class="nav-deck mb-3" style="display:none;"></div>
+
+                <div id="manage-grid-view" class="container-fluid px-4 flex-grow-1" style="display:none;">
                     <div id="slot-grid-container" class="slot-grid"></div>
                     <div id="unslotted-container" class="mt-4"></div>
                 </div>
-                <div id="manage-list-view" class="container px-3" style="display:none;">
+
+                <div id="manage-list-view" class="container px-3 flex-grow-1" style="display:none;">
                     <div id="manage-empty-msg" class="empty-state-box">
                         <div class="empty-state-text">EMPTY</div>
                         <p class="text-muted mt-2">Scan a spool to add it here.</p>
                     </div>
                     <div id="manage-contents-list"></div>
+                    
                     <div class="danger-zone pb-5">
                          <div class="action-badge" style="border-color:#dc3545; display:inline-flex;" onclick="triggerEjectAll(document.getElementById('manage-loc-id').value)">
                             <div id="qr-eject-all-list" class="badge-qr"></div>
@@ -166,9 +148,23 @@
                         </div>
                     </div>
                 </div>
+                
+                <div style="height: 120px;"></div>
             </div>
-            <div class="modal-footer bg-dark border-secondary justify-content-center">
-                <button type="button" class="btn btn-lg btn-success px-5" onclick="closeManage()">✅ DONE</button>
+
+            <div class="modal-footer bg-dark border-top border-secondary p-2 d-block">
+                <div class="container">
+                    <div class="input-group input-group-lg mb-2">
+                        <input type="text" id="manual-spool-id" class="form-control" placeholder="Enter Spool ID / Scan Legacy">
+                        <button class="btn btn-primary fw-bold" onclick="manualAddSpool()">+ ADD</button>
+                    </div>
+                    <button class="btn btn-success w-100 btn-lg fw-bold d-flex justify-content-between align-items-center" onclick="closeManage()">
+                        <span style="flex:1"></span> <span>✓ DONE / SYNC</span>
+                        <span style="flex:1; text-align:right;">
+                            <div id="qr-modal-done" class="footer-qr-box d-inline-block"></div>
+                        </span>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -177,9 +173,7 @@
 <div class="modal fade" id="actionModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="action-title">Action Required</h5>
-            </div>
+            <div class="modal-header"><h5 class="modal-title" id="action-title">Action</h5></div>
             <div class="modal-body text-center">
                 <h4 id="action-msg" class="mb-4"></h4>
                 <div id="action-buttons" class="d-flex justify-content-center gap-3 flex-wrap"></div>
@@ -194,19 +188,15 @@
 <div class="modal fade" id="confirmModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-warning">
-            <div class="modal-header bg-warning text-dark">
-                <h5 class="modal-title">⚠️ Confirmation</h5>
-            </div>
+            <div class="modal-header bg-warning text-dark"><h5 class="modal-title">⚠️ Confirm</h5></div>
             <div class="modal-body text-center">
-                <h3 id="confirm-msg" class="mb-4">Are you sure?</h3>
+                <h3 id="confirm-msg" class="mb-4">Sure?</h3>
                 <div class="d-flex justify-content-center gap-4">
                     <div class="text-center" onclick="confirmAction(true)">
-                        <div id="qr-confirm-yes" class="qr-box mb-2" style="width:100px;height:100px;"></div>
-                        <button class="btn btn-lg btn-success">YES</button>
+                        <div id="qr-confirm-yes" class="qr-box mb-2"></div><button class="btn btn-lg btn-success">YES</button>
                     </div>
                     <div class="text-center" onclick="confirmAction(false)">
-                        <div id="qr-confirm-no" class="qr-box mb-2" style="width:100px;height:100px;"></div>
-                        <button class="btn btn-lg btn-danger">NO</button>
+                        <div id="qr-confirm-no" class="qr-box mb-2"></div><button class="btn btn-lg btn-danger">NO</button>
                     </div>
                 </div>
             </div>
@@ -217,19 +207,15 @@
 <div class="modal fade" id="safetyModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-danger">
-            <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title">⛔ SAFETY INTERLOCK</h5>
-            </div>
+            <div class="modal-header bg-danger text-white"><h5 class="modal-title">⛔ SAFETY</h5></div>
             <div class="modal-body text-center">
                 <h3 id="safety-msg" class="text-danger fw-bold mb-4"></h3>
                 <div class="d-flex justify-content-center gap-4">
                     <div class="text-center" onclick="confirmSafety(true)">
-                        <div id="qr-safety-yes" class="qr-box mb-2" style="width:100px;height:100px;"></div>
-                        <button class="btn btn-lg btn-danger">FORCE EXECUTE</button>
+                        <div id="qr-safety-yes" class="qr-box mb-2"></div><button class="btn btn-lg btn-danger">FORCE</button>
                     </div>
                     <div class="text-center" onclick="confirmSafety(false)">
-                        <div id="qr-safety-no" class="qr-box mb-2" style="width:100px;height:100px;"></div>
-                        <button class="btn btn-lg btn-secondary">CANCEL</button>
+                        <div id="qr-safety-no" class="qr-box mb-2"></div><button class="btn btn-lg btn-secondary">CANCEL</button>
                     </div>
                 </div>
             </div>
