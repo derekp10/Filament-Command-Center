@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.12 (Link Pattern Corrected)
+ * Version: v154.15 (Queue + Spoolman Link)
  */
 
-const DASHBOARD_VERSION = "v154.12 (Link Pattern Corrected)";
+const DASHBOARD_VERSION = "v154.15 (Queue + Spoolman Link)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
