@@ -1,9 +1,9 @@
 <style>
-    /* --- STICKER FACTORY: v2.2 (MARGIN EATER EDITION) --- */
+    /* --- STICKER FACTORY: v2.3 (PRECISION OFFSET + DATA RESTORE) --- */
     @media print {
         body * { visibility: hidden; }
-        @page { size: auto; margin: 0mm; } /* Try to kill driver margins */
-        html, body { margin: 0; padding: 0; }
+        @page { size: auto; margin: 0mm; } 
+        html, body { margin: 0; padding: 0; background: white; }
         
         /* Show the container */
         #printable-queue-container {
@@ -12,24 +12,20 @@
             position: absolute; 
             
             /* --- 🖨️ CALIBRATION ZONE 🖨️ --- */
-            left: 2mm;    /* Was 46px. Reduced to 2mm to fill left margin */
-            top: 8mm;     /* Was 10px. Increased to 8mm (~30px) to push down */
-            width: 60mm !important; /* Fixed at 60mm */
+            left: 4mm;    /* Increased to 4mm to prevent clipping on the left */
+            top: 15mm;    /* Increased to 15mm to push further down the page */
+            width: 60mm !important; 
             /* ------------------------------- */
             
             background: white;
             z-index: 9999;
         }
         
-        /* Make children visible */
         #printable-queue-container * { visibility: visible !important; }
         
-        /* Page Break for multiple labels */
         .print-job-item {
             page-break-inside: avoid;
-            margin-bottom: 3mm; /* Gap between labels */
-            border-bottom: 1px dashed #999; /* Cut line */
-            padding-bottom: 1mm;
+            margin-bottom: 5mm; /* Increased gap to ensure clear separation */
             width: 100%;
         }
     }
@@ -39,14 +35,13 @@
 
     /* --- THE LABEL DESIGN (CSS GRID) --- */
     .label-box {
-        width: 100%; /* Fill the 60mm container */
+        width: 54mm; /* Slightly narrower to ensure fit within the 60mm zone */
         height: 24mm; 
-        
         background: #fff; color: #000;
         font-family: 'Arial Narrow', sans-serif;
         display: grid;
-        grid-template-columns: 18mm 1fr; /* Left: QR, Right: Data */
-        border: 2px solid #000; /* Thicker border for visibility */
+        grid-template-columns: 20mm 1fr; /* QR takes fixed width */
+        border: 1px solid #000;
         box-sizing: border-box;
         overflow: hidden;
     }
@@ -57,12 +52,11 @@
         width: 100%; height: 100%;
         display: flex; align-items: center; justify-content: center;
         padding: 1mm;
-        border-right: 2px solid #000;
+        border-right: 1px solid #000;
     }
-    /* Force QR image to fit */
     .label-qr img {
-        width: 16mm !important;
-        height: 16mm !important;
+        width: 18mm !important;
+        height: 18mm !important;
         object-fit: contain;
     }
 
@@ -71,31 +65,36 @@
         grid-column: 2;
         display: flex; flex-direction: column;
         justify-content: space-between;
-        padding-left: 1mm;
-        padding-right: 1mm;
-        line-height: 1;
+        padding: 1mm;
+        line-height: 1.1;
     }
 
     /* TEXT ROWS */
     .lbl-row {
-        display: flex; align-items: center;
-        border-bottom: 1px solid #000;
-        height: 25%; /* 4 rows = 100% */
+        display: flex; 
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #eee;
+        height: 20%; 
         overflow: hidden;
     }
     .lbl-row:last-child { border-bottom: none; }
 
     .lbl-key {
-        font-size: 7pt; font-weight: 900;
-        width: 9mm; flex-shrink: 0;
+        font-size: 6pt; font-weight: 900;
         text-transform: uppercase;
+        color: #666;
     }
     .lbl-val {
         font-size: 8pt; font-weight: bold;
         white-space: nowrap;
         overflow: hidden; text-overflow: ellipsis;
+        text-align: right;
     }
-    .lbl-hex { font-family: monospace; font-size: 7pt; letter-spacing: 1px; }
+    
+    /* Restore Gold Standard Elements */
+    .lbl-id { font-size: 9pt; color: #000; }
+    .lbl-rgb { font-family: 'Consolas', monospace; font-size: 6pt; }
 </style>
 
 <div id="printable-queue-container"></div>
