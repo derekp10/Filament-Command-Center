@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.8 (Spoolman Link Fix)
+ * Version: v154.9 (Spoolman Link Fixed)
  */
 
-const DASHBOARD_VERSION = "v154.8 (Spoolman Link Fix)";
+const DASHBOARD_VERSION = "v154.9 (Spoolman Link Fixed)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -626,14 +626,16 @@ const openSpoolDetails = (id) => {
         
         // --- LINK FIX START ---
         // Dynamically update the href of the "Open Spoolman" button
+        // FIX: Added /#/ for Spoolman SPA routing
         const btnLink = document.getElementById('btn-open-spoolman');
         if (btnLink) {
-            // Check if global SPOOLMAN_URL exists (injected by dashboard.html)
             if (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) {
-                btnLink.href = `${SPOOLMAN_URL}/spool/${d.id}`;
+                // Ensure no double slashes if user config has trailing slash
+                const baseUrl = SPOOLMAN_URL.endsWith('/') ? SPOOLMAN_URL.slice(0, -1) : SPOOLMAN_URL;
+                btnLink.href = `${baseUrl}/#/spool/${d.id}`;
             } else {
                 console.warn("SPOOLMAN_URL is undefined. Using relative path.");
-                btnLink.href = `/spool/${d.id}`; // Fallback, though likely wrong port
+                btnLink.href = `/#/spool/${d.id}`;
             }
         }
         // --- LINK FIX END ---
