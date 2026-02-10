@@ -59,9 +59,69 @@ def get_best_hex(item_data):
         if first_hex: return first_hex
     return item_data.get('color_hex', '')
 
-# --- NEW BATCH ROUTE ---
+# --- ROUTE 1: SINGLE PRINT ---
+@app.route('/api/print_label', methods=['POST'])
+def api_print_label():
+    sid = request.json.get('id')
+    if not sid: return jsonify({"success": False, "msg": "No ID provided"})
+
+    spool = spoolman_api.get_spool(sid)
+    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
+
+    # ... (Your existing single print logic here) ...
+    # If you need this code again, let me know!
+    return jsonify({"success": True, "method": "browser", "data": spool})
+
+
+# --- ROUTE 2: BATCH CSV (The New One) ---
 @app.route('/api/print_batch_csv', methods=['POST'])
 def api_print_batch_csv():
+    data = request.json
+    ids = data.get('ids', [])
+    if not ids: return jsonify({"success": False, "msg": "Empty Queue"})
+
+    cfg = config_loader.load_config()
+    # Force use of CSV path from config
+    csv_path = cfg.get("print_settings", {}).get("csv_path", "labels.csv")
+
+    try:
+        file_exists = os.path.exists(csv_path)
+        # Open in Append mode
+        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            
+            # Add Header if file is new
+            if not file_exists:
+                writer.writerow(['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code'])
+            
+            for sid in ids:
+                # Get Spool Data
+                spool = spoolman_api.get_spool(sid)
+                if not spool: continue
+                
+                # Extract Fields 
+                fil = spool.get('filament', {})
+                vend = fil.get('vendor', {})
+                fil_extra = fil.get('extra', {})
+
+                brand = vend.get('name', 'Unknown')
+                name = get_color_name(fil) # THIS FUNCTION MUST EXIST ABOVE
+                material = fil.get('material', 'Unknown')
+                smart_type = get_smart_type(material, fil_extra) # THIS ONE TOO
+                hex_val = get_best_hex(fil)
+                r, g, b = hex_to_rgb(hex_val)
+                weight = f"{fil.get('weight', 0):.0f}g"
+                qr = f"ID:{sid}"
+                
+                writer.writerow([sid, brand, name, smart_type, hex_val, r, g, b, weight, qr])
+
+        return jsonify({"success": True, "count": len(ids)})
+        
+    except PermissionError:
+        return jsonify({"success": False, "msg": "CSV File Locked! Close Excel."})
+    except Exception as e:
+        state.logger.error(f"Batch CSV Error: {e}")
+        return jsonify({"success": False, "msg": str(e)})
     data = request.json
     ids = data.get('ids', [])
     if not ids: return jsonify({"success": False, "msg": "Empty Queue"})
