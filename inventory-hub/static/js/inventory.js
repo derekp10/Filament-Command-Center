@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.5 (Debug Mode)
+ * Version: v154.6 (Z-Index Fixed)
  */
 
-const DASHBOARD_VERSION = "v154.5 (Debug Mode)";
+const DASHBOARD_VERSION = "v154.6 (Z-Index Fixed)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -423,11 +423,12 @@ const confirmSafety = (y) => { closeModal('safetyModal'); if(y && state.pendingS
 const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
 const openManage = (id) => { 
+    // FIX: Hide the Location List first so there's no ghost window behind
+    if (modals.locMgrModal) modals.locMgrModal.hide();
+    
     document.getElementById('manageTitle').innerText=`Location Manager: ${id}`; 
     document.getElementById('manage-loc-id').value=id; 
     document.getElementById('manual-spool-id').value=""; 
-    
-    // We do NOT render here anymore. The listener handles it.
     modals.manageModal.show(); 
     refreshManageView(id);
 };
@@ -591,20 +592,16 @@ const openSpoolDetails = (id) => {
     })
     .then(d => {
         setProcessing(false);
-        // SAFETY CHECK: Ensure data is valid
         if (!d || !d.id) { 
             showToast("Details Data Missing!", "error"); 
-            console.error("Invalid Spool Data Received:", d);
             return; 
         }
         
-        // Populate Modal
         document.getElementById('detail-id').innerText = d.id;
         document.getElementById('detail-material').innerText = d.filament?.material || "Unknown";
         document.getElementById('detail-vendor').innerText = d.filament?.vendor?.name || "Unknown";
         document.getElementById('detail-weight').innerText = (d.filament?.weight || 0) + "g";
         
-        // Safety for used/remaining weights which might be null
         const used = d.used_weight !== null ? d.used_weight : 0;
         const rem = d.remaining_weight !== null ? d.remaining_weight : 0;
         document.getElementById('detail-used').innerText = Number(used).toFixed(1) + "g";
@@ -617,7 +614,6 @@ const openSpoolDetails = (id) => {
         const swatch = document.getElementById('detail-swatch');
         if(swatch) swatch.style.backgroundColor = "#" + (d.filament?.color_hex || "333");
         
-        // Open Modal
         if(modals.spoolModal) modals.spoolModal.show();
         else {
             const el = document.getElementById('spoolModal');
@@ -632,9 +628,7 @@ const openSpoolDetails = (id) => {
     });
 };
 
-// --- NEW: QUICK QUEUE (Fixes list button) ---
 const quickQueue = (id) => {
-    // Fetch data just to get the name/color for the queue list
     fetch(`/api/spool_details?id=${id}`)
     .then(r=>r.json())
     .then(d => {
