@@ -373,6 +373,62 @@ def api_identify_scan():
 
     return jsonify(res)
 
+@app.route('/api/print_location_label', methods=['POST'])
+def api_print_location_label():
+    loc_id = request.json.get('id')
+    if not loc_id: return jsonify({"success": False, "msg": "No ID provided"})
+    
+    # Simple CSV append for now, matching existing label logic
+    cfg = config_loader.load_config()
+    csv_path = cfg.get("print_settings", {}).get("csv_path", "labels_locations.csv")
+    
+    # Handle folder creation if needed
+    if "/" in csv_path or "\\" in csv_path:
+        folder = os.path.dirname(csv_path)
+        try: os.makedirs(folder, exist_ok=True)
+        except: pass
+        csv_path = os.path.join(folder, "labels_locations.csv")
+
+    try:
+        # Load location details to get the Name
+        locs = locations_db.load_locations_list()
+        loc_data = next((x for x in locs if x['LocationID'] == loc_id), None)
+        loc_name = loc_data['Name'] if loc_data else "Unknown"
+
+        file_exists = os.path.exists(csv_path)
+        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+            headers = ["LocationID", "Name", "QR_Code"]
+            writer = csv.DictWriter(f, fieldnames=headers)
+            if not file_exists: writer.writeheader()
+            writer.writerow({
+                "LocationID": loc_id, 
+                "Name": loc_name, 
+                "QR_Code": loc_id
+            })
+            
+        return jsonify({"success": True, "msg": f"Queue: {loc_id}"})
+    except Exception as e:
+        return jsonify({"success": False, "msg": str(e)})
+
+@app.route('/api/get_multicolor_filaments', methods=['GET'])
+def api_get_multicolor_filaments():
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        resp = requests.get(f"{sm_url}/api/v1/filament", timeout=5)
+        if not resp.ok: return jsonify([])
+        
+        candidates = []
+        for f in resp.json():
+            multi = f.get('multi_color_hexes')
+            if multi and ',' in multi:
+                candidates.append({
+                    "id": f['id'], 
+                    "display": f"{f.get('vendor',{}).get('name')} - {f.get('name')}"
+                })
+        return jsonify(candidates)
+    except:
+        return jsonify([])
+
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
     return jsonify(logic.perform_smart_move(request.json.get('location'), request.json.get('spools')))
