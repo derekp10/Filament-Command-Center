@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.24 (Critical Fix: CSV Safe-Write)
+ * Version: v154.25 (Safety Queue Clear + Overwrite Support)
  */
 
-const DASHBOARD_VERSION = "v154.24 (CSV Safe-Write)";
+const DASHBOARD_VERSION = "v154.25 (Safety Queue Clear)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -1015,9 +1015,12 @@ function removeFromQueue(index) {
 }
 
 function clearQueue() {
-    labelQueue = [];
-    openQueueModal();
-    updateQueueUI();
+    requestConfirmation("⚠️ Clear the entire Print Queue? This cannot be undone.", () => {
+        labelQueue = [];
+        openQueueModal();
+        updateQueueUI();
+        showToast("Queue Cleared");
+    });
 }
 
 // Updated: Supports Overwrite/Append Toggle
@@ -1067,7 +1070,10 @@ function printQueueCSV() {
 
     Promise.all(promises).then(results => {
         if (results.every(r => r === true)) {
-            clearQueue();
+            // Updated: Use a distinct method to clear without prompting, since success is confirmed.
+            labelQueue = [];
+            openQueueModal();
+            updateQueueUI();
             if (modals.queueModal) modals.queueModal.hide();
         } else {
             showToast("⚠️ Queue NOT cleared due to errors.", "warning");
