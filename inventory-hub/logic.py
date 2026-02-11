@@ -38,11 +38,17 @@ def resolve_scan(text):
 
         return {'type': 'error', 'msg': 'Malformed Command'}
 
-    # DIRECT SPOOL ID
+    # DIRECT SPOOL ID (Standard)
     if upper_text.startswith("ID:"):
         clean_id = text[3:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
         return {'type': 'error', 'msg': 'Invalid Spool ID Format'}
+
+    # DIRECT SPOOL ID (Alternative Prefix)
+    if upper_text.startswith("SPL:"):
+        clean_id = text[4:].strip()
+        if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
+        return {'type': 'error', 'msg': 'Invalid SPL ID Format'}
 
     # NEW: FILAMENT DEFINITION ID
     if upper_text.startswith("FIL:"):
