@@ -19,6 +19,8 @@
                     <button class="btn btn-secondary" onclick="printQueueCSV()">📄 Send to P-Touch CSV (Batch)</button>
                     <hr>
                     <button class="btn btn-outline-danger" onclick="clearQueue()">🗑️ Clear Queue</button>
+                    <hr>
+                    <button class="btn btn-info text-dark fw-bold" onclick="findMultiColorFilaments()">🌈 Find Multi-Color Swatches</button>
                 </div>
             </div>
         </div>
@@ -185,7 +187,11 @@
                     <h4 class="modal-title text-info mb-0" id="manageTitle">Managing...</h4>
                     <small class="text-muted">Scan item to add • Click slot to manage</small>
                 </div>
+                <div class="ms-3">
+                    <button class="btn btn-sm btn-outline-warning" onclick="printCurrentLocationLabel()">🖨️ LOC LABEL</button>
+                </div>
                 <button type="button" class="btn-close btn-close-white" onclick="closeManage()"></button>
+            </div>
             </div>
             <div class="modal-body bg-black d-flex flex-column">
                 <input type="hidden" id="manage-loc-id">
