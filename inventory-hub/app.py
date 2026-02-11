@@ -100,13 +100,13 @@ def api_print_label():
 def api_print_batch_csv():
     data = request.json
     ids = data.get('ids', [])
-    mode = data.get('mode', 'spool') # 'spool' or 'filament'
+    mode = data.get('mode', 'spool')
+    clear_old = data.get('clear_old', False) # NEW PARAMETER
     
     if not ids: return jsonify({"success": False, "msg": "Empty Queue"})
 
     cfg = config_loader.load_config()
     
-    # Filename strategy
     filename = "labels_spool.csv" if mode == 'spool' else "labels_swatch.csv"
     csv_path = cfg.get("print_settings", {}).get("csv_path", filename)
     
@@ -117,100 +117,93 @@ def api_print_batch_csv():
     try:
         items_to_print = []
         
-        # 1. Define CORE Headers based on Mode
+        # 1. Define CORE Headers
         if mode == 'spool':
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
         else:
-            # Filament Swatch Headers
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Temp_Nozzle', 'Temp_Bed', 'Density', 'QR_Code']
 
+        # ... (Data Fetching & Processing Loop remains the same) ...
         for item_id in ids:
-            # Fetch Data
+            # [KEEP EXISTING LOGIC FOR FETCHING AND CALCULATING row_data]
+            # ... (Copied from previous step) ...
             if mode == 'spool':
                 raw_data = spoolman_api.get_spool(item_id)
+                # ...
+            else:
+                raw_data = spoolman_api.get_filament(item_id)
+                # ...
+            
+            # ... (Calculating row_data) ...
+            row_data = {}
+            # ... (re-use previous logic for fields) ...
+            # FOR BREVITY IN CHAT: I assume you keep the logic we just verified in v154.23
+            # The key change is below in the WRITE section.
+            
+            # --- RE-INSERTING THE LOGIC SO YOU CAN COPY-PASTE THE WHOLE BLOCK IF NEEDED ---
+            if mode == 'spool':
                 if not raw_data: continue
                 fil_data = raw_data.get('filament', {})
                 vendor_data = fil_data.get('vendor', {})
                 fil_extra = fil_data.get('extra', {})
             else:
-                raw_data = spoolman_api.get_filament(item_id)
                 if not raw_data: continue
                 fil_data = raw_data
                 vendor_data = raw_data.get('vendor', {})
                 fil_extra = raw_data.get('extra', {})
 
-            # --- CALCULATE CORE FIELDS ---
-            row_data = {}
             row_data['ID'] = item_id
-            
-            # Common Fields
             row_data['Brand'] = vendor_data.get('name', 'Unknown') if vendor_data else 'Unknown'
             row_data['Color'] = get_color_name(fil_data)
-            
             raw_material = fil_data.get('material', 'Unknown')
             row_data['Type'] = get_smart_type(raw_material, fil_extra)
-            
             hex_val = get_best_hex(fil_data)
             row_data['Hex'] = hex_val
             r, g, b = hex_to_rgb(hex_val)
-            row_data['Red'] = r
-            row_data['Green'] = g
-            row_data['Blue'] = b
+            row_data['Red'] = r; row_data['Green'] = g; row_data['Blue'] = b
 
-            # Mode Specific Fields
             if mode == 'spool':
                 row_data['Weight'] = f"{raw_data.get('remaining_weight', 0):.0f}g"
                 row_data['QR_Code'] = f"ID:{item_id}"
             else:
-                # Filament Formatting
                 t_noz = fil_data.get('settings_extruder_temp')
                 row_data['Temp_Nozzle'] = f"{t_noz}°C" if t_noz else ""
-                
                 t_bed = fil_data.get('settings_bed_temp')
                 row_data['Temp_Bed'] = f"{t_bed}°C" if t_bed else ""
-                
                 dens = fil_data.get('density')
                 row_data['Density'] = f"{dens} g/cm³" if dens else ""
-                
                 row_data['QR_Code'] = f"FIL:{item_id}"
 
-            # --- FLATTEN & MERGE EVERYTHING ELSE ---
             flat_data = flatten_json(raw_data)
-            
-            # Merge flat data, preserving our calculated Core Keys
             for k, v in flat_data.items():
-                if k not in row_data:
-                    row_data[k] = v
-            
+                if k not in row_data: row_data[k] = v
             items_to_print.append(row_data)
+            # -------------------------------------------------------------
 
-        if not items_to_print:
-            return jsonify({"success": False, "msg": "No valid data found"})
+        if not items_to_print: return jsonify({"success": False, "msg": "No valid data found"})
 
-        # 2. Determine Final Header List
+        # 2. Determine Headers
         final_headers = list(core_headers)
-        
         all_keys = set()
-        for item in items_to_print:
-            all_keys.update(item.keys())
-            
+        for item in items_to_print: all_keys.update(item.keys())
         extra_headers = sorted([k for k in all_keys if k not in core_headers])
         final_headers.extend(extra_headers)
 
-        # 3. Write to CSV
+        # 3. WRITE LOGIC (UPDATED)
         file_exists = os.path.exists(csv_path)
         
-        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
-            # We use extrasaction='ignore' to be safe if appending to old files with fewer columns,
-            # but we construct the writer with ALL current columns.
+        # Decide Mode: 'w' (Overwrite) if clear_old is True, otherwise 'a' (Append)
+        write_mode = 'w' if clear_old else 'a'
+        
+        # Note: 'w' automatically truncates the file (clears it)
+        with open(csv_path, write_mode, newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=final_headers, extrasaction='ignore')
             
-            if not file_exists:
+            # Always write header if Overwriting OR if file is new
+            if clear_old or not file_exists:
                 writer.writeheader()
-                writer.writerows(items_to_print)
-            else:
-                # Append Mode
-                writer.writerows(items_to_print)
+            
+            writer.writerows(items_to_print)
 
         return jsonify({"success": True, "count": len(items_to_print), "file": filename})
 
