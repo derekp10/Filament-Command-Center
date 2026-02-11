@@ -38,17 +38,13 @@ def resolve_scan(text):
 
         return {'type': 'error', 'msg': 'Malformed Command'}
 
-    # DIRECT SPOOL ID (Standard)
-    if upper_text.startswith("ID:"):
-        clean_id = text[3:].strip()
+    # DIRECT SPOOL ID
+    if upper_text.startswith("ID:") or upper_text.startswith("SPL:"):
+        # Normalize SPL: to just ID logic
+        prefix_len = 3 if upper_text.startswith("ID:") else 4
+        clean_id = text[prefix_len:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
         return {'type': 'error', 'msg': 'Invalid Spool ID Format'}
-
-    # DIRECT SPOOL ID (Alternative Prefix)
-    if upper_text.startswith("SPL:"):
-        clean_id = text[4:].strip()
-        if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
-        return {'type': 'error', 'msg': 'Invalid SPL ID Format'}
 
     # NEW: FILAMENT DEFINITION ID
     if upper_text.startswith("FIL:"):
@@ -66,18 +62,32 @@ def resolve_scan(text):
         if rid: return {'type': 'spool', 'id': rid}
         return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
-    # PURE NUMBER SCAN (Legacy ID Fallback)
+    # PURE NUMBER SCAN (Priority Stack)
     if text.isdigit():
-        # 1. Try to find an ACTIVE Spool first
-        rid = spoolman_api.find_spool_by_legacy_id(text, strict_mode=False)
+        # 1. PRIORITY: Legacy Spool Match
+        # (Does a spool exist that has this number as its EXTERNAL ID?)
+        rid = spoolman_api.find_spool_by_legacy_id(text, strict_mode=True)
         if rid: return {'type': 'spool', 'id': rid}
         
-        # 2. Try to find the Filament Definition (Swatch)
+        # 2. PRIORITY: Legacy Filament Match
+        # (Does a filament exist that has this number as its EXTERNAL ID?)
+        # This catches your case: Input "99" matches Filament 96's External ID "99".
         fid = spoolman_api.find_filament_by_legacy_id(text)
         if fid: return {'type': 'filament', 'id': fid}
         
-        # 3. Assume it's a direct Spool ID if all else fails
-        return {'type': 'spool', 'id': int(text)}
+        # 3. FALLBACK: Direct Spool ID
+        # (Does Spool #99 exist?)
+        spool_check = spoolman_api.get_spool(text)
+        if spool_check and spool_check.get('id'):
+            return {'type': 'spool', 'id': int(text)}
+
+        # 4. FALLBACK: Direct Filament ID
+        # (Does Filament #99 exist?)
+        fil_check = spoolman_api.get_filament(text)
+        if fil_check and fil_check.get('id'):
+            return {'type': 'filament', 'id': int(text)}
+        
+        return {'type': 'error', 'msg': 'ID Not Found'}
         
     if len(text) > 2: 
         return {'type': 'location', 'id': text.upper()}
