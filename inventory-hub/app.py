@@ -9,7 +9,7 @@ import csv
 import os
 import json
 
-VERSION = "v154.20 (Queue + Explicit CSV Columns)"
+VERSION = "v154.23 (Full Data Export)"
 app = Flask(__name__)
 
 @app.after_request
@@ -28,7 +28,7 @@ def dashboard():
     
     return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url)
 
-# --- HELPER FUNCTIONS (PRESERVED) ---
+# --- HELPER FUNCTIONS ---
 def clean_string(s):
     if isinstance(s, str): return s.strip('"').strip("'")
     return s
@@ -117,9 +117,13 @@ def api_print_batch_csv():
     try:
         items_to_print = []
         
-        # 1. Define the MANDATORY columns that must exist and be first
-        core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
-        
+        # 1. Define CORE Headers based on Mode
+        if mode == 'spool':
+            core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
+        else:
+            # Filament Swatch Headers
+            core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Temp_Nozzle', 'Temp_Bed', 'Density', 'QR_Code']
+
         for item_id in ids:
             # Fetch Data
             if mode == 'spool':
@@ -135,42 +139,45 @@ def api_print_batch_csv():
                 vendor_data = raw_data.get('vendor', {})
                 fil_extra = raw_data.get('extra', {})
 
-            # --- CALCULATE CORE FIELDS (USER LOGIC RESTORED) ---
+            # --- CALCULATE CORE FIELDS ---
             row_data = {}
-            
             row_data['ID'] = item_id
             
-            # Brand
+            # Common Fields
             row_data['Brand'] = vendor_data.get('name', 'Unknown') if vendor_data else 'Unknown'
-            
-            # Color
             row_data['Color'] = get_color_name(fil_data)
             
-            # Type (Smart Type)
             raw_material = fil_data.get('material', 'Unknown')
             row_data['Type'] = get_smart_type(raw_material, fil_extra)
             
-            # Hex & RGB
             hex_val = get_best_hex(fil_data)
             row_data['Hex'] = hex_val
             r, g, b = hex_to_rgb(hex_val)
             row_data['Red'] = r
             row_data['Green'] = g
             row_data['Blue'] = b
-            
-            # Weight (Filament Capacity for labels)
-            # Using fil.get('weight') as per user request to match original snippet
-            row_data['Weight'] = f"{fil_data.get('weight', 0):.0f}g"
-            
-            # QR Code
-            prefix = "ID:" if mode == 'spool' else "FIL:"
-            row_data['QR_Code'] = f"{prefix}{item_id}"
 
-            # --- FLATTEN & MERGE EXTRA DATA ---
-            # This ensures we have the "Dump All" feature while keeping Core fields prioritized
+            # Mode Specific Fields
+            if mode == 'spool':
+                row_data['Weight'] = f"{raw_data.get('remaining_weight', 0):.0f}g"
+                row_data['QR_Code'] = f"ID:{item_id}"
+            else:
+                # Filament Formatting
+                t_noz = fil_data.get('settings_extruder_temp')
+                row_data['Temp_Nozzle'] = f"{t_noz}°C" if t_noz else ""
+                
+                t_bed = fil_data.get('settings_bed_temp')
+                row_data['Temp_Bed'] = f"{t_bed}°C" if t_bed else ""
+                
+                dens = fil_data.get('density')
+                row_data['Density'] = f"{dens} g/cm³" if dens else ""
+                
+                row_data['QR_Code'] = f"FIL:{item_id}"
+
+            # --- FLATTEN & MERGE EVERYTHING ELSE ---
             flat_data = flatten_json(raw_data)
             
-            # Merge flat data into row_data, but DO NOT overwrite the Core keys we just calculated
+            # Merge flat data, preserving our calculated Core Keys
             for k, v in flat_data.items():
                 if k not in row_data:
                     row_data[k] = v
@@ -181,10 +188,8 @@ def api_print_batch_csv():
             return jsonify({"success": False, "msg": "No valid data found"})
 
         # 2. Determine Final Header List
-        # Start with Core Headers (in order)
         final_headers = list(core_headers)
         
-        # Add any other keys found in the items, sorted
         all_keys = set()
         for item in items_to_print:
             all_keys.update(item.keys())
@@ -196,31 +201,15 @@ def api_print_batch_csv():
         file_exists = os.path.exists(csv_path)
         
         with open(csv_path, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=final_headers)
-            
-            # Logic: If file doesn't exist, write headers.
-            # If it does exist, we append. 
-            # Note: DictWriter will raise ValueError if we try to write fields not in 'fieldnames'
-            # if the file was opened with different fieldnames previously.
-            # However, since we are re-defining fieldnames based on THIS batch, 
-            # we need to be careful if appending to a file with FEWER columns.
-            # For robustness in "Append" mode with variable schemas, 'extrasaction=ignore' 
-            # is safer if we want to preserve the OLD file structure, 
-            # BUT the user wants ALL data.
-            # Ideally, the user deletes the file to get a fresh schema. 
+            # We use extrasaction='ignore' to be safe if appending to old files with fewer columns,
+            # but we construct the writer with ALL current columns.
+            writer = csv.DictWriter(f, fieldnames=final_headers, extrasaction='ignore')
             
             if not file_exists:
                 writer.writeheader()
                 writer.writerows(items_to_print)
             else:
-                # If appending, we must respect the headers we just calculated for THIS batch.
-                # But we can't change the physical headers of the existing file easily.
-                # We will try to write. If the new data has columns the old file didn't,
-                # they will just be appended without a header in the CSV text (which is messy but preserves data),
-                # OR we accept that appending only works perfectly if schema is stable.
-                
-                # To be safe and compliant with DictWriter:
-                writer = csv.DictWriter(f, fieldnames=final_headers, extrasaction='ignore')
+                # Append Mode
                 writer.writerows(items_to_print)
 
         return jsonify({"success": True, "count": len(items_to_print), "file": filename})
@@ -303,7 +292,6 @@ def api_spool_details():
     if not sid: return jsonify({})
     return jsonify(spoolman_api.get_spool(sid))
 
-# NEW: Filament Details Route
 @app.route('/api/filament_details', methods=['GET'])
 def api_filament_details():
     fid = request.args.get('id')
@@ -351,7 +339,6 @@ def api_identify_scan():
     text = request.json.get('text', '')
     res = logic.resolve_scan(text)
 
-    # --- AUDIT MODE INTERCEPTION ---
     if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
         state.reset_audit()
         state.AUDIT_SESSION['active'] = True
@@ -363,7 +350,6 @@ def api_identify_scan():
         logic.process_audit_scan(res)
         return jsonify({"type": "command", "cmd": "clear"})
 
-    # Standard Operation
     if not res: return jsonify({"type": "unknown"})
     
     if res['type'] == 'location':
@@ -378,7 +364,6 @@ def api_identify_scan():
             info = spoolman_api.format_spool_display(data)
             return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
             
-    # NEW: Filament Scan Handling
     if res['type'] == 'filament':
         fid = res['id']
         data = spoolman_api.get_filament(fid)
