@@ -111,17 +111,18 @@ def api_print_batch_csv():
     filename = "labels_spool.csv" if mode == 'spool' else "labels_swatch.csv"
     csv_path = cfg.get("print_settings", {}).get("csv_path", filename)
     
+    # 🛠️ AUTO-CREATE FOLDER FIX
     if "/" in csv_path or "\\" in csv_path:
         folder = os.path.dirname(csv_path)
+        try: 
+            os.makedirs(folder, exist_ok=True)
+        except Exception as e:
+            state.logger.warning(f"Could not create folder {folder}: {e}")
+        
+        # Ensure we point to the correct filename in that folder
         csv_path = os.path.join(folder, filename)
 
     try:
-        # [DATA GATHERING LOGIC - Same as before]
-        # ... (Perform the loop to build items_to_print) ...
-        # FOR BREVITY: Copy the "items_to_print" loop from the previous successful version.
-        # It calculates row_data for every item.
-        
-        # --- RE-INSERTING DATA LOOP FOR SAFETY ---
         items_to_print = []
         if mode == 'spool':
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
