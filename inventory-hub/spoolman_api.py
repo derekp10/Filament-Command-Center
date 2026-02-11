@@ -95,8 +95,20 @@ def format_spool_display(spool_data):
             final_color = multi_hex 
         else:
             final_color = fil.get('color_hex', 'ffffff')
-            
-        return {"text": display_text, "color": final_color, "slot": slot}
+
+        return {
+            "text": display_text, 
+            "color": final_color, 
+            "slot": slot,
+            "details": {
+                "id": sid,
+                "brand": brand,
+                "material": mat,
+                "color_name": col_name,
+                "weight": rem,
+                "temp": f"{fil.get('settings_extruder_temp', '')}°C" if fil.get('settings_extruder_temp') else ""
+            }
+        }
 
     except Exception as e:
         state.logger.error(f"Format Error: {e}")
