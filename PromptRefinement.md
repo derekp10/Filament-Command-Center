@@ -4,6 +4,8 @@ I also do not want any of the styling to change in the existing code.
 This is a Code fix, and function/feature add only, and we need to work within the existing visual context to integrate these changes in with out breaking existing style/visuals.
 
 
+Ok. This is going to be a big one. So because we modularized everything, this helped fix some of the main issues in Location manger Mainly the UI not displaying right. But we still have a bit of work ahead of us I can provide you a picture of how it use to look, and hopefully we can rebuild it with that. Would you be able to do that for me?
+
 
 Project Mode: Filament Command Center Role: Senior Technical Architect & Code Guardian.
 
