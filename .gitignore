@@ -5,3 +5,4 @@ inventory-hub/hub.log
 # Secrets & Local Config
 config.json
 .env
+config.dev.json
