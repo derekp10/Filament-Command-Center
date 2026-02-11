@@ -958,21 +958,23 @@ const updateLogState = (force=false) => {
         if(sSpool) sSpool.className = `status-dot ${d.status.spoolman?'status-on':'status-off'}`;
         if(sFila) sFila.className = `status-dot ${d.status.filabridge?'status-on':'status-off'}`;
         if (d.audit_active !== state.lastAuditState) {
-            state.lastAuditState = d.audit_active;
-            state.auditActive = d.audit_active; 
-            const deckBtn = document.getElementById('btn-deck-audit');
-            const lbl = document.getElementById('lbl-audit');
-            const qrDiv = document.getElementById('qr-audit');
-            if (state.auditActive) {
-                if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
-                if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
-                if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 60); }
-            } else {
-                if(deckBtn) deckBtn.classList.remove('btn-audit-active');
-                if(lbl) { lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit'); }
-                if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 60); }
-            }
+        state.lastAuditState = d.audit_active;
+        state.auditActive = d.audit_active; 
+        const deckBtn = document.getElementById('btn-deck-audit');
+        const lbl = document.getElementById('lbl-audit');
+        const qrDiv = document.getElementById('qr-audit');
+        if (state.auditActive) {
+            if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
+            if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
+            /* FIXED: Updated size to 85 to match Deck Init size */
+            if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 85); }
+        } else {
+            if(deckBtn) deckBtn.classList.remove('btn-audit-active');
+            if(lbl) { lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit'); }
+            /* FIXED: Updated size to 85 to match Deck Init size */
+            if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 85); }
         }
+    }
     });
 };
 
