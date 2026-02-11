@@ -11,7 +11,14 @@
 # **Next Steps Items:**
 
 ## **Current:**
-None
+Production Functionality Fix list
+1. QR codes not scanning into buffer
+2. QR Button codes not have enought white space for the scanner to read them.
+3. Increase the size of all QR Codes
+4. Add functionality to print location Labels (With support for slot based assignments on DryerBox types)
+5. add the ability to find filament/swatches with multiple filaments and easily add those to the print queue
+6. Fix Location Manager UI Dryer box slot locations not correctly displaying all filament information
+
 
 
 ## **Future:**
