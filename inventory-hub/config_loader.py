@@ -5,7 +5,19 @@ import state
 
 # Logic to find the ROOT config.json (Go up one level)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
+
+def get_config_path():
+    """Determines which config file to load based on Environment Variables."""
+    env = os.environ.get('FLASK_ENV', '').lower()
+    custom_env = os.environ.get('ENV', '').lower()
+    
+    # Priority: Explicit 'ENV' var > FLASK_ENV > Default
+    if 'dev' in custom_env or 'dev' in env:
+        target = os.path.join(BASE_DIR, 'config.dev.json')
+        if os.path.exists(target):
+            return target, "DEV"
+    
+    return os.path.join(BASE_DIR, 'config.json'), "PROD"
 
 def load_config():
     defaults = {
@@ -19,17 +31,25 @@ def load_config():
     }
     
     final_config = defaults.copy()
+    config_file, mode = get_config_path()
     
-    if os.path.exists(CONFIG_FILE):
+    if os.path.exists(config_file):
         try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f: 
+            with open(config_file, 'r', encoding='utf-8') as f: 
                 loaded = json.load(f)
                 final_config.update(loaded)
+            # Log only if state logger is available
+            if hasattr(state, 'logger'):
+                if mode == "DEV":
+                    state.logger.warning(f"⚠️ LOADED DEV CONFIG: {config_file}")
+                else:
+                    state.logger.info(f"✅ Loaded Prod Config: {config_file}")
         except Exception as e: 
-            # Fallback for Docker or if file missing
-            state.logger.error(f"Root Config Load Error: {e}")
+            if hasattr(state, 'logger'):
+                state.logger.error(f"Config Load Error: {e}")
     else:
-        state.logger.warning(f"Root config.json not found at {CONFIG_FILE}")
+        if hasattr(state, 'logger'):
+            state.logger.warning(f"Config file not found at {config_file}")
 
     # Force Uppercase Keys for Printer Map
     if 'printer_map' in final_config:
