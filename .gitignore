@@ -6,3 +6,4 @@ inventory-hub/hub.log
 config.json
 .env
 config.dev.json
+config.prod.json
