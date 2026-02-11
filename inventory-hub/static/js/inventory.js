@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.17 (Label Data Restore)
+ * Version: v154.20 (Dual Pipeline: Spool & Filament)
  */
 
-const DASHBOARD_VERSION = "v154.17 (Label Data Restore)";
+const DASHBOARD_VERSION = "v154.20 (Dual Pipeline)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -55,7 +55,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if(vTag) vTag.innerText = DASHBOARD_VERSION;
 
     // Bootstrap Modals
-    ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal', 'queueModal', 'spoolModal'].forEach(id => {
+    ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 'actionModal', 'safetyModal', 'queueModal', 'spoolModal', 'filamentModal'].forEach(id => {
         const el = document.getElementById(id);
         if(el) modals[id] = new bootstrap.Modal(el);
     });
@@ -118,17 +118,28 @@ document.addEventListener('DOMContentLoaded', () => {
         btnPrintAction.onclick = () => {
             const idText = document.getElementById('detail-id').innerText;
             if (idText) {
-                const spoolObj = {
+                addToQueue({
                     id: parseInt(idText),
-                    filament: {
-                        name: document.getElementById('detail-color-name').innerText,
-                        material: document.getElementById('detail-material').innerText,
-                        vendor: { name: document.getElementById('detail-vendor').innerText },
-                        color_hex: document.getElementById('detail-hex').innerText
-                    }
-                };
-                addToQueue(spoolObj);
+                    type: 'spool',
+                    display: document.getElementById('detail-color-name').innerText
+                });
                 modals.spoolModal.hide();
+            }
+        };
+    }
+
+    // Wire up Filament Detail "Queue Swatch" button
+    const btnFilPrint = document.getElementById('btn-fil-print-action');
+    if (btnFilPrint) {
+        btnFilPrint.onclick = () => {
+            const idText = document.getElementById('fil-detail-id').innerText;
+            if (idText) {
+                addToQueue({
+                    id: parseInt(idText),
+                    type: 'filament',
+                    display: document.getElementById('fil-detail-color-name').innerText
+                });
+                modals.filamentModal.hide();
             }
         };
     }
@@ -405,6 +416,9 @@ const processScan = (text) => {
 
             if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
             else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); }
+        } else if (res.type === 'filament') {
+            // NEW: Handle Filament Scan -> Open Details
+            openFilamentDetails(res.id);
         } else if (res.type === 'error') showToast(res.msg, 'error');
     })
     .catch((e)=>{ setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
@@ -436,7 +450,6 @@ const confirmSafety = (y) => { closeModal('safetyModal'); if(y && state.pendingS
 const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
 const openManage = (id) => { 
-    // REMOVED: The hide() call for locMgrModal. It stays open in the background now.
     document.getElementById('manageTitle').innerText=`Location Manager: ${id}`; 
     document.getElementById('manage-loc-id').value=id; 
     document.getElementById('manual-spool-id').value=""; 
@@ -628,26 +641,72 @@ const openSpoolDetails = (id) => {
         const swatch = document.getElementById('detail-swatch');
         if(swatch) swatch.style.backgroundColor = "#" + (d.filament?.color_hex || "333");
         
-        // --- LINK FIX: NO HASH ---
-        // Dynamically update the href of the "Open Spoolman" button
-        // FIX: Removed the /#/ to match user's working example /spool/show/
+        // --- LINK FIX ---
         const btnLink = document.getElementById('btn-open-spoolman');
         if (btnLink) {
             if (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) {
-                // Ensure no double slashes if user config has trailing slash
                 const baseUrl = SPOOLMAN_URL.endsWith('/') ? SPOOLMAN_URL.slice(0, -1) : SPOOLMAN_URL;
                 btnLink.href = `${baseUrl}/spool/show/${d.id}`;
             } else {
-                console.warn("SPOOLMAN_URL is undefined. Using relative path.");
                 btnLink.href = `/spool/show/${d.id}`;
             }
         }
         
         if(modals.spoolModal) modals.spoolModal.show();
+    })
+    .catch(e => { 
+        setProcessing(false); 
+        console.error(e);
+        showToast("Connection/Data Error", "error");
+    });
+};
+
+// --- NEW: OPEN FILAMENT DETAILS FUNCTION ---
+const openFilamentDetails = (fid) => {
+    setProcessing(true);
+    fetch(`/api/filament_details?id=${fid}`)
+    .then(r => {
+        if (!r.ok) throw new Error(`Server Error: ${r.status}`);
+        return r.json();
+    })
+    .then(d => {
+        setProcessing(false);
+        if (!d || !d.id) { 
+            showToast("Filament Data Missing!", "error"); 
+            return; 
+        }
+        
+        // Populate Filament Modal
+        document.getElementById('fil-detail-id').innerText = d.id;
+        document.getElementById('fil-detail-vendor').innerText = d.vendor ? d.vendor.name : "Unknown";
+        document.getElementById('fil-detail-material').innerText = d.material || "Unknown";
+        document.getElementById('fil-detail-color-name').innerText = d.name || "Unknown";
+        document.getElementById('fil-detail-hex').innerText = (d.color_hex || "").toUpperCase();
+        
+        document.getElementById('fil-detail-temp-nozzle').innerText = d.settings_extruder_temp ? `${d.settings_extruder_temp}°C` : "--";
+        document.getElementById('fil-detail-temp-bed').innerText = d.settings_bed_temp ? `${d.settings_bed_temp}°C` : "--";
+        document.getElementById('fil-detail-density').innerText = d.density ? `${d.density} g/cm³` : "--";
+        
+        document.getElementById('fil-detail-comment').value = d.comment || "";
+        
+        const swatch = document.getElementById('fil-detail-swatch');
+        if(swatch) swatch.style.backgroundColor = "#" + (d.color_hex || "333");
+        
+        // Link to Spoolman Filament Page
+        const btnLink = document.getElementById('btn-fil-open-spoolman');
+        if (btnLink) {
+            if (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) {
+                const baseUrl = SPOOLMAN_URL.endsWith('/') ? SPOOLMAN_URL.slice(0, -1) : SPOOLMAN_URL;
+                btnLink.href = `${baseUrl}/filament/show/${d.id}`;
+            } else {
+                btnLink.href = `/filament/show/${d.id}`;
+            }
+        }
+        
+        if(modals.filamentModal) modals.filamentModal.show();
         else {
-            const el = document.getElementById('spoolModal');
-            if(el) { modals.spoolModal = new bootstrap.Modal(el); modals.spoolModal.show(); }
-            else showToast("Modal HTML Missing!", "error");
+            const el = document.getElementById('filamentModal');
+            if(el) { modals.filamentModal = new bootstrap.Modal(el); modals.filamentModal.show(); }
         }
     })
     .catch(e => { 
@@ -664,12 +723,8 @@ const quickQueue = (id) => {
         if(!d.id) return;
         addToQueue({
             id: d.id,
-            filament: {
-                name: d.filament?.name,
-                material: d.filament?.material,
-                vendor: { name: d.filament?.vendor?.name },
-                color_hex: d.filament?.color_hex
-            }
+            type: 'spool',
+            display: d.filament?.name || "Unknown"
         });
     });
 };
@@ -754,6 +809,8 @@ const manualAddSpool = () => {
         if (res.type === 'spool') { 
             if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning"); 
             else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); showToast("Added to Buffer"); }
+        } else if (res.type === 'filament') {
+            openFilamentDetails(res.id);
         } else showToast(res.msg || "Invalid Code", 'warning');
     })
     .catch(() => setProcessing(false));
@@ -898,14 +955,18 @@ function updateQueueUI() {
     if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
 }
 
-function addToQueue(spool) {
-    if (labelQueue.find(s => s.id === spool.id)) {
+// Updated: Supports 'type' to differentiate Spool vs Filament
+function addToQueue(item) {
+    if (labelQueue.find(s => s.id === item.id && s.type === item.type)) {
         showToast("⚠️ Already in Queue", "warning");
         return;
     }
-    labelQueue.push(spool);
+    // Default type to 'spool' for legacy calls
+    if (!item.type) item.type = 'spool';
+    
+    labelQueue.push(item);
     updateQueueUI();
-    showToast(`Added to Print Queue (${labelQueue.length})`);
+    showToast(`Added ${item.type} to Print Queue`);
 }
 
 function openQueueModal() {
@@ -915,27 +976,23 @@ function openQueueModal() {
     if (labelQueue.length === 0) {
         list.innerHTML = "<li class='list-group-item'>Queue is empty</li>";
     } else {
-        labelQueue.forEach((s, index) => {
-            const name = s.filament ? s.filament.name : "Unknown";
+        labelQueue.forEach((item, index) => {
+            const icon = item.type === 'filament' ? '🧬' : '🧵';
             list.innerHTML += `
                 <li class="list-group-item d-flex justify-content-between align-items-center">
-                    <span>#${s.id} - ${name}</span>
+                    <span>${icon} #${item.id} - ${item.display}</span>
                     <button class="btn btn-sm btn-outline-danger" onclick="removeFromQueue(${index})">❌</button>
                 </li>`;
         });
     }
     
-    // FIX: Use the existing modal instance instead of creating a new one
     if (modals.queueModal) {
         modals.queueModal.show();
     } else {
-        // Self-heal if missing
         const el = document.getElementById('queueModal');
         if (el) {
             modals.queueModal = new bootstrap.Modal(el);
             modals.queueModal.show();
-        } else {
-            showToast("CRITICAL: Queue Modal Not Found", "error");
         }
     }
 }
@@ -952,65 +1009,43 @@ function clearQueue() {
     updateQueueUI();
 }
 
-function printQueueBrowser() {
-    const container = document.getElementById('printable-queue-container');
-    if (!container) return;
-    container.innerHTML = ""; 
-    if (labelQueue.length === 0) return;
-    
-    labelQueue.forEach(spool => {
-        const fil = spool.filament;
-        const vid = spool.id;
-        const hex = fil.color_hex || "000000";
-        const rgb = hexToRgb(hex); // Uses the helper already in your file
-        
-        const wrap = document.createElement('div');
-        wrap.className = 'print-job-item';
-        const qrId = `qr-print-${vid}`;
-        
-        wrap.innerHTML = `
-            <div class="label-box">
-                <div class="label-qr" id="${qrId}"></div>
-                <div class="label-data">
-                    <div class="lbl-row"><div class="lbl-key">BRND</div><div class="lbl-val">${fil.vendor ? fil.vendor.name : 'Generic'}</div></div>
-                    <div class="lbl-row"><div class="lbl-key">COLR</div><div class="lbl-val">${fil.name}</div></div>
-                    <div class="lbl-row"><div class="lbl-key">MATL</div><div class="lbl-val">${fil.material}</div></div>
-                    <div class="lbl-row"><div class="lbl-key">ID#</div><div class="lbl-val lbl-id">${vid}</div></div>
-                    <div class="lbl-row"><div class="lbl-key">RGB</div><div class="lbl-val lbl-rgb">${rgb.r},${rgb.g},${rgb.b}</div></div>
-                </div>
-            </div>`;
-            
-        container.appendChild(wrap);
-        // Generate high-resolution QR for the printer
-        new QRCode(document.getElementById(qrId), {
-            text: `ID:${vid}`, 
-            width: 120, 
-            height: 120, 
-            correctLevel: QRCode.CorrectLevel.H 
-        });
-    });
-    
-    // Slight delay to allow QR codes to render before the print dialog pops up
-    setTimeout(() => window.print(), 1000);
-}
-
+// Updated: Splits Queue into Spool Batch and Filament Batch
 function printQueueCSV() {
     if (labelQueue.length === 0) return;
-    const ids = labelQueue.map(s => s.id);
-    fetch('/api/print_batch_csv', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ ids: ids })
-    })
-    .then(r => r.json())
-    .then(res => {
-        if(res.success) {
-            showToast("✅ Sent " + res.count + " labels to CSV!");
-            clearQueue();
-            if (modals.queueModal) modals.queueModal.hide();
-        } else {
-            showToast("Error: " + res.msg, "error");
-        }
+    
+    // Split the queue
+    const spools = labelQueue.filter(i => i.type === 'spool').map(i => i.id);
+    const filaments = labelQueue.filter(i => i.type === 'filament').map(i => i.id);
+    
+    // Helper to send batch
+    const sendBatch = (ids, mode) => {
+        return fetch('/api/print_batch_csv', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ ids: ids, mode: mode })
+        }).then(r => r.json());
+    };
+
+    // Chain the requests if needed
+    let p = Promise.resolve();
+    
+    if (spools.length > 0) {
+        p = p.then(() => sendBatch(spools, 'spool').then(res => {
+            if(res.success) showToast(`✅ Spool Batch: ${res.count} saved to ${res.file}`);
+            else showToast(`❌ Spool Error: ${res.msg}`, "error");
+        }));
+    }
+    
+    if (filaments.length > 0) {
+        p = p.then(() => sendBatch(filaments, 'filament').then(res => {
+            if(res.success) showToast(`✅ Swatch Batch: ${res.count} saved to ${res.file}`);
+            else showToast(`❌ Swatch Error: ${res.msg}`, "error");
+        }));
+    }
+    
+    p.then(() => {
+        clearQueue();
+        if (modals.queueModal) modals.queueModal.hide();
     });
 }
 
