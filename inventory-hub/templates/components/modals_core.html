@@ -1,0 +1,62 @@
+<div class="modal fade" id="actionModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="action-title">Action Required</h5>
+            </div>
+            <div class="modal-body text-center">
+                <h4 id="action-msg" class="mb-4"></h4>
+                <div id="action-buttons" class="d-flex justify-content-center gap-3 flex-wrap"></div>
+            </div>
+            <div class="modal-footer justify-content-center">
+                <button class="btn btn-secondary" onclick="closeModal('actionModal')">Cancel</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="confirmModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-warning">
+            <div class="modal-header bg-warning text-dark">
+                <h5 class="modal-title">⚠️ Confirmation</h5>
+            </div>
+            <div class="modal-body text-center">
+                <h3 id="confirm-msg" class="mb-4">Are you sure?</h3>
+                <div class="d-flex justify-content-center gap-4">
+                    <div class="text-center" onclick="confirmAction(true)">
+                        <div id="qr-confirm-yes" class="qr-box mb-2" style="width:100px;height:100px;"></div>
+                        <button class="btn btn-lg btn-success">YES</button>
+                    </div>
+                    <div class="text-center" onclick="confirmAction(false)">
+                        <div id="qr-confirm-no" class="qr-box mb-2" style="width:100px;height:100px;"></div>
+                        <button class="btn btn-lg btn-danger">NO</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="safetyModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-danger">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title">⛔ SAFETY INTERLOCK</h5>
+            </div>
+            <div class="modal-body text-center">
+                <h3 id="safety-msg" class="text-danger fw-bold mb-4"></h3>
+                <div class="d-flex justify-content-center gap-4">
+                    <div class="text-center" onclick="confirmSafety(true)">
+                        <div id="qr-safety-yes" class="qr-box mb-2" style="width:100px;height:100px;"></div>
+                        <button class="btn btn-lg btn-danger">FORCE EXECUTE</button>
+                    </div>
+                    <div class="text-center" onclick="confirmSafety(false)">
+                        <div id="qr-safety-no" class="qr-box mb-2" style="width:100px;height:100px;"></div>
+                        <button class="btn btn-lg btn-secondary">CANCEL</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
