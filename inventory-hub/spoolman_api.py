@@ -142,9 +142,10 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
                         candidates.append(spool['id'])
                 if candidates: return candidates[0]
                 if strict_mode: return None
-        if not strict_mode:
-            check_resp = requests.get(f"{sm_url}/api/v1/spool/{legacy_id}", timeout=2)
-            if check_resp.ok: return int(legacy_id)
+        
+        # FIX: Removed the "Blind Direct ID" check here.
+        # Direct IDs are now handled explicitly in logic.py
+        
     except Exception as e: state.logger.error(f"Legacy Spool Lookup Error: {e}")
     return None
 
