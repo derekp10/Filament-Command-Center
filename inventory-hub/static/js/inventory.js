@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.21 (Spool-to-Filament Bridge)
+ * Version: v154.22 (Clickable Buffer + SPL Logic)
  */
 
-const DASHBOARD_VERSION = "v154.21 (Spool-to-Filament Bridge)";
+const DASHBOARD_VERSION = "v154.22 (Clickable Buffer)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -310,7 +310,7 @@ const renderBuffer = () => {
         return `
         <div class="cham-card buffer-item ${i===0?'active-item':''}" style="background: ${styles.frame};">
             <div class="cham-body buffer-inner" style="background: ${styles.inner};">
-                <div class="cham-text-group">
+                <div class="cham-text-group" onclick="openSpoolDetails(${s.id})" style="cursor:pointer">
                     <div class="cham-id-badge">#${s.id}</div>
                     <div class="cham-text">${cleanText}</div>
                 </div>
