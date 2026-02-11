@@ -85,12 +85,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Generate Deck QRs
-    generateSafeQR('qr-undo', 'CMD:UNDO', 60);
-    generateSafeQR('qr-clear', 'CMD:CLEAR', 60);
-    generateSafeQR('qr-drop', 'CMD:DROP', 60);
-    generateSafeQR('qr-eject', 'CMD:EJECT', 60); 
-    generateSafeQR('qr-audit', 'CMD:AUDIT', 60);
-    generateSafeQR('qr-locs', 'CMD:LOCATIONS', 60);
+    generateSafeQR('qr-undo', 'CMD:UNDO', 85);
+    generateSafeQR('qr-clear', 'CMD:CLEAR', 85);
+    generateSafeQR('qr-drop', 'CMD:DROP', 85);
+    generateSafeQR('qr-eject', 'CMD:EJECT', 85); 
+    generateSafeQR('qr-audit', 'CMD:AUDIT', 85);
+    generateSafeQR('qr-locs', 'CMD:LOCATIONS', 85);
     const modalQRs = {'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL'};
     for(const [id, txt] of Object.entries(modalQRs)) generateSafeQR(id, txt, 120);
 
