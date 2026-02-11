@@ -408,9 +408,10 @@ const processScan = (text) => {
             openManage(res.id); state.lastScannedLoc = res.id;
         } else if (res.type === 'spool') {
             if (state.dropMode) { removeBufferItem(res.id); return; }
-            if (state.ejectMode) { ejectSpool(res.id, "Scan", false); toggleEjectMode(); return; } 
+            /* FIXED: Eject Mode is now PERSISTENT. User must scan 'EJECT' again to exit. */
+            if (state.ejectMode) { ejectSpool(res.id, "Scan", false); return; } 
             
-            state.lastScannedLoc = null; 
+            state.lastScannedLoc = null;
             if (!res.display) { showToast("Spool ID found but data missing!", "error"); return; }
 
             if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
@@ -965,11 +966,11 @@ const updateLogState = (force=false) => {
             if (state.auditActive) {
                 if(deckBtn) deckBtn.classList.add('btn-audit-active'); 
                 if(lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
-                if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 42); }
+                if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:DONE", 60); }
             } else {
                 if(deckBtn) deckBtn.classList.remove('btn-audit-active');
                 if(lbl) { lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit'); }
-                if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 42); }
+                if(qrDiv) { qrDiv.innerHTML=""; generateSafeQR('qr-audit', "CMD:AUDIT", 60); }
             }
         }
     });
