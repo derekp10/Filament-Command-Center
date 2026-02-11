@@ -85,13 +85,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Generate Deck QRs
-    generateSafeQR('qr-undo', 'CMD:UNDO', 42);
-    generateSafeQR('qr-clear', 'CMD:CLEAR', 42);
-    generateSafeQR('qr-drop', 'CMD:DROP', 42);
-    generateSafeQR('qr-eject', 'CMD:EJECT', 42); 
-    generateSafeQR('qr-audit', 'CMD:AUDIT', 42);
-    generateSafeQR('qr-locs', 'CMD:LOCATIONS', 42);
-
+    generateSafeQR('qr-undo', 'CMD:UNDO', 60);
+    generateSafeQR('qr-clear', 'CMD:CLEAR', 60);
+    generateSafeQR('qr-drop', 'CMD:DROP', 60);
+    generateSafeQR('qr-eject', 'CMD:EJECT', 60); 
+    generateSafeQR('qr-audit', 'CMD:AUDIT', 60);
+    generateSafeQR('qr-locs', 'CMD:LOCATIONS', 60);
     const modalQRs = {'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL'};
     for(const [id, txt] of Object.entries(modalQRs)) generateSafeQR(id, txt, 120);
 
@@ -512,23 +511,41 @@ const renderGrid = (data, max) => {
             const styles = getFilamentStyle(item.color);
             div.className = "cham-card slot-btn full";
             div.style.background = styles.frame;
+            
+            // TASK 6: Better Display Info using the new 'details' object
+            const d = item.details || {};
+            const brand = d.brand || "";
+            const name = d.color_name || item.display;
+            const mat = d.material || "";
+            const weight = d.weight ? `[${Math.round(d.weight)}g]` : "";
+            
             div.innerHTML = `
-                <div class="cham-body slot-inner" style="background:${styles.inner};">
-                    <div class="slot-num">Slot ${i}</div>
-                    <div id="qr-slot-${i}" class="bg-white p-1 rounded mb-2"></div>
-                    <div class="slot-content cham-text" style="font-size:1.1rem; cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">${item.display}</div>
-                    <button class="btn btn-sm btn-light border-dark mt-2 fw-bold" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>
+                <div class="cham-body slot-inner" style="background:${styles.inner}; padding: 5px;">
+                    <div class="d-flex justify-content-between w-100 align-items-center mb-1">
+                        <div class="slot-num badge bg-dark border border-secondary">Slot ${i}</div>
+                        <div class="small text-muted fw-bold">${mat}</div>
+                    </div>
+                    
+                    <div id="qr-slot-${i}" class="bg-white p-1 rounded mb-1" style="border: 4px solid white;"></div>
+                    
+                    <div class="slot-content text-center" style="cursor:pointer; line-height:1.1;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
+                        <div style="font-size:0.8rem; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${brand}</div>
+                        <div style="font-size:1.0rem; font-weight:bold; color:#fff; margin: 2px 0;">${name}</div>
+                        <div style="font-size:0.9rem; color:#00d4ff;">${weight}</div>
+                    </div>
+
+                    <button class="btn btn-sm btn-light border-dark mt-1 fw-bold py-0" style="font-size:0.8rem;" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LBL</button>
                 </div>`;
         } else {
             div.className = "slot-btn empty";
             div.innerHTML = `
                 <div class="slot-num">Slot ${i}</div>
-                <div id="qr-slot-${i}" class="bg-white p-1 rounded"></div>
+                <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 4px solid white;"></div>
                 <div class="text-muted fs-4 mt-2">EMPTY</div>`;
         }
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
-        generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 60);
+        generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 75); // Increased size
     }
     if(unslotted.length>0) renderUnslotted(unslotted); 
     else un.style.display='none';
@@ -603,9 +620,9 @@ const renderBadgeHTML = (s, i, locId) => {
 };
 
 const renderBadgeQRs = (s, i) => {
-    generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 56);
-    generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 56);
-    generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 56);
+    generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 75);
+    generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 75);
+    generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 75);
 };
 
 // --- ROBUST OPEN SPOOL DETAILS FUNCTION ---
@@ -1080,5 +1097,63 @@ function printQueueCSV() {
         }
     });
 }
+
+// --- NEW FUNCTIONS FOR TASKS 4 & 5 ---
+
+const printCurrentLocationLabel = () => {
+    const locId = document.getElementById('manage-loc-id').value;
+    if(!locId) return;
+    
+    setProcessing(true);
+    fetch('/api/print_location_label', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: locId})
+    })
+    .then(r => r.json())
+    .then(res => {
+        setProcessing(false);
+        if(res.success) showToast(res.msg, "success");
+        else showToast(res.msg, "error");
+    })
+    .catch(() => {
+        setProcessing(false);
+        showToast("Connection Error", "error");
+    });
+};
+
+const findMultiColorFilaments = () => {
+    setProcessing(true);
+    fetch('/api/get_multicolor_filaments')
+    .then(r => r.json())
+    .then(data => {
+        setProcessing(false);
+        if (data.length === 0) {
+            showToast("No Multi-Color Filaments Found", "warning");
+            return;
+        }
+        
+        if (confirm(`Found ${data.length} Multi-Color Filaments. Add all to Queue?`)) {
+            let added = 0;
+            data.forEach(item => {
+                // Check if already in queue to avoid duplicates
+                if (!labelQueue.find(q => q.id === item.id && q.type === 'filament')) {
+                    addToQueue({
+                        id: item.id,
+                        type: 'filament',
+                        display: item.display
+                    });
+                    added++;
+                }
+            });
+            showToast(`Added ${added} swatches to queue!`);
+            openQueueModal(); // Refresh modal
+        }
+    })
+    .catch(() => {
+        setProcessing(false);
+        showToast("Search Error", "error");
+    });
+};
 
 setInterval(updateLogState, 2500);
