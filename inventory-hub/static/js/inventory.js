@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.22 (Clickable Buffer + SPL Logic)
+ * Version: v154.24 (Critical Fix: CSV Safe-Write)
  */
 
-const DASHBOARD_VERSION = "v154.22 (Clickable Buffer)";
+const DASHBOARD_VERSION = "v154.24 (CSV Safe-Write)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -417,7 +417,6 @@ const processScan = (text) => {
             if (state.heldSpools.some(s=>s.id===res.id)) showToast("Already in Buffer", "warning");
             else { state.heldSpools.unshift({id:res.id, display:res.display, color:res.color}); renderBuffer(); }
         } else if (res.type === 'filament') {
-            // NEW: Handle Filament Scan -> Open Details
             openFilamentDetails(res.id);
         } else if (res.type === 'error') showToast(res.msg, 'error');
     })
@@ -1029,35 +1028,44 @@ function printQueueCSV() {
     const spools = labelQueue.filter(i => i.type === 'spool').map(i => i.id);
     const filaments = labelQueue.filter(i => i.type === 'filament').map(i => i.id);
     
+    let allGood = true;
+
     // Helper to send batch
     const sendBatch = (ids, mode) => {
         return fetch('/api/print_batch_csv', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ ids: ids, mode: mode })
-        }).then(r => r.json());
+        })
+        .then(r => r.json())
+        .then(res => {
+            if(res.success) {
+                showToast(`✅ ${mode === 'spool' ? 'Spool' : 'Swatch'} Batch Saved!`);
+                return true;
+            } else {
+                showToast(`❌ Error: ${res.msg}`, "error");
+                return false;
+            }
+        })
+        .catch(e => {
+            showToast("Connection Error", "error");
+            return false;
+        });
     };
 
-    // Chain the requests if needed
-    let p = Promise.resolve();
-    
-    if (spools.length > 0) {
-        p = p.then(() => sendBatch(spools, 'spool').then(res => {
-            if(res.success) showToast(`✅ Spool Batch: ${res.count} saved to ${res.file}`);
-            else showToast(`❌ Spool Error: ${res.msg}`, "error");
-        }));
-    }
-    
-    if (filaments.length > 0) {
-        p = p.then(() => sendBatch(filaments, 'filament').then(res => {
-            if(res.success) showToast(`✅ Swatch Batch: ${res.count} saved to ${res.file}`);
-            else showToast(`❌ Swatch Error: ${res.msg}`, "error");
-        }));
-    }
-    
-    p.then(() => {
-        clearQueue();
-        if (modals.queueModal) modals.queueModal.hide();
+    // Execute
+    const promises = [];
+    if (spools.length > 0) promises.push(sendBatch(spools, 'spool'));
+    if (filaments.length > 0) promises.push(sendBatch(filaments, 'filament'));
+
+    Promise.all(promises).then(results => {
+        // results is an array of booleans (true/false) from the sendBatch returns
+        if (results.every(r => r === true)) {
+            clearQueue();
+            if (modals.queueModal) modals.queueModal.hide();
+        } else {
+            showToast("⚠️ Queue NOT cleared due to errors.", "warning");
+        }
     });
 }
 
