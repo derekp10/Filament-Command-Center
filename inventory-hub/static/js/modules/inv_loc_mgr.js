@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER */
-console.log("🚀 Loaded Module: LOCATION MANAGER");
+/* MODULE: LOCATION MANAGER (Restored Layout v153.75) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Restored)");
 
 const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
@@ -8,7 +8,12 @@ const openManage = (id) => {
     document.getElementById('manage-loc-id').value=id; 
     const input = document.getElementById('manual-spool-id');
     if(input) input.value=""; 
+    
     modals.manageModal.show(); 
+    
+    // IMPORTANT: Trigger buffer render so the Nav Deck appears immediately
+    if(window.renderBuffer) window.renderBuffer();
+    
     refreshManageView(id);
 };
 
@@ -28,54 +33,79 @@ const refreshManageView = (id) => {
         if(isGrid) renderGrid(d, parseInt(loc['Max Spools'])); 
         else renderList(d, id); 
         
-        // Update buffer nav in command center if needed
+        // Ensure Nav Deck updates if we have items in buffer
         if(window.renderBuffer) window.renderBuffer();
     });
     return true;
 };
 
-// --- RENDERERS ---
+// --- RESTORED RENDERERS (Matches Screenshot) ---
 const renderGrid = (data, max) => {
-    const grid=document.getElementById('slot-grid-container'), un=document.getElementById('unslotted-container');
-    grid.innerHTML=""; un.innerHTML=""; state.currentGrid={};
-    const unslotted=[];
-    data.forEach(i => { if(i.slot && parseInt(i.slot)>0) state.currentGrid[i.slot]=i; else unslotted.push(i); });
+    const grid = document.getElementById('slot-grid-container');
+    const un = document.getElementById('unslotted-container');
+    
+    grid.innerHTML = ""; 
+    un.innerHTML = ""; 
+    state.currentGrid = {};
+    
+    const unslotted = [];
+    data.forEach(i => { 
+        if(i.slot && parseInt(i.slot) > 0) state.currentGrid[i.slot] = i; 
+        else unslotted.push(i); 
+    });
     
     for(let i=1; i<=max; i++) {
-        const item = state.currentGrid[i], div = document.createElement('div');
+        const item = state.currentGrid[i];
+        const div = document.createElement('div');
+        
         if (item) {
+            // Occupied Slot - The "Dark Card" look from screenshot
             const styles = getFilamentStyle(item.color);
             div.className = "cham-card slot-btn full";
-            div.style.background = styles.frame;
-            const d = item.details || {};
+            div.style.background = styles.frame; // Gradient Border
             
+            // Extract details safely
+            const d = item.details || {};
+            const mat = d.material || "";
+            const weight = d.weight ? `[${Math.round(d.weight)}g]` : "";
+            const brand = d.brand || "";
+            const name = d.color_name || item.display;
+
             div.innerHTML = `
-                <div class="cham-body slot-inner" style="background:${styles.inner}; padding: 5px;">
+                <div class="cham-body slot-inner" style="background:${styles.inner}; padding: 10px; display:flex; flex-direction:column; justify-content:space-between; height:100%;">
                     <div class="d-flex justify-content-between w-100 align-items-center mb-1">
-                        <div class="slot-num badge bg-dark border border-secondary">Slot ${i}</div>
-                        <div class="small text-muted fw-bold">${d.material||""}</div>
+                        <div class="slot-num badge bg-white text-dark border border-secondary fw-bold">SLOT ${i}</div>
                     </div>
-                    <div id="qr-slot-${i}" class="bg-white p-1 rounded mb-1" style="border: 4px solid white;"></div>
-                    <div class="slot-content text-center" style="cursor:pointer; line-height:1.1;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
-                        <div style="font-size:0.8rem; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${d.brand||""}</div>
-                        <div style="font-size:1.0rem; font-weight:bold; color:#fff; margin: 2px 0;">${d.color_name||item.display}</div>
-                        <div style="font-size:0.9rem; color:#00d4ff;">${d.weight ? '['+Math.round(d.weight)+'g]' : ''}</div>
+                    
+                    <div id="qr-slot-${i}" class="bg-white p-1 rounded mb-2" style="border: 4px solid white; align-self:center;"></div>
+                    
+                    <div class="slot-content text-center" style="cursor:pointer; line-height:1.2;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
+                        <div style="font-size:0.9rem; font-weight:bold; color:#fff;">#${item.id} [Legacy: ${d.external_id || '?'}]</div>
+                        <div style="font-size:0.85rem; color:#ccc;">${brand} ${mat}</div>
+                        <div style="font-size:1.0rem; font-weight:bold; color:#fff; margin: 2px 0;">"${name}"</div>
+                        <div style="font-size:0.9rem; color:#00d4ff;">${weight}</div>
                     </div>
-                    <button class="btn btn-sm btn-light border-dark mt-1 fw-bold py-0" style="font-size:0.8rem;" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LBL</button>
+
+                    <button class="btn btn-light border-dark mt-2 fw-bold py-1 w-100" style="font-size:0.8rem; text-transform:uppercase;" onclick="event.stopPropagation(); printLabel(${item.id})">🖨️ LABEL</button>
                 </div>`;
         } else {
+            // Empty Slot
             div.className = "slot-btn empty";
             div.innerHTML = `
-                <div class="slot-num">Slot ${i}</div>
-                <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 4px solid white;"></div>
-                <div class="text-muted fs-4 mt-2">EMPTY</div>`;
+                <div class="slot-num text-muted fw-bold mb-3">SLOT ${i}</div>
+                <div id="qr-slot-${i}" class="bg-white p-2 rounded" style="opacity:0.8;"></div>
+                <div class="text-muted fs-4 mt-3">EMPTY</div>`;
         }
+        
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
-        generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 75);
+        
+        // Generate QR (Size 75 matches the large QRs in screenshot)
+        generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 75); 
     }
-    if(unslotted.length>0) renderUnslotted(unslotted); 
-    else un.style.display='none';
+
+    if(unslotted.length > 0) renderUnslotted(unslotted); 
+    else un.style.display = 'none';
 };
 
 const renderList = (data, locId) => {
@@ -84,11 +114,13 @@ const renderList = (data, locId) => {
     
     if (data.length === 0) {
         list.innerHTML = "";
-        if(emptyMsg) emptyMsg.style.display = 'flex'; 
+        if(emptyMsg) emptyMsg.style.display = 'block'; 
     } else {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
         data.forEach((s,i) => renderBadgeQRs(s, i));
+        
+        // Eject All for List View
         generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
     }
 };
@@ -96,19 +128,20 @@ const renderList = (data, locId) => {
 const renderUnslotted = (items) => {
     const un = document.getElementById('unslotted-container');
     if (!un) return;
-    un.style.display='block';
+    un.style.display = 'block';
     
-    let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3">Unslotted Items</h4>`;
+    let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3 mt-4">Unslotted Items</h4>`;
     html += items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
     
     html += `
-        <div class="danger-zone">
+        <div class="danger-zone mt-4 pt-3 border-top border-danger">
             <h4 class="text-danger fw-bold mb-3">DANGER ZONE</h4>
             <div class="action-badge" style="border-color:#dc3545; display:inline-flex;" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">
                 <div id="qr-eject-all" class="badge-qr"></div>
                 <button class="badge-btn btn-trash">EJECT ALL</button>
             </div>
         </div>`;
+    
     un.innerHTML = html;
     items.forEach((s,i) => renderBadgeQRs(s, i));
     generateSafeQR("qr-eject-all", "CMD:EJECTALL", 56);
@@ -116,14 +149,22 @@ const renderUnslotted = (items) => {
 
 const renderBadgeHTML = (s, i, locId) => {
     const styles = getFilamentStyle(s.color);
+    // Screenshot style for horizontal items
+    const d = s.details || {};
+    const legacyText = d.external_id ? `[Legacy: ${d.external_id}]` : "";
+    const weightText = d.weight ? `[${Math.round(d.weight)}g]` : "";
+
     return `
-    <div class="cham-card manage-list-item" style="background:${styles.frame}">
-        <div class="cham-body" style="background: ${styles.inner}">
-            <div class="cham-text-group" style="cursor:pointer;" onclick="openSpoolDetails(${s.id})">
-                <div class="cham-id-badge">#${s.id}</div>
-                <div class="cham-text">${s.display}</div>
+    <div class="cham-card manage-list-item mb-2" style="background:${styles.frame}">
+        <div class="cham-body" style="background: ${styles.inner}; display:flex; justify-content:space-between; align-items:center; padding:5px 10px;">
+            <div class="cham-text-group d-flex align-items-center" style="cursor:pointer; overflow:hidden;" onclick="openSpoolDetails(${s.id})">
+                <div class="cham-id-badge me-3" style="font-size:1.2rem;">#${s.id}</div>
+                <div class="d-flex flex-column text-white">
+                     <div style="font-weight:bold; font-size:1.1rem;">${legacyText} ${s.display}</div>
+                     <div class="small" style="color:#ccc;">${weightText}</div>
+                </div>
             </div>
-            <div class="cham-actions">
+            <div class="cham-actions d-flex gap-2">
                 <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', true)">
                     <div id="qr-pick-${i}" class="badge-qr"></div>
                     <button class="badge-btn btn-pick">PICK</button>
@@ -142,20 +183,18 @@ const renderBadgeHTML = (s, i, locId) => {
 };
 
 const renderBadgeQRs = (s, i) => {
-    generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 75);
-    generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 75);
-    generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 75);
+    generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 56);
+    generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 56);
+    generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 56);
 };
 
 // --- INTERACTION ---
 const handleSlotInteraction = (slot) => {
     const locId = document.getElementById('manage-loc-id').value, item = state.currentGrid[slot];
-    // NOTE: state.heldSpools comes from Cmd Center.
     if (state.heldSpools.length > 0) {
         const newId = state.heldSpools[0].id;
         if(item) promptAction("Slot Occupied", `Swap/Overwrite Slot ${slot}?`, [
             {label:"Swap", action:()=>{
-                // Shift out the new spool, push in the old spool
                 state.heldSpools.shift(); 
                 state.heldSpools.push({id:item.id, display:item.display, color:item.color}); 
                 if(window.renderBuffer) window.renderBuffer(); 
@@ -226,7 +265,6 @@ const doEject = (sid, loc) => {
 const manualAddSpool = () => {
     const val = document.getElementById('manual-spool-id').value.trim(); 
     if (!val) return; 
-    // Logic delegated to core scanner but handled locally to update UI
     setProcessing(true);
     fetch('/api/identify_scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: val}) })
     .then(r => r.json())
