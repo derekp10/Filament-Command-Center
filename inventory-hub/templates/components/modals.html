@@ -8,6 +8,13 @@
             <div class="modal-body">
                 <div id="queue-empty-msg" class="text-center text-muted py-4">Your print queue is empty.<br>Go add some spools! 🧶</div>
                 <ul id="queue-list-items" class="list-group mb-3"></ul>
+                
+                <div class="form-check form-switch mb-3 p-2 border rounded bg-light text-dark">
+                    <input class="form-check-input ms-0 me-2" type="checkbox" id="chk-overwrite-csv" checked>
+                    <label class="form-check-label fw-bold" for="chk-overwrite-csv">Overwrite CSV File (Clear Old)</label>
+                    <div class="text-muted small ms-4">Uncheck to append to existing list.</div>
+                </div>
+
                 <div class="d-grid gap-2">
                     <button class="btn btn-secondary" onclick="printQueueCSV()">📄 Send to P-Touch CSV (Batch)</button>
                     <hr>
