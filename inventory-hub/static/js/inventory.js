@@ -1020,9 +1020,12 @@ function clearQueue() {
     updateQueueUI();
 }
 
-// Updated: Splits Queue into Spool Batch and Filament Batch
+// Updated: Supports Overwrite/Append Toggle
 function printQueueCSV() {
     if (labelQueue.length === 0) return;
+    
+    // Get the toggle state
+    const overwrite = document.getElementById('chk-overwrite-csv').checked;
     
     // Split the queue
     const spools = labelQueue.filter(i => i.type === 'spool').map(i => i.id);
@@ -1035,7 +1038,11 @@ function printQueueCSV() {
         return fetch('/api/print_batch_csv', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ ids: ids, mode: mode })
+            body: JSON.stringify({ 
+                ids: ids, 
+                mode: mode,
+                clear_old: overwrite // PASS THE FLAG
+            })
         })
         .then(r => r.json())
         .then(res => {
@@ -1059,7 +1066,6 @@ function printQueueCSV() {
     if (filaments.length > 0) promises.push(sendBatch(filaments, 'filament'));
 
     Promise.all(promises).then(results => {
-        // results is an array of booleans (true/false) from the sendBatch returns
         if (results.every(r => r === true)) {
             clearQueue();
             if (modals.queueModal) modals.queueModal.hide();
