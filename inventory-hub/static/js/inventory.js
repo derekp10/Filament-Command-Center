@@ -1,8 +1,8 @@
 /* * Filament Command Center - Inventory Logic
- * Version: v154.20 (Dual Pipeline: Spool & Filament)
+ * Version: v154.21 (Spool-to-Filament Bridge)
  */
 
-const DASHBOARD_VERSION = "v154.20 (Dual Pipeline)";
+const DASHBOARD_VERSION = "v154.21 (Spool-to-Filament Bridge)";
 console.log("🚀 Filament Command Center Dashboard Loaded: " + DASHBOARD_VERSION);
 
 // --- GLOBAL STATE ---
@@ -650,6 +650,18 @@ const openSpoolDetails = (id) => {
             } else {
                 btnLink.href = `/spool/show/${d.id}`;
             }
+        }
+        
+        // NEW: Wire up "View Swatch" button
+        const btnSwatch = document.getElementById('btn-spool-to-filament');
+        if (btnSwatch && d.filament) {
+            btnSwatch.onclick = () => {
+                modals.spoolModal.hide();
+                openFilamentDetails(d.filament.id);
+            };
+            btnSwatch.style.display = 'inline-block';
+        } else if (btnSwatch) {
+            btnSwatch.style.display = 'none';
         }
         
         if(modals.spoolModal) modals.spoolModal.show();
