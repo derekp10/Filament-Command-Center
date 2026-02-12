@@ -41,14 +41,21 @@
         background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important;
     }
 
+    /* GOLD STANDARD: High Contrast Nav Labels */
     #loc-mgr-nav-deck .nav-label {
         font-size: 0.8rem; font-weight: 900; letter-spacing: 2px;
-        color: #aaa; text-transform: uppercase; margin-bottom: 8px;
+        text-transform: uppercase; margin-bottom: 8px;
+        color: #fff; 
+        text-shadow: 2px 2px 4px #000;
     }
+    
+    /* GOLD STANDARD: High Contrast Nav Text */
     #loc-mgr-nav-deck .nav-text-main {
         font-size: 1.1rem; font-weight: 800; line-height: 1.2;
-        color: #fff; text-shadow: 2px 2px 4px #000;
+        color: #fff; 
+        text-shadow: 2px 2px 4px #000;
     }
+    
     .nav-qr { background: white; padding: 5px; border-radius: 4px; flex-shrink: 0; }
 
     /* --- YELLOW ZONE: SLOT GRID --- */
@@ -83,14 +90,19 @@
         width: 100%; text-align: center;
         background: transparent; border: none; margin-bottom: 5px;
     }
+    
+    /* GOLD STANDARD: Slot Numbers pop now */
     .slot-num-gold {
-        font-weight: 900; color: #fff; letter-spacing: 1px; font-size: 1.1rem; opacity: 0.7;
+        font-weight: 900; letter-spacing: 1px; font-size: 1.1rem;
+        color: #fff; 
+        text-shadow: 2px 2px 4px #000;
+        opacity: 1; /* Was 0.7 */
     }
 
     .slot-info-gold { text-align: center; margin: 8px 0; width: 100%; }
     
-    /* --- TEXT POP STYLES (Applies to Grid & List) --- */
-    /* All lines get White Text + Black Shadow for readability on colored backgrounds */
+    /* --- GLOBAL TEXT POP STYLES (Grid & List) --- */
+    /* All lines get White Text + Black Shadow for readability */
     .text-line-1 { 
         font-size: 0.85rem; font-weight: 700; color: #fff; 
         text-shadow: 2px 2px 4px #000; 
@@ -144,14 +156,14 @@
     
     .badge-qr { background: #fff; padding: 5px; border-radius: 4px; margin-bottom: 6px; }
     
-    /* SPECIAL: High-Contrast White Background for Eject/Done QRs */
     .qr-bg-white {
         background-color: white; padding: 5px; border-radius: 6px; margin-bottom: 5px;
     }
 
     .badge-btn-gold {
         font-weight: 900; font-size: 0.85rem; text-transform: uppercase;
-        width: 100%; text-align: center; border-radius: 3px; padding: 4px 0; color: #000; line-height: 1;
+        width: 100%; text-align: center; border-radius: 3px; padding: 4px 0; color: #000;
+        line-height: 1;
     }
     .btn-pick-bg { background-color: #0d6efd; color: white; }
     .btn-print-bg { background-color: #ffc107; color: black; }

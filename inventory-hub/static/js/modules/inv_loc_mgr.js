@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v24 - Clean Source) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v24)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v25 - Global Text Pop) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v25)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -126,7 +126,7 @@ const renderManagerNav = () => {
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
             <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
-                <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:10px;">READY TO SLOT</div>
+                <div class="nav-label">READY TO SLOT</div>
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div style="font-size:1.0rem; color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${curInfo.line2}</div>
@@ -159,6 +159,12 @@ const renderManagerNav = () => {
     }
 };
 
+// --- CLICK HELPER: STOPS PROPAGATION ---
+window.handleLabelClick = (e, id, display) => {
+    e.stopPropagation(); 
+    window.addToQueue({id: id, type: 'spool', display: display});
+};
+
 // --- YELLOW ZONE: SLOT GRID RENDERER ---
 const renderGrid = (data, max) => {
     const grid = document.getElementById('slot-grid-container');
@@ -182,7 +188,6 @@ const renderGrid = (data, max) => {
             const info = getRichInfo(item);
             div.style.background = styles.frame;
             
-            // CLEAN HTML: No inline styles needed now
             div.innerHTML = `
                 <div class="slot-inner-gold" style="background:${styles.inner};">
                     <div class="slot-header"><div class="slot-num-gold">SLOT ${i}</div></div>
