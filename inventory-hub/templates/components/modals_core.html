@@ -25,11 +25,13 @@
                 <h3 id="confirm-msg" class="mb-4">Are you sure?</h3>
                 <div class="d-flex justify-content-center gap-4">
                     <div class="text-center" onclick="confirmAction(true)">
-                        <div id="qr-confirm-yes" class="qr-box mb-2" style="width:100px;height:100px;"></div>
+                        <div id="qr-confirm-yes" class="bg-white p-2 rounded mb-2 d-inline-block" style="min-width: 100px;"></div>
+                        <br>
                         <button class="btn btn-lg btn-success">YES</button>
                     </div>
                     <div class="text-center" onclick="confirmAction(false)">
-                        <div id="qr-confirm-no" class="qr-box mb-2" style="width:100px;height:100px;"></div>
+                        <div id="qr-confirm-no" class="bg-white p-2 rounded mb-2 d-inline-block" style="min-width: 100px;"></div>
+                        <br>
                         <button class="btn btn-lg btn-danger">NO</button>
                     </div>
                 </div>
@@ -48,11 +50,13 @@
                 <h3 id="safety-msg" class="text-danger fw-bold mb-4"></h3>
                 <div class="d-flex justify-content-center gap-4">
                     <div class="text-center" onclick="confirmSafety(true)">
-                        <div id="qr-safety-yes" class="qr-box mb-2" style="width:100px;height:100px;"></div>
+                        <div id="qr-safety-yes" class="bg-white p-2 rounded mb-2 d-inline-block" style="min-width: 100px;"></div>
+                        <br>
                         <button class="btn btn-lg btn-danger">FORCE EXECUTE</button>
                     </div>
                     <div class="text-center" onclick="confirmSafety(false)">
-                        <div id="qr-safety-no" class="qr-box mb-2" style="width:100px;height:100px;"></div>
+                        <div id="qr-safety-no" class="bg-white p-2 rounded mb-2 d-inline-block" style="min-width: 100px;"></div>
+                        <br>
                         <button class="btn btn-lg btn-secondary">CANCEL</button>
                     </div>
                 </div>

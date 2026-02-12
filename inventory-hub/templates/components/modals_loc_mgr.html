@@ -129,7 +129,6 @@
     
     .badge-qr { background: #fff; padding: 5px; border-radius: 4px; margin-bottom: 6px; }
     
-    /* SPECIAL: High-Contrast White Background for Eject/Done QRs */
     .qr-bg-white {
         background-color: white; padding: 5px; border-radius: 6px; margin-bottom: 5px;
     }
@@ -148,33 +147,32 @@
     }
     .eject-label-text { font-size: 1.5rem; font-weight: 900; color: #dc3545; text-transform: uppercase; letter-spacing: 2px; }
 
-    /* FOOTER DONE QR - RIGID LOCK */
+    /* FOOTER DONE QR */
     #qr-footer-block {
         background: #1f1f1f; 
         border: 1px solid #555; 
         border-radius: 6px;
-        padding: 8px; /* Creates the dark border/bezel */
-        /* Forces container to be stable */
-        min-width: 90px; 
-        min-height: 90px;
+        padding: 8px;
+        min-width: 90px;
         display: flex; justify-content: center; align-items: center;
-        flex-shrink: 0; /* DO NOT SQUISH */
     }
-    /* The white box inside */
     #qr-modal-done { 
         margin: 0;
-        width: 75px !important;  /* LOCKED PIXEL SIZE */
-        height: 75px !important; /* LOCKED PIXEL SIZE */
+        width: 65px !important;
+        height: 65px !important;
         background-color: white;
         border-radius: 4px;
         overflow: hidden;
-        flex-shrink: 0; /* DO NOT SQUISH */
-        padding: 6px; /* White bezel around QR code */
+        flex-shrink: 0;
+        padding: 6px; 
+        box-sizing: border-box;
     }
     #qr-modal-done img, #qr-modal-done canvas {
         width: 100% !important;
         height: 100% !important;
         display: block;
+        image-rendering: -moz-crisp-edges;
+        image-rendering: pixelated;
     }
 
     #manage-empty-msg .empty-state-text { color: #fff !important; opacity: 0.9; }
