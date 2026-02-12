@@ -1,10 +1,26 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v14 - RAF Fix) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v14)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v15 - Event Driven) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v15)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
     if (modal && modal.classList.contains('show')) {
         renderManagerNav();
+    }
+});
+
+// --- CRITICAL FIX: WAIT FOR MODAL TO DRAW BEFORE RENDERING QRS ---
+document.addEventListener('DOMContentLoaded', () => {
+    const manageModalEl = document.getElementById('manageModal');
+    if (manageModalEl) {
+        manageModalEl.addEventListener('shown.bs.modal', () => {
+            const id = document.getElementById('manage-loc-id').value;
+            if (id) {
+                refreshManageView(id);
+                // Generate Done QR only when visible and stable
+                // Size 75 matches the CSS hard-lock
+                generateSafeQR('qr-modal-done', 'CMD:DONE', 75);
+            }
+        });
     }
 });
 
@@ -16,11 +32,9 @@ window.openManage = (id) => {
     const input = document.getElementById('manual-spool-id');
     if(input) input.value=""; 
     
+    // JUST SHOW. The event listener 'shown.bs.modal' will handle the rendering.
+    // This prevents the "Flicker" and "Shrink" bugs.
     modals.manageModal.show(); 
-    refreshManageView(id);
-    
-    // Generate Done QR (Fixed Size)
-    generateSafeQR('qr-modal-done', 'CMD:DONE', 75);
 };
 
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
@@ -132,11 +146,8 @@ const renderManagerNav = () => {
         }
 
         n.innerHTML = html;
-        // RAF for Nav QRs to ensure smoothness
-        requestAnimationFrame(() => {
-            if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
-            if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
-        });
+        if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
+        if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
 
     } else {
         n.style.display = 'none';
@@ -197,11 +208,8 @@ const renderGrid = (data, max) => {
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
         
-        // Slot QRs usually render fine, but RAF doesn't hurt
-        requestAnimationFrame(() => {
-            if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
-            else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
-        });
+        if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
+        else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
     }
     
     if(unslotted.length > 0) renderUnslotted(unslotted); 
@@ -220,7 +228,7 @@ const renderList = (data, locId) => {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
         
-        // FIX: RequestAnimationFrame Loop instead of Timeout
+        // Wait for modal transition to finish, then draw QRs
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
                 data.forEach((s,i) => renderBadgeQRs(s, i));
@@ -256,7 +264,7 @@ const renderUnslotted = (items) => {
     
     un.innerHTML = html;
     
-    // FIX: RAF Loop
+    // Wait for modal transition to finish, then draw QRs
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             items.forEach((s,i) => renderBadgeQRs(s, i));

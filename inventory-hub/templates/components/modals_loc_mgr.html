@@ -137,7 +137,7 @@
     
     .badge-qr { background: #fff; padding: 5px; border-radius: 4px; margin-bottom: 6px; }
     
-    /* FIX: High Contrast White Background for Eject/Done QRs */
+    /* SPECIAL: High-Contrast White Background for Eject/Done QRs */
     .qr-bg-white {
         background-color: white;
         padding: 5px;
@@ -160,25 +160,32 @@
     }
     .eject-label-text { font-size: 1.5rem; font-weight: 900; color: #dc3545; text-transform: uppercase; letter-spacing: 2px; }
 
-    /* FOOTER DONE QR */
+    /* FOOTER DONE QR - RIGID LOCK */
     #qr-footer-block {
         background: #1f1f1f; 
         border: 1px solid #555; 
         border-radius: 6px;
         padding: 8px;
-        min-width: 90px;
+        /* Force explicit size logic */
+        width: 95px; 
+        height: 95px;
+        min-width: 95px; 
+        min-height: 95px;
         display: flex; justify-content: center; align-items: center;
+        flex-shrink: 0; /* DO NOT SQUISH */
     }
-    /* FIX: Lock size and force images to fit */
     #qr-modal-done { 
-        margin-bottom: 0;
-        width: 75px;
-        height: 75px;
-        flex-shrink: 0; /* Prevents flexbox squishing */
+        margin: 0; padding: 0;
+        width: 75px !important;
+        height: 75px !important;
+        background-color: white;
+        border-radius: 4px;
+        overflow: hidden; /* Ensure content stays inside */
     }
     #qr-modal-done img, #qr-modal-done canvas {
-        width: 100% !important;
-        height: 100% !important;
+        width: 75px !important;
+        height: 75px !important;
+        display: block;
     }
 
     /* FIX: Brighten Empty State Text */
@@ -298,7 +305,7 @@
                     <button class="btn btn-success btn-lg flex-grow-1 fw-bold" onclick="closeManage()">✅ Done / Sync</button>
                     
                     <div id="qr-footer-block" onclick="closeManage()" style="cursor:pointer;">
-                        <div id="qr-modal-done" class="qr-bg-white"></div>
+                        <div id="qr-modal-done"></div>
                     </div>
                 </div>
             </div>
