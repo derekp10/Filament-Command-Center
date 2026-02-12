@@ -1,30 +1,38 @@
 <style>
     /* --- MODAL SIZING & THEME --- */
     #manageModal .modal-dialog { max-width: 960px; }
-    
-    /* THEME: Match Location List Gray (#121212) */
     #manageModal .modal-body { background: #121212 !important; }
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
-    /* --- RED ZONE: NAV DECK (RENAMED TO AVOID CONFLICT) --- */
-    #loc-mgr-nav-deck { display: flex; gap: 15px; width: 100%; }
+    /* --- RED ZONE: NAV DECK (3 Column) --- */
+    #loc-mgr-nav-deck { display: flex; gap: 10px; width: 100%; align-items: stretch; }
+    
     #loc-mgr-nav-deck .nav-card {
         min-height: 100px;
         box-shadow: 0 4px 10px rgba(0,0,0,0.5);
         border: 2px solid rgba(255,255,255,0.2);
-        flex: 1; width: 50%; /* Equal Width */
+        flex: 1; /* Side cards share remaining space */
         cursor: pointer;
         transition: transform 0.1s;
     }
+    
+    /* Center Card - Dominant */
+    #loc-mgr-nav-deck .nav-card-center {
+        flex: 2; /* 2x Width of side cards */
+        border: 2px solid #fff;
+        box-shadow: 0 0 20px rgba(0, 212, 255, 0.2);
+        z-index: 2;
+    }
+    
     #loc-mgr-nav-deck .nav-card:active { transform: scale(0.98); }
     
     #loc-mgr-nav-deck .nav-label {
-        font-size: 0.85rem; font-weight: 900; letter-spacing: 2px;
+        font-size: 0.75rem; font-weight: 900; letter-spacing: 2px;
         color: #aaa; text-transform: uppercase; margin-bottom: 4px;
     }
     #loc-mgr-nav-deck .nav-text-main {
-        font-size: 1.1rem; font-weight: 800; line-height: 1.2;
+        font-size: 1.0rem; font-weight: 800; line-height: 1.1;
         color: #fff; text-shadow: 1px 1px 3px #000;
     }
     .nav-qr { background: white; padding: 5px; border-radius: 4px; }
@@ -46,7 +54,6 @@
     .slot-inner-gold {
         padding: 10px; height: 100%; width: 100%;
         display: flex; flex-direction: column; justify-content: space-between; align-items: center;
-        /* Background set by JS to maintain gradient */
         margin: 4px; 
         height: calc(100% - 8px); width: calc(100% - 8px);
     }
@@ -55,9 +62,7 @@
 
     .slot-header {
         width: 100%; text-align: center;
-        background: transparent; 
-        border: none; 
-        margin-bottom: 5px;
+        background: transparent; border: none; margin-bottom: 5px;
     }
     .slot-num-gold {
         font-weight: 900; color: #fff; letter-spacing: 1px; font-size: 1.1rem;
@@ -78,8 +83,7 @@
         box-shadow: 0 4px 5px rgba(0,0,0,0.3);
         border: 2px solid #fff;
         margin-top: auto;
-        cursor: pointer;
-        transition: transform 0.1s;
+        cursor: pointer; transition: transform 0.1s;
     }
     .btn-label-compact:active { transform: scale(0.9); }
 
@@ -121,6 +125,18 @@
         padding: 10px 20px; background: rgba(220, 53, 69, 0.15);
     }
     .eject-label-text { font-size: 1.5rem; font-weight: 900; color: #dc3545; text-transform: uppercase; letter-spacing: 2px; }
+
+    /* FOOTER DONE QR - Specific Styling */
+    #qr-footer-block {
+        background: #1f1f1f; 
+        border: 1px solid #555; 
+        border-radius: 6px;
+        padding: 6px;
+        /* Dimensions to match action-badge visually */
+        min-width: 75px; 
+        display: flex; justify-content: center; align-items: center;
+    }
+    #qr-modal-done { margin-bottom: 0; } /* Remove bottom margin since no text */
 
 </style>
 
@@ -199,7 +215,6 @@
         <div class="modal-content">
             <div class="modal-header p-2 d-flex align-items-center">
                 <h5 class="modal-title ms-3 text-info flex-grow-1" id="manageTitle">Manage</h5>
-                
                 <button class="btn btn-sm btn-outline-warning fw-bold me-2" onclick="window.printCurrentLocationLabel()">🖨️ Location Labels</button>
                 <button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button>
             </div>
@@ -214,7 +229,6 @@
                         Tap button or scan slot QR (CMD:SLOT:X)
                     </div>
                     <div id="slot-grid-container" class="slot-grid"></div>
-                    
                     <div id="unslotted-container" class="mt-4" style="display:none;"></div>
                 </div>
 
@@ -236,9 +250,8 @@
                 <div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary gap-3">
                     <button class="btn btn-success btn-lg flex-grow-1 fw-bold" onclick="closeManage()">✅ Done / Sync</button>
                     
-                    <div class="action-badge" style="background: #1f1f1f; border: 1px solid #555; min-width: 75px;" onclick="closeManage()">
+                    <div id="qr-footer-block">
                         <div id="qr-modal-done" class="badge-qr"></div>
-                        <div class="badge-btn-gold text-muted">DONE</div>
                     </div>
                 </div>
             </div>

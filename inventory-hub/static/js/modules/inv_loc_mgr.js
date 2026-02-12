@@ -1,10 +1,7 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v4 - Clean Events) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v4)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v5) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v5)");
 
-// --- EVENT LISTENER FOR BUFFER UPDATES ---
-// This listens for the clean event from inv_cmd.js instead of patching functions.
 document.addEventListener('inventory:buffer-updated', () => {
-    // Only update if the manager modal is actually visible
     const modal = document.getElementById('manageModal');
     if (modal && modal.classList.contains('show')) {
         renderManagerNav();
@@ -22,15 +19,14 @@ window.openManage = (id) => {
     modals.manageModal.show(); 
     refreshManageView(id);
     
-    // Generate Done QR (Size 50 to match action badges)
-    generateSafeQR('qr-modal-done', 'CMD:DONE', 50);
+    // Generate Done QR (Size 60 to match unslotted button visual weight)
+    generateSafeQR('qr-modal-done', 'CMD:DONE', 60);
 };
 
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
 
 window.refreshManageView = (id) => {
     renderManagerNav();
-
     const loc = state.allLocations.find(l=>l.LocationID==id); 
     if(!loc) return false;
     
@@ -65,50 +61,79 @@ const getRichInfo = (item) => {
     };
 };
 
-// --- RED ZONE: NAV DECK RENDERER ---
+// --- RED ZONE: NAV DECK (3-COLUMN SPREAD) ---
 const renderManagerNav = () => {
-    // UPDATED ID: Matches the renamed container in HTML to avoid conflict
     const n = document.getElementById('loc-mgr-nav-deck');
     if (!n) return;
 
-    if (state.heldSpools.length > 1) {
+    if (state.heldSpools.length > 0) {
         n.style.display = 'flex';
         
-        const prevItem = state.heldSpools[state.heldSpools.length - 1];
-        const prevStyle = getFilamentStyle(prevItem.color);
-        const prevInfo = getRichInfo(prevItem);
+        // Items to display
+        const curItem = state.heldSpools[0];
+        const prevItem = state.heldSpools.length > 1 ? state.heldSpools[state.heldSpools.length - 1] : null;
+        const nextItem = state.heldSpools.length > 1 ? state.heldSpools[1] : null;
 
-        const nextItem = state.heldSpools[1];
-        const nextStyle = getFilamentStyle(nextItem.color);
-        const nextInfo = getRichInfo(nextItem);
+        const curStyle = getFilamentStyle(curItem.color);
+        const curInfo = getRichInfo(curItem);
+        
+        let html = '';
 
-        n.innerHTML = `
+        // 1. PREV CARD (Left)
+        if (prevItem) {
+            const prevStyle = getFilamentStyle(prevItem.color);
+            const prevInfo = getRichInfo(prevItem);
+            html += `
             <div class="cham-card nav-card" style="background: ${prevStyle.frame};" onclick="prevBuffer();">
-                <div class="cham-body nav-inner" style="background:${prevStyle.inner}; display:flex; align-items:center; padding:10px;">
-                    <div id="qr-nav-prev" class="nav-qr me-3"></div>
-                    <div style="flex-grow:1;">
+                <div class="cham-body nav-inner" style="background:${prevStyle.inner}; display:flex; align-items:center; padding:5px 10px;">
+                    <div id="qr-nav-prev" class="nav-qr me-2"></div>
+                    <div>
                         <div class="nav-label text-start">◀ PREV</div>
-                        <div class="nav-text-main">
-                            ${prevInfo.line1}<br>${prevInfo.line2}<br>${prevInfo.line3}<br><span style="color:#00d4ff">${prevInfo.line4}</span>
+                        <div class="nav-text-main" style="font-size:0.9rem;">
+                            #${prevItem.id}<br>${prevInfo.line3}
                         </div>
                     </div>
                 </div>
+            </div>`;
+        } else {
+             html += `<div style="flex:1;"></div>`; // Spacer
+        }
+
+        // 2. CURRENT CARD (Center - Prominent)
+        html += `
+        <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
+            <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
+                <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:5px;">READY TO SLOT</div>
+                <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
+                <div style="font-size:0.9rem; color:#ddd;">${curInfo.line2}</div>
+                <div style="font-size:0.9rem; color:#00d4ff; font-weight:bold;">${curInfo.line1}</div>
             </div>
-            
+        </div>`;
+
+        // 3. NEXT CARD (Right)
+        if (nextItem) {
+            const nextStyle = getFilamentStyle(nextItem.color);
+            const nextInfo = getRichInfo(nextItem);
+            html += `
             <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="nextBuffer();">
-                <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; padding:10px;">
-                    <div style="flex-grow:1; text-align:right;">
+                <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; justify-content:flex-end; padding:5px 10px;">
+                    <div style="text-align:right;">
                         <div class="nav-label">NEXT ▶</div>
-                        <div class="nav-text-main">
-                            ${nextInfo.line1}<br>${nextInfo.line2}<br>${nextInfo.line3}<br><span style="color:#00d4ff">${nextInfo.line4}</span>
+                        <div class="nav-text-main" style="font-size:0.9rem;">
+                             #${nextItem.id}<br>${nextInfo.line3}
                         </div>
                     </div>
-                    <div id="qr-nav-next" class="nav-qr ms-3"></div>
+                    <div id="qr-nav-next" class="nav-qr ms-2"></div>
                 </div>
-            </div>
-        `;
-        generateSafeQR("qr-nav-prev", "CMD:PREV", 60);
-        generateSafeQR("qr-nav-next", "CMD:NEXT", 60);
+            </div>`;
+        } else {
+             html += `<div style="flex:1;"></div>`; // Spacer
+        }
+
+        n.innerHTML = html;
+        if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
+        if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
+
     } else {
         n.style.display = 'none';
         n.innerHTML = "";
@@ -135,8 +160,6 @@ const renderGrid = (data, max) => {
         if (item) {
             const styles = getFilamentStyle(item.color);
             const info = getRichInfo(item);
-            
-            // Frame Color as Background
             div.style.background = styles.frame;
             
             div.innerHTML = `
@@ -154,8 +177,8 @@ const renderGrid = (data, max) => {
                         <div class="text-line-4">${info.line4}</div>
                     </div>
 
-                    <div class="btn-label-compact" onclick="event.stopPropagation(); printLabel(${item.id})">
-                        <span style="font-size:1.2rem;">📷</span> LABEL
+                    <div class="btn-label-compact" onclick="event.stopPropagation(); window.printLabel(${item.id})">
+                        <span style="font-size:1.2rem;">📷</span> PRINT
                     </div>
                 </div>`;
         } else {
@@ -178,7 +201,7 @@ const renderGrid = (data, max) => {
     else un.style.display = 'none';
 };
 
-// --- GREEN ZONE: UNSLOTTED / LIST RENDERER ---
+// --- GREEN ZONE: LIST RENDERER ---
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
     const emptyMsg = document.getElementById('manage-empty-msg');
@@ -202,7 +225,6 @@ const renderUnslotted = (items) => {
     let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3 mt-4">Unslotted Items</h4>`;
     html += items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
     
-    // REDESIGNED EJECT ALL CARD
     html += `
         <div class="danger-zone mt-4 pt-3 border-top border-danger">
             <div class="cham-card manage-list-item" style="border-color:#dc3545; background:#300;">
@@ -249,9 +271,9 @@ const renderBadgeHTML = (s, i, locId) => {
                     <div id="qr-pick-${i}" class="badge-qr"></div>
                     <div class="badge-btn-gold btn-pick-bg">PICK</div>
                 </div>
-                <div class="action-badge" onclick="event.stopPropagation(); quickQueue(${s.id})">
+                <div class="action-badge" onclick="event.stopPropagation(); window.printLabel(${s.id})">
                     <div id="qr-print-${i}" class="badge-qr"></div>
-                    <div class="badge-btn-gold btn-print-bg">QUEUE</div>
+                    <div class="badge-btn-gold btn-print-bg">PRINT</div>
                 </div>
                 <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', false)">
                     <div id="qr-trash-${i}" class="badge-qr"></div>
@@ -279,7 +301,6 @@ window.handleSlotInteraction = (slot) => {
                 state.heldSpools.shift(); 
                 state.heldSpools.push({id:item.id, display:item.display, color:item.color}); 
                 if(window.renderBuffer) window.renderBuffer(); 
-                // Note: The event listener will handle the redraw, but we can double tap safely
                 renderManagerNav();
                 doAssign(locId, newId, slot);
             }}, 

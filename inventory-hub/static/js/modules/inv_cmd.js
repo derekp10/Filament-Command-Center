@@ -34,7 +34,6 @@ const renderBuffer = () => {
     }
 
     // 2. Render Dashboard Nav Deck (If present on Dashboard)
-    // NOTE: Location Manager now uses a separate ID (#loc-mgr-nav-deck) to avoid conflicts here.
     if (n) {
         if (state.heldSpools.length > 1) {
             const nextSpool = state.heldSpools[1];
@@ -68,7 +67,7 @@ const renderBuffer = () => {
         } else { n.style.display = 'none'; }
     }
 
-    // 3. PROPER EVENT DISPATCH: Tell the system the buffer changed
+    // 3. Dispatch Event for Location Manager
     document.dispatchEvent(new CustomEvent('inventory:buffer-updated', { detail: { spools: state.heldSpools } }));
 };
 
@@ -117,7 +116,6 @@ const updateDeckVisuals = () => {
     }
 };
 
-// Global hook for audit visuals
 window.updateAuditVisuals = () => {
     const deckBtn = document.getElementById('btn-deck-audit');
     const lbl = document.getElementById('lbl-audit');
@@ -136,8 +134,6 @@ window.updateAuditVisuals = () => {
 // --- SCAN ROUTER ---
 const processScan = (text) => {
     const upper = text.toUpperCase();
-    
-    // Command Routing
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
     if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
     if (upper === 'CMD:DROP') { toggleDropMode(); return; }
@@ -150,7 +146,6 @@ const processScan = (text) => {
     if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
     
-    // Modal Intercepts
     if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
     if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
     if (state.activeModal === 'action') { if(upper.includes('CANCEL')) { closeModal('actionModal'); return; } if(upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
@@ -167,7 +162,6 @@ const processScan = (text) => {
             else if (res.cmd === 'slot') handleSlotInteraction(res.value); 
             else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
         } else if (res.type === 'location') {
-            // Location Logic
             if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
             if (state.heldSpools.length > 0) { performContextAssign(res.id); state.lastScannedLoc = null; return; }
             const locData = state.allLocations.find(l => l.LocationID === res.id);
@@ -181,7 +175,6 @@ const processScan = (text) => {
             }
             openManage(res.id); state.lastScannedLoc = res.id;
         } else if (res.type === 'spool') {
-            // Spool Logic
             if (state.dropMode) { removeBufferItem(res.id); return; }
             if (state.ejectMode) { ejectSpool(res.id, "Scan", false); return; } 
             
@@ -255,3 +248,6 @@ const printLabel = (sid) => {
     })
     .catch(e => { setProcessing(false); console.error(e); showToast("Connection Error", "error"); });
 };
+
+// EXPOSE GLOBALLY FOR LOC MANAGER
+window.printLabel = printLabel;
