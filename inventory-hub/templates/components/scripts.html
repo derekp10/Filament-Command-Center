@@ -34,8 +34,8 @@
         }
         
         // --- EVENT LISTENERS ---
-        // NOTE: 'shown.bs.modal' for manageModal REMOVED to prevent double-draw flicker.
-        // The Location Manager module now handles its own rendering lifecycle.
+        // ROOT CAUSE FIX: Removed the 'shown.bs.modal' listener for manageModal.
+        // inv_loc_mgr.js -> openManage() now handles the full render cycle before showing.
         
         // Deck QRs
         generateSafeQR('qr-undo', 'CMD:UNDO', 85);

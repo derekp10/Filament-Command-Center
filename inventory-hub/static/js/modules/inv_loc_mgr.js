@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v20 - Rock Solid) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v20)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v21 - Root Cause Fix) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v21)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -8,9 +8,12 @@ document.addEventListener('inventory:buffer-updated', () => {
     }
 });
 
+// NOTE: 'shown.bs.modal' listener REMOVED entirely.
+// openManage() handles the render. No double triggers.
+
 window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
-// --- PRE-FLIGHT PROTOCOL ---
+// --- PRE-FLIGHT PROTOCOL: Fetch -> Render -> Show ---
 window.openManage = (id) => { 
     setProcessing(true);
 
@@ -19,11 +22,12 @@ window.openManage = (id) => {
     const input = document.getElementById('manual-spool-id');
     if(input) input.value=""; 
     
-    // Wipe old data
+    // 1. Wipe old data immediately
     document.getElementById('slot-grid-container').innerHTML = '';
     document.getElementById('manage-contents-list').innerHTML = '';
     document.getElementById('unslotted-container').innerHTML = '';
     
+    // 2. Hide Views until ready
     document.getElementById('manage-grid-view').style.display = 'none';
     document.getElementById('manage-list-view').style.display = 'none';
     
@@ -35,6 +39,7 @@ window.openManage = (id) => {
     fetch(`/api/get_contents?id=${id}`)
     .then(r=>r.json())
     .then(d => {
+        // 3. Render Content into the Hidden Modal
         if(isGrid) {
             document.getElementById('manage-grid-view').style.display = 'block';
             document.getElementById('manage-list-view').style.display = 'none';
@@ -46,8 +51,11 @@ window.openManage = (id) => {
         }
         
         renderManagerNav();
-        generateSafeQR('qr-modal-done', 'CMD:DONE', 58); // Size 58 fits perfectly in 75px with padding
+        
+        // Generate Done QR - Size 60 fits nicely in the 75px box with padding
+        generateSafeQR('qr-modal-done', 'CMD:DONE', 60);
 
+        // 4. Show Modal (Populated & Stable)
         setProcessing(false);
         modals.manageModal.show();
     })
@@ -61,6 +69,7 @@ window.openManage = (id) => {
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
 
 window.refreshManageView = (id) => {
+    // Only used for live updates, not initial open
     renderManagerNav();
     const loc = state.allLocations.find(l=>l.LocationID==id); 
     if(!loc) return false;
@@ -76,6 +85,7 @@ window.refreshManageView = (id) => {
     return true;
 };
 
+// --- HELPER: FORMAT RICH TEXT ---
 const getRichInfo = (item) => {
     const d = item.details || {};
     const legacy = d.external_id ? `[Legacy: ${d.external_id}]` : "";
@@ -84,9 +94,16 @@ const getRichInfo = (item) => {
     const name = d.color_name || item.display.replace(/#\d+/, '').trim();
     const qName = name.startsWith('"') ? name : `"${name}"`; 
     const weight = d.weight ? `[${Math.round(d.weight)}g]` : "";
-    return { line1: `#${item.id} ${legacy}`, line2: `${brand} ${material}`, line3: qName, line4: weight };
+    
+    return {
+        line1: `#${item.id} ${legacy}`,
+        line2: `${brand} ${material}`,
+        line3: qName,
+        line4: weight
+    };
 };
 
+// --- RED ZONE: NAV DECK (3-COLUMN SPREAD) ---
 const renderManagerNav = () => {
     const n = document.getElementById('loc-mgr-nav-deck');
     if (!n) return;
@@ -100,8 +117,10 @@ const renderManagerNav = () => {
 
         const curStyle = getFilamentStyle(curItem.color);
         const curInfo = getRichInfo(curItem);
+        
         let html = '';
 
+        // 1. PREV CARD
         if (prevItem) {
             const prevStyle = getFilamentStyle(prevItem.color);
             const prevInfo = getRichInfo(prevItem);
@@ -111,22 +130,30 @@ const renderManagerNav = () => {
                     <div id="qr-nav-prev" class="nav-qr me-2"></div>
                     <div>
                         <div class="nav-label text-start">◀ PREV</div>
-                        <div class="nav-text-main" style="font-size:0.9rem;">#${prevItem.id}<br>${prevInfo.line3}</div>
+                        <div class="nav-text-main" style="font-size:0.9rem;">
+                            #${prevItem.id}<br>${prevInfo.line3}
+                        </div>
                     </div>
                 </div>
             </div>`;
-        } else { html += `<div style="flex:1;"></div>`; }
+        } else {
+             html += `<div style="flex:1;"></div>`; 
+        }
 
+        // 2. CURRENT CARD
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
             <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
                 <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:10px;">READY TO SLOT</div>
+                
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
+                
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div style="font-size:1.0rem; color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${curInfo.line2}</div>
             </div>
         </div>`;
 
+        // 3. NEXT CARD
         if (nextItem) {
             const nextStyle = getFilamentStyle(nextItem.color);
             const nextInfo = getRichInfo(nextItem);
@@ -135,18 +162,21 @@ const renderManagerNav = () => {
                 <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; justify-content:flex-end; padding:5px 10px;">
                     <div style="text-align:right;">
                         <div class="nav-label">NEXT ▶</div>
-                        <div class="nav-text-main" style="font-size:0.9rem;">#${nextItem.id}<br>${nextInfo.line3}</div>
+                        <div class="nav-text-main" style="font-size:0.9rem;">
+                             #${nextItem.id}<br>${nextInfo.line3}
+                        </div>
                     </div>
                     <div id="qr-nav-next" class="nav-qr ms-2"></div>
                 </div>
             </div>`;
-        } else { html += `<div style="flex:1;"></div>`; }
+        } else {
+             html += `<div style="flex:1;"></div>`; 
+        }
 
         n.innerHTML = html;
-        requestAnimationFrame(() => {
-            if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
-            if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
-        });
+        if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
+        if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
+
     } else {
         n.style.display = 'none';
         n.innerHTML = "";
@@ -155,7 +185,7 @@ const renderManagerNav = () => {
 
 // --- CLICK HELPER: STOPS PROPAGATION ---
 window.handleLabelClick = (e, id, display) => {
-    e.stopPropagation(); // CRITICAL FIX
+    e.stopPropagation(); 
     window.addToQueue({id: id, type: 'spool', display: display});
 };
 
@@ -176,7 +206,7 @@ const renderGrid = (data, max) => {
         const div = document.createElement('div');
         div.className = item ? "cham-card slot-btn full" : "slot-btn empty";
         
-        // STRUCTURAL IDENTITY FIX: Both use same inner HTML structure to prevent wiggle
+        // STRUCTURAL IDENTITY FIX
         if (item) {
             const styles = getFilamentStyle(item.color);
             const info = getRichInfo(item);
@@ -197,7 +227,7 @@ const renderGrid = (data, max) => {
                     </div>
                 </div>`;
         } else {
-            // EMPTY SLOT - Identical Structure, Hidden Elements
+            // EMPTY SLOT - Identical Structure
             div.innerHTML = `
                 <div class="slot-inner-gold">
                     <div class="slot-header"><div class="slot-num-gold" style="color:#555;">SLOT ${i}</div></div>
@@ -210,16 +240,15 @@ const renderGrid = (data, max) => {
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
         
-        requestAnimationFrame(() => {
-            if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
-            else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
-        });
+        if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
+        else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
     }
     
     if(unslotted.length > 0) renderUnslotted(unslotted); 
     else un.style.display = 'none';
 };
 
+// --- GREEN ZONE: LIST RENDERER ---
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
     const emptyMsg = document.getElementById('manage-empty-msg');
@@ -230,12 +259,8 @@ const renderList = (data, locId) => {
     } else {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                data.forEach((s,i) => renderBadgeQRs(s, i));
-                generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
-            });
-        });
+        data.forEach((s,i) => renderBadgeQRs(s, i));
+        generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
     }
 };
 
@@ -262,12 +287,8 @@ const renderUnslotted = (items) => {
     
     un.innerHTML = html;
     
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            items.forEach((s,i) => renderBadgeQRs(s, i));
-            generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
-        });
-    });
+    items.forEach((s,i) => renderBadgeQRs(s, i));
+    generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
 };
 
 const renderBadgeHTML = (s, i, locId) => {
@@ -314,7 +335,6 @@ window.handleSlotInteraction = (slot) => {
     if (state.heldSpools.length > 0) {
         const newId = state.heldSpools[0].id;
         if(item) {
-            // OCCUPIED + BUFFER -> SWAP/OVERWRITE/CANCEL
             promptAction("Slot Occupied", `Swap/Overwrite Slot ${slot}?`, [
                 {label:"Swap", action:()=>{
                     state.heldSpools.shift(); 
@@ -332,14 +352,12 @@ window.handleSlotInteraction = (slot) => {
                 {label:"Cancel", action:()=>{ closeModal('actionModal'); }}
             ]);
         } else { 
-            // EMPTY + BUFFER -> FILL
             state.heldSpools.shift(); 
             if(window.renderBuffer) window.renderBuffer(); 
             renderManagerNav();
             doAssign(locId, newId, slot); 
         }
     } else if(item) {
-        // OCCUPIED + NO BUFFER -> ACTION MENU
         promptAction("Slot Action", `Manage ${item.display}`, [
             {label:"✋ Pick Up", action:()=>{
                 state.heldSpools.unshift({id:item.id, display:item.display, color:item.color}); 

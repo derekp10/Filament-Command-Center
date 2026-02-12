@@ -10,19 +10,6 @@
         z-index: 1100 !important;
     }
 
-    /* --- GLOBAL QR FIXES (Safety & Action Modals) --- */
-    /* Target IDs from modals_core.html to fix their sizing/padding */
-    #qr-safety-yes, #qr-safety-no, #qr-confirm-yes, #qr-confirm-no {
-        background-color: white !important;
-        padding: 5px !important;
-        border-radius: 6px !important;
-        box-sizing: border-box !important;
-        margin: 0 auto 10px auto !important; /* Center it */
-        /* Ensure img fits inside */
-        display: flex; justify-content: center; align-items: center;
-    }
-    #qr-safety-yes img, #qr-safety-no img { width: 100% !important; height: auto !important; }
-
     /* --- RED ZONE: NAV DECK --- */
     #loc-mgr-nav-deck { 
         display: flex; gap: 10px; width: 100%; align-items: stretch; height: 200px; 
@@ -71,20 +58,15 @@
         gap: 15px; justify-content: center;
     }
     
-    /* SLOT CONTAINER */
     #slot-grid-container .slot-btn {
         height: auto !important; min-height: 280px !important;
         justify-content: flex-start !important; padding: 0 !important;
         background: #111; border: none; 
         position: relative;
-        transition: transform 0.1s ease-in-out; /* Smooth press */
+        transition: transform 0.1s ease-in-out;
     }
-    /* DEPRESS ANIMATION */
-    #slot-grid-container .slot-btn:active {
-        transform: scale(0.96);
-    }
+    #slot-grid-container .slot-btn:active { transform: scale(0.96); }
     
-    /* INNER CONTENT (Both Empty and Full use this now) */
     .slot-inner-gold {
         padding: 10px; height: 100%; width: 100%;
         display: flex; flex-direction: column; justify-content: space-between; align-items: center;
@@ -92,9 +74,8 @@
         background-size: cover !important; background-repeat: no-repeat !important;
     }
     
-    /* Empty State Specifics */
     .slot-btn.empty .slot-inner-gold {
-        border: 2px dashed #444; /* Dashed look for empty */
+        border: 2px dashed #444; 
         background: transparent;
     }
 
@@ -167,32 +148,33 @@
     }
     .eject-label-text { font-size: 1.5rem; font-weight: 900; color: #dc3545; text-transform: uppercase; letter-spacing: 2px; }
 
-    /* FOOTER DONE QR */
+    /* FOOTER DONE QR - RIGID LOCK */
     #qr-footer-block {
         background: #1f1f1f; 
         border: 1px solid #555; 
         border-radius: 6px;
         padding: 8px; /* Creates the dark border/bezel */
-        min-width: 90px;
+        /* Forces container to be stable */
+        min-width: 90px; 
+        min-height: 90px;
         display: flex; justify-content: center; align-items: center;
+        flex-shrink: 0; /* DO NOT SQUISH */
     }
+    /* The white box inside */
     #qr-modal-done { 
         margin: 0;
-        width: 75px !important;
-        height: 75px !important;
+        width: 75px !important;  /* LOCKED PIXEL SIZE */
+        height: 75px !important; /* LOCKED PIXEL SIZE */
         background-color: white;
         border-radius: 4px;
         overflow: hidden;
-        flex-shrink: 0;
-        padding: 6px; 
-        box-sizing: border-box;
+        flex-shrink: 0; /* DO NOT SQUISH */
+        padding: 6px; /* White bezel around QR code */
     }
     #qr-modal-done img, #qr-modal-done canvas {
         width: 100% !important;
         height: 100% !important;
         display: block;
-        image-rendering: -moz-crisp-edges;
-        image-rendering: pixelated;
     }
 
     #manage-empty-msg .empty-state-text { color: #fff !important; opacity: 0.9; }
@@ -311,7 +293,7 @@
                     <button class="btn btn-success btn-lg flex-grow-1 fw-bold" onclick="closeManage()">✅ Done / Sync</button>
                     
                     <div id="qr-footer-block" onclick="closeManage()" style="cursor:pointer;">
-                        <div id="qr-modal-done" class="qr-bg-white"></div>
+                        <div id="qr-modal-done"></div>
                     </div>
                 </div>
             </div>
