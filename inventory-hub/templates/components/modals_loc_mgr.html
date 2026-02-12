@@ -5,16 +5,26 @@
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
-    /* --- NUCLEAR Z-INDEX FIX --- */
+    /* --- NUCLEAR Z-INDEX FIX (REVISED) --- */
+    /* DO NOT force manageModal Z-Index. Let it sit naturally (usually 1055). */
+    /* Force ONLY the sub-popups to be higher. */
     #queueModal, #spoolModal, #filamentModal, #actionModal, #safetyModal, #confirmModal {
         z-index: 1100 !important;
     }
-    .modal-backdrop + .modal-backdrop {
-        z-index: 1090 !important;
+    /* Ensure the backdrop for the sub-popups sits between Manager and Popup */
+    .modal-backdrop {
+        /* Bootstrap handles this dynamically, but if multiple backdrops exist, 
+           the second one usually behaves correctly if the modal z-index is higher. */
     }
 
     /* --- RED ZONE: NAV DECK --- */
-    #loc-mgr-nav-deck { display: flex; gap: 10px; width: 100%; align-items: stretch; height: 180px; }
+    #loc-mgr-nav-deck { 
+        display: flex; 
+        gap: 10px; 
+        width: 100%; 
+        align-items: stretch; 
+        height: 200px; 
+    }
     
     #loc-mgr-nav-deck .nav-card {
         height: 100%;
@@ -24,7 +34,8 @@
         cursor: pointer;
         transition: transform 0.1s;
         overflow: hidden; 
-        display: flex; flex-direction: column;
+        display: flex; 
+        flex-direction: column;
         box-sizing: border-box;
     }
     
@@ -37,7 +48,7 @@
     
     #loc-mgr-nav-deck .nav-card:active { transform: scale(0.98); }
     
-    /* Inner Content Stability */
+    /* Inner Container Stability */
     .nav-inner {
         height: 100%; width: 100%; box-sizing: border-box;
         background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important;
@@ -49,7 +60,7 @@
     }
     #loc-mgr-nav-deck .nav-text-main {
         font-size: 1.1rem; font-weight: 800; line-height: 1.2;
-        color: #fff; text-shadow: 1px 1px 5px #000, 0 0 5px #000;
+        color: #fff; text-shadow: 2px 2px 4px #000;
     }
     .nav-qr { background: white; padding: 5px; border-radius: 4px; flex-shrink: 0; }
 
