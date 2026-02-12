@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v22 - Source Fix) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v22)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v23 - High Contrast Slots) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v23)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -160,6 +160,12 @@ const renderManagerNav = () => {
     }
 };
 
+// --- CLICK HELPER: STOPS PROPAGATION ---
+window.handleLabelClick = (e, id, display) => {
+    e.stopPropagation(); 
+    window.addToQueue({id: id, type: 'spool', display: display});
+};
+
 // --- YELLOW ZONE: SLOT GRID RENDERER ---
 const renderGrid = (data, max) => {
     const grid = document.getElementById('slot-grid-container');
@@ -176,8 +182,6 @@ const renderGrid = (data, max) => {
         const item = state.currentGrid[i];
         const div = document.createElement('div');
         div.className = item ? "cham-card slot-btn full" : "slot-btn empty";
-        
-        // PARENT CLICK: Attached via property, handles general slot logic
         div.onclick = () => handleSlotInteraction(i);
 
         if (item) {
@@ -185,14 +189,13 @@ const renderGrid = (data, max) => {
             const info = getRichInfo(item);
             div.style.background = styles.frame;
             
-            // NOTE: Removed inline onclick from btn-label-compact. Added class 'js-btn-label'
             div.innerHTML = `
                 <div class="slot-inner-gold" style="background:${styles.inner};">
                     <div class="slot-header"><div class="slot-num-gold">SLOT ${i}</div></div>
                     <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 3px solid white;"></div>
                     <div class="slot-info-gold" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
                         <div class="text-line-1">${info.line1}</div>
-                        <div class="text-line-2">${info.line2}</div>
+                        <div class="text-line-2" style="color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${info.line2}</div>
                         <div class="text-line-3">${info.line3}</div>
                         <div class="text-line-4">${info.line4}</div>
                     </div>
@@ -201,11 +204,10 @@ const renderGrid = (data, max) => {
                     </div>
                 </div>`;
                 
-            // EVENT BINDING: Attach safe listener programmatically
             const btn = div.querySelector('.js-btn-label');
             if (btn) {
                 btn.addEventListener('click', (e) => {
-                    e.stopPropagation(); // Stops bubbling to div.onclick
+                    e.stopPropagation(); 
                     window.addToQueue({id: item.id, type: 'spool', display: item.display});
                 });
             }
@@ -241,15 +243,11 @@ const renderList = (data, locId) => {
         if(emptyMsg) emptyMsg.style.display = 'block'; 
     } else {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
-        // We will build fragment first, then bind events
-        list.innerHTML = ""; // clear
+        list.innerHTML = ""; 
         data.forEach((s,i) => {
-            // Create container
             const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = renderBadgeHTML(s, i, locId); // Returns HTML string
-            const el = tempDiv.firstElementChild; // The actual cham-card
-            
-            // Bind Label Button
+            tempDiv.innerHTML = renderBadgeHTML(s, i, locId);
+            const el = tempDiv.firstElementChild;
             const btnLabel = el.querySelector('.js-btn-label');
             if (btnLabel) {
                 btnLabel.addEventListener('click', (e) => {
@@ -257,7 +255,6 @@ const renderList = (data, locId) => {
                     window.addToQueue({id: s.id, type: 'spool', display: s.display});
                 });
             }
-            
             list.appendChild(el);
         });
         
@@ -275,9 +272,7 @@ const renderUnslotted = (items) => {
     if (!un) return;
     un.style.display = 'block';
     
-    // Header
     let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3 mt-4">Unslotted Items</h4>`;
-    // We add the wrapper div, then we will append the items programmatically
     un.innerHTML = html;
     
     const itemContainer = document.createElement('div');
@@ -285,8 +280,6 @@ const renderUnslotted = (items) => {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value);
         const el = tempDiv.firstElementChild;
-        
-        // Bind Label Button
         const btnLabel = el.querySelector('.js-btn-label');
         if (btnLabel) {
             btnLabel.addEventListener('click', (e) => {
@@ -299,7 +292,6 @@ const renderUnslotted = (items) => {
     
     un.appendChild(itemContainer);
     
-    // Danger Zone (Safe to use string here as it has no complex children)
     const dangerDiv = document.createElement('div');
     dangerDiv.className = "danger-zone mt-4 pt-3 border-top border-danger";
     dangerDiv.innerHTML = `
@@ -325,7 +317,6 @@ const renderUnslotted = (items) => {
 const renderBadgeHTML = (s, i, locId) => {
     const styles = getFilamentStyle(s.color);
     const info = getRichInfo(s);
-    // Removed inline onclick for Label button, added class js-btn-label
     return `
     <div class="cham-card manage-list-item" style="background:${styles.frame}">
         <div class="list-inner-gold" style="background: ${styles.inner};">
