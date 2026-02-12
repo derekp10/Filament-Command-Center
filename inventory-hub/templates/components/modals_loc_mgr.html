@@ -88,10 +88,25 @@
     }
 
     .slot-info-gold { text-align: center; margin: 8px 0; width: 100%; }
-    .text-line-1 { font-size: 0.85rem; font-weight: 700; color: #ddd; }
-    .text-line-2 { font-size: 0.8rem; font-weight: 600; color: #aaa; margin-top: 2px; }
-    .text-line-3 { font-size: 1.0rem; font-weight: 800; color: #fff; margin: 4px 0; line-height: 1.1; }
-    .text-line-4 { font-size: 0.9rem; font-weight: 700; color: #00d4ff; }
+    
+    /* --- TEXT POP STYLES (Applies to Grid & List) --- */
+    /* All lines get White Text + Black Shadow for readability on colored backgrounds */
+    .text-line-1 { 
+        font-size: 0.85rem; font-weight: 700; color: #fff; 
+        text-shadow: 2px 2px 4px #000; 
+    }
+    .text-line-2 { 
+        font-size: 0.9rem; font-weight: 800; color: #fff; 
+        text-shadow: 2px 2px 4px #000; margin-top: 2px; 
+    }
+    .text-line-3 { 
+        font-size: 1.1rem; font-weight: 900; color: #fff; 
+        text-shadow: 2px 2px 4px #000; margin: 4px 0; line-height: 1.1; 
+    }
+    .text-line-4 { 
+        font-size: 0.9rem; font-weight: 700; color: #fff; 
+        text-shadow: 2px 2px 4px #000; 
+    }
 
     .btn-label-compact {
         background: #ffc107; color: #000;
@@ -129,6 +144,7 @@
     
     .badge-qr { background: #fff; padding: 5px; border-radius: 4px; margin-bottom: 6px; }
     
+    /* SPECIAL: High-Contrast White Background for Eject/Done QRs */
     .qr-bg-white {
         background-color: white; padding: 5px; border-radius: 6px; margin-bottom: 5px;
     }

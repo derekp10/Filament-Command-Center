@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v23 - High Contrast Slots) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v23)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v24 - Clean Source) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v24)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -46,7 +46,6 @@ window.openManage = (id) => {
         }
         
         renderManagerNav();
-        // Done QR: Fixed Size 58
         generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
 
         setProcessing(false);
@@ -160,12 +159,6 @@ const renderManagerNav = () => {
     }
 };
 
-// --- CLICK HELPER: STOPS PROPAGATION ---
-window.handleLabelClick = (e, id, display) => {
-    e.stopPropagation(); 
-    window.addToQueue({id: id, type: 'spool', display: display});
-};
-
 // --- YELLOW ZONE: SLOT GRID RENDERER ---
 const renderGrid = (data, max) => {
     const grid = document.getElementById('slot-grid-container');
@@ -189,13 +182,14 @@ const renderGrid = (data, max) => {
             const info = getRichInfo(item);
             div.style.background = styles.frame;
             
+            // CLEAN HTML: No inline styles needed now
             div.innerHTML = `
                 <div class="slot-inner-gold" style="background:${styles.inner};">
                     <div class="slot-header"><div class="slot-num-gold">SLOT ${i}</div></div>
                     <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 3px solid white;"></div>
                     <div class="slot-info-gold" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
                         <div class="text-line-1">${info.line1}</div>
-                        <div class="text-line-2" style="color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${info.line2}</div>
+                        <div class="text-line-2">${info.line2}</div>
                         <div class="text-line-3">${info.line3}</div>
                         <div class="text-line-4">${info.line4}</div>
                     </div>
