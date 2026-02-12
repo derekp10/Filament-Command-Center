@@ -5,21 +5,35 @@
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
+    /* --- CRITICAL FIX: MODAL STACKING --- */
+    /* Forces Details and Queue modals to pop OVER the Location Manager */
+    #spoolModal, #filamentModal, #queueModal {
+        z-index: 1070 !important; /* Higher than ManageModal (1055) */
+    }
+    .modal-backdrop {
+        /* Ensure multiple backdrops stack correctly */
+        z-index: 1050; 
+    }
+    /* When SpoolModal is open, ensure the backdrop for it is higher too if needed, 
+       but usually Bootstrap handles the last opened modal's backdrop well. */
+
     /* --- RED ZONE: NAV DECK (3 Column) --- */
-    #loc-mgr-nav-deck { display: flex; gap: 10px; width: 100%; align-items: stretch; }
+    #loc-mgr-nav-deck { display: flex; gap: 10px; width: 100%; align-items: stretch; height: 130px; /* Fixed Height container */ }
     
     #loc-mgr-nav-deck .nav-card {
-        min-height: 100px;
+        height: 100%; /* Force fill */
         box-shadow: 0 4px 10px rgba(0,0,0,0.5);
         border: 2px solid rgba(255,255,255,0.2);
-        flex: 1; /* Side cards share remaining space */
+        flex: 1; 
         cursor: pointer;
         transition: transform 0.1s;
+        overflow: hidden; /* Fix growth glitch */
+        display: flex; flex-direction: column; /* Structural fix */
     }
     
     /* Center Card - Dominant */
     #loc-mgr-nav-deck .nav-card-center {
-        flex: 2; /* 2x Width of side cards */
+        flex: 2; 
         border: 2px solid #fff;
         box-shadow: 0 0 20px rgba(0, 212, 255, 0.2);
         z-index: 2;
@@ -33,9 +47,9 @@
     }
     #loc-mgr-nav-deck .nav-text-main {
         font-size: 1.0rem; font-weight: 800; line-height: 1.1;
-        color: #fff; text-shadow: 1px 1px 3px #000;
+        color: #fff; text-shadow: 1px 1px 5px #000, 0 0 5px #000; /* Extra shadow for readability */
     }
-    .nav-qr { background: white; padding: 5px; border-radius: 4px; }
+    .nav-qr { background: white; padding: 5px; border-radius: 4px; flex-shrink: 0; }
 
     /* --- YELLOW ZONE: SLOT GRID --- */
     #slot-grid-container {
@@ -95,7 +109,6 @@
     }
     .list-left { display: flex; align-items: center; gap: 15px; overflow: hidden; }
     
-    /* REUSED STYLE FOR CENTER DECK CARD TOO */
     .id-badge-gold {
         background: #000; color: #fff; border: 2px solid #fff; 
         font-weight: 900; font-size: 1.2rem; padding: 5px 8px; 
@@ -133,7 +146,7 @@
         background: #1f1f1f; 
         border: 1px solid #555; 
         border-radius: 6px;
-        padding: 8px; /* Increased padding */
+        padding: 8px;
         min-width: 90px; 
         display: flex; justify-content: center; align-items: center;
     }

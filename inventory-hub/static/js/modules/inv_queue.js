@@ -3,23 +3,25 @@ console.log("🚀 Loaded Module: QUEUE");
 
 let labelQueue = [];
 
-function updateQueueUI() {
+window.updateQueueUI = () => {
     const btn = document.getElementById('btn-queue-count');
     if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
-}
+};
 
-function addToQueue(item) {
+window.addToQueue = (item) => {
+    // Check for duplicates
     if (labelQueue.find(s => s.id === item.id && s.type === item.type)) {
         showToast("⚠️ Already in Queue", "warning");
         return;
     }
     if (!item.type) item.type = 'spool';
+    
     labelQueue.push(item);
-    updateQueueUI();
+    window.updateQueueUI();
     showToast(`Added ${item.type} to Print Queue`);
-}
+};
 
-function openQueueModal() {
+window.openQueueModal = () => {
     const list = document.getElementById('queue-list-items');
     if (!list) return;
     list.innerHTML = "";
@@ -27,7 +29,10 @@ function openQueueModal() {
         list.innerHTML = "<li class='list-group-item'>Queue is empty</li>";
     } else {
         labelQueue.forEach((item, index) => {
-            const icon = item.type === 'filament' ? '🧬' : '🧵';
+            let icon = '🧵';
+            if (item.type === 'filament') icon = '🧬';
+            if (item.type === 'location') icon = '📍';
+            
             list.innerHTML += `
                 <li class="list-group-item d-flex justify-content-between align-items-center">
                     <span>${icon} #${item.id} - ${item.display}</span>
@@ -36,28 +41,30 @@ function openQueueModal() {
         });
     }
     if (modals.queueModal) modals.queueModal.show();
-}
+};
 
-function removeFromQueue(index) {
+window.removeFromQueue = (index) => {
     labelQueue.splice(index, 1);
-    openQueueModal(); 
-    updateQueueUI();
-}
+    window.openQueueModal(); 
+    window.updateQueueUI();
+};
 
-function clearQueue() {
+window.clearQueue = () => {
     requestConfirmation("⚠️ Clear the entire Print Queue?", () => {
         labelQueue = [];
-        openQueueModal();
-        updateQueueUI();
+        window.openQueueModal();
+        window.updateQueueUI();
         showToast("Queue Cleared");
     });
-}
+};
 
-function printQueueCSV() {
+window.printQueueCSV = () => {
     if (labelQueue.length === 0) return;
     const overwrite = document.getElementById('chk-overwrite-csv').checked;
+    
     const spools = labelQueue.filter(i => i.type === 'spool').map(i => i.id);
     const filaments = labelQueue.filter(i => i.type === 'filament').map(i => i.id);
+    const locations = labelQueue.filter(i => i.type === 'location').map(i => i.id); // New Location Support
     
     const sendBatch = (ids, mode) => {
         return fetch('/api/print_batch_csv', {
@@ -76,18 +83,21 @@ function printQueueCSV() {
     const promises = [];
     if (spools.length > 0) promises.push(sendBatch(spools, 'spool'));
     if (filaments.length > 0) promises.push(sendBatch(filaments, 'filament'));
+    // Note: If your backend api/print_batch_csv supports 'location', this will work. 
+    // If not, we might need a separate endpoint for location labels later.
+    if (locations.length > 0) promises.push(sendBatch(locations, 'location')); 
 
     Promise.all(promises).then(results => {
         if (results.every(r => r === true)) {
             labelQueue = [];
-            openQueueModal();
-            updateQueueUI();
+            window.openQueueModal();
+            window.updateQueueUI();
             modals.queueModal.hide();
         }
     });
-}
+};
 
-const findMultiColorFilaments = () => {
+window.findMultiColorFilaments = () => {
     setProcessing(true);
     fetch('/api/get_multicolor_filaments')
     .then(r => r.json())
@@ -98,12 +108,12 @@ const findMultiColorFilaments = () => {
             let added = 0;
             data.forEach(item => {
                 if (!labelQueue.find(q => q.id === item.id && q.type === 'filament')) {
-                    addToQueue({ id: item.id, type: 'filament', display: item.display });
+                    window.addToQueue({ id: item.id, type: 'filament', display: item.display });
                     added++;
                 }
             });
             showToast(`Added ${added} swatches!`);
-            openQueueModal();
+            window.openQueueModal();
         }
     })
     .catch(() => { setProcessing(false); showToast("Search Error", "error"); });
