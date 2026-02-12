@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v7) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v7)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v8) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v8)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -19,7 +19,6 @@ window.openManage = (id) => {
     modals.manageModal.show(); 
     refreshManageView(id);
     
-    // Generate Done QR
     generateSafeQR('qr-modal-done', 'CMD:DONE', 75);
 };
 
