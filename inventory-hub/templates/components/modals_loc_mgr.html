@@ -94,6 +94,8 @@
         padding: 8px 15px; background: inherit; border-radius: 8px; min-height: 80px;
     }
     .list-left { display: flex; align-items: center; gap: 15px; overflow: hidden; }
+    
+    /* REUSED STYLE FOR CENTER DECK CARD TOO */
     .id-badge-gold {
         background: #000; color: #fff; border: 2px solid #fff; 
         font-weight: 900; font-size: 1.2rem; padding: 5px 8px; 
@@ -126,17 +128,16 @@
     }
     .eject-label-text { font-size: 1.5rem; font-weight: 900; color: #dc3545; text-transform: uppercase; letter-spacing: 2px; }
 
-    /* FOOTER DONE QR - Specific Styling */
+    /* FOOTER DONE QR */
     #qr-footer-block {
         background: #1f1f1f; 
         border: 1px solid #555; 
         border-radius: 6px;
-        padding: 6px;
-        /* Dimensions to match action-badge visually */
-        min-width: 75px; 
+        padding: 8px; /* Increased padding */
+        min-width: 90px; 
         display: flex; justify-content: center; align-items: center;
     }
-    #qr-modal-done { margin-bottom: 0; } /* Remove bottom margin since no text */
+    #qr-modal-done { margin-bottom: 0; }
 
 </style>
 
@@ -215,7 +216,7 @@
         <div class="modal-content">
             <div class="modal-header p-2 d-flex align-items-center">
                 <h5 class="modal-title ms-3 text-info flex-grow-1" id="manageTitle">Manage</h5>
-                <button class="btn btn-sm btn-outline-warning fw-bold me-2" onclick="window.printCurrentLocationLabel()">🖨️ Location Labels</button>
+                <button class="btn btn-sm btn-outline-warning fw-bold me-2" onclick="window.printCurrentLocationLabel()">🖨️ Print Location Labels</button>
                 <button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button>
             </div>
             
@@ -250,7 +251,7 @@
                 <div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary gap-3">
                     <button class="btn btn-success btn-lg flex-grow-1 fw-bold" onclick="closeManage()">✅ Done / Sync</button>
                     
-                    <div id="qr-footer-block">
+                    <div id="qr-footer-block" onclick="closeManage()" style="cursor:pointer;">
                         <div id="qr-modal-done" class="badge-qr"></div>
                     </div>
                 </div>

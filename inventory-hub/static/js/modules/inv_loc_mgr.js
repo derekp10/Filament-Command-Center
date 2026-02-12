@@ -1,6 +1,7 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v5) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v5)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v6) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v6)");
 
+// --- EVENT LISTENER FOR BUFFER UPDATES ---
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
     if (modal && modal.classList.contains('show')) {
@@ -19,8 +20,8 @@ window.openManage = (id) => {
     modals.manageModal.show(); 
     refreshManageView(id);
     
-    // Generate Done QR (Size 60 to match unslotted button visual weight)
-    generateSafeQR('qr-modal-done', 'CMD:DONE', 60);
+    // Generate Done QR (Size 75 to match action badges)
+    generateSafeQR('qr-modal-done', 'CMD:DONE', 75);
 };
 
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
@@ -69,7 +70,6 @@ const renderManagerNav = () => {
     if (state.heldSpools.length > 0) {
         n.style.display = 'flex';
         
-        // Items to display
         const curItem = state.heldSpools[0];
         const prevItem = state.heldSpools.length > 1 ? state.heldSpools[state.heldSpools.length - 1] : null;
         const nextItem = state.heldSpools.length > 1 ? state.heldSpools[1] : null;
@@ -96,17 +96,19 @@ const renderManagerNav = () => {
                 </div>
             </div>`;
         } else {
-             html += `<div style="flex:1;"></div>`; // Spacer
+             html += `<div style="flex:1;"></div>`; 
         }
 
-        // 2. CURRENT CARD (Center - Prominent)
+        // 2. CURRENT CARD (Center - Prominent) - ADDED ID BADGE BOX
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
             <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
-                <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:5px;">READY TO SLOT</div>
+                <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:10px;">READY TO SLOT</div>
+                
+                <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
+                
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div style="font-size:0.9rem; color:#ddd;">${curInfo.line2}</div>
-                <div style="font-size:0.9rem; color:#00d4ff; font-weight:bold;">${curInfo.line1}</div>
             </div>
         </div>`;
 
@@ -127,7 +129,7 @@ const renderManagerNav = () => {
                 </div>
             </div>`;
         } else {
-             html += `<div style="flex:1;"></div>`; // Spacer
+             html += `<div style="flex:1;"></div>`; 
         }
 
         n.innerHTML = html;
@@ -177,7 +179,7 @@ const renderGrid = (data, max) => {
                         <div class="text-line-4">${info.line4}</div>
                     </div>
 
-                    <div class="btn-label-compact" onclick="event.stopPropagation(); window.printLabel(${item.id})">
+                    <div class="btn-label-compact" onclick="event.stopPropagation(); addToQueue({id:${item.id}, type:'spool', display:'${item.display}'})">
                         <span style="font-size:1.2rem;">📷</span> PRINT
                     </div>
                 </div>`;
@@ -225,10 +227,12 @@ const renderUnslotted = (items) => {
     let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3 mt-4">Unslotted Items</h4>`;
     html += items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
     
+    // REDESIGNED EJECT ALL CARD
+    // FIXED: triggerEjectAll now finds ID dynamically
     html += `
         <div class="danger-zone mt-4 pt-3 border-top border-danger">
             <div class="cham-card manage-list-item" style="border-color:#dc3545; background:#300;">
-                <div class="eject-card-inner" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')" style="cursor:pointer;">
+                <div class="eject-card-inner" onclick="triggerEjectAll(document.getElementById('manage-loc-id').value)" style="cursor:pointer;">
                     
                     <div class="eject-label-text">
                         <span style="font-size:3rem; vertical-align:middle;">☢️</span> 
@@ -271,13 +275,15 @@ const renderBadgeHTML = (s, i, locId) => {
                     <div id="qr-pick-${i}" class="badge-qr"></div>
                     <div class="badge-btn-gold btn-pick-bg">PICK</div>
                 </div>
-                <div class="action-badge" onclick="event.stopPropagation(); window.printLabel(${s.id})">
+                
+                <div class="action-badge" onclick="event.stopPropagation(); addToQueue({id:${s.id}, type:'spool', display:'${s.display}'})">
                     <div id="qr-print-${i}" class="badge-qr"></div>
                     <div class="badge-btn-gold btn-print-bg">PRINT</div>
                 </div>
+                
                 <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', false)">
                     <div id="qr-trash-${i}" class="badge-qr"></div>
-                    <div class="badge-btn-gold btn-trash-bg">TRASH</div>
+                    <div class="badge-btn-gold btn-trash-bg">DROP</div>
                 </div>
             </div>
 
