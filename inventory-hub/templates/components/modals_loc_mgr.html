@@ -7,9 +7,9 @@
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
-    /* --- RED ZONE: NAV DECK --- */
-    #buffer-nav-deck { display: flex; gap: 15px; width: 100%; }
-    #buffer-nav-deck .nav-card {
+    /* --- RED ZONE: NAV DECK (RENAMED TO AVOID CONFLICT) --- */
+    #loc-mgr-nav-deck { display: flex; gap: 15px; width: 100%; }
+    #loc-mgr-nav-deck .nav-card {
         min-height: 100px;
         box-shadow: 0 4px 10px rgba(0,0,0,0.5);
         border: 2px solid rgba(255,255,255,0.2);
@@ -17,13 +17,13 @@
         cursor: pointer;
         transition: transform 0.1s;
     }
-    #buffer-nav-deck .nav-card:active { transform: scale(0.98); }
+    #loc-mgr-nav-deck .nav-card:active { transform: scale(0.98); }
     
-    #buffer-nav-deck .nav-label {
+    #loc-mgr-nav-deck .nav-label {
         font-size: 0.85rem; font-weight: 900; letter-spacing: 2px;
         color: #aaa; text-transform: uppercase; margin-bottom: 4px;
     }
-    #buffer-nav-deck .nav-text-main {
+    #loc-mgr-nav-deck .nav-text-main {
         font-size: 1.1rem; font-weight: 800; line-height: 1.2;
         color: #fff; text-shadow: 1px 1px 3px #000;
     }
@@ -200,14 +200,14 @@
             <div class="modal-header p-2 d-flex align-items-center">
                 <h5 class="modal-title ms-3 text-info flex-grow-1" id="manageTitle">Manage</h5>
                 
-                <button class="btn btn-sm btn-outline-warning fw-bold me-3" onclick="window.printCurrentLocationLabel()">🖨️ Location Labels</button>
+                <button class="btn btn-sm btn-outline-warning fw-bold me-2" onclick="window.printCurrentLocationLabel()">🖨️ Location Labels</button>
                 <button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button>
             </div>
             
             <div class="modal-body">
                 <input type="hidden" id="manage-loc-id">
                 
-                <div id="buffer-nav-deck" class="mb-4"></div>
+                <div id="loc-mgr-nav-deck" class="mb-4"></div>
 
                 <div id="manage-grid-view" class="container-fluid px-1" style="display:none;">
                     <div class="alert alert-info py-1 mb-3 small text-center fw-bold text-uppercase" style="background:#111; border:1px solid #00d4ff; color:#00d4ff;">

@@ -1,5 +1,15 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v3) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v3)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v4 - Clean Events) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v4)");
+
+// --- EVENT LISTENER FOR BUFFER UPDATES ---
+// This listens for the clean event from inv_cmd.js instead of patching functions.
+document.addEventListener('inventory:buffer-updated', () => {
+    // Only update if the manager modal is actually visible
+    const modal = document.getElementById('manageModal');
+    if (modal && modal.classList.contains('show')) {
+        renderManagerNav();
+    }
+});
 
 window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
@@ -19,7 +29,6 @@ window.openManage = (id) => {
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
 
 window.refreshManageView = (id) => {
-    // Render Red Zone (Nav) immediately
     renderManagerNav();
 
     const loc = state.allLocations.find(l=>l.LocationID==id); 
@@ -58,18 +67,17 @@ const getRichInfo = (item) => {
 
 // --- RED ZONE: NAV DECK RENDERER ---
 const renderManagerNav = () => {
-    const n = document.getElementById('buffer-nav-deck');
+    // UPDATED ID: Matches the renamed container in HTML to avoid conflict
+    const n = document.getElementById('loc-mgr-nav-deck');
     if (!n) return;
 
     if (state.heldSpools.length > 1) {
         n.style.display = 'flex';
         
-        // PREV Item (Last in array)
         const prevItem = state.heldSpools[state.heldSpools.length - 1];
         const prevStyle = getFilamentStyle(prevItem.color);
         const prevInfo = getRichInfo(prevItem);
 
-        // NEXT Item (Second in array)
         const nextItem = state.heldSpools[1];
         const nextStyle = getFilamentStyle(nextItem.color);
         const nextInfo = getRichInfo(nextItem);
@@ -271,6 +279,7 @@ window.handleSlotInteraction = (slot) => {
                 state.heldSpools.shift(); 
                 state.heldSpools.push({id:item.id, display:item.display, color:item.color}); 
                 if(window.renderBuffer) window.renderBuffer(); 
+                // Note: The event listener will handle the redraw, but we can double tap safely
                 renderManagerNav();
                 doAssign(locId, newId, slot);
             }}, 
@@ -431,18 +440,3 @@ window.openAddModal = () => {
 };
 
 window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, {method:'DELETE'}).then(fetchLocations));
-
-/* --- MONKEY PATCH: Hook into Global Scanner Updates --- */
-// This ensures that when inv_cmd.js updates the buffer, we update the Modal Deck too.
-if (typeof window.originalRenderBuffer === 'undefined') {
-    window.originalRenderBuffer = window.renderBuffer;
-    window.renderBuffer = () => {
-        // Call the original (inv_cmd.js) renderer for dashboard
-        if (window.originalRenderBuffer) window.originalRenderBuffer();
-        
-        // If modal is open, call our local renderer to prevent text reverting
-        if (document.getElementById('manageModal').classList.contains('show')) {
-            renderManagerNav();
-        }
-    };
-}

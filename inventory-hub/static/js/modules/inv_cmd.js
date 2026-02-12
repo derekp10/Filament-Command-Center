@@ -6,35 +6,35 @@ const renderBuffer = () => {
     const z = document.getElementById('buffer-zone');
     const n = document.getElementById('buffer-nav-deck'); 
     
-    // Check if elements exist (in case we are on a page without buffer)
-    if (!z) return;
-
-    if (state.heldSpools.length === 0) { 
-        z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; 
-        if(n) { n.style.display = 'none'; n.innerHTML = ""; }
-        return; 
+    // 1. Render Dashboard Buffer Zone
+    if (z) {
+        if (state.heldSpools.length === 0) { 
+            z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`; 
+        } else {
+            z.innerHTML = state.heldSpools.map((s, i) => {
+                const styles = getFilamentStyle(s.color);
+                const cleanText = (s.display||"").replace(/^#\d+\s*/, '').trim();
+                return `
+                <div class="cham-card buffer-item ${i===0?'active-item':''}" style="background: ${styles.frame};">
+                    <div class="cham-body buffer-inner" style="background: ${styles.inner};">
+                        <div class="cham-text-group" onclick="openSpoolDetails(${s.id})" style="cursor:pointer">
+                            <div class="cham-id-badge">#${s.id}</div>
+                            <div class="cham-text">${cleanText}</div>
+                        </div>
+                        <div class="buffer-actions">
+                            <div id="qr-buf-${i}" class="buffer-qr"></div>
+                            <div class="btn-buffer-x" onclick="removeBufferItem(${s.id})">❌</div>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+            
+            state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 74)); 
+        }
     }
-    
-    z.innerHTML = state.heldSpools.map((s, i) => {
-        const styles = getFilamentStyle(s.color);
-        const cleanText = (s.display||"").replace(/^#\d+\s*/, '').trim();
-        return `
-        <div class="cham-card buffer-item ${i===0?'active-item':''}" style="background: ${styles.frame};">
-            <div class="cham-body buffer-inner" style="background: ${styles.inner};">
-                <div class="cham-text-group" onclick="openSpoolDetails(${s.id})" style="cursor:pointer">
-                    <div class="cham-id-badge">#${s.id}</div>
-                    <div class="cham-text">${cleanText}</div>
-                </div>
-                <div class="buffer-actions">
-                    <div id="qr-buf-${i}" class="buffer-qr"></div>
-                    <div class="btn-buffer-x" onclick="removeBufferItem(${s.id})">❌</div>
-                </div>
-            </div>
-        </div>`;
-    }).join('');
-    
-    state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:"+s.id, 74)); 
 
+    // 2. Render Dashboard Nav Deck (If present on Dashboard)
+    // NOTE: Location Manager now uses a separate ID (#loc-mgr-nav-deck) to avoid conflicts here.
     if (n) {
         if (state.heldSpools.length > 1) {
             const nextSpool = state.heldSpools[1];
@@ -67,6 +67,9 @@ const renderBuffer = () => {
             generateSafeQR("qr-nav-next", "CMD:NEXT", 74);
         } else { n.style.display = 'none'; }
     }
+
+    // 3. PROPER EVENT DISPATCH: Tell the system the buffer changed
+    document.dispatchEvent(new CustomEvent('inventory:buffer-updated', { detail: { spools: state.heldSpools } }));
 };
 
 const removeBufferItem = (id) => {
