@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v18 - Flicker Free) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v18)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v19 - Final) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v19)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -49,8 +49,8 @@ window.openManage = (id) => {
         
         renderManagerNav();
         
-        // Generate Done QR - Size 58 (Standard)
-        generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
+        // Generate Done QR - EXACT SIZE MATCH (65px)
+        generateSafeQR('qr-modal-done', 'CMD:DONE', 65);
 
         // 4. Show Modal (Populated & Stable)
         setProcessing(false);
@@ -100,7 +100,7 @@ const getRichInfo = (item) => {
     };
 };
 
-// --- RED ZONE: NAV DECK ---
+// --- RED ZONE: NAV DECK (3-COLUMN SPREAD) ---
 const renderManagerNav = () => {
     const n = document.getElementById('loc-mgr-nav-deck');
     if (!n) return;
@@ -117,6 +117,7 @@ const renderManagerNav = () => {
         
         let html = '';
 
+        // 1. PREV CARD
         if (prevItem) {
             const prevStyle = getFilamentStyle(prevItem.color);
             const prevInfo = getRichInfo(prevItem);
@@ -132,18 +133,24 @@ const renderManagerNav = () => {
                     </div>
                 </div>
             </div>`;
-        } else { html += `<div style="flex:1;"></div>`; }
+        } else {
+             html += `<div style="flex:1;"></div>`; 
+        }
 
+        // 2. CURRENT CARD
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
             <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
                 <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:10px;">READY TO SLOT</div>
+                
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
+                
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div style="font-size:1.0rem; color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${curInfo.line2}</div>
             </div>
         </div>`;
 
+        // 3. NEXT CARD
         if (nextItem) {
             const nextStyle = getFilamentStyle(nextItem.color);
             const nextInfo = getRichInfo(nextItem);
@@ -159,11 +166,15 @@ const renderManagerNav = () => {
                     <div id="qr-nav-next" class="nav-qr ms-2"></div>
                 </div>
             </div>`;
-        } else { html += `<div style="flex:1;"></div>`; }
+        } else {
+             html += `<div style="flex:1;"></div>`; 
+        }
 
         n.innerHTML = html;
-        if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
-        if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
+        requestAnimationFrame(() => {
+            if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
+            if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
+        });
 
     } else {
         n.style.display = 'none';
@@ -224,8 +235,10 @@ const renderGrid = (data, max) => {
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
         
-        if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
-        else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
+        requestAnimationFrame(() => {
+            if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
+            else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
+        });
     }
     
     if(unslotted.length > 0) renderUnslotted(unslotted); 
@@ -243,8 +256,13 @@ const renderList = (data, locId) => {
     } else {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
-        data.forEach((s,i) => renderBadgeQRs(s, i));
-        generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
+        
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                data.forEach((s,i) => renderBadgeQRs(s, i));
+                generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
+            });
+        });
     }
 };
 
@@ -273,8 +291,13 @@ const renderUnslotted = (items) => {
         </div>`;
     
     un.innerHTML = html;
-    items.forEach((s,i) => renderBadgeQRs(s, i));
-    generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
+    
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            items.forEach((s,i) => renderBadgeQRs(s, i));
+            generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
+        });
+    });
 };
 
 const renderBadgeHTML = (s, i, locId) => {

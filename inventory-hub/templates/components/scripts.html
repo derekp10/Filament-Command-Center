@@ -34,16 +34,8 @@
         }
         
         // --- EVENT LISTENERS ---
-        // Manager Events
-        const manageEl = document.getElementById('manageModal');
-        if (manageEl) {
-            manageEl.addEventListener('shown.bs.modal', () => {
-                const id = document.getElementById('manage-loc-id').value;
-                if(window.renderBuffer) window.renderBuffer();
-                refreshManageView(id); 
-                generateSafeQR('qr-modal-done', 'CMD:DONE', 42);
-            });
-        }
+        // NOTE: 'shown.bs.modal' for manageModal REMOVED to prevent double-draw flicker.
+        // The Location Manager module now handles its own rendering lifecycle.
         
         // Deck QRs
         generateSafeQR('qr-undo', 'CMD:UNDO', 85);
@@ -65,9 +57,9 @@
         if(locTable) {
             locTable.addEventListener('click', (e) => {
                 const btn = e.target.closest('.btn-manage');
-                if (btn) openManage(btn.dataset.id);
-                else if (e.target.closest('.btn-edit')) openEdit(e.target.closest('.btn-edit').dataset.id);
-                else if (e.target.closest('.btn-delete')) deleteLoc(e.target.closest('.btn-delete').dataset.id);
+                if (btn) window.openManage(btn.dataset.id);
+                else if (e.target.closest('.btn-edit')) window.openEdit(e.target.closest('.btn-edit').dataset.id);
+                else if (e.target.closest('.btn-delete')) window.deleteLoc(e.target.closest('.btn-delete').dataset.id);
             });
         }
 
@@ -97,7 +89,7 @@
         const manualInput = document.getElementById("manual-spool-id");
         if(manualInput) {
             manualInput.addEventListener("keydown", (e) => { 
-                if (e.key === "Enter") { e.preventDefault(); manualAddSpool(); }
+                if (e.key === "Enter") { e.preventDefault(); window.manualAddSpool(); }
             });
         }
         

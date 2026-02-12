@@ -141,21 +141,36 @@
     }
     .eject-label-text { font-size: 1.5rem; font-weight: 900; color: #dc3545; text-transform: uppercase; letter-spacing: 2px; }
 
-    /* FOOTER DONE QR - SIMPLIFIED */
+    /* FOOTER DONE QR - RIGID LOCK - NO WIGGLE */
     #qr-footer-block {
         background: #1f1f1f; 
         border: 1px solid #555; 
         border-radius: 6px;
-        padding: 8px; /* Padding creates the bezel */
-        min-width: 90px;
+        padding: 8px; /* Creates the dark border/bezel */
+        /* Forces container to be stable */
+        min-width: 81px; 
+        min-height: 81px;
         display: flex; justify-content: center; align-items: center;
+        flex-shrink: 0; /* DO NOT SQUISH */
     }
-    /* Let the inner QR simply exist. No strict width/height forcing on the container. */
+    /* The white box inside */
     #qr-modal-done { 
+        margin: 0;
+        width: 65px !important;  /* LOCKED PIXEL SIZE */
+        height: 65px !important; /* LOCKED PIXEL SIZE */
         background-color: white;
         border-radius: 4px;
         overflow: hidden;
-        padding: 2px; /* Small inner padding for the QR modules */
+        flex-shrink: 0;
+        padding: 4px; /* White bezel around QR code */
+    }
+    #qr-modal-done img, #qr-modal-done canvas {
+        width: 100% !important;
+        height: 100% !important;
+        display: block;
+        /* Crisp rendering */
+        image-rendering: -moz-crisp-edges;
+        image-rendering: pixelated;
     }
 
     #manage-empty-msg .empty-state-text { color: #fff !important; opacity: 0.9; }
