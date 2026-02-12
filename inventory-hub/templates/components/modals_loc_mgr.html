@@ -1,7 +1,7 @@
 <style>
     /* --- MODAL SIZING & THEME --- */
     #manageModal .modal-dialog { max-width: 1000px; }
-    #manageModal .modal-body { background: #121212 !important; min-height: 400px; /* Prevent collapse */ }
+    #manageModal .modal-body { background: #121212 !important; min-height: 400px; }
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
@@ -141,36 +141,21 @@
     }
     .eject-label-text { font-size: 1.5rem; font-weight: 900; color: #dc3545; text-transform: uppercase; letter-spacing: 2px; }
 
-    /* FOOTER DONE QR */
+    /* FOOTER DONE QR - SIMPLIFIED */
     #qr-footer-block {
         background: #1f1f1f; 
         border: 1px solid #555; 
         border-radius: 6px;
-        padding: 8px;
+        padding: 8px; /* Padding creates the bezel */
         min-width: 90px;
         display: flex; justify-content: center; align-items: center;
     }
-    /* FIX: PADDING FOR BEZEL + IMAGE RENDERING */
+    /* Let the inner QR simply exist. No strict width/height forcing on the container. */
     #qr-modal-done { 
-        margin: 0;
-        width: 75px !important;
-        height: 75px !important;
         background-color: white;
         border-radius: 4px;
         overflow: hidden;
-        flex-shrink: 0;
-        padding: 6px; 
-        box-sizing: border-box;
-    }
-    #qr-modal-done img, #qr-modal-done canvas {
-        width: 100% !important;
-        height: 100% !important;
-        display: block;
-        /* Force sharp rendering */
-        image-rendering: -moz-crisp-edges;
-        image-rendering: -webkit-optimize-contrast;
-        image-rendering: crisp-edges;
-        image-rendering: pixelated;
+        padding: 2px; /* Small inner padding for the QR modules */
     }
 
     #manage-empty-msg .empty-state-text { color: #fff !important; opacity: 0.9; }
@@ -289,7 +274,7 @@
                     <button class="btn btn-success btn-lg flex-grow-1 fw-bold" onclick="closeManage()">✅ Done / Sync</button>
                     
                     <div id="qr-footer-block" onclick="closeManage()" style="cursor:pointer;">
-                        <div id="qr-modal-done" class="qr-bg-white"></div>
+                        <div id="qr-modal-done"></div>
                     </div>
                 </div>
             </div>

@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v17 - Pre-Flight) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v17)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v18 - Flicker Free) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v18)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -12,7 +12,6 @@ window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations();
 
 // --- PRE-FLIGHT PROTOCOL: Fetch -> Render -> Show ---
 window.openManage = (id) => { 
-    // 1. Show global loading state (using the core setProcessing)
     setProcessing(true);
 
     document.getElementById('manageTitle').innerText=`Location Manager: ${id}`; 
@@ -20,7 +19,15 @@ window.openManage = (id) => {
     const input = document.getElementById('manual-spool-id');
     if(input) input.value=""; 
     
-    // 2. Fetch Data BEFORE showing modal
+    // 1. Wipe old data immediately
+    document.getElementById('slot-grid-container').innerHTML = '';
+    document.getElementById('manage-contents-list').innerHTML = '';
+    document.getElementById('unslotted-container').innerHTML = '';
+    
+    // 2. Hide Views until ready
+    document.getElementById('manage-grid-view').style.display = 'none';
+    document.getElementById('manage-list-view').style.display = 'none';
+    
     const loc = state.allLocations.find(l=>l.LocationID==id);
     if(!loc) { setProcessing(false); return; }
 
@@ -40,13 +47,12 @@ window.openManage = (id) => {
             renderList(d, id);
         }
         
-        // Render Nav Deck (Buffer)
         renderManagerNav();
         
-        // Generate Done QR (High Res 200 -> Scaled to 75 via CSS)
-        generateSafeQR('qr-modal-done', 'CMD:DONE', 200);
+        // Generate Done QR - Size 58 (Standard)
+        generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
 
-        // 4. Show Modal (Now Populated)
+        // 4. Show Modal (Populated & Stable)
         setProcessing(false);
         modals.manageModal.show();
     })
@@ -60,7 +66,7 @@ window.openManage = (id) => {
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
 
 window.refreshManageView = (id) => {
-    // Only used for updates while open
+    // Only used for live updates, not initial open
     renderManagerNav();
     const loc = state.allLocations.find(l=>l.LocationID==id); 
     if(!loc) return false;
@@ -94,7 +100,7 @@ const getRichInfo = (item) => {
     };
 };
 
-// --- RED ZONE: NAV DECK (3-COLUMN SPREAD) ---
+// --- RED ZONE: NAV DECK ---
 const renderManagerNav = () => {
     const n = document.getElementById('loc-mgr-nav-deck');
     if (!n) return;
@@ -111,7 +117,6 @@ const renderManagerNav = () => {
         
         let html = '';
 
-        // 1. PREV CARD
         if (prevItem) {
             const prevStyle = getFilamentStyle(prevItem.color);
             const prevInfo = getRichInfo(prevItem);
@@ -127,24 +132,18 @@ const renderManagerNav = () => {
                     </div>
                 </div>
             </div>`;
-        } else {
-             html += `<div style="flex:1;"></div>`; 
-        }
+        } else { html += `<div style="flex:1;"></div>`; }
 
-        // 2. CURRENT CARD
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
             <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
                 <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:10px;">READY TO SLOT</div>
-                
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
-                
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div style="font-size:1.0rem; color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${curInfo.line2}</div>
             </div>
         </div>`;
 
-        // 3. NEXT CARD
         if (nextItem) {
             const nextStyle = getFilamentStyle(nextItem.color);
             const nextInfo = getRichInfo(nextItem);
@@ -160,15 +159,11 @@ const renderManagerNav = () => {
                     <div id="qr-nav-next" class="nav-qr ms-2"></div>
                 </div>
             </div>`;
-        } else {
-             html += `<div style="flex:1;"></div>`; 
-        }
+        } else { html += `<div style="flex:1;"></div>`; }
 
         n.innerHTML = html;
-        requestAnimationFrame(() => {
-            if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
-            if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
-        });
+        if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
+        if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
 
     } else {
         n.style.display = 'none';
@@ -229,10 +224,8 @@ const renderGrid = (data, max) => {
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
         
-        requestAnimationFrame(() => {
-            if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
-            else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
-        });
+        if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
+        else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
     }
     
     if(unslotted.length > 0) renderUnslotted(unslotted); 
@@ -250,13 +243,8 @@ const renderList = (data, locId) => {
     } else {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
-        
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                data.forEach((s,i) => renderBadgeQRs(s, i));
-                generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
-            });
-        });
+        data.forEach((s,i) => renderBadgeQRs(s, i));
+        generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
     }
 };
 
@@ -285,13 +273,8 @@ const renderUnslotted = (items) => {
         </div>`;
     
     un.innerHTML = html;
-    
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            items.forEach((s,i) => renderBadgeQRs(s, i));
-            generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
-        });
-    });
+    items.forEach((s,i) => renderBadgeQRs(s, i));
+    generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
 };
 
 const renderBadgeHTML = (s, i, locId) => {
