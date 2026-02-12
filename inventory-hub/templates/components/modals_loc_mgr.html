@@ -1,3 +1,135 @@
+<style>
+    /* --- RED ZONE: NAV DECK --- */
+    #buffer-nav-deck .nav-card {
+        min-height: 100px;
+        box-shadow: 0 0 15px rgba(0,0,0,0.5);
+        border: 2px solid rgba(255,255,255,0.2);
+    }
+    #buffer-nav-deck .nav-label {
+        font-size: 0.85rem;
+        font-weight: 900;
+        letter-spacing: 2px;
+        color: #aaa;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+    }
+    #buffer-nav-deck .nav-text-main {
+        font-size: 1.1rem;
+        font-weight: 800; /* THICKER FONT */
+        line-height: 1.2;
+        color: #fff;
+        text-shadow: 1px 1px 3px #000;
+    }
+
+    /* --- YELLOW ZONE: SLOT GRID --- */
+    #slot-grid-container {
+        display: grid; 
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); 
+        gap: 15px;
+    }
+    
+    /* FIX: Force height to auto/min-height to prevent cutting off text/buttons */
+    #slot-grid-container .slot-btn {
+        height: auto !important; 
+        min-height: 280px !important; /* Grow to fit content */
+        justify-content: flex-start !important;
+        padding: 0 !important;
+        background: #111;
+        border: 2px solid #444;
+    }
+    
+    .slot-inner-gold {
+        padding: 10px;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        align-items: center;
+        background: inherit;
+        width: 100%;
+    }
+
+    .slot-header {
+        width: 100%;
+        text-align: center;
+        background: rgba(0,0,0,0.5);
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        padding-bottom: 5px;
+        margin-bottom: 8px;
+    }
+    .slot-num-gold {
+        font-weight: 900; 
+        color: #fff; 
+        letter-spacing: 1px;
+        font-size: 1.1rem;
+    }
+
+    .slot-info-gold {
+        text-align: center;
+        margin: 8px 0;
+        width: 100%;
+    }
+    .text-line-1 { font-size: 0.85rem; font-weight: 700; color: #ddd; }
+    .text-line-2 { font-size: 0.8rem; font-weight: 600; color: #aaa; margin-top: 2px; }
+    .text-line-3 { font-size: 1.0rem; font-weight: 800; color: #fff; margin: 4px 0; line-height: 1.1; }
+    .text-line-4 { font-size: 0.9rem; font-weight: 700; color: #00d4ff; }
+
+    .btn-label-gold {
+        width: 100%;
+        background: #eee;
+        color: #000;
+        font-weight: 900;
+        border: none;
+        border-radius: 4px;
+        padding: 6px 0;
+        margin-top: auto; /* Push to bottom */
+        text-transform: uppercase;
+        font-size: 0.9rem;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+    }
+    .btn-label-gold:hover { background: #fff; }
+
+    /* --- GREEN ZONE: UNSLOTTED LIST --- */
+    .manage-list-item {
+        margin-bottom: 10px;
+        border: 1px solid #444;
+    }
+    .list-inner-gold {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 15px;
+        background: inherit;
+        border-radius: 8px;
+    }
+    .list-left { display: flex; align-items: center; gap: 15px; overflow: hidden; }
+    .id-badge-gold {
+        background: #000; color: #fff; border: 2px solid #fff; 
+        font-weight: 900; font-size: 1.2rem; padding: 5px 8px; 
+        border-radius: 6px; min-width: 60px; text-align: center;
+    }
+    
+    .action-group-gold { display: flex; gap: 10px; }
+    .action-badge {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        background: #111; border: 1px solid #555; border-radius: 6px; padding: 4px;
+        min-width: 75px; cursor: pointer; transition: transform 0.1s;
+    }
+    .action-badge:active { transform: scale(0.95); }
+    .badge-qr { background: #fff; padding: 3px; border-radius: 2px; margin-bottom: 4px; }
+    
+    .badge-btn-gold {
+        font-weight: 900; font-size: 0.85rem; text-transform: uppercase;
+        width: 100%; text-align: center; border-radius: 3px; padding: 2px 0; color: #000;
+    }
+    
+    /* Strict Colors for Actions */
+    .btn-pick-bg { background-color: #0d6efd; color: white; }
+    .btn-print-bg { background-color: #ffc107; color: black; }
+    .btn-trash-bg { background-color: #dc3545; color: white; }
+
+</style>
+
 <div class="modal fade" id="locMgrModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-scrollable modal-dialog-centered">
         <div class="modal-content">
@@ -82,10 +214,9 @@
             <div class="modal-body bg-black">
                 <input type="hidden" id="manage-loc-id">
                 
-                <div id="buffer-nav-deck" class="nav-deck mb-3" style="display:none; gap:15px;">
-                    </div>
+                <div id="buffer-nav-deck" class="nav-deck mb-4" style="display:none; gap:15px;"></div>
 
-                <div id="manage-grid-view" class="container-fluid px-2" style="display:none;">
+                <div id="manage-grid-view" class="container-fluid px-1" style="display:none;">
                     <div class="alert alert-info py-1 mb-3 small text-center fw-bold text-uppercase" style="background:#111; border:1px solid #00d4ff; color:#00d4ff;">
                         Tap button or scan slot QR (CMD:SLOT:X)
                     </div>

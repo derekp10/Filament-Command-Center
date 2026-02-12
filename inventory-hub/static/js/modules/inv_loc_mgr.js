@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (High-Fidelity) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Hi-Fi)");
+/* MODULE: LOCATION MANAGER (Gold Standard Restoration) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard)");
 
 const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
@@ -16,7 +16,7 @@ const openManage = (id) => {
 const closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
 
 const refreshManageView = (id) => {
-    // 1. Update Red Zone (Nav Deck) immediately
+    // Render Red Zone (Nav) immediately
     renderManagerNav();
 
     const loc = state.allLocations.find(l=>l.LocationID==id); 
@@ -36,14 +36,12 @@ const refreshManageView = (id) => {
 };
 
 // --- HELPER: FORMAT RICH TEXT ---
-// Extracts details to match the 4-line format in the screenshot
 const getRichInfo = (item) => {
     const d = item.details || {};
     const legacy = d.external_id ? `[Legacy: ${d.external_id}]` : "";
     const brand = d.brand || "Generic";
     const material = d.material || "PLA";
     const name = d.color_name || item.display.replace(/#\d+/, '').trim();
-    // Quote name if not already quoted
     const qName = name.startsWith('"') ? name : `"${name}"`; 
     const weight = d.weight ? `[${Math.round(d.weight)}g]` : "";
     
@@ -78,8 +76,8 @@ const renderManagerNav = () => {
                 <div class="cham-body nav-inner" style="background:${prevStyle.inner}; display:flex; align-items:center; padding:10px;">
                     <div id="qr-nav-prev" class="nav-qr me-3" style="background:white; padding:2px; border-radius:4px;"></div>
                     <div style="flex-grow:1;">
-                        <div class="nav-label text-start mb-1">◀ PREV</div>
-                        <div class="text-white small fw-bold" style="line-height:1.2;">
+                        <div class="nav-label text-start">◀ PREV</div>
+                        <div class="nav-text-main">
                             ${prevInfo.line1}<br>${prevInfo.line2}<br>${prevInfo.line3}<br><span style="color:#00d4ff">${prevInfo.line4}</span>
                         </div>
                     </div>
@@ -89,8 +87,8 @@ const renderManagerNav = () => {
             <div class="cham-card nav-card" style="background: ${nextStyle.frame}; flex:1;" onclick="nextBuffer()">
                 <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; padding:10px;">
                     <div style="flex-grow:1; text-align:right;">
-                        <div class="nav-label mb-1">NEXT ▶</div>
-                        <div class="text-white small fw-bold" style="line-height:1.2;">
+                        <div class="nav-label">NEXT ▶</div>
+                        <div class="nav-text-main">
                             ${nextInfo.line1}<br>${nextInfo.line2}<br>${nextInfo.line3}<br><span style="color:#00d4ff">${nextInfo.line4}</span>
                         </div>
                     </div>
@@ -121,40 +119,44 @@ const renderGrid = (data, max) => {
     for(let i=1; i<=max; i++) {
         const item = state.currentGrid[i];
         const div = document.createElement('div');
+        div.className = "cham-card slot-btn full";
         
         if (item) {
             const styles = getFilamentStyle(item.color);
             const info = getRichInfo(item);
-            
-            div.className = "cham-card slot-btn full";
             div.style.background = styles.frame;
+            
             div.innerHTML = `
-                <div class="cham-body slot-inner" style="background:${styles.inner}; padding: 10px; display:flex; flex-direction:column; justify-content:space-between; height:100%;">
-                    <div class="d-flex justify-content-center w-100 align-items-center mb-1">
-                        <div class="slot-num badge bg-dark border border-secondary" style="font-size:1.1rem;">SLOT ${i}</div>
+                <div class="slot-inner-gold" style="background:${styles.inner};">
+                    <div class="slot-header">
+                        <div class="slot-num-gold">SLOT ${i}</div>
                     </div>
                     
-                    <div id="qr-slot-${i}" class="bg-white p-1 rounded mb-2" style="border: 4px solid white; align-self:center;"></div>
+                    <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 3px solid white;"></div>
                     
-                    <div class="slot-content text-center" style="cursor:pointer; line-height:1.2;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
-                        <div style="font-size:0.85rem; font-weight:bold; color:#fff;">${info.line1}</div>
-                        <div style="font-size:0.8rem; color:#ccc;">${info.line2}</div>
-                        <div style="font-size:0.95rem; font-weight:bold; color:#fff; margin: 2px 0;">${info.line3}</div>
-                        <div style="font-size:0.9rem; color:#00d4ff;">${info.line4}</div>
+                    <div class="slot-info-gold" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
+                        <div class="text-line-1">${info.line1}</div>
+                        <div class="text-line-2">${info.line2}</div>
+                        <div class="text-line-3">${info.line3}</div>
+                        <div class="text-line-4">${info.line4}</div>
                     </div>
 
-                    <button class="btn btn-light border-dark mt-2 fw-bold py-1 w-100" style="font-size:0.8rem; text-transform:uppercase;" onclick="event.stopPropagation(); printLabel(${item.id})">📷 LABEL</button>
+                    <button class="btn-label-gold" onclick="event.stopPropagation(); printLabel(${item.id})">📷 LABEL</button>
                 </div>`;
         } else {
             div.className = "slot-btn empty";
+            div.style.justifyContent = 'center';
             div.innerHTML = `
-                <div class="slot-num text-muted fw-bold mb-3">SLOT ${i}</div>
-                <div id="qr-slot-${i}" class="bg-white p-2 rounded" style="opacity:0.8;"></div>
-                <div class="text-muted fs-4 mt-3">EMPTY</div>`;
+                <div class="slot-num-gold" style="color:#555;">SLOT ${i}</div>
+                <div id="qr-slot-${i}" class="bg-white p-2 rounded mt-3 mb-3" style="opacity:0.5;"></div>
+                <div class="fs-4 text-muted fw-bold">EMPTY</div>`;
         }
+        
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
-        generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80); // Bigger QRs
+        
+        if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); // Large QR for slots
+        else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
     }
     
     if(unslotted.length > 0) renderUnslotted(unslotted); 
@@ -185,11 +187,12 @@ const renderUnslotted = (items) => {
     let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3 mt-4">Unslotted Items</h4>`;
     html += items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
     
+    // Danger Zone (Eject All)
     html += `
         <div class="danger-zone mt-4 pt-3 border-top border-danger text-center">
-            <div class="action-badge" style="border-color:#dc3545; display:inline-flex;" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">
-                <div id="qr-eject-all" class="badge-qr"></div>
-                <button class="badge-btn btn-trash">EJECT ALL</button>
+            <div class="action-badge" style="border-color:#dc3545; display:inline-flex; width:auto; padding:10px;" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">
+                <div id="qr-eject-all" class="badge-qr" style="width:60px;height:60px;"></div>
+                <div class="badge-btn-gold text-white bg-danger mt-1 rounded">EJECT ALL</div>
             </div>
         </div>`;
     
@@ -203,38 +206,42 @@ const renderBadgeHTML = (s, i, locId) => {
     const info = getRichInfo(s);
 
     return `
-    <div class="cham-card manage-list-item mb-2" style="background:${styles.frame}">
-        <div class="cham-body" style="background: ${styles.inner}; display:flex; justify-content:space-between; align-items:center; padding:5px 15px;">
-            <div class="cham-text-group d-flex align-items-center" style="cursor:pointer; overflow:hidden;" onclick="openSpoolDetails(${s.id})">
-                <div class="cham-id-badge me-3" style="font-size:1.4rem;">#${s.id}</div>
+    <div class="cham-card manage-list-item" style="background:${styles.frame}">
+        <div class="list-inner-gold" style="background: ${styles.inner};">
+            
+            <div class="list-left" style="cursor:pointer;" onclick="openSpoolDetails(${s.id})">
+                <div class="id-badge-gold">#${s.id}</div>
                 <div class="d-flex flex-column text-white">
-                     <div class="small" style="color:#ccc;">${info.line1}</div>
-                     <div style="font-weight:bold; font-size:1.1rem; line-height:1.1;">${info.line2} ${info.line3}</div>
-                     <div class="small" style="color:#00d4ff;">${info.line4}</div>
+                     <div class="text-line-1">${info.line1}</div>
+                     <div class="text-line-3" style="font-size:1.1rem;">${info.line2} ${info.line3}</div>
+                     <div class="text-line-4">${info.line4}</div>
                 </div>
             </div>
-            <div class="cham-actions d-flex gap-2">
+
+            <div class="action-group-gold">
                 <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', true)">
                     <div id="qr-pick-${i}" class="badge-qr"></div>
-                    <button class="badge-btn btn-pick">PICK</button>
+                    <div class="badge-btn-gold btn-pick-bg">PICK</div>
                 </div>
                 <div class="action-badge" onclick="event.stopPropagation(); quickQueue(${s.id})">
                     <div id="qr-print-${i}" class="badge-qr"></div>
-                    <button class="badge-btn btn-print">QUEUE</button>
+                    <div class="badge-btn-gold btn-print-bg">QUEUE</div>
                 </div>
                 <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', false)">
                     <div id="qr-trash-${i}" class="badge-qr"></div>
-                    <button class="badge-btn btn-trash">TRASH</button>
+                    <div class="badge-btn-gold btn-trash-bg">TRASH</div>
                 </div>
             </div>
+
         </div>
     </div>`;
 };
 
 const renderBadgeQRs = (s, i) => {
-    generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 56);
-    generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 56);
-    generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 56);
+    // QRs for the 3 buttons
+    generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 50);
+    generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 50);
+    generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 50);
 };
 
 // --- INTERACTION ---
