@@ -1,9 +1,9 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v2) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v2)");
 
-const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
+window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
-const openManage = (id) => { 
+window.openManage = (id) => { 
     document.getElementById('manageTitle').innerText=`Location Manager: ${id}`; 
     document.getElementById('manage-loc-id').value=id; 
     const input = document.getElementById('manual-spool-id');
@@ -11,11 +11,14 @@ const openManage = (id) => {
     
     modals.manageModal.show(); 
     refreshManageView(id);
+    
+    // Generate large Done QR
+    generateSafeQR('qr-modal-done', 'CMD:DONE', 60);
 };
 
-const closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
+window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
 
-const refreshManageView = (id) => {
+window.refreshManageView = (id) => {
     // Render Red Zone (Nav) immediately
     renderManagerNav();
 
@@ -71,10 +74,11 @@ const renderManagerNav = () => {
         const nextStyle = getFilamentStyle(nextItem.color);
         const nextInfo = getRichInfo(nextItem);
 
+        // Note: onclicks now chain the global buffer function AND a re-render
         n.innerHTML = `
-            <div class="cham-card nav-card" style="background: ${prevStyle.frame};" onclick="prevBuffer()">
+            <div class="cham-card nav-card" style="background: ${prevStyle.frame};" onclick="prevBuffer(); setTimeout(renderManagerNav, 50);">
                 <div class="cham-body nav-inner" style="background:${prevStyle.inner}; display:flex; align-items:center; padding:10px;">
-                    <div id="qr-nav-prev" class="nav-qr me-3" style="background:white; padding:2px; border-radius:4px;"></div>
+                    <div id="qr-nav-prev" class="nav-qr me-3"></div>
                     <div style="flex-grow:1;">
                         <div class="nav-label text-start">◀ PREV</div>
                         <div class="nav-text-main">
@@ -84,7 +88,7 @@ const renderManagerNav = () => {
                 </div>
             </div>
             
-            <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="nextBuffer()">
+            <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="nextBuffer(); setTimeout(renderManagerNav, 50);">
                 <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; padding:10px;">
                     <div style="flex-grow:1; text-align:right;">
                         <div class="nav-label">NEXT ▶</div>
@@ -92,7 +96,7 @@ const renderManagerNav = () => {
                             ${nextInfo.line1}<br>${nextInfo.line2}<br>${nextInfo.line3}<br><span style="color:#00d4ff">${nextInfo.line4}</span>
                         </div>
                     </div>
-                    <div id="qr-nav-next" class="nav-qr ms-3" style="background:white; padding:2px; border-radius:4px;"></div>
+                    <div id="qr-nav-next" class="nav-qr ms-3"></div>
                 </div>
             </div>
         `;
@@ -124,10 +128,12 @@ const renderGrid = (data, max) => {
         if (item) {
             const styles = getFilamentStyle(item.color);
             const info = getRichInfo(item);
+            
+            // Apply Frame Color as Background (creates border effect via margin in child)
             div.style.background = styles.frame;
             
             div.innerHTML = `
-                <div class="slot-inner-gold" style="background:${styles.inner};">
+                <div class="slot-inner-gold" style="background:#2b2b2b;">
                     <div class="slot-header">
                         <div class="slot-num-gold">SLOT ${i}</div>
                     </div>
@@ -141,7 +147,9 @@ const renderGrid = (data, max) => {
                         <div class="text-line-4">${info.line4}</div>
                     </div>
 
-                    <button class="btn-label-gold" onclick="event.stopPropagation(); printLabel(${item.id})">📷 LABEL</button>
+                    <div class="btn-label-compact" onclick="event.stopPropagation(); printLabel(${item.id})">
+                        <span style="font-size:1.2rem;">📷</span> LABEL
+                    </div>
                 </div>`;
         } else {
             div.className = "slot-btn empty";
@@ -187,7 +195,7 @@ const renderUnslotted = (items) => {
     let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3 mt-4">Unslotted Items</h4>`;
     html += items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
     
-    // REDESIGNED EJECT ALL CARD (Matches Unassigned Styles)
+    // REDESIGNED EJECT ALL CARD
     html += `
         <div class="danger-zone mt-4 pt-3 border-top border-danger">
             <div class="cham-card manage-list-item" style="border-color:#dc3545; background:#300;">
@@ -198,7 +206,7 @@ const renderUnslotted = (items) => {
                         DANGER ZONE
                     </div>
 
-                    <div class="action-badge" style="border-color:#dc3545; background:#000;">
+                    <div class="action-badge" style="border-color:#dc3545; background:#111;">
                         <div id="qr-eject-all" class="badge-qr"></div>
                         <div class="badge-btn-gold text-white bg-danger mt-1 rounded">EJECT ALL</div>
                     </div>
@@ -254,8 +262,8 @@ const renderBadgeQRs = (s, i) => {
     generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 50);
 };
 
-// --- INTERACTION ---
-const handleSlotInteraction = (slot) => {
+// --- INTERACTION (Global) ---
+window.handleSlotInteraction = (slot) => {
     const locId = document.getElementById('manage-loc-id').value, item = state.currentGrid[slot];
     if (state.heldSpools.length > 0) {
         const newId = state.heldSpools[0].id;
@@ -292,7 +300,7 @@ const handleSlotInteraction = (slot) => {
     ]);
 };
 
-const doAssign = (loc, spool, slot) => { 
+window.doAssign = (loc, spool, slot) => { 
     setProcessing(true); 
     fetch('/api/manage_contents', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'add', location:loc, spool_id:"ID:"+spool, slot})})
     .then(r=>r.json())
@@ -304,7 +312,7 @@ const doAssign = (loc, spool, slot) => {
     .catch(()=>setProcessing(false)); 
 };
 
-const ejectSpool = (sid, loc, pickup) => { 
+window.ejectSpool = (sid, loc, pickup) => { 
     if(pickup) { 
         fetch('/api/identify_scan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:"ID:"+sid})})
         .then(r=>r.json())
@@ -325,7 +333,7 @@ const ejectSpool = (sid, loc, pickup) => {
     } 
 };
 
-const doEject = (sid, loc) => { 
+window.doEject = (sid, loc) => { 
     setProcessing(true); 
     fetch('/api/manage_contents', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'remove', location:loc, spool_id:sid})})
     .then(r=>r.json())
@@ -333,7 +341,7 @@ const doEject = (sid, loc) => {
     .catch(()=>setProcessing(false)); 
 };
 
-const manualAddSpool = () => {
+window.manualAddSpool = () => {
     const val = document.getElementById('manual-spool-id').value.trim(); 
     if (!val) return; 
     setProcessing(true);
@@ -357,14 +365,14 @@ const manualAddSpool = () => {
     .catch(() => setProcessing(false));
 };
 
-const triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, () => { 
+window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, () => { 
     setProcessing(true); 
     fetch('/api/manage_contents', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'clear_location', location:loc})})
     .then(r=>r.json())
     .then(()=>{setProcessing(false); refreshManageView(loc); showToast("Cleared!");}); 
 });
 
-const printCurrentLocationLabel = () => {
+window.printCurrentLocationLabel = () => {
     const locId = document.getElementById('manage-loc-id').value;
     if(!locId) return;
     setProcessing(true);
@@ -382,8 +390,7 @@ const printCurrentLocationLabel = () => {
     .catch(() => { setProcessing(false); showToast("Connection Error", "error"); });
 };
 
-// CRUD
-const openEdit = (id) => { 
+window.openEdit = (id) => { 
     const i=state.allLocations.find(l=>l.LocationID==id); 
     if(i){ 
         modals.locMgrModal.hide(); 
@@ -396,9 +403,9 @@ const openEdit = (id) => {
     }
 };
 
-const closeEdit = () => { modals.locModal.hide(); modals.locMgrModal.show(); };
+window.closeEdit = () => { modals.locModal.hide(); modals.locMgrModal.show(); };
 
-const saveLocation = () => { 
+window.saveLocation = () => { 
     fetch('/api/locations', {
         method:'POST', 
         headers:{'Content-Type':'application/json'}, 
@@ -415,7 +422,7 @@ const saveLocation = () => {
     .then(()=>{modals.locModal.hide(); modals.locMgrModal.show(); fetchLocations();}); 
 };
 
-const openAddModal = () => { 
+window.openAddModal = () => { 
     modals.locMgrModal.hide(); 
     document.getElementById('edit-original-id').value=""; 
     document.getElementById('edit-id').value=""; 
@@ -424,4 +431,4 @@ const openAddModal = () => {
     modals.locModal.show(); 
 };
 
-const deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, {method:'DELETE'}).then(fetchLocations));
+window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, {method:'DELETE'}).then(fetchLocations));

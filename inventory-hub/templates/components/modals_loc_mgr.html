@@ -1,120 +1,98 @@
 <style>
-    /* --- MODAL SIZING --- */
-    /* Shrink to fit 4-column grid perfectly, removing dead space */
-    #manageModal .modal-dialog {
-        max-width: 960px; 
-    }
+    /* --- MODAL SIZING & THEME --- */
+    #manageModal .modal-dialog { max-width: 960px; }
+    
+    /* THEME: Gray Background instead of Black */
+    #manageModal .modal-body { background: #2b2b2b !important; }
+    #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
+    #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
     /* --- RED ZONE: NAV DECK --- */
-    #buffer-nav-deck {
-        display: flex;
-        gap: 15px;
-        width: 100%;
-    }
+    #buffer-nav-deck { display: flex; gap: 15px; width: 100%; }
     #buffer-nav-deck .nav-card {
         min-height: 100px;
-        box-shadow: 0 0 15px rgba(0,0,0,0.5);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.5);
         border: 2px solid rgba(255,255,255,0.2);
-        flex: 1; /* Equal Growth */
-        width: 50%; /* Force Equal Base Width */
+        flex: 1; width: 50%; /* Equal Width */
+        cursor: pointer;
+        transition: transform 0.1s;
     }
+    #buffer-nav-deck .nav-card:active { transform: scale(0.98); }
+    
     #buffer-nav-deck .nav-label {
-        font-size: 0.85rem;
-        font-weight: 900;
-        letter-spacing: 2px;
-        color: #aaa;
-        text-transform: uppercase;
-        margin-bottom: 4px;
+        font-size: 0.85rem; font-weight: 900; letter-spacing: 2px;
+        color: #aaa; text-transform: uppercase; margin-bottom: 4px;
     }
     #buffer-nav-deck .nav-text-main {
-        font-size: 1.1rem;
-        font-weight: 800;
-        line-height: 1.2;
-        color: #fff;
-        text-shadow: 1px 1px 3px #000;
+        font-size: 1.1rem; font-weight: 800; line-height: 1.2;
+        color: #fff; text-shadow: 1px 1px 3px #000;
     }
+    /* QR Padding Fix */
+    .nav-qr { background: white; padding: 5px; border-radius: 4px; }
 
     /* --- YELLOW ZONE: SLOT GRID --- */
     #slot-grid-container {
         display: grid; 
         grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); 
-        gap: 15px;
-        justify-content: center; /* Center the grid items */
+        gap: 15px; justify-content: center;
     }
     
+    /* Slot Card Container */
     #slot-grid-container .slot-btn {
-        height: auto !important; 
-        min-height: 280px !important;
-        justify-content: flex-start !important;
-        padding: 0 !important;
-        background: #111;
-        border: 2px solid #444;
+        height: auto !important; min-height: 280px !important;
+        justify-content: flex-start !important; padding: 0 !important;
+        background: #111; border: none; /* Color handled by inner/outer overlap */
+        position: relative;
     }
     
     .slot-inner-gold {
-        padding: 10px;
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        align-items: center;
-        background: inherit;
-        width: 100%;
+        padding: 10px; height: 100%; width: 100%;
+        display: flex; flex-direction: column; justify-content: space-between; align-items: center;
+        background: #2b2b2b; /* Match modal bg for "transparent" feel or darker? */
+        /* To show the border color (parent bg), we use margin or clip-path. 
+           Let's use a 4px inset. */
+        margin: 4px; 
+        height: calc(100% - 8px); width: calc(100% - 8px);
     }
+    /* If slot is empty, simple border */
+    .slot-btn.empty { border: 2px solid #444; background: transparent; }
 
     .slot-header {
-        width: 100%;
-        text-align: center;
-        background: rgba(0,0,0,0.5);
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-        padding-bottom: 5px;
-        margin-bottom: 8px;
+        width: 100%; text-align: center;
+        background: transparent; /* Removed bg */
+        border: none; /* Removed border */
+        margin-bottom: 5px;
     }
     .slot-num-gold {
-        font-weight: 900; 
-        color: #fff; 
-        letter-spacing: 1px;
-        font-size: 1.1rem;
+        font-weight: 900; color: #fff; letter-spacing: 1px; font-size: 1.1rem;
+        opacity: 0.7;
     }
 
-    .slot-info-gold {
-        text-align: center;
-        margin: 8px 0;
-        width: 100%;
-    }
+    .slot-info-gold { text-align: center; margin: 8px 0; width: 100%; }
     .text-line-1 { font-size: 0.85rem; font-weight: 700; color: #ddd; }
     .text-line-2 { font-size: 0.8rem; font-weight: 600; color: #aaa; margin-top: 2px; }
     .text-line-3 { font-size: 1.0rem; font-weight: 800; color: #fff; margin: 4px 0; line-height: 1.1; }
     .text-line-4 { font-size: 0.9rem; font-weight: 700; color: #00d4ff; }
 
-    .btn-label-gold {
-        width: 100%;
-        background: #eee;
-        color: #000;
-        font-weight: 900;
-        border: none;
-        border-radius: 4px;
-        padding: 6px 0;
+    /* Compact Camera Button */
+    .btn-label-compact {
+        background: #ffc107; color: #000;
+        border-radius: 6px; padding: 4px 10px;
+        font-weight: 900; font-size: 0.9rem;
+        display: flex; align-items: center; gap: 6px;
+        box-shadow: 0 4px 5px rgba(0,0,0,0.3);
+        border: 2px solid #fff;
         margin-top: auto;
-        text-transform: uppercase;
-        font-size: 0.9rem;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+        cursor: pointer;
+        transition: transform 0.1s;
     }
-    .btn-label-gold:hover { background: #fff; }
+    .btn-label-compact:active { transform: scale(0.9); }
 
     /* --- GREEN ZONE: LIST & EJECT --- */
-    .manage-list-item {
-        margin-bottom: 10px;
-        border: 1px solid #444;
-    }
+    .manage-list-item { margin-bottom: 10px; border: 1px solid #444; }
     .list-inner-gold {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 8px 15px;
-        background: inherit;
-        border-radius: 8px;
-        min-height: 80px;
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 8px 15px; background: inherit; border-radius: 8px; min-height: 80px;
     }
     .list-left { display: flex; align-items: center; gap: 15px; overflow: hidden; }
     .id-badge-gold {
@@ -126,25 +104,24 @@
     .action-group-gold { display: flex; gap: 10px; }
     .action-badge {
         display: flex; flex-direction: column; align-items: center; justify-content: center;
-        background: #111; border: 1px solid #555; border-radius: 6px; padding: 6px;
-        min-width: 75px; height: auto; /* Fix clipping */
+        background: #1f1f1f; border: 1px solid #555; border-radius: 6px; padding: 6px;
+        min-width: 75px; height: auto; 
         cursor: pointer; transition: transform 0.1s;
     }
     .action-badge:active { transform: scale(0.95); }
-    .badge-qr { background: #fff; padding: 3px; border-radius: 2px; margin-bottom: 6px; }
+    
+    /* Action QR Padding Fix */
+    .badge-qr { background: #fff; padding: 5px; border-radius: 4px; margin-bottom: 6px; }
     
     .badge-btn-gold {
         font-weight: 900; font-size: 0.85rem; text-transform: uppercase;
         width: 100%; text-align: center; border-radius: 3px; padding: 4px 0; color: #000;
         line-height: 1;
     }
-    
-    /* Strict Colors */
     .btn-pick-bg { background-color: #0d6efd; color: white; }
     .btn-print-bg { background-color: #ffc107; color: black; }
     .btn-trash-bg { background-color: #dc3545; color: white; }
     
-    /* Eject All Special Styling */
     .eject-card-inner {
         display: flex; justify-content: space-between; align-items: center; 
         padding: 10px 20px; background: rgba(220, 53, 69, 0.15);
@@ -226,15 +203,15 @@
 <div class="modal fade" id="manageModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
-            <div class="modal-header bg-dark border-secondary p-2">
+            <div class="modal-header p-2">
                 <h5 class="modal-title ms-3 text-info" id="manageTitle">Manage</h5>
                 <div class="ms-auto me-3">
-                    <button class="btn btn-sm btn-outline-warning fw-bold" onclick="printCurrentLocationLabel()">🖨️ LOC LABEL</button>
+                    <button class="btn btn-sm btn-outline-warning fw-bold" onclick="window.printCurrentLocationLabel()">🖨️ Location Labels</button>
                 </div>
                 <button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button>
             </div>
             
-            <div class="modal-body bg-black">
+            <div class="modal-body">
                 <input type="hidden" id="manage-loc-id">
                 
                 <div id="buffer-nav-deck" class="mb-4"></div>
@@ -260,14 +237,15 @@
                 
                 <div class="input-group mb-3">
                     <input type="text" id="manual-spool-id" class="form-control form-control-lg bg-dark text-white border-secondary" placeholder="Enter Spool ID / Scan Legacy">
-                    <button class="btn btn-primary btn-lg fw-bold" onclick="manualAddSpool()">➕ Add (To Buffer)</button>
+                    <button class="btn btn-primary btn-lg fw-bold" onclick="window.manualAddSpool()">➕ Add (To Buffer)</button>
                 </div>
                 
-                <div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary">
-                    <button class="btn btn-success btn-lg flex-grow-1 me-3 fw-bold" onclick="closeManage()">✅ Done / Sync</button>
-                    <div class="text-center" onclick="closeManage()" style="cursor:pointer;">
-                        <div id="qr-modal-done" class="bg-white p-1 rounded d-inline-block"></div>
-                        <div class="qr-label small fw-bold text-muted mt-1">DONE</div>
+                <div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary gap-3">
+                    <button class="btn btn-success btn-lg flex-grow-1 fw-bold" onclick="closeManage()">✅ Done / Sync</button>
+                    
+                    <div class="action-badge" style="background: #111; border: 1px solid #444; min-width: 80px;" onclick="closeManage()">
+                        <div id="qr-modal-done" class="badge-qr"></div>
+                        <div class="badge-btn-gold text-muted">DONE</div>
                     </div>
                 </div>
             </div>
