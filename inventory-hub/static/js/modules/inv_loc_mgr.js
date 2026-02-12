@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v8) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v8)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v9) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v9)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');

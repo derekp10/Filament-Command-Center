@@ -1,13 +1,28 @@
 <style>
     /* --- MODAL SIZING & THEME --- */
-    #manageModal .modal-dialog { max-width: 1000px; } /* Slightly wider for breathing room */
+    #manageModal .modal-dialog { max-width: 1000px; }
     #manageModal .modal-body { background: #121212 !important; }
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
+    /* --- NUCLEAR Z-INDEX FIX --- */
+    /* Force these specific modals to be ABOVE the Location Manager (usually 1055) */
+    #queueModal, #spoolModal, #filamentModal, #actionModal, #safetyModal, #confirmModal {
+        z-index: 1100 !important;
+    }
+    /* Ensure their backdrops also stack correctly if needed */
+    .modal-backdrop + .modal-backdrop {
+        z-index: 1090 !important;
+    }
+
     /* --- RED ZONE: NAV DECK (3 Column) --- */
-    /* Increased height to 180px to prevent text clipping */
-    #loc-mgr-nav-deck { display: flex; gap: 10px; width: 100%; align-items: stretch; height: 180px; }
+    #loc-mgr-nav-deck { 
+        display: flex; 
+        gap: 10px; 
+        width: 100%; 
+        align-items: stretch; 
+        height: 180px; /* Rigid Height */
+    }
     
     #loc-mgr-nav-deck .nav-card {
         height: 100%;
@@ -16,8 +31,10 @@
         flex: 1; 
         cursor: pointer;
         transition: transform 0.1s;
-        overflow: hidden; 
-        display: flex; flex-direction: column;
+        overflow: hidden; /* CRITICAL: Clips the gradient */
+        display: flex; 
+        flex-direction: column;
+        box-sizing: border-box; /* CRITICAL: Includes border in height calc */
     }
     
     /* Center Card - Dominant */
@@ -30,6 +47,15 @@
     
     #loc-mgr-nav-deck .nav-card:active { transform: scale(0.98); }
     
+    /* Inner Container Stability Fix */
+    .nav-inner {
+        height: 100%; 
+        width: 100%; 
+        box-sizing: border-box;
+        background-size: cover !important; /* Prevents repeating/glitching */
+        background-repeat: no-repeat !important;
+    }
+
     #loc-mgr-nav-deck .nav-label {
         font-size: 0.8rem; font-weight: 900; letter-spacing: 2px;
         color: #aaa; text-transform: uppercase; margin-bottom: 8px;
@@ -59,6 +85,7 @@
         display: flex; flex-direction: column; justify-content: space-between; align-items: center;
         margin: 4px; 
         height: calc(100% - 8px); width: calc(100% - 8px);
+        background-size: cover; background-repeat: no-repeat;
     }
     
     .slot-btn.empty { border: 2px solid #444; background: transparent; }
