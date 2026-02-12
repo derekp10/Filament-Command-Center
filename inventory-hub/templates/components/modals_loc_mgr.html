@@ -5,28 +5,16 @@
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
-    /* --- STRICT Z-INDEX HIERARCHY (Prevents Hard Lock) --- */
-    /* Level 1: Location List (Default Bootstrap ~1055) */
-    
-    /* Level 2: Manager (Must be higher than List) */
-    #manageModal {
-        z-index: 1060 !important;
-    }
-    
-    /* Level 3: Popups (Must be higher than Manager) */
+    /* --- NUCLEAR Z-INDEX FIX --- */
     #queueModal, #spoolModal, #filamentModal, #actionModal, #safetyModal, #confirmModal {
-        z-index: 1070 !important;
+        z-index: 1100 !important;
+    }
+    .modal-backdrop + .modal-backdrop {
+        z-index: 1090 !important;
     }
 
     /* --- RED ZONE: NAV DECK --- */
-    /* Height increased to 200px to prevent text clipping */
-    #loc-mgr-nav-deck { 
-        display: flex; 
-        gap: 10px; 
-        width: 100%; 
-        align-items: stretch; 
-        height: 200px; 
-    }
+    #loc-mgr-nav-deck { display: flex; gap: 10px; width: 100%; align-items: stretch; height: 180px; }
     
     #loc-mgr-nav-deck .nav-card {
         height: 100%;
@@ -36,12 +24,10 @@
         cursor: pointer;
         transition: transform 0.1s;
         overflow: hidden; 
-        display: flex; 
-        flex-direction: column;
+        display: flex; flex-direction: column;
         box-sizing: border-box;
     }
     
-    /* Center Card - Dominant */
     #loc-mgr-nav-deck .nav-card-center {
         flex: 2; 
         border: 2px solid #fff;
@@ -51,14 +37,10 @@
     
     #loc-mgr-nav-deck .nav-card:active { transform: scale(0.98); }
     
-    /* Inner Container Stability & Background Fix */
+    /* Inner Content Stability */
     .nav-inner {
-        height: 100%; 
-        width: 100%; 
-        box-sizing: border-box;
-        background-size: cover !important; 
-        background-repeat: no-repeat !important;
-        background-position: center !important;
+        height: 100%; width: 100%; box-sizing: border-box;
+        background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important;
     }
 
     #loc-mgr-nav-deck .nav-label {
@@ -67,7 +49,7 @@
     }
     #loc-mgr-nav-deck .nav-text-main {
         font-size: 1.1rem; font-weight: 800; line-height: 1.2;
-        color: #fff; text-shadow: 2px 2px 4px #000;
+        color: #fff; text-shadow: 1px 1px 5px #000, 0 0 5px #000;
     }
     .nav-qr { background: white; padding: 5px; border-radius: 4px; flex-shrink: 0; }
 
@@ -81,17 +63,14 @@
     #slot-grid-container .slot-btn {
         height: auto !important; min-height: 280px !important;
         justify-content: flex-start !important; padding: 0 !important;
-        background: #111; border: none; 
-        position: relative;
+        background: #111; border: none; position: relative;
     }
     
     .slot-inner-gold {
         padding: 10px; height: 100%; width: 100%;
         display: flex; flex-direction: column; justify-content: space-between; align-items: center;
-        margin: 4px; 
-        height: calc(100% - 8px); width: calc(100% - 8px);
-        background-size: cover !important;
-        background-repeat: no-repeat !important;
+        margin: 4px; height: calc(100% - 8px); width: calc(100% - 8px);
+        background-size: cover !important; background-repeat: no-repeat !important;
     }
     
     .slot-btn.empty { border: 2px solid #444; background: transparent; }
@@ -101,8 +80,7 @@
         background: transparent; border: none; margin-bottom: 5px;
     }
     .slot-num-gold {
-        font-weight: 900; color: #fff; letter-spacing: 1px; font-size: 1.1rem;
-        opacity: 0.7;
+        font-weight: 900; color: #fff; letter-spacing: 1px; font-size: 1.1rem; opacity: 0.7;
     }
 
     .slot-info-gold { text-align: center; margin: 8px 0; width: 100%; }
@@ -117,8 +95,7 @@
         font-weight: 900; font-size: 0.9rem;
         display: flex; align-items: center; gap: 6px;
         box-shadow: 0 4px 5px rgba(0,0,0,0.3);
-        border: 2px solid #fff;
-        margin-top: auto;
+        border: 2px solid #fff; margin-top: auto;
         cursor: pointer; transition: transform 0.1s;
     }
     .btn-label-compact:active { transform: scale(0.9); }
@@ -146,12 +123,20 @@
     }
     .action-badge:active { transform: scale(0.95); }
     
+    /* Generic Badge QR (Small) */
     .badge-qr { background: #fff; padding: 5px; border-radius: 4px; margin-bottom: 6px; }
     
+    /* SPECIAL: High-Contrast White Background for Eject/Done QRs */
+    .qr-bg-white {
+        background-color: white;
+        padding: 5px;
+        border-radius: 6px;
+        margin-bottom: 5px;
+    }
+
     .badge-btn-gold {
         font-weight: 900; font-size: 0.85rem; text-transform: uppercase;
-        width: 100%; text-align: center; border-radius: 3px; padding: 4px 0; color: #000;
-        line-height: 1;
+        width: 100%; text-align: center; border-radius: 3px; padding: 4px 0; color: #000; line-height: 1;
     }
     .btn-pick-bg { background-color: #0d6efd; color: white; }
     .btn-print-bg { background-color: #ffc107; color: black; }
@@ -165,12 +150,8 @@
 
     /* FOOTER DONE QR */
     #qr-footer-block {
-        background: #1f1f1f; 
-        border: 1px solid #555; 
-        border-radius: 6px;
-        padding: 8px;
-        min-width: 90px; 
-        display: flex; justify-content: center; align-items: center;
+        background: #1f1f1f; border: 1px solid #555; border-radius: 6px; padding: 8px;
+        min-width: 90px; display: flex; justify-content: center; align-items: center;
     }
     #qr-modal-done { margin-bottom: 0; }
 
@@ -287,7 +268,7 @@
                     <button class="btn btn-success btn-lg flex-grow-1 fw-bold" onclick="closeManage()">✅ Done / Sync</button>
                     
                     <div id="qr-footer-block" onclick="closeManage()" style="cursor:pointer;">
-                        <div id="qr-modal-done" class="badge-qr"></div>
+                        <div id="qr-modal-done" class="qr-bg-white"></div>
                     </div>
                 </div>
             </div>
