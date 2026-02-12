@@ -41,7 +41,6 @@
     
     #loc-mgr-nav-deck .nav-card:active { transform: scale(0.98); }
     
-    /* Inner Container Stability */
     .nav-inner {
         height: 100%; 
         width: 100%; 
@@ -170,11 +169,16 @@
         min-width: 90px;
         display: flex; justify-content: center; align-items: center;
     }
-    /* FIX: Lock the Done QR size so it doesn't shrink */
+    /* FIX: Lock size and force images to fit */
     #qr-modal-done { 
         margin-bottom: 0;
         width: 75px;
         height: 75px;
+        flex-shrink: 0; /* Prevents flexbox squishing */
+    }
+    #qr-modal-done img, #qr-modal-done canvas {
+        width: 100% !important;
+        height: 100% !important;
     }
 
     /* FIX: Brighten Empty State Text */

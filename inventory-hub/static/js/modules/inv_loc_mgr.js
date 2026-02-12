@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v13 - Stability) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v13)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v14 - RAF Fix) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v14)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -132,8 +132,11 @@ const renderManagerNav = () => {
         }
 
         n.innerHTML = html;
-        if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
-        if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
+        // RAF for Nav QRs to ensure smoothness
+        requestAnimationFrame(() => {
+            if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
+            if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
+        });
 
     } else {
         n.style.display = 'none';
@@ -194,8 +197,11 @@ const renderGrid = (data, max) => {
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
         
-        if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
-        else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
+        // Slot QRs usually render fine, but RAF doesn't hurt
+        requestAnimationFrame(() => {
+            if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
+            else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
+        });
     }
     
     if(unslotted.length > 0) renderUnslotted(unslotted); 
@@ -214,11 +220,13 @@ const renderList = (data, locId) => {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
         
-        // FIX: Add Timeout to ensure Modal is rendered before QR drawing
-        setTimeout(() => {
-            data.forEach((s,i) => renderBadgeQRs(s, i));
-            generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
-        }, 250);
+        // FIX: RequestAnimationFrame Loop instead of Timeout
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                data.forEach((s,i) => renderBadgeQRs(s, i));
+                generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
+            });
+        });
     }
 };
 
@@ -248,11 +256,13 @@ const renderUnslotted = (items) => {
     
     un.innerHTML = html;
     
-    // FIX: Add Timeout to ensure DOM is ready
-    setTimeout(() => {
-        items.forEach((s,i) => renderBadgeQRs(s, i));
-        generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
-    }, 250);
+    // FIX: RAF Loop
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            items.forEach((s,i) => renderBadgeQRs(s, i));
+            generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
+        });
+    });
 };
 
 const renderBadgeHTML = (s, i, locId) => {
