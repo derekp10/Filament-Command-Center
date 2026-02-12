@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v11) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v11)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v13 - Stability) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v13)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -19,6 +19,7 @@ window.openManage = (id) => {
     modals.manageModal.show(); 
     refreshManageView(id);
     
+    // Generate Done QR (Fixed Size)
     generateSafeQR('qr-modal-done', 'CMD:DONE', 75);
 };
 
@@ -212,8 +213,12 @@ const renderList = (data, locId) => {
     } else {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
-        data.forEach((s,i) => renderBadgeQRs(s, i));
-        generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
+        
+        // FIX: Add Timeout to ensure Modal is rendered before QR drawing
+        setTimeout(() => {
+            data.forEach((s,i) => renderBadgeQRs(s, i));
+            generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
+        }, 250);
     }
 };
 
@@ -225,29 +230,29 @@ const renderUnslotted = (items) => {
     let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3 mt-4">Unslotted Items</h4>`;
     html += items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
     
-    // REDESIGNED EJECT ALL CARD - Fixed Clickability
     html += `
         <div class="danger-zone mt-4 pt-3 border-top border-danger">
             <div class="cham-card manage-list-item" style="border-color:#dc3545; background:#300;">
                 <div class="eject-card-inner">
-                    
                     <div class="eject-label-text">
                         <span style="font-size:3rem; vertical-align:middle;">☢️</span> 
                         DANGER ZONE
                     </div>
-
                     <div class="action-badge" style="border-color:#dc3545; background:#1f1f1f;" onclick="triggerEjectAll(document.getElementById('manage-loc-id').value)">
                         <div id="qr-eject-all" class="qr-bg-white"></div>
                         <div class="badge-btn-gold text-white bg-danger mt-1 rounded">EJECT ALL</div>
                     </div>
-
                 </div>
             </div>
         </div>`;
     
     un.innerHTML = html;
-    items.forEach((s,i) => renderBadgeQRs(s, i));
-    generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
+    
+    // FIX: Add Timeout to ensure DOM is ready
+    setTimeout(() => {
+        items.forEach((s,i) => renderBadgeQRs(s, i));
+        generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
+    }, 250);
 };
 
 const renderBadgeHTML = (s, i, locId) => {

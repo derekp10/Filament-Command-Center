@@ -5,16 +5,9 @@
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
-    /* --- NUCLEAR Z-INDEX FIX (REVISED) --- */
-    /* DO NOT force manageModal Z-Index. Let it sit naturally (usually 1055). */
-    /* Force ONLY the sub-popups to be higher. */
+    /* --- NUCLEAR Z-INDEX FIX --- */
     #queueModal, #spoolModal, #filamentModal, #actionModal, #safetyModal, #confirmModal {
         z-index: 1100 !important;
-    }
-    /* Ensure the backdrop for the sub-popups sits between Manager and Popup */
-    .modal-backdrop {
-        /* Bootstrap handles this dynamically, but if multiple backdrops exist, 
-           the second one usually behaves correctly if the modal z-index is higher. */
     }
 
     /* --- RED ZONE: NAV DECK --- */
@@ -50,8 +43,12 @@
     
     /* Inner Container Stability */
     .nav-inner {
-        height: 100%; width: 100%; box-sizing: border-box;
-        background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important;
+        height: 100%; 
+        width: 100%; 
+        box-sizing: border-box;
+        background-size: cover !important; 
+        background-repeat: no-repeat !important;
+        background-position: center !important;
     }
 
     #loc-mgr-nav-deck .nav-label {
@@ -74,14 +71,17 @@
     #slot-grid-container .slot-btn {
         height: auto !important; min-height: 280px !important;
         justify-content: flex-start !important; padding: 0 !important;
-        background: #111; border: none; position: relative;
+        background: #111; border: none; 
+        position: relative;
     }
     
     .slot-inner-gold {
         padding: 10px; height: 100%; width: 100%;
         display: flex; flex-direction: column; justify-content: space-between; align-items: center;
-        margin: 4px; height: calc(100% - 8px); width: calc(100% - 8px);
-        background-size: cover !important; background-repeat: no-repeat !important;
+        margin: 4px; 
+        height: calc(100% - 8px); width: calc(100% - 8px);
+        background-size: cover !important;
+        background-repeat: no-repeat !important;
     }
     
     .slot-btn.empty { border: 2px solid #444; background: transparent; }
@@ -91,7 +91,8 @@
         background: transparent; border: none; margin-bottom: 5px;
     }
     .slot-num-gold {
-        font-weight: 900; color: #fff; letter-spacing: 1px; font-size: 1.1rem; opacity: 0.7;
+        font-weight: 900; color: #fff; letter-spacing: 1px; font-size: 1.1rem;
+        opacity: 0.7;
     }
 
     .slot-info-gold { text-align: center; margin: 8px 0; width: 100%; }
@@ -106,7 +107,8 @@
         font-weight: 900; font-size: 0.9rem;
         display: flex; align-items: center; gap: 6px;
         box-shadow: 0 4px 5px rgba(0,0,0,0.3);
-        border: 2px solid #fff; margin-top: auto;
+        border: 2px solid #fff;
+        margin-top: auto;
         cursor: pointer; transition: transform 0.1s;
     }
     .btn-label-compact:active { transform: scale(0.9); }
@@ -134,10 +136,9 @@
     }
     .action-badge:active { transform: scale(0.95); }
     
-    /* Generic Badge QR (Small) */
     .badge-qr { background: #fff; padding: 5px; border-radius: 4px; margin-bottom: 6px; }
     
-    /* SPECIAL: High-Contrast White Background for Eject/Done QRs */
+    /* FIX: High Contrast White Background for Eject/Done QRs */
     .qr-bg-white {
         background-color: white;
         padding: 5px;
@@ -147,7 +148,8 @@
 
     .badge-btn-gold {
         font-weight: 900; font-size: 0.85rem; text-transform: uppercase;
-        width: 100%; text-align: center; border-radius: 3px; padding: 4px 0; color: #000; line-height: 1;
+        width: 100%; text-align: center; border-radius: 3px; padding: 4px 0; color: #000;
+        line-height: 1;
     }
     .btn-pick-bg { background-color: #0d6efd; color: white; }
     .btn-print-bg { background-color: #ffc107; color: black; }
@@ -161,10 +163,23 @@
 
     /* FOOTER DONE QR */
     #qr-footer-block {
-        background: #1f1f1f; border: 1px solid #555; border-radius: 6px; padding: 8px;
-        min-width: 90px; display: flex; justify-content: center; align-items: center;
+        background: #1f1f1f; 
+        border: 1px solid #555; 
+        border-radius: 6px;
+        padding: 8px;
+        min-width: 90px;
+        display: flex; justify-content: center; align-items: center;
     }
-    #qr-modal-done { margin-bottom: 0; }
+    /* FIX: Lock the Done QR size so it doesn't shrink */
+    #qr-modal-done { 
+        margin-bottom: 0;
+        width: 75px;
+        height: 75px;
+    }
+
+    /* FIX: Brighten Empty State Text */
+    #manage-empty-msg .empty-state-text { color: #fff !important; opacity: 0.9; }
+    #manage-empty-msg p { color: #ccc !important; font-size: 1.1rem; }
 
 </style>
 
@@ -262,8 +277,8 @@
 
                 <div id="manage-list-view" class="container px-2" style="display:none;">
                     <div id="manage-empty-msg" class="empty-state-box text-center py-5">
-                        <div class="empty-state-text text-muted fs-1 fw-bold">EMPTY</div>
-                        <p class="text-muted mt-2">Scan a spool to add it here.</p>
+                        <div class="empty-state-text fs-1 fw-bold">EMPTY</div>
+                        <p class="mt-2">Scan a spool to add it here.</p>
                     </div>
                     <div id="manage-contents-list" class="mb-4"></div>
                 </div>
