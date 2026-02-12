@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v16 - Clean Open) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v16)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v17 - Pre-Flight) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v17)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -8,48 +8,59 @@ document.addEventListener('inventory:buffer-updated', () => {
     }
 });
 
-// Event listener for post-animation rendering
-document.addEventListener('DOMContentLoaded', () => {
-    const manageModalEl = document.getElementById('manageModal');
-    if (manageModalEl) {
-        manageModalEl.addEventListener('shown.bs.modal', () => {
-            const id = document.getElementById('manage-loc-id').value;
-            if (id) {
-                // Fetch and render data now that window is visible
-                refreshManageView(id);
-                // Generate Done QR
-                generateSafeQR('qr-modal-done', 'CMD:DONE', 75);
-            }
-        });
-    }
-});
-
 window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
+// --- PRE-FLIGHT PROTOCOL: Fetch -> Render -> Show ---
 window.openManage = (id) => { 
+    // 1. Show global loading state (using the core setProcessing)
+    setProcessing(true);
+
     document.getElementById('manageTitle').innerText=`Location Manager: ${id}`; 
     document.getElementById('manage-loc-id').value=id; 
     const input = document.getElementById('manual-spool-id');
     if(input) input.value=""; 
     
-    // --- CLEAN OPEN PROTOCOL ---
-    // 1. Wipe old data immediately so it never flashes
-    document.getElementById('slot-grid-container').innerHTML = '';
-    document.getElementById('manage-contents-list').innerHTML = '';
-    document.getElementById('unslotted-container').innerHTML = '';
-    
-    // 2. Hide Views / Show Loader
-    document.getElementById('manage-grid-view').style.display = 'none';
-    document.getElementById('manage-list-view').style.display = 'none';
-    document.getElementById('manage-loading').style.display = 'block'; // Show spinner
-    
-    // 3. Show Modal (Empty/Loading state)
-    modals.manageModal.show(); 
+    // 2. Fetch Data BEFORE showing modal
+    const loc = state.allLocations.find(l=>l.LocationID==id);
+    if(!loc) { setProcessing(false); return; }
+
+    const isGrid = (loc.Type==='Dryer Box' || loc.Type==='MMU Slot') && parseInt(loc['Max Spools']) > 1;
+
+    fetch(`/api/get_contents?id=${id}`)
+    .then(r=>r.json())
+    .then(d => {
+        // 3. Render Content into the Hidden Modal
+        if(isGrid) {
+            document.getElementById('manage-grid-view').style.display = 'block';
+            document.getElementById('manage-list-view').style.display = 'none';
+            renderGrid(d, parseInt(loc['Max Spools']));
+        } else {
+            document.getElementById('manage-grid-view').style.display = 'none';
+            document.getElementById('manage-list-view').style.display = 'block';
+            renderList(d, id);
+        }
+        
+        // Render Nav Deck (Buffer)
+        renderManagerNav();
+        
+        // Generate Done QR (High Res 200 -> Scaled to 75 via CSS)
+        generateSafeQR('qr-modal-done', 'CMD:DONE', 200);
+
+        // 4. Show Modal (Now Populated)
+        setProcessing(false);
+        modals.manageModal.show();
+    })
+    .catch(e => {
+        console.error(e);
+        setProcessing(false);
+        showToast("Failed to load location data", "error");
+    });
 };
 
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
 
 window.refreshManageView = (id) => {
+    // Only used for updates while open
     renderManagerNav();
     const loc = state.allLocations.find(l=>l.LocationID==id); 
     if(!loc) return false;
@@ -59,17 +70,8 @@ window.refreshManageView = (id) => {
     fetch(`/api/get_contents?id=${id}`)
     .then(r=>r.json())
     .then(d => { 
-        // Data received. Hide loader.
-        document.getElementById('manage-loading').style.display = 'none';
-        
-        // Show correct view
-        if(isGrid) {
-            document.getElementById('manage-grid-view').style.display = 'block';
-            renderGrid(d, parseInt(loc['Max Spools'])); 
-        } else {
-            document.getElementById('manage-list-view').style.display = 'block';
-            renderList(d, id); 
-        }
+        if(isGrid) renderGrid(d, parseInt(loc['Max Spools'])); 
+        else renderList(d, id); 
     });
     return true;
 };
@@ -163,7 +165,6 @@ const renderManagerNav = () => {
         }
 
         n.innerHTML = html;
-        // RAF for Nav QRs
         requestAnimationFrame(() => {
             if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
             if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);

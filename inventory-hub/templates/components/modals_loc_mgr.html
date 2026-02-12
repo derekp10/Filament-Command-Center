@@ -1,7 +1,7 @@
 <style>
     /* --- MODAL SIZING & THEME --- */
     #manageModal .modal-dialog { max-width: 1000px; }
-    #manageModal .modal-body { background: #121212 !important; }
+    #manageModal .modal-body { background: #121212 !important; min-height: 400px; /* Prevent collapse */ }
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
@@ -150,7 +150,7 @@
         min-width: 90px;
         display: flex; justify-content: center; align-items: center;
     }
-    /* FIX: PADDING ADDED TO SHRINK INNER QR */
+    /* FIX: PADDING FOR BEZEL + IMAGE RENDERING */
     #qr-modal-done { 
         margin: 0;
         width: 75px !important;
@@ -159,13 +159,18 @@
         border-radius: 4px;
         overflow: hidden;
         flex-shrink: 0;
-        padding: 6px; /* THIS IS THE BEZEL FIX */
+        padding: 6px; 
         box-sizing: border-box;
     }
     #qr-modal-done img, #qr-modal-done canvas {
         width: 100% !important;
         height: 100% !important;
         display: block;
+        /* Force sharp rendering */
+        image-rendering: -moz-crisp-edges;
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: crisp-edges;
+        image-rendering: pixelated;
     }
 
     #manage-empty-msg .empty-state-text { color: #fff !important; opacity: 0.9; }
@@ -256,11 +261,6 @@
                 <input type="hidden" id="manage-loc-id">
                 
                 <div id="loc-mgr-nav-deck" class="mb-4"></div>
-
-                <div id="manage-loading" class="text-center py-5" style="display:none;">
-                    <div class="spinner-border text-info" role="status" style="width: 3rem; height: 3rem;"></div>
-                    <div class="mt-3 text-muted">Loading Inventory...</div>
-                </div>
 
                 <div id="manage-grid-view" class="container-fluid px-1" style="display:none;">
                     <div class="alert alert-info py-1 mb-3 small text-center fw-bold text-uppercase" style="background:#111; border:1px solid #00d4ff; color:#00d4ff;">
