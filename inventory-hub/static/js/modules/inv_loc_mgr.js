@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v9) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v9)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v10) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v10)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -106,7 +106,8 @@ const renderManagerNav = () => {
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
                 
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
-                <div style="font-size:0.9rem; color:#fff; font-weight:bold; text-shadow:0 0 5px #000;">${curInfo.line2}</div>
+                
+                <div style="font-size:1.0rem; color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${curInfo.line2}</div>
             </div>
         </div>`;
 

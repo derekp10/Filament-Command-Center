@@ -5,23 +5,27 @@
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
-    /* --- NUCLEAR Z-INDEX FIX --- */
-    /* Force these specific modals to be ABOVE the Location Manager (usually 1055) */
-    #queueModal, #spoolModal, #filamentModal, #actionModal, #safetyModal, #confirmModal {
-        z-index: 1100 !important;
+    /* --- STRICT Z-INDEX HIERARCHY (Prevents Hard Lock) --- */
+    /* Level 1: Location List (Default Bootstrap ~1055) */
+    
+    /* Level 2: Manager (Must be higher than List) */
+    #manageModal {
+        z-index: 1060 !important;
     }
-    /* Ensure their backdrops also stack correctly if needed */
-    .modal-backdrop + .modal-backdrop {
-        z-index: 1090 !important;
+    
+    /* Level 3: Popups (Must be higher than Manager) */
+    #queueModal, #spoolModal, #filamentModal, #actionModal, #safetyModal, #confirmModal {
+        z-index: 1070 !important;
     }
 
-    /* --- RED ZONE: NAV DECK (3 Column) --- */
+    /* --- RED ZONE: NAV DECK --- */
+    /* Height increased to 200px to prevent text clipping */
     #loc-mgr-nav-deck { 
         display: flex; 
         gap: 10px; 
         width: 100%; 
         align-items: stretch; 
-        height: 180px; /* Rigid Height */
+        height: 200px; 
     }
     
     #loc-mgr-nav-deck .nav-card {
@@ -31,10 +35,10 @@
         flex: 1; 
         cursor: pointer;
         transition: transform 0.1s;
-        overflow: hidden; /* CRITICAL: Clips the gradient */
+        overflow: hidden; 
         display: flex; 
         flex-direction: column;
-        box-sizing: border-box; /* CRITICAL: Includes border in height calc */
+        box-sizing: border-box;
     }
     
     /* Center Card - Dominant */
@@ -47,13 +51,14 @@
     
     #loc-mgr-nav-deck .nav-card:active { transform: scale(0.98); }
     
-    /* Inner Container Stability Fix */
+    /* Inner Container Stability & Background Fix */
     .nav-inner {
         height: 100%; 
         width: 100%; 
         box-sizing: border-box;
-        background-size: cover !important; /* Prevents repeating/glitching */
+        background-size: cover !important; 
         background-repeat: no-repeat !important;
+        background-position: center !important;
     }
 
     #loc-mgr-nav-deck .nav-label {
@@ -62,7 +67,7 @@
     }
     #loc-mgr-nav-deck .nav-text-main {
         font-size: 1.1rem; font-weight: 800; line-height: 1.2;
-        color: #fff; text-shadow: 1px 1px 5px #000, 0 0 5px #000;
+        color: #fff; text-shadow: 2px 2px 4px #000;
     }
     .nav-qr { background: white; padding: 5px; border-radius: 4px; flex-shrink: 0; }
 
@@ -85,7 +90,8 @@
         display: flex; flex-direction: column; justify-content: space-between; align-items: center;
         margin: 4px; 
         height: calc(100% - 8px); width: calc(100% - 8px);
-        background-size: cover; background-repeat: no-repeat;
+        background-size: cover !important;
+        background-repeat: no-repeat !important;
     }
     
     .slot-btn.empty { border: 2px solid #444; background: transparent; }
