@@ -1,4 +1,4 @@
-/* MODULE: LOCATION MANAGER (Gold Standard Restoration) */
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished) */
 console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard)");
 
 const openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
@@ -72,7 +72,7 @@ const renderManagerNav = () => {
         const nextInfo = getRichInfo(nextItem);
 
         n.innerHTML = `
-            <div class="cham-card nav-card" style="background: ${prevStyle.frame}; flex:1;" onclick="prevBuffer()">
+            <div class="cham-card nav-card" style="background: ${prevStyle.frame};" onclick="prevBuffer()">
                 <div class="cham-body nav-inner" style="background:${prevStyle.inner}; display:flex; align-items:center; padding:10px;">
                     <div id="qr-nav-prev" class="nav-qr me-3" style="background:white; padding:2px; border-radius:4px;"></div>
                     <div style="flex-grow:1;">
@@ -84,7 +84,7 @@ const renderManagerNav = () => {
                 </div>
             </div>
             
-            <div class="cham-card nav-card" style="background: ${nextStyle.frame}; flex:1;" onclick="nextBuffer()">
+            <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="nextBuffer()">
                 <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; padding:10px;">
                     <div style="flex-grow:1; text-align:right;">
                         <div class="nav-label">NEXT ▶</div>
@@ -155,7 +155,7 @@ const renderGrid = (data, max) => {
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
         
-        if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); // Large QR for slots
+        if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
         else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
     }
     
@@ -187,18 +187,29 @@ const renderUnslotted = (items) => {
     let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3 mt-4">Unslotted Items</h4>`;
     html += items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
     
-    // Danger Zone (Eject All)
+    // REDESIGNED EJECT ALL CARD (Matches Unassigned Styles)
     html += `
-        <div class="danger-zone mt-4 pt-3 border-top border-danger text-center">
-            <div class="action-badge" style="border-color:#dc3545; display:inline-flex; width:auto; padding:10px;" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')">
-                <div id="qr-eject-all" class="badge-qr" style="width:60px;height:60px;"></div>
-                <div class="badge-btn-gold text-white bg-danger mt-1 rounded">EJECT ALL</div>
+        <div class="danger-zone mt-4 pt-3 border-top border-danger">
+            <div class="cham-card manage-list-item" style="border-color:#dc3545; background:#300;">
+                <div class="eject-card-inner" onclick="triggerEjectAll('${document.getElementById('manage-loc-id').value}')" style="cursor:pointer;">
+                    
+                    <div class="eject-label-text">
+                        <span style="font-size:3rem; vertical-align:middle;">☢️</span> 
+                        DANGER ZONE
+                    </div>
+
+                    <div class="action-badge" style="border-color:#dc3545; background:#000;">
+                        <div id="qr-eject-all" class="badge-qr"></div>
+                        <div class="badge-btn-gold text-white bg-danger mt-1 rounded">EJECT ALL</div>
+                    </div>
+
+                </div>
             </div>
         </div>`;
     
     un.innerHTML = html;
     items.forEach((s,i) => renderBadgeQRs(s, i));
-    generateSafeQR("qr-eject-all", "CMD:EJECTALL", 56);
+    generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
 };
 
 const renderBadgeHTML = (s, i, locId) => {
@@ -238,7 +249,6 @@ const renderBadgeHTML = (s, i, locId) => {
 };
 
 const renderBadgeQRs = (s, i) => {
-    // QRs for the 3 buttons
     generateSafeQR(`qr-pick-${i}`, "ID:"+s.id, 50);
     generateSafeQR(`qr-print-${i}`, "CMD:PRINT:"+s.id, 50);
     generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 50);
