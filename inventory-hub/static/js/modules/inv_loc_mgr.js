@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v21 - Root Cause Fix) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v21)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v22 - Source Fix) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v22)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -8,12 +8,9 @@ document.addEventListener('inventory:buffer-updated', () => {
     }
 });
 
-// NOTE: 'shown.bs.modal' listener REMOVED entirely.
-// openManage() handles the render. No double triggers.
-
 window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
-// --- PRE-FLIGHT PROTOCOL: Fetch -> Render -> Show ---
+// --- PRE-FLIGHT PROTOCOL ---
 window.openManage = (id) => { 
     setProcessing(true);
 
@@ -22,12 +19,11 @@ window.openManage = (id) => {
     const input = document.getElementById('manual-spool-id');
     if(input) input.value=""; 
     
-    // 1. Wipe old data immediately
+    // 1. Wipe old data
     document.getElementById('slot-grid-container').innerHTML = '';
     document.getElementById('manage-contents-list').innerHTML = '';
     document.getElementById('unslotted-container').innerHTML = '';
     
-    // 2. Hide Views until ready
     document.getElementById('manage-grid-view').style.display = 'none';
     document.getElementById('manage-list-view').style.display = 'none';
     
@@ -39,7 +35,6 @@ window.openManage = (id) => {
     fetch(`/api/get_contents?id=${id}`)
     .then(r=>r.json())
     .then(d => {
-        // 3. Render Content into the Hidden Modal
         if(isGrid) {
             document.getElementById('manage-grid-view').style.display = 'block';
             document.getElementById('manage-list-view').style.display = 'none';
@@ -51,11 +46,9 @@ window.openManage = (id) => {
         }
         
         renderManagerNav();
-        
-        // Generate Done QR - Size 60 fits nicely in the 75px box with padding
-        generateSafeQR('qr-modal-done', 'CMD:DONE', 60);
+        // Done QR: Fixed Size 58
+        generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
 
-        // 4. Show Modal (Populated & Stable)
         setProcessing(false);
         modals.manageModal.show();
     })
@@ -69,7 +62,6 @@ window.openManage = (id) => {
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
 
 window.refreshManageView = (id) => {
-    // Only used for live updates, not initial open
     renderManagerNav();
     const loc = state.allLocations.find(l=>l.LocationID==id); 
     if(!loc) return false;
@@ -103,24 +95,20 @@ const getRichInfo = (item) => {
     };
 };
 
-// --- RED ZONE: NAV DECK (3-COLUMN SPREAD) ---
+// --- RED ZONE: NAV DECK ---
 const renderManagerNav = () => {
     const n = document.getElementById('loc-mgr-nav-deck');
     if (!n) return;
 
     if (state.heldSpools.length > 0) {
         n.style.display = 'flex';
-        
         const curItem = state.heldSpools[0];
         const prevItem = state.heldSpools.length > 1 ? state.heldSpools[state.heldSpools.length - 1] : null;
         const nextItem = state.heldSpools.length > 1 ? state.heldSpools[1] : null;
-
         const curStyle = getFilamentStyle(curItem.color);
         const curInfo = getRichInfo(curItem);
-        
         let html = '';
 
-        // 1. PREV CARD
         if (prevItem) {
             const prevStyle = getFilamentStyle(prevItem.color);
             const prevInfo = getRichInfo(prevItem);
@@ -130,30 +118,22 @@ const renderManagerNav = () => {
                     <div id="qr-nav-prev" class="nav-qr me-2"></div>
                     <div>
                         <div class="nav-label text-start">◀ PREV</div>
-                        <div class="nav-text-main" style="font-size:0.9rem;">
-                            #${prevItem.id}<br>${prevInfo.line3}
-                        </div>
+                        <div class="nav-text-main" style="font-size:0.9rem;">#${prevItem.id}<br>${prevInfo.line3}</div>
                     </div>
                 </div>
             </div>`;
-        } else {
-             html += `<div style="flex:1;"></div>`; 
-        }
+        } else { html += `<div style="flex:1;"></div>`; }
 
-        // 2. CURRENT CARD
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
             <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
                 <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:10px;">READY TO SLOT</div>
-                
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
-                
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div style="font-size:1.0rem; color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${curInfo.line2}</div>
             </div>
         </div>`;
 
-        // 3. NEXT CARD
         if (nextItem) {
             const nextStyle = getFilamentStyle(nextItem.color);
             const nextInfo = getRichInfo(nextItem);
@@ -162,31 +142,22 @@ const renderManagerNav = () => {
                 <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; justify-content:flex-end; padding:5px 10px;">
                     <div style="text-align:right;">
                         <div class="nav-label">NEXT ▶</div>
-                        <div class="nav-text-main" style="font-size:0.9rem;">
-                             #${nextItem.id}<br>${nextInfo.line3}
-                        </div>
+                        <div class="nav-text-main" style="font-size:0.9rem;">#${nextItem.id}<br>${nextInfo.line3}</div>
                     </div>
                     <div id="qr-nav-next" class="nav-qr ms-2"></div>
                 </div>
             </div>`;
-        } else {
-             html += `<div style="flex:1;"></div>`; 
-        }
+        } else { html += `<div style="flex:1;"></div>`; }
 
         n.innerHTML = html;
-        if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
-        if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
-
+        requestAnimationFrame(() => {
+            if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
+            if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
+        });
     } else {
         n.style.display = 'none';
         n.innerHTML = "";
     }
-};
-
-// --- CLICK HELPER: STOPS PROPAGATION ---
-window.handleLabelClick = (e, id, display) => {
-    e.stopPropagation(); 
-    window.addToQueue({id: id, type: 'spool', display: display});
 };
 
 // --- YELLOW ZONE: SLOT GRID RENDERER ---
@@ -206,12 +177,15 @@ const renderGrid = (data, max) => {
         const div = document.createElement('div');
         div.className = item ? "cham-card slot-btn full" : "slot-btn empty";
         
-        // STRUCTURAL IDENTITY FIX
+        // PARENT CLICK: Attached via property, handles general slot logic
+        div.onclick = () => handleSlotInteraction(i);
+
         if (item) {
             const styles = getFilamentStyle(item.color);
             const info = getRichInfo(item);
             div.style.background = styles.frame;
             
+            // NOTE: Removed inline onclick from btn-label-compact. Added class 'js-btn-label'
             div.innerHTML = `
                 <div class="slot-inner-gold" style="background:${styles.inner};">
                     <div class="slot-header"><div class="slot-num-gold">SLOT ${i}</div></div>
@@ -222,12 +196,20 @@ const renderGrid = (data, max) => {
                         <div class="text-line-3">${info.line3}</div>
                         <div class="text-line-4">${info.line4}</div>
                     </div>
-                    <div class="btn-label-compact" onclick="window.handleLabelClick(event, ${item.id}, '${item.display}')">
+                    <div class="btn-label-compact js-btn-label">
                         <span style="font-size:1.2rem;">📷</span> LABEL
                     </div>
                 </div>`;
+                
+            // EVENT BINDING: Attach safe listener programmatically
+            const btn = div.querySelector('.js-btn-label');
+            if (btn) {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Stops bubbling to div.onclick
+                    window.addToQueue({id: item.id, type: 'spool', display: item.display});
+                });
+            }
         } else {
-            // EMPTY SLOT - Identical Structure
             div.innerHTML = `
                 <div class="slot-inner-gold">
                     <div class="slot-header"><div class="slot-num-gold" style="color:#555;">SLOT ${i}</div></div>
@@ -237,11 +219,12 @@ const renderGrid = (data, max) => {
                 </div>`;
         }
         
-        div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
         
-        if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
-        else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
+        requestAnimationFrame(() => {
+            if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
+            else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
+        });
     }
     
     if(unslotted.length > 0) renderUnslotted(unslotted); 
@@ -258,9 +241,32 @@ const renderList = (data, locId) => {
         if(emptyMsg) emptyMsg.style.display = 'block'; 
     } else {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
-        list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
-        data.forEach((s,i) => renderBadgeQRs(s, i));
-        generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
+        // We will build fragment first, then bind events
+        list.innerHTML = ""; // clear
+        data.forEach((s,i) => {
+            // Create container
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = renderBadgeHTML(s, i, locId); // Returns HTML string
+            const el = tempDiv.firstElementChild; // The actual cham-card
+            
+            // Bind Label Button
+            const btnLabel = el.querySelector('.js-btn-label');
+            if (btnLabel) {
+                btnLabel.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    window.addToQueue({id: s.id, type: 'spool', display: s.display});
+                });
+            }
+            
+            list.appendChild(el);
+        });
+        
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                data.forEach((s,i) => renderBadgeQRs(s, i));
+                generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
+            });
+        });
     }
 };
 
@@ -269,31 +275,57 @@ const renderUnslotted = (items) => {
     if (!un) return;
     un.style.display = 'block';
     
+    // Header
     let html = `<h4 class="text-info border-bottom border-secondary pb-2 mb-3 mt-4">Unslotted Items</h4>`;
-    html += items.map((s,i) => renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value)).join('');
+    // We add the wrapper div, then we will append the items programmatically
+    un.innerHTML = html;
     
-    html += `
-        <div class="danger-zone mt-4 pt-3 border-top border-danger">
-            <div class="cham-card manage-list-item" style="border-color:#dc3545; background:#300;">
-                <div class="eject-card-inner">
-                    <div class="eject-label-text"><span style="font-size:3rem; vertical-align:middle;">☢️</span> DANGER ZONE</div>
-                    <div class="action-badge" style="border-color:#dc3545; background:#1f1f1f;" onclick="triggerEjectAll(document.getElementById('manage-loc-id').value)">
-                        <div id="qr-eject-all" class="qr-bg-white"></div>
-                        <div class="badge-btn-gold text-white bg-danger mt-1 rounded">EJECT ALL</div>
-                    </div>
+    const itemContainer = document.createElement('div');
+    items.forEach((s,i) => {
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value);
+        const el = tempDiv.firstElementChild;
+        
+        // Bind Label Button
+        const btnLabel = el.querySelector('.js-btn-label');
+        if (btnLabel) {
+            btnLabel.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.addToQueue({id: s.id, type: 'spool', display: s.display});
+            });
+        }
+        itemContainer.appendChild(el);
+    });
+    
+    un.appendChild(itemContainer);
+    
+    // Danger Zone (Safe to use string here as it has no complex children)
+    const dangerDiv = document.createElement('div');
+    dangerDiv.className = "danger-zone mt-4 pt-3 border-top border-danger";
+    dangerDiv.innerHTML = `
+        <div class="cham-card manage-list-item" style="border-color:#dc3545; background:#300;">
+            <div class="eject-card-inner">
+                <div class="eject-label-text"><span style="font-size:3rem; vertical-align:middle;">☢️</span> DANGER ZONE</div>
+                <div class="action-badge" style="border-color:#dc3545; background:#1f1f1f;" onclick="triggerEjectAll(document.getElementById('manage-loc-id').value)">
+                    <div id="qr-eject-all" class="qr-bg-white"></div>
+                    <div class="badge-btn-gold text-white bg-danger mt-1 rounded">EJECT ALL</div>
                 </div>
             </div>
         </div>`;
+    un.appendChild(dangerDiv);
     
-    un.innerHTML = html;
-    
-    items.forEach((s,i) => renderBadgeQRs(s, i));
-    generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            items.forEach((s,i) => renderBadgeQRs(s, i));
+            generateSafeQR("qr-eject-all", "CMD:EJECTALL", 65);
+        });
+    });
 };
 
 const renderBadgeHTML = (s, i, locId) => {
     const styles = getFilamentStyle(s.color);
     const info = getRichInfo(s);
+    // Removed inline onclick for Label button, added class js-btn-label
     return `
     <div class="cham-card manage-list-item" style="background:${styles.frame}">
         <div class="list-inner-gold" style="background: ${styles.inner};">
@@ -310,7 +342,7 @@ const renderBadgeHTML = (s, i, locId) => {
                     <div id="qr-pick-${i}" class="badge-qr"></div>
                     <div class="badge-btn-gold btn-pick-bg">PICK</div>
                 </div>
-                <div class="action-badge" onclick="window.handleLabelClick(event, ${s.id}, '${s.display}')">
+                <div class="action-badge js-btn-label">
                     <div id="qr-print-${i}" class="badge-qr"></div>
                     <div class="badge-btn-gold btn-print-bg">LABEL</div>
                 </div>
