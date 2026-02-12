@@ -6,6 +6,12 @@
 2. If legacy barcode has no spools attached to it, UI should warn about this, perhapes give option to add new spool?
 3. Spoolman ExternalID is not a visible field to add to the data when viewing it in spoolman. As much as I don't want to duplicate data in the database, being able to see that data in the view lists might be handy. But this is very low priority, and may be achived by other means like inport/export Process or not needed depending on UI/config/features added. We should evaluate this after we've added more features to Command Center.
 5. Add unassigned Location in Location manager.
+6. Location Label CSV doesn't seem to generat on the Live server, but does on dev.
+7. No support for Unicode on P-touch, need to address in CSV
+8. Make the slot unassigned QR codes brighter
+9. Cannot add buffered items to Single Slot Spaces. (Toolheads Possibly Polymaker Dryerboxes)
+10. Spool Details should have a button back to filament details, and filament should have one back to Spool. (But with filament, how do we hand >1 spools)
+11. Filament/spool buffer on command center needs to be persistant acrost all open instances. Same with the Label Print Queue
 
 
 # **Next Steps Items:**
@@ -55,13 +61,7 @@ The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERY
 
 
 # **New/Future Features **
-1. Inport/Export of filament/spool/Manufacture data
-I'd like to be able to pull out the data, in a similar format to how the filament sheet is currentl (Same for Locations and Lists)
-so that I can continue to use some of the easier features that Google Sheets provide for looking at the data. (Filtering, searching, AI assisted questions and insightsl.)
-
-I'd also like this to be a way to back up the database, or make some bulk changes if needed. But this could be done via a more imporoved process to handle data entry into the system. We'll need a way to streamline adding new filament/spools/Manufactures as we have a lot of custom fields, that to edit in the spoolman UI is not very user friendly. The fact that it's missing a search feature is crazy, IMO.
-
-This task might need to be broken down into other goals, and we should probably refine ideas before going forward with this as written.
+1. High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
 
 2. Maybe we should probably figure out a way to set up a dev version for Spoolman and filabridge. So that I can test in dev, and maybe start using the prod version for actual prod activities, without messing up existing configurations in the database. This would probably be highly reliant on being able to sync data from Prod to test. We will probably have to build a list of apps or code to handling this, like the Import/Export feature. But also some sort of configuration UI within Command Center, for setting up the config files. We should probably refactor out hard coded configs that are bound to my instance and gear it more twords customzation, so that if others want to use this they can.
 
