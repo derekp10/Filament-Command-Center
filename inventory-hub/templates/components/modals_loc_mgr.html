@@ -2,8 +2,8 @@
     /* --- MODAL SIZING & THEME --- */
     #manageModal .modal-dialog { max-width: 960px; }
     
-    /* THEME: Gray Background instead of Black */
-    #manageModal .modal-body { background: #2b2b2b !important; }
+    /* THEME: Match Location List Gray (#121212) */
+    #manageModal .modal-body { background: #121212 !important; }
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
@@ -27,7 +27,6 @@
         font-size: 1.1rem; font-weight: 800; line-height: 1.2;
         color: #fff; text-shadow: 1px 1px 3px #000;
     }
-    /* QR Padding Fix */
     .nav-qr { background: white; padding: 5px; border-radius: 4px; }
 
     /* --- YELLOW ZONE: SLOT GRID --- */
@@ -37,30 +36,27 @@
         gap: 15px; justify-content: center;
     }
     
-    /* Slot Card Container */
     #slot-grid-container .slot-btn {
         height: auto !important; min-height: 280px !important;
         justify-content: flex-start !important; padding: 0 !important;
-        background: #111; border: none; /* Color handled by inner/outer overlap */
+        background: #111; border: none; 
         position: relative;
     }
     
     .slot-inner-gold {
         padding: 10px; height: 100%; width: 100%;
         display: flex; flex-direction: column; justify-content: space-between; align-items: center;
-        background: #2b2b2b; /* Match modal bg for "transparent" feel or darker? */
-        /* To show the border color (parent bg), we use margin or clip-path. 
-           Let's use a 4px inset. */
+        /* Background set by JS to maintain gradient */
         margin: 4px; 
         height: calc(100% - 8px); width: calc(100% - 8px);
     }
-    /* If slot is empty, simple border */
+    
     .slot-btn.empty { border: 2px solid #444; background: transparent; }
 
     .slot-header {
         width: 100%; text-align: center;
-        background: transparent; /* Removed bg */
-        border: none; /* Removed border */
+        background: transparent; 
+        border: none; 
         margin-bottom: 5px;
     }
     .slot-num-gold {
@@ -74,7 +70,6 @@
     .text-line-3 { font-size: 1.0rem; font-weight: 800; color: #fff; margin: 4px 0; line-height: 1.1; }
     .text-line-4 { font-size: 0.9rem; font-weight: 700; color: #00d4ff; }
 
-    /* Compact Camera Button */
     .btn-label-compact {
         background: #ffc107; color: #000;
         border-radius: 6px; padding: 4px 10px;
@@ -110,7 +105,6 @@
     }
     .action-badge:active { transform: scale(0.95); }
     
-    /* Action QR Padding Fix */
     .badge-qr { background: #fff; padding: 5px; border-radius: 4px; margin-bottom: 6px; }
     
     .badge-btn-gold {
@@ -130,7 +124,7 @@
 
 </style>
 
-<div class="modal fade" id="locMgrModal" tabindex="-1">
+<div class="modal fade" id="locMgrModal" tabindex="-1" data-bs-backdrop="static">
     <div class="modal-dialog modal-xl modal-dialog-scrollable modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
@@ -160,7 +154,7 @@
     </div>
 </div>
 
-<div class="modal fade" id="locModal" tabindex="-1">
+<div class="modal fade" id="locModal" tabindex="-1" data-bs-backdrop="static">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
@@ -200,14 +194,13 @@
     </div>
 </div>
 
-<div class="modal fade" id="manageModal" tabindex="-1">
+<div class="modal fade" id="manageModal" tabindex="-1" data-bs-backdrop="static">
     <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
-            <div class="modal-header p-2">
-                <h5 class="modal-title ms-3 text-info" id="manageTitle">Manage</h5>
-                <div class="ms-auto me-3">
-                    <button class="btn btn-sm btn-outline-warning fw-bold" onclick="window.printCurrentLocationLabel()">🖨️ Location Labels</button>
-                </div>
+            <div class="modal-header p-2 d-flex align-items-center">
+                <h5 class="modal-title ms-3 text-info flex-grow-1" id="manageTitle">Manage</h5>
+                
+                <button class="btn btn-sm btn-outline-warning fw-bold me-3" onclick="window.printCurrentLocationLabel()">🖨️ Location Labels</button>
                 <button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button>
             </div>
             
@@ -243,7 +236,7 @@
                 <div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary gap-3">
                     <button class="btn btn-success btn-lg flex-grow-1 fw-bold" onclick="closeManage()">✅ Done / Sync</button>
                     
-                    <div class="action-badge" style="background: #111; border: 1px solid #444; min-width: 80px;" onclick="closeManage()">
+                    <div class="action-badge" style="background: #1f1f1f; border: 1px solid #555; min-width: 75px;" onclick="closeManage()">
                         <div id="qr-modal-done" class="badge-qr"></div>
                         <div class="badge-btn-gold text-muted">DONE</div>
                     </div>

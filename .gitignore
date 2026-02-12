@@ -7,3 +7,4 @@ config.json
 .env
 config.dev.json
 config.prod.json
+inventory-hub/hub.log.1

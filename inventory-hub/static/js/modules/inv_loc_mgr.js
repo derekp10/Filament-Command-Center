@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v2) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v2)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v3) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v3)");
 
 window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
@@ -12,8 +12,8 @@ window.openManage = (id) => {
     modals.manageModal.show(); 
     refreshManageView(id);
     
-    // Generate large Done QR
-    generateSafeQR('qr-modal-done', 'CMD:DONE', 60);
+    // Generate Done QR (Size 50 to match action badges)
+    generateSafeQR('qr-modal-done', 'CMD:DONE', 50);
 };
 
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
@@ -74,9 +74,8 @@ const renderManagerNav = () => {
         const nextStyle = getFilamentStyle(nextItem.color);
         const nextInfo = getRichInfo(nextItem);
 
-        // Note: onclicks now chain the global buffer function AND a re-render
         n.innerHTML = `
-            <div class="cham-card nav-card" style="background: ${prevStyle.frame};" onclick="prevBuffer(); setTimeout(renderManagerNav, 50);">
+            <div class="cham-card nav-card" style="background: ${prevStyle.frame};" onclick="prevBuffer();">
                 <div class="cham-body nav-inner" style="background:${prevStyle.inner}; display:flex; align-items:center; padding:10px;">
                     <div id="qr-nav-prev" class="nav-qr me-3"></div>
                     <div style="flex-grow:1;">
@@ -88,7 +87,7 @@ const renderManagerNav = () => {
                 </div>
             </div>
             
-            <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="nextBuffer(); setTimeout(renderManagerNav, 50);">
+            <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="nextBuffer();">
                 <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; padding:10px;">
                     <div style="flex-grow:1; text-align:right;">
                         <div class="nav-label">NEXT ▶</div>
@@ -129,11 +128,11 @@ const renderGrid = (data, max) => {
             const styles = getFilamentStyle(item.color);
             const info = getRichInfo(item);
             
-            // Apply Frame Color as Background (creates border effect via margin in child)
+            // Frame Color as Background
             div.style.background = styles.frame;
             
             div.innerHTML = `
-                <div class="slot-inner-gold" style="background:#2b2b2b;">
+                <div class="slot-inner-gold" style="background:${styles.inner};">
                     <div class="slot-header">
                         <div class="slot-num-gold">SLOT ${i}</div>
                     </div>
@@ -206,7 +205,7 @@ const renderUnslotted = (items) => {
                         DANGER ZONE
                     </div>
 
-                    <div class="action-badge" style="border-color:#dc3545; background:#111;">
+                    <div class="action-badge" style="border-color:#dc3545; background:#1f1f1f;">
                         <div id="qr-eject-all" class="badge-qr"></div>
                         <div class="badge-btn-gold text-white bg-danger mt-1 rounded">EJECT ALL</div>
                     </div>
@@ -432,3 +431,18 @@ window.openAddModal = () => {
 };
 
 window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, {method:'DELETE'}).then(fetchLocations));
+
+/* --- MONKEY PATCH: Hook into Global Scanner Updates --- */
+// This ensures that when inv_cmd.js updates the buffer, we update the Modal Deck too.
+if (typeof window.originalRenderBuffer === 'undefined') {
+    window.originalRenderBuffer = window.renderBuffer;
+    window.renderBuffer = () => {
+        // Call the original (inv_cmd.js) renderer for dashboard
+        if (window.originalRenderBuffer) window.originalRenderBuffer();
+        
+        // If modal is open, call our local renderer to prevent text reverting
+        if (document.getElementById('manageModal').classList.contains('show')) {
+            renderManagerNav();
+        }
+    };
+}
