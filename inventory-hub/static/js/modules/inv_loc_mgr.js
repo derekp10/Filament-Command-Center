@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v19 - Final) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v19)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v20 - Rock Solid) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v20)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -10,7 +10,7 @@ document.addEventListener('inventory:buffer-updated', () => {
 
 window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
-// --- PRE-FLIGHT PROTOCOL: Fetch -> Render -> Show ---
+// --- PRE-FLIGHT PROTOCOL ---
 window.openManage = (id) => { 
     setProcessing(true);
 
@@ -19,12 +19,11 @@ window.openManage = (id) => {
     const input = document.getElementById('manual-spool-id');
     if(input) input.value=""; 
     
-    // 1. Wipe old data immediately
+    // Wipe old data
     document.getElementById('slot-grid-container').innerHTML = '';
     document.getElementById('manage-contents-list').innerHTML = '';
     document.getElementById('unslotted-container').innerHTML = '';
     
-    // 2. Hide Views until ready
     document.getElementById('manage-grid-view').style.display = 'none';
     document.getElementById('manage-list-view').style.display = 'none';
     
@@ -36,7 +35,6 @@ window.openManage = (id) => {
     fetch(`/api/get_contents?id=${id}`)
     .then(r=>r.json())
     .then(d => {
-        // 3. Render Content into the Hidden Modal
         if(isGrid) {
             document.getElementById('manage-grid-view').style.display = 'block';
             document.getElementById('manage-list-view').style.display = 'none';
@@ -48,11 +46,8 @@ window.openManage = (id) => {
         }
         
         renderManagerNav();
-        
-        // Generate Done QR - EXACT SIZE MATCH (65px)
-        generateSafeQR('qr-modal-done', 'CMD:DONE', 65);
+        generateSafeQR('qr-modal-done', 'CMD:DONE', 58); // Size 58 fits perfectly in 75px with padding
 
-        // 4. Show Modal (Populated & Stable)
         setProcessing(false);
         modals.manageModal.show();
     })
@@ -66,7 +61,6 @@ window.openManage = (id) => {
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
 
 window.refreshManageView = (id) => {
-    // Only used for live updates, not initial open
     renderManagerNav();
     const loc = state.allLocations.find(l=>l.LocationID==id); 
     if(!loc) return false;
@@ -82,7 +76,6 @@ window.refreshManageView = (id) => {
     return true;
 };
 
-// --- HELPER: FORMAT RICH TEXT ---
 const getRichInfo = (item) => {
     const d = item.details || {};
     const legacy = d.external_id ? `[Legacy: ${d.external_id}]` : "";
@@ -91,16 +84,9 @@ const getRichInfo = (item) => {
     const name = d.color_name || item.display.replace(/#\d+/, '').trim();
     const qName = name.startsWith('"') ? name : `"${name}"`; 
     const weight = d.weight ? `[${Math.round(d.weight)}g]` : "";
-    
-    return {
-        line1: `#${item.id} ${legacy}`,
-        line2: `${brand} ${material}`,
-        line3: qName,
-        line4: weight
-    };
+    return { line1: `#${item.id} ${legacy}`, line2: `${brand} ${material}`, line3: qName, line4: weight };
 };
 
-// --- RED ZONE: NAV DECK (3-COLUMN SPREAD) ---
 const renderManagerNav = () => {
     const n = document.getElementById('loc-mgr-nav-deck');
     if (!n) return;
@@ -114,10 +100,8 @@ const renderManagerNav = () => {
 
         const curStyle = getFilamentStyle(curItem.color);
         const curInfo = getRichInfo(curItem);
-        
         let html = '';
 
-        // 1. PREV CARD
         if (prevItem) {
             const prevStyle = getFilamentStyle(prevItem.color);
             const prevInfo = getRichInfo(prevItem);
@@ -127,30 +111,22 @@ const renderManagerNav = () => {
                     <div id="qr-nav-prev" class="nav-qr me-2"></div>
                     <div>
                         <div class="nav-label text-start">◀ PREV</div>
-                        <div class="nav-text-main" style="font-size:0.9rem;">
-                            #${prevItem.id}<br>${prevInfo.line3}
-                        </div>
+                        <div class="nav-text-main" style="font-size:0.9rem;">#${prevItem.id}<br>${prevInfo.line3}</div>
                     </div>
                 </div>
             </div>`;
-        } else {
-             html += `<div style="flex:1;"></div>`; 
-        }
+        } else { html += `<div style="flex:1;"></div>`; }
 
-        // 2. CURRENT CARD
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
             <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
                 <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:10px;">READY TO SLOT</div>
-                
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
-                
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div style="font-size:1.0rem; color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${curInfo.line2}</div>
             </div>
         </div>`;
 
-        // 3. NEXT CARD
         if (nextItem) {
             const nextStyle = getFilamentStyle(nextItem.color);
             const nextInfo = getRichInfo(nextItem);
@@ -159,27 +135,28 @@ const renderManagerNav = () => {
                 <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; justify-content:flex-end; padding:5px 10px;">
                     <div style="text-align:right;">
                         <div class="nav-label">NEXT ▶</div>
-                        <div class="nav-text-main" style="font-size:0.9rem;">
-                             #${nextItem.id}<br>${nextInfo.line3}
-                        </div>
+                        <div class="nav-text-main" style="font-size:0.9rem;">#${nextItem.id}<br>${nextInfo.line3}</div>
                     </div>
                     <div id="qr-nav-next" class="nav-qr ms-2"></div>
                 </div>
             </div>`;
-        } else {
-             html += `<div style="flex:1;"></div>`; 
-        }
+        } else { html += `<div style="flex:1;"></div>`; }
 
         n.innerHTML = html;
         requestAnimationFrame(() => {
             if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
             if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
         });
-
     } else {
         n.style.display = 'none';
         n.innerHTML = "";
     }
+};
+
+// --- CLICK HELPER: STOPS PROPAGATION ---
+window.handleLabelClick = (e, id, display) => {
+    e.stopPropagation(); // CRITICAL FIX
+    window.addToQueue({id: id, type: 'spool', display: display});
 };
 
 // --- YELLOW ZONE: SLOT GRID RENDERER ---
@@ -197,8 +174,9 @@ const renderGrid = (data, max) => {
     for(let i=1; i<=max; i++) {
         const item = state.currentGrid[i];
         const div = document.createElement('div');
-        div.className = "cham-card slot-btn full";
+        div.className = item ? "cham-card slot-btn full" : "slot-btn empty";
         
+        // STRUCTURAL IDENTITY FIX: Both use same inner HTML structure to prevent wiggle
         if (item) {
             const styles = getFilamentStyle(item.color);
             const info = getRichInfo(item);
@@ -206,30 +184,27 @@ const renderGrid = (data, max) => {
             
             div.innerHTML = `
                 <div class="slot-inner-gold" style="background:${styles.inner};">
-                    <div class="slot-header">
-                        <div class="slot-num-gold">SLOT ${i}</div>
-                    </div>
-                    
+                    <div class="slot-header"><div class="slot-num-gold">SLOT ${i}</div></div>
                     <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 3px solid white;"></div>
-                    
                     <div class="slot-info-gold" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
                         <div class="text-line-1">${info.line1}</div>
                         <div class="text-line-2">${info.line2}</div>
                         <div class="text-line-3">${info.line3}</div>
                         <div class="text-line-4">${info.line4}</div>
                     </div>
-
-                    <div class="btn-label-compact" onclick="event.stopPropagation(); window.addToQueue({id:${item.id}, type:'spool', display:'${item.display}'})">
+                    <div class="btn-label-compact" onclick="window.handleLabelClick(event, ${item.id}, '${item.display}')">
                         <span style="font-size:1.2rem;">📷</span> LABEL
                     </div>
                 </div>`;
         } else {
-            div.className = "slot-btn empty";
-            div.style.justifyContent = 'center';
+            // EMPTY SLOT - Identical Structure, Hidden Elements
             div.innerHTML = `
-                <div class="slot-num-gold" style="color:#555;">SLOT ${i}</div>
-                <div id="qr-slot-${i}" class="bg-white p-2 rounded mt-3 mb-3" style="opacity:0.5;"></div>
-                <div class="fs-4 text-muted fw-bold">EMPTY</div>`;
+                <div class="slot-inner-gold">
+                    <div class="slot-header"><div class="slot-num-gold" style="color:#555;">SLOT ${i}</div></div>
+                    <div id="qr-slot-${i}" class="bg-white p-2 rounded mt-3 mb-3" style="opacity:0.5;"></div>
+                    <div class="fs-4 text-muted fw-bold" style="margin-top:20px;">EMPTY</div>
+                    <div style="height:35px;"></div>
+                </div>`;
         }
         
         div.onclick = () => handleSlotInteraction(i); 
@@ -245,7 +220,6 @@ const renderGrid = (data, max) => {
     else un.style.display = 'none';
 };
 
-// --- GREEN ZONE: LIST RENDERER ---
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
     const emptyMsg = document.getElementById('manage-empty-msg');
@@ -256,7 +230,6 @@ const renderList = (data, locId) => {
     } else {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
-        
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
                 data.forEach((s,i) => renderBadgeQRs(s, i));
@@ -278,10 +251,7 @@ const renderUnslotted = (items) => {
         <div class="danger-zone mt-4 pt-3 border-top border-danger">
             <div class="cham-card manage-list-item" style="border-color:#dc3545; background:#300;">
                 <div class="eject-card-inner">
-                    <div class="eject-label-text">
-                        <span style="font-size:3rem; vertical-align:middle;">☢️</span> 
-                        DANGER ZONE
-                    </div>
+                    <div class="eject-label-text"><span style="font-size:3rem; vertical-align:middle;">☢️</span> DANGER ZONE</div>
                     <div class="action-badge" style="border-color:#dc3545; background:#1f1f1f;" onclick="triggerEjectAll(document.getElementById('manage-loc-id').value)">
                         <div id="qr-eject-all" class="qr-bg-white"></div>
                         <div class="badge-btn-gold text-white bg-danger mt-1 rounded">EJECT ALL</div>
@@ -303,11 +273,9 @@ const renderUnslotted = (items) => {
 const renderBadgeHTML = (s, i, locId) => {
     const styles = getFilamentStyle(s.color);
     const info = getRichInfo(s);
-
     return `
     <div class="cham-card manage-list-item" style="background:${styles.frame}">
         <div class="list-inner-gold" style="background: ${styles.inner};">
-            
             <div class="list-left" style="cursor:pointer;" onclick="openSpoolDetails(${s.id})">
                 <div class="id-badge-gold">#${s.id}</div>
                 <div class="d-flex flex-column text-white">
@@ -316,24 +284,20 @@ const renderBadgeHTML = (s, i, locId) => {
                      <div class="text-line-4">${info.line4}</div>
                 </div>
             </div>
-
             <div class="action-group-gold">
                 <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', true)">
                     <div id="qr-pick-${i}" class="badge-qr"></div>
                     <div class="badge-btn-gold btn-pick-bg">PICK</div>
                 </div>
-                
-                <div class="action-badge" onclick="event.stopPropagation(); window.addToQueue({id:${s.id}, type:'spool', display:'${s.display}'})">
+                <div class="action-badge" onclick="window.handleLabelClick(event, ${s.id}, '${s.display}')">
                     <div id="qr-print-${i}" class="badge-qr"></div>
                     <div class="badge-btn-gold btn-print-bg">LABEL</div>
                 </div>
-                
                 <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', false)">
                     <div id="qr-trash-${i}" class="badge-qr"></div>
                     <div class="badge-btn-gold btn-trash-bg">TRASH</div>
                 </div>
             </div>
-
         </div>
     </div>`;
 };
@@ -344,42 +308,49 @@ const renderBadgeQRs = (s, i) => {
     generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:"+s.id, 50);
 };
 
-// --- INTERACTION (Global) ---
+// --- INTERACTION ---
 window.handleSlotInteraction = (slot) => {
     const locId = document.getElementById('manage-loc-id').value, item = state.currentGrid[slot];
     if (state.heldSpools.length > 0) {
         const newId = state.heldSpools[0].id;
-        if(item) promptAction("Slot Occupied", `Swap/Overwrite Slot ${slot}?`, [
-            {label:"Swap", action:()=>{
-                state.heldSpools.shift(); 
-                state.heldSpools.push({id:item.id, display:item.display, color:item.color}); 
-                if(window.renderBuffer) window.renderBuffer(); 
-                renderManagerNav();
-                doAssign(locId, newId, slot);
-            }}, 
-            {label:"Overwrite", action:()=>{
-                state.heldSpools.shift(); 
-                if(window.renderBuffer) window.renderBuffer(); 
-                renderManagerNav();
-                doAssign(locId, newId, slot);
-            }}
-        ]);
-        else { 
+        if(item) {
+            // OCCUPIED + BUFFER -> SWAP/OVERWRITE/CANCEL
+            promptAction("Slot Occupied", `Swap/Overwrite Slot ${slot}?`, [
+                {label:"Swap", action:()=>{
+                    state.heldSpools.shift(); 
+                    state.heldSpools.push({id:item.id, display:item.display, color:item.color}); 
+                    if(window.renderBuffer) window.renderBuffer(); 
+                    renderManagerNav();
+                    doAssign(locId, newId, slot);
+                }}, 
+                {label:"Overwrite", action:()=>{
+                    state.heldSpools.shift(); 
+                    if(window.renderBuffer) window.renderBuffer(); 
+                    renderManagerNav();
+                    doAssign(locId, newId, slot);
+                }},
+                {label:"Cancel", action:()=>{ closeModal('actionModal'); }}
+            ]);
+        } else { 
+            // EMPTY + BUFFER -> FILL
             state.heldSpools.shift(); 
             if(window.renderBuffer) window.renderBuffer(); 
             renderManagerNav();
             doAssign(locId, newId, slot); 
         }
-    } else if(item) promptAction("Slot Action", `Manage ${item.display}`, [
-        {label:"✋ Pick Up", action:()=>{
-            state.heldSpools.unshift({id:item.id, display:item.display, color:item.color}); 
-            if(window.renderBuffer) window.renderBuffer(); 
-            renderManagerNav();
-            doEject(item.id, locId, false);
-        }}, 
-        {label:"🗑️ Eject", action:()=>{doEject(item.id, locId, false);}}, 
-        {label:"🖨️ Details", action:()=>{openSpoolDetails(item.id);}}
-    ]);
+    } else if(item) {
+        // OCCUPIED + NO BUFFER -> ACTION MENU
+        promptAction("Slot Action", `Manage ${item.display}`, [
+            {label:"✋ Pick Up", action:()=>{
+                state.heldSpools.unshift({id:item.id, display:item.display, color:item.color}); 
+                if(window.renderBuffer) window.renderBuffer(); 
+                renderManagerNav();
+                doEject(item.id, locId, false);
+            }}, 
+            {label:"🗑️ Eject", action:()=>{doEject(item.id, locId, false);}}, 
+            {label:"🖨️ Details", action:()=>{openSpoolDetails(item.id);}}
+        ]);
+    }
 };
 
 window.doAssign = (loc, spool, slot) => { 
@@ -457,13 +428,7 @@ window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, 
 window.printCurrentLocationLabel = () => {
     const locId = document.getElementById('manage-loc-id').value;
     if(!locId) return;
-    
-    // Add to Queue instead of printing immediately
-    window.addToQueue({
-        id: locId,
-        type: 'location',
-        display: `Location: ${locId}`
-    });
+    window.addToQueue({ id: locId, type: 'location', display: `Location: ${locId}` });
 };
 
 window.openEdit = (id) => { 
