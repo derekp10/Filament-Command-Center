@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v15 - Event Driven) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v15)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v16 - Clean Open) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v16)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -8,16 +8,16 @@ document.addEventListener('inventory:buffer-updated', () => {
     }
 });
 
-// --- CRITICAL FIX: WAIT FOR MODAL TO DRAW BEFORE RENDERING QRS ---
+// Event listener for post-animation rendering
 document.addEventListener('DOMContentLoaded', () => {
     const manageModalEl = document.getElementById('manageModal');
     if (manageModalEl) {
         manageModalEl.addEventListener('shown.bs.modal', () => {
             const id = document.getElementById('manage-loc-id').value;
             if (id) {
+                // Fetch and render data now that window is visible
                 refreshManageView(id);
-                // Generate Done QR only when visible and stable
-                // Size 75 matches the CSS hard-lock
+                // Generate Done QR
                 generateSafeQR('qr-modal-done', 'CMD:DONE', 75);
             }
         });
@@ -32,8 +32,18 @@ window.openManage = (id) => {
     const input = document.getElementById('manual-spool-id');
     if(input) input.value=""; 
     
-    // JUST SHOW. The event listener 'shown.bs.modal' will handle the rendering.
-    // This prevents the "Flicker" and "Shrink" bugs.
+    // --- CLEAN OPEN PROTOCOL ---
+    // 1. Wipe old data immediately so it never flashes
+    document.getElementById('slot-grid-container').innerHTML = '';
+    document.getElementById('manage-contents-list').innerHTML = '';
+    document.getElementById('unslotted-container').innerHTML = '';
+    
+    // 2. Hide Views / Show Loader
+    document.getElementById('manage-grid-view').style.display = 'none';
+    document.getElementById('manage-list-view').style.display = 'none';
+    document.getElementById('manage-loading').style.display = 'block'; // Show spinner
+    
+    // 3. Show Modal (Empty/Loading state)
     modals.manageModal.show(); 
 };
 
@@ -45,14 +55,21 @@ window.refreshManageView = (id) => {
     if(!loc) return false;
     
     const isGrid = (loc.Type==='Dryer Box' || loc.Type==='MMU Slot') && parseInt(loc['Max Spools']) > 1;
-    document.getElementById('manage-grid-view').style.display = isGrid ? 'block' : 'none';
-    document.getElementById('manage-list-view').style.display = isGrid ? 'none' : 'block';
     
     fetch(`/api/get_contents?id=${id}`)
     .then(r=>r.json())
     .then(d => { 
-        if(isGrid) renderGrid(d, parseInt(loc['Max Spools'])); 
-        else renderList(d, id); 
+        // Data received. Hide loader.
+        document.getElementById('manage-loading').style.display = 'none';
+        
+        // Show correct view
+        if(isGrid) {
+            document.getElementById('manage-grid-view').style.display = 'block';
+            renderGrid(d, parseInt(loc['Max Spools'])); 
+        } else {
+            document.getElementById('manage-list-view').style.display = 'block';
+            renderList(d, id); 
+        }
     });
     return true;
 };
@@ -146,8 +163,11 @@ const renderManagerNav = () => {
         }
 
         n.innerHTML = html;
-        if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
-        if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
+        // RAF for Nav QRs
+        requestAnimationFrame(() => {
+            if(prevItem) generateSafeQR("qr-nav-prev", "CMD:PREV", 50);
+            if(nextItem) generateSafeQR("qr-nav-next", "CMD:NEXT", 50);
+        });
 
     } else {
         n.style.display = 'none';
@@ -208,8 +228,10 @@ const renderGrid = (data, max) => {
         div.onclick = () => handleSlotInteraction(i); 
         grid.appendChild(div);
         
-        if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
-        else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
+        requestAnimationFrame(() => {
+            if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 90); 
+            else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:"+i, 80);
+        });
     }
     
     if(unslotted.length > 0) renderUnslotted(unslotted); 
@@ -228,7 +250,6 @@ const renderList = (data, locId) => {
         if(emptyMsg) emptyMsg.style.display = 'none'; 
         list.innerHTML = data.map((s,i) => renderBadgeHTML(s, i, locId)).join('');
         
-        // Wait for modal transition to finish, then draw QRs
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
                 data.forEach((s,i) => renderBadgeQRs(s, i));
@@ -264,7 +285,6 @@ const renderUnslotted = (items) => {
     
     un.innerHTML = html;
     
-    // Wait for modal transition to finish, then draw QRs
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             items.forEach((s,i) => renderBadgeQRs(s, i));
