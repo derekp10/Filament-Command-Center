@@ -109,7 +109,7 @@ const openFilamentDetails = (fid) => {
                     // Render List
                     spools.forEach(s => {
                         const remaining = s.remaining_weight ? Math.round(s.remaining_weight) : 0;
-                        const location = s.extra?.location || "No Loc"; // Adjust based on your metadata
+                        const location = s.extra?.location || "No Loc"; 
                         
                         const row = document.createElement('div');
                         row.className = "list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center p-2 small";
@@ -130,6 +130,8 @@ const openFilamentDetails = (fid) => {
                                 </button>
                             </div>
                         `;
+                        
+                        listContainer.appendChild(row);
                     });
 
                     // Enable "Queue All" Button
