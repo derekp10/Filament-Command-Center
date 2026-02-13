@@ -52,12 +52,13 @@ const openSpoolDetails = (id) => {
 
 const openFilamentDetails = (fid) => {
     setProcessing(true);
+    // 1. Fetch Filament Details
     fetch(`/api/filament_details?id=${fid}`)
     .then(r => r.json())
     .then(d => {
-        setProcessing(false);
-        if (!d || !d.id) { showToast("Filament Data Missing!", "error"); return; }
+        if (!d || !d.id) { setProcessing(false); showToast("Filament Data Missing!", "error"); return; }
         
+        // --- Populate Basic Details ---
         document.getElementById('fil-detail-id').innerText = d.id;
         document.getElementById('fil-detail-vendor').innerText = d.vendor ? d.vendor.name : "Unknown";
         document.getElementById('fil-detail-material').innerText = d.material || "Unknown";
@@ -72,15 +73,101 @@ const openFilamentDetails = (fid) => {
         const swatch = document.getElementById('fil-detail-swatch');
         if(swatch) swatch.style.backgroundColor = "#" + (d.color_hex || "333");
         
+        // Link to Spoolman
         const btnLink = document.getElementById('btn-fil-open-spoolman');
         if (btnLink) {
-            if (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) {
-                const baseUrl = SPOOLMAN_URL.endsWith('/') ? SPOOLMAN_URL.slice(0, -1) : SPOOLMAN_URL;
-                btnLink.href = `${baseUrl}/filament/show/${d.id}`;
-            } else btnLink.href = `/filament/show/${d.id}`;
+            const baseUrl = (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) ? SPOOLMAN_URL : "";
+            btnLink.href = baseUrl ? `${baseUrl.replace(/\/$/, "")}/filament/show/${d.id}` : `/filament/show/${d.id}`;
         }
+
+        // Action: Queue Swatch Label
+        const btnQueueSwatch = document.getElementById('btn-fil-print-action');
+        if(btnQueueSwatch) {
+            btnQueueSwatch.onclick = () => {
+                addToQueue({ id: d.id, type: 'filament', display: d.name });
+            };
+        }
+
+        // --- NEW: Fetch Associated Spools for this Filament ---
+        const listContainer = document.getElementById('fil-spools-list');
+        const countBadge = document.getElementById('fil-spool-count');
+        const btnQueueAll = document.getElementById('btn-queue-all-spools');
         
-        if(modals.filamentModal) modals.filamentModal.show();
+        // Only run if the HTML element exists (safety check)
+        if(listContainer) {
+            listContainer.innerHTML = "<div class='p-2 text-muted text-center small'>Checking inventory...</div>";
+            
+            fetch(`/api/spools_by_filament?id=${fid}`)
+            .then(r => r.json())
+            .then(spools => {
+                setProcessing(false); // Done loading
+                listContainer.innerHTML = "";
+                
+                if (Array.isArray(spools) && spools.length > 0) {
+                    if(countBadge) countBadge.innerText = spools.length;
+                    
+                    // Render List
+                    spools.forEach(s => {
+                        const remaining = s.remaining_weight ? Math.round(s.remaining_weight) : 0;
+                        const location = s.extra?.location || "No Loc"; // Adjust based on your metadata
+                        
+                        const row = document.createElement('div');
+                        row.className = "list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center p-2 small";
+                        row.innerHTML = `
+                            <span>
+                                <span class="text-info fw-bold">ID: ${s.id}</span> 
+                                <span class="text-muted mx-1">|</span> 
+                                <span>${remaining}g</span>
+                            </span>
+                            <span class="badge bg-secondary">${location}</span>
+                        `;
+                        // Optional: Make row clickable to jump to spool?
+                        // row.onclick = () => { modals.filamentModal.hide(); openSpoolDetails(s.id); };
+                        // row.style.cursor = 'pointer'; 
+                        listContainer.appendChild(row);
+                    });
+
+                    // Enable "Queue All" Button
+                    if(btnQueueAll) {
+                        btnQueueAll.style.display = 'block';
+                        btnQueueAll.onclick = () => {
+                            let added = 0;
+                            spools.forEach(s => {
+                                // Prevent duplicates
+                                if (!window.labelQueue.find(q => q.id === s.id && q.type === 'spool')) {
+                                    window.addToQueue({ id: s.id, type: 'spool', display: `${d.name} (ID:${s.id})` });
+                                    added++;
+                                }
+                            });
+                            if(added > 0) {
+                                showToast(`Queued ${added} spools!`);
+                                // Close this modal and open the queue to confirm
+                                if(modals.filamentModal) modals.filamentModal.hide();
+                                setTimeout(() => window.openQueueModal(), 300);
+                            } else {
+                                showToast("All spools already in queue", "info");
+                            }
+                        };
+                    }
+                } else {
+                    // No spools found
+                    if(countBadge) countBadge.innerText = "0";
+                    listContainer.innerHTML = "<div class='p-2 text-muted text-center small'>No active spools found.</div>";
+                    if(btnQueueAll) btnQueueAll.style.display = 'none';
+                }
+                
+                if(modals.filamentModal) modals.filamentModal.show();
+            })
+            .catch(e => {
+                setProcessing(false);
+                listContainer.innerHTML = "<div class='text-danger small p-2'>Error loading spools</div>";
+                if(modals.filamentModal) modals.filamentModal.show();
+            });
+        } else {
+            // If HTML missing, just show modal normally
+            setProcessing(false);
+            if(modals.filamentModal) modals.filamentModal.show();
+        }
     })
     .catch(e => { setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
 };
