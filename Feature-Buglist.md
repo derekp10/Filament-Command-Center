@@ -16,7 +16,7 @@
 10. Spool Details should have a button back to filament details, and filament should have one back to Spool. (But with filament, how do we hand >1 spools)
 11. Change the Mult-color filament button into a filament with multiple spools button
 # **Command Center Items**
-1. Filament/spool buffer on command center needs to be persistant acrost all open instances. Same with the Label Print Queue
+
 
 
 # **Next Steps Items:**
