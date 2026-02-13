@@ -12,9 +12,9 @@
 # **Location Manger Items**
 
 # **Print Queue Items**
-6. Location Label CSV doesn't seem to generat on the Live server, but does on dev.
-10. Spool Details should have a button back to filament details, and filament should have one back to Spool. (But with filament, how do we hand >1 spools)
-11. Change the Mult-color filament button into a filament with multiple spools button
+1. Location Label CSV doesn't seem to generat on the Live server, but does on dev.
+2. Spool Details should have a button back to filament details, and filament should have one back to Spool. (But with filament, how do we hand >1 spools)
+3. Change the Mult-color filament button into a filament with multiple spools button
 # **Command Center Items**
 
 
