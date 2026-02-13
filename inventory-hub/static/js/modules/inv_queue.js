@@ -117,14 +117,28 @@ window.findMultiColorFilaments = () => {
         }
     })
     .catch(() => { setProcessing(false); showToast("Search Error", "error"); });
+};
 
-/* --- PERSISTENCE LAYER: QUEUE --- */
+/* --- PERSISTENCE LAYER: QUEUE (V2 Fixed) --- */
+
+// 1. Redefine UpdateUI to emit an event (Matches the Buffer Strategy)
+// We overwrite the original function to add the "Dispatch" signal.
+window.updateQueueUI = () => {
+    const btn = document.getElementById('btn-queue-count');
+    if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
+    
+    // Dispatch the event so our persister hears it
+    document.dispatchEvent(new CustomEvent('inventory:queue-updated', { detail: { queue: labelQueue } }));
+};
+
 const persistQueue = () => {
     fetch('/api/state/queue', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({queue: labelQueue})
-    }).catch(e => console.warn("Queue Save Failed", e));
+    })
+    .then(() => console.log("🛒 Queue Saved to Server"))
+    .catch(e => console.warn("Queue Save Failed", e));
 };
 
 const loadQueue = () => {
@@ -132,11 +146,11 @@ const loadQueue = () => {
     .then(r => r.json())
     .then(data => {
         if (Array.isArray(data) && data.length > 0) {
-            // We can safely overwrite local labelQueue because we are inside the module scope here
-            // Note: Since labelQueue is 'let', we can modify it by clearing and pushing
-            labelQueue.length = 0; 
+            // Clear and Fill
+            labelQueue.length = 0;
             data.forEach(item => labelQueue.push(item));
             
+            // Update UI (This will trigger a "Save", but that ensures consistency)
             window.updateQueueUI();
             console.log(`📥 Restored ${data.length} items to Queue`);
         }
@@ -144,13 +158,8 @@ const loadQueue = () => {
     .catch(e => console.warn("Queue Load Failed", e));
 };
 
-// Hook into updateQueueUI to trigger saves
-const _origUpdateQueueUI = window.updateQueueUI;
-window.updateQueueUI = () => {
-    _origUpdateQueueUI(); // Update UI
-    persistQueue();       // Save State
-};
+// 2. Listen for the event we just created
+document.addEventListener('inventory:queue-updated', persistQueue);
 
-// Trigger Load on Startup
+// 3. Load on startup
 document.addEventListener('DOMContentLoaded', loadQueue);
-};
