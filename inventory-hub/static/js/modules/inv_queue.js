@@ -99,22 +99,38 @@ window.printQueueCSV = () => {
     });
 };
 
-window.findMultiColorFilaments = () => {
+/* --- REPLACED: Multi-Spool Logic instead of Multi-Color --- */
+window.findMultiSpoolFilaments = () => {
     setProcessing(true);
-    fetch('/api/get_multicolor_filaments')
+    // Call the new API endpoint we created
+    fetch('/api/get_multi_spool_filaments')
     .then(r => r.json())
     .then(data => {
         setProcessing(false);
-        if (data.length === 0) { showToast("No Multi-Color Filaments Found", "warning"); return; }
-        if (confirm(`Found ${data.length} Multi-Color Filaments. Add to Queue?`)) {
+        if (data.length === 0) { showToast("No Multi-Spool Filaments Found", "info"); return; }
+        
+        // Calculate total spools to add
+        const totalSpools = data.reduce((acc, item) => acc + item.count, 0);
+        const msg = `Found ${data.length} Filaments with multiple spools.\n(Total ${totalSpools} spools).\n\nAdd ALL ${totalSpools} spools to Print Queue?`;
+        
+        if (confirm(msg)) {
             let added = 0;
-            data.forEach(item => {
-                if (!labelQueue.find(q => q.id === item.id && q.type === 'filament')) {
-                    window.addToQueue({ id: item.id, type: 'filament', display: item.display });
-                    added++;
-                }
+            data.forEach(fil => {
+                // Add each spool for this filament
+                fil.spool_ids.forEach(sid => {
+                    // Check for duplicates in queue
+                    if (!window.labelQueue.find(q => q.id === sid && q.type === 'spool')) {
+                        // We construct a display name for the queue
+                        window.addToQueue({ 
+                            id: sid, 
+                            type: 'spool', 
+                            display: `${fil.display} (ID:${sid})` 
+                        });
+                        added++;
+                    }
+                });
             });
-            showToast(`Added ${added} swatches!`);
+            showToast(`Added ${added} spools!`);
             window.openQueueModal();
         }
     })
