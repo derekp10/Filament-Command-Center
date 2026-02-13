@@ -1,13 +1,13 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v26 - Deposit Feature) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v26)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v27 - Deposit Fix) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v27)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
     if (modal && modal.classList.contains('show')) {
         renderManagerNav();
-        // Force refresh of list/grid to show/hide Deposit button based on new buffer state
+        // Refresh view to toggle Deposit button visibility
         const id = document.getElementById('manage-loc-id').value;
-        if(id) refreshManageView(id); 
+        if(id) refreshManageView(id);
     }
 });
 
@@ -234,27 +234,24 @@ const renderGrid = (data, max) => {
     else un.style.display = 'none';
 };
 
-// --- GREEN ZONE: LIST RENDERER (Updated with Deposit Logic) ---
+// --- GREEN ZONE: LIST RENDERER ---
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
     const emptyMsg = document.getElementById('manage-empty-msg');
     
-    // Clear list
     list.innerHTML = "";
     
-    // 1. DEPOSIT CARD (If Buffer has items)
+    // 1. DEPOSIT CARD
     if (state.heldSpools.length > 0) {
         const item = state.heldSpools[0];
         const styles = getFilamentStyle(item.color);
-        const info = getRichInfo(item);
         
         if(emptyMsg) emptyMsg.style.display = 'none';
         
-        // Render Deposit Card
         const depositCard = document.createElement('div');
         depositCard.className = "cham-card manage-list-item";
         depositCard.style.cssText = `background:${styles.frame}; border: 2px dashed #fff; cursor: pointer; margin-bottom: 15px;`;
-        depositCard.onclick = () => doAssign(locId, item.id, null); // Null slot for general storage
+        depositCard.onclick = () => doAssign(locId, item.id, null); 
         
         depositCard.innerHTML = `
             <div class="list-inner-gold" style="background: ${styles.inner}; justify-content: center; flex-direction: column; padding: 15px;">
@@ -269,7 +266,6 @@ const renderList = (data, locId) => {
         list.appendChild(depositCard);
     } 
     else {
-        // Only show empty message if no data AND no buffer item
         if (data.length === 0) {
             if(emptyMsg) emptyMsg.style.display = 'block'; 
         } else {
@@ -277,7 +273,7 @@ const renderList = (data, locId) => {
         }
     }
 
-    // 2. Render Existing Items
+    // 2. Existing Items
     if (data.length > 0) {
         data.forEach((s,i) => {
             const tempDiv = document.createElement('div');
@@ -436,7 +432,21 @@ window.doAssign = (loc, spool, slot) => {
     .then(r=>r.json())
     .then(res=>{
         setProcessing(false); 
-        if(res.status==='success') { showToast("Assigned"); refreshManageView(loc); } 
+        if(res.status==='success') { 
+            showToast("Assigned");
+            
+            // --- FIX: Remove the assigned spool from buffer ---
+            // If the spool ID matches something in the buffer, nuke it
+            const spoolIdStr = String(spool).replace("ID:", "");
+            const bufIdx = state.heldSpools.findIndex(s => String(s.id) === spoolIdStr);
+            if (bufIdx > -1) {
+                state.heldSpools.splice(bufIdx, 1);
+                // Update global UI
+                if(window.renderBuffer) window.renderBuffer();
+            }
+            
+            refreshManageView(loc); 
+        } 
         else showToast(res.msg, 'error');
     })
     .catch(()=>setProcessing(false)); 
