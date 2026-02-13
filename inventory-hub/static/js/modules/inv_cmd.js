@@ -304,3 +304,35 @@ setInterval(loadBuffer, 2000);
 
 // Initial Load
 document.addEventListener('DOMContentLoaded', loadBuffer);
+
+/* --- NEW FEATURE: External Buffer Control --- */
+window.addSpoolToBuffer = (id) => {
+    // 1. Check if already in buffer
+    if (state.heldSpools.find(s => s.id == id)) {
+        showToast("⚠️ Spool already in Buffer", "warning");
+        return;
+    }
+    
+    // 2. Fetch Data & Add
+    setProcessing(true);
+    // We use the same API as the details window to get the full object
+    fetch(`/api/spool_details?id=${id}`)
+    .then(r => r.json())
+    .then(data => {
+        setProcessing(false);
+        if(!data || !data.id) { showToast("Error fetching spool", "error"); return; }
+        
+        // 3. Push to State
+        state.heldSpools.push(data);
+        
+        // 4. Update UI (This triggers the auto-save persistence we added earlier)
+        if(window.renderBuffer) window.renderBuffer();
+        
+        showToast(`📥 Added Spool #${id} to Buffer`);
+    })
+    .catch(e => {
+        setProcessing(false);
+        console.error(e);
+        showToast("Connection Error", "error");
+    });
+};

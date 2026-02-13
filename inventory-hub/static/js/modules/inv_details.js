@@ -113,18 +113,23 @@ const openFilamentDetails = (fid) => {
                         
                         const row = document.createElement('div');
                         row.className = "list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center p-2 small";
+                        
+                        // Updated Layout with "Add to Buffer" Button
                         row.innerHTML = `
-                            <span>
-                                <span class="text-info fw-bold">ID: ${s.id}</span> 
-                                <span class="text-muted mx-1">|</span> 
+                            <div class="d-flex align-items-center">
+                                <span class="text-info fw-bold me-2">ID: ${s.id}</span> 
+                                <span class="text-muted me-2">|</span> 
                                 <span>${remaining}g</span>
-                            </span>
-                            <span class="badge bg-secondary">${location}</span>
+                            </div>
+                            <div class="d-flex align-items-center">
+                                <span class="badge bg-secondary me-2">${location}</span>
+                                <button class="btn btn-sm btn-outline-success py-0 px-2" 
+                                    onclick="window.addSpoolToBuffer(${s.id})" 
+                                    title="Add to Buffer">
+                                    📥
+                                </button>
+                            </div>
                         `;
-                        // Optional: Make row clickable to jump to spool?
-                        // row.onclick = () => { modals.filamentModal.hide(); openSpoolDetails(s.id); };
-                        // row.style.cursor = 'pointer'; 
-                        listContainer.appendChild(row);
                     });
 
                     // Enable "Queue All" Button
