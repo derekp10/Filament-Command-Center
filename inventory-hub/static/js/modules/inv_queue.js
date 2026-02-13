@@ -1,7 +1,9 @@
 /* MODULE: PRINT QUEUE */
 console.log("🚀 Loaded Module: QUEUE");
 
-let labelQueue = [];
+// Expose the queue globally so other modules (like Details) can check for duplicates
+window.labelQueue = [];
+let labelQueue = window.labelQueue; // Keep local reference for convenience
 
 window.updateQueueUI = () => {
     const btn = document.getElementById('btn-queue-count');
