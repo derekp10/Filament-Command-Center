@@ -131,35 +131,56 @@ window.updateQueueUI = () => {
     document.dispatchEvent(new CustomEvent('inventory:queue-updated', { detail: { queue: labelQueue } }));
 };
 
+/* --- PERSISTENCE LAYER: QUEUE (V3 Polling) --- */
+
+// 1. Redefine UpdateUI to emit an event
+window.updateQueueUI = () => {
+    const btn = document.getElementById('btn-queue-count');
+    if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
+    document.dispatchEvent(new CustomEvent('inventory:queue-updated', { detail: { queue: labelQueue } }));
+};
+
 const persistQueue = () => {
     fetch('/api/state/queue', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({queue: labelQueue})
-    })
-    .then(() => console.log("🛒 Queue Saved to Server"))
-    .catch(e => console.warn("Queue Save Failed", e));
+    }).catch(e => console.warn("Queue Save Failed", e));
 };
 
 const loadQueue = () => {
     fetch('/api/state/queue')
     .then(r => r.json())
     .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
-            // Clear and Fill
-            labelQueue.length = 0;
-            data.forEach(item => labelQueue.push(item));
+        if (Array.isArray(data)) {
+            // SMART SYNC: Only update if the server has DIFFERENT data than we do
+            // We compare 'JSON stringified' versions to detect changes
+            const currentStr = JSON.stringify(labelQueue);
+            const serverStr = JSON.stringify(data);
             
-            // Update UI (This will trigger a "Save", but that ensures consistency)
-            window.updateQueueUI();
-            console.log(`📥 Restored ${data.length} items to Queue`);
+            if (currentStr !== serverStr) {
+                console.log("🔄 Syncing Queue from Server...");
+                labelQueue.length = 0;
+                data.forEach(item => labelQueue.push(item));
+                
+                // Update UI without triggering a save loop (we silence the event dispatch here)
+                const btn = document.getElementById('btn-queue-count');
+                if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
+                
+                if (window.openQueueModal && document.getElementById('queueModal')?.classList.contains('show')) {
+                     window.openQueueModal(); // Refresh modal if open
+                }
+            }
         }
     })
     .catch(e => console.warn("Queue Load Failed", e));
 };
 
-// 2. Listen for the event we just created
+// 2. Listen for local updates to save
 document.addEventListener('inventory:queue-updated', persistQueue);
 
-// 3. Load on startup
+// 3. Start the Heartbeat (Checks every 2 seconds)
+setInterval(loadQueue, 2000);
+
+// 4. Initial Load
 document.addEventListener('DOMContentLoaded', loadQueue);

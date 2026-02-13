@@ -267,34 +267,40 @@ window.renderBuffer = () => {
     persistBuffer();     // Save State
 };
 
-/* --- PERSISTENCE LAYER: BUFFER (V2 Fixed) --- */
+/* --- PERSISTENCE LAYER: BUFFER (V3 Polling) --- */
 const persistBuffer = () => {
     fetch('/api/state/buffer', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({buffer: state.heldSpools})
-    })
-    .then(() => console.log("💾 Buffer Saved to Server")) // Added log so you can see it work!
-    .catch(e => console.warn("Buffer Save Failed", e));
+    }).catch(e => console.warn("Buffer Save Failed", e));
 };
 
 const loadBuffer = () => {
     fetch('/api/state/buffer')
     .then(r => r.json())
     .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
-            state.heldSpools = data;
-            // Force a render to update UI
-            if(window.renderBuffer) window.renderBuffer(); 
-            console.log(`📥 Restored ${data.length} items to Buffer`);
+        if (Array.isArray(data)) {
+            // SMART SYNC: Compare to see if we need to update
+            const currentStr = JSON.stringify(state.heldSpools);
+            const serverStr = JSON.stringify(data);
+
+            if (currentStr !== serverStr) {
+                 console.log("🔄 Syncing Buffer from Server...");
+                 state.heldSpools = data;
+                 // Update UI
+                 if(window.renderBuffer) window.renderBuffer(); 
+            }
         }
     })
     .catch(e => console.warn("Buffer Load Failed", e));
 };
 
-// V2 FIX: Use the existing event listener.
-// This guarantees we catch EVERY update, whether from scan, click, or clear.
+// Listen for local updates
 document.addEventListener('inventory:buffer-updated', persistBuffer);
 
-// Trigger Load on Startup
+// Heartbeat (Checks every 2 seconds)
+setInterval(loadBuffer, 2000);
+
+// Initial Load
 document.addEventListener('DOMContentLoaded', loadBuffer);
