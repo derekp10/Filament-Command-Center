@@ -18,6 +18,9 @@
 # **Command Center Items**
 1. Add ability for an scan to update the label printed/filament printed status to true/yes
 
+# **Details (Filament/Spool) Modal **
+1. Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
+
 
 
 # **Next Steps Items:**
