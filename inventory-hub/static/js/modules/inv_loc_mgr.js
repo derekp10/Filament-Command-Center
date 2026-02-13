@@ -1,10 +1,13 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v25 - Global Text Pop) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v25)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v26 - Deposit Feature) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v26)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
     if (modal && modal.classList.contains('show')) {
         renderManagerNav();
+        // Force refresh of list/grid to show/hide Deposit button based on new buffer state
+        const id = document.getElementById('manage-loc-id').value;
+        if(id) refreshManageView(id); 
     }
 });
 
@@ -159,7 +162,6 @@ const renderManagerNav = () => {
     }
 };
 
-// --- CLICK HELPER: STOPS PROPAGATION ---
 window.handleLabelClick = (e, id, display) => {
     e.stopPropagation(); 
     window.addToQueue({id: id, type: 'spool', display: display});
@@ -194,7 +196,7 @@ const renderGrid = (data, max) => {
                     <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 3px solid white;"></div>
                     <div class="slot-info-gold" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
                         <div class="text-line-1">${info.line1}</div>
-                        <div class="text-line-2">${info.line2}</div>
+                        <div class="text-line-2" style="color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${info.line2}</div>
                         <div class="text-line-3">${info.line3}</div>
                         <div class="text-line-4">${info.line4}</div>
                     </div>
@@ -232,17 +234,51 @@ const renderGrid = (data, max) => {
     else un.style.display = 'none';
 };
 
-// --- GREEN ZONE: LIST RENDERER ---
+// --- GREEN ZONE: LIST RENDERER (Updated with Deposit Logic) ---
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
     const emptyMsg = document.getElementById('manage-empty-msg');
     
-    if (data.length === 0) {
-        list.innerHTML = "";
-        if(emptyMsg) emptyMsg.style.display = 'block'; 
-    } else {
-        if(emptyMsg) emptyMsg.style.display = 'none'; 
-        list.innerHTML = ""; 
+    // Clear list
+    list.innerHTML = "";
+    
+    // 1. DEPOSIT CARD (If Buffer has items)
+    if (state.heldSpools.length > 0) {
+        const item = state.heldSpools[0];
+        const styles = getFilamentStyle(item.color);
+        const info = getRichInfo(item);
+        
+        if(emptyMsg) emptyMsg.style.display = 'none';
+        
+        // Render Deposit Card
+        const depositCard = document.createElement('div');
+        depositCard.className = "cham-card manage-list-item";
+        depositCard.style.cssText = `background:${styles.frame}; border: 2px dashed #fff; cursor: pointer; margin-bottom: 15px;`;
+        depositCard.onclick = () => doAssign(locId, item.id, null); // Null slot for general storage
+        
+        depositCard.innerHTML = `
+            <div class="list-inner-gold" style="background: ${styles.inner}; justify-content: center; flex-direction: column; padding: 15px;">
+                <div style="font-size: 1.5rem; font-weight: 900; color: #fff; text-shadow: 2px 2px 4px #000; text-transform: uppercase;">
+                    ⬇️ DEPOSIT HERE
+                </div>
+                <div style="color: #fff; text-shadow: 1px 1px 3px #000; margin-top: 5px; font-weight: bold;">
+                    #${item.id} - ${item.display}
+                </div>
+            </div>`;
+            
+        list.appendChild(depositCard);
+    } 
+    else {
+        // Only show empty message if no data AND no buffer item
+        if (data.length === 0) {
+            if(emptyMsg) emptyMsg.style.display = 'block'; 
+        } else {
+            if(emptyMsg) emptyMsg.style.display = 'none'; 
+        }
+    }
+
+    // 2. Render Existing Items
+    if (data.length > 0) {
         data.forEach((s,i) => {
             const tempDiv = document.createElement('div');
             tempDiv.innerHTML = renderBadgeHTML(s, i, locId);
@@ -323,7 +359,8 @@ const renderBadgeHTML = (s, i, locId) => {
                 <div class="id-badge-gold">#${s.id}</div>
                 <div class="d-flex flex-column text-white">
                      <div class="text-line-1">${info.line1}</div>
-                     <div class="text-line-3" style="font-size:1.1rem;">${info.line2} ${info.line3}</div>
+                     <div class="text-line-2" style="color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${info.line2}</div>
+                     <div class="text-line-3">${info.line3}</div>
                      <div class="text-line-4">${info.line4}</div>
                 </div>
             </div>
