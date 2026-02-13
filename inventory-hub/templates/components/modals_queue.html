@@ -22,10 +22,14 @@
 
                 <div class="d-grid gap-2">
                     <button class="btn btn-secondary" onclick="printQueueCSV()">📄 Send to P-Touch CSV (Batch)</button>
+                    
                     <hr class="border-secondary">
-                    <button class="btn btn-outline-danger" onclick="confirmClearQueueReq()">🗑️ Clear Queue</button>
+                    
+                    <button class="btn btn-danger fw-bold" onclick="confirmClearQueueReq()">🗑️ Clear Queue</button>
+                    
                     <hr class="border-secondary">
-                    <button class="btn btn-outline-warning" onclick="findMultiSpoolFilaments()">🧵 Find Multi-Spool Filaments</button>
+                    
+                    <button class="btn btn-info text-dark fw-bold" onclick="findMultiSpoolFilaments()">🧵 Find Multi-Spool Filaments</button>
                 </div>
             </div>
         </div>
@@ -40,7 +44,7 @@
                 <button type="button" class="btn-close btn-close-white" onclick="closeClearConfirm()"></button>
             </div>
             <div class="modal-body bg-dark text-white text-center">
-                <p class="mb-3">Are you sure you want to delete all items?</p>
+                <p class="mb-4 fw-bold">Are you sure you want to delete all items?</p>
                 <div class="d-flex justify-content-center gap-2">
                     <button class="btn btn-secondary" onclick="closeClearConfirm()">Cancel</button>
                     <button class="btn btn-danger fw-bold" onclick="executeClearQueue()">Yes, Clear it!</button>
