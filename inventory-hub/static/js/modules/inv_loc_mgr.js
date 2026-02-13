@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v30 - High Contrast Empty QRs) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v30)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v31 - 0-Index Fix) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v31)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -140,7 +140,7 @@ const renderManagerNav = () => {
             const nextStyle = getFilamentStyle(nextItem.color);
             const nextInfo = getRichInfo(nextItem);
             html += `
-            <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="window.nextBuffer()">
+            <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="nextBuffer();">
                 <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; justify-content:flex-end; padding:5px 10px;">
                     <div style="text-align:right;">
                         <div class="nav-label">NEXT ▶</div>
@@ -441,7 +441,19 @@ window.handleSlotInteraction = (slot) => {
 
 window.doAssign = (loc, spool, slot) => { 
     setProcessing(true); 
-    fetch('/api/manage_contents', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'add', location:loc, spool_id:"ID:"+spool, slot})})
+    
+    // FIX: 0-based index correction for MMU/CORE slots
+    let finalSlot = slot;
+    if (slot !== null) {
+        const locObj = state.allLocations.find(l => l.LocationID === loc);
+        // If Type is 'MMU Slot', we assume backend expects 0-based indexing (0..N-1)
+        // Frontend grid is 1-based (1..N). So we subtract 1.
+        if (locObj && locObj.Type === 'MMU Slot') {
+            finalSlot = parseInt(slot) - 1;
+        }
+    }
+
+    fetch('/api/manage_contents', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'add', location:loc, spool_id:"ID:"+spool, slot: finalSlot})})
     .then(r=>r.json())
     .then(res=>{
         setProcessing(false); 
@@ -453,7 +465,6 @@ window.doAssign = (loc, spool, slot) => {
             const bufIdx = state.heldSpools.findIndex(s => String(s.id) === spoolIdStr);
             if (bufIdx > -1) {
                 state.heldSpools.splice(bufIdx, 1);
-                // Call global updater if available
                 if(window.renderBuffer) window.renderBuffer();
             }
             
