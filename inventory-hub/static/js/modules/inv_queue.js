@@ -1,30 +1,38 @@
 /* MODULE: PRINT QUEUE */
 console.log("🚀 Loaded Module: QUEUE");
 
-// Expose globally so inv_details.js can see it
+// Expose globally
 window.labelQueue = [];
 let labelQueue = window.labelQueue; 
-let clearConfirmModal = null; // Store instance for the new modal
+
+// Modal Instances & Data
+let clearConfirmModal = null;
+let multiSpoolModal = null;
+let multiSpoolData = []; // Store search results here
 
 window.updateQueueUI = () => {
     const btn = document.getElementById('btn-queue-count');
     if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
-    // Dispatch event for persistence
     document.dispatchEvent(new CustomEvent('inventory:queue-updated', { detail: { queue: labelQueue } }));
 };
 
 window.addToQueue = (item) => {
-    // Check for duplicates
     if (labelQueue.find(s => s.id === item.id && s.type === item.type)) {
-        showToast("⚠️ Already in Queue", "warning");
-        return;
+        // Silent return for bulk adds, generic toast handled by caller
+        return false;
     }
     if (!item.type) item.type = 'spool';
     
     labelQueue.push(item);
     window.updateQueueUI();
-    showToast(`Added ${item.type} to Print Queue`);
+    return true;
 };
+
+// Generic toast wrapper for single adds if needed
+window.addToQueueWithToast = (item) => {
+    if(addToQueue(item)) showToast(`Added ${item.type} to Print Queue`);
+    else showToast("⚠️ Already in Queue", "warning");
+}
 
 window.openQueueModal = () => {
     const list = document.getElementById('queue-list-items');
@@ -33,7 +41,6 @@ window.openQueueModal = () => {
     if (!list) return;
     list.innerHTML = "";
 
-    // Toggle the Empty Message Div
     if (labelQueue.length === 0) {
         if(emptyMsg) emptyMsg.style.display = 'block';
     } else {
@@ -44,7 +51,6 @@ window.openQueueModal = () => {
             if (item.type === 'filament') icon = '🧬';
             if (item.type === 'location') icon = '📍';
             
-            // Fixed: bg-dark/text-white for list items
             list.innerHTML += `
                 <li class="list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center">
                     <span>${icon} #${item.id} - ${item.display}</span>
@@ -61,9 +67,8 @@ window.removeFromQueue = (index) => {
     window.updateQueueUI();
 };
 
-/* --- NEW: Modal-Based Clear Confirmation --- */
+/* --- CLEAR CONFIRMATION --- */
 window.confirmClearQueueReq = () => {
-    // Open the secondary modal
     const el = document.getElementById('clearQueueConfirmModal');
     if(el) {
         clearConfirmModal = new bootstrap.Modal(el);
@@ -76,7 +81,7 @@ window.closeClearConfirm = () => {
 };
 
 window.executeClearQueue = () => {
-    labelQueue.length = 0; // Clear array in place
+    labelQueue.length = 0;
     window.openQueueModal();
     window.updateQueueUI();
     showToast("Queue Cleared");
@@ -120,7 +125,7 @@ window.printQueueCSV = () => {
     });
 };
 
-/* --- Multi-Spool Feature --- */
+/* --- MULTI-SPOOL FEATURE (Modal Version) --- */
 window.findMultiSpoolFilaments = () => {
     setProcessing(true);
     fetch('/api/get_multi_spool_filaments')
@@ -129,31 +134,59 @@ window.findMultiSpoolFilaments = () => {
         setProcessing(false);
         if (data.length === 0) { showToast("No Multi-Spool Filaments Found", "info"); return; }
         
-        const totalSpools = data.reduce((acc, item) => acc + item.count, 0);
-        const msg = `Found ${data.length} Filaments with multiple spools.\n(Total ${totalSpools} spools).\n\nAdd ALL ${totalSpools} spools to Print Queue?`;
+        // Store data for the modal action
+        multiSpoolData = data;
         
-        if (confirm(msg)) {
-            let added = 0;
-            data.forEach(fil => {
-                fil.spool_ids.forEach(sid => {
-                    if (!labelQueue.find(q => q.id === sid && q.type === 'spool')) {
-                        window.addToQueue({ 
-                            id: sid, 
-                            type: 'spool', 
-                            display: `${fil.display} (ID:${sid})` 
-                        });
-                        added++;
-                    }
-                });
-            });
-            showToast(`Added ${added} spools!`);
-            window.openQueueModal();
+        // Populate Modal
+        const totalSpools = data.reduce((acc, item) => acc + item.count, 0);
+        
+        const titleEl = document.getElementById('multi-spool-count');
+        const msgEl = document.getElementById('multi-spool-msg');
+        
+        if(titleEl) titleEl.innerText = `Found ${data.length} Filaments`;
+        if(msgEl) msgEl.innerHTML = `These filaments have multiple active spools.<br><strong>Total Spools: ${totalSpools}</strong><br><br>Add them all to the Print Queue?`;
+        
+        // Show Modal
+        const el = document.getElementById('multiSpoolModal');
+        if(el) {
+            multiSpoolModal = new bootstrap.Modal(el);
+            multiSpoolModal.show();
         }
     })
     .catch(() => { setProcessing(false); showToast("Search Error", "error"); });
 };
 
-/* --- PERSISTENCE LAYER (Polling) --- */
+window.executeMultiSpoolAdd = () => {
+    if(!multiSpoolData || multiSpoolData.length === 0) return;
+    
+    let added = 0;
+    multiSpoolData.forEach(fil => {
+        fil.spool_ids.forEach(sid => {
+            // Re-using addToQueue logic
+            if (window.addToQueue({ 
+                id: sid, 
+                type: 'spool', 
+                display: `${fil.display} (ID:${sid})` 
+            })) {
+                added++;
+            }
+        });
+    });
+    
+    showToast(`Added ${added} spools!`);
+    
+    // Close Multi Modal
+    if(multiSpoolModal) multiSpoolModal.hide();
+    
+    // Refresh Queue Modal to show new items
+    window.openQueueModal();
+};
+
+window.closeMultiSpoolModal = () => {
+    if(multiSpoolModal) multiSpoolModal.hide();
+};
+
+/* --- PERSISTENCE LAYER --- */
 const persistQueue = () => {
     fetch('/api/state/queue', {
         method: 'POST',
@@ -171,15 +204,12 @@ const loadQueue = () => {
             const serverStr = JSON.stringify(data);
             
             if (currentStr !== serverStr) {
-                // Sync from Server
                 labelQueue.length = 0;
                 data.forEach(item => labelQueue.push(item));
                 
-                // Update UI manually to avoid loop
                 const btn = document.getElementById('btn-queue-count');
                 if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
                 
-                // Refresh modal if open
                 if (modals.queueModal && document.getElementById('queueModal').classList.contains('show')) {
                      window.openQueueModal(); 
                 }

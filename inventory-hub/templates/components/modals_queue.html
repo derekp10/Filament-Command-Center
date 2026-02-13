@@ -22,13 +22,9 @@
 
                 <div class="d-grid gap-2">
                     <button class="btn btn-secondary" onclick="printQueueCSV()">📄 Send to P-Touch CSV (Batch)</button>
-                    
                     <hr class="border-secondary">
-                    
                     <button class="btn btn-danger fw-bold" onclick="confirmClearQueueReq()">🗑️ Clear Queue</button>
-                    
                     <hr class="border-secondary">
-                    
                     <button class="btn btn-info text-dark fw-bold" onclick="findMultiSpoolFilaments()">🧵 Find Multi-Spool Filaments</button>
                 </div>
             </div>
@@ -48,6 +44,25 @@
                 <div class="d-flex justify-content-center gap-2">
                     <button class="btn btn-secondary" onclick="closeClearConfirm()">Cancel</button>
                     <button class="btn btn-danger fw-bold" onclick="executeClearQueue()">Yes, Clear it!</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="multiSpoolModal" tabindex="-1" style="z-index: 2000;">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-info">
+            <div class="modal-header bg-info text-dark">
+                <h5 class="modal-title">🧵 Multi-Spool Search</h5>
+                <button type="button" class="btn-close" onclick="closeMultiSpoolModal()"></button>
+            </div>
+            <div class="modal-body bg-dark text-white text-center">
+                <h4 id="multi-spool-count" class="text-info fw-bold mb-3">Found 0 Items</h4>
+                <p id="multi-spool-msg" class="mb-4">...</p>
+                <div class="d-flex justify-content-center gap-3">
+                    <button class="btn btn-secondary" onclick="closeMultiSpoolModal()">Cancel</button>
+                    <button class="btn btn-info fw-bold text-dark" onclick="executeMultiSpoolAdd()">➕ Add All to Queue</button>
                 </div>
             </div>
         </div>
