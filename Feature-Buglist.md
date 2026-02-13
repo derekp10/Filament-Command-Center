@@ -2,7 +2,6 @@
 7. Way to resync filabridge & spoolman current state into the command center, for changes done outside of the command center. possibly just incorperate in regular actions, or schedule it?
 
 # **New Issues:**
-1. Logic behind CORE1-M0/M1 Needs to be refiend. Updating one, or the other will change the current Toolhead0 slot to what ever was last placed into M0 or M1. But with no flag to tell when in MMU mode, it's hard to know what should take priority here... This is assuming that using 5 toolheads to emulate a MMU is the correct answer here for this.
 2. If legacy barcode has no spools attached to it, UI should warn about this, perhapes give option to add new spool?
 3. Spoolman ExternalID is not a visible field to add to the data when viewing it in spoolman. As much as I don't want to duplicate data in the database, being able to see that data in the view lists might be handy. But this is very low priority, and may be achived by other means like inport/export Process or not needed depending on UI/config/features added. We should evaluate this after we've added more features to Command Center.
 
@@ -11,11 +10,11 @@
 7. No support for Unicode on P-touch, need to address in CSV
 
 # **Location Manger Items**
-8. Make the slot unassigned QR codes brighter
-9. Cannot add buffered items to Single Slot Spaces. (Toolheads Possibly Polymaker Dryerboxes)
+
 # **Print Queue Items**
 6. Location Label CSV doesn't seem to generat on the Live server, but does on dev.
 10. Spool Details should have a button back to filament details, and filament should have one back to Spool. (But with filament, how do we hand >1 spools)
+11. Change the Mult-color filament button into a filament with multiple spools button
 # **Command Center Items**
 1. Filament/spool buffer on command center needs to be persistant acrost all open instances. Same with the Label Print Queue
 
