@@ -33,7 +33,7 @@ window.openQueueModal = () => {
     if (!list) return;
     list.innerHTML = "";
 
-    // LOGIC FIX: Toggle the Empty Message Div
+    // Toggle the Empty Message Div
     if (labelQueue.length === 0) {
         if(emptyMsg) emptyMsg.style.display = 'block';
     } else {
@@ -44,7 +44,7 @@ window.openQueueModal = () => {
             if (item.type === 'filament') icon = '🧬';
             if (item.type === 'location') icon = '📍';
             
-            // FIXED: Used bg-dark instead of bg-black for safety
+            // Fixed: bg-dark/text-white for list items
             list.innerHTML += `
                 <li class="list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center">
                     <span>${icon} #${item.id} - ${item.display}</span>
