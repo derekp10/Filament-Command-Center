@@ -460,22 +460,66 @@ def api_print_location_label():
     except Exception as e:
         return jsonify({"success": False, "msg": str(e)})
 
-@app.route('/api/get_multicolor_filaments', methods=['GET'])
-def api_get_multicolor_filaments():
+# --- REPLACED: Multi-Spool Logic instead of Multi-Color ---
+@app.route('/api/get_multi_spool_filaments', methods=['GET'])
+def api_get_multi_spool_filaments():
     sm_url, _ = config_loader.get_api_urls()
     try:
-        resp = requests.get(f"{sm_url}/api/v1/filament", timeout=5)
+        # 1. Get ALL active spools
+        resp = requests.get(f"{sm_url}/api/v1/spool", timeout=10)
         if not resp.ok: return jsonify([])
+        all_spools = resp.json()
         
+        # 2. Group by Filament ID
+        fil_counts = {}
+        for s in all_spools:
+            if s.get('archived'): continue # Skip archived
+            fid = s.get('filament', {}).get('id')
+            if not fid: continue
+            
+            if fid not in fil_counts: 
+                fil_counts[fid] = {
+                    "count": 0, 
+                    "spools": [], 
+                    "name": s.get('filament', {}).get('name'),
+                    "vendor": s.get('filament', {}).get('vendor', {}).get('name')
+                }
+            fil_counts[fid]["count"] += 1
+            fil_counts[fid]["spools"].append(s['id'])
+            
+        # 3. Filter for > 1
         candidates = []
-        for f in resp.json():
-            multi = f.get('multi_color_hexes')
-            if multi and ',' in multi:
+        for fid, data in fil_counts.items():
+            if data['count'] > 1:
+                display_name = f"{data['vendor']} - {data['name']}"
                 candidates.append({
-                    "id": f['id'], 
-                    "display": f"{f.get('vendor',{}).get('name')} - {f.get('name')}"
+                    "id": fid,
+                    "display": display_name,
+                    "count": data['count'],
+                    "spool_ids": data['spools']
                 })
+        
         return jsonify(candidates)
+    except Exception as e:
+        state.logger.error(f"Multi-Spool Error: {e}")
+        return jsonify([])
+
+# --- NEW ROUTE: Fetch Active Spools for a specific Filament ---
+@app.route('/api/spools_by_filament', methods=['GET'])
+def api_get_spools_by_filament():
+    fid = request.args.get('id')
+    if not fid: return jsonify([])
+    
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        # Get spools filtered by filament_id
+        # We ask Spoolman directly: "Give me all spools for Filament ID X"
+        resp = requests.get(f"{sm_url}/api/v1/spool?filament_id={fid}", timeout=5)
+        if resp.ok:
+            # Filter out archived ones just in case
+            spools = [s for s in resp.json() if not s.get('archived')]
+            return jsonify(spools)
+        return jsonify([])
     except:
         return jsonify([])
 
