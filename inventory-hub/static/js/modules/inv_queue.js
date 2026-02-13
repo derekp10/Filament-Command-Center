@@ -4,6 +4,7 @@ console.log("🚀 Loaded Module: QUEUE");
 // Expose globally so inv_details.js can see it
 window.labelQueue = [];
 let labelQueue = window.labelQueue; 
+let clearConfirmModal = null; // Store instance for the new modal
 
 window.updateQueueUI = () => {
     const btn = document.getElementById('btn-queue-count');
@@ -43,9 +44,9 @@ window.openQueueModal = () => {
             if (item.type === 'filament') icon = '🧬';
             if (item.type === 'location') icon = '📍';
             
-            // Added bg-black and text-white for list items
+            // FIXED: Used bg-dark instead of bg-black for safety
             list.innerHTML += `
-                <li class="list-group-item bg-black text-white border-secondary d-flex justify-content-between align-items-center">
+                <li class="list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center">
                     <span>${icon} #${item.id} - ${item.display}</span>
                     <button class="btn btn-sm btn-outline-danger" onclick="removeFromQueue(${index})">❌</button>
                 </li>`;
@@ -60,14 +61,26 @@ window.removeFromQueue = (index) => {
     window.updateQueueUI();
 };
 
-window.clearQueue = () => {
-    // Simple confirm
-    if(confirm("⚠️ Clear the entire Print Queue?")) {
-        labelQueue.length = 0; // Clear array in place
-        window.openQueueModal();
-        window.updateQueueUI();
-        showToast("Queue Cleared");
+/* --- NEW: Modal-Based Clear Confirmation --- */
+window.confirmClearQueueReq = () => {
+    // Open the secondary modal
+    const el = document.getElementById('clearQueueConfirmModal');
+    if(el) {
+        clearConfirmModal = new bootstrap.Modal(el);
+        clearConfirmModal.show();
     }
+};
+
+window.closeClearConfirm = () => {
+    if(clearConfirmModal) clearConfirmModal.hide();
+};
+
+window.executeClearQueue = () => {
+    labelQueue.length = 0; // Clear array in place
+    window.openQueueModal();
+    window.updateQueueUI();
+    showToast("Queue Cleared");
+    if(clearConfirmModal) clearConfirmModal.hide();
 };
 
 window.printQueueCSV = () => {
@@ -107,7 +120,7 @@ window.printQueueCSV = () => {
     });
 };
 
-/* --- NEW FEATURE: Find Multi-Spool Filaments --- */
+/* --- Multi-Spool Feature --- */
 window.findMultiSpoolFilaments = () => {
     setProcessing(true);
     fetch('/api/get_multi_spool_filaments')
