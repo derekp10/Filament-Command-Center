@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v29 - Global Sync) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v29)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v30 - High Contrast Empty QRs) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v30)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -129,7 +129,7 @@ const renderManagerNav = () => {
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
             <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
-                <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:10px;">READY TO SLOT</div>
+                <div class="nav-label">READY TO SLOT</div>
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div style="font-size:1.0rem; color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${curInfo.line2}</div>
@@ -213,10 +213,11 @@ const renderGrid = (data, max) => {
                 });
             }
         } else {
+            // FIX: Removed opacity:0.5 from QR div to make it sharp and scannable
             div.innerHTML = `
                 <div class="slot-inner-gold">
                     <div class="slot-header"><div class="slot-num-gold" style="color:#555;">SLOT ${i}</div></div>
-                    <div id="qr-slot-${i}" class="bg-white p-2 rounded mt-3 mb-3" style="opacity:0.5;"></div>
+                    <div id="qr-slot-${i}" class="bg-white p-2 rounded mt-3 mb-3"></div>
                     <div class="fs-4 text-muted fw-bold" style="margin-top:20px;">EMPTY</div>
                     <div style="height:35px;"></div>
                 </div>`;
@@ -296,14 +297,12 @@ const renderList = (data, locId) => {
                 data.forEach((s,i) => renderBadgeQRs(s, i));
                 generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
                 
-                // Render Deposit QR if present
                 if (document.getElementById('qr-deposit-trigger')) {
                     generateSafeQR('qr-deposit-trigger', locId, 85);
                 }
             });
         });
     } else {
-        // If list empty but deposit card exists, we still need to render that QR
         requestAnimationFrame(() => {
             if (document.getElementById('qr-deposit-trigger')) {
                 generateSafeQR('qr-deposit-trigger', locId, 85);
