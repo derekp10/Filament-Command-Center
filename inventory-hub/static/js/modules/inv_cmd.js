@@ -260,14 +260,22 @@ window.prevBuffer = prevBuffer;
 window.nextBuffer = nextBuffer;
 window.removeBufferItem = removeBufferItem;
 
-/* --- PERSISTENCE LAYER: BUFFER --- */
+// Hook into the render function to trigger saves automatically
+const _origRenderBuffer = window.renderBuffer;
+window.renderBuffer = () => {
+    _origRenderBuffer(); // Update UI
+    persistBuffer();     // Save State
+};
+
+/* --- PERSISTENCE LAYER: BUFFER (V2 Fixed) --- */
 const persistBuffer = () => {
-    // Silent save to server
     fetch('/api/state/buffer', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({buffer: state.heldSpools})
-    }).catch(e => console.warn("Buffer Save Failed", e));
+    })
+    .then(() => console.log("💾 Buffer Saved to Server")) // Added log so you can see it work!
+    .catch(e => console.warn("Buffer Save Failed", e));
 };
 
 const loadBuffer = () => {
@@ -276,22 +284,17 @@ const loadBuffer = () => {
     .then(data => {
         if (Array.isArray(data) && data.length > 0) {
             state.heldSpools = data;
-            // Call the ORIGINAL render to avoid triggering a save loop immediately,
-            // or just let it trigger (it's safe).
-            // We use the exposed window method to update UI.
-            if(window.renderBuffer) window.renderBuffer();
+            // Force a render to update UI
+            if(window.renderBuffer) window.renderBuffer(); 
             console.log(`📥 Restored ${data.length} items to Buffer`);
         }
     })
     .catch(e => console.warn("Buffer Load Failed", e));
 };
 
-// Hook into the render function to trigger saves automatically
-const _origRenderBuffer = window.renderBuffer;
-window.renderBuffer = () => {
-    _origRenderBuffer(); // Update UI
-    persistBuffer();     // Save State
-};
+// V2 FIX: Use the existing event listener.
+// This guarantees we catch EVERY update, whether from scan, click, or clear.
+document.addEventListener('inventory:buffer-updated', persistBuffer);
 
 // Trigger Load on Startup
 document.addEventListener('DOMContentLoaded', loadBuffer);
