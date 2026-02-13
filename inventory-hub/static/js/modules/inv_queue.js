@@ -1,13 +1,15 @@
 /* MODULE: PRINT QUEUE */
 console.log("🚀 Loaded Module: QUEUE");
 
-// Expose the queue globally so other modules (like Details) can check for duplicates
+// Expose globally so inv_details.js can see it
 window.labelQueue = [];
-let labelQueue = window.labelQueue; // Keep local reference for convenience
+let labelQueue = window.labelQueue; 
 
 window.updateQueueUI = () => {
     const btn = document.getElementById('btn-queue-count');
     if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
+    // Dispatch event for persistence
+    document.dispatchEvent(new CustomEvent('inventory:queue-updated', { detail: { queue: labelQueue } }));
 };
 
 window.addToQueue = (item) => {
@@ -25,18 +27,25 @@ window.addToQueue = (item) => {
 
 window.openQueueModal = () => {
     const list = document.getElementById('queue-list-items');
+    const emptyMsg = document.getElementById('queue-empty-msg');
+    
     if (!list) return;
     list.innerHTML = "";
+
+    // LOGIC FIX: Toggle the Empty Message Div
     if (labelQueue.length === 0) {
-        list.innerHTML = "<li class='list-group-item'>Queue is empty</li>";
+        if(emptyMsg) emptyMsg.style.display = 'block';
     } else {
+        if(emptyMsg) emptyMsg.style.display = 'none';
+        
         labelQueue.forEach((item, index) => {
             let icon = '🧵';
             if (item.type === 'filament') icon = '🧬';
             if (item.type === 'location') icon = '📍';
             
+            // Added bg-black and text-white for list items
             list.innerHTML += `
-                <li class="list-group-item d-flex justify-content-between align-items-center">
+                <li class="list-group-item bg-black text-white border-secondary d-flex justify-content-between align-items-center">
                     <span>${icon} #${item.id} - ${item.display}</span>
                     <button class="btn btn-sm btn-outline-danger" onclick="removeFromQueue(${index})">❌</button>
                 </li>`;
@@ -52,12 +61,13 @@ window.removeFromQueue = (index) => {
 };
 
 window.clearQueue = () => {
-    requestConfirmation("⚠️ Clear the entire Print Queue?", () => {
-        labelQueue = [];
+    // Simple confirm
+    if(confirm("⚠️ Clear the entire Print Queue?")) {
+        labelQueue.length = 0; // Clear array in place
         window.openQueueModal();
         window.updateQueueUI();
         showToast("Queue Cleared");
-    });
+    }
 };
 
 window.printQueueCSV = () => {
@@ -66,7 +76,7 @@ window.printQueueCSV = () => {
     
     const spools = labelQueue.filter(i => i.type === 'spool').map(i => i.id);
     const filaments = labelQueue.filter(i => i.type === 'filament').map(i => i.id);
-    const locations = labelQueue.filter(i => i.type === 'location').map(i => i.id); // New Location Support
+    const locations = labelQueue.filter(i => i.type === 'location').map(i => i.id);
     
     const sendBatch = (ids, mode) => {
         return fetch('/api/print_batch_csv', {
@@ -85,13 +95,11 @@ window.printQueueCSV = () => {
     const promises = [];
     if (spools.length > 0) promises.push(sendBatch(spools, 'spool'));
     if (filaments.length > 0) promises.push(sendBatch(filaments, 'filament'));
-    // Note: If your backend api/print_batch_csv supports 'location', this will work. 
-    // If not, we might need a separate endpoint for location labels later.
     if (locations.length > 0) promises.push(sendBatch(locations, 'location')); 
 
     Promise.all(promises).then(results => {
         if (results.every(r => r === true)) {
-            labelQueue = [];
+            labelQueue.length = 0;
             window.openQueueModal();
             window.updateQueueUI();
             modals.queueModal.hide();
@@ -99,28 +107,23 @@ window.printQueueCSV = () => {
     });
 };
 
-/* --- REPLACED: Multi-Spool Logic instead of Multi-Color --- */
+/* --- NEW FEATURE: Find Multi-Spool Filaments --- */
 window.findMultiSpoolFilaments = () => {
     setProcessing(true);
-    // Call the new API endpoint we created
     fetch('/api/get_multi_spool_filaments')
     .then(r => r.json())
     .then(data => {
         setProcessing(false);
         if (data.length === 0) { showToast("No Multi-Spool Filaments Found", "info"); return; }
         
-        // Calculate total spools to add
         const totalSpools = data.reduce((acc, item) => acc + item.count, 0);
         const msg = `Found ${data.length} Filaments with multiple spools.\n(Total ${totalSpools} spools).\n\nAdd ALL ${totalSpools} spools to Print Queue?`;
         
         if (confirm(msg)) {
             let added = 0;
             data.forEach(fil => {
-                // Add each spool for this filament
                 fil.spool_ids.forEach(sid => {
-                    // Check for duplicates in queue
-                    if (!window.labelQueue.find(q => q.id === sid && q.type === 'spool')) {
-                        // We construct a display name for the queue
+                    if (!labelQueue.find(q => q.id === sid && q.type === 'spool')) {
                         window.addToQueue({ 
                             id: sid, 
                             type: 'spool', 
@@ -137,27 +140,7 @@ window.findMultiSpoolFilaments = () => {
     .catch(() => { setProcessing(false); showToast("Search Error", "error"); });
 };
 
-/* --- PERSISTENCE LAYER: QUEUE (V2 Fixed) --- */
-
-// 1. Redefine UpdateUI to emit an event (Matches the Buffer Strategy)
-// We overwrite the original function to add the "Dispatch" signal.
-window.updateQueueUI = () => {
-    const btn = document.getElementById('btn-queue-count');
-    if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
-    
-    // Dispatch the event so our persister hears it
-    document.dispatchEvent(new CustomEvent('inventory:queue-updated', { detail: { queue: labelQueue } }));
-};
-
-/* --- PERSISTENCE LAYER: QUEUE (V3 Polling) --- */
-
-// 1. Redefine UpdateUI to emit an event
-window.updateQueueUI = () => {
-    const btn = document.getElementById('btn-queue-count');
-    if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
-    document.dispatchEvent(new CustomEvent('inventory:queue-updated', { detail: { queue: labelQueue } }));
-};
-
+/* --- PERSISTENCE LAYER (Polling) --- */
 const persistQueue = () => {
     fetch('/api/state/queue', {
         method: 'POST',
@@ -171,22 +154,21 @@ const loadQueue = () => {
     .then(r => r.json())
     .then(data => {
         if (Array.isArray(data)) {
-            // SMART SYNC: Only update if the server has DIFFERENT data than we do
-            // We compare 'JSON stringified' versions to detect changes
             const currentStr = JSON.stringify(labelQueue);
             const serverStr = JSON.stringify(data);
             
             if (currentStr !== serverStr) {
-                console.log("🔄 Syncing Queue from Server...");
+                // Sync from Server
                 labelQueue.length = 0;
                 data.forEach(item => labelQueue.push(item));
                 
-                // Update UI without triggering a save loop (we silence the event dispatch here)
+                // Update UI manually to avoid loop
                 const btn = document.getElementById('btn-queue-count');
                 if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
                 
-                if (window.openQueueModal && document.getElementById('queueModal')?.classList.contains('show')) {
-                     window.openQueueModal(); // Refresh modal if open
+                // Refresh modal if open
+                if (modals.queueModal && document.getElementById('queueModal').classList.contains('show')) {
+                     window.openQueueModal(); 
                 }
             }
         }
@@ -194,11 +176,6 @@ const loadQueue = () => {
     .catch(e => console.warn("Queue Load Failed", e));
 };
 
-// 2. Listen for local updates to save
 document.addEventListener('inventory:queue-updated', persistQueue);
-
-// 3. Start the Heartbeat (Checks every 2 seconds)
 setInterval(loadQueue, 2000);
-
-// 4. Initial Load
 document.addEventListener('DOMContentLoaded', loadQueue);
