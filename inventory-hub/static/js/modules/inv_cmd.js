@@ -1,4 +1,4 @@
-/* MODULE: COMMAND CENTER (Dashboard & Buffer) */
+/* MODULE: COMMAND CENTER (Dashboard & Buffer) - Polished v2 */
 console.log("🚀 Loaded Module: COMMAND CENTER");
 
 // --- BUFFER UI ---
@@ -18,8 +18,8 @@ const renderBuffer = () => {
                 <div class="cham-card buffer-item ${i===0?'active-item':''}" style="background: ${styles.frame};">
                     <div class="cham-body buffer-inner" style="background: ${styles.inner};">
                         <div class="cham-text-group" onclick="openSpoolDetails(${s.id})" style="cursor:pointer">
-                            <div class="cham-id-badge">#${s.id}</div>
-                            <div class="cham-text">${cleanText}</div>
+                            <div class="cham-id-badge" style="color: #fff; text-shadow: 2px 2px 4px #000;">#${s.id}</div>
+                            <div class="cham-text" style="color: #fff; text-shadow: 2px 2px 4px #000; font-weight: 800;">${cleanText}</div>
                         </div>
                         <div class="buffer-actions">
                             <div id="qr-buf-${i}" class="buffer-qr"></div>
@@ -47,16 +47,20 @@ const renderBuffer = () => {
                     <div class="cham-body nav-inner" style="background:${prevStyles.inner};">
                         <div id="qr-nav-prev" class="nav-qr"></div>
                         <div>
-                            <div class="nav-label">◀ PREV</div>
-                            <div class="nav-name">${prevSpool.display.replace(/^#\d+\s*/, '')}</div>
+                            <div class="nav-label" style="color: #fff; text-shadow: 2px 2px 4px #000; font-weight: 900;">◀ PREV</div>
+                            <div class="nav-name" style="color: #fff; text-shadow: 2px 2px 4px #000; font-weight: 800;">
+                                ${prevSpool.display.replace(/^#\d+\s*/, '')}
+                            </div>
                         </div>
                     </div>
                 </div>
                 <div class="cham-card nav-card" style="background: ${nextStyles.frame}" onclick="window.nextBuffer()">
                     <div class="cham-body nav-inner" style="background:${nextStyles.inner};">
                         <div style="text-align:right;">
-                            <div class="nav-label">NEXT ▶</div>
-                            <div class="nav-name">${nextSpool.display.replace(/^#\d+\s*/, '')}</div>
+                            <div class="nav-label" style="color: #fff; text-shadow: 2px 2px 4px #000; font-weight: 900;">NEXT ▶</div>
+                            <div class="nav-name" style="color: #fff; text-shadow: 2px 2px 4px #000; font-weight: 800;">
+                                ${nextSpool.display.replace(/^#\d+\s*/, '')}
+                            </div>
                         </div>
                         <div id="qr-nav-next" class="nav-qr"></div>
                     </div>
