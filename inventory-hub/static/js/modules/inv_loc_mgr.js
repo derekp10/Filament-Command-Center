@@ -1,5 +1,5 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v27 - Deposit Fix) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v27)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v28 - Deposit QR) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v28)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
@@ -7,7 +7,7 @@ document.addEventListener('inventory:buffer-updated', () => {
         renderManagerNav();
         // Refresh view to toggle Deposit button visibility
         const id = document.getElementById('manage-loc-id').value;
-        if(id) refreshManageView(id);
+        if(id) refreshManageView(id); 
     }
 });
 
@@ -254,10 +254,12 @@ const renderList = (data, locId) => {
         depositCard.onclick = () => doAssign(locId, item.id, null); 
         
         depositCard.innerHTML = `
-            <div class="list-inner-gold" style="background: ${styles.inner}; justify-content: center; flex-direction: column; padding: 15px;">
+            <div class="list-inner-gold" style="background: ${styles.inner}; justify-content: center; align-items: center; flex-direction: column; padding: 15px;">
                 <div style="font-size: 1.5rem; font-weight: 900; color: #fff; text-shadow: 2px 2px 4px #000; text-transform: uppercase;">
                     ⬇️ DEPOSIT HERE
                 </div>
+                <div id="qr-deposit-trigger" class="bg-white p-2 rounded mb-2 mt-2" style="box-shadow: 0 4px 10px rgba(0,0,0,0.5);"></div>
+                
                 <div style="color: #fff; text-shadow: 1px 1px 3px #000; margin-top: 5px; font-weight: bold;">
                     #${item.id} - ${item.display}
                 </div>
@@ -293,7 +295,19 @@ const renderList = (data, locId) => {
             requestAnimationFrame(() => {
                 data.forEach((s,i) => renderBadgeQRs(s, i));
                 generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
+                
+                // Render Deposit QR if present
+                if (document.getElementById('qr-deposit-trigger')) {
+                    generateSafeQR('qr-deposit-trigger', locId, 85);
+                }
             });
+        });
+    } else {
+        // If list empty but deposit card exists, we still need to render that QR
+        requestAnimationFrame(() => {
+            if (document.getElementById('qr-deposit-trigger')) {
+                generateSafeQR('qr-deposit-trigger', locId, 85);
+            }
         });
     }
 };
@@ -436,12 +450,10 @@ window.doAssign = (loc, spool, slot) => {
             showToast("Assigned");
             
             // --- FIX: Remove the assigned spool from buffer ---
-            // If the spool ID matches something in the buffer, nuke it
             const spoolIdStr = String(spool).replace("ID:", "");
             const bufIdx = state.heldSpools.findIndex(s => String(s.id) === spoolIdStr);
             if (bufIdx > -1) {
                 state.heldSpools.splice(bufIdx, 1);
-                // Update global UI
                 if(window.renderBuffer) window.renderBuffer();
             }
             
