@@ -23,7 +23,7 @@ const renderBuffer = () => {
                         </div>
                         <div class="buffer-actions">
                             <div id="qr-buf-${i}" class="buffer-qr"></div>
-                            <div class="btn-buffer-x" onclick="removeBufferItem(${s.id})">❌</div>
+                            <div class="btn-buffer-x" onclick="window.removeBufferItem(${s.id})">❌</div>
                         </div>
                     </div>
                 </div>`;
@@ -43,7 +43,7 @@ const renderBuffer = () => {
             
             n.style.display = 'flex';
             n.innerHTML = `
-                <div class="cham-card nav-card" style="background: ${prevStyles.frame}" onclick="prevBuffer()">
+                <div class="cham-card nav-card" style="background: ${prevStyles.frame}" onclick="window.prevBuffer()">
                     <div class="cham-body nav-inner" style="background:${prevStyles.inner};">
                         <div id="qr-nav-prev" class="nav-qr"></div>
                         <div>
@@ -52,7 +52,7 @@ const renderBuffer = () => {
                         </div>
                     </div>
                 </div>
-                <div class="cham-card nav-card" style="background: ${nextStyles.frame}" onclick="nextBuffer()">
+                <div class="cham-card nav-card" style="background: ${nextStyles.frame}" onclick="window.nextBuffer()">
                     <div class="cham-body nav-inner" style="background:${nextStyles.inner};">
                         <div style="text-align:right;">
                             <div class="nav-label">NEXT ▶</div>
@@ -143,7 +143,7 @@ const processScan = (text) => {
     if (upper === 'CMD:CLEAR') { requestClearBuffer(); return; } 
     if (upper === 'CMD:PREV') { prevBuffer(); return; }
     if (upper === 'CMD:NEXT') { nextBuffer(); return; }
-    if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) printLabel(parts[2]); return; }
+    if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if(parts[2]) window.printLabel(parts[2]); return; }
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if(parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
     
     if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
@@ -251,3 +251,7 @@ const printLabel = (sid) => {
 
 // EXPOSE GLOBALLY FOR LOC MANAGER
 window.printLabel = printLabel;
+window.renderBuffer = renderBuffer;
+window.prevBuffer = prevBuffer;
+window.nextBuffer = nextBuffer;
+window.removeBufferItem = removeBufferItem;

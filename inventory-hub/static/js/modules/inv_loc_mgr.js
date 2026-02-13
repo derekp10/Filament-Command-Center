@@ -1,13 +1,13 @@
-/* MODULE: LOCATION MANAGER (Gold Standard - Polished v28 - Deposit QR) */
-console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v28)");
+/* MODULE: LOCATION MANAGER (Gold Standard - Polished v29 - Global Sync) */
+console.log("🚀 Loaded Module: LOCATION MANAGER (Gold Standard v29)");
 
 document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
     if (modal && modal.classList.contains('show')) {
         renderManagerNav();
-        // Refresh view to toggle Deposit button visibility
+        // Refresh to update Deposit button visibility
         const id = document.getElementById('manage-loc-id').value;
-        if(id) refreshManageView(id); 
+        if(id) refreshManageView(id);
     }
 });
 
@@ -115,7 +115,7 @@ const renderManagerNav = () => {
             const prevStyle = getFilamentStyle(prevItem.color);
             const prevInfo = getRichInfo(prevItem);
             html += `
-            <div class="cham-card nav-card" style="background: ${prevStyle.frame};" onclick="prevBuffer();">
+            <div class="cham-card nav-card" style="background: ${prevStyle.frame};" onclick="window.prevBuffer()">
                 <div class="cham-body nav-inner" style="background:${prevStyle.inner}; display:flex; align-items:center; padding:5px 10px;">
                     <div id="qr-nav-prev" class="nav-qr me-2"></div>
                     <div>
@@ -129,7 +129,7 @@ const renderManagerNav = () => {
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
             <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
-                <div class="nav-label">READY TO SLOT</div>
+                <div class="nav-label" style="color:#fff; font-size:1rem; border-bottom:1px solid #fff; width:100%; margin-bottom:10px;">READY TO SLOT</div>
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div style="font-size:1.0rem; color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${curInfo.line2}</div>
@@ -140,7 +140,7 @@ const renderManagerNav = () => {
             const nextStyle = getFilamentStyle(nextItem.color);
             const nextInfo = getRichInfo(nextItem);
             html += `
-            <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="nextBuffer();">
+            <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="window.nextBuffer()">
                 <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; justify-content:flex-end; padding:5px 10px;">
                     <div style="text-align:right;">
                         <div class="nav-label">NEXT ▶</div>
@@ -454,6 +454,7 @@ window.doAssign = (loc, spool, slot) => {
             const bufIdx = state.heldSpools.findIndex(s => String(s.id) === spoolIdStr);
             if (bufIdx > -1) {
                 state.heldSpools.splice(bufIdx, 1);
+                // Call global updater if available
                 if(window.renderBuffer) window.renderBuffer();
             }
             
