@@ -108,7 +108,12 @@ def api_print_batch_csv():
     if not ids: return jsonify({"success": False, "msg": "Empty Queue"})
 
     cfg = config_loader.load_config()
-    filename = "labels_spool.csv" if mode == 'spool' else "labels_swatch.csv"
+    
+    # --- 1. DETERMINE FILENAME ---
+    if mode == 'spool': filename = "labels_spool.csv"
+    elif mode == 'location': filename = "labels_locations.csv"
+    else: filename = "labels_swatch.csv"
+    
     csv_path = cfg.get("print_settings", {}).get("csv_path", filename)
     
     # 🛠️ AUTO-CREATE FOLDER FIX
@@ -118,46 +123,101 @@ def api_print_batch_csv():
             os.makedirs(folder, exist_ok=True)
         except Exception as e:
             state.logger.warning(f"Could not create folder {folder}: {e}")
-        
-        # Ensure we point to the correct filename in that folder
         csv_path = os.path.join(folder, filename)
 
     try:
         items_to_print = []
+        
+        # --- 2. DEFINE HEADERS ---
         if mode == 'spool':
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
+        elif mode == 'location':
+            core_headers = ['LocationID', 'Name', 'QR_Code']
         else:
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Temp_Nozzle', 'Temp_Bed', 'Density', 'QR_Code']
 
+        # --- 3. PRE-LOAD DATA (Optimization) ---
+        loc_lookup = {}
+        if mode == 'location':
+            # Load local CSV first
+            loc_list = locations_db.load_locations_list()
+            loc_lookup = {str(row['LocationID']): row for row in loc_list}
+
+        # --- 4. BUILD ROWS ---
         for item_id in ids:
+            row_data = {}
+            
+            # === SPOOL MODE ===
             if mode == 'spool':
                 raw_data = spoolman_api.get_spool(item_id)
                 if not raw_data: continue
                 fil_data = raw_data.get('filament', {})
                 vendor_data = fil_data.get('vendor', {})
                 fil_extra = fil_data.get('extra', {})
+                
+                row_data['ID'] = item_id
+                row_data['Brand'] = vendor_data.get('name', 'Unknown') if vendor_data else 'Unknown'
+                row_data['Color'] = get_color_name(fil_data)
+                raw_material = fil_data.get('material', 'Unknown')
+                row_data['Type'] = get_smart_type(raw_material, fil_extra)
+                hex_val = get_best_hex(fil_data)
+                row_data['Hex'] = hex_val
+                r, g, b = hex_to_rgb(hex_val)
+                row_data['Red'] = r; row_data['Green'] = g; row_data['Blue'] = b
+                row_data['Weight'] = f"{raw_data.get('remaining_weight', 0):.0f}g"
+                row_data['QR_Code'] = f"ID:{item_id}"
+                
+                flat_data = flatten_json(raw_data)
+                for k, v in flat_data.items():
+                    if k not in row_data: row_data[k] = v
+
+            # === LOCATION MODE (HYBRID LOOKUP) ===
+            elif mode == 'location':
+                # 1. Try Local CSV
+                loc_data = loc_lookup.get(str(item_id)) 
+                
+                if loc_data:
+                    name = loc_data.get('Name', 'Unknown')
+                else:
+                    # 2. Try Spoolman API (Fallback)
+                    # This handles cases where the location exists in Spoolman but not the CSV
+                    sm_url, _ = config_loader.get_api_urls()
+                    try:
+                        # Attempt to fetch location details from Spoolman
+                        resp = requests.get(f"{sm_url}/api/v1/location/{item_id}", timeout=2)
+                        if resp.ok:
+                            s_data = resp.json()
+                            name = s_data.get('name', str(item_id))
+                        else:
+                            name = str(item_id) # 404/Error: Fallback to ID
+                    except:
+                        name = str(item_id) # Network Error: Fallback to ID
+                
+                row_data['LocationID'] = item_id
+                row_data['Name'] = name
+                row_data['QR_Code'] = item_id 
+
+                items_to_print.append(row_data)
+                continue 
+
+            # === FILAMENT MODE ===
             else:
                 raw_data = spoolman_api.get_filament(item_id)
                 if not raw_data: continue
                 fil_data = raw_data
                 vendor_data = raw_data.get('vendor', {})
                 fil_extra = raw_data.get('extra', {})
+                
+                row_data['ID'] = item_id
+                row_data['Brand'] = vendor_data.get('name', 'Unknown') if vendor_data else 'Unknown'
+                row_data['Color'] = get_color_name(fil_data)
+                raw_material = fil_data.get('material', 'Unknown')
+                row_data['Type'] = get_smart_type(raw_material, fil_extra)
+                hex_val = get_best_hex(fil_data)
+                row_data['Hex'] = hex_val
+                r, g, b = hex_to_rgb(hex_val)
+                row_data['Red'] = r; row_data['Green'] = g; row_data['Blue'] = b
 
-            row_data = {}
-            row_data['ID'] = item_id
-            row_data['Brand'] = vendor_data.get('name', 'Unknown') if vendor_data else 'Unknown'
-            row_data['Color'] = get_color_name(fil_data)
-            raw_material = fil_data.get('material', 'Unknown')
-            row_data['Type'] = get_smart_type(raw_material, fil_extra)
-            hex_val = get_best_hex(fil_data)
-            row_data['Hex'] = hex_val
-            r, g, b = hex_to_rgb(hex_val)
-            row_data['Red'] = r; row_data['Green'] = g; row_data['Blue'] = b
-
-            if mode == 'spool':
-                row_data['Weight'] = f"{raw_data.get('remaining_weight', 0):.0f}g"
-                row_data['QR_Code'] = f"ID:{item_id}"
-            else:
                 t_noz = fil_data.get('settings_extruder_temp')
                 row_data['Temp_Nozzle'] = f"{t_noz}°C" if t_noz else ""
                 t_bed = fil_data.get('settings_bed_temp')
@@ -166,11 +226,13 @@ def api_print_batch_csv():
                 row_data['Density'] = f"{dens} g/cm³" if dens else ""
                 row_data['QR_Code'] = f"FIL:{item_id}"
 
-            flat_data = flatten_json(raw_data)
-            for k, v in flat_data.items():
-                if k not in row_data: row_data[k] = v
-            items_to_print.append(row_data)
-        # -------------------------------------------------------------
+                flat_data = flatten_json(raw_data)
+                for k, v in flat_data.items():
+                    if k not in row_data: row_data[k] = v
+            
+            # Append Spool/Filament rows
+            if mode != 'location':
+                items_to_print.append(row_data)
 
         if not items_to_print: return jsonify({"success": False, "msg": "No valid data found"})
 
@@ -180,33 +242,23 @@ def api_print_batch_csv():
         
         target_headers = []
 
-        # SCENARIO 1: APPENDING to Existing File
         if not clear_old and file_exists:
             try:
                 with open(csv_path, 'r', encoding='utf-8') as f:
                     reader = csv.reader(f)
-                    target_headers = next(reader, None) # Read first line
+                    target_headers = next(reader, None)
             except: pass
         
-        # SCENARIO 2: OVERWRITE or NEW FILE or READ FAILED
         if not target_headers:
-            # Calculate Fresh Headers from Current Data
             target_headers = list(core_headers)
             all_keys = set()
             for item in items_to_print: all_keys.update(item.keys())
             extra_headers = sorted([k for k in all_keys if k not in core_headers])
             target_headers.extend(extra_headers)
 
-        # 3. WRITE TO CSV
         with open(csv_path, write_mode, newline='', encoding='utf-8') as f:
-            # extrasaction='ignore' is the MVP here.
-            # If we are Appending, and row_data has 'NewField', but target_headers (from file) doesn't,
-            # DictWriter simply drops 'NewField' so the columns stay aligned.
             writer = csv.DictWriter(f, fieldnames=target_headers, extrasaction='ignore')
-            
-            if clear_old or not file_exists:
-                writer.writeheader()
-            
+            if clear_old or not file_exists: writer.writeheader()
             writer.writerows(items_to_print)
 
         action_word = "Overwritten" if clear_old else "Appended"
@@ -217,8 +269,6 @@ def api_print_batch_csv():
     except Exception as e:
         state.logger.error(f"Batch CSV Error: {e}")
         return jsonify({"success": False, "msg": str(e)})
-
-# ... (Rest of app.py) ...
 
 # --- EXISTING ROUTES ---
 
