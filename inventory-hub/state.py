@@ -7,6 +7,11 @@ from logging.handlers import RotatingFileHandler
 UNDO_STACK = []
 RECENT_LOGS = []
 
+# --- PERSISTENT STATE ---
+# Stores the active Buffer and Queue for cross-window persistence
+GLOBAL_BUFFER = []
+GLOBAL_QUEUE = []
+
 # --- AUDIT STATE ---
 # Stores the current audit session
 AUDIT_SESSION = {

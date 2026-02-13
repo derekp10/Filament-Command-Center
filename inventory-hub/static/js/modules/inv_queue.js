@@ -117,4 +117,40 @@ window.findMultiColorFilaments = () => {
         }
     })
     .catch(() => { setProcessing(false); showToast("Search Error", "error"); });
+
+/* --- PERSISTENCE LAYER: QUEUE --- */
+const persistQueue = () => {
+    fetch('/api/state/queue', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({queue: labelQueue})
+    }).catch(e => console.warn("Queue Save Failed", e));
+};
+
+const loadQueue = () => {
+    fetch('/api/state/queue')
+    .then(r => r.json())
+    .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+            // We can safely overwrite local labelQueue because we are inside the module scope here
+            // Note: Since labelQueue is 'let', we can modify it by clearing and pushing
+            labelQueue.length = 0; 
+            data.forEach(item => labelQueue.push(item));
+            
+            window.updateQueueUI();
+            console.log(`📥 Restored ${data.length} items to Queue`);
+        }
+    })
+    .catch(e => console.warn("Queue Load Failed", e));
+};
+
+// Hook into updateQueueUI to trigger saves
+const _origUpdateQueueUI = window.updateQueueUI;
+window.updateQueueUI = () => {
+    _origUpdateQueueUI(); // Update UI
+    persistQueue();       // Save State
+};
+
+// Trigger Load on Startup
+document.addEventListener('DOMContentLoaded', loadQueue);
 };

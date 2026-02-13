@@ -433,6 +433,21 @@ def api_get_multicolor_filaments():
 def api_smart_move():
     return jsonify(logic.perform_smart_move(request.json.get('location'), request.json.get('spools')))
 
+# --- PERSISTENCE ROUTES ---
+@app.route('/api/state/buffer', methods=['GET', 'POST'])
+def api_state_buffer():
+    if request.method == 'POST':
+        state.GLOBAL_BUFFER = request.json.get('buffer', [])
+        return jsonify({"success": True})
+    return jsonify(state.GLOBAL_BUFFER)
+
+@app.route('/api/state/queue', methods=['GET', 'POST'])
+def api_state_queue():
+    if request.method == 'POST':
+        state.GLOBAL_QUEUE = request.json.get('queue', [])
+        return jsonify({"success": True})
+    return jsonify(state.GLOBAL_QUEUE)
+
 @app.route('/api/logs', methods=['GET'])
 def api_get_logs_route():
     sm_url, fb_url = config_loader.get_api_urls()
