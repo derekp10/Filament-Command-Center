@@ -51,6 +51,10 @@ window.openManage = (id) => {
         renderManagerNav();
         generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
 
+        // Prime the Hash to prevent "First Pulse Wiggle"
+        const bufHash = state.heldSpools.map(s=>s.id).join(',');
+        state.lastLocRenderHash = `${JSON.stringify(d)}|${bufHash}`;
+
         setProcessing(false);
         modals.manageModal.show();
     })
@@ -64,15 +68,27 @@ window.openManage = (id) => {
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
 
 window.refreshManageView = (id) => {
-    renderManagerNav();
     const loc = state.allLocations.find(l=>l.LocationID==id); 
     if(!loc) return false;
     
-    const isGrid = (loc.Type==='Dryer Box' || loc.Type==='MMU Slot') && parseInt(loc['Max Spools']) > 1;
-    
+    // Fetch data first (Don't touch DOM yet)
     fetch(`/api/get_contents?id=${id}`)
     .then(r=>r.json())
     .then(d => { 
+        // --- NO WIGGLE CHECK ---
+        // Create a signature of the Content + Buffer State
+        const bufHash = state.heldSpools.map(s=>s.id).join(',');
+        const contentHash = JSON.stringify(d);
+        const newHash = `${contentHash}|${bufHash}`;
+
+        // If nothing changed, STOP. This eliminates the wiggle for 99% of sync pulses.
+        if (state.lastLocRenderHash === newHash) return;
+        state.lastLocRenderHash = newHash;
+        // -----------------------
+
+        // Data changed? Okay, render it.
+        renderManagerNav();
+        const isGrid = (loc.Type==='Dryer Box' || loc.Type==='MMU Slot') && parseInt(loc['Max Spools']) > 1;
         if(isGrid) renderGrid(d, parseInt(loc['Max Spools'])); 
         else renderList(d, id); 
     });
@@ -583,3 +599,18 @@ window.openAddModal = () => {
 };
 
 window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, {method:'DELETE'}).then(fetchLocations));
+
+// --- SMART SYNC LISTENER ---
+// Hooks into Core's heartbeat to refresh the active manager view if open
+document.addEventListener('inventory:sync-pulse', () => {
+    const manageModal = document.getElementById('manageModal');
+    // Only refresh if the modal is actually open (Bootstrap adds 'show' class)
+    if (manageModal && manageModal.classList.contains('show')) {
+        const id = document.getElementById('manage-loc-id').value;
+        // Logic check: ensure we aren't currently dragging/holding something that a refresh might disrupt
+        // (Though refreshManageView is generally safe as it rebuilds the list)
+        if(id && !state.processing) {
+            refreshManageView(id);
+        }
+    }
+});

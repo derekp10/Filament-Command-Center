@@ -1,12 +1,12 @@
 /* MODULE: DETAILS (Spool & Filament Modals) */
 console.log("🚀 Loaded Module: DETAILS");
 
-const openSpoolDetails = (id) => {
-    setProcessing(true);
+const openSpoolDetails = (id, silent=false) => {
+    if(!silent) setProcessing(true);
     fetch(`/api/spool_details?id=${id}`)
     .then(r => r.json())
     .then(d => {
-        setProcessing(false);
+        if(!silent) setProcessing(false);
         if (!d || !d.id) { showToast("Details Data Missing!", "error"); return; }
         
         // Fill Modal
@@ -45,18 +45,18 @@ const openSpoolDetails = (id) => {
             } else btnSwatch.style.display = 'none';
         }
         
-        if(modals.spoolModal) modals.spoolModal.show();
+        if(!silent && modals.spoolModal) modals.spoolModal.show();
     })
-    .catch(e => { setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
+    .catch(e => { if(!silent) setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
 };
 
-const openFilamentDetails = (fid) => {
-    setProcessing(true);
+const openFilamentDetails = (fid, silent=false) => {
+    if(!silent) setProcessing(true);
     // 1. Fetch Filament Details
     fetch(`/api/filament_details?id=${fid}`)
     .then(r => r.json())
     .then(d => {
-        if (!d || !d.id) { setProcessing(false); showToast("Filament Data Missing!", "error"); return; }
+        if (!d || !d.id) { if(!silent) setProcessing(false); showToast("Filament Data Missing!", "error"); return; }
         
         // --- Populate Basic Details ---
         document.getElementById('fil-detail-id').innerText = d.id;
@@ -95,12 +95,12 @@ const openFilamentDetails = (fid) => {
         
         // Only run if the HTML element exists (safety check)
         if(listContainer) {
-            listContainer.innerHTML = "<div class='p-2 text-muted text-center small'>Checking inventory...</div>";
+            if(!silent) listContainer.innerHTML = "<div class='p-2 text-muted text-center small'>Checking inventory...</div>";
             
             fetch(`/api/spools_by_filament?id=${fid}`)
             .then(r => r.json())
             .then(spools => {
-                setProcessing(false); // Done loading
+                if(!silent) setProcessing(false); // Done loading
                 listContainer.innerHTML = "";
                 
                 if (Array.isArray(spools) && spools.length > 0) {
@@ -163,20 +163,20 @@ const openFilamentDetails = (fid) => {
                     if(btnQueueAll) btnQueueAll.style.display = 'none';
                 }
                 
-                if(modals.filamentModal) modals.filamentModal.show();
+                if(!silent && modals.filamentModal) modals.filamentModal.show();
             })
             .catch(e => {
-                setProcessing(false);
+                if(!silent) setProcessing(false);
                 listContainer.innerHTML = "<div class='text-danger small p-2'>Error loading spools</div>";
-                if(modals.filamentModal) modals.filamentModal.show();
+                if(!silent && modals.filamentModal) modals.filamentModal.show();
             });
         } else {
             // If HTML missing, just show modal normally
-            setProcessing(false);
-            if(modals.filamentModal) modals.filamentModal.show();
+            if(!silent) setProcessing(false);
+            if(!silent && modals.filamentModal) modals.filamentModal.show();
         }
     })
-    .catch(e => { setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
+    .catch(e => { if(!silent) setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
 };
 
 const quickQueue = (id) => {
@@ -187,3 +187,20 @@ const quickQueue = (id) => {
         addToQueue({ id: d.id, type: 'spool', display: d.filament?.name || "Unknown" });
     });
 };
+
+// --- SMART SYNC LISTENER ---
+document.addEventListener('inventory:sync-pulse', () => {
+    // 1. Sync Spool Modal
+    const spoolModal = document.getElementById('spoolModal');
+    if (spoolModal && spoolModal.classList.contains('show')) {
+        const id = document.getElementById('detail-id').innerText;
+        if(id) openSpoolDetails(id, true); // Silent Refresh
+    }
+    
+    // 2. Sync Filament Modal
+    const filModal = document.getElementById('filamentModal');
+    if (filModal && filModal.classList.contains('show')) {
+        const fid = document.getElementById('fil-detail-id').innerText;
+        if(fid) openFilamentDetails(fid, true); // Silent Refresh
+    }
+});
