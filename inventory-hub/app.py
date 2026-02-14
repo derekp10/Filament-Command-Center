@@ -127,6 +127,7 @@ def api_print_batch_csv():
 
     try:
         items_to_print = []
+        slots_to_print = []
         
         # --- 2. DEFINE HEADERS ---
         if mode == 'spool':
@@ -195,7 +196,25 @@ def api_print_batch_csv():
                 
                 row_data['LocationID'] = item_id
                 row_data['Name'] = name
-                row_data['QR_Code'] = item_id 
+                row_data['QR_Code'] = item_id
+
+                # --- SLOT GENERATION ---
+                max_spools = 0
+                if loc_data:
+                    # Robust lookup for 'Max Spools' in the CSV data
+                    for k, v in loc_data.items():
+                        if k.strip().lower() == 'max spools':
+                            try: max_spools = int(v)
+                            except: max_spools = 0
+                            break
+                
+                if max_spools > 1:
+                    for i in range(1, max_spools + 1):
+                        slots_to_print.append({
+                            "LocationID": item_id,
+                            "Name": f"{name} Slot {i}",
+                            "QR_Code": f"LOC:{item_id}:SLOT:{i}"
+                        })
 
                 items_to_print.append(row_data)
                 continue 
@@ -261,8 +280,22 @@ def api_print_batch_csv():
             if clear_old or not file_exists: writer.writeheader()
             writer.writerows(items_to_print)
 
+            # --- WRITE SLOTS IF GENERATED ---
+        slots_filename = "labels_slots.csv"
+        if slots_to_print:
+            slots_path = os.path.join(folder, slots_filename)
+            slots_exists = os.path.exists(slots_path)
+            
+            with open(slots_path, write_mode, newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=["LocationID", "Name", "QR_Code"])
+                if clear_old or not slots_exists: writer.writeheader()
+                writer.writerows(slots_to_print)
+
         action_word = "Overwritten" if clear_old else "Appended"
-        return jsonify({"success": True, "count": len(items_to_print), "file": filename, "msg": f"{action_word} {len(items_to_print)} items."})
+        msg = f"{action_word} {len(items_to_print)} items."
+        if slots_to_print: msg += f" (+{len(slots_to_print)} Slots)"
+        
+        return jsonify({"success": True, "count": len(items_to_print), "file": filename, "msg": msg})
 
     except PermissionError:
         return jsonify({"success": False, "msg": f"{filename} Locked! Close Excel."})
