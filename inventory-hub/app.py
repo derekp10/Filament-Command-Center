@@ -430,15 +430,21 @@ def api_print_location_label():
     if not raw_id: return jsonify({"success": False, "msg": "No ID provided"})
     target_id = str(raw_id).strip().upper()
     
+    state.logger.info(f"🖨️ [LABEL] Request for: {target_id}")
+
+    # 2. Determine Output Path
     cfg = config_loader.load_config()
     base_path = cfg.get("print_settings", {}).get("csv_path", "labels.csv")
     
-    # Path Setup
     output_dir = os.path.dirname(base_path)
-    if not output_dir or output_dir == "": output_dir = "."
-    if not os.path.exists(output_dir):
+    # Fallback to current dir if config path is empty or root-bound on Windows without drive letter
+    if not output_dir or (os.name == 'nt' and output_dir.startswith(('/', '\\'))):
+        output_dir = "."
+    
+    # Ensure directory exists
+    if output_dir != ".":
         try: os.makedirs(output_dir, exist_ok=True)
-        except: pass
+        except: output_dir = "." # Fallback on permission error
 
     loc_file = os.path.join(output_dir, "labels_locations.csv")
     slot_file = os.path.join(output_dir, "slots_to_print.csv")
@@ -446,13 +452,13 @@ def api_print_location_label():
     try:
         locs = locations_db.load_locations_list()
         
-        # 2. Robust Lookup (Find row where LocationID matches, ignoring case/whitespace)
+        # 3. Robust Lookup (Find row where LocationID matches, ignoring case/whitespace)
         loc_data = None
         for row in locs:
-            # Find the ID column safely
             row_id = ""
+            # Iterate keys to find 'LocationID' case-insensitively
             for k, v in row.items():
-                if k.strip().lower() == 'locationid': # Match "LocationID" or "LocationID "
+                if k.strip().lower() == 'locationid': 
                     row_id = v.strip().upper()
                     break
             
@@ -460,15 +466,18 @@ def api_print_location_label():
                 loc_data = row
                 break
         
+        if not loc_data:
+             state.logger.warning(f"❌ [LABEL] ID {target_id} not found in DB")
+             return jsonify({"success": False, "msg": "ID Not Found in DB"})
+
         # Get Name safely
         loc_name = target_id
-        if loc_data:
-            for k, v in loc_data.items():
-                if k.strip().lower() == 'name':
-                    loc_name = v
-                    break
+        for k, v in loc_data.items():
+            if k.strip().lower() == 'name':
+                loc_name = v
+                break
 
-        # 3. Write Main Label
+        # 4. Write Main Label
         file_exists = os.path.exists(loc_file)
         with open(loc_file, 'a', newline='', encoding='utf-8') as f:
             headers = ["LocationID", "Name", "QR_Code"]
@@ -480,23 +489,22 @@ def api_print_location_label():
                 "QR_Code": target_id
             })
             
-        msg = f"Queue: {target_id}"
-
-        # 4. Robust Slot Logic
+        # 5. Robust Slot Logic
         max_spools = 1
-        if loc_data:
-            # Hunt for "Max Spools" key (ignoring whitespace)
-            raw_val = None
-            for k, v in loc_data.items():
-                if k.strip().lower() == 'max spools':
-                    raw_val = v
-                    break
+        # Hunt for "Max Spools" key (ignoring whitespace)
+        raw_val = None
+        for k, v in loc_data.items():
+            if k.strip().lower() == 'max spools':
+                raw_val = v
+                break
+        
+        if raw_val:
+            try: max_spools = int(raw_val)
+            except: max_spools = 1
             
-            if raw_val:
-                try: max_spools = int(raw_val)
-                except: max_spools = 1
+        state.logger.info(f"ℹ️ [LABEL] Found {target_id}. Max Spools: {max_spools}")
 
-        # 5. Write Slot Labels
+        slots_generated = False
         if max_spools > 1:
             slot_exists = os.path.exists(slot_file)
             with open(slot_file, 'a', newline='', encoding='utf-8') as f:
@@ -510,7 +518,15 @@ def api_print_location_label():
                         "Name": f"{loc_name} Slot {i}",
                         "QR_Code": f"LOC:{target_id}:SLOT:{i}"
                     })
-            msg += f" (+ {max_spools} Slots)"
+            slots_generated = True
+
+        # 6. Build User Message
+        abs_path = os.path.abspath(output_dir)
+        short_path = "..." + abs_path[-30:] if len(abs_path) > 30 else abs_path
+        
+        msg = f"Queue: {target_id}"
+        if slots_generated: msg += f" (+{max_spools} Slots)"
+        msg += f" in {short_path}"
         
         return jsonify({"success": True, "msg": msg})
 
