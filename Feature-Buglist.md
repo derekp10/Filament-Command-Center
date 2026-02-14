@@ -1,37 +1,38 @@
-# **Old Things:**
-7. Way to resync filabridge & spoolman current state into the command center, for changes done outside of the command center. possibly just incorperate in regular actions, or schedule it?
-
 # **New Issues:**
-2. If legacy barcode has no spools attached to it, UI should warn about this, perhapes give option to add new spool?
-3. Spoolman ExternalID is not a visible field to add to the data when viewing it in spoolman. As much as I don't want to duplicate data in the database, being able to see that data in the view lists might be handy. But this is very low priority, and may be achived by other means like inport/export Process or not needed depending on UI/config/features added. We should evaluate this after we've added more features to Command Center.
 
-5. Add unassigned Location in Location List.
 
-7. No support for Unicode on P-touch, need to address in CSV
+# ** General **
+1. Add Label Based Slot Assignment (With support for slot based assignments on DryerBox types) To allow it to stay in the box, but also be assigned to a print head.
+2. Way to resync filabridge & spoolman current state into the command center, for changes done outside of the command center. possibly just incorperate in regular actions, or schedule it? (If this is even needed.)
+3. High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
+4. Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
+5. Black filaments need a better way to show border or a better gradiant in the color
+
 
 # **Location Manger Items**
 
 # **Print Queue Items**
-1. Location Label CSV doesn't seem to generat on the Live server, but does on dev. (Need to test)
-2. Spool Details should have a button back to filament details, and filament should have one back to Spool. (But with filament, how do we hand >1 spools)
-    a. Add ability to select certin spools from the list to add to buffer.
+1. No support for Unicode on P-touch, need to address in CSV (🦝 XL -> Raccoon XL)
+
 # **Command Center Items**
-1. Add ability for an scan to update the label printed/filament printed status to true/yes
+1. Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label)
+2. Set it so that the screen don't sleep.
+3. Clicking on the Spoolman or Filabridge Status Buttons should opening there respective apps.
 
 # **Details (Filament/Spool) Modal **
 1. Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
 
-
+# **Location List**
+1. Add unassigned Location in Location List.
+2. Fix Gray text on Gray background and X close button.
+3. Fix first line (Headers scrolling with the window)
+4. Improve readibility for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme)
+    - High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
 
 # **Next Steps Items:**
 
 ## **Current:**
 Production Functionality Fix list
-1. QR codes not scanning into buffer
-2. QR Button codes not have enought white space for the scanner to read them.
-3. Increase the size of all QR Codes
-4. Add functionality to print location Labels (With support for slot based assignments on DryerBox types)
-5. add the ability to find filament/swatches with multiple filaments and easily add those to the print queue
 6. Fix Location Manager UI Dryer box slot locations not correctly displaying all filament information
 
 
@@ -48,15 +49,6 @@ Crucial for keeping inventory accurate after a print job or manual usage.
 
 This is pretty important for spools with a QR code on them. So we may want to tread this one differently, and hash it out better as things evolve.
 
-3. 🏷️ Label Printing Integration
-The Context: You uploaded scripts like generate_location_labels.py.
-
-The Missing Feature:
-
-A button in the Hub (e.g., inside the "Manage" window or "Edit Location" modal) to trigger a label print for that specific Spool or Location directly from the UI.
-
-Currently, you have to run those scripts manually on the backend.
-
 5. 🔄 Bulk Moves
 The Discussion: We briefly touched on moving entire boxes.
 
@@ -67,6 +59,11 @@ The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERY
 6. Shapeshifting QR Codes in more places.
 
 7. Refactor dashboard to be more modular if possible, and reduce token size/context requirements for some modifications.
+
+# **On Hold **
+1. Standardize the size of all QR codes to match that of the sizes used on the command center. (Audit, eject, drop, etc)
+2. If legacy barcode has no spools attached to it, UI should warn about this, perhapes give option to add new spool?
+3. Spoolman ExternalID is not a visible field to add to the data when viewing it in spoolman. As much as I don't want to duplicate data in the database, being able to see that data in the view lists might be handy. But this is very low priority, and may be achived by other means like inport/export Process or not needed depending on UI/config/features added. We should evaluate this after we've added more features to Command Center.
 
 
 # **New/Future Features **
