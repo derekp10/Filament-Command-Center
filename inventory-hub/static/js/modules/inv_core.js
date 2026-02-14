@@ -174,3 +174,29 @@ const promptAction = (t, m, btns) => {
     btns.forEach((_,i) => generateSafeQR(`qr-act-${i}`, `CMD:MODAL:${i}`, 100));
     modals.actionModal.show(); state.activeModal = 'action';
 };
+
+// --- SMART SYNC PROTOCOL (Heartbeat) ---
+window.startSmartSync = () => {
+    if (window._smartSyncRunning) return;
+    window._smartSyncRunning = true;
+    console.log("🔄 Smart Sync Protocol Initiated (5s Interval)");
+    
+    setInterval(() => {
+        // 1. Refresh Logs & System Status (Spoolman/Filabridge connectivity)
+        if (!state.logsPaused) updateLogState();
+
+        // 2. Refresh Location List if Visible (Modal Open)
+        // We check offsetParent to determine if the table is actually visible to the user
+        const locTable = document.getElementById('location-table');
+        if (locTable && locTable.offsetParent !== null) {
+            fetchLocations();
+        }
+
+        // 3. Broadcast Pulse for other modules (like Location Manager)
+        document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+
+    }, 5000); // 5 Second Heartbeat
+};
+
+// Auto-start the heartbeat
+document.addEventListener('DOMContentLoaded', window.startSmartSync);

@@ -583,3 +583,18 @@ window.openAddModal = () => {
 };
 
 window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, {method:'DELETE'}).then(fetchLocations));
+
+// --- SMART SYNC LISTENER ---
+// Hooks into Core's heartbeat to refresh the active manager view if open
+document.addEventListener('inventory:sync-pulse', () => {
+    const manageModal = document.getElementById('manageModal');
+    // Only refresh if the modal is actually open (Bootstrap adds 'show' class)
+    if (manageModal && manageModal.classList.contains('show')) {
+        const id = document.getElementById('manage-loc-id').value;
+        // Logic check: ensure we aren't currently dragging/holding something that a refresh might disrupt
+        // (Though refreshManageView is generally safe as it rebuilds the list)
+        if(id && !state.processing) {
+            refreshManageView(id);
+        }
+    }
+});
