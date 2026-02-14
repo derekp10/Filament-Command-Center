@@ -4,7 +4,7 @@
 # ** General **
 1. Add Label Based Slot Assignment (With support for slot based assignments on DryerBox types) To allow it to stay in the box, but also be assigned to a print head.
 2. Way to resync filabridge & spoolman current state into the command center, for changes done outside of the command center. possibly just incorperate in regular actions, or schedule it? (If this is even needed.)
-3. High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
+3. High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
 4. Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
 5. Black filaments need a better way to show border or a better gradiant in the color
 
@@ -68,6 +68,7 @@ The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERY
 
 # **New/Future Features **
 1. High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
+    - Adaptive High-Contrast Pop (Shadows Only) on colors
 
 2. Maybe we should probably figure out a way to set up a dev version for Spoolman and filabridge. So that I can test in dev, and maybe start using the prod version for actual prod activities, without messing up existing configurations in the database. This would probably be highly reliant on being able to sync data from Prod to test. We will probably have to build a list of apps or code to handling this, like the Import/Export feature. But also some sort of configuration UI within Command Center, for setting up the config files. We should probably refactor out hard coded configs that are bound to my instance and gear it more twords customzation, so that if others want to use this they can.
 
