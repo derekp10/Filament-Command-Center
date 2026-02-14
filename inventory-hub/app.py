@@ -425,70 +425,97 @@ def api_identify_scan():
 
 @app.route('/api/print_location_label', methods=['POST'])
 def api_print_location_label():
-    loc_id = request.json.get('id')
-    if not loc_id: return jsonify({"success": False, "msg": "No ID provided"})
+    # 1. Robust Input Handling
+    raw_id = request.json.get('id')
+    if not raw_id: return jsonify({"success": False, "msg": "No ID provided"})
+    target_id = str(raw_id).strip().upper()
     
     cfg = config_loader.load_config()
-    # Get base path from config, default to current dir if not set
     base_path = cfg.get("print_settings", {}).get("csv_path", "labels.csv")
     
-    # Determine Output Directory
-    output_dir = "."
-    if "/" in base_path or "\\" in base_path:
-        output_dir = os.path.dirname(base_path)
-    
-    # Ensure directory exists
+    # Path Setup
+    output_dir = os.path.dirname(base_path)
+    if not output_dir or output_dir == "": output_dir = "."
     if not os.path.exists(output_dir):
         try: os.makedirs(output_dir, exist_ok=True)
         except: pass
 
-    # Define Output Files
     loc_file = os.path.join(output_dir, "labels_locations.csv")
     slot_file = os.path.join(output_dir, "slots_to_print.csv")
 
     try:
-        # Load location details
         locs = locations_db.load_locations_list()
-        loc_data = next((x for x in locs if x['LocationID'] == loc_id), None)
-        loc_name = loc_data['Name'] if loc_data else "Unknown"
+        
+        # 2. Robust Lookup (Find row where LocationID matches, ignoring case/whitespace)
+        loc_data = None
+        for row in locs:
+            # Find the ID column safely
+            row_id = ""
+            for k, v in row.items():
+                if k.strip().lower() == 'locationid': # Match "LocationID" or "LocationID "
+                    row_id = v.strip().upper()
+                    break
+            
+            if row_id == target_id:
+                loc_data = row
+                break
+        
+        # Get Name safely
+        loc_name = target_id
+        if loc_data:
+            for k, v in loc_data.items():
+                if k.strip().lower() == 'name':
+                    loc_name = v
+                    break
 
-        # 1. WRITE MAIN LOCATION LABEL
+        # 3. Write Main Label
         file_exists = os.path.exists(loc_file)
         with open(loc_file, 'a', newline='', encoding='utf-8') as f:
             headers = ["LocationID", "Name", "QR_Code"]
             writer = csv.DictWriter(f, fieldnames=headers)
             if not file_exists: writer.writeheader()
             writer.writerow({
-                "LocationID": loc_id, 
+                "LocationID": target_id, 
                 "Name": loc_name, 
-                "QR_Code": loc_id
+                "QR_Code": target_id
             })
             
-        msg = f"Queue: {loc_id}"
+        msg = f"Queue: {target_id}"
 
-        # 2. WRITE SLOT LABELS (If Max Spools > 1)
+        # 4. Robust Slot Logic
+        max_spools = 1
         if loc_data:
-            try:
-                max_spools = int(loc_data.get('Max Spools', 1))
-            except: max_spools = 1
+            # Hunt for "Max Spools" key (ignoring whitespace)
+            raw_val = None
+            for k, v in loc_data.items():
+                if k.strip().lower() == 'max spools':
+                    raw_val = v
+                    break
             
-            if max_spools > 1:
-                slot_exists = os.path.exists(slot_file)
-                with open(slot_file, 'a', newline='', encoding='utf-8') as f:
-                    headers = ["LocationID", "Name", "QR_Code"]
-                    writer = csv.DictWriter(f, fieldnames=headers)
-                    if not slot_exists: writer.writeheader()
-                    
-                    for i in range(1, max_spools + 1):
-                        writer.writerow({
-                            "LocationID": loc_id,
-                            "Name": f"{loc_name} Slot {i}",
-                            "QR_Code": f"LOC:{loc_id}:SLOT:{i}"
-                        })
-                msg += f" (+ {max_spools} Slots)"
-            
+            if raw_val:
+                try: max_spools = int(raw_val)
+                except: max_spools = 1
+
+        # 5. Write Slot Labels
+        if max_spools > 1:
+            slot_exists = os.path.exists(slot_file)
+            with open(slot_file, 'a', newline='', encoding='utf-8') as f:
+                headers = ["LocationID", "Name", "QR_Code"]
+                writer = csv.DictWriter(f, fieldnames=headers)
+                if not slot_exists: writer.writeheader()
+                
+                for i in range(1, max_spools + 1):
+                    writer.writerow({
+                        "LocationID": target_id,
+                        "Name": f"{loc_name} Slot {i}",
+                        "QR_Code": f"LOC:{target_id}:SLOT:{i}"
+                    })
+            msg += f" (+ {max_spools} Slots)"
+        
         return jsonify({"success": True, "msg": msg})
+
     except Exception as e:
+        state.logger.error(f"Print Label Error: {e}")
         return jsonify({"success": False, "msg": str(e)})
 
 # --- REPLACED: Multi-Spool Logic instead of Multi-Color ---
