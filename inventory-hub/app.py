@@ -504,32 +504,77 @@ def api_get_multi_spool_filaments():
         state.logger.error(f"Multi-Spool Error: {e}")
         return jsonify([])
 
-# --- NEW ROUTE: Fetch Active Spools for a specific Filament ---
-@app.route('/api/spools_by_filament', methods=['GET'])
-def api_get_spools_by_filament():
-    fid = request.args.get('id')
-    if not fid: return jsonify([])
+@app.route('/api/print_location_label', methods=['POST'])
+def api_print_location_label():
+    loc_id = request.json.get('id')
+    if not loc_id: return jsonify({"success": False, "msg": "No ID provided"})
     
-    sm_url, _ = config_loader.get_api_urls()
+    cfg = config_loader.load_config()
+    # Get base path from config, default to current dir if not set
+    base_path = cfg.get("print_settings", {}).get("csv_path", "labels.csv")
+    
+    # Determine Output Directory
+    output_dir = "."
+    if "/" in base_path or "\\" in base_path:
+        output_dir = os.path.dirname(base_path)
+    
+    # Ensure directory exists
+    if not os.path.exists(output_dir):
+        try: os.makedirs(output_dir, exist_ok=True)
+        except: pass
+
+    # Define Output Files
+    loc_file = os.path.join(output_dir, "labels_locations.csv")
+    slot_file = os.path.join(output_dir, "slots_to_print.csv")
+
     try:
-        # Get spools filtered by filament_id
-        # We ask Spoolman directly: "Give me all spools for Filament ID X"
-        resp = requests.get(f"{sm_url}/api/v1/spool?filament_id={fid}", timeout=5)
-        if resp.ok:
-            # Filter out archived ones just in case
-            spools = [s for s in resp.json() if not s.get('archived')]
-            return jsonify(spools)
-        return jsonify([])
-    except:
-        return jsonify([])
+        # Load location details
+        locs = locations_db.load_locations_list()
+        loc_data = next((x for x in locs if x['LocationID'] == loc_id), None)
+        loc_name = loc_data['Name'] if loc_data else "Unknown"
+
+        # 1. WRITE MAIN LOCATION LABEL
+        file_exists = os.path.exists(loc_file)
+        with open(loc_file, 'a', newline='', encoding='utf-8') as f:
+            headers = ["LocationID", "Name", "QR_Code"]
+            writer = csv.DictWriter(f, fieldnames=headers)
+            if not file_exists: writer.writeheader()
+            writer.writerow({
+                "LocationID": loc_id, 
+                "Name": loc_name, 
+                "QR_Code": loc_id
+            })
+            
+        msg = f"Queue: {loc_id}"
+
+        # 2. WRITE SLOT LABELS (If Max Spools > 1)
+        if loc_data:
+            try:
+                max_spools = int(loc_data.get('Max Spools', 1))
+            except: max_spools = 1
+            
+            if max_spools > 1:
+                slot_exists = os.path.exists(slot_file)
+                with open(slot_file, 'a', newline='', encoding='utf-8') as f:
+                    headers = ["LocationID", "Name", "QR_Code"]
+                    writer = csv.DictWriter(f, fieldnames=headers)
+                    if not slot_exists: writer.writeheader()
+                    
+                    for i in range(1, max_spools + 1):
+                        writer.writerow({
+                            "LocationID": loc_id,
+                            "Name": f"{loc_name} Slot {i}",
+                            "QR_Code": f"LOC:{loc_id}:SLOT:{i}"
+                        })
+                msg += f" (+ {max_spools} Slots)"
+            
+        return jsonify({"success": True, "msg": msg})
+    except Exception as e:
+        return jsonify({"success": False, "msg": str(e)})
 
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
-    return jsonify(logic.perform_smart_move(
-        request.json.get('location'), 
-        request.json.get('spools'),
-        target_slot=request.json.get('slot')
-    ))
+    return jsonify(logic.perform_smart_move(request.json.get('location'), request.json.get('spools')))
 
 # --- PERSISTENCE ROUTES ---
 @app.route('/api/state/buffer', methods=['GET', 'POST'])
