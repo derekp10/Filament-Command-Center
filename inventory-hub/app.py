@@ -68,6 +68,20 @@ def get_best_hex(item_data):
         if first_hex: return first_hex
     return item_data.get('color_hex', '')
 
+def sanitize_label_text(text):
+    if not isinstance(text, str): return str(text)
+    # 🛠️ EMOJI TRANSLATION MAP
+    replacements = {
+        "🦝": "Raccoon",
+        "⚡": "Bolt",
+        "🔥": "Fire",
+        "📦": "Box",
+        "⚠️": "Warn"
+    }
+    for char, name in replacements.items():
+        text = text.replace(char, name)
+    return text
+
 def flatten_json(y):
     out = {}
     def flatten(x, name=''):
@@ -133,8 +147,8 @@ def api_print_batch_csv():
         if mode == 'spool':
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
         elif mode == 'location':
-            core_headers = ['LocationID', 'Name', 'QR_Code']
-        else:
+            core_headers = ['LocationID', 'Name', 'Cleaned_Name', 'QR_Code']
+
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Temp_Nozzle', 'Temp_Bed', 'Density', 'QR_Code']
 
         # --- 3. PRE-LOAD DATA (Optimization) ---
@@ -157,10 +171,10 @@ def api_print_batch_csv():
                 fil_extra = fil_data.get('extra', {})
                 
                 row_data['ID'] = item_id
-                row_data['Brand'] = vendor_data.get('name', 'Unknown') if vendor_data else 'Unknown'
-                row_data['Color'] = get_color_name(fil_data)
+                row_data['Brand'] = sanitize_label_text(vendor_data.get('name', 'Unknown') if vendor_data else 'Unknown')
+                row_data['Color'] = sanitize_label_text(get_color_name(fil_data))
                 raw_material = fil_data.get('material', 'Unknown')
-                row_data['Type'] = get_smart_type(raw_material, fil_extra)
+                row_data['Type'] = sanitize_label_text(get_smart_type(raw_material, fil_extra))
                 hex_val = get_best_hex(fil_data)
                 row_data['Hex'] = hex_val
                 r, g, b = hex_to_rgb(hex_val)
@@ -197,6 +211,27 @@ def api_print_batch_csv():
                 row_data['LocationID'] = item_id
                 row_data['Name'] = name
                 row_data['QR_Code'] = item_id
+
+                # --- CLEAN NAME & SLOT GENERATION ---
+                clean_name = sanitize_label_text(name)
+                row_data['Cleaned_Name'] = clean_name
+
+                max_spools = 0
+                if loc_data:
+                    for k, v in loc_data.items():
+                        if k.strip().lower() == 'max spools':
+                            try: max_spools = int(v)
+                            except: max_spools = 0
+                            break
+                
+                if max_spools > 1:
+                    for i in range(1, max_spools + 1):
+                        slots_to_print.append({
+                            "LocationID": item_id,
+                            "Name": f"{name} Slot {i}",
+                            "Cleaned_Name": f"{clean_name} Slot {i}",
+                            "QR_Code": f"LOC:{item_id}:SLOT:{i}"
+                        })
 
                 # --- SLOT GENERATION ---
                 max_spools = 0
@@ -279,15 +314,15 @@ def api_print_batch_csv():
             writer = csv.DictWriter(f, fieldnames=target_headers, extrasaction='ignore')
             if clear_old or not file_exists: writer.writeheader()
             writer.writerows(items_to_print)
-
-            # --- WRITE SLOTS IF GENERATED ---
+            
+        # --- WRITE SLOTS IF GENERATED ---
         slots_filename = "labels_slots.csv"
         if slots_to_print:
             slots_path = os.path.join(folder, slots_filename)
             slots_exists = os.path.exists(slots_path)
             
             with open(slots_path, write_mode, newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=["LocationID", "Name", "QR_Code"])
+                writer = csv.DictWriter(f, fieldnames=["LocationID", "Name", "Cleaned_Name", "QR_Code"])
                 if clear_old or not slots_exists: writer.writeheader()
                 writer.writerows(slots_to_print)
 
