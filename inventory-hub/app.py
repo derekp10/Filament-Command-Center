@@ -525,7 +525,11 @@ def api_get_spools_by_filament():
 
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
-    return jsonify(logic.perform_smart_move(request.json.get('location'), request.json.get('spools')))
+    return jsonify(logic.perform_smart_move(
+        request.json.get('location'), 
+        request.json.get('spools'),
+        target_slot=request.json.get('slot')
+    ))
 
 # --- PERSISTENCE ROUTES ---
 @app.route('/api/state/buffer', methods=['GET', 'POST'])

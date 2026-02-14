@@ -165,6 +165,13 @@ const processScan = (text) => {
             else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true); 
             else if (res.cmd === 'slot') handleSlotInteraction(res.value); 
             else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
+        } else if (res.type === 'assignment') {
+            if (state.heldSpools.length > 0) {
+                performContextAssign(res.location, res.slot);
+                state.lastScannedLoc = null;
+            } else {
+                showToast("Buffer Empty! Scan a spool first.", "warning");
+            }
         } else if (res.type === 'location') {
             if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
             if (state.heldSpools.length > 0) { performContextAssign(res.id); state.lastScannedLoc = null; return; }
@@ -193,9 +200,19 @@ const processScan = (text) => {
     .catch((e)=>{ setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
 };
 
-const performContextAssign = (tid) => {
+const performContextAssign = (tid, slot = null) => {
     setProcessing(true); 
-    fetch('/api/smart_move', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({location:tid, spools:[state.heldSpools[0].id]}) })
+    const payload = {
+        location: tid, 
+        spools: [state.heldSpools[0].id],
+        slot: slot
+    };
+    
+    fetch('/api/smart_move', { 
+        method: 'POST', 
+        headers: {'Content-Type': 'application/json'}, 
+        body: JSON.stringify(payload) 
+    })
     .then(r=>r.json())
     .then(res=>{ 
         setProcessing(false); 

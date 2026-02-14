@@ -35,6 +35,20 @@ def resolve_scan(text):
         
         # AUDIT
         if "CMD:AUDIT" in upper_text: return {'type': 'command', 'cmd': 'audit'}
+        
+        # SLOT ASSIGNMENT (LOC:x:SLOT:y)
+        if "LOC:" in upper_text and ":SLOT:" in upper_text:
+            try:
+                # robust parsing for LOC:NAME:SLOT:1
+                parts = upper_text.split(':')
+                if 'LOC' in parts and 'SLOT' in parts:
+                    loc_idx = parts.index('LOC')
+                    slot_idx = parts.index('SLOT')
+                    if slot_idx > loc_idx:
+                        loc_val = parts[loc_idx+1]
+                        slot_val = parts[slot_idx+1]
+                        return {'type': 'assignment', 'location': loc_val, 'slot': slot_val}
+            except: pass
 
         return {'type': 'error', 'msg': 'Malformed Command'}
 
