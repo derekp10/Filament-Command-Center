@@ -46,6 +46,7 @@ def process_locations():
         rows = list(reader)
 
     new_labels = []
+    new_slot_labels = []
     updates_made = False
 
     for row in rows:
@@ -56,16 +57,36 @@ def process_locations():
             loc_id = row.get('LocationID', '').upper()
             name = row.get('Name', '')
             
+            # 1. Add Main Location Label
             new_labels.append({
                 "LocationID": loc_id,
                 "Name": name,
                 "QR_Code": loc_id 
             })
             
+            # 2. Check for Slots (Max Spools > 1)
+            try:
+                max_spools = int(row.get('Max Spools', 1))
+            except (ValueError, TypeError):
+                max_spools = 1
+            
+            if max_spools > 1:
+                print(f"   -> Generating {max_spools} slot labels for {loc_id}")
+                for i in range(1, max_spools + 1):
+                    slot_name = f"{name} Slot {i}"
+                    # QR Format: LOC:ID:SLOT:NUMBER (Matches server logic)
+                    slot_qr = f"LOC:{loc_id}:SLOT:{i}"
+                    
+                    new_slot_labels.append({
+                        "LocationID": loc_id,
+                        "Name": slot_name,
+                        "QR_Code": slot_qr
+                    })
+
             row['Label Printed'] = 'Yes'
             updates_made = True
 
-    # 1. Generate P-Touch CSV
+    # 3. Generate Main P-Touch CSV
     if new_labels:
         out_file = get_output_path("locations_to_print.csv")
         with open(out_file, 'w', newline='', encoding='utf-8') as f:
@@ -76,7 +97,19 @@ def process_locations():
     else:
         print("No new locations to print.")
 
-    # 2. Update the Source CSV
+    # 4. Generate Slots P-Touch CSV
+    if new_slot_labels:
+        slot_file = get_output_path("slots_to_print.csv")
+        with open(slot_file, 'w', newline='', encoding='utf-8') as f:
+            # Using same headers for compatibility, but data differs
+            writer = csv.DictWriter(f, fieldnames=["LocationID", "Name", "QR_Code"])
+            writer.writeheader()
+            writer.writerows(new_slot_labels)
+        print(f"✅ Generated {len(new_slot_labels)} slot labels in '{slot_file}'")
+    else:
+        print("No new slot labels needed.")
+
+    # 5. Update the Source CSV
     if updates_made:
         # Create backup
         shutil.copy(SOURCE_CSV, SOURCE_CSV + ".bak")
