@@ -142,13 +142,15 @@ def api_print_batch_csv():
     try:
         items_to_print = []
         slots_to_print = []
-        
+
+
         # --- 2. DEFINE HEADERS ---
         if mode == 'spool':
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
         elif mode == 'location':
+            # 🧹 STRICT HEADERS for Locations (No Spool data allowed)
             core_headers = ['LocationID', 'Name', 'Cleaned_Name', 'QR_Code']
-
+        else:
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Temp_Nozzle', 'Temp_Bed', 'Density', 'QR_Code']
 
         # --- 3. PRE-LOAD DATA (Optimization) ---
@@ -314,7 +316,7 @@ def api_print_batch_csv():
             writer = csv.DictWriter(f, fieldnames=target_headers, extrasaction='ignore')
             if clear_old or not file_exists: writer.writeheader()
             writer.writerows(items_to_print)
-            
+
         # --- WRITE SLOTS IF GENERATED ---
         slots_filename = "labels_slots.csv"
         if slots_to_print:
@@ -544,31 +546,30 @@ def api_print_location_label():
             if k.strip().lower() == 'name':
                 loc_name = v
                 break
+        
+        # Sanitize
+        clean_name = sanitize_label_text(loc_name)
 
         # 4. Write Main Label
         file_exists = os.path.exists(loc_file)
         with open(loc_file, 'a', newline='', encoding='utf-8') as f:
-            headers = ["LocationID", "Name", "QR_Code"]
+            headers = ["LocationID", "Name", "Cleaned_Name", "QR_Code"]
             writer = csv.DictWriter(f, fieldnames=headers)
             if not file_exists: writer.writeheader()
             writer.writerow({
                 "LocationID": target_id, 
-                "Name": loc_name, 
+                "Name": loc_name,
+                "Cleaned_Name": clean_name,
                 "QR_Code": target_id
             })
             
         # 5. Robust Slot Logic
         max_spools = 1
-        # Hunt for "Max Spools" key (ignoring whitespace)
-        raw_val = None
         for k, v in loc_data.items():
             if k.strip().lower() == 'max spools':
-                raw_val = v
+                try: max_spools = int(v)
+                except: max_spools = 1
                 break
-        
-        if raw_val:
-            try: max_spools = int(raw_val)
-            except: max_spools = 1
             
         state.logger.info(f"ℹ️ [LABEL] Found {target_id}. Max Spools: {max_spools}")
 
@@ -576,7 +577,7 @@ def api_print_location_label():
         if max_spools > 1:
             slot_exists = os.path.exists(slot_file)
             with open(slot_file, 'a', newline='', encoding='utf-8') as f:
-                headers = ["LocationID", "Name", "QR_Code"]
+                headers = ["LocationID", "Name", "Cleaned_Name", "QR_Code"]
                 writer = csv.DictWriter(f, fieldnames=headers)
                 if not slot_exists: writer.writeheader()
                 
@@ -584,6 +585,7 @@ def api_print_location_label():
                     writer.writerow({
                         "LocationID": target_id,
                         "Name": f"{loc_name} Slot {i}",
+                        "Cleaned_Name": f"{clean_name} Slot {i}",
                         "QR_Code": f"LOC:{target_id}:SLOT:{i}"
                     })
             slots_generated = True
