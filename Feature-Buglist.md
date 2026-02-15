@@ -8,6 +8,7 @@
 
 
 # **Location Manger Items**
+Ejecting from slot is not soing as being ejected (setting slot to empty) Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned intems in the box.
 
 # **Print Queue Items**
 1. No support for Unicode on P-touch, need to address in CSV (🦝 XL -> Raccoon XL)
