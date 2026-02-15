@@ -2,10 +2,9 @@
 
 
 # ** General **
-1. Add Label Based Slot Assignment (With support for slot based assignments on DryerBox types) To allow it to stay in the box, but also be assigned to a print head.
-3. High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
-4. Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
-5. Black filaments need a better way to show border or a better gradiant in the color
+1. High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
+2. Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
+3. Black filaments need a better way to show border or a better gradiant in the color
 
 
 # **Location Manger Items**
