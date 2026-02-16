@@ -10,14 +10,16 @@
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
 * Undo should put back into buffer if it came from buffer.
 * Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without (Effectivly doubling the line count.)
-* Slots CSV should include Slot + # (Slot 1, Slot 2, etc)
+* Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field
 
 
 # **Location Manger Items**
-Ejecting from slot is not soing as being ejected (setting slot to empty) Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned intems in the box.
+Ejecting from slot is not showing as being ejected (setting slot to empty) Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
 
 # **Print Queue Items**
-1. No support for Unicode on P-touch, need to address in CSV (🦝 XL -> Raccoon XL)
+1. Locations QR Codes should contain a LOC: code, and a LOC: code should be used to help identify locations. (Too many manual entry items accidently turn into locations by accident on misstyping)
+    - Pehraps we just refactor this code an check its logic.
+
 
 # **Command Center Items**
 1. Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label)
