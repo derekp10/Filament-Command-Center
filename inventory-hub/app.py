@@ -25,8 +25,10 @@ def dashboard():
     if ip == '0.0.0.0': ip = '127.0.0.1'
     port = cfg.get('spoolman_port', 7912)
     sm_url = f"http://{ip}:{port}"
+    # [Code Guardian] Fetch FilaBridge URL for Dashboard Button
+    _, fb_url = config_loader.get_api_urls()
     
-    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url)
+    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url, filabridge_url=fb_url)
 
 # --- HELPER FUNCTIONS ---
 def clean_string(s):
@@ -105,7 +107,9 @@ def api_print_label():
     if not sid: return jsonify({"success": False, "msg": "No ID provided"})
 
     spool = spoolman_api.get_spool(sid)
-    if not spool: return jsonify({"success": False, "msg": "Spool not found"})
+    # [Code Guardian] Update 'Label Printed' status
+    if spool:
+        spoolman_api.update_spool(sid, {'extra': {'label_printed': 'true'}})
 
     # Browser Mode: Just return data
     return jsonify({"success": True, "method": "browser", "data": spool})

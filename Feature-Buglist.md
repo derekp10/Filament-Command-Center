@@ -63,7 +63,7 @@ The Missing Feature:
 
 The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 
-6. Shapeshifting QR Codes in more places.
+6. Shapeshifting QR Codes in more places. (Audit button)
 
 7. Refactor dashboard to be more modular if possible, and reduce token size/context requirements for some modifications.
 

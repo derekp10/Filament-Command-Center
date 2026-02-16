@@ -18,8 +18,12 @@
             </div>
             
             <div class="d-flex align-items-center gap-3">
-                <div class="status-label"><span id="st-spoolman" class="status-dot status-off"></span> Spoolman</div>
-                <div class="status-label"><span id="st-filabridge" class="status-dot status-off"></span> FilaBridge</div>
+                <div class="status-label" onclick="window.open(SPOOLMAN_URL, '_blank')" style="cursor: pointer;">
+                    <span id="st-spoolman" class="status-dot status-off"></span> Spoolman
+                </div>
+                <div class="status-label" onclick="window.open(FILABRIDGE_URL, '_blank')" style="cursor: pointer;">
+                    <span id="st-filabridge" class="status-dot status-off"></span> FilaBridge
+                </div>
                 
                 <button class="btn btn-warning ms-2" id="btn-queue-count" onclick="openQueueModal()">
                     🛒 Queue (0)
@@ -84,6 +88,19 @@
     <script>
         // Inject the Spoolman URL from Python
         const SPOOLMAN_URL = "{{ spoolman_url }}";
+        const FILABRIDGE_URL = "{{ filabridge_url }}";
+        
+        // [Code Guardian] Request Screen Wake Lock on Load
+        document.addEventListener('DOMContentLoaded', () => {
+            if(window.requestWakeLock) window.requestWakeLock();
+        });
+        
+        // [Code Guardian] Wake Lock Persistence
+        document.addEventListener('visibilitychange', async () => {
+            if (wakeLock !== null && document.visibilityState === 'visible') {
+                await requestWakeLock();
+            }
+        });
     </script>
 </body>
 </html>
