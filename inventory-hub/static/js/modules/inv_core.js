@@ -200,3 +200,10 @@ window.startSmartSync = () => {
 
 // Auto-start the heartbeat
 document.addEventListener('DOMContentLoaded', window.startSmartSync);
+
+// [Code Guardian] Wake Lock Persistence
+document.addEventListener('visibilitychange', async () => {
+    if (wakeLock !== null && document.visibilityState === 'visible') {
+        await requestWakeLock();
+    }
+});

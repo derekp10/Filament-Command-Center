@@ -107,9 +107,6 @@ def api_print_label():
     if not sid: return jsonify({"success": False, "msg": "No ID provided"})
 
     spool = spoolman_api.get_spool(sid)
-    # [Code Guardian] Update 'Label Printed' status
-    if spool:
-        spoolman_api.update_spool(sid, {'extra': {'label_printed': 'true'}})
 
     # Browser Mode: Just return data
     return jsonify({"success": True, "method": "browser", "data": spool})

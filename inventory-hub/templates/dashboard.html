@@ -94,7 +94,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             if(window.requestWakeLock) window.requestWakeLock();
         });
-        
+
         // [Code Guardian] Wake Lock Persistence
         document.addEventListener('visibilitychange', async () => {
             if (wakeLock !== null && document.visibilityState === 'visible') {
