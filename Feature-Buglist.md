@@ -2,9 +2,15 @@
 
 
 # ** General **
-1. High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
-2. Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
-3. Black filaments need a better way to show border or a better gradiant in the color
+* High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
+* Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
+* Black filaments need a better way to show border or a better gradiant in the color
+* Smart assign (I think thats what we called it) isn't working for non-dryerbox locations. I have to scan the location multiple times to unload the buffer into it, instead of it realizing it's a mass storage locaiton and just assigning it to the location.
+* Doens't seem to handle 4+ colors in a swatch for generating gradiant 
+* Loading spools into buffer from filament definition doesn't load all spool data into card.
+* Undo should put back into buffer if it came from buffer.
+* Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without (Effectivly doubling the line count.)
+* Slots CSV should include Slot + # (Slot 1, Slot 2, etc)
 
 
 # **Location Manger Items**
