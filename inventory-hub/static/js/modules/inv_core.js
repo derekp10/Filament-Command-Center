@@ -85,45 +85,47 @@ const getHexDark = (hex, opacity=0.3) => {
 };
 
 
+/* [Search Anchor] */
 const getFilamentStyle = (colorStr) => {
-    // [ALEX FIX V2] Enhanced cleaning & Debugging
-    // Clean up input: remove quotes, extra spaces
+    // [ALEX FIX] Robust Color Parsing (Shared by Buffer & Modals)
     if (!colorStr) colorStr = "333";
+    
+    // 1. Scrub the input (remove quotes, extra spaces)
     let cleanStr = colorStr.toString().replace(/['"]/g, '').trim();
     if (!cleanStr) cleanStr = "333";
 
-    // Debug log to help us catch the "Gray" culprit
-    // console.log(`🎨 Style Gen: "${colorStr}" -> "${cleanStr}"`);
-
     let colors = [];
-    // Handle JSON array strings (e.g. '["#FF0000","#00FF00"]')
+    
+    // 2. Handle Lists (JSON or CSV)
     if (cleanStr.startsWith('[')) {
-        try { 
-            colors = JSON.parse(cleanStr); 
-        } catch(e) { 
-            console.warn("Color Parse Fail", e);
-            colors = [cleanStr]; 
-        }
+        try { colors = JSON.parse(cleanStr); } 
+        catch(e) { colors = [cleanStr]; }
     } else {
         colors = cleanStr.split(',').map(c => c.trim());
     }
 
-    // Ensure all have # prefix and are valid hex chars
+    // 3. Normalize Hex Codes
     colors = colors.map(c => {
-        let hex = c.replace(/[^a-fA-F0-9]/g, ''); // Strip non-hex
+        // If it's already a valid hex format like #FFF or #112233, keep it
+        // Otherwise, strip non-hex chars and add hash
+        if(c.startsWith('#') && (c.length === 4 || c.length === 7)) return c;
+        let hex = c.replace(/[^a-fA-F0-9]/g, '');
         return hex ? '#' + hex : '#333';
     });
     
-    // Fallback for single color to make a gradient
+    // 4. Force at least 2 colors for a gradient
     if (colors.length === 1) colors.push(colors[0]);
 
+    // 5. Generate Gradients
     const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
     
     let innerGrad;
     if (colors.length > 1 && colors[0] !== colors[1]) {
+        // Multi-color inner: transparent dark overlay + colors
         const gradColors = colors.map(c => getHexDark(c, 0.8)); 
         innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), linear-gradient(135deg, ${gradColors.join(', ')})`;
     } else {
+        // Single-color inner: simple fade to black
         const lastColorDark = getHexDark(colors[0], 0.3);
         innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
     }

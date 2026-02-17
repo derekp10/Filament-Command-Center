@@ -45,8 +45,9 @@ const openSpoolDetails = (id, silent=false) => {
             } else btnSwatch.style.display = 'none';
         }
         
-        // [ALEX FIX] Update Swatch to use Gradient (Support Multi-Color)
+        // [ALEX FIX] Use Shared Gradient Style
         if(swatch) {
+            // We use 'background' (not backgroundColor) to support gradients
             const styles = getFilamentStyle(d.filament?.color_hex || "333");
             swatch.style.background = styles.frame;
         }
@@ -77,10 +78,10 @@ const openFilamentDetails = (fid, silent=false) => {
         document.getElementById('fil-detail-comment').value = d.comment || "";
         
         const swatch = document.getElementById('fil-detail-swatch');
-        // [ALEX FIX] Use Gradient Background
+        // [ALEX FIX] Use Shared Gradient Style
         if(swatch) {
-             const styles = getFilamentStyle(d.color_hex || "333");
-             swatch.style.background = styles.frame;
+            const styles = getFilamentStyle(d.color_hex || "333");
+            swatch.style.background = styles.frame;
         }
         
         // Link to Spoolman

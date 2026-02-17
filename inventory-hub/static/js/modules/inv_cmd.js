@@ -322,51 +322,11 @@ setInterval(loadBuffer, 2000);
 // Initial Load
 document.addEventListener('DOMContentLoaded', loadBuffer);
 
-/* --- NEW FEATURE: External Buffer Control --- */
 window.addSpoolToBuffer = (id) => {
-    // 1. Check if already in buffer
-    if (state.heldSpools.find(s => s.id == id)) {
-        showToast("⚠️ Spool already in Buffer", "warning");
-        return;
-    }
-    
-    // 2. Fetch Data & Add
-    setProcessing(true);
-    fetch(`/api/spool_details?id=${id}`)
-    .then(r => r.json())
-    .then(data => {
-        setProcessing(false);
-        if(!data || !data.id) { showToast("Error fetching spool", "error"); return; }
-        
-        // [ALEX FIX V2] Better Display String Construction
-        // Construct: "#123 Vendor Material Name"
-        // This format allows the Buffer Card renderer to strip the ID for the main text
-        // and put it in the ID badge corner.
-        const vendor = data.filament?.vendor?.name || "";
-        const material = data.filament?.material || "";
-        const name = data.filament?.name || "Unknown";
-        
-        // Combine and clean up extra spaces
-        const fullDisplay = `#${data.id} ${vendor} ${material} ${name}`.replace(/\s+/g, ' ').trim();
-
-        const bufferItem = {
-            id: data.id,
-            display: fullDisplay,
-            color: data.filament ? data.filament.color_hex : "333333",
-            _raw: data
-        };
-
-        // 3. Push to State
-        state.heldSpools.push(bufferItem);
-        
-        // 4. Update UI
-        if(window.renderBuffer) window.renderBuffer();
-        
-        showToast(`📥 Added Spool #${id} to Buffer`);
-    })
-    .catch(e => {
-        setProcessing(false);
-        console.error(e);
-        showToast("Connection Error", "error");
-    });
+    // [ALEX FIX] Reuse the Scanner Logic! 
+    // Instead of manually fetching and building the object, we just tell the 
+    // scanner router that this ID was "scanned". This ensures consistent behavior 
+    // and data formatting between physical scans and UI clicks.
+    console.log(`📥 Simulating Scan for Spool #${id}`);
+    processScan(id.toString());
 };
