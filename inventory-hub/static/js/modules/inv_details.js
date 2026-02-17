@@ -9,34 +9,40 @@ const openSpoolDetails = (id, silent=false) => {
         if(!silent) setProcessing(false);
         if (!d || !d.id) { showToast("Details Data Missing!", "error"); return; }
         
-        // Fill Modal
+        // --- 1. Basic Info ---
+        const fil = d.filament || {}; // Safe access
+        
         document.getElementById('detail-id').innerText = d.id;
-        document.getElementById('detail-material').innerText = d.filament?.material || "Unknown";
-        document.getElementById('detail-vendor').innerText = d.filament?.vendor?.name || "Unknown";
-        document.getElementById('detail-weight').innerText = (d.filament?.weight || 0) + "g";
+        document.getElementById('detail-material').innerText = fil.material || "Unknown";
+        document.getElementById('detail-vendor').innerText = fil.vendor?.name || "Unknown";
+        document.getElementById('detail-weight').innerText = (fil.weight || 0) + "g";
         
         const used = d.used_weight !== null ? d.used_weight : 0;
         const rem = d.remaining_weight !== null ? d.remaining_weight : 0;
         document.getElementById('detail-used').innerText = Number(used).toFixed(1) + "g";
         document.getElementById('detail-remaining').innerText = Number(rem).toFixed(1) + "g";
         
-        document.getElementById('detail-color-name').innerText = d.filament?.name || "Unknown";
-        document.getElementById('detail-hex').innerText = (d.filament?.color_hex || "").toUpperCase();
+        document.getElementById('detail-color-name').innerText = fil.name || "Unknown";
+        document.getElementById('detail-hex').innerText = (fil.color_hex || "").toUpperCase();
         document.getElementById('detail-comment').value = d.comment || "";
         
+        // --- 2. Swatch Logic (Robust V3) ---
         const swatch = document.getElementById('detail-swatch');
-        // [ALEX FIX] Gradient Swatch (Smart Field Selection)
         if(swatch) {
-            // Check multi_color_hexes first, then fall back to standard color_hex
-            const fil = d.filament;
-            const rawColor = fil?.multi_color_hexes || fil?.color_hex || "333";
+            // Priority: Multi-Hex -> Single Hex -> Extra Multi -> Extra Original -> Fallback
+            const rawColor = fil.multi_color_hexes 
+                          || fil.color_hex 
+                          || fil.extra?.multi_color_hexes
+                          || fil.extra?.color_hex 
+                          || "333";
             
-            console.log("🎨 Spool Swatch Color:", rawColor); // Debug
+            console.log(`🎨 Spool #${d.id} Swatch Color:`, rawColor);
+            
             const styles = getFilamentStyle(rawColor);
             swatch.style.background = styles.frame;
         }
         
-        // Link Logic
+        // --- 3. Link Logic ---
         const btnLink = document.getElementById('btn-open-spoolman');
         if (btnLink) {
             if (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) {
@@ -45,20 +51,13 @@ const openSpoolDetails = (id, silent=false) => {
             } else btnLink.href = `/spool/show/${d.id}`;
         }
         
-        // Swatch Link
+        // --- 4. Swatch Link Action ---
         const btnSwatch = document.getElementById('btn-spool-to-filament');
         if (btnSwatch) {
             if(d.filament) {
-                btnSwatch.onclick = () => { modals.spoolModal.hide(); openFilamentDetails(d.filament.id); };
+                btnSwatch.onclick = () => { modals.spoolModal.hide(); openFilamentDetails(fil.id); };
                 btnSwatch.style.display = 'inline-block';
             } else btnSwatch.style.display = 'none';
-        }
-        
-        // [ALEX FIX] Use Shared Gradient Style
-        if(swatch) {
-            // We use 'background' (not backgroundColor) to support gradients
-            const styles = getFilamentStyle(d.filament?.color_hex || "333");
-            swatch.style.background = styles.frame;
         }
         
         if(!silent && modals.spoolModal) modals.spoolModal.show();
