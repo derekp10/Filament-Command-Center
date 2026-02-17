@@ -182,8 +182,19 @@ const fetchLocations = () => {
                     statusHtml = `<span style="color:#666; font-style:italic; font-weight:bold;">--</span>`;
                 }
 
-                // 4. Type Badge
-                const typeBadge = `<span class="badge bg-secondary" style="margin-left:8px; border:1px solid #555; box-shadow: 1px 1px 3px rgba(0,0,0,0.5);">${l.Type}</span>`;
+                // 4. Type Badge (Rainbow Logic)
+                let badgeClass = 'bg-secondary';
+                let badgeStyle = 'border:1px solid #555;';
+                
+                // Color Mapping
+                const t = l.Type || '';
+                if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
+                else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
+                else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
+                else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
+                else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
+
+                const typeBadge = `<span class="badge ${badgeClass}" style="margin-left:8px; box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
 
                 return `
                 <tr>
