@@ -25,9 +25,12 @@ const openSpoolDetails = (id, silent=false) => {
         document.getElementById('detail-comment').value = d.comment || "";
         
         const swatch = document.getElementById('detail-swatch');
-        // [ALEX FIX] Gradient Swatch (Replaces old logic)
+        // [ALEX FIX] Gradient Swatch (Smart Field Selection)
         if(swatch) {
-            const rawColor = d.filament?.color_hex || "333";
+            // Check multi_color_hexes first, then fall back to standard color_hex
+            const fil = d.filament;
+            const rawColor = fil?.multi_color_hexes || fil?.color_hex || "333";
+            
             console.log("🎨 Spool Swatch Color:", rawColor); // Debug
             const styles = getFilamentStyle(rawColor);
             swatch.style.background = styles.frame;
@@ -84,9 +87,11 @@ const openFilamentDetails = (fid, silent=false) => {
         document.getElementById('fil-detail-comment').value = d.comment || "";
         
        const swatch = document.getElementById('fil-detail-swatch');
-        // [ALEX FIX] Gradient Swatch (Replaces old logic)
+        // [ALEX FIX] Gradient Swatch (Smart Field Selection)
         if(swatch) {
-            const rawColor = d.color_hex || "333";
+            // Check multi_color_hexes first, then fall back to standard color_hex
+            const rawColor = d.multi_color_hexes || d.color_hex || "333";
+            
             console.log("🎨 Filament Swatch Color:", rawColor); // Debug
             const styles = getFilamentStyle(rawColor);
             swatch.style.background = styles.frame;
