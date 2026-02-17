@@ -144,23 +144,61 @@ const fetchLocations = () => {
     fetch('/api/locations')
     .then(r=>r.json())
     .then(d => { 
-        state.allLocations=d; 
+        // 1. Inject Unassigned "Virtual" Location
+        const unassigned = { 
+            LocationID: 'Unassigned', 
+            Name: 'Workbench / Unsorted', 
+            Type: 'Virtual', 
+            Occupancy: '' 
+        };
+        const finalList = [unassigned, ...d];
+
+        state.allLocations = finalList; 
+        
+        // 2. Update Total Count with Pop Style
         const countEl = document.getElementById('loc-count');
-        if(countEl) countEl.innerText = "Total Locations: " + d.length; 
+        if(countEl) countEl.innerText = "Total Locations: " + finalList.length; 
         
         const table = document.getElementById('location-table');
         if(table) {
-            table.innerHTML = d.map(l => `
+            table.innerHTML = finalList.map(l => {
+                // 3. Status Pop Logic
+                let statusHtml = '';
+                let occColor = '#fff'; // Default White
+                
+                if (l.Occupancy) {
+                    const parts = l.Occupancy.split('/');
+                    if (parts.length === 2) {
+                        const cur = parseInt(parts[0]);
+                        const max = parseInt(parts[1]);
+                        // Check for Full State
+                        if (!isNaN(cur) && !isNaN(max) && cur >= max) {
+                            occColor = '#ff4444'; // Red if full
+                        }
+                    }
+                    // GOLD STANDARD: High Contrast Pop
+                    statusHtml = `<span style="font-weight:900; font-size:1.1rem; color:${occColor}; text-shadow: 2px 2px 4px #000;">${l.Occupancy}</span>`;
+                } else {
+                    statusHtml = `<span style="color:#666; font-style:italic; font-weight:bold;">--</span>`;
+                }
+
+                // 4. Type Badge
+                const typeBadge = `<span class="badge bg-secondary" style="margin-left:8px; border:1px solid #555; box-shadow: 1px 1px 3px rgba(0,0,0,0.5);">${l.Type}</span>`;
+
+                return `
                 <tr>
-                    <td class="col-id">${l.LocationID}</td>
-                    <td class="col-name">${l.Name}</td>
-                    <td class="col-status">${l.Occupancy||''} <span class="badge bg-secondary">${l.Type}</span></td>
-                    <td class="col-actions">
+                    <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem;">${l.LocationID}</td>
+                    <td class="col-name" style="font-weight:600; font-size:1.05rem;">${l.Name}</td>
+                    <td class="col-status">${statusHtml} ${typeBadge}</td>
+                    <td class="col-actions text-end">
+                        ${l.Type !== 'Virtual' ? `
                         <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${l.LocationID}">✏️</button>
                         <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${l.LocationID}">🗑️</button>
-                        <button class="btn btn-sm btn-info btn-manage" data-id="${l.LocationID}">Manage</button>
+                        ` : ''}
+                        <button class="btn btn-sm btn-info btn-manage fw-bold" data-id="${l.LocationID}">Manage</button>
                     </td>
-                </tr>`).join(''); 
+                </tr>`;
+            }).join(''); 
         }
     }); 
 };

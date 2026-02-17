@@ -5,6 +5,22 @@
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
+    /* --- LIST VIEW FIXES (Sticky, Contrast, Close Btn) --- */
+    .sticky-th th { 
+        position: sticky; top: 0; z-index: 10; 
+        background-color: #1f1f1f; 
+        box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+    }
+    /* Fix Close Button Visibility on Dark Header */
+    #locMgrModal .btn-close { filter: invert(1) grayscale(100%) brightness(200%); }
+    /* Fix Loading/Count Text Visibility */
+    #loc-count { 
+        color: #0dcaf0 !important; /* Bootstrap text-info */
+        font-weight: bold; 
+        font-size: 1.1rem; 
+        text-shadow: 1px 1px 3px #000;
+    }
+
     /* --- NUCLEAR Z-INDEX FIX --- */
     #queueModal, #spoolModal, #filamentModal, #actionModal, #safetyModal, #confirmModal {
         z-index: 1100 !important;
@@ -212,11 +228,11 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">📍 Location List</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body p-0">
                 <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-dark">
-                    <span id="loc-count" class="text-muted">Loading...</span>
+                    <span id="loc-count" class="text-info fw-bold" style="font-size: 1.1rem; text-shadow: 1px 1px 3px #000;">Loading...</span>
                     <button class="btn btn-success" onclick="openAddModal()">➕ Add Location</button>
                 </div>
                 <div class="table-responsive" style="max-height: 70vh;">
