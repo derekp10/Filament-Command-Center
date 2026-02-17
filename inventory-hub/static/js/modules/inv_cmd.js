@@ -339,8 +339,18 @@ window.addSpoolToBuffer = (id) => {
         setProcessing(false);
         if(!data || !data.id) { showToast("Error fetching spool", "error"); return; }
         
+        // [ALEX FIX] Map API Data to Buffer Object Format
+        // The buffer expects {id, display, color}, but the API returns a nested object.
+        const bufferItem = {
+            id: data.id,
+            display: data.filament ? data.filament.name : "Unknown Spool",
+            color: data.filament ? data.filament.color_hex : "333333",
+            // Keep original data just in case
+            _raw: data
+        };
+
         // 3. Push to State
-        state.heldSpools.push(data);
+        state.heldSpools.push(bufferItem);
         
         // 4. Update UI (This triggers the auto-save persistence we added earlier)
         if(window.renderBuffer) window.renderBuffer();

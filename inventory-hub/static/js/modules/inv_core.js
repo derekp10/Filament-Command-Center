@@ -84,18 +84,31 @@ const getHexDark = (hex, opacity=0.3) => {
     return `rgba(${r}, ${g}, ${b}, ${opacity})`; 
 };
 
+
 const getFilamentStyle = (colorStr) => {
     if (!colorStr) return { frame: '#333', inner: '#1a1a1a' };
+    
+    // [ALEX FIX] Robust Color Parsing for Multi-Color/Rainbow Spools
     let colors = [];
-    if (colorStr.includes(',')) {
-        colors = colorStr.split(',').map(c => c.trim().startsWith('#') ? c.trim() : '#' + c.trim());
+    // Handle JSON array strings (e.g. '["#FF0000","#00FF00"]') or simple commas
+    if (colorStr.trim().startsWith('[')) {
+        try { colors = JSON.parse(colorStr); } catch(e) { colors = [colorStr]; }
     } else {
-        const hex = colorStr.startsWith('#') ? colorStr : '#' + colorStr;
-        colors = [hex, hex];
+        colors = colorStr.split(',').map(c => c.trim());
     }
+
+    // Ensure all have # prefix
+    colors = colors.map(c => c.startsWith('#') ? c : '#' + c);
+    
+    // Fallback for single color to make a gradient
+    if (colors.length === 1) colors.push(colors[0]);
+
     const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
+    
     let innerGrad;
-    if (colors.length > 1 && colors[0] !== colors[1]) {
+    if (colors.length > 1) {
+        // Create a semi-transparent version of the gradient for the inner card
+        // For 4+ colors, we simply use the same sequence but darker/transparent
         const gradColors = colors.map(c => getHexDark(c, 0.8)); 
         innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), linear-gradient(135deg, ${gradColors.join(', ')})`;
     } else {

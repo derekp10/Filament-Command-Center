@@ -45,6 +45,12 @@ const openSpoolDetails = (id, silent=false) => {
             } else btnSwatch.style.display = 'none';
         }
         
+        // [ALEX FIX] Update Swatch to use Gradient (Support Multi-Color)
+        if(swatch) {
+            const styles = getFilamentStyle(d.filament?.color_hex || "333");
+            swatch.style.background = styles.frame;
+        }
+        
         if(!silent && modals.spoolModal) modals.spoolModal.show();
     })
     .catch(e => { if(!silent) setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
@@ -71,7 +77,11 @@ const openFilamentDetails = (fid, silent=false) => {
         document.getElementById('fil-detail-comment').value = d.comment || "";
         
         const swatch = document.getElementById('fil-detail-swatch');
-        if(swatch) swatch.style.backgroundColor = "#" + (d.color_hex || "333");
+        // [ALEX FIX] Use Gradient Background
+        if(swatch) {
+             const styles = getFilamentStyle(d.color_hex || "333");
+             swatch.style.background = styles.frame;
+        }
         
         // Link to Spoolman
         const btnLink = document.getElementById('btn-fil-open-spoolman');
