@@ -52,6 +52,15 @@ def resolve_scan(text):
 
         return {'type': 'error', 'msg': 'Malformed Command'}
 
+    # [ALEX FIX] EXPLICIT LOCATION SCAN (LOC: Prefix)
+    # This prevents accidental manual entries unless they explicitly start with LOC:
+    if upper_text.startswith("LOC:"):
+        # Strip the prefix and use the rest as the ID
+        clean_loc = upper_text[4:].strip()
+        if clean_loc:
+             return {'type': 'location', 'id': clean_loc}
+        return {'type': 'error', 'msg': 'Empty Location Code'}
+
     # DIRECT SPOOL ID
     if upper_text.startswith("ID:") or upper_text.startswith("SPL:"):
         # Normalize SPL: to just ID logic
@@ -79,32 +88,38 @@ def resolve_scan(text):
     # PURE NUMBER SCAN (Priority Stack)
     if text.isdigit():
         # 1. PRIORITY: Legacy Spool Match
-        # (Does a spool exist that has this number as its EXTERNAL ID?)
         rid = spoolman_api.find_spool_by_legacy_id(text, strict_mode=True)
         if rid: return {'type': 'spool', 'id': rid}
         
         # 2. PRIORITY: Legacy Filament Match
-        # (Does a filament exist that has this number as its EXTERNAL ID?)
-        # This catches your case: Input "99" matches Filament 96's External ID "99".
         fid = spoolman_api.find_filament_by_legacy_id(text)
         if fid: return {'type': 'filament', 'id': fid}
         
         # 3. FALLBACK: Direct Spool ID
-        # (Does Spool #99 exist?)
         spool_check = spoolman_api.get_spool(text)
         if spool_check and spool_check.get('id'):
             return {'type': 'spool', 'id': int(text)}
 
         # 4. FALLBACK: Direct Filament ID
-        # (Does Filament #99 exist?)
         fil_check = spoolman_api.get_filament(text)
         if fil_check and fil_check.get('id'):
             return {'type': 'filament', 'id': int(text)}
         
         return {'type': 'error', 'msg': 'ID Not Found'}
         
+    # [ALEX FIX] LEGACY LOCATION FALLBACK (With Validation)
+    # Only accept a "random string" as a location IF it exists in the DB.
+    # This stops typos (e.g. "Spool") from becoming location "SPOOL".
     if len(text) > 2: 
-        return {'type': 'location', 'id': text.upper()}
+        # Check against known locations
+        loc_list = locations_db.load_locations_list()
+        # Create a set of valid IDs for fast lookup
+        valid_ids = {row['LocationID'].upper() for row in loc_list}
+        
+        if text.upper() in valid_ids:
+            return {'type': 'location', 'id': text.upper()}
+        else:
+            return {'type': 'error', 'msg': 'Unknown Code (Use LOC: prefix)'}
         
     return {'type': 'error', 'msg': 'Unknown Code'}
 

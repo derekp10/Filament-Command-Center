@@ -145,12 +145,11 @@ def api_print_batch_csv():
         items_to_print = []
         slots_to_print = []
 
-
         # --- 2. DEFINE HEADERS ---
         if mode == 'spool':
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Weight', 'QR_Code']
         elif mode == 'location':
-            # 🧹 STRICT HEADERS for Locations (No Spool data allowed)
+            # [ALEX FIX] Added 'Slot' to headers
             core_headers = ['LocationID', 'Name', 'Cleaned_Name', 'QR_Code']
         else:
             core_headers = ['ID', 'Brand', 'Color', 'Type', 'Hex', 'Red', 'Green', 'Blue', 'Temp_Nozzle', 'Temp_Bed', 'Density', 'QR_Code']
@@ -163,7 +162,13 @@ def api_print_batch_csv():
             loc_lookup = {str(row['LocationID']): row for row in loc_list}
 
         # --- 4. BUILD ROWS ---
+        seen_ids = set() # [ALEX FIX] Deduplication tracker
+
         for item_id in ids:
+            # [ALEX FIX] Prevent processing duplicates in the same batch
+            if item_id in seen_ids: continue
+            seen_ids.add(item_id)
+
             row_data = {}
             
             # === SPOOL MODE ===
@@ -199,22 +204,21 @@ def api_print_batch_csv():
                     name = loc_data.get('Name', 'Unknown')
                 else:
                     # 2. Try Spoolman API (Fallback)
-                    # This handles cases where the location exists in Spoolman but not the CSV
                     sm_url, _ = config_loader.get_api_urls()
                     try:
-                        # Attempt to fetch location details from Spoolman
                         resp = requests.get(f"{sm_url}/api/v1/location/{item_id}", timeout=2)
                         if resp.ok:
                             s_data = resp.json()
                             name = s_data.get('name', str(item_id))
                         else:
-                            name = str(item_id) # 404/Error: Fallback to ID
+                            name = str(item_id)
                     except:
-                        name = str(item_id) # Network Error: Fallback to ID
+                        name = str(item_id)
                 
                 row_data['LocationID'] = item_id
                 row_data['Name'] = name
-                row_data['QR_Code'] = item_id
+                # [ALEX FIX] Enforce LOC: prefix for Location QR Codes
+                row_data['QR_Code'] = f"LOC:{item_id}" 
 
                 # --- CLEAN NAME & SLOT GENERATION ---
                 clean_name = sanitize_label_text(name)
@@ -228,30 +232,15 @@ def api_print_batch_csv():
                             except: max_spools = 0
                             break
                 
+                # [ALEX FIX] Removed the DUPLICATE "Slot Generation" block that was here.
+                # [ALEX FIX] Added "Slot" column logic.
                 if max_spools > 1:
                     for i in range(1, max_spools + 1):
                         slots_to_print.append({
                             "LocationID": item_id,
+                            "Slot": f"Slot {i}", # <--- NEW FIELD
                             "Name": f"{name} Slot {i}",
                             "Cleaned_Name": f"{clean_name} Slot {i}",
-                            "QR_Code": f"LOC:{item_id}:SLOT:{i}"
-                        })
-
-                # --- SLOT GENERATION ---
-                max_spools = 0
-                if loc_data:
-                    # Robust lookup for 'Max Spools' in the CSV data
-                    for k, v in loc_data.items():
-                        if k.strip().lower() == 'max spools':
-                            try: max_spools = int(v)
-                            except: max_spools = 0
-                            break
-                
-                if max_spools > 1:
-                    for i in range(1, max_spools + 1):
-                        slots_to_print.append({
-                            "LocationID": item_id,
-                            "Name": f"{name} Slot {i}",
                             "QR_Code": f"LOC:{item_id}:SLOT:{i}"
                         })
 
@@ -326,7 +315,8 @@ def api_print_batch_csv():
             slots_exists = os.path.exists(slots_path)
             
             with open(slots_path, write_mode, newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=["LocationID", "Name", "Cleaned_Name", "QR_Code"])
+                # [ALEX FIX] Added "Slot" to fieldnames
+                writer = csv.DictWriter(f, fieldnames=["LocationID", "Slot", "Name", "Cleaned_Name", "QR_Code"])
                 if clear_old or not slots_exists: writer.writeheader()
                 writer.writerows(slots_to_print)
 
@@ -509,14 +499,12 @@ def api_print_location_label():
     base_path = cfg.get("print_settings", {}).get("csv_path", "labels.csv")
     
     output_dir = os.path.dirname(base_path)
-    # Fallback to current dir if config path is empty or root-bound on Windows without drive letter
     if not output_dir or (os.name == 'nt' and output_dir.startswith(('/', '\\'))):
         output_dir = "."
     
-    # Ensure directory exists
     if output_dir != ".":
         try: os.makedirs(output_dir, exist_ok=True)
-        except: output_dir = "." # Fallback on permission error
+        except: output_dir = "." 
 
     loc_file = os.path.join(output_dir, "labels_locations.csv")
     slot_file = os.path.join(output_dir, "slots_to_print.csv")
@@ -524,11 +512,10 @@ def api_print_location_label():
     try:
         locs = locations_db.load_locations_list()
         
-        # 3. Robust Lookup (Find row where LocationID matches, ignoring case/whitespace)
+        # 3. Robust Lookup 
         loc_data = None
         for row in locs:
             row_id = ""
-            # Iterate keys to find 'LocationID' case-insensitively
             for k, v in row.items():
                 if k.strip().lower() == 'locationid': 
                     row_id = v.strip().upper()
@@ -562,7 +549,7 @@ def api_print_location_label():
                 "LocationID": target_id, 
                 "Name": loc_name,
                 "Cleaned_Name": clean_name,
-                "QR_Code": target_id
+                "QR_Code": f"LOC:{target_id}" # [ALEX FIX] Added Prefix
             })
             
         # 5. Robust Slot Logic
@@ -579,13 +566,15 @@ def api_print_location_label():
         if max_spools > 1:
             slot_exists = os.path.exists(slot_file)
             with open(slot_file, 'a', newline='', encoding='utf-8') as f:
-                headers = ["LocationID", "Name", "Cleaned_Name", "QR_Code"]
+                # [ALEX FIX] Added "Slot" field
+                headers = ["LocationID", "Slot", "Name", "Cleaned_Name", "QR_Code"]
                 writer = csv.DictWriter(f, fieldnames=headers)
                 if not slot_exists: writer.writeheader()
                 
                 for i in range(1, max_spools + 1):
                     writer.writerow({
                         "LocationID": target_id,
+                        "Slot": f"Slot {i}",
                         "Name": f"{loc_name} Slot {i}",
                         "Cleaned_Name": f"{clean_name} Slot {i}",
                         "QR_Code": f"LOC:{target_id}:SLOT:{i}"
