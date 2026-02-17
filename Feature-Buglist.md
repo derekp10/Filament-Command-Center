@@ -6,6 +6,7 @@
 * Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
 * Smart assign (I think thats what we called it) isn't working for non-dryerbox locations. I have to scan the location multiple times to unload the buffer into it, instead of it realizing it's a mass storage locaiton and just assigning it to the location.
 * Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
+* Add the ability to have Command Center Notify if Filabridge had an issue reading data from printer for spool weight update, so user can see without having to open filabridge.
 
 
 # **Location Manger Items**
@@ -26,9 +27,7 @@ Ejecting from slot is not showing as being ejected (setting slot to empty) Is th
 
 
 # **Details (Filament/Spool) Modal **
-* Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
-* Loading spools into buffer from filament definition doesn't load all spool data into card.
-* Side Quest: Spool card coloring system doens't seem to handle 4+ colors in a swatch for generating gradiant 
+
 
 # **Location List**
 1. Add unassigned Location in Location List.
@@ -91,3 +90,6 @@ All 3 of these things are important and have value. And I think this is somethin
 
 # **Done**
 * Black filaments need a better way to show border or a better gradiant in the color
+* Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
+* Loading spools into buffer from filament definition doesn't load all spool data into card.
+* Side Quest: Spool card coloring system doens't seem to handle 4+ colors in a swatch for generating gradiant 
