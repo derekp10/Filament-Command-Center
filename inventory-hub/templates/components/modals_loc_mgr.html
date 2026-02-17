@@ -5,20 +5,11 @@
     #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
     #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
 
-    /* --- LIST VIEW FIXES (Sticky, Contrast, Close Btn) --- */
+    /* --- LIST VIEW FIXES (Sticky Header Only) --- */
     .sticky-th th { 
         position: sticky; top: 0; z-index: 10; 
         background-color: #1f1f1f; 
         box-shadow: 0 2px 5px rgba(0,0,0,0.5);
-    }
-    /* Fix Close Button Visibility on Dark Header */
-    #locMgrModal .btn-close { filter: invert(1) grayscale(100%) brightness(200%); }
-    /* Fix Loading/Count Text Visibility */
-    #loc-count { 
-        color: #0dcaf0 !important; /* Bootstrap text-info */
-        font-weight: bold; 
-        font-size: 1.1rem; 
-        text-shadow: 1px 1px 3px #000;
     }
 
     /* --- NUCLEAR Z-INDEX FIX --- */
