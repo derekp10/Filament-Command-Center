@@ -332,27 +332,34 @@ window.addSpoolToBuffer = (id) => {
     
     // 2. Fetch Data & Add
     setProcessing(true);
-    // We use the same API as the details window to get the full object
     fetch(`/api/spool_details?id=${id}`)
     .then(r => r.json())
     .then(data => {
         setProcessing(false);
         if(!data || !data.id) { showToast("Error fetching spool", "error"); return; }
         
-        // [ALEX FIX] Map API Data to Buffer Object Format
-        // The buffer expects {id, display, color}, but the API returns a nested object.
+        // [ALEX FIX V2] Better Display String Construction
+        // Construct: "#123 Vendor Material Name"
+        // This format allows the Buffer Card renderer to strip the ID for the main text
+        // and put it in the ID badge corner.
+        const vendor = data.filament?.vendor?.name || "";
+        const material = data.filament?.material || "";
+        const name = data.filament?.name || "Unknown";
+        
+        // Combine and clean up extra spaces
+        const fullDisplay = `#${data.id} ${vendor} ${material} ${name}`.replace(/\s+/g, ' ').trim();
+
         const bufferItem = {
             id: data.id,
-            display: data.filament ? data.filament.name : "Unknown Spool",
+            display: fullDisplay,
             color: data.filament ? data.filament.color_hex : "333333",
-            // Keep original data just in case
             _raw: data
         };
 
         // 3. Push to State
         state.heldSpools.push(bufferItem);
         
-        // 4. Update UI (This triggers the auto-save persistence we added earlier)
+        // 4. Update UI
         if(window.renderBuffer) window.renderBuffer();
         
         showToast(`📥 Added Spool #${id} to Buffer`);

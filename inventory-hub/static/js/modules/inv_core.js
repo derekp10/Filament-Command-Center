@@ -86,19 +86,33 @@ const getHexDark = (hex, opacity=0.3) => {
 
 
 const getFilamentStyle = (colorStr) => {
-    if (!colorStr) return { frame: '#333', inner: '#1a1a1a' };
-    
-    // [ALEX FIX] Robust Color Parsing for Multi-Color/Rainbow Spools
+    // [ALEX FIX V2] Enhanced cleaning & Debugging
+    // Clean up input: remove quotes, extra spaces
+    if (!colorStr) colorStr = "333";
+    let cleanStr = colorStr.toString().replace(/['"]/g, '').trim();
+    if (!cleanStr) cleanStr = "333";
+
+    // Debug log to help us catch the "Gray" culprit
+    // console.log(`🎨 Style Gen: "${colorStr}" -> "${cleanStr}"`);
+
     let colors = [];
-    // Handle JSON array strings (e.g. '["#FF0000","#00FF00"]') or simple commas
-    if (colorStr.trim().startsWith('[')) {
-        try { colors = JSON.parse(colorStr); } catch(e) { colors = [colorStr]; }
+    // Handle JSON array strings (e.g. '["#FF0000","#00FF00"]')
+    if (cleanStr.startsWith('[')) {
+        try { 
+            colors = JSON.parse(cleanStr); 
+        } catch(e) { 
+            console.warn("Color Parse Fail", e);
+            colors = [cleanStr]; 
+        }
     } else {
-        colors = colorStr.split(',').map(c => c.trim());
+        colors = cleanStr.split(',').map(c => c.trim());
     }
 
-    // Ensure all have # prefix
-    colors = colors.map(c => c.startsWith('#') ? c : '#' + c);
+    // Ensure all have # prefix and are valid hex chars
+    colors = colors.map(c => {
+        let hex = c.replace(/[^a-fA-F0-9]/g, ''); // Strip non-hex
+        return hex ? '#' + hex : '#333';
+    });
     
     // Fallback for single color to make a gradient
     if (colors.length === 1) colors.push(colors[0]);
@@ -106,9 +120,7 @@ const getFilamentStyle = (colorStr) => {
     const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
     
     let innerGrad;
-    if (colors.length > 1) {
-        // Create a semi-transparent version of the gradient for the inner card
-        // For 4+ colors, we simply use the same sequence but darker/transparent
+    if (colors.length > 1 && colors[0] !== colors[1]) {
         const gradColors = colors.map(c => getHexDark(c, 0.8)); 
         innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), linear-gradient(135deg, ${gradColors.join(', ')})`;
     } else {
