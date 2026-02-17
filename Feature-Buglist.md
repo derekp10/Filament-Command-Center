@@ -7,6 +7,7 @@
 * Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
 * Fix backend logging to not repeate this filling the logs with non useful data. 
     - 2026-02-14 06:01:08,706 - INFO - ✅ Loaded Prod Config: /config.json
+* Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
 
 
 
@@ -14,6 +15,9 @@
 # **Location Manger Items**
 * Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
 * Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here.
+* Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to. This might be because we added the LOC: indicater, and it might just not be parcing correctly now.
+    - Could be advantagous to have the slots have there own loation in Spoolman.
+    - Definitely need to support loading locations from Spoolman, but perhaps store in a config the information about the location, and not rely on the Locations.csv file as much.
 
 # **Print Queue Items**
 
