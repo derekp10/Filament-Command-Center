@@ -155,18 +155,19 @@ const fetchLocations = () => {
         const table = document.getElementById('location-table');
         if(table) {
             table.innerHTML = finalList.map(l => {
-                // 3. Status Pop Logic
+                // 3. Status Pop Logic (Red/Green/White)
                 let statusHtml = '';
-                let occColor = '#fff'; // Default White
+                let occColor = '#fff'; // Default White (Under Capacity)
                 
                 if (l.Occupancy) {
                     const parts = l.Occupancy.split('/');
                     if (parts.length === 2) {
                         const cur = parseInt(parts[0]);
                         const max = parseInt(parts[1]);
-                        // Check for Full State
-                        if (!isNaN(cur) && !isNaN(max) && cur >= max) {
-                            occColor = '#ff4444'; // Red if full
+                        
+                        if (!isNaN(cur) && !isNaN(max)) {
+                            if (cur > max) occColor = '#ff4444';      // Red (Overfilled)
+                            else if (cur === max) occColor = '#00ff00'; // Green (Full)
                         }
                     }
                     // GOLD STANDARD: High Contrast Pop
@@ -175,7 +176,7 @@ const fetchLocations = () => {
                     statusHtml = `<span style="color:#666; font-style:italic; font-weight:bold;">--</span>`;
                 }
 
-                // 4. Type Badge (Rainbow Logic)
+                // 4. Type Badge (Rainbow Logic + Visible Virtual)
                 let badgeClass = 'bg-secondary';
                 let badgeStyle = 'border:1px solid #555;';
                 
@@ -186,7 +187,8 @@ const fetchLocations = () => {
                 else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
                 else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
                 else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
-                else if (t.includes('Virtual')) { badgeClass = 'bg-dark text-muted'; badgeStyle = 'border:1px dashed #666;'; }
+                // [ALEX FIX] High Contrast for Virtual
+                else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
 
                 const typeBadge = `<span class="badge ${badgeClass}" style="margin-left:8px; box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
 
