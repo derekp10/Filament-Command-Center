@@ -36,11 +36,7 @@
 
 
 # **Location List**
-1. Add unassigned Location in Location List.
-2. Fix Gray text on Gray background and X close button.
-3. Fix first line (Headers scrolling with the window)
-4. Improve readibility for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme)
-    - High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
+
 
 # **Next Steps Items:**
 
@@ -104,3 +100,10 @@ Production Functionality Fix list
     - Keep existing logic to allow for backwords compatibility, but allow for LOC: codes for future items.
 * Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without (Effectivly doubling the line count.)
 * Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field
+* Add unassigned Location in Location List.
+* Fix Gray text on Gray background and X close button.
+* Fix first line (Headers scrolling with the window)
+* Improve readibility for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme)
+    - High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
+* Added color coding to the badges on the location (Location Type)
+* Added color indicate of dryerbox/tool fullness (1/1 Green, 2/1 Red, < Max White)
