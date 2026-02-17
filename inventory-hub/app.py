@@ -338,6 +338,8 @@ def api_print_batch_csv():
 def api_get_locations(): 
     csv_rows = locations_db.load_locations_list()
     occupancy_map = {}
+    unassigned_count = 0 # [ALEX FIX] Track unassigned
+    
     sm_url, _ = config_loader.get_api_urls()
     try:
         resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
@@ -345,9 +347,19 @@ def api_get_locations():
             for s in resp.json():
                 loc = s.get('location', '').upper().strip()
                 if loc: occupancy_map[loc] = occupancy_map.get(loc, 0) + 1
+                else: unassigned_count += 1 # [ALEX FIX] Count unassigned
     except: pass
 
     final_list = []
+    # [ALEX FIX] Inject Virtual Unassigned Row
+    final_list.append({
+        "LocationID": "Unassigned",
+        "Name": "Workbench / Unsorted",
+        "Type": "Virtual",
+        "Occupancy": f"{unassigned_count} items",
+        "Max Spools": 0
+    })
+
     for row in csv_rows:
         lid = row['LocationID'].upper()
         max_s = row.get('Max Spools', '')

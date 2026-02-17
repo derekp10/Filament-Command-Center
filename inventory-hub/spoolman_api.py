@@ -117,11 +117,23 @@ def format_spool_display(spool_data):
 def get_spools_at_location_detailed(loc_name):
     sm_url, _ = config_loader.get_api_urls()
     found = []
+    # [ALEX FIX] Handle Unassigned (No Location)
+    check_unassigned = (str(loc_name).upper() == 'UNASSIGNED')
+
     try:
         resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
         if resp.ok:
             for s in resp.json():
-                if s.get('location', '').upper() == loc_name.upper():
+                # [ALEX FIX] Logic for Unassigned vs Named Location
+                sloc = s.get('location', '').strip()
+                match = False
+                
+                if check_unassigned:
+                    if not sloc: match = True
+                elif sloc.upper() == loc_name.upper():
+                    match = True
+                    
+                if match:
                     info = format_spool_display(s)
                     found.append({'id': s['id'], 'display': info['text'], 'color': info['color'], 'slot': info['slot']})
     except: pass

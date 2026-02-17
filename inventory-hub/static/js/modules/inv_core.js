@@ -144,15 +144,8 @@ const fetchLocations = () => {
     fetch('/api/locations')
     .then(r=>r.json())
     .then(d => { 
-        // 1. Inject Unassigned "Virtual" Location
-        const unassigned = { 
-            LocationID: 'Unassigned', 
-            Name: 'Workbench / Unsorted', 
-            Type: 'Virtual', 
-            Occupancy: '' 
-        };
-        const finalList = [unassigned, ...d];
-
+        // [ALEX FIX] Backend now provides Unassigned, so we use 'd' directly
+        const finalList = d;
         state.allLocations = finalList; 
         
         // 2. Update Total Count with Pop Style
@@ -193,13 +186,14 @@ const fetchLocations = () => {
                 else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
                 else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
                 else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
+                else if (t.includes('Virtual')) { badgeClass = 'bg-dark text-muted'; badgeStyle = 'border:1px dashed #666;'; }
 
                 const typeBadge = `<span class="badge ${badgeClass}" style="margin-left:8px; box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
 
                 return `
                 <tr>
                     <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem;">${l.LocationID}</td>
-                    <td class="col-name" style="font-weight:600; font-size:1.05rem;">${l.Name}</td>
+                    <td class="col-name" style="font-weight:800; font-size:1.1rem; color:#fff; text-shadow: 1px 1px 3px #000;">${l.Name}</td>
                     <td class="col-status">${statusHtml} ${typeBadge}</td>
                     <td class="col-actions text-end">
                         ${l.Type !== 'Virtual' ? `
