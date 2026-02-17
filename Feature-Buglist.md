@@ -5,6 +5,7 @@
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
 * Smart assign (I think thats what we called it) isn't working for non-dryerbox locations. I have to scan the location multiple times to unload the buffer into it, instead of it realizing it's a mass storage locaiton and just assigning it to the location. Can't recall if this was a design choice, or if it's a bug.
 * Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
+    - Label Printed in Spoolman Spool data can be used to determin if a new (Spoolman Based ID) Label has been printed.
 * Fix backend logging to not repeate this filling the logs with non useful data. 
     - 2026-02-14 06:01:08,706 - INFO - ✅ Loaded Prod Config: /config.json
 * Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
@@ -20,6 +21,7 @@
     - Definitely need to support loading locations from Spoolman, but perhaps store in a config the information about the location, and not rely on the Locations.csv file as much.
 
 # **Print Queue Items**
+* For filament Queue, the spools in the list for that filament list No Loc for all items, even the ones with a loc. This needs to be fixed.
 
 
 # **Command Center Items**
