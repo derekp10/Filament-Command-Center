@@ -13,11 +13,6 @@
 Ejecting from slot is not showing as being ejected (setting slot to empty) Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
 
 # **Print Queue Items**
-* Locations QR Codes should contain a LOC: code, and a LOC: code should be used to help identify locations. (Too many manual entry items accidently turn into locations by accident on misstyping)
-    - Pehraps we just refactor this code an check its logic.
-    - Keep existing logic to allow for backwords compatibility, but allow for LOC: codes for future items.
-* Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without (Effectivly doubling the line count.)
-* Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field
 
 
 # **Command Center Items**
@@ -40,9 +35,6 @@ Ejecting from slot is not showing as being ejected (setting slot to empty) Is th
 # **Next Steps Items:**
 
 ## **Current:**
-Production Functionality Fix list
-6. Fix Location Manager UI Dryer box slot locations not correctly displaying all filament information
-
 
 
 ## **Future:**
@@ -89,8 +81,17 @@ I think we've inadverntaly created 3 levels of logic/complexity here. 1. The phy
 
 All 3 of these things are important and have value. And I think this is something that we should table for now, and come back to once we've gotten more of the functionality in place and working.
 
+# **I THINK there done?**
+Production Functionality Fix list
+* Fix Location Manager UI Dryer box slot locations not correctly displaying all filament information
+
 # **Done**
 * Black filaments need a better way to show border or a better gradiant in the color
 * Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
-* Side Quest: Spool card coloring system doens't seem to handle 4+ colors in a swatch for generating gradiant 
+* Side Quest: Spool card coloring system doens't seem to handle 4+ colors in a swatch for generating gradiant
+* Locations QR Codes should contain a LOC: code, and a LOC: code should be used to help identify locations. (Too many manual entry items accidently turn into locations by accident on misstyping)
+    - Pehraps we just refactor this code an check its logic.
+    - Keep existing logic to allow for backwords compatibility, but allow for LOC: codes for future items.
+* Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without (Effectivly doubling the line count.)
+* Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field
