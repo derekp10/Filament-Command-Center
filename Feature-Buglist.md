@@ -3,14 +3,17 @@
 
 # ** General **
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
-* Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
 * Smart assign (I think thats what we called it) isn't working for non-dryerbox locations. I have to scan the location multiple times to unload the buffer into it, instead of it realizing it's a mass storage locaiton and just assigning it to the location. Can't recall if this was a design choice, or if it's a bug.
 * Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
-* Add the ability to have Command Center Notify if Filabridge had an issue reading data from printer for spool weight update, so user can see without having to open filabridge.
+* Fix backend logging to not repeate this filling the logs with non useful data. 
+    - 2026-02-14 06:01:08,706 - INFO - ✅ Loaded Prod Config: /config.json
+
+
 
 
 # **Location Manger Items**
-Ejecting from slot is not showing as being ejected (setting slot to empty) Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
+* Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
+* Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here.
 
 # **Print Queue Items**
 
@@ -20,6 +23,8 @@ Ejecting from slot is not showing as being ejected (setting slot to empty) Is th
 * Undo should put back into buffer if it came from buffer.
 * Eject should auto disable if we move off of the command screen to anyother screen or modal
 * Fix swatch circles in "Live Activity" window/pane to work with multi-color filament/spools.
+* Add the ability to have Command Center Notify if Filabridge had an issue reading data from printer for spool weight update, so user can see without having to open filabridge.
+* Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
 
 
 # **Details (Filament/Spool) Modal **
