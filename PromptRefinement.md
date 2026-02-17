@@ -2,7 +2,13 @@ Ok It's time to put on the coding hat. We need to fix all the following. Lets wo
 I don't want any deletion of any of the original code as we fix it to maintain existing functionality. 
 I also do not want any of the styling to change in the existing code. 
 This is a Code fix, and function/feature add only, and we need to work within the existing visual context to integrate these changes in with out breaking existing style/visuals.
-We also don't want to do any injection fixes, or fixes where it makes more sense to just update the primary code for it. To prevent us from having multiple places where the code does a thing, that should have just been rolled into the main code set. Don't re-invent the wheel, Code reuse is a HIGH PRIORITY! Make sure we are not duplicating existing code before progressing with writting code.
+We also don't want to do any injection fixes, or fixes where it makes more sense to just update the primary code for it. To prevent us from having multiple places where the code does a thing, that should have just been rolled into the main code set. Don't re-invent the wheel, Code reuse is a HIGH PRIORITY! Make sure we are not duplicating existing code before progressing with writing code.
+
+Lets work on these Items/Bugs/Features:
+
+Please clarify the plan of attach before writing any Code. I want to make sure we don't have any misunderstandings before making code changes. If something is vague, ask. 
+
+-------------
 
 Ok. This is going to be a big one. So because we modularized everything, this helped fix some of the main issues in Location manger Mainly the UI not displaying right. But we still have a bit of work ahead of us I can provide you a picture of how it use to look, and hopefully we can rebuild it with that. Would you be able to do that for me?
 
