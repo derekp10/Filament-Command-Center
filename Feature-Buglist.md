@@ -23,9 +23,7 @@ Ejecting from slot is not showing as being ejected (setting slot to empty) Is th
 
 
 # **Command Center Items**
-
-2. Set it so that the screen don't sleep. (Needs to be tested on laptop)
-3. Clicking on the Spoolman or Filabridge Status Buttons should opening there respective apps.
+* TODO: Set it so that the screen don't sleep. (Needs to be tested on laptop)
 
 # **Details (Filament/Spool) Modal **
 1. Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
