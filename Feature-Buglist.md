@@ -4,13 +4,8 @@
 # ** General **
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
 * Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
-* Black filaments need a better way to show border or a better gradiant in the color
 * Smart assign (I think thats what we called it) isn't working for non-dryerbox locations. I have to scan the location multiple times to unload the buffer into it, instead of it realizing it's a mass storage locaiton and just assigning it to the location.
 * Doens't seem to handle 4+ colors in a swatch for generating gradiant 
-* Loading spools into buffer from filament definition doesn't load all spool data into card.
-* Undo should put back into buffer if it came from buffer.
-* Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without (Effectivly doubling the line count.)
-* Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field
 * Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
 
 
@@ -18,15 +13,22 @@
 Ejecting from slot is not showing as being ejected (setting slot to empty) Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
 
 # **Print Queue Items**
-1. Locations QR Codes should contain a LOC: code, and a LOC: code should be used to help identify locations. (Too many manual entry items accidently turn into locations by accident on misstyping)
+* Locations QR Codes should contain a LOC: code, and a LOC: code should be used to help identify locations. (Too many manual entry items accidently turn into locations by accident on misstyping)
     - Pehraps we just refactor this code an check its logic.
+    - Keep existing logic to allow for backwords compatibility, but allow for LOC: codes for future items.
+* Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without (Effectivly doubling the line count.)
+* Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field
 
 
 # **Command Center Items**
 * TODO: Set it so that the screen don't sleep. (Needs to be tested on laptop)
+* Undo should put back into buffer if it came from buffer.
+* Eject should auto disable if we move off of the command screen to anyother screen or modal
+
 
 # **Details (Filament/Spool) Modal **
-1. Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
+* Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
+* Loading spools into buffer from filament definition doesn't load all spool data into card.
 
 # **Location List**
 1. Add unassigned Location in Location List.
@@ -86,3 +88,6 @@ The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERY
 I think we've inadverntaly created 3 levels of logic/complexity here. 1. The physical, Scanning stuff and efficiently Moving it, 2. A UI layer, for debugging, but should only really need to be looked at to confirm things when where you were expecting, and 3, a full on interface that is easier to move spools around than having to use spoolmans lack luster interface.
 
 All 3 of these things are important and have value. And I think this is something that we should table for now, and come back to once we've gotten more of the functionality in place and working.
+
+# **Done**
+* Black filaments need a better way to show border or a better gradiant in the color
