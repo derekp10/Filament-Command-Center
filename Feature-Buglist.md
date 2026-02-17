@@ -11,6 +11,7 @@
 * Undo should put back into buffer if it came from buffer.
 * Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without (Effectivly doubling the line count.)
 * Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field
+* Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
 
 
 # **Location Manger Items**
@@ -22,8 +23,8 @@ Ejecting from slot is not showing as being ejected (setting slot to empty) Is th
 
 
 # **Command Center Items**
-1. Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label)
-2. Set it so that the screen don't sleep.
+
+2. Set it so that the screen don't sleep. (Needs to be tested on laptop)
 3. Clicking on the Spoolman or Filabridge Status Buttons should opening there respective apps.
 
 # **Details (Filament/Spool) Modal **

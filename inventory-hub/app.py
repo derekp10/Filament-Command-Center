@@ -26,9 +26,10 @@ def dashboard():
     port = cfg.get('spoolman_port', 7912)
     sm_url = f"http://{ip}:{port}"
     # [Code Guardian] Fetch FilaBridge URL for Dashboard Button
-    _, fb_url = config_loader.get_api_urls()
+    _, fb_api_url = config_loader.get_api_urls()
+    fb_ui_url = fb_api_url.replace('/api', '')
     
-    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url, filabridge_url=fb_url)
+    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url, filabridge_url=fb_ui_url)
 
 # --- HELPER FUNCTIONS ---
 def clean_string(s):
