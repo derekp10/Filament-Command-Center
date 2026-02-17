@@ -29,6 +29,7 @@
 * Fix swatch circles in "Live Activity" window/pane to work with multi-color filament/spools.
 * Add the ability to have Command Center Notify if Filabridge had an issue reading data from printer for spool weight update, so user can see without having to open filabridge.
 * Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
+* Black filaments need a better way to show border or a better gradiant in the color
 
 
 # **Details (Filament/Spool) Modal **
@@ -95,7 +96,6 @@ Production Functionality Fix list
 * Fix Location Manager UI Dryer box slot locations not correctly displaying all filament information
 
 # **Done**
-* Black filaments need a better way to show border or a better gradiant in the color
 * Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
 * Side Quest: Spool card coloring system doens't seem to handle 4+ colors in a swatch for generating gradiant
