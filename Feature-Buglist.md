@@ -4,7 +4,7 @@
 # ** General **
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
 * Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
-* Smart assign (I think thats what we called it) isn't working for non-dryerbox locations. I have to scan the location multiple times to unload the buffer into it, instead of it realizing it's a mass storage locaiton and just assigning it to the location.
+* Smart assign (I think thats what we called it) isn't working for non-dryerbox locations. I have to scan the location multiple times to unload the buffer into it, instead of it realizing it's a mass storage locaiton and just assigning it to the location. Can't recall if this was a design choice, or if it's a bug.
 * Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
 * Add the ability to have Command Center Notify if Filabridge had an issue reading data from printer for spool weight update, so user can see without having to open filabridge.
 
