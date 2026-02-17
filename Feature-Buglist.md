@@ -23,7 +23,8 @@
 
 
 # **Command Center Items**
-* TODO: Set it so that the screen don't sleep. (Needs to be tested on laptop)
+* Set it so that the screen don't sleep. (Needs to be tested on laptop)
+    - Doesn't seem to work on Laptop
 * Undo should put back into buffer if it came from buffer.
 * Eject should auto disable if we move off of the command screen to anyother screen or modal
 * Fix swatch circles in "Live Activity" window/pane to work with multi-color filament/spools.
