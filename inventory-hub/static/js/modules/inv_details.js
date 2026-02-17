@@ -25,7 +25,13 @@ const openSpoolDetails = (id, silent=false) => {
         document.getElementById('detail-comment').value = d.comment || "";
         
         const swatch = document.getElementById('detail-swatch');
-        if(swatch) swatch.style.backgroundColor = "#" + (d.filament?.color_hex || "333");
+        // [ALEX FIX] Gradient Swatch (Replaces old logic)
+        if(swatch) {
+            const rawColor = d.filament?.color_hex || "333";
+            console.log("🎨 Spool Swatch Color:", rawColor); // Debug
+            const styles = getFilamentStyle(rawColor);
+            swatch.style.background = styles.frame;
+        }
         
         // Link Logic
         const btnLink = document.getElementById('btn-open-spoolman');
@@ -77,10 +83,12 @@ const openFilamentDetails = (fid, silent=false) => {
         document.getElementById('fil-detail-density').innerText = d.density ? `${d.density} g/cm³` : "--";
         document.getElementById('fil-detail-comment').value = d.comment || "";
         
-        const swatch = document.getElementById('fil-detail-swatch');
-        // [ALEX FIX] Use Shared Gradient Style
+       const swatch = document.getElementById('fil-detail-swatch');
+        // [ALEX FIX] Gradient Swatch (Replaces old logic)
         if(swatch) {
-            const styles = getFilamentStyle(d.color_hex || "333");
+            const rawColor = d.color_hex || "333";
+            console.log("🎨 Filament Swatch Color:", rawColor); // Debug
+            const styles = getFilamentStyle(rawColor);
             swatch.style.background = styles.frame;
         }
         
