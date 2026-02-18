@@ -24,6 +24,7 @@
 
 # **Print Queue Items**
 * For filament Queue, the spools in the list for that filament list No Loc for all items, even the ones with a loc. This needs to be fixed.
+    - Would be nice for a Queue to print button too.
 
 
 # **Command Center Items**
