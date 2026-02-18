@@ -11,6 +11,16 @@ def resolve_scan(text):
     decoded = urllib.parse.unquote(text)
     upper_text = text.upper()
 
+    # [ALEX FIX] PRIORITY: SLOT ASSIGNMENT (LOC:x:SLOT:y)
+    # Must be checked BEFORE "CMD:" or generic "LOC:" to prevent misinterpretation.
+    slot_match = re.search(r'LOC:(.+?):SLOT:(\d+)', upper_text)
+    if slot_match:
+        return {
+            'type': 'assignment', 
+            'location': slot_match.group(1).strip(), 
+            'slot': slot_match.group(2).strip()
+        }
+
     # COMMAND HANDLING
     if "CMD:" in upper_text:
         if "CMD:UNDO" in upper_text: return {'type': 'command', 'cmd': 'undo'}
