@@ -1,10 +1,12 @@
-Ok It's time to put on the coding hat. We need to fix all the following. Lets work on a plan to fix them in the least code destructive way. 
+Ok It's time to put on the coding hat. I have a list of things to work on. Lets work on a plan to work on them in the least code destructive way. 
 I don't want any deletion of any of the original code as we fix it to maintain existing functionality. 
 I also do not want any of the styling to change in the existing code. 
 This is a Code fix, and function/feature add only, and we need to work within the existing visual context to integrate these changes in with out breaking existing style/visuals.
-We also don't want to do any injection fixes, or fixes where it makes more sense to just update the primary code for it. To prevent us from having multiple places where the code does a thing, that should have just been rolled into the main code set. Code reuse is a HIGH PRIORITY! Make sure we are not duplicating existing code before progressing with writing new code.
+We also don't want to avoid code injection fixes/feature adds and prioritize fixes/feature adds where it makes more sense to just update the primary code for it. To prevent us from having multiple places where the code does a thing, that should have just been rolled into the main code set. Code reuse is a HIGH PRIORITY! Make sure we are not duplicating existing code before progressing with writing new.
 
 Lets work on these Items/Bugs/Features:
+
+
 
 Please generate a list of changes before writing any Code. I want to make sure we don't have any misunderstandings before making code changes. If something is ambiguous, ask instead of assuming. 
 
