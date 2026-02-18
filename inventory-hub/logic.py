@@ -38,7 +38,8 @@ def resolve_scan(text):
         
         # SLOT ASSIGNMENT (LOC:x:SLOT:y)
         # [ALEX FIX] Use Regex for robust parsing of LOC/SLOT strings
-        slot_match = re.search(r'LOC:(.+):SLOT:(\d+)', upper_text)
+        # Changed to non-greedy (.*?) to prevent capturing the SLOT part into the location
+        slot_match = re.search(r'LOC:(.*?):SLOT:(\d+)', upper_text)
         if slot_match:
             return {
                 'type': 'assignment', 
@@ -164,17 +165,20 @@ def perform_smart_move(target, raw_spools, target_slot=None):
         
         new_extra = current_extra.copy()
         
-        # Handle Slot Assignment
+# Handle Slot Assignment
         if target_slot:
             existing_items = spoolman_api.get_spools_at_location_detailed(target)
             for existing in existing_items:
+                # [ALEX FIX] Improved comparison to catch string vs int mismatches
                 if str(existing.get('slot', '')).strip('"') == str(target_slot) and existing['id'] != int(sid):
                     state.logger.info(f"🪑 Unseating Spool {existing['id']} from Slot {target_slot}")
+                    # [ALEX FIX] Explicitly set to empty string to ensure DB update
                     spoolman_api.update_spool(existing['id'], {'extra': {'container_slot': ''}})
+            
             new_extra['container_slot'] = str(target_slot)
         else:
             # If moving to a non-slotted location, clear the slot
-            new_extra.pop('container_slot', None)
+            new_extra['container_slot'] = ""
 
         # PRINTER MOVE
         if target in printer_map:
@@ -209,14 +213,28 @@ def perform_smart_eject(spool_id):
     spool_data = spoolman_api.get_spool(spool_id)
     if not spool_data: return False
     
+    current_location = spool_data.get('location', '').strip().upper()
     extra = spool_data.get('extra', {})
+    
+    # [ALEX FIX] Explicitly overwrite the slot with empty string.
+    # .pop() just removes the key, which causes PATCH to ignore it (keeping the old value).
+    extra['container_slot'] = ""
+    
     saved_source = extra.get('physical_source')
     
-    extra.pop('container_slot', None)
-    
+    # [ALEX FIX] Prevent Infinite Return Loop
+    # If the database thinks we "came from" the place we are currently ejecting from,
+    # we must clear that memory, otherwise we just 'return' to the same box.
+    if saved_source and saved_source.strip().upper() == current_location:
+        state.logger.info(f"🛑 Eject Loop Detected: Source is same as Location ({saved_source}). Clearing.")
+        saved_source = None
+        extra['physical_source'] = "" # Wipe the memory
+
     if saved_source:
         if saved_source.startswith('"'): saved_source = saved_source.strip('"') 
-        extra.pop('physical_source', None) 
+        # Clear the source memory so we don't bounce back again later
+        extra['physical_source'] = "" 
+        
         if spoolman_api.update_spool(spool_id, {"location": saved_source, "extra": extra}):
             state.add_log_entry(f"↩️ Returned #{spool_id} -> {saved_source}", "WARNING")
             return True
