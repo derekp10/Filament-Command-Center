@@ -3,7 +3,6 @@
 
 # ** General **
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
-* Smart assign (I think thats what we called it) isn't working for non-dryerbox locations. I have to scan the location multiple times to unload the buffer into it, instead of it realizing it's a mass storage locaiton and just assigning it to the location. Can't recall if this was a design choice, or if it's a bug.
 * Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
     - Label Printed in Spoolman Spool data can be used to determin if a new (Spoolman Based ID) Label has been printed.
     - Filaments: Spoolman Reprint field/extra data, is set to Yes for all items that need to have a label reprinted with the new Spoolman ID. Null or No, mean that it already has a label with the spoolman ID.
@@ -17,14 +16,15 @@
 
 # **Location Manger Items**
 * Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
-* Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here.
+* Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here, for spools that are assigned to the location, but doesn't have a slot attached to them.
 * Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to. This might be because we added the LOC: indicater, and it might just not be parcing correctly now.
     - Could be advantagous to have the slots have there own loation in Spoolman.
-    - Definitely need to support loading locations from Spoolman, but perhaps store in a config the information about the location, and not rely on the Locations.csv file as much.
+    - Definitely need to support loading locations from Spoolman, but perhaps store in a config the information about the location, and not rely on the Locations.csv file as much or at all?
+* Smart assign (I think thats what we called it) isn't working for non-dryerbox locations. I have to scan the location multiple times to unload the buffer into it, instead of it realizing it's a mass storage locaiton and just assigning it to the location. Can't recall if this was a design choice, or if it's a bug.
 
 # **Print Queue Items**
 * For filament Queue, the spools in the list for that filament list No Loc for all items, even the ones with a loc. This needs to be fixed.
-    - Would be nice for a Queue to print button too.
+    - Would be nice to have a send to print queue button too.
 
 
 # **Command Center Items**
