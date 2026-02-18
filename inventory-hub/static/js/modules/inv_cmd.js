@@ -202,9 +202,10 @@ const processScan = (text) => {
 
 const performContextAssign = (tid, slot = null) => {
     setProcessing(true); 
+    // [ALEX FIX] Bulk Assign: Send ALL held spools, not just the first one
     const payload = {
         location: tid, 
-        spools: [state.heldSpools[0].id],
+        spools: state.heldSpools.map(s => s.id),
         slot: slot
     };
     
@@ -217,8 +218,9 @@ const performContextAssign = (tid, slot = null) => {
     .then(res=>{ 
         setProcessing(false); 
         if(res.status==='success') { 
-            showToast("Assigned!", "success"); 
-            state.heldSpools.shift(); 
+            showToast("Assigned " + state.heldSpools.length + " items!", "success"); 
+            // [ALEX FIX] Clear entire buffer after bulk move
+            state.heldSpools = []; 
             renderBuffer(); 
             if(document.getElementById('manage-loc-id').value===tid) refreshManageView(tid); 
         } else showToast(res.msg, 'error'); 

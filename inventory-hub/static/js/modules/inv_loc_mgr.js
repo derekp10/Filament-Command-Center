@@ -516,7 +516,16 @@ window.doEject = (sid, loc) => {
     setProcessing(true); 
     fetch('/api/manage_contents', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'remove', location:loc, spool_id:sid})})
     .then(r=>r.json())
-    .then(()=>{ setProcessing(false); showToast("Ejected"); if(loc!=="Scan") refreshManageView(loc); })
+    .then(()=>{ 
+        setProcessing(false); 
+        showToast("Ejected"); 
+        if(loc!=="Scan") {
+            // [ALEX FIX] Force a re-render by clearing the hash. 
+            // This ensures the UI updates to "Empty" even if the API data is cached/similar.
+            state.lastLocRenderHash = null;
+            refreshManageView(loc); 
+        }
+    })
     .catch(()=>setProcessing(false)); 
 };
 
