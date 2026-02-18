@@ -12,15 +12,15 @@
 * Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
 
 
-
-
 # **Location Manger Items**
 * Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
 * Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here, for spools that are assigned to the location, but doesn't have a slot attached to them.
 * Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to. This might be because we added the LOC: indicater, and it might just not be parcing correctly now.
-    - Could be advantagous to have the slots have there own loation in Spoolman.
-    - Definitely need to support loading locations from Spoolman, but perhaps store in a config the information about the location, and not rely on the Locations.csv file as much or at all?
-* Smart assign (I think thats what we called it) isn't working for non-dryerbox locations. I have to scan the location multiple times to unload the buffer into it, instead of it realizing it's a mass storage locaiton and just assigning it to the location. Can't recall if this was a design choice, or if it's a bug.
+    - Currently items assigned using a slot QR code "LOC:CR-MDB-1:SLOT:4" are being stored in spoolman as a "CR-MDB-1:SLOT:4" location
+        * Could be advantagous to have the slots have there own loation in Spoolman. But I don't have a direct use case currently for it. Perhapes you might have one.
+* Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assigne all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
+    - This should probably be the default for non-drier boxes.
+
 
 # **Print Queue Items**
 * For filament Queue, the spools in the list for that filament list No Loc for all items, even the ones with a loc. This needs to be fixed.
@@ -42,6 +42,8 @@
 
 
 # **Location List**
+* Definitely need to add support for loading locations from Spoolman and adding them to the locations list, But in order to persist specific data (Friendly Name, Type, Max Spools) but perhaps store in a 
+  config file and not rely on the Locations.csv file as much or at all?
 
 
 # **Next Steps Items:**
