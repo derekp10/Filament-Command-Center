@@ -167,10 +167,39 @@ const processScan = (text) => {
             else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
         } else if (res.type === 'assignment') {
             if (state.heldSpools.length > 0) {
+                // Scenario A: Buffer Full -> Drop item INTO the slot
                 performContextAssign(res.location, res.slot);
                 state.lastScannedLoc = null;
             } else {
-                showToast("Buffer Empty! Scan a spool first.", "warning");
+                // Scenario B: Buffer Empty -> Pick item UP from the slot
+                // [ALEX FIX] Fetch contents to interact with the specific slot
+                fetch(`/api/get_contents?id=${res.location}`)
+                .then(r => r.json())
+                .then(items => {
+                    // Find the item in that slot (Loose equality for string/int safety)
+                    const item = items.find(i => String(i.slot) === String(res.slot));
+                    
+                    if (item) {
+                        // 1. Spool Found: Pick it up!
+                        if (state.heldSpools.some(s => s.id === item.id)) {
+                             showToast("Already in Buffer", "warning");
+                        } else {
+                             state.heldSpools.unshift({id: item.id, display: item.display, color: item.color});
+                             renderBuffer();
+                             showToast(`Picked up #${item.id} from Slot ${res.slot}`);
+                             // Optional: If you want to see the manager too, uncomment next line:
+                             // openManage(res.location); 
+                        }
+                    } else {
+                        // 2. Slot Empty: Open the Location Manager so you can see/act
+                        showToast(`Slot ${res.slot} is empty`);
+                        openManage(res.location);
+                    }
+                })
+                .catch(e => {
+                    console.error(e);
+                    showToast("Error looking up slot", "error");
+                });
             }
         } else if (res.type === 'location') {
             if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
