@@ -36,7 +36,7 @@
 * Add the ability to have Command Center Notify if Filabridge had an issue reading data from printer for spool weight update, so user can see without having to open filabridge.
 * Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
 * Black filaments need a better way to show border or a better gradiant in the color
-
+* Add background refreshing used in Location Manger, etc... to update spool text (update weight other data)
 
 # **Details (Filament/Spool) Modal **
 
