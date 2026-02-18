@@ -11,8 +11,8 @@ def resolve_scan(text):
     decoded = urllib.parse.unquote(text)
     upper_text = text.upper()
 
-    # [ALEX FIX] PRIORITY: SLOT ASSIGNMENT (LOC:x:SLOT:y)
-    # Must be checked BEFORE "CMD:" or generic "LOC:" to prevent misinterpretation.
+    # 1. [ALEX FIX] PRIORITY: SLOT ASSIGNMENT (LOC:x:SLOT:y)
+    # Must be checked FIRST. regex is non-greedy to capture the location ID correctly.
     slot_match = re.search(r'LOC:(.+?):SLOT:(\d+)', upper_text)
     if slot_match:
         return {
@@ -21,7 +21,7 @@ def resolve_scan(text):
             'slot': slot_match.group(2).strip()
         }
 
-    # COMMAND HANDLING
+    # 2. COMMAND HANDLING
     if "CMD:" in upper_text:
         if "CMD:UNDO" in upper_text: return {'type': 'command', 'cmd': 'undo'}
         if "CMD:CLEAR" in upper_text: return {'type': 'command', 'cmd': 'clear'}
@@ -35,7 +35,7 @@ def resolve_scan(text):
         if "CMD:PREV" in upper_text: return {'type': 'command', 'cmd': 'prev'}
         if "CMD:DONE" in upper_text: return {'type': 'command', 'cmd': 'done'}
         
-        # SLOT
+        # SLOT (Interactive)
         if "CMD:SLOT:" in upper_text:
             try:
                 parts = upper_text.split(':')
@@ -46,43 +46,31 @@ def resolve_scan(text):
         # AUDIT
         if "CMD:AUDIT" in upper_text: return {'type': 'command', 'cmd': 'audit'}
         
-        # SLOT ASSIGNMENT (LOC:x:SLOT:y)
-        # [ALEX FIX] Use Regex for robust parsing of LOC/SLOT strings
-        # Changed to non-greedy (.*?) to prevent capturing the SLOT part into the location
-        slot_match = re.search(r'LOC:(.*?):SLOT:(\d+)', upper_text)
-        if slot_match:
-            return {
-                'type': 'assignment', 
-                'location': slot_match.group(1).strip(), 
-                'slot': slot_match.group(2).strip()
-            }
-
         return {'type': 'error', 'msg': 'Malformed Command'}
 
-    # [ALEX FIX] EXPLICIT LOCATION SCAN (LOC: Prefix)
-    # This prevents accidental manual entries unless they explicitly start with LOC:
+    # 3. [ALEX FIX] STANDARD LOCATION SCAN (LOC: Prefix)
+    # This handles "LOC:BOX-01" or "LOC:PRINTER". 
+    # It MUST run after the Slot check (so it doesn't steal slot codes) but BEFORE legacy checks.
     if upper_text.startswith("LOC:"):
-        # Strip the prefix and use the rest as the ID
         clean_loc = upper_text[4:].strip()
         if clean_loc:
              return {'type': 'location', 'id': clean_loc}
         return {'type': 'error', 'msg': 'Empty Location Code'}
 
-    # DIRECT SPOOL ID
+    # 4. DIRECT SPOOL ID
     if upper_text.startswith("ID:") or upper_text.startswith("SPL:"):
-        # Normalize SPL: to just ID logic
         prefix_len = 3 if upper_text.startswith("ID:") else 4
         clean_id = text[prefix_len:].strip()
         if clean_id.isdigit(): return {'type': 'spool', 'id': int(clean_id)}
         return {'type': 'error', 'msg': 'Invalid Spool ID Format'}
 
-    # NEW: FILAMENT DEFINITION ID
+    # 5. FILAMENT DEFINITION ID
     if upper_text.startswith("FIL:"):
         clean_id = text[4:].strip()
         if clean_id.isdigit(): return {'type': 'filament', 'id': int(clean_id)}
         return {'type': 'error', 'msg': 'Invalid Filament ID Format'}
 
-    # LEGACY / URL PARSING
+    # 6. LEGACY / URL PARSING
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
         m = re.search(r'range=(\d+)', decoded, re.IGNORECASE)
         if m:
@@ -92,35 +80,32 @@ def resolve_scan(text):
         if rid: return {'type': 'spool', 'id': rid}
         return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
-    # PURE NUMBER SCAN (Priority Stack)
+    # 7. PURE NUMBER SCAN (Priority Stack)
     if text.isdigit():
-        # 1. PRIORITY: Legacy Spool Match
+        # Priority 1: Legacy Spool
         rid = spoolman_api.find_spool_by_legacy_id(text, strict_mode=True)
         if rid: return {'type': 'spool', 'id': rid}
         
-        # 2. PRIORITY: Legacy Filament Match
+        # Priority 2: Legacy Filament
         fid = spoolman_api.find_filament_by_legacy_id(text)
         if fid: return {'type': 'filament', 'id': fid}
         
-        # 3. FALLBACK: Direct Spool ID
+        # Priority 3: Direct Spool ID
         spool_check = spoolman_api.get_spool(text)
         if spool_check and spool_check.get('id'):
             return {'type': 'spool', 'id': int(text)}
 
-        # 4. FALLBACK: Direct Filament ID
+        # Priority 4: Direct Filament ID
         fil_check = spoolman_api.get_filament(text)
         if fil_check and fil_check.get('id'):
             return {'type': 'filament', 'id': int(text)}
         
         return {'type': 'error', 'msg': 'ID Not Found'}
         
-    # [ALEX FIX] LEGACY LOCATION FALLBACK (With Validation)
-    # Only accept a "random string" as a location IF it exists in the DB.
-    # This stops typos (e.g. "Spool") from becoming location "SPOOL".
+    # 8. LEGACY LOCATION FALLBACK (Len > 2)
+    # Only accepts a "random string" if it matches a known location in DB.
     if len(text) > 2: 
-        # Check against known locations
         loc_list = locations_db.load_locations_list()
-        # Create a set of valid IDs for fast lookup
         valid_ids = {row['LocationID'].upper() for row in loc_list}
         
         if text.upper() in valid_ids:
