@@ -207,28 +207,31 @@ const renderGrid = (data, max) => {
             
             // [ALEX FIX] Ghost / Deployed Styling
             if (item.is_ghost) {
-                div.style.background = "#333"; // Dimmed Frame
-                div.style.border = `2px dashed ${styles.frame}`; // Dashed Border
+                // Keep the border color of the filament, but dim the background
+                div.style.background = "#222"; 
+                div.style.border = `2px dashed ${styles.frame}`; 
                 
+                // Create a stripe effect using the filament's actual color (dimmed)
+                const c = styles.frame;
                 div.innerHTML = `
-                <div class="slot-inner-gold" style="background: repeating-linear-gradient(45deg, #1a1a1a, #1a1a1a 10px, #222 10px, #222 20px); opacity: 0.9;">
-                    <div class="slot-header">
+                <div class="slot-inner-gold" style="background: repeating-linear-gradient(45deg, #111, #111 10px, ${c}33 10px, ${c}33 20px);">
+                    <div class="slot-header d-flex justify-content-between align-items-center">
                         <div class="slot-num-gold" style="color:#aaa;">SLOT ${i}</div>
-                        <div class="badge bg-warning text-dark float-end">DEPLOYED</div>
+                        <div class="badge bg-warning text-dark">DEPLOYED</div>
                     </div>
                     
-                    <div class="text-center mt-2 mb-2">
-                        <div style="font-size:0.8rem; color:#888;">CURRENTLY AT:</div>
-                        <div style="font-weight:bold; color:#fff;">${item.deployed_to || "Unknown"}</div>
+                    <div class="text-center mt-3 mb-2">
+                        <div style="font-size:0.8rem; color:#aaa;">CURRENTLY AT:</div>
+                        <div style="font-size:1.1rem; font-weight:900; color:#fff; text-shadow: 1px 1px 2px #000;">${item.deployed_to || "Unknown"}</div>
                     </div>
 
-                    <div class="slot-info-gold" style="opacity:0.6;">
+                    <div class="slot-info-gold text-center" style="opacity:0.8;">
                         <div class="text-line-1">${info.line1}</div>
-                        <div class="text-line-3">${info.line3}</div>
+                        <div class="text-line-3" style="font-weight:bold;">${info.line3}</div>
                     </div>
 
-                    <div class="d-grid gap-2 mt-2">
-                        <button class="btn btn-sm btn-outline-warning" onclick="event.stopPropagation(); doAssign('${document.getElementById('manage-loc-id').value}', ${item.id}, ${i})">
+                    <div class="d-grid gap-2 mt-auto pb-2 px-2">
+                        <button class="btn btn-sm" style="background-color: #ffc107; color: #000; font-weight: bold; border: 2px solid #b38600;" onclick="event.stopPropagation(); doAssign('${document.getElementById('manage-loc-id').value}', ${item.id}, ${i})">
                             ↩️ RETURN
                         </button>
                     </div>

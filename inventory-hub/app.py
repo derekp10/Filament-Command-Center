@@ -433,6 +433,10 @@ def api_manage_contents():
     if action == 'clear_location':
         contents = spoolman_api.get_spools_at_location_detailed(loc_id)
         for spool in contents:
+            # [ALEX FIX] Protect "Ghost" items from being ejected when a box is cleared
+            if spool.get('is_ghost'):
+                continue
+                
             slot_val = spool.get('slot', '')
             if not slot_val or slot_val == 'None' or slot_val == '':
                 logic.perform_smart_eject(spool['id'])
