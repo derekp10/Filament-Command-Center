@@ -409,6 +409,31 @@ const renderUnslotted = (items) => {
 const renderBadgeHTML = (s, i, locId) => {
     const styles = getFilamentStyle(s.color);
     const info = getRichInfo(s);
+
+    // [ALEX FIX] Ghost / Deployed Styling for List View (Single Slot)
+    if (s.is_ghost) {
+         return `
+        <div class="cham-card manage-list-item" style="background:#333; border: 2px dashed ${styles.frame}">
+            <div class="list-inner-gold" style="background: repeating-linear-gradient(45deg, #1a1a1a, #1a1a1a 10px, #222 10px, #222 20px);">
+                <div class="list-left">
+                    <div class="badge bg-warning text-dark mb-1" style="width:fit-content;">DEPLOYED</div>
+                    <div class="text-white" style="font-size:0.9rem;">
+                        <span style="color:#aaa;">Currently at:</span> <strong>${s.deployed_to || "Unknown"}</strong>
+                    </div>
+                    <div class="mt-2 text-white-50">
+                        ${info.line1} - ${info.line3}
+                    </div>
+                </div>
+                <div class="action-group-gold">
+                    <div class="action-badge" onclick="doAssign('${locId}', ${s.id}, '${s.slot || ''}')">
+                        <div class="badge-btn-gold btn-pick-bg" style="background: #ffc107; color:#000;">↩️ RETURN</div>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    // Standard Render
     return `
     <div class="cham-card manage-list-item" style="background:${styles.frame}">
         <div class="list-inner-gold" style="background: ${styles.inner};">

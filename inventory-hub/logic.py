@@ -180,6 +180,8 @@ def perform_smart_move(target, raw_spools, target_slot=None):
             src_info = loc_info_map.get(current_loc)
             if src_info and src_info.get('Type') == 'Dryer Box':
                 new_extra['physical_source'] = current_loc
+                # [ALEX FIX] Save the slot! This was missing, causing the "Missing Ghost" bug.
+                new_extra['physical_source_slot'] = current_extra.get('container_slot')
             
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 p = printer_map[target]
