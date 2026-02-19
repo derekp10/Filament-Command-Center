@@ -20,6 +20,7 @@
         * Could be advantagous to have the slots have there own loation in Spoolman. But I don't have a direct use case currently for it. Perhapes you might have one.
 * Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assigne all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
     - This should probably be the default for non-drier boxes.
+* Location Manager not syncing status across browser instances?
 
 
 # **Print Queue Items**

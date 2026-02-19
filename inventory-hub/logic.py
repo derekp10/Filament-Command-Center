@@ -192,12 +192,20 @@ def perform_smart_move(target, raw_spools, target_slot=None):
         # DRYER MOVE
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
             new_extra.pop('physical_source', None)
+            # [ALEX FIX] Clean up the source slot memory too, since we are home now.
+            new_extra.pop('physical_source_slot', None)
+            
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 slot_txt = f" [Slot {target_slot}]" if target_slot else ""
                 state.add_log_entry(f"📦 {info['text']} -> Dryer {target}{slot_txt}", "INFO", info['color'])
             
         # GENERIC MOVE
         else:
+            # [ALEX FIX] If moving FROM a Dryer, save the specific Slot number too!
+            # This allows us to "Ghost" it in the correct spot later.
+            if loc_info_map.get(current_loc, {}).get('Type') == 'Dryer Box':
+                new_extra['physical_source_slot'] = current_extra.get('container_slot')
+
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
 

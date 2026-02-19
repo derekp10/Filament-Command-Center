@@ -204,29 +204,61 @@ const renderGrid = (data, max) => {
         if (item) {
             const styles = getFilamentStyle(item.color);
             const info = getRichInfo(item);
-            div.style.background = styles.frame;
             
-            div.innerHTML = `
-                <div class="slot-inner-gold" style="background:${styles.inner};">
-                    <div class="slot-header"><div class="slot-num-gold">SLOT ${i}</div></div>
-                    <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 3px solid white;"></div>
-                    <div class="slot-info-gold" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
-                        <div class="text-line-1">${info.line1}</div>
-                        <div class="text-line-2" style="color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${info.line2}</div>
-                        <div class="text-line-3">${info.line3}</div>
-                        <div class="text-line-4">${info.line4}</div>
+            // [ALEX FIX] Ghost / Deployed Styling
+            if (item.is_ghost) {
+                div.style.background = "#333"; // Dimmed Frame
+                div.style.border = `2px dashed ${styles.frame}`; // Dashed Border
+                
+                div.innerHTML = `
+                <div class="slot-inner-gold" style="background: repeating-linear-gradient(45deg, #1a1a1a, #1a1a1a 10px, #222 10px, #222 20px); opacity: 0.9;">
+                    <div class="slot-header">
+                        <div class="slot-num-gold" style="color:#aaa;">SLOT ${i}</div>
+                        <div class="badge bg-warning text-dark float-end">DEPLOYED</div>
                     </div>
-                    <div class="btn-label-compact js-btn-label">
-                        <span style="font-size:1.2rem;">📷</span> LABEL
+                    
+                    <div class="text-center mt-2 mb-2">
+                        <div style="font-size:0.8rem; color:#888;">CURRENTLY AT:</div>
+                        <div style="font-weight:bold; color:#fff;">${item.deployed_to || "Unknown"}</div>
+                    </div>
+
+                    <div class="slot-info-gold" style="opacity:0.6;">
+                        <div class="text-line-1">${info.line1}</div>
+                        <div class="text-line-3">${info.line3}</div>
+                    </div>
+
+                    <div class="d-grid gap-2 mt-2">
+                        <button class="btn btn-sm btn-outline-warning" onclick="event.stopPropagation(); doAssign('${document.getElementById('manage-loc-id').value}', ${item.id}, ${i})">
+                            ↩️ RETURN
+                        </button>
                     </div>
                 </div>`;
                 
-            const btn = div.querySelector('.js-btn-label');
-            if (btn) {
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation(); 
-                    window.addToQueue({id: item.id, type: 'spool', display: item.display});
-                });
+            } else {
+                // STANDARD RENDER (Normal Item)
+                div.style.background = styles.frame;
+                div.innerHTML = `
+                    <div class="slot-inner-gold" style="background:${styles.inner};">
+                        <div class="slot-header"><div class="slot-num-gold">SLOT ${i}</div></div>
+                        <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 3px solid white;"></div>
+                        <div class="slot-info-gold" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
+                            <div class="text-line-1">${info.line1}</div>
+                            <div class="text-line-2" style="color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${info.line2}</div>
+                            <div class="text-line-3">${info.line3}</div>
+                            <div class="text-line-4">${info.line4}</div>
+                        </div>
+                        <div class="btn-label-compact js-btn-label">
+                            <span style="font-size:1.2rem;">📷</span> LABEL
+                        </div>
+                    </div>`;
+                    
+                const btn = div.querySelector('.js-btn-label');
+                if (btn) {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation(); 
+                        window.addToQueue({id: item.id, type: 'spool', display: item.display});
+                    });
+                }
             }
         } else {
             // FIX: Removed opacity:0.5 from QR div to make it sharp and scannable

@@ -119,23 +119,51 @@ def get_spools_at_location_detailed(loc_name):
     found = []
     # [ALEX FIX] Handle Unassigned (No Location)
     check_unassigned = (str(loc_name).upper() == 'UNASSIGNED')
+    # [ALEX FIX] Normalize for comparison
+    target_loc_upper = str(loc_name).upper()
 
     try:
         resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
         if resp.ok:
             for s in resp.json():
-                # [ALEX FIX] Logic for Unassigned vs Named Location
                 sloc = s.get('location', '').strip()
+                extra = s.get('extra', {})
                 match = False
+                is_ghost = False
+                ghost_slot = None
                 
+                # 1. Direct Location Match
                 if check_unassigned:
                     if not sloc: match = True
-                elif sloc.upper() == loc_name.upper():
+                elif sloc.upper() == target_loc_upper:
                     match = True
                     
+                # 2. [ALEX FIX] Physical Source Match (The Ghost Logic)
+                # If I'm not here, but my "physical_source" says I belong here...
+                if not match and not check_unassigned:
+                    p_source = extra.get('physical_source', '').strip().upper()
+                    if p_source == target_loc_upper:
+                        match = True
+                        is_ghost = True
+                        # Use the saved slot memory, or fallback to 0 if missing
+                        ghost_slot = extra.get('physical_source_slot')
+
                 if match:
                     info = format_spool_display(s)
-                    found.append({'id': s['id'], 'display': info['text'], 'color': info['color'], 'slot': info['slot']})
+                    
+                    # [ALEX FIX] If Ghost, override the slot so it appears in the grid correctly
+                    final_slot = info['slot']
+                    if is_ghost and ghost_slot:
+                        final_slot = ghost_slot
+
+                    found.append({
+                        'id': s['id'], 
+                        'display': info['text'], 
+                        'color': info['color'], 
+                        'slot': final_slot,
+                        'is_ghost': is_ghost,             # Flag for UI
+                        'deployed_to': sloc if is_ghost else None # Where is it really?
+                    })
     except: pass
     return found
 
