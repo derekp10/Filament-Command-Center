@@ -120,7 +120,6 @@ def get_spools_at_location_detailed(loc_name):
     found = []
     # [ALEX FIX] Handle Unassigned (No Location)
     check_unassigned = (str(loc_name).upper() == 'UNASSIGNED')
-    # [ALEX FIX] Normalize for comparison
     target_loc_upper = str(loc_name).upper()
 
     try:
@@ -140,14 +139,14 @@ def get_spools_at_location_detailed(loc_name):
                     match = True
                     
                 # 2. [ALEX FIX] Physical Source Match (The Ghost Logic)
-                # If I'm not here, but my "physical_source" says I belong here...
+                # Strip the literal quotes that Spoolman adds to JSON String Fields!
                 if not match and not check_unassigned:
-                    p_source = extra.get('physical_source', '').strip().upper()
+                    p_source = str(extra.get('physical_source', '')).strip().upper().replace('"', '')
                     if p_source == target_loc_upper:
                         match = True
                         is_ghost = True
-                        # Use the saved slot memory, or fallback to 0 if missing
-                        ghost_slot = extra.get('physical_source_slot')
+                        # Strip quotes from the slot too!
+                        ghost_slot = str(extra.get('physical_source_slot', '')).strip('"')
 
                 if match:
                     info = format_spool_display(s)
