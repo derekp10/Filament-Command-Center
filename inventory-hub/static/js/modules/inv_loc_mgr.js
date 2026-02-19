@@ -211,7 +211,7 @@ const renderGrid = (data, max) => {
                 div.style.border = `3px dashed ${styles.frame}`; // Bright colored border
                 
                 div.innerHTML = `
-                <div class="slot-inner-gold" style="background: repeating-linear-gradient(45deg, rgba(0,0,0,0.6), rgba(0,0,0,0.6) 10px, ${styles.inner} 10px, ${styles.inner} 15px);">
+                <div class="slot-inner-gold" style="background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.inner}; background-size: cover;">
                     
                     <div class="slot-header d-flex flex-column align-items-center mb-2 mt-1">
                         <div class="slot-num-gold" style="color:#ccc;">SLOT ${i}</div>
@@ -414,20 +414,20 @@ const renderBadgeHTML = (s, i, locId) => {
     // [ALEX FIX] Ghost / Deployed Styling for List View (Single Slot)
     if (s.is_ghost) {
          return `
-        <div class="cham-card manage-list-item" style="background:#333; border: 2px dashed ${styles.frame}">
-            <div class="list-inner-gold" style="background: repeating-linear-gradient(45deg, #1a1a1a, #1a1a1a 10px, #222 10px, #222 20px);">
+        <div class="cham-card manage-list-item" style="background:#111; border: 2px dashed ${styles.frame}">
+            <div class="list-inner-gold" style="background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.inner}; background-size: cover;">
                 <div class="list-left">
                     <div class="badge bg-warning text-dark mb-1" style="width:fit-content;">DEPLOYED</div>
-                    <div class="text-white" style="font-size:0.9rem;">
-                        <span style="color:#aaa;">Currently at:</span> <strong>${s.deployed_to || "Unknown"}</strong>
+                    <div class="text-white mt-1" style="font-size:0.9rem; background: rgba(0,0,0,0.7); padding: 2px 6px; border-radius: 4px; display: inline-block;">
+                        <span style="color:#aaa;">Currently at:</span> <strong style="color:#fff;">${s.deployed_to || "Unknown"}</strong>
                     </div>
-                    <div class="mt-2 text-white-50">
-                        ${info.line1} - ${info.line3}
+                    <div class="mt-2 text-white" style="background: rgba(0,0,0,0.7); padding: 4px 8px; border-radius: 4px;">
+                        ${info.line1} - <strong>${info.line3}</strong>
                     </div>
                 </div>
                 <div class="action-group-gold">
                     <div class="action-badge" onclick="doAssign('${locId}', ${s.id}, '${s.slot || ''}')">
-                        <div class="badge-btn-gold btn-pick-bg" style="background: #ffc107; color:#000;">↩️ RETURN</div>
+                        <div class="badge-btn-gold btn-pick-bg" style="background: #ffc107; color:#000; box-shadow: 0 4px 6px rgba(0,0,0,0.5);">↩️ RETURN</div>
                     </div>
                 </div>
             </div>
