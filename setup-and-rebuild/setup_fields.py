@@ -110,6 +110,8 @@ spool_types.update(get_clean_choices(FILAMENT_CSV, "Spool Type"))
 # ==========================================
 print("\n--- Setting up SPOOL Fields ---")
 create_field("spool", "physical_source", "Physical Source", "text")
+# [ALEX FIX] Register the new Ghost Slot field
+create_field("spool", "physical_source_slot", "Physical Source Slot", "text")
 create_field("spool", "label_printed", "Label Printed", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")
