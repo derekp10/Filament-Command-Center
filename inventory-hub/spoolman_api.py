@@ -3,7 +3,8 @@ import state
 import config_loader
 
 # Constants for JSON sanitation
-JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "original_color", "spool_temp"]
+# [ALEX FIX] Added 'physical_source_slot' to ensure strict JSON string formatting
+JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "physical_source_slot", "original_color", "spool_temp"]
 
 def get_spool(sid):
     sm_url, _ = config_loader.get_api_urls()
