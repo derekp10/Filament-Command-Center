@@ -203,10 +203,11 @@ def perform_smart_move(target, raw_spools, target_slot=None):
             
         # GENERIC MOVE
         else:
-            # [ALEX FIX] If moving FROM a Dryer, save the specific Slot number too!
-            # This allows us to "Ghost" it in the correct spot later.
-            if loc_info_map.get(current_loc, {}).get('Type') == 'Dryer Box':
-                new_extra['physical_source_slot'] = current_extra.get('container_slot')
+            # [ALEX FIX] Ghost Logic: If moving Dryer -> Tool, leave a breadcrumb (Source + Slot)
+            # We only do this if the target is a "Consumer" (Tool/MMU), not just a random cart.
+            if loc_info_map.get(current_loc, {}).get('Type') == 'Dryer Box' and is_toolhead:
+                 new_extra['physical_source'] = current_loc
+                 new_extra['physical_source_slot'] = current_extra.get('container_slot')
 
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
