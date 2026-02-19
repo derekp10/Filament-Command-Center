@@ -338,7 +338,7 @@ def api_print_batch_csv():
 def api_get_locations(): 
     csv_rows = locations_db.load_locations_list()
     occupancy_map = {}
-    unassigned_count = 0 # [ALEX FIX] Track unassigned
+    unassigned_count = 0 
     
     sm_url, _ = config_loader.get_api_urls()
     try:
@@ -346,8 +346,19 @@ def api_get_locations():
         if resp.ok:
             for s in resp.json():
                 loc = s.get('location', '').upper().strip()
-                if loc: occupancy_map[loc] = occupancy_map.get(loc, 0) + 1
-                else: unassigned_count += 1 # [ALEX FIX] Count unassigned
+                extra = s.get('extra', {})
+                
+                if loc: 
+                    occupancy_map[loc] = occupancy_map.get(loc, 0) + 1
+                else: 
+                    unassigned_count += 1 
+                
+                # [ALEX FIX] Ghost Occupancy Count
+                # Ensure deployed items still count towards their home box's total
+                p_source = str(extra.get('physical_source', '')).upper().strip().replace('"', '')
+                if p_source and p_source != loc:
+                    occupancy_map[p_source] = occupancy_map.get(p_source, 0) + 1
+
     except: pass
 
     final_list = []
