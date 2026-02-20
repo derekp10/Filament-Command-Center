@@ -52,20 +52,28 @@ def create_field(entity_type, key, name, f_type, choices=None, multi=False, forc
     existing_choices = []
     if f_type == "choice" and not force_reset:
         try:
-            get_resp = requests.get(f"{SPOOLMAN_IP}/api/v1/field/{entity_type}/{key}")
+            # Query the entire entity list instead of the specific key
+            get_resp = requests.get(f"{SPOOLMAN_IP}/api/v1/field/{entity_type}")
             if get_resp.status_code == 200:
-                existing_data = get_resp.json()
-                # Extract existing choices, handle potential string/list formatting
-                raw_existing = existing_data.get('choices', [])
-                if isinstance(raw_existing, str):
-                    try: raw_existing = json.loads(raw_existing)
-                    except: raw_existing = []
-                if isinstance(raw_existing, list):
-                    existing_choices = raw_existing
-                if existing_choices:
-                    print(f"   ℹ️ Found {len(existing_choices)} existing choices. Merging to protect data.")
+                all_fields = get_resp.json()
+                
+                # Dig through the list to find our specific field
+                for field in all_fields:
+                    if field.get('key') == key:
+                        raw_existing = field.get('choices', [])
+                        
+                        if isinstance(raw_existing, str):
+                            try: raw_existing = json.loads(raw_existing)
+                            except: raw_existing = [c.strip() for c in raw_existing.strip('[]').replace('"', '').split(',') if c.strip()]
+                            
+                        if isinstance(raw_existing, list):
+                            existing_choices = raw_existing
+                            
+                        if existing_choices:
+                            print(f"   ℹ️ Found {len(existing_choices)} existing choices. Merging to protect data.")
+                        break # Found it, stop searching
         except Exception as e:
-            pass # It is okay if the field doesn't exist yet!
+            print(f"   ⚠️ Could not fetch existing choices: {e}")
 
     payload = {"name": name, "field_type": f_type}
     if f_type == "choice":
