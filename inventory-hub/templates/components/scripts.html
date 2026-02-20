@@ -113,12 +113,12 @@
                 // Focus triggers before MouseDown.
                 // We instantly turn the guard transparent so the user feels immediate responsiveness...
                 g.style.opacity = '0';
-                // ...But we physically keep the DOM element shielding the UI for 150ms 
+                // ...But we physically keep the DOM element shielding the UI for 100ms 
                 // so the browser's hit-tester clicks the invisible guard instead of the buttons underneath it.
                 setTimeout(() => {
                     g.style.display = 'none';
                     g.style.opacity = '1'; // reset for next time
-                }, 150);
+                }, 100);
             }
         });
 
