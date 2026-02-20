@@ -744,6 +744,15 @@ def api_state_queue():
         return jsonify({"success": True})
     return jsonify(state.GLOBAL_QUEUE)
 
+@app.route('/api/spools/refresh', methods=['POST'])
+def api_spools_refresh():
+    spools = request.json.get('spools', [])
+    if not isinstance(spools, list):
+        return jsonify({"error": "spools must be a list"}), 400
+    if len(spools) == 0:
+        return jsonify({})
+    return jsonify(logic.get_live_spools_data(spools))
+
 @app.route('/api/logs', methods=['GET'])
 def api_get_logs_route():
     sm_url, fb_url = config_loader.get_api_urls()

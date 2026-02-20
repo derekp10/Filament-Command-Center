@@ -202,6 +202,7 @@ const renderGrid = (data, max) => {
         div.onclick = () => handleSlotInteraction(i);
 
         if (item) {
+            div.setAttribute('data-spool-id', item.id);
             const styles = getFilamentStyle(item.color);
             const info = getRichInfo(item);
 
@@ -414,7 +415,7 @@ const renderBadgeHTML = (s, i, locId) => {
     // [ALEX FIX] Ghost / Deployed Styling for List View (Single Slot)
     if (s.is_ghost) {
         return `
-        <div class="cham-card manage-list-item" style="background:#111; border: 2px dashed ${styles.frame}">
+        <div class="cham-card manage-list-item" data-spool-id="${s.id}" style="background:#111; border: 2px dashed ${styles.frame}">
             <div class="list-inner-gold" style="background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.frame}; background-size: cover;">
                 <div class="list-left">
                     <div class="badge bg-warning text-dark mb-1" style="width:fit-content;">DEPLOYED</div>
@@ -436,7 +437,7 @@ const renderBadgeHTML = (s, i, locId) => {
 
     // Standard Render
     return `
-    <div class="cham-card manage-list-item" style="background:${styles.frame}">
+    <div class="cham-card manage-list-item" data-spool-id="${s.id}" style="background:${styles.frame}">
         <div class="list-inner-gold" style="background: ${styles.inner};">
             <div class="list-left" style="cursor:pointer;" onclick="openSpoolDetails(${s.id})">
                 <div class="id-badge-gold">#${s.id}</div>
@@ -683,17 +684,78 @@ window.openAddModal = () => {
 
 window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, { method: 'DELETE' }).then(fetchLocations));
 
-// --- SMART SYNC LISTENER ---
-// Hooks into Core's heartbeat to refresh the active manager view if open
+// --- SMART SYNC LISTENER (SURGICAL UPDATES ONLY) ---
 document.addEventListener('inventory:sync-pulse', () => {
     const manageModal = document.getElementById('manageModal');
-    // Only refresh if the modal is actually open (Bootstrap adds 'show' class)
-    if (manageModal && manageModal.classList.contains('show')) {
-        const id = document.getElementById('manage-loc-id').value;
-        // Logic check: ensure we aren't currently dragging/holding something that a refresh might disrupt
-        // (Though refreshManageView is generally safe as it rebuilds the list)
-        if (id && !state.processing) {
-            refreshManageView(id);
-        }
+    if (manageModal && manageModal.classList.contains('show') && !state.processing) {
+
+        // 1. Find all spool elements currently on screen in the Manager
+        const spoolNodes = document.querySelectorAll('#manageModal [data-spool-id]');
+        if (spoolNodes.length === 0) return;
+
+        // 2. Extract unique IDs
+        const spoolMap = {};
+        spoolNodes.forEach(node => {
+            const id = node.getAttribute('data-spool-id');
+            if (id) spoolMap[id] = true;
+        });
+
+        const spoolIds = Object.keys(spoolMap).map(id => parseInt(id));
+
+        // 3. Fetch latest display info from backend
+        fetch('/api/spools/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ spools: spoolIds })
+        })
+            .then(r => r.json())
+            .then(data => {
+                // 4. Surgically apply updates
+                spoolNodes.forEach(node => {
+                    const id = node.getAttribute('data-spool-id');
+                    const fresh = data[id];
+                    if (!fresh) return;
+
+                    const styles = getFilamentStyle(fresh.color);
+
+                    // --- Apply to GRID items ---
+                    if (node.classList.contains('slot-btn')) {
+                        node.style.background = styles.frame;
+                        const inner = node.querySelector('.slot-inner-gold');
+                        if (inner) {
+                            // Don't overwrite repeating-linear-gradient for ghosts
+                            if (!inner.style.background.includes('repeating-linear-gradient')) {
+                                inner.style.background = styles.inner;
+                            }
+                        }
+
+                        const t3 = node.querySelector('.text-line-3');
+                        if (t3) {
+                            const qName = fresh.display.replace(/^#\d+\s*/, '').trim();
+                            t3.innerText = qName.startsWith('"') ? qName : `"${qName}"`;
+                        }
+                    }
+
+                    // --- Apply to LIST items ---
+                    if (node.classList.contains('manage-list-item')) {
+                        // Don't overwrite Ghost styling
+                        if (!node.style.background.includes('#111')) {
+                            node.style.background = styles.frame;
+                        }
+
+                        const inner = node.querySelector('.list-inner-gold');
+                        if (inner && !inner.style.background.includes('repeating-linear-gradient')) {
+                            inner.style.background = styles.inner;
+                        }
+
+                        const t3 = node.querySelector('.text-line-3') || node.querySelector('.mt-2 strong');
+                        if (t3) {
+                            const qName = fresh.display.replace(/^#\d+\s*/, '').trim();
+                            t3.innerText = qName.startsWith('"') ? qName : `"${qName}"`;
+                        }
+                    }
+                });
+            })
+            .catch(e => console.warn("Live Refresh Manager Failed", e));
     }
 });

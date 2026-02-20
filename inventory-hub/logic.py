@@ -371,3 +371,24 @@ def process_audit_scan(scan_result):
         return {"status": "success"}
 
     return {"status": "error", "msg": "Unknown scan type"}
+
+def get_live_spools_data(spool_ids):
+    """
+    Rapidly queries Spoolman for a specific list of Spool IDs and returns 
+    their formatted display strings and colors.
+    Used by the frontend to live-refresh the Dashboard Buffer and Location Manager UI.
+    """
+    results = {}
+    for sid in spool_ids:
+        try:
+            spool_data = spoolman_api.get_spool(sid)
+            if spool_data:
+                info = spoolman_api.format_spool_display(spool_data)
+                results[str(sid)] = {
+                    "display": info["text"],
+                    "color": info["color"]
+                }
+        except Exception as e:
+            state.logger.error(f"Failed to live-refresh spool {sid}: {e}")
+            
+    return results

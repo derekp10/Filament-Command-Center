@@ -142,3 +142,22 @@ def test_empty_toolhead_buffer_swap(mock_state, mock_spoolman, mock_config, mock
     # 4. Verify Buffer Injection (This is what is failing for user)
     assert len(mock_state.GLOBAL_BUFFER) == 1
     
+    
+def test_get_live_spools_data(mock_spoolman):
+    """Test rapid Spoolman querying for Live Refresh."""
+    # mock_spoolman fixture already sets:
+    # get_spool.return_value = {'id': 123, ...}
+    # format_spool_display.return_value = {'text': 'Test Spool', 'color': '#ff0000'}
+    
+    # Passing 123 triggers the mock, passing 404 tests graceful handling
+    mock_spoolman.get_spool.side_effect = lambda sid: {'id': sid} if sid == 123 else None
+    
+    res = logic.get_live_spools_data([123, 404])
+    
+    # Assert successful fetch
+    assert "123" in res
+    assert res["123"]["display"] == "Test Spool"
+    assert res["123"]["color"] == "#ff0000"
+    
+    # Assert missing ID is gracefully ignored
+    assert "404" not in res
