@@ -40,6 +40,8 @@ const openSpoolDetails = (id, silent = false) => {
 
                 const styles = getFilamentStyle(rawColor);
                 swatch.style.background = styles.frame;
+                if (styles.border) swatch.style.boxShadow = 'inset 0 0 0 2px #555';
+                else swatch.style.boxShadow = '';
             }
 
             // --- 3. Link Logic ---
@@ -94,6 +96,8 @@ const openFilamentDetails = (fid, silent = false) => {
                 console.log("🎨 Filament Swatch Color:", rawColor); // Debug
                 const styles = getFilamentStyle(rawColor);
                 swatch.style.background = styles.frame;
+                if (styles.border) swatch.style.boxShadow = 'inset 0 0 0 2px #555';
+                else swatch.style.boxShadow = '';
             }
 
             // Link to Spoolman

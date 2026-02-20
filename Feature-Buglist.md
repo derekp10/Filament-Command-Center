@@ -8,6 +8,7 @@
     - Filaments: Spoolman Reprint field/extra data, is set to Yes for all items that need to have a label reprinted with the new Spoolman ID. Null or No, mean that it already has a label with the spoolman ID.
       For Label printed field/extra data, if it has a legacy ID, this will probably be Yes, if it's a no, then it's new, and a label needs to be printed.
 * Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
+* Spools might need to have a text field added to store the product data (Prusament: https://prusament.com/spool/17705/5b1a183b26/) as this is more spool level data, than filament level data.
 
 
 # **Location Manger Items**
@@ -19,11 +20,7 @@
 # **Command Center Items**
 * Set it so that the screen don't sleep. (Needs to be tested on laptop)
     - Doesn't seem to work on Laptop
-* Undo should put back into buffer if it came from buffer.
 * Eject should auto disable if we move off of the command screen to anyother screen or modal
-* Fix swatch circles in "Live Activity" window/pane to work with multi-color filament/spools.
-* Add the ability to have Command Center Notify if Filabridge had an issue reading data from printer for spool weight update, so user can see without having to open filabridge.
-* Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
 * Black filaments need a better way to show border or a better gradiant in the color
 * Add background refreshing used in Location Manger, etc... to update spool text (update weight other data)
 
@@ -31,8 +28,7 @@
 
 
 # **Location List**
-* Definitely need to add support for loading locations from Spoolman and adding them to the locations list, But in order to persist specific data (Friendly Name, Type, Max Spools) but perhaps store in a 
-  config file and not rely on the Locations.csv file as much or at all?
+* Unable to send items to the unassigned location in the location list with a QR code scann.
 
 
 # **Next Steps Items:**
@@ -117,3 +113,8 @@ Production Functionality Fix list
     - 2026-02-14 06:01:08,706 - INFO - ✅ Loaded Prod Config: /config.json
 * Fixed Print Queue displaying "No Loc" for all spools.
 * Added "Send to Print Queue" button for individual spools inside the Filament Details popup.
+* Refactored Location DB to use JSON config instead of CSV, added native sync for Spoolman Location API, and built automated tests.
+* Fixed Undo Buffer Restoration to correctly recall spools to the buffer and reversed Toolhead Ejection cascades.
+* Fixed swatch circles in the "Live Activity" Dashboard log pane to accurately display CSS conic gradients mathematically divided for multi-color filament spools.
+* Implemented background polling for Filabridge `GET /api/print-errors` to expose `gcode` parsing errors in the Live Activity log.
+* Engineered a native CSS physical shield inside `scripts.html` to consume hardware `mousedown`/`click` wake-up hits natively when the Scanner Pauses, preventing accidental button triggers.

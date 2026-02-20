@@ -1,10 +1,10 @@
-from flask import Flask, request, jsonify, render_template
-import requests
-import state
-import config_loader
-import locations_db
-import spoolman_api
-import logic
+from flask import Flask, request, jsonify, render_template # type: ignore
+import requests # type: ignore
+import state # type: ignore
+import config_loader # type: ignore
+import locations_db # type: ignore
+import spoolman_api # type: ignore
+import logic # type: ignore
 import csv
 import os
 import json
@@ -336,22 +336,45 @@ def api_print_batch_csv():
 
 @app.route('/api/locations', methods=['GET'])
 def api_get_locations(): 
-    csv_rows = locations_db.load_locations_list()
-    occupancy_map = {}
-    unassigned_count = 0 
+    local_rows = locations_db.load_locations_list()
+    local_map = {str(row['LocationID']).upper(): row for row in local_rows}
+    
+    # 1. Fetch native Spoolman Locations
+    sm_locations = spoolman_api.get_all_locations()
+    for sm_loc in sm_locations:
+        if not sm_loc or not isinstance(sm_loc, str): continue
+        loc_name = sm_loc.strip()
+        loc_id_upper = loc_name.upper()
+        if loc_id_upper and loc_id_upper not in local_map:
+            # Create a virtual entry for Spoolman native locations
+            local_map[loc_id_upper] = {
+                "LocationID": loc_name,
+                "Name": loc_name,
+                "Type": "Spoolman Native",
+                "Max Spools": 0
+            }
+            
+    csv_rows = list(local_map.values())
+    occupancy_map: dict[str, int] = {}
+    unassigned_count: int = 0 
     
     sm_url, _ = config_loader.get_api_urls()
     try:
         resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
         if resp.ok:
             for s in resp.json():
-                loc = s.get('location', '').upper().strip()
-                extra = s.get('extra', {})
+                if not isinstance(s, dict): continue
+                loc = str(s.get('location', '')).upper().strip()
+                extra = s.get('extra')
+                if not isinstance(extra, dict): extra = {}
                 
                 if loc: 
-                    occupancy_map[loc] = occupancy_map.get(loc, 0) + 1
+                    if loc not in occupancy_map:
+                        occupancy_map[loc] = 1
+                    else:
+                        occupancy_map[loc] += 1
                 else: 
-                    unassigned_count += 1 
+                    unassigned_count += 1 # type: ignore # pyre-ignore
                 
                 # [ALEX FIX] Ghost Occupancy Count
                 # Ensure deployed items still count towards their home box's total
@@ -372,9 +395,13 @@ def api_get_locations():
     })
 
     for row in csv_rows:
-        lid = row['LocationID'].upper()
+        lid = str(row['LocationID']).upper()
         max_s = row.get('Max Spools', '')
-        max_val = int(max_s) if max_s and max_s.isdigit() else 0
+        try:
+            max_val = int(max_s) if max_s else 0
+        except (ValueError, TypeError):
+            max_val = 0
+            
         curr_val = occupancy_map.get(lid, 0)
         row['OccupancyRaw'] = curr_val 
         if max_val > 0: row['Occupancy'] = f"{curr_val}/{max_val}"
@@ -394,7 +421,7 @@ def api_save_location():
     else:
         state.add_log_entry(f"✨ Created: {new_entry['LocationID']}")
     current_list.append(new_entry)
-    current_list.sort(key=lambda x: x['LocationID'])
+    current_list.sort(key=lambda x: str(x.get('LocationID', '')))
     locations_db.save_locations_list(current_list)
     return jsonify({"success": True})
 
@@ -470,7 +497,8 @@ def api_manage_contents():
         if logic.perform_smart_eject(spool_id): return jsonify({"success": True})
         else: return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'add':
-        return jsonify(logic.perform_smart_move(loc_id, [spool_id], target_slot=slot_arg))
+        origin = data.get('origin', '')
+        return jsonify(logic.perform_smart_move(loc_id, [spool_id], target_slot=slot_arg, origin=origin))
     return jsonify({"success": False})
 
 @app.route('/api/identify_scan', methods=['POST'])
@@ -542,10 +570,11 @@ def api_print_location_label():
         # 3. Robust Lookup 
         loc_data = None
         for row in locs:
+            if not isinstance(row, dict): continue
             row_id = ""
             for k, v in row.items():
-                if k.strip().lower() == 'locationid': 
-                    row_id = v.strip().upper()
+                if str(k).strip().lower() == 'locationid': 
+                    row_id = str(v).strip().upper()
                     break
             
             if row_id == target_id:
@@ -558,10 +587,11 @@ def api_print_location_label():
 
         # Get Name safely
         loc_name = target_id
-        for k, v in loc_data.items():
-            if k.strip().lower() == 'name':
-                loc_name = v
-                break
+        if isinstance(loc_data, dict):
+            for k, v in loc_data.items():
+                if str(k).strip().lower() == 'name':
+                    loc_name = str(v)
+                    break
         
         # Sanitize
         clean_name = sanitize_label_text(loc_name)
@@ -581,11 +611,12 @@ def api_print_location_label():
             
         # 5. Robust Slot Logic
         max_spools = 1
-        for k, v in loc_data.items():
-            if k.strip().lower() == 'max spools':
-                try: max_spools = int(v)
-                except: max_spools = 1
-                break
+        if isinstance(loc_data, dict):
+            for k, v in loc_data.items():
+                if str(k).strip().lower() == 'max spools':
+                    try: max_spools = int(v)
+                    except: max_spools = 1
+                    break
             
         state.logger.info(f"ℹ️ [LABEL] Found {target_id}. Max Spools: {max_spools}")
 
@@ -609,8 +640,8 @@ def api_print_location_label():
             slots_generated = True
 
         # 6. Build User Message
-        abs_path = os.path.abspath(output_dir)
-        short_path = "..." + abs_path[-30:] if len(abs_path) > 30 else abs_path
+        abs_path = str(os.path.abspath(output_dir))
+        short_path = "..." + abs_path[-30:] if len(abs_path) > 30 else abs_path # type: ignore
         
         msg = f"Queue: {target_id}"
         if slots_generated: msg += f" (+{max_spools} Slots)"
@@ -634,31 +665,35 @@ def api_get_multi_spool_filaments():
         
         # 2. Group by Filament ID
         fil_counts = {}
-        for s in all_spools:
-            if s.get('archived'): continue # Skip archived
-            fid = s.get('filament', {}).get('id')
-            if not fid: continue
-            
-            if fid not in fil_counts: 
-                fil_counts[fid] = {
-                    "count": 0, 
-                    "spools": [], 
-                    "name": s.get('filament', {}).get('name'),
-                    "vendor": s.get('filament', {}).get('vendor', {}).get('name')
-                }
-            fil_counts[fid]["count"] += 1
-            fil_counts[fid]["spools"].append(s['id'])
+        fil_spools = {}
+        fil_names = {}
+        fil_vendors = {}
+        
+        if isinstance(all_spools, list):
+            for s in all_spools:
+                if not isinstance(s, dict) or s.get('archived'): continue # Skip archived
+                fid = s.get('filament', {}).get('id')
+                if not fid: continue
+                
+                if fid not in fil_counts: 
+                    fil_counts[fid] = 0
+                    fil_spools[fid] = []
+                    fil_names[fid] = s.get('filament', {}).get('name', '')
+                    fil_vendors[fid] = s.get('filament', {}).get('vendor', {}).get('name', '')
+                    
+                fil_counts[fid] += 1
+                fil_spools[fid].append(s['id'])
             
         # 3. Filter for > 1
         candidates = []
-        for fid, data in fil_counts.items():
-            if data['count'] > 1:
-                display_name = f"{data['vendor']} - {data['name']}"
+        for fid, count in fil_counts.items():
+            if count > 1:
+                display_name = f"{fil_vendors.get(fid, '')} - {fil_names.get(fid, '')}".strip(" -")
                 candidates.append({
                     "id": fid,
                     "display": display_name,
-                    "count": data['count'],
-                    "spool_ids": data['spools']
+                    "count": count,
+                    "spool_ids": fil_spools.get(fid, [])
                 })
         
         return jsonify(candidates)
@@ -690,7 +725,8 @@ def api_smart_move():
     return jsonify(logic.perform_smart_move(
         request.json.get('location'), 
         request.json.get('spools'),
-        target_slot=request.json.get('slot')
+        target_slot=request.json.get('slot'),
+        origin=request.json.get('origin', '')
     ))
 
 # --- PERSISTENCE ROUTES ---
@@ -708,14 +744,50 @@ def api_state_queue():
         return jsonify({"success": True})
     return jsonify(state.GLOBAL_QUEUE)
 
+@app.route('/api/spools/refresh', methods=['POST'])
+def api_spools_refresh():
+    spools = request.json.get('spools', [])
+    if not isinstance(spools, list):
+        return jsonify({"error": "spools must be a list"}), 400
+    if len(spools) == 0:
+        return jsonify({})
+    return jsonify(logic.get_live_spools_data(spools))
+
 @app.route('/api/logs', methods=['GET'])
 def api_get_logs_route():
     sm_url, fb_url = config_loader.get_api_urls()
     sm_ok, fb_ok = False, False
     try: sm_ok = requests.get(f"{sm_url}/api/v1/health", timeout=1).ok
     except: pass
-    try: fb_ok = requests.get(f"{fb_url}/status", timeout=1).ok
+    
+    try: 
+        fb_resp = requests.get(f"{fb_url}/status", timeout=1)
+        fb_ok = fb_resp.ok
+        
+        # [NEW] Check for FilaBridge Print Errors
+        if fb_ok:
+            try:
+                err_resp = requests.get(f"{fb_url}/print-errors", timeout=2)
+                if err_resp.ok:
+                    fb_errors = err_resp.json().get('errors', [])
+                    for err in fb_errors:
+                        err_id = err.get('id')
+                        # Only alert if we haven't seen it and the user hasn't naturally acknowledged it in FilaBridge
+                        if err_id and not err.get('acknowledged', False):
+                            if err_id not in state.ACKNOWLEDGED_FILABRIDGE_ERRORS:
+                                state.ACKNOWLEDGED_FILABRIDGE_ERRORS.add(err_id)
+                                p_name = err.get('printer_name', 'Unknown Printer')
+                                f_name = err.get('filename', 'Unknown File')
+                                err_msg = err.get('error', 'Unknown Error')
+                                state.add_log_entry(
+                                    f"🔴 FilaBridge: [{p_name}] failed to parse weight for '{f_name}': {err_msg}",
+                                    "WARNING"
+                                )
+            except Exception as e:
+                pass # Don't crash the log poller if FilaBridge errors endpoint times out
+                
     except: pass
+    
     return jsonify({
         "logs": state.RECENT_LOGS,
         "undo_available": len(state.UNDO_STACK) > 0,
