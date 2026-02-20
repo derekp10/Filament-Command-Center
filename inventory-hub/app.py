@@ -725,7 +725,8 @@ def api_smart_move():
     return jsonify(logic.perform_smart_move(
         request.json.get('location'), 
         request.json.get('spools'),
-        target_slot=request.json.get('slot')
+        target_slot=request.json.get('slot'),
+        origin=request.json.get('origin', '')
     ))
 
 # --- PERSISTENCE ROUTES ---

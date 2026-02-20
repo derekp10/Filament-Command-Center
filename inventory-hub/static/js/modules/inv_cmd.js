@@ -235,7 +235,8 @@ const performContextAssign = (tid, slot = null) => {
     const payload = {
         location: tid,
         spools: state.heldSpools.map(s => s.id),
-        slot: slot
+        slot: slot,
+        origin: 'buffer'
     };
 
     fetch('/api/smart_move', {
