@@ -21,7 +21,6 @@
 * Set it so that the screen don't sleep. (Needs to be tested on laptop)
     - Doesn't seem to work on Laptop
 * Eject should auto disable if we move off of the command screen to anyother screen or modal
-* Fix swatch circles in "Live Activity" window/pane to work with multi-color filament/spools.
 * Add the ability to have Command Center Notify if Filabridge had an issue reading data from printer for spool weight update, so user can see without having to open filabridge.
 * Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
 * Black filaments need a better way to show border or a better gradiant in the color
@@ -31,6 +30,7 @@
 
 
 # **Location List**
+* Unable to send items to the unassigned location in the location list with a QR code scann.
 
 
 # **Next Steps Items:**
@@ -117,3 +117,4 @@ Production Functionality Fix list
 * Added "Send to Print Queue" button for individual spools inside the Filament Details popup.
 * Refactored Location DB to use JSON config instead of CSV, added native sync for Spoolman Location API, and built automated tests.
 * Fixed Undo Buffer Restoration to correctly recall spools to the buffer and reversed Toolhead Ejection cascades.
+* Fixed swatch circles in the "Live Activity" Dashboard log pane to accurately display CSS conic gradients mathematically divided for multi-color filament spools.
