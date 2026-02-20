@@ -13,68 +13,6 @@
 
 
 # **Location Manger Items**
-* Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
-* Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here, for spools that are assigned to the location, but doesn't have a slot attached to them.
-* Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to. This might be because we added the LOC: indicater, and it might just not be parcing correctly now.
-    - Currently items assigned using a slot QR code "LOC:CR-MDB-1:SLOT:4" are being stored in spoolman as a "CR-MDB-1:SLOT:4" location
-        * Could be advantagous to have the slots have there own loation in Spoolman. But I don't have a direct use case currently for it. Perhapes you might have one.
-* Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assigne all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
-    - This should probably be the default for non-drier boxes.
-* Location Manager not syncing status across browser instances?
-* COME BACK AND ADDRESS ISSUES IN setup_fields.py (Non destructive of existing choice fields, check error codes)
-
---- Gathering Choices ---
-
---- Setting up SPOOL Fields ---
-🔧 Processing spool field: Physical Source (physical_source)...
-   ✅ Created/Updated.
-🔧 Processing spool field: Physical Source Slot (physical_source_slot)...
-   ✅ Created/Updated.
-🔧 Processing spool field: Label Printed (label_printed)...
-   ✅ Created/Updated.
-🔧 Processing spool field: Is Refill (is_refill)...
-   ✅ Created/Updated.
-🔧 Processing spool field: Temp Resistance (spool_temp)...
-   ✅ Created/Updated.
-🔧 Processing spool field: Container / MMU Slot (container_slot)...
-   ⚠️ Force Reset enabled. Deleting old definition...
-   🗑️ Deleted old field.
-   ✅ Created/Updated.
-🔧 Processing spool field: Spool Type (spool_type)...
-   ✅ Created/Updated.
-
---- Setting up FILAMENT Fields ---
-🔧 Processing filament field: Filament Attributes (filament_attributes)...
-   ❌ Error 400: {"message":"Cannot remove existing choices."}
-🔧 Processing filament field: Shore Hardness (shore_hardness)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Slicer Profile (slicer_profile)...
-   ❌ Error 400: {"message":"Cannot remove existing choices."}
-🔧 Processing filament field: Label Printed (label_printed)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Sample Printed (sample_printed)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Product Page Link (product_url)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Purchase Link (purchase_url)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Sheet Row Link (sheet_link)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Price (w/ Tax) (price_total)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Spoolman Reprint (spoolman_reprint)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Original Color (original_color)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Drying Temp (drying_temp)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Drying Time (drying_time)...
-   ✅ Created/Updated.
-🔧 Processing filament field: Flush Multiplier (flush_multiplier)...
-   ✅ Created/Updated.
-
-🎉 All Fields Configured Successfully!
-
 
 
 # **Print Queue Items**
@@ -170,3 +108,12 @@ Production Functionality Fix list
     - High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
 * Added color coding to the badges on the location (Location Type)
 * Added color indicate of dryerbox/tool fullness (1/1 Green, 2/1 Red, < Max White)
+* Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
+* Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here, for spools that are assigned to the location, but doesn't have a slot attached to them.
+* Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to. This might be because we added the LOC: indicater, and it might just not be parcing correctly now.
+    - Currently items assigned using a slot QR code "LOC:CR-MDB-1:SLOT:4" are being stored in spoolman as a "CR-MDB-1:SLOT:4" location
+        * Could be advantagous to have the slots have there own loation in Spoolman. But I don't have a direct use case currently for it. Perhapes you might have one.
+* Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assigne all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
+    - This should probably be the default for non-drier boxes.
+* Location Manager not syncing status across browser instances?
+* COME BACK AND ADDRESS ISSUES IN setup_fields.py (Non destructive of existing choice fields, check error codes)
