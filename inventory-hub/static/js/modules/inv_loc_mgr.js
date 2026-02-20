@@ -211,7 +211,7 @@ const renderGrid = (data, max) => {
                 div.style.border = `3px dashed ${styles.frame}`; // Bright colored border
                 
                 div.innerHTML = `
-                <div class="slot-inner-gold" style="background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.inner}; background-size: cover;">
+                <div class="slot-inner-gold" style="background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.frame}; background-size: cover;">
                     
                     <div class="slot-header d-flex flex-column align-items-center mb-2 mt-1">
                         <div class="slot-num-gold" style="color:#ccc;">SLOT ${i}</div>
@@ -415,7 +415,7 @@ const renderBadgeHTML = (s, i, locId) => {
     if (s.is_ghost) {
          return `
         <div class="cham-card manage-list-item" style="background:#111; border: 2px dashed ${styles.frame}">
-            <div class="list-inner-gold" style="background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.inner}; background-size: cover;">
+            <div class="list-inner-gold" style="background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.frame}; background-size: cover;">
                 <div class="list-left">
                     <div class="badge bg-warning text-dark mb-1" style="width:fit-content;">DEPLOYED</div>
                     <div class="text-white mt-1" style="font-size:0.9rem; background: rgba(0,0,0,0.7); padding: 2px 6px; border-radius: 4px; display: inline-block;">
