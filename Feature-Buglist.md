@@ -20,7 +20,6 @@
 # **Command Center Items**
 * Set it so that the screen don't sleep. (Needs to be tested on laptop)
     - Doesn't seem to work on Laptop
-* Undo should put back into buffer if it came from buffer.
 * Eject should auto disable if we move off of the command screen to anyother screen or modal
 * Fix swatch circles in "Live Activity" window/pane to work with multi-color filament/spools.
 * Add the ability to have Command Center Notify if Filabridge had an issue reading data from printer for spool weight update, so user can see without having to open filabridge.
@@ -117,3 +116,4 @@ Production Functionality Fix list
 * Fixed Print Queue displaying "No Loc" for all spools.
 * Added "Send to Print Queue" button for individual spools inside the Filament Details popup.
 * Refactored Location DB to use JSON config instead of CSV, added native sync for Spoolman Location API, and built automated tests.
+* Fixed Undo Buffer Restoration to correctly recall spools to the buffer and reversed Toolhead Ejection cascades.
