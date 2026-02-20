@@ -8,6 +8,7 @@
     - Filaments: Spoolman Reprint field/extra data, is set to Yes for all items that need to have a label reprinted with the new Spoolman ID. Null or No, mean that it already has a label with the spoolman ID.
       For Label printed field/extra data, if it has a legacy ID, this will probably be Yes, if it's a no, then it's new, and a label needs to be printed.
 * Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
+* Spools might need to have a text field added to store the product data (Prusament: https://prusament.com/spool/17705/5b1a183b26/) as this is more spool level data, than filament level data.
 
 
 # **Location Manger Items**
