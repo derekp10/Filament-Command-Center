@@ -149,10 +149,15 @@ const openFilamentDetails = (fid, silent = false) => {
                             </div>
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-secondary me-2">${location}</span>
-                                <button class="btn btn-sm btn-outline-success py-0 px-2" 
+                                <button class="btn btn-sm btn-outline-success py-0 px-2 me-1" 
                                     onclick="window.addSpoolToBuffer(${s.id})" 
                                     title="Add to Buffer">
                                     📥
+                                </button>
+                                <button class="btn btn-sm btn-outline-info py-0 px-2" 
+                                    onclick="window.addToQueue({ id: ${s.id}, type: 'spool', display: '${d.name} (ID:${s.id})' }); showToast('Added to Queue');" 
+                                    title="Send to Print Queue">
+                                    🖨️
                                 </button>
                             </div>
                         `;

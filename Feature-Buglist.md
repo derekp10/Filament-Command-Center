@@ -14,7 +14,6 @@
 
 
 # **Print Queue Items**
-* Would be nice to have a send to print queue button too.
 
 
 # **Command Center Items**
@@ -117,3 +116,4 @@ Production Functionality Fix list
 * Fix backend logging to not repeate this filling the logs with non useful data. 
     - 2026-02-14 06:01:08,706 - INFO - ✅ Loaded Prod Config: /config.json
 * Fixed Print Queue displaying "No Loc" for all spools.
+* Added "Send to Print Queue" button for individual spools inside the Filament Details popup.
