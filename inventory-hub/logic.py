@@ -1,4 +1,5 @@
 import re
+import typing
 import urllib.parse
 import requests
 import state
@@ -115,7 +116,7 @@ def resolve_scan(text):
         
     return {'type': 'error', 'msg': 'Unknown Code'}
 
-def perform_smart_move(target, raw_spools, target_slot=None):
+def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
     target = target.strip().upper()
     cfg = config_loader.load_config()
     printer_map = cfg.get("printer_map", {})
@@ -138,6 +139,8 @@ def perform_smart_move(target, raw_spools, target_slot=None):
     is_printer = target in printer_map
     is_toolhead = tgt_info and tgt_info.get('Type') in ['Tool Head', 'MMU Slot', 'Printer']
     
+    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "ejections": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
+
     if is_printer or is_toolhead:
         # Check if anyone is already home
         residents = spoolman_api.get_spools_at_location(target)
@@ -145,20 +148,21 @@ def perform_smart_move(target, raw_spools, target_slot=None):
             # Don't eject the spool we are currently trying to move (if it's already there)
             if str(rid) not in [str(s) for s in spools]:
                 state.add_log_entry(f"⚠️ <b>Smart Load:</b> Ejecting #{rid} from {target}...", "WARNING")
-                perform_smart_eject(rid)
-    # ----------------------------------------------
-
-    undo_record = {"target": target, "moves": {}, "summary": f"Moved {len(spools)} -> {target}"}
+                if perform_smart_eject(rid):
+                    # Find out where it actually got sent to so we can bring it back!
+                    ejected_data = spoolman_api.get_spool(rid)
+                    if ejected_data:
+                        undo_record['ejections'][rid] = ejected_data.get('location', '')
 
     for sid in spools:
         spool_data = spoolman_api.get_spool(sid)
         if not spool_data: continue
         current_loc = spool_data.get('location', '').strip().upper()
         undo_record['moves'][sid] = current_loc
-        current_extra = spool_data.get('extra') or {}
+        current_extra: dict = dict(spool_data.get('extra') or {})
         info = spoolman_api.format_spool_display(spool_data)
         
-        new_extra = current_extra.copy()
+        new_extra: typing.Dict[str, typing.Any] = dict(current_extra)
         
 # Handle Slot Assignment
         if target_slot:
@@ -252,7 +256,10 @@ def perform_smart_eject(spool_id):
 
 def perform_undo():
     if not state.UNDO_STACK: return {"success": False, "msg": "History empty."}
-    last = state.UNDO_STACK.pop(); moves = last['moves']; target = last.get('target')
+    last = state.UNDO_STACK.pop()
+    moves = last['moves']
+    target = last.get('target')
+    origin = last.get('origin', '')
     cfg = config_loader.load_config(); printer_map = cfg.get("printer_map", {})
     sm_url, fb_url = config_loader.get_api_urls()
     
@@ -270,7 +277,29 @@ def perform_undo():
             try: requests.post(f"{fb_url}/map_toolhead", 
                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)})
             except: pass
+    # [ALEX FIX] Revert Smart Ejections
+    ejections = last.get('ejections', {})
+    for ejected_sid, original_loc in ejections.items():
+        requests.patch(f"{sm_url}/api/v1/spool/{ejected_sid}", json={"location": original_loc})
+        if original_loc in printer_map:
+            p = printer_map[original_loc]
+            try: requests.post(f"{fb_url}/map_toolhead", 
+                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(ejected_sid)})
+            except: pass
             
+            
+    # [ALEX FIX] Restore to Buffer Memory
+    if origin == 'buffer':
+        for sid in moves.keys():
+            spool_data = spoolman_api.get_spool(sid)
+            if spool_data:
+                info = spoolman_api.format_spool_display(spool_data)
+                # Ensure we avoid duplicates
+                if not any(s.get('id') == int(sid) for s in getattr(state, 'GLOBAL_BUFFER', [])):
+                    if not hasattr(state, 'GLOBAL_BUFFER'): state.GLOBAL_BUFFER = []
+                    # Prepend to buffer so it shows up first
+                    state.GLOBAL_BUFFER.insert(0, {'id': int(sid), 'display': info['text'], 'color': info['color']})
+                    
     state.add_log_entry(f"↩️ Undid: {last['summary']}", "WARNING")
     return {"success": True}
 

@@ -497,7 +497,8 @@ def api_manage_contents():
         if logic.perform_smart_eject(spool_id): return jsonify({"success": True})
         else: return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'add':
-        return jsonify(logic.perform_smart_move(loc_id, [spool_id], target_slot=slot_arg))
+        origin = data.get('origin', '')
+        return jsonify(logic.perform_smart_move(loc_id, [spool_id], target_slot=slot_arg, origin=origin))
     return jsonify({"success": False})
 
 @app.route('/api/identify_scan', methods=['POST'])

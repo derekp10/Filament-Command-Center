@@ -1,5 +1,5 @@
 {
     "python.analysis.extraPaths": [
-        "./inventory-hub"
+        "d:/My Documents/Documents/3D Printing/Filament Command Center/inventory-hub"
     ]
 }
