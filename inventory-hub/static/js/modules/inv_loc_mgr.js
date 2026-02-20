@@ -425,9 +425,9 @@ const renderBadgeHTML = (s, i, locId) => {
                         ${info.line1} - <strong>${info.line3}</strong>
                     </div>
                 </div>
-                <div class="action-group-gold">
-                    <div class="action-badge" onclick="doAssign('${locId}', ${s.id}, '${s.slot || ''}')">
-                        <div class="badge-btn-gold btn-pick-bg" style="background: #ffc107; color:#000; box-shadow: 0 4px 6px rgba(0,0,0,0.5);">↩️ RETURN</div>
+                <div class="action-group-gold" style="justify-content: center; align-items: center;">
+                    <div class="action-badge" style="flex: 0 0 auto; height: fit-content; width: 90px; margin: auto;" onclick="doAssign('${locId}', ${s.id}, '${s.slot || ''}')">
+                        <div class="badge-btn-gold btn-pick-bg" style="background: #ffc107; color:#000; box-shadow: 0 4px 6px rgba(0,0,0,0.5); padding: 12px 5px; height: auto; border-radius: 6px;">↩️ RETURN</div>
                     </div>
                 </div>
             </div>
