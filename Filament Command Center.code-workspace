@@ -7,5 +7,9 @@
 			"path": "../3D Print Data"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"python.analysis.extraPaths": [
+			"./inventory-hub"
+		]
+	}
 }
