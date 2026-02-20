@@ -93,6 +93,7 @@ const prevBuffer = () => { if (state.heldSpools.length > 1) { state.heldSpools.u
 // --- MODES ---
 const toggleDropMode = () => { state.dropMode = !state.dropMode; state.ejectMode = false; updateDeckVisuals(); };
 const toggleEjectMode = () => { state.ejectMode = !state.ejectMode; state.dropMode = false; updateDeckVisuals(); };
+window.resetCommandModes = () => { state.dropMode = false; state.ejectMode = false; updateDeckVisuals(); };
 const toggleAudit = () => {
     state.auditActive = !state.auditActive;
     updateLogState(true);

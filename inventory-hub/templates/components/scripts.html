@@ -43,6 +43,13 @@
         // ROOT CAUSE FIX: Removed the 'shown.bs.modal' listener for manageModal.
         // inv_loc_mgr.js -> openManage() now handles the full render cycle before showing.
 
+        // Modal Open Interceptor (Auto-disables Deck Modes)
+        document.addEventListener('show.bs.modal', () => {
+            if (typeof window.resetCommandModes === 'function') {
+                window.resetCommandModes();
+            }
+        });
+
         // Deck QRs
         generateSafeQR('qr-undo', 'CMD:UNDO', 85);
         generateSafeQR('qr-clear', 'CMD:CLEAR', 85);
