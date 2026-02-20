@@ -9,6 +9,7 @@
       For Label printed field/extra data, if it has a legacy ID, this will probably be Yes, if it's a no, then it's new, and a label needs to be printed.
 * Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
 * Spools might need to have a text field added to store the product data (Prusament: https://prusament.com/spool/17705/5b1a183b26/) as this is more spool level data, than filament level data.
+* Need to add a routine to clean up the logs after a while. We don't have that currently, and I'm sure things have gotten out of hand on production.
 
 
 # **Location Manger Items**
