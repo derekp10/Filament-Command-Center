@@ -9,3 +9,5 @@ config.dev.json
 config.prod.json
 inventory-hub/hub.log.1
 inventory-hub/out.json
+.config_mtime
+hub.log
