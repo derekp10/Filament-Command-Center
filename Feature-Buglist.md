@@ -7,8 +7,6 @@
     - Label Printed in Spoolman Spool data can be used to determin if a new (Spoolman Based ID) Label has been printed.
     - Filaments: Spoolman Reprint field/extra data, is set to Yes for all items that need to have a label reprinted with the new Spoolman ID. Null or No, mean that it already has a label with the spoolman ID.
       For Label printed field/extra data, if it has a legacy ID, this will probably be Yes, if it's a no, then it's new, and a label needs to be printed.
-* Fix backend logging to not repeate this filling the logs with non useful data. 
-    - 2026-02-14 06:01:08,706 - INFO - ✅ Loaded Prod Config: /config.json
 * Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
 
 
@@ -117,3 +115,5 @@ Production Functionality Fix list
     - This should probably be the default for non-drier boxes.
 * Location Manager not syncing status across browser instances?
 * COME BACK AND ADDRESS ISSUES IN setup_fields.py (Non destructive of existing choice fields, check error codes)
+* Fix backend logging to not repeate this filling the logs with non useful data. 
+    - 2026-02-14 06:01:08,706 - INFO - ✅ Loaded Prod Config: /config.json
