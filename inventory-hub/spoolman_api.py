@@ -1,6 +1,6 @@
-import requests
-import state
-import config_loader
+import requests # type: ignore
+import state # type: ignore
+import config_loader # type: ignore
 
 # Constants for JSON sanitation
 # [ALEX FIX] Added 'physical_source_slot' to ensure strict JSON string formatting
@@ -10,6 +10,17 @@ def get_spool(sid):
     sm_url, _ = config_loader.get_api_urls()
     try: return requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3).json()
     except: return None
+
+def get_all_locations():
+    """Fetches all locations from Spoolman."""
+    sm_url, _ = config_loader.get_api_urls()
+    try: 
+        resp = requests.get(f"{sm_url}/api/v1/location", timeout=3)
+        if resp.ok:
+            return resp.json()
+        return []
+    except: 
+        return []
 
 def get_filament(fid):
     """Fetches a specific filament definition."""
@@ -21,9 +32,9 @@ def sanitize_outbound_data(data):
     """Ensures extra fields are properly formatted as JSON strings for Spoolman."""
     if 'extra' not in data or not data['extra']: return data
     clean_extra = {}
-    for key, value in data['extra'].items():
+    for key, value in data['extra'].items(): # type: ignore
         if value is None: continue 
-        if isinstance(value, bool):
+        if type(value) is bool:
             clean_extra[key] = "true" if value else "false"
         elif key in JSON_STRING_FIELDS:
             val_str = str(value).strip()

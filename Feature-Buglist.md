@@ -31,8 +31,6 @@
 
 
 # **Location List**
-* Definitely need to add support for loading locations from Spoolman and adding them to the locations list, But in order to persist specific data (Friendly Name, Type, Max Spools) but perhaps store in a 
-  config file and not rely on the Locations.csv file as much or at all?
 
 
 # **Next Steps Items:**
@@ -117,3 +115,4 @@ Production Functionality Fix list
     - 2026-02-14 06:01:08,706 - INFO - ✅ Loaded Prod Config: /config.json
 * Fixed Print Queue displaying "No Loc" for all spools.
 * Added "Send to Print Queue" button for individual spools inside the Filament Details popup.
+* Refactored Location DB to use JSON config instead of CSV, added native sync for Spoolman Location API, and built automated tests.
