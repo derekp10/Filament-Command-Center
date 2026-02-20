@@ -342,7 +342,8 @@ def api_get_locations():
     # 1. Fetch native Spoolman Locations
     sm_locations = spoolman_api.get_all_locations()
     for sm_loc in sm_locations:
-        loc_name = str(sm_loc.get('name', '')).strip()
+        if not sm_loc or not isinstance(sm_loc, str): continue
+        loc_name = sm_loc.strip()
         loc_id_upper = loc_name.upper()
         if loc_id_upper and loc_id_upper not in local_map:
             # Create a virtual entry for Spoolman native locations
@@ -394,9 +395,13 @@ def api_get_locations():
     })
 
     for row in csv_rows:
-        lid = row['LocationID'].upper()
+        lid = str(row['LocationID']).upper()
         max_s = row.get('Max Spools', '')
-        max_val = int(max_s) if max_s and max_s.isdigit() else 0
+        try:
+            max_val = int(max_s) if max_s else 0
+        except (ValueError, TypeError):
+            max_val = 0
+            
         curr_val = occupancy_map.get(lid, 0)
         row['OccupancyRaw'] = curr_val 
         if max_val > 0: row['Occupancy'] = f"{curr_val}/{max_val}"
