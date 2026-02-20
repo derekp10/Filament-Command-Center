@@ -3,60 +3,60 @@ console.log("🚀 Loaded Module: CORE");
 
 // --- GLOBAL STATE ---
 let wakeLock = null;
-let modals = {}; 
-let state = { 
+let modals = {};
+let state = {
     // Core
-    scanBuffer: "", 
-    bufferTimeout: null, 
-    processing: false, 
+    scanBuffer: "",
+    bufferTimeout: null,
+    processing: false,
     logsPaused: false,
-    allLocations: [], 
-    
+    allLocations: [],
+
     // Command Center / Buffer
-    heldSpools: [], 
-    ejectMode: false, 
-    dropMode: false, 
-    lastScannedLoc: null, 
-    auditActive: false, 
+    heldSpools: [],
+    ejectMode: false,
+    dropMode: false,
+    lastScannedLoc: null,
+    auditActive: false,
     lastAuditState: null,
-    
+
     // Manager
-    currentGrid: {}, 
-    
+    currentGrid: {},
+
     // Modals
-    modalCallbacks: [], 
-    activeModal: null, 
-    pendingConfirm: null, 
+    modalCallbacks: [],
+    activeModal: null,
+    pendingConfirm: null,
     pendingSafety: null
 };
 
 // --- INITIALIZATION HELPERS ---
-const requestWakeLock = async () => { 
-    if ('wakeLock' in navigator) { 
-        try { wakeLock = await navigator.wakeLock.request('screen'); } 
-        catch (err) { console.log(err); } 
-    } 
+const requestWakeLock = async () => {
+    if ('wakeLock' in navigator) {
+        try { wakeLock = await navigator.wakeLock.request('screen'); }
+        catch (err) { console.log(err); }
+    }
 };
 
 // --- UI HELPERS ---
-const showToast = (msg, type='info') => {
+const showToast = (msg, type = 'info') => {
     let c = document.getElementById('toast-container');
     if (!c) { c = document.createElement('div'); c.id = 'toast-container'; document.body.appendChild(c); }
-    const el = document.createElement('div'); el.className = 'toast-msg'; el.innerText = msg; el.style.borderColor = type==='error'?'#f44':(type==='warning'?'#fc0':'#00d4ff');
+    const el = document.createElement('div'); el.className = 'toast-msg'; el.innerText = msg; el.style.borderColor = type === 'error' ? '#f44' : (type === 'warning' ? '#fc0' : '#00d4ff');
     c.appendChild(el); setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 2000);
 };
 
-const setProcessing = (s) => { 
+const setProcessing = (s) => {
     let ov = document.getElementById('processing-overlay');
     if (!ov) { ov = document.createElement('div'); ov.id = 'processing-overlay'; ov.style.cssText = "display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999;"; document.body.appendChild(ov); }
-    state.processing = s; ov.style.display = s ? 'block' : 'none'; 
+    state.processing = s; ov.style.display = s ? 'block' : 'none';
 };
 
 const pauseLogs = (isPaused) => {
     state.logsPaused = isPaused;
     const el = document.getElementById('log-status');
     if (el) {
-        if (isPaused) { el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-muted'); } 
+        if (isPaused) { el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-muted'); }
         else { el.innerText = "Auto-Refresh ON"; el.style.color = "#0f0"; el.classList.remove('text-muted'); }
     }
 };
@@ -68,20 +68,20 @@ const generateSafeQR = (elementId, text, size) => {
             const el = document.getElementById(elementId);
             if (el) {
                 el.innerHTML = "";
-                try { 
-                    new QRCode(el, { text: text, width: size, height: size, correctLevel: QRCode.CorrectLevel.L }); 
-                } catch(e) {}
+                try {
+                    new QRCode(el, { text: text, width: size, height: size, correctLevel: QRCode.CorrectLevel.L });
+                } catch (e) { }
             }
         });
     });
 };
 
-const getHexDark = (hex, opacity=0.3) => {
+const getHexDark = (hex, opacity = 0.3) => {
     if (!hex) return 'rgba(0,0,0,0.5)';
     hex = hex.replace('#', '');
-    if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
-    const r = parseInt(hex.substring(0,2), 16), g = parseInt(hex.substring(2,4), 16), b = parseInt(hex.substring(4,6), 16);
-    return `rgba(${r}, ${g}, ${b}, ${opacity})`; 
+    if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+    const r = parseInt(hex.substring(0, 2), 16), g = parseInt(hex.substring(2, 4), 16), b = parseInt(hex.substring(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 };
 
 
@@ -89,17 +89,17 @@ const getHexDark = (hex, opacity=0.3) => {
 const getFilamentStyle = (colorStr) => {
     // [ALEX FIX] Robust Color Parsing (Shared by Buffer & Modals)
     if (!colorStr) colorStr = "333";
-    
+
     // 1. Scrub the input (remove quotes, extra spaces)
     let cleanStr = colorStr.toString().replace(/['"]/g, '').trim();
     if (!cleanStr) cleanStr = "333";
 
     let colors = [];
-    
+
     // 2. Handle Lists (JSON or CSV)
     if (cleanStr.startsWith('[')) {
-        try { colors = JSON.parse(cleanStr); } 
-        catch(e) { colors = [cleanStr]; }
+        try { colors = JSON.parse(cleanStr); }
+        catch (e) { colors = [cleanStr]; }
     } else {
         colors = cleanStr.split(',').map(c => c.trim());
     }
@@ -108,21 +108,21 @@ const getFilamentStyle = (colorStr) => {
     colors = colors.map(c => {
         // If it's already a valid hex format like #FFF or #112233, keep it
         // Otherwise, strip non-hex chars and add hash
-        if(c.startsWith('#') && (c.length === 4 || c.length === 7)) return c;
+        if (c.startsWith('#') && (c.length === 4 || c.length === 7)) return c;
         let hex = c.replace(/[^a-fA-F0-9]/g, '');
         return hex ? '#' + hex : '#333';
     });
-    
+
     // 4. Force at least 2 colors for a gradient
     if (colors.length === 1) colors.push(colors[0]);
 
     // 5. Generate Gradients
     const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
-    
+
     let innerGrad;
     if (colors.length > 1 && colors[0] !== colors[1]) {
         // Multi-color inner: transparent dark overlay + colors
-        const gradColors = colors.map(c => getHexDark(c, 0.8)); 
+        const gradColors = colors.map(c => getHexDark(c, 0.8));
         innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), linear-gradient(135deg, ${gradColors.join(', ')})`;
     } else {
         // Single-color inner: simple fade to black
@@ -132,69 +132,69 @@ const getFilamentStyle = (colorStr) => {
     return { frame: frameGrad, inner: innerGrad };
 };
 
-const hexToRgb = (hex) => { 
-    if (!hex) return {r:'', g:'', b:''}; 
-    hex = hex.replace('#', ''); 
-    const i = parseInt(hex, 16); 
-    return { r: (i >> 16) & 255, g: (i >> 8) & 255, b: i & 255 }; 
+const hexToRgb = (hex) => {
+    if (!hex) return { r: '', g: '', b: '' };
+    hex = hex.replace('#', '');
+    const i = parseInt(hex, 16);
+    return { r: (i >> 16) & 255, g: (i >> 8) & 255, b: i & 255 };
 };
 
 // --- DATA FETCHERS ---
-const fetchLocations = () => { 
+const fetchLocations = () => {
     fetch('/api/locations')
-    .then(r=>r.json())
-    .then(d => { 
-        // [ALEX FIX] Backend now provides Unassigned, so we use 'd' directly
-        const finalList = d;
-        state.allLocations = finalList; 
-        
-        // 2. Update Total Count with Pop Style
-        const countEl = document.getElementById('loc-count');
-        if(countEl) countEl.innerText = "Total Locations: " + finalList.length; 
-        
-        const table = document.getElementById('location-table');
-        if(table) {
-            table.innerHTML = finalList.map(l => {
-                // 3. Status Pop Logic (Red/Green/White)
-                let statusHtml = '';
-                let occColor = '#fff'; // Default White (Under Capacity)
-                
-                if (l.Occupancy) {
-                    const parts = l.Occupancy.split('/');
-                    if (parts.length === 2) {
-                        const cur = parseInt(parts[0]);
-                        const max = parseInt(parts[1]);
-                        
-                        if (!isNaN(cur) && !isNaN(max)) {
-                            if (cur > max) occColor = '#ff4444';      // Red (Overfilled)
-                            else if (cur === max) occColor = '#00ff00'; // Green (Full)
+        .then(r => r.json())
+        .then(d => {
+            // [ALEX FIX] Backend now provides Unassigned, so we use 'd' directly
+            const finalList = d;
+            state.allLocations = finalList;
+
+            // 2. Update Total Count with Pop Style
+            const countEl = document.getElementById('loc-count');
+            if (countEl) countEl.innerText = "Total Locations: " + finalList.length;
+
+            const table = document.getElementById('location-table');
+            if (table) {
+                table.innerHTML = finalList.map(l => {
+                    // 3. Status Pop Logic (Red/Green/White)
+                    let statusHtml = '';
+                    let occColor = '#fff'; // Default White (Under Capacity)
+
+                    if (l.Occupancy) {
+                        const parts = l.Occupancy.split('/');
+                        if (parts.length === 2) {
+                            const cur = parseInt(parts[0]);
+                            const max = parseInt(parts[1]);
+
+                            if (!isNaN(cur) && !isNaN(max)) {
+                                if (cur > max) occColor = '#ff4444';      // Red (Overfilled)
+                                else if (cur === max) occColor = '#00ff00'; // Green (Full)
+                            }
                         }
+                        // GOLD STANDARD: High Contrast Pop
+                        statusHtml = `<span style="font-weight:900; font-size:1.1rem; color:${occColor}; text-shadow: 2px 2px 4px #000;">${l.Occupancy}</span>`;
+                    } else {
+                        statusHtml = `<span style="color:#666; font-style:italic; font-weight:bold;">--</span>`;
                     }
-                    // GOLD STANDARD: High Contrast Pop
-                    statusHtml = `<span style="font-weight:900; font-size:1.1rem; color:${occColor}; text-shadow: 2px 2px 4px #000;">${l.Occupancy}</span>`;
-                } else {
-                    statusHtml = `<span style="color:#666; font-style:italic; font-weight:bold;">--</span>`;
-                }
 
-                // 4. Type Badge (Rainbow Logic + Visible Virtual)
-                let badgeClass = 'bg-secondary';
-                let badgeStyle = 'border:1px solid #555;';
-                
-                // Color Mapping
-                const t = l.Type || '';
-                if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
-                else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
-                else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
-                else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
-                else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
-                // [ALEX FIX] High Contrast for Virtual
-                else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
+                    // 4. Type Badge (Rainbow Logic + Visible Virtual)
+                    let badgeClass = 'bg-secondary';
+                    let badgeStyle = 'border:1px solid #555;';
 
-                const typeBadge = `<span class="badge ${badgeClass}" style="margin-left:8px; box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
+                    // Color Mapping
+                    const t = l.Type || '';
+                    if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
+                    else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
+                    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
+                    else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
+                    else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
+                    // [ALEX FIX] High Contrast for Virtual
+                    else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
 
-                return `
+                    const typeBadge = `<span class="badge ${badgeClass}" style="margin-left:8px; box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
+
+                    return `
                 <tr>
-                    <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem;">${l.LocationID}</td>
+                    <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem; white-space: nowrap;">${l.LocationID}</td>
                     <td class="col-name" style="font-weight:800; font-size:1.1rem; color:#fff; text-shadow: 1px 1px 3px #000;">${l.Name}</td>
                     <td class="col-status">${statusHtml} ${typeBadge}</td>
                     <td class="col-actions text-end">
@@ -205,45 +205,45 @@ const fetchLocations = () => {
                         <button class="btn btn-sm btn-info btn-manage fw-bold" data-id="${l.LocationID}">Manage</button>
                     </td>
                 </tr>`;
-            }).join(''); 
-        }
-    }); 
+                }).join('');
+            }
+        });
 };
 
-const updateLogState = (force=false) => {
-    if(!state.logsPaused || force) fetch('/api/logs').then(r=>r.json()).then(d=>{ 
+const updateLogState = (force = false) => {
+    if (!state.logsPaused || force) fetch('/api/logs').then(r => r.json()).then(d => {
         const logsEl = document.getElementById('live-logs');
-        if(logsEl) logsEl.innerHTML = d.logs.map(l=>`<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join(''); 
-        
+        if (logsEl) logsEl.innerHTML = d.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
+
         const sSpool = document.getElementById('st-spoolman');
         const sFila = document.getElementById('st-filabridge');
-        if(sSpool) sSpool.className = `status-dot ${d.status.spoolman?'status-on':'status-off'}`;
-        if(sFila) sFila.className = `status-dot ${d.status.filabridge?'status-on':'status-off'}`;
-        
+        if (sSpool) sSpool.className = `status-dot ${d.status.spoolman ? 'status-on' : 'status-off'}`;
+        if (sFila) sFila.className = `status-dot ${d.status.filabridge ? 'status-on' : 'status-off'}`;
+
         if (d.audit_active !== state.lastAuditState) {
             state.lastAuditState = d.audit_active;
-            state.auditActive = d.audit_active; 
+            state.auditActive = d.audit_active;
             // Audit Visuals are handled in Command Center Module
-            if(window.updateAuditVisuals) window.updateAuditVisuals();
+            if (window.updateAuditVisuals) window.updateAuditVisuals();
         }
     });
 };
 
 // --- MODAL HELPERS ---
-const closeModal = (id) => { if(modals[id]) modals[id].hide(); state.activeModal = null; };
-const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText=msg; state.pendingConfirm=cb; modals.confirmModal.show(); state.activeModal = 'confirm'; };
-const confirmAction = (y) => { closeModal('confirmModal'); if(y && state.pendingConfirm) state.pendingConfirm(); state.pendingConfirm=null; };
-const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText=msg; state.pendingSafety=cb; modals.safetyModal.show(); state.activeModal = 'safety'; };
-const confirmSafety = (y) => { closeModal('safetyModal'); if(y && state.pendingSafety) state.pendingSafety(); state.pendingSafety=null; };
+const closeModal = (id) => { if (modals[id]) modals[id].hide(); state.activeModal = null; };
+const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; modals.confirmModal.show(); state.activeModal = 'confirm'; };
+const confirmAction = (y) => { closeModal('confirmModal'); if (y && state.pendingConfirm) state.pendingConfirm(); state.pendingConfirm = null; };
+const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText = msg; state.pendingSafety = cb; modals.safetyModal.show(); state.activeModal = 'safety'; };
+const confirmSafety = (y) => { closeModal('safetyModal'); if (y && state.pendingSafety) state.pendingSafety(); state.pendingSafety = null; };
 const promptAction = (t, m, btns) => {
-    document.getElementById('action-title').innerText=t; 
-    document.getElementById('action-msg').innerHTML=m; 
-    state.modalCallbacks=[];
-    document.getElementById('action-buttons').innerHTML = btns.map((b,i) => { 
-        state.modalCallbacks.push(b.action); 
-        return `<div class="modal-action-card" onclick="closeModal('actionModal');state.modalCallbacks[${i}]()"><div id="qr-act-${i}" class="bg-white p-1 rounded mb-2"></div><button class="btn btn-primary modal-action-btn">${b.label}</button></div>`; 
+    document.getElementById('action-title').innerText = t;
+    document.getElementById('action-msg').innerHTML = m;
+    state.modalCallbacks = [];
+    document.getElementById('action-buttons').innerHTML = btns.map((b, i) => {
+        state.modalCallbacks.push(b.action);
+        return `<div class="modal-action-card" onclick="closeModal('actionModal');state.modalCallbacks[${i}]()"><div id="qr-act-${i}" class="bg-white p-1 rounded mb-2"></div><button class="btn btn-primary modal-action-btn">${b.label}</button></div>`;
     }).join('');
-    btns.forEach((_,i) => generateSafeQR(`qr-act-${i}`, `CMD:MODAL:${i}`, 100));
+    btns.forEach((_, i) => generateSafeQR(`qr-act-${i}`, `CMD:MODAL:${i}`, 100));
     modals.actionModal.show(); state.activeModal = 'action';
 };
 
@@ -252,7 +252,7 @@ window.startSmartSync = () => {
     if (window._smartSyncRunning) return;
     window._smartSyncRunning = true;
     console.log("🔄 Smart Sync Protocol Initiated (5s Interval)");
-    
+
     setInterval(() => {
         // 1. Refresh Logs & System Status (Spoolman/Filabridge connectivity)
         if (!state.logsPaused) updateLogState();
