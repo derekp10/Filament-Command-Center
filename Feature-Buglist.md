@@ -14,8 +14,7 @@
 
 
 # **Print Queue Items**
-* For filament Queue, the spools in the list for that filament list No Loc for all items, even the ones with a loc. This needs to be fixed.
-    - Would be nice to have a send to print queue button too.
+* Would be nice to have a send to print queue button too.
 
 
 # **Command Center Items**
@@ -117,3 +116,4 @@ Production Functionality Fix list
 * COME BACK AND ADDRESS ISSUES IN setup_fields.py (Non destructive of existing choice fields, check error codes)
 * Fix backend logging to not repeate this filling the logs with non useful data. 
     - 2026-02-14 06:01:08,706 - INFO - ✅ Loaded Prod Config: /config.json
+* Fixed Print Queue displaying "No Loc" for all spools.
