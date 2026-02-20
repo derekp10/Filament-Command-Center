@@ -15,7 +15,7 @@ const renderBuffer = () => {
                 const styles = getFilamentStyle(s.color);
                 const cleanText = (s.display || "").replace(/^#\d+\s*/, '').trim();
                 return `
-                <div class="cham-card buffer-item ${i === 0 ? 'active-item' : ''}" data-spool-id="${s.id}" style="background: ${styles.frame};">
+                <div class="cham-card buffer-item ${i === 0 ? 'active-item' : ''}" data-spool-id="${s.id}" style="background: ${styles.frame}; ${styles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}">
                     <div class="cham-body buffer-inner" style="background: ${styles.inner};">
                         <div class="cham-text-group" onclick="openSpoolDetails(${s.id})" style="cursor:pointer">
                             <div class="cham-id-badge" style="color: #fff; text-shadow: 2px 2px 4px #000;">#${s.id}</div>
@@ -43,7 +43,7 @@ const renderBuffer = () => {
 
             n.style.display = 'flex';
             n.innerHTML = `
-                <div class="cham-card nav-card" data-spool-id="${prevSpool.id}" style="background: ${prevStyles.frame}" onclick="window.prevBuffer()">
+                <div class="cham-card nav-card" data-spool-id="${prevSpool.id}" style="background: ${prevStyles.frame}; ${prevStyles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}" onclick="window.prevBuffer()">
                     <div class="cham-body nav-inner" style="background:${prevStyles.inner};">
                         <div id="qr-nav-prev" class="nav-qr"></div>
                         <div>
@@ -54,7 +54,7 @@ const renderBuffer = () => {
                         </div>
                     </div>
                 </div>
-                <div class="cham-card nav-card" data-spool-id="${nextSpool.id}" style="background: ${nextStyles.frame}" onclick="window.nextBuffer()">
+                <div class="cham-card nav-card" data-spool-id="${nextSpool.id}" style="background: ${nextStyles.frame}; ${nextStyles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}" onclick="window.nextBuffer()">
                     <div class="cham-body nav-inner" style="background:${nextStyles.inner};">
                         <div style="text-align:right;">
                             <div class="nav-label" style="color: #fff; text-shadow: 2px 2px 4px #000; font-weight: 900;">NEXT ▶</div>
@@ -384,6 +384,8 @@ const liveRefreshBuffer = () => {
                     const cards = document.querySelectorAll(`.buffer-item[data-spool-id="${s.id}"]`);
                     cards.forEach(card => {
                         card.style.background = styles.frame;
+                        if (styles.border) card.style.boxShadow = 'inset 0 0 0 2px #555';
+                        else card.style.boxShadow = '';
                         const inner = card.querySelector('.buffer-inner');
                         if (inner) inner.style.background = styles.inner;
                         const textEl = card.querySelector('.cham-text');
@@ -394,6 +396,8 @@ const liveRefreshBuffer = () => {
                     const navCards = document.querySelectorAll(`.nav-card[data-spool-id="${s.id}"]`);
                     navCards.forEach(card => {
                         card.style.background = styles.frame;
+                        if (styles.border) card.style.boxShadow = 'inset 0 0 0 2px #555';
+                        else card.style.boxShadow = '';
                         const inner = card.querySelector('.nav-inner');
                         if (inner) inner.style.background = styles.inner;
                         const nameEl = card.querySelector('.nav-name');

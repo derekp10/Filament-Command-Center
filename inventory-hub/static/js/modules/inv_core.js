@@ -32,9 +32,23 @@ let state = {
 
 // --- INITIALIZATION HELPERS ---
 const requestWakeLock = async () => {
+    // 1. Try native API first (mostly for mobiles/tablets where it works reliably)
     if ('wakeLock' in navigator) {
         try { wakeLock = await navigator.wakeLock.request('screen'); }
-        catch (err) { console.log(err); }
+        catch (err) { console.log("Native WakeLock failed. Relying on NoSleep fallback.", err); }
+    }
+
+    // 2. Setup NoSleep.js media fallback for Laptops (requires a user gesture)
+    if (window.NoSleep) {
+        const noSleep = new window.NoSleep();
+        const enableNoSleep = () => {
+            noSleep.enable();
+            document.removeEventListener('click', enableNoSleep, false);
+            document.removeEventListener('touchstart', enableNoSleep, false);
+            console.log("NoSleep.js armed via user interaction.");
+        };
+        document.addEventListener('click', enableNoSleep, false);
+        document.addEventListener('touchstart', enableNoSleep, false);
     }
 };
 
@@ -129,7 +143,21 @@ const getFilamentStyle = (colorStr) => {
         const lastColorDark = getHexDark(colors[0], 0.3);
         innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
     }
-    return { frame: frameGrad, inner: innerGrad };
+
+    // 6. Black border fix
+    let borderStyle = "";
+    if (colors.length > 0) {
+        let isAllDark = true;
+        for (let c of colors) {
+            let hex = c.replace('#', '');
+            if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+            const r = parseInt(hex.substring(0, 2), 16), g = parseInt(hex.substring(2, 4), 16), b = parseInt(hex.substring(4, 6), 16);
+            if (r > 35 || g > 35 || b > 35) { isAllDark = false; break; }
+        }
+        if (isAllDark) borderStyle = "2px solid #666";
+    }
+
+    return { frame: frameGrad, inner: innerGrad, border: borderStyle };
 };
 
 const hexToRgb = (hex) => {

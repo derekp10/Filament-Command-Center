@@ -131,7 +131,7 @@ const renderManagerNav = () => {
             const prevStyle = getFilamentStyle(prevItem.color);
             const prevInfo = getRichInfo(prevItem);
             html += `
-            <div class="cham-card nav-card" style="background: ${prevStyle.frame};" onclick="window.prevBuffer()">
+            <div class="cham-card nav-card" style="background: ${prevStyle.frame}; ${prevStyle.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}" onclick="window.prevBuffer()">
                 <div class="cham-body nav-inner" style="background:${prevStyle.inner}; display:flex; align-items:center; padding:5px 10px;">
                     <div id="qr-nav-prev" class="nav-qr me-2"></div>
                     <div>
@@ -143,7 +143,7 @@ const renderManagerNav = () => {
         } else { html += `<div style="flex:1;"></div>`; }
 
         html += `
-        <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame};">
+        <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame}; ${curStyle.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}">
             <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
                 <div class="nav-label">READY TO SLOT</div>
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
@@ -156,7 +156,7 @@ const renderManagerNav = () => {
             const nextStyle = getFilamentStyle(nextItem.color);
             const nextInfo = getRichInfo(nextItem);
             html += `
-            <div class="cham-card nav-card" style="background: ${nextStyle.frame};" onclick="nextBuffer();">
+            <div class="cham-card nav-card" style="background: ${nextStyle.frame}; ${nextStyle.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}" onclick="nextBuffer();">
                 <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; justify-content:flex-end; padding:5px 10px;">
                     <div style="text-align:right;">
                         <div class="nav-label">NEXT ▶</div>
@@ -239,6 +239,7 @@ const renderGrid = (data, max) => {
             } else {
                 // STANDARD RENDER (Normal Item)
                 div.style.background = styles.frame;
+                if (styles.border) div.style.boxShadow = 'inset 0 0 0 2px #555';
                 div.innerHTML = `
                     <div class="slot-inner-gold" style="background:${styles.inner};">
                         <div class="slot-header"><div class="slot-num-gold">SLOT ${i}</div></div>
@@ -437,7 +438,7 @@ const renderBadgeHTML = (s, i, locId) => {
 
     // Standard Render
     return `
-    <div class="cham-card manage-list-item" data-spool-id="${s.id}" style="background:${styles.frame}">
+    <div class="cham-card manage-list-item" data-spool-id="${s.id}" style="background:${styles.frame}; ${styles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}">
         <div class="list-inner-gold" style="background: ${styles.inner};">
             <div class="list-left" style="cursor:pointer;" onclick="openSpoolDetails(${s.id})">
                 <div class="id-badge-gold">#${s.id}</div>
@@ -721,6 +722,8 @@ document.addEventListener('inventory:sync-pulse', () => {
                     // --- Apply to GRID items ---
                     if (node.classList.contains('slot-btn')) {
                         node.style.background = styles.frame;
+                        if (styles.border) node.style.boxShadow = 'inset 0 0 0 2px #555';
+                        else node.style.boxShadow = '';
                         const inner = node.querySelector('.slot-inner-gold');
                         if (inner) {
                             // Don't overwrite repeating-linear-gradient for ghosts
@@ -741,8 +744,9 @@ document.addEventListener('inventory:sync-pulse', () => {
                         // Don't overwrite Ghost styling
                         if (!node.style.background.includes('#111')) {
                             node.style.background = styles.frame;
+                            if (styles.border) node.style.boxShadow = 'inset 0 0 0 2px #555';
+                            else node.style.boxShadow = '';
                         }
-
                         const inner = node.querySelector('.list-inner-gold');
                         if (inner && !inner.style.background.includes('repeating-linear-gradient')) {
                             inner.style.background = styles.inner;

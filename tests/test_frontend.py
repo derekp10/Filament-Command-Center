@@ -31,3 +31,25 @@ def test_reset_command_modes_exists():
     assert "state.dropMode = false" in content
     assert "state.ejectMode = false" in content
     assert "updateDeckVisuals()" in content
+
+def test_nosleep_video_injected():
+    """
+    Ensures scripts.html loads the NoSleep fallback to bypass laptop screen timeouts.
+    """
+    html_path = os.path.join(os.path.dirname(__file__), "..", "inventory-hub", "templates", "components", "scripts.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "NoSleep.min.js" in content
+
+def test_request_wakelock_fallback():
+    """
+    Ensures inv_core.js initiates the NoSleep fallback polyfill on user click
+    if the native navigator.wakelock fails.
+    """
+    js_path = os.path.join(os.path.dirname(__file__), "..", "inventory-hub", "static", "js", "modules", "inv_core.js")
+    with open(js_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "window.NoSleep" in content
+    assert "noSleep.enable()" in content
