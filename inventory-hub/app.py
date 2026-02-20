@@ -750,8 +750,35 @@ def api_get_logs_route():
     sm_ok, fb_ok = False, False
     try: sm_ok = requests.get(f"{sm_url}/api/v1/health", timeout=1).ok
     except: pass
-    try: fb_ok = requests.get(f"{fb_url}/status", timeout=1).ok
+    
+    try: 
+        fb_resp = requests.get(f"{fb_url}/status", timeout=1)
+        fb_ok = fb_resp.ok
+        
+        # [NEW] Check for FilaBridge Print Errors
+        if fb_ok:
+            try:
+                err_resp = requests.get(f"{fb_url}/print-errors", timeout=2)
+                if err_resp.ok:
+                    fb_errors = err_resp.json().get('errors', [])
+                    for err in fb_errors:
+                        err_id = err.get('id')
+                        # Only alert if we haven't seen it and the user hasn't naturally acknowledged it in FilaBridge
+                        if err_id and not err.get('acknowledged', False):
+                            if err_id not in state.ACKNOWLEDGED_FILABRIDGE_ERRORS:
+                                state.ACKNOWLEDGED_FILABRIDGE_ERRORS.add(err_id)
+                                p_name = err.get('printer_name', 'Unknown Printer')
+                                f_name = err.get('filename', 'Unknown File')
+                                err_msg = err.get('error', 'Unknown Error')
+                                state.add_log_entry(
+                                    f"🔴 FilaBridge: [{p_name}] failed to parse weight for '{f_name}': {err_msg}",
+                                    "WARNING"
+                                )
+            except Exception as e:
+                pass # Don't crash the log poller if FilaBridge errors endpoint times out
+                
     except: pass
+    
     return jsonify({
         "logs": state.RECENT_LOGS,
         "undo_available": len(state.UNDO_STACK) > 0,

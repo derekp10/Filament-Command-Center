@@ -6,6 +6,7 @@ from logging.handlers import RotatingFileHandler
 # --- GLOBAL STATE ---
 UNDO_STACK = []
 RECENT_LOGS = []
+ACKNOWLEDGED_FILABRIDGE_ERRORS = set()
 
 # --- PERSISTENT STATE ---
 # Stores the active Buffer and Queue for cross-window persistence
