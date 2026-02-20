@@ -38,12 +38,32 @@ def load_config():
             with open(config_file, 'r', encoding='utf-8') as f: 
                 loaded = json.load(f)
                 final_config.update(loaded)
-            # Log only if state logger is available
+
+            current_mtime = str(os.path.getmtime(config_file))
+            tracker_file = os.path.join(BASE_DIR, '.config_mtime')
+            
+            last_mtime = None
+            if os.path.exists(tracker_file):
+                try:
+                    with open(tracker_file, 'r') as tf:
+                        last_mtime = tf.read().strip()
+                except:
+                    pass
+            
+            # Log only if state logger is available AND we haven't logged this specific version recently
             if hasattr(state, 'logger'):
-                if mode == "DEV":
-                    state.logger.warning(f"⚠️ LOADED DEV CONFIG: {config_file}")
-                else:
-                    state.logger.info(f"✅ Loaded Prod Config: {config_file}")
+                if last_mtime != current_mtime:
+                    if mode == "DEV":
+                        state.logger.warning(f"⚠️ LOADED DEV CONFIG: {config_file}")
+                    else:
+                        state.logger.info(f"✅ Loaded Prod Config: {config_file}")
+                    
+                    try:
+                        with open(tracker_file, 'w') as tf:
+                            tf.write(current_mtime)
+                    except:
+                        pass
+
         except Exception as e: 
             if hasattr(state, 'logger'):
                 state.logger.error(f"Config Load Error: {e}")
