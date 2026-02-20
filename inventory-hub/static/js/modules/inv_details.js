@@ -132,8 +132,8 @@ const openFilamentDetails = (fid, silent = false) => {
                             // Render List
                             spools.forEach(s => {
                                 const remaining = s.remaining_weight ? Math.round(s.remaining_weight) : 0;
-                                let location = s.location || "No Loc";
-                                if (location === "No Loc" && s.extra?.physical_source) {
+                                let location = s.location || "Unassigned";
+                                if (location === "Unassigned" && s.extra?.physical_source) {
                                     location = s.extra.physical_source.replace(/"/g, '');
                                 }
 
