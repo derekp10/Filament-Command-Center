@@ -21,7 +21,6 @@
 * Set it so that the screen don't sleep. (Needs to be tested on laptop)
     - Doesn't seem to work on Laptop
 * Eject should auto disable if we move off of the command screen to anyother screen or modal
-* Set the Scanner Paused state to eat the first mouse click on it to give the window focus if possible, to prevent accidental clicking on unentended items.
 * Black filaments need a better way to show border or a better gradiant in the color
 * Add background refreshing used in Location Manger, etc... to update spool text (update weight other data)
 
@@ -118,3 +117,4 @@ Production Functionality Fix list
 * Fixed Undo Buffer Restoration to correctly recall spools to the buffer and reversed Toolhead Ejection cascades.
 * Fixed swatch circles in the "Live Activity" Dashboard log pane to accurately display CSS conic gradients mathematically divided for multi-color filament spools.
 * Implemented background polling for Filabridge `GET /api/print-errors` to expose `gcode` parsing errors in the Live Activity log.
+* Engineered a native CSS physical shield inside `scripts.html` to consume hardware `mousedown`/`click` wake-up hits natively when the Scanner Pauses, preventing accidental button triggers.

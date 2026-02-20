@@ -15,46 +15,52 @@
     document.addEventListener('DOMContentLoaded', () => {
         // Bootstrapping
         requestWakeLock();
-        
+
         // Initialize Modals
-        ['locMgrModal', 'locModal', 'manageModal', 'confirmModal', 
-         'actionModal', 'safetyModal', 'queueModal', 'spoolModal', 
-         'filamentModal'].forEach(id => {
-            const el = document.getElementById(id);
-            if(el) modals[id] = new bootstrap.Modal(el);
-        });
-        
+        ['locMgrModal', 'locModal', 'manageModal', 'confirmModal',
+            'actionModal', 'safetyModal', 'queueModal', 'spoolModal',
+            'filamentModal'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) modals[id] = new bootstrap.Modal(el);
+            });
+
         // Focus Guard Logic
         if (!document.getElementById('focus-guard')) {
             const fg = document.createElement('div');
             fg.id = 'focus-guard';
             fg.innerHTML = `<div class="focus-msg"><div><div style="font-size:5rem;">🚫</div><div style="font-size:3rem;color:#f44;font-weight:bold;">SCANNER PAUSED</div><div class="text-white">Click anywhere to resume</div></div></div>`;
-            fg.onclick = () => { document.body.focus(); fg.style.display = 'none'; };
             document.body.appendChild(fg);
+
+            // Allow focus-guard to organically absorb clicks without triggering anything underneath
+            fg.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                document.body.focus();
+            };
         }
-        
+
         // --- EVENT LISTENERS ---
         // ROOT CAUSE FIX: Removed the 'shown.bs.modal' listener for manageModal.
         // inv_loc_mgr.js -> openManage() now handles the full render cycle before showing.
-        
+
         // Deck QRs
         generateSafeQR('qr-undo', 'CMD:UNDO', 85);
         generateSafeQR('qr-clear', 'CMD:CLEAR', 85);
         generateSafeQR('qr-drop', 'CMD:DROP', 85);
-        generateSafeQR('qr-eject', 'CMD:EJECT', 85); 
+        generateSafeQR('qr-eject', 'CMD:EJECT', 85);
         generateSafeQR('qr-audit', 'CMD:AUDIT', 85);
         generateSafeQR('qr-locs', 'CMD:LOCATIONS', 85);
-        
+
         // Modal QRs
         const modalQRs = {
-            'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL', 
+            'qr-safety-yes': 'CMD:CONFIRM', 'qr-safety-no': 'CMD:CANCEL',
             'qr-confirm-yes': 'CMD:CONFIRM', 'qr-confirm-no': 'CMD:CANCEL'
         };
-        for(const [id, txt] of Object.entries(modalQRs)) generateSafeQR(id, txt, 120);
+        for (const [id, txt] of Object.entries(modalQRs)) generateSafeQR(id, txt, 120);
 
         // Location Table Events
         const locTable = document.getElementById('location-table');
-        if(locTable) {
+        if (locTable) {
             locTable.addEventListener('click', (e) => {
                 const btn = e.target.closest('.btn-manage');
                 if (btn) window.openManage(btn.dataset.id);
@@ -84,39 +90,59 @@
                 }
             };
         }
-        
+
         // Input Handling
         const manualInput = document.getElementById("manual-spool-id");
-        if(manualInput) {
-            manualInput.addEventListener("keydown", (e) => { 
+        if (manualInput) {
+            manualInput.addEventListener("keydown", (e) => {
                 if (e.key === "Enter") { e.preventDefault(); window.manualAddSpool(); }
             });
         }
-        
-        window.addEventListener('blur', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'flex'; });
-        window.addEventListener('focus', () => { const g = document.getElementById('focus-guard'); if(g) g.style.display = 'none'; });
+
+        window.addEventListener('blur', () => {
+            const g = document.getElementById('focus-guard');
+            if (g) {
+                g.style.opacity = '1';
+                g.style.display = 'flex';
+            }
+        });
+
+        window.addEventListener('focus', () => {
+            const g = document.getElementById('focus-guard');
+            if (g) {
+                // Focus triggers before MouseDown.
+                // We instantly turn the guard transparent so the user feels immediate responsiveness...
+                g.style.opacity = '0';
+                // ...But we physically keep the DOM element shielding the UI for 150ms 
+                // so the browser's hit-tester clicks the invisible guard instead of the buttons underneath it.
+                setTimeout(() => {
+                    g.style.display = 'none';
+                    g.style.opacity = '1'; // reset for next time
+                }, 150);
+            }
+        });
 
         document.addEventListener('keydown', (e) => {
             const g = document.getElementById('focus-guard');
             if ((g && g.style.display === 'flex') || state.processing || e.target.tagName === 'INPUT') return;
-            
-            if (e.key === 'Enter') { 
-                e.preventDefault(); 
-                if (state.scanBuffer.length > 0) processScan(state.scanBuffer); 
-                state.scanBuffer = ""; 
+
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (state.scanBuffer.length > 0) processScan(state.scanBuffer);
+                state.scanBuffer = "";
             }
-            else if (e.key.length === 1) { 
-                state.scanBuffer += e.key; 
-                clearTimeout(state.bufferTimeout); 
-                state.bufferTimeout = setTimeout(() => state.scanBuffer = "", 2000); 
+            else if (e.key.length === 1) {
+                state.scanBuffer += e.key;
+                clearTimeout(state.bufferTimeout);
+                state.bufferTimeout = setTimeout(() => state.scanBuffer = "", 2000);
             }
         });
 
         // Start Core Services
-        updateLogState(); 
-        fetchLocations(); 
-        updateQueueUI(); 
-        
+        updateLogState();
+        fetchLocations();
+        updateQueueUI();
+
         // Polling
         setInterval(updateLogState, 2500);
     });
