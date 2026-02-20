@@ -48,11 +48,38 @@ def create_field(entity_type, key, name, f_type, choices=None, multi=False, forc
                 print(f"   ⚠️ Delete status {del_resp.status_code}: {del_resp.text}")
         except Exception as e: print(f"   ❌ Connection Error during delete: {e}")
 
+    # --- [ALEX FIX] FETCH EXISTING CHOICES TO PREVENT "CANNOT REMOVE" ERROR ---
+    existing_choices = []
+    if f_type == "choice" and not force_reset:
+        try:
+            get_resp = requests.get(f"{SPOOLMAN_IP}/api/v1/field/{entity_type}/{key}")
+            if get_resp.status_code == 200:
+                existing_data = get_resp.json()
+                # Extract existing choices, handle potential string/list formatting
+                raw_existing = existing_data.get('choices', [])
+                if isinstance(raw_existing, str):
+                    try: raw_existing = json.loads(raw_existing)
+                    except: raw_existing = []
+                if isinstance(raw_existing, list):
+                    existing_choices = raw_existing
+                if existing_choices:
+                    print(f"   ℹ️ Found {len(existing_choices)} existing choices. Merging to protect data.")
+        except Exception as e:
+            pass # It is okay if the field doesn't exist yet!
+
     payload = {"name": name, "field_type": f_type}
     if f_type == "choice":
         payload["multi_choice"] = multi
-        if choices:
-            payload["choices"] = sorted([c for c in list(set(choices)) if c.strip()])
+        
+        # [ALEX FIX] Combine CSV choices with Existing DB choices
+        merged_choices = set()
+        if choices: 
+            merged_choices.update(choices)
+        if existing_choices: 
+            merged_choices.update(existing_choices)
+            
+        if merged_choices:
+            payload["choices"] = sorted([c for c in list(merged_choices) if str(c).strip()])
 
     try:
         resp = requests.post(f"{SPOOLMAN_IP}/api/v1/field/{entity_type}/{key}", json=payload)
