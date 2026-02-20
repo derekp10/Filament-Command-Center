@@ -310,10 +310,12 @@ window.nextBuffer = nextBuffer;
 window.removeBufferItem = removeBufferItem;
 
 // Hook into the render function to trigger saves automatically
+window.isBufferSyncing = false; // [ALEX FIX] Mutex for sync
+
 const _origRenderBuffer = window.renderBuffer;
 window.renderBuffer = () => {
     _origRenderBuffer(); // Update UI
-    persistBuffer();     // Save State
+    if (!window.isBufferSyncing) persistBuffer(); // Save State ONLY if we aren't currently downloading it
 };
 
 /* --- PERSISTENCE LAYER: BUFFER (V3 Polling) --- */
@@ -326,23 +328,26 @@ const persistBuffer = () => {
 };
 
 const loadBuffer = () => {
+    window.isBufferSyncing = true; // Block uploads
     fetch('/api/state/buffer')
         .then(r => r.json())
         .then(data => {
             if (Array.isArray(data)) {
-                // SMART SYNC: Compare to see if we need to update
                 const currentStr = JSON.stringify(state.heldSpools);
                 const serverStr = JSON.stringify(data);
 
                 if (currentStr !== serverStr) {
                     console.log("🔄 Syncing Buffer from Server...");
                     state.heldSpools = data;
-                    // Update UI
                     if (window.renderBuffer) window.renderBuffer();
                 }
             }
+            window.isBufferSyncing = false; // Unblock
         })
-        .catch(e => console.warn("Buffer Load Failed", e));
+        .catch(e => {
+            console.warn("Buffer Load Failed", e);
+            window.isBufferSyncing = false;
+        });
 };
 
 // Listen for local updates

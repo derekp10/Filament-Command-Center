@@ -37,7 +37,12 @@ def mock_spoolman():
 @pytest.fixture
 def mock_config():
     with patch('logic.config_loader') as mock_cfg:
-        mock_cfg.load_config.return_value = {"printer_map": {}}
+        mock_cfg.load_config.return_value = {
+            "printer_map": {
+                "CORE1": {"printer_name": "core", "position": 0},
+                "CORE1-M4": {"printer_name": "core", "position": 4}
+            }
+        }
         mock_cfg.get_api_urls.return_value = ("http://spoolman", "http://filabridge")
         yield mock_cfg
 
@@ -47,7 +52,8 @@ def mock_locations():
         mock_db.load_locations_list.return_value = [
             {'LocationID': 'NEW_SHELF', 'Type': 'Shelf'},
             {'LocationID': 'DRYER-01', 'Type': 'Dryer Box'},
-            {'LocationID': 'PRINTER-1', 'Type': 'Tool Head'}
+            {'LocationID': 'PRINTER-1', 'Type': 'Tool Head'},
+            {'LocationID': 'CORE1-M4', 'Type': 'MMU Slot'}
         ]
         yield mock_db
 
@@ -112,11 +118,27 @@ def test_buffer_restoration_undo(mock_state, mock_spoolman, mock_config, mock_lo
 
 def test_missing_ghost_cleanup_on_undo():
     """Test Case 3: Reverting a Ghost move properly clears the phantom physical_source"""
-    # This is handled deeply in how extra keys are passed, but logic.py's perform_undo
-    # essentially just calls patch location. A future refactor might want to pop extra keys
-    # during an undo, but right now we only patch the location back.
-    # We will assert that perform_smart_eject handles the loop protection instead.
-    
-    # The fix we made in logic.py:perform_smart_eject
-    pass # covered by standard execution flow
+    pass
 
+def test_empty_toolhead_buffer_swap(mock_state, mock_spoolman, mock_config, mock_locations, mock_requests):
+    """Test Case 4: Verify origin='buffer' is retained when moving into an empty toolhead slot."""
+    # This mirrors the user's exact workflow: Buffer -> CORE1-M4 -> Undo
+    
+    # 1. Perform move specifically from buffer into empty Toolhead MMU Slot
+    result = logic.perform_smart_move("CORE1-M4", [123], origin='buffer')
+    
+    # 2. Assert Move recorded success and retained origin correctly BEFORE undo
+    assert result['status'] == 'success'
+    assert len(mock_state.UNDO_STACK) == 1
+    
+    record = mock_state.UNDO_STACK[0]
+    print(record)
+    assert record['origin'] == "buffer" # FAILING HERE?
+    
+    # 3. Perform Undo
+    undo_result = logic.perform_undo()
+    assert undo_result['success'] == True
+    
+    # 4. Verify Buffer Injection (This is what is failing for user)
+    assert len(mock_state.GLOBAL_BUFFER) == 1
+    

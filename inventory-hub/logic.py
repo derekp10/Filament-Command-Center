@@ -289,6 +289,7 @@ def perform_undo():
             
             
     # [ALEX FIX] Restore to Buffer Memory
+    state.logger.info(f"UNDO RECORD TRIGGER: {last}")
     if origin == 'buffer':
         for sid in moves.keys():
             spool_data = spoolman_api.get_spool(sid)
