@@ -2,7 +2,15 @@ import requests
 import re
 import json
 
-SPOOLMAN_IP = "http://192.168.1.29:7912"
+import os
+import sys
+
+# Add inventory-hub to path to import config_loader
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'inventory-hub')))
+import config_loader
+
+SPOOLMAN_IP, _ = config_loader.get_api_urls()
+print(f"🔗 Target Spoolman IP: {SPOOLMAN_IP}")
 
 def clean_comment(comment_text):
     if not comment_text:

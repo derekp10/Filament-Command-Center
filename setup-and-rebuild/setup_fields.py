@@ -4,8 +4,13 @@ import json
 import os
 import sys
 
+# Add inventory-hub to path to import config_loader
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'inventory-hub')))
+import config_loader
+
 # --- CONFIGURATION ---
-SPOOLMAN_IP = "http://192.168.1.29:7912"
+SPOOLMAN_IP, _ = config_loader.get_api_urls()
+print(f"🔗 Target Spoolman Database: {SPOOLMAN_IP}")
 DATA_FOLDER_NAME = "3D Print Data"
 LISTS_FILENAME = "3D Print Supplies - Lists.csv"
 FILAMENT_FILENAME = "3D Print Supplies - Filament.csv"
