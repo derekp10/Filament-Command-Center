@@ -19,11 +19,6 @@
 
 
 # **Command Center Items**
-* Set it so that the screen don't sleep. (Needs to be tested on laptop)
-    - Doesn't seem to work on Laptop
-* Eject should auto disable if we move off of the command screen to anyother screen or modal
-* Black filaments need a better way to show border or a better gradiant in the color
-* Add background refreshing used in Location Manger, etc... to update spool text (update weight other data)
 
 # **Details (Filament/Spool) Modal **
 
@@ -119,3 +114,8 @@ Production Functionality Fix list
 * Fixed swatch circles in the "Live Activity" Dashboard log pane to accurately display CSS conic gradients mathematically divided for multi-color filament spools.
 * Implemented background polling for Filabridge `GET /api/print-errors` to expose `gcode` parsing errors in the Live Activity log.
 * Engineered a native CSS physical shield inside `scripts.html` to consume hardware `mousedown`/`click` wake-up hits natively when the Scanner Pauses, preventing accidental button triggers.
+* Set it so that the screen don't sleep. (Needs to be tested on laptop)
+    - Doesn't seem to work on Laptop
+* Eject should auto disable if we move off of the command screen to anyother screen or modal
+* Black filaments need a better way to show border or a better gradiant in the color
+* Add background refreshing used in Location Manger, etc... to update spool text (update weight other data)
