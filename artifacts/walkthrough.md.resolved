@@ -1,0 +1,91 @@
+# Complete Changelog & Walkthrough
+
+## Multi-Color Swatches in Live Activity
+- Users reported that multi-color filaments did not render correctly in the "Live Activity" log window. 
+- Using dynamic string parsing in [state.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/tests/test_state.py), Spoolman's comma-separated multi-hex strings are now dynamically rendered into mathematically equivalent CSS `conic-gradient` pizzas. 
+- E.g., a two-color filament translates to `background: conic-gradient(#color1 0% 50%, #color2 50% 100%)`.
+
+## Undo Buffer Restoration: Fix Walkthrough
+
+### Issue Overview
+Users reported that after moving an item from the "Buffer" into a location, triggering an "Undo" action successfully removed the item from the location in the Spoolman DB, but failed to restore the item visibly into the user's active UI Buffer.
+
+We identified three separate issues that contributed to this bug across the stack.
+
+### Fixes Implemented
+
+#### 1. Backend Origin Tracking ([logic.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/tests/test_logic.py) & [app.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/app.py))
+- We modified [app.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/app.py)'s `/api/manage_contents` and `/api/smart_move` endpoints to securely process and forward an `origin='buffer'` string whenever an API request was initialized from the frontend's buffer zone.
+- We updated [logic.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/tests/test_logic.py)'s [perform_smart_move](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/logic.py#119-221) to explicitly intercept the `origin` flag and pass it downwards into the `UNDO_STACK` history record.
+- We updated [perform_undo()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/logic.py#257-306) to monitor popped `UNDO_STACK` actions, intercept cases where `origin == 'buffer'`, and safely inject the reversed spools back into `state.GLOBAL_BUFFER`.
+
+#### 2. Frontend Buffer Tag Extraction ([inv_cmd.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js) & [inv_loc_mgr.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_loc_mgr.js))
+- We corrected [performContextAssign](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js#233-261) inside [inv_cmd.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js) to ensure rapid bulk-scans from the dashboard correctly appended the `origin: 'buffer'` JSON payload.
+- We corrected [inv_loc_mgr.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_loc_mgr.js)'s [doAssign()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_loc_mgr.js#527-569) and [handleSlotInteraction()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_loc_mgr.js#476-526) so that dragging, dropping, and replacing items correctly propagated the `isFromBuffer` flag over the network.
+
+#### 3. Asynchronous Data-Race Mutex ([inv_cmd.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js))
+- Even after the backend and frontend payloads correctly identified and stored buffer restorations, the UI would still load empty.
+- **The Cause:** [triggerUndo()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js#262-263) called [loadBuffer()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js#331-353), which fetched the newly repaired array and triggered [renderBuffer()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js#4-77). [renderBuffer()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js#4-77) was fundamentally designed to *always* call [persistBuffer()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js#322-330) (which immediately uploads the UI state back to the server to prevent data loss). 
+- Because of Javascript's async execution speeds, the system would request the old buffer, download the new array, but instantly upload an empty array `[]` *back* to the server before the variables fully settled, resulting in infinite rollback loops.
+- **The Fix:** We injected an `isBufferSyncing` boolean mutex. [loadBuffer](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js#331-353) sets this to `true` when downloading, preventing [persistBuffer](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js#322-330) from executing an upload until the current render cycle completes fully.
+
+### Results
+- Moving spools out of the buffer, into slots (both empty and occupied), and undoing those actions now cleanly restores the precise UI state. Automatic Toolhead Ejections are successfully reversed asynchronously alongside buffer restorations without collisions.
+- Pytest cases were added in [test_logic.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/tests/test_logic.py) to ensure core buffer tracking logic persists across Python environments correctly.
+
+## Scanner Paused Click Eater
+- The user reported that clicking the browser window to awaken it while the `#focus-guard` overlay was active caused the browser's hardware `mousedown` event to register on the command buttons underneath the overlay, unintentionally triggering actions.
+- Investigated and found that Javascript event interceptors (capturing phase) were failing because the OS-level `focus` event resolves *before* the hardware mouse events, causing the script to instantly hide the `#focus-guard` and surrender the click.
+- Implemented a CSS-driven physical shield inside [scripts.html](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/templates/components/scripts.html):
+  - When the window loses focus, the `#focus-guard` turns on.
+  - When the window regains focus, the `#focus-guard` instantly flips to `opacity: 0` so it immediately disappears for the user.
+  - However, a `setTimeout` ensures it physically remains at `display: flex` for `150ms`.
+  - This guarantees the `touchstart`, `mousedown`, `mouseup`, and [click](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/templates/components/scripts.html#93-100) hardware events strike the invisible shield instead of the buttons underneath it, completely eating the mis-click natively without JS event propagation.
+
+## Command Deck Auto-Disarm
+- The user reported that clicking a danger mode like "Eject" and then opening a different screen (like the Location Manager) resulted in the Eject mode dangerously staying active in the background.
+- Added a new `window.resetCommandModes()` function to [inv_cmd.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js) that forcibly disarms `state.dropMode` and `state.ejectMode`, removing the red/orange highlights from the UI.
+- Injected a global Javascript listener into [scripts.html](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/templates/components/scripts.html) that triggers on the Bootstrap event `show.bs.modal`.
+- Now, opening *any* modal screen automatically intercepts the navigation and instantly disarms the main dashboard deck in the background, making it safe to operate.
+- Added a Python-based syntax unit test [test_frontend.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/tests/test_frontend.py) to ensure the hook logic exists.
+
+## Native Background UI Live-Refresh ([liveRefreshBuffer](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js#354-412) & `liveRefreshLocationManager`)
+- The user requested that modifying a spool's attributes (like weight or color) inside Spoolman should automatically push those updates to the Command Center UI without requiring a hard refresh or stealing focus.
+- **Backend Infrastructure:**
+  - Built a new highly-optimized endpoint `POST /api/spools/refresh` in [app.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/app.py). Given a list of Spool IDs, it bypasses the standard grid logic and executes rapid queries directly to Spoolman to fetch just those specific objects, formats them via [format_spool_display()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/spoolman_api.py#67-128), and returns a dictionary payload.
+  - Wrote a new Pytest asserting [get_live_spools_data](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/logic.py#375-395) returns the correct attributes.
+- **Frontend Dashboard Sync ([inv_cmd.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_cmd.js)):**
+  - Tapped into the existing `inventory:sync-pulse` heartbeat (which fires every 5 seconds) to harvest the IDs of all Spools currently sitting in `state.heldSpools`.
+  - Sent the array to the backend and mapped the returned styling natively onto the DOM.
+  - **Surgical DOM Updates:** Rather than executing `updateQueueUI()` (which destroys and rebuilds the HTML, causing the browser to drop cursors and flashing the screen), we injected `data-spool-id` attributes onto the Buffer `cham-card` and `nav-card` elements themselves. The Javascript now directly uses `document.querySelectorAll()` to locate the active nodes and organically mutates `.innerText` and `background-color`, providing a perfectly smooth user experience.
+- **Location Manager Sync ([inv_loc_mgr.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_loc_mgr.js)):**
+  - Removed the aggressive legacy [refreshManageView()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_loc_mgr.js#70-97) function from the heartbeat listener.
+  - Upgraded both the Grid View and List View rendering loops to tag elements with `data-spool-id` IDs.
+  - Implemented an intelligent parser that sweeps the `#manageModal` when the Pulse fires, aggregates every visible Spool ID, and uses the exact same backend engine to perform surgical, focus-safe updates to the Location Modal's text and badge elements.
+
+## WakeLock Polyfill (Screen Sleep Prevention)
+- The user reported that the [requestWakeLock()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_core.js#33-54) API implementation inside [inv_core.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_core.js) frequently failed on laptops, causing the Command Center dashboard to fall asleep during long active sessions.
+- **Root Cause:** Modern browsers (specifically Chromium engines on battery power) enforce rigid power-saving heuristics that silently deny or break pure Javascript `wakeLock.request('screen')` promises natively.
+- **The Fix:** Integrated `NoSleep.js`, the industry-standard media fallback polyfill. 
+- Modified [requestWakeLock](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_core.js#33-54) to first attempt the native Web API, but immediately bind an invisible, muted `<video>` injection loop to the HTML DOM.
+- Upon the user's first physical interaction with the page (click or touch), the `noSleep.enable()` loop silently plays a 1-pixel video, which completely bypasses the browser's restrictions and forces the OS to recognize an active media session, permanently blocking sleep.
+- Wrote Pytest assertions to actively verify the injection tag inside [scripts.html](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/templates/components/scripts.html) and the invocation logic within [inv_core.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_core.js).
+
+## Black Filament Borders
+- The user reported that pure black filaments (`#000000`) completely vanish against the Dashboard's `#222` dark mode background plating.
+- Modified the recursive [getFilamentStyle()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_core.js#102-162) math engine located in [inv_core.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_core.js).
+- During the hex-parsing phase, the engine now extracts the absolute RGB coordinates of the calculated filament. If all three values (Red, Green, Blue) register strictly under `35` (e.g., `#111111` or `#000000`), the engine dynamically inserts a `border: 2px solid #666` property into the payload context.
+  - Modified `.cham-card`, `.nav-card`, and [getFilamentStyle](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_core.js#102-162) downstream consumers (Buffer lists, Location Modals, Detail Modals) to intelligently intercept the `border` key from the dictionary.
+  - If present, the DOM elements are organically painted with a `box-shadow: inset 0 0 0 2px #555` to dynamically carve out a crisp contrast border exclusively for the darkest spools.
+
+## Suppressed System Daemon Log Growth (Flask Telemetry)
+- The user reported that production logs were growing endlessly "out of hand" without a cleanup routine.
+- An investigation into [state.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/tests/test_state.py) proved that the primary system logger ([hub.log](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/hub.log)) actually already natively enforces an aggressive `RotatingFileHandler` permanently caching the output to a strict 5MB maximum file size limit.
+- **Root Cause:** The actual offender causing infinite server disk expansion was Flask's underlying `werkzeug` HTTP engine. Every 2.5 seconds, the Dashboard pings `/api/logs` and `/api/state/buffer`. Flask natively prints these `HTTP 200` networking requests directly to `stdout`. Production daemons (like `systemd`) intercept `stdout` and write it to disk indefinitely.
+- **The Fix:** Injected `logging.getLogger('werkzeug').setLevel(logging.ERROR)` directly into the initialization layer of [app.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/app.py).
+  - This surgically silences routing telemetry and status codes from printing to the console entirely, instantly stopping infinite log bloat at the source without wiping out actual crash data or custom `InventoryHub` warnings.
+
+## Test Suite Architecture Fixes (Pytest)
+- During the validation checks for the logging update, a massive chain of `Pytest` failures occurred within [test_state.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/tests/test_state.py) and [test_logic.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/tests/test_logic.py), seemingly disconnected from the log suppression edits.
+- Traced the `AttributeError: DummyState` crashes back to a global module hijack inside [test_locations_db.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/tests/test_locations_db.py) (`sys.modules['state'] = DummyState()`). 
+- **The Fix:** Deleted the hostile system override and natively patched [test_locations_db.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/tests/test_locations_db.py) to securely isolate its mocking through standard Python import protocols. The entire testing suite (17 tests) is fully green and restored.

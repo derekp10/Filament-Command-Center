@@ -24,7 +24,7 @@
 
 
 # **Location List**
-* Unable to send items to the unassigned location in the location list with a QR code scann.
+* Unable to send items to the unassigned location in the location list with a QR code scan.
 
 
 # **Next Steps Items:**
