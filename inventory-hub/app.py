@@ -8,9 +8,14 @@ import logic # type: ignore
 import csv
 import os
 import json
+import logging
 
 VERSION = "v154.25 (Overwrite CSV Logic)"
 app = Flask(__name__)
+
+# [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 @app.after_request
 def add_header(r):
