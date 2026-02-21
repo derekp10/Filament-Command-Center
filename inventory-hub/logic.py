@@ -108,6 +108,7 @@ def resolve_scan(text):
     if len(text) > 2: 
         loc_list = locations_db.load_locations_list()
         valid_ids = {row['LocationID'].upper() for row in loc_list}
+        valid_ids.add("UNASSIGNED") # [ALEX FIX] Allow the virtual Unassigned bucket
         
         if text.upper() in valid_ids:
             return {'type': 'location', 'id': text.upper()}
