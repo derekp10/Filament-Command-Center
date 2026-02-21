@@ -53,7 +53,28 @@ const openSpoolDetails = (id, silent = false) => {
                 } else btnLink.href = `/spool/show/${d.id}`;
             }
 
-            // --- 4. Swatch Link Action ---
+            // --- 4. Product Data Link ---
+            const prodUrlContainer = document.getElementById('detail-product-url-container');
+            const btnProdUrl = document.getElementById('detail-btn-product-url');
+
+            if (prodUrlContainer && btnProdUrl) {
+                let url = d.extra?.product_url || "";
+
+                // Cleanse the Spoolman JSON string quotes if they exist
+                if (url.startsWith('"') && url.endsWith('"')) {
+                    url = url.substring(1, url.length - 1);
+                }
+
+                if (url && url.startsWith('http')) {
+                    btnProdUrl.href = url;
+                    prodUrlContainer.classList.remove('d-none');
+                } else {
+                    prodUrlContainer.classList.add('d-none');
+                    btnProdUrl.href = "#";
+                }
+            }
+
+            // --- 5. Swatch Link Action ---
             const btnSwatch = document.getElementById('btn-spool-to-filament');
             if (btnSwatch) {
                 if (d.filament) {

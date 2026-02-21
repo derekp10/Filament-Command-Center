@@ -3,8 +3,8 @@ import state # type: ignore
 import config_loader # type: ignore
 
 # Constants for JSON sanitation
-# [ALEX FIX] Added 'physical_source_slot' to ensure strict JSON string formatting
-JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "physical_source_slot", "original_color", "spool_temp"]
+# [ALEX FIX] Added 'physical_source_slot', and 'product_url' to ensure strict JSON string formatting
+JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "physical_source_slot", "original_color", "spool_temp", "product_url"]
 
 def get_spool(sid):
     sm_url, _ = config_loader.get_api_urls()
@@ -53,6 +53,11 @@ def sanitize_outbound_data(data):
 def update_spool(sid, data):
     sm_url, _ = config_loader.get_api_urls()
     try:
+        # [ALEX FIX] Intercept "UNASSIGNED" and coerce into empty string for Spoolman API
+        if 'location' in data and isinstance(data['location'], str):
+            if data['location'].strip().upper() == 'UNASSIGNED':
+                data['location'] = ''
+                
         clean_data = sanitize_outbound_data(data)
         resp = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
         if not resp.ok:

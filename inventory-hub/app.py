@@ -8,9 +8,14 @@ import logic # type: ignore
 import csv
 import os
 import json
+import logging
 
 VERSION = "v154.25 (Overwrite CSV Logic)"
 app = Flask(__name__)
+
+# [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 @app.after_request
 def add_header(r):
@@ -569,17 +574,20 @@ def api_print_location_label():
         
         # 3. Robust Lookup 
         loc_data = None
-        for row in locs:
-            if not isinstance(row, dict): continue
-            row_id = ""
-            for k, v in row.items():
-                if str(k).strip().lower() == 'locationid': 
-                    row_id = str(v).strip().upper()
+        if target_id == "UNASSIGNED":
+             loc_data = {"LocationID": "Unassigned", "Name": "Unassigned", "Max Spools": 0}
+        else:
+            for row in locs:
+                if not isinstance(row, dict): continue
+                row_id = ""
+                for k, v in row.items():
+                    if str(k).strip().lower() == 'locationid': 
+                        row_id = str(v).strip().upper()
+                        break
+                
+                if row_id == target_id:
+                    loc_data = row
                     break
-            
-            if row_id == target_id:
-                loc_data = row
-                break
         
         if not loc_data:
              state.logger.warning(f"❌ [LABEL] ID {target_id} not found in DB")

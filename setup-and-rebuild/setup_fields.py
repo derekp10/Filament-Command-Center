@@ -4,8 +4,13 @@ import json
 import os
 import sys
 
+# Add inventory-hub to path to import config_loader
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'inventory-hub')))
+import config_loader
+
 # --- CONFIGURATION ---
-SPOOLMAN_IP = "http://192.168.1.29:7912"
+SPOOLMAN_IP, _ = config_loader.get_api_urls()
+print(f"🔗 Target Spoolman Database: {SPOOLMAN_IP}")
 DATA_FOLDER_NAME = "3D Print Data"
 LISTS_FILENAME = "3D Print Supplies - Lists.csv"
 FILAMENT_FILENAME = "3D Print Supplies - Filament.csv"
@@ -105,7 +110,7 @@ def get_clean_choices(csv_path, column_name):
             reader = csv.DictReader(f)
             for row in reader:
                 val = row.get(column_name)
-                if val:
+                if isinstance(val, str) and val.strip():
                     for p in val.split(','):
                         clean = p.strip()
                         if clean: choices.add(clean)
@@ -150,6 +155,7 @@ create_field("spool", "physical_source_slot", "Physical Source Slot", "text")
 create_field("spool", "label_printed", "Label Printed", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")
+create_field("spool", "product_url", "Product Page Link", "text") # [ALEX FIX] New custom field
 
 # --- CRITICAL: FORCE RESET CONTAINER SLOT TO TEXT ---
 create_field("spool", "container_slot", "Container / MMU Slot", "text", force_reset=True)

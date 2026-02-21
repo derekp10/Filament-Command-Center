@@ -8,27 +8,29 @@
     - Filaments: Spoolman Reprint field/extra data, is set to Yes for all items that need to have a label reprinted with the new Spoolman ID. Null or No, mean that it already has a label with the spoolman ID.
       For Label printed field/extra data, if it has a legacy ID, this will probably be Yes, if it's a no, then it's new, and a label needs to be printed.
 * Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
-* Spools might need to have a text field added to store the product data (Prusament: https://prusament.com/spool/17705/5b1a183b26/) as this is more spool level data, than filament level data.
+* Its too easy to have multiple legacy spools with no exact id, where we could be assigning the wrong item, though in those cases we should probably just reprint new labels. Perhaps a pop up when there could be more than 1 spool attached to the legacy id, asking the user if they want to see the list of spools, or just reprint a new label.
 
 
 # **Location Manger Items**
+* The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
+* Ability to assigne a box slot to a printhead/mmu, so that a scan to that box slot will auto load the spool into the printhead/mmu. (This would be a per box setting)
 
 
 # **Print Queue Items**
 
 
 # **Command Center Items**
-* Set it so that the screen don't sleep. (Needs to be tested on laptop)
-    - Doesn't seem to work on Laptop
-* Eject should auto disable if we move off of the command screen to anyother screen or modal
-* Black filaments need a better way to show border or a better gradiant in the color
-* Add background refreshing used in Location Manger, etc... to update spool text (update weight other data)
 
 # **Details (Filament/Spool) Modal **
+* Bring in more data from spoolman into the details modals. It be nice to see at purchase link to easily get more of the same filament.
+    - Some fields we might not want to bring in. Will need to go over the list of fields to bring in. And to leave alone.
+    - Add a button to the details modal to easily get more of the same filament. (This would be a custom button that we can configure in the config file, so that it can be different for different filaments.)
+    - A confirmation maybe to auto add a new spool of the same filament to the database when the button is clicked if the user buys more filament. Or an easy button to add a new spool, that fills in most of the standard data, but stuff that would be unique to the new spool, like price, product link (if it happens to be one that provides a good link like prusament ones)
+* Spools might need to have a text field added to store the product data (Prusament: https://prusament.com/spool/17705/5b1a183b26/) as this is more spool level data, than filament level data.
 
 
 # **Location List**
-* Unable to send items to the unassigned location in the location list with a QR code scann.
+* Unable to send items to the unassigned location in the location list with a QR code scan.
 
 
 # **Next Steps Items:**
@@ -55,7 +57,7 @@ The Missing Feature:
 
 The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 
-6. Shapeshifting QR Codes in more places. (Audit button)
+6. Shapeshifting QR Codes in more places. (like Audit button)
 
 7. Refactor dashboard to be more modular if possible, and reduce token size/context requirements for some modifications.
 
@@ -73,7 +75,6 @@ The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERY
 
 3. On the front of 2, make as much of command Center user configuarble as possible, using UI elements and a config inport/export feature.
 
-4. Refactoring setup code to be dynamic. For existing instances when someone is installing command center for the first time on an existing spoolman server, we just add the needed data fields that command center needs/uses. But on brand new installs (with no existing data) We can maintain existing code to get it started, or leverage the inport/export data for this in some way.
 
 # **Overarching issue**
 I think we've inadverntaly created 3 levels of logic/complexity here. 1. The physical, Scanning stuff and efficiently Moving it, 2. A UI layer, for debugging, but should only really need to be looked at to confirm things when where you were expecting, and 3, a full on interface that is easier to move spools around than having to use spoolmans lack luster interface.
@@ -118,3 +119,10 @@ Production Functionality Fix list
 * Fixed swatch circles in the "Live Activity" Dashboard log pane to accurately display CSS conic gradients mathematically divided for multi-color filament spools.
 * Implemented background polling for Filabridge `GET /api/print-errors` to expose `gcode` parsing errors in the Live Activity log.
 * Engineered a native CSS physical shield inside `scripts.html` to consume hardware `mousedown`/`click` wake-up hits natively when the Scanner Pauses, preventing accidental button triggers.
+* Set it so that the screen don't sleep. (Needs to be tested on laptop)
+    - Doesn't seem to work on Laptop
+* Eject should auto disable if we move off of the command screen to anyother screen or modal
+* Black filaments need a better way to show border or a better gradiant in the color
+* Add background refreshing used in Location Manger, etc... to update spool text (update weight other data)
+* Need to add a routine to clean up the logs after a while. We don't have that currently, and I'm sure things have gotten out of hand on production.
+* Refactoring setup code to be dynamic. For existing instances when someone is installing command center for the first time on an existing spoolman server, we just add the needed data fields that command center needs/uses. But on brand new installs (with no existing data) We can maintain existing code to get it started, or leverage the inport/export data for this in some way.

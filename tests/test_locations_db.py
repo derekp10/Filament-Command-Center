@@ -4,24 +4,15 @@ import json
 import tempfile
 import csv
 
-# We need to test locations_db, but it imports 'state' which sets up logging.
-# Let's mock state.logger to prevent it from cluttering test output or failing if run without full context.
-import sys
-import logging
-class DummyState:
-    class DummyLogger:
-        def info(self, msg): pass
-        def error(self, msg): pass
-        def warning(self, msg): pass
-    logger = DummyLogger()
-
-sys.modules['state'] = DummyState() # type: ignore
-
 # Add the inventory-hub directory to the Python path so we can import locations_db
+import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'inventory-hub')))
 
-# Now we can safely import the module under test
+from unittest.mock import patch, MagicMock
+import state
+
+# We can safely import the module under test
 import locations_db # type: ignore
 
 @pytest.fixture
