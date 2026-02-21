@@ -110,7 +110,7 @@ def get_clean_choices(csv_path, column_name):
             reader = csv.DictReader(f)
             for row in reader:
                 val = row.get(column_name)
-                if val:
+                if isinstance(val, str) and val.strip():
                     for p in val.split(','):
                         clean = p.strip()
                         if clean: choices.add(clean)
