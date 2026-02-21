@@ -53,6 +53,11 @@ def sanitize_outbound_data(data):
 def update_spool(sid, data):
     sm_url, _ = config_loader.get_api_urls()
     try:
+        # [ALEX FIX] Intercept "UNASSIGNED" and coerce into empty string for Spoolman API
+        if 'location' in data and isinstance(data['location'], str):
+            if data['location'].strip().upper() == 'UNASSIGNED':
+                data['location'] = ''
+                
         clean_data = sanitize_outbound_data(data)
         resp = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
         if not resp.ok:
