@@ -150,6 +150,7 @@ create_field("spool", "physical_source_slot", "Physical Source Slot", "text")
 create_field("spool", "label_printed", "Label Printed", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")
+create_field("spool", "product_url", "Product Page Link", "text") # [ALEX FIX] New custom field
 
 # --- CRITICAL: FORCE RESET CONTAINER SLOT TO TEXT ---
 create_field("spool", "container_slot", "Container / MMU Slot", "text", force_reset=True)

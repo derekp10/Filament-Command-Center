@@ -13,27 +13,40 @@
                         <p class="mb-1"><strong>Vendor:</strong> <span id="detail-vendor"></span></p>
                         <p class="mb-1"><strong>Weight:</strong> <span id="detail-weight"></span></p>
                         <p class="mb-1"><strong>Used:</strong> <span id="detail-used"></span></p>
-                        <p class="mb-1"><strong>Remaining:</strong> <span id="detail-remaining" class="fw-bold text-success"></span></p>
+                        <p class="mb-1"><strong>Remaining:</strong> <span id="detail-remaining"
+                                class="fw-bold text-success"></span></p>
                     </div>
                     <div class="col-md-6 text-center">
-                        <div id="detail-swatch" style="width: 80px; height: 80px; border-radius: 50%; margin: 0 auto; border: 3px solid #fff; box-shadow: 0 0 10px rgba(255,255,255,0.2);"></div>
+                        <div id="detail-swatch"
+                            style="width: 80px; height: 80px; border-radius: 50%; margin: 0 auto; border: 3px solid #fff; box-shadow: 0 0 10px rgba(255,255,255,0.2);">
+                        </div>
                         <p class="mt-2 mb-0 fw-bold" id="detail-color-name"></p>
                         <p class="text-muted small" id="detail-hex"></p>
                     </div>
                 </div>
                 <hr class="border-secondary">
+                <div id="detail-product-url-container" class="mb-3 d-none">
+                    <a href="#" id="detail-btn-product-url" target="_blank"
+                        class="btn btn-outline-primary w-100 fw-bold">
+                        🔗 View Product Data
+                    </a>
+                </div>
                 <div class="mb-3">
                     <label class="form-label text-muted small">Comment / Notes</label>
-                    <textarea class="form-control bg-black text-white border-secondary" id="detail-comment" rows="2" readonly></textarea>
+                    <textarea class="form-control bg-black text-white border-secondary" id="detail-comment" rows="2"
+                        readonly></textarea>
                 </div>
             </div>
             <div class="modal-footer bg-dark border-top border-secondary justify-content-between">
                 <div>
-                    <a href="#" id="btn-open-spoolman" target="_blank" class="btn btn-outline-info me-2">Open Spoolman ↗️</a>
-                    <button type="button" class="btn btn-outline-success me-2" id="btn-spool-to-filament">🧬 View Swatch</button>
+                    <a href="#" id="btn-open-spoolman" target="_blank" class="btn btn-outline-info me-2">Open Spoolman
+                        ↗️</a>
+                    <button type="button" class="btn btn-outline-success me-2" id="btn-spool-to-filament">🧬 View
+                        Swatch</button>
                 </div>
                 <div>
-                    <button type="button" class="btn btn-warning fw-bold" id="btn-print-action">➕ Queue Spool Label</button>
+                    <button type="button" class="btn btn-warning fw-bold" id="btn-print-action">➕ Queue Spool
+                        Label</button>
                     <button type="button" class="btn btn-secondary ms-2" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
@@ -51,7 +64,8 @@
             <div class="modal-body bg-dark text-white">
                 <div class="row">
                     <div class="col-md-6">
-                        <p class="mb-1"><strong>Filament ID:</strong> <span id="fil-detail-id" class="text-success"></span></p>
+                        <p class="mb-1"><strong>Filament ID:</strong> <span id="fil-detail-id"
+                                class="text-success"></span></p>
                         <p class="mb-1"><strong>Brand:</strong> <span id="fil-detail-vendor"></span></p>
                         <p class="mb-1"><strong>Material:</strong> <span id="fil-detail-material"></span></p>
                         <hr>
@@ -60,32 +74,40 @@
                         <p class="mb-1"><strong>Density:</strong> <span id="fil-detail-density"></span></p>
                     </div>
                     <div class="col-md-6 text-center">
-                        <div id="fil-detail-swatch" style="width: 80px; height: 80px; border-radius: 12px; margin: 0 auto; border: 3px solid #fff; box-shadow: 0 0 15px rgba(0,255,0,0.2);"></div>
+                        <div id="fil-detail-swatch"
+                            style="width: 80px; height: 80px; border-radius: 12px; margin: 0 auto; border: 3px solid #fff; box-shadow: 0 0 15px rgba(0,255,0,0.2);">
+                        </div>
                         <p class="mt-2 mb-0 fw-bold" id="fil-detail-color-name"></p>
                         <p class="text-muted small" id="fil-detail-hex"></p>
                     </div>
                 </div>
                 <div class="mt-3">
                     <label class="form-label text-muted small">Notes</label>
-                    <textarea class="form-control bg-black text-white border-secondary" id="fil-detail-comment" rows="2" readonly></textarea>
+                    <textarea class="form-control bg-black text-white border-secondary" id="fil-detail-comment" rows="2"
+                        readonly></textarea>
                 </div>
                 <div class="mt-3">
                     <label class="form-label text-muted small d-flex justify-content-between">
                         <span>Active Spools</span>
                         <span id="fil-spool-count" class="badge bg-secondary">0</span>
                     </label>
-                    <div id="fil-spools-list" class="list-group list-group-flush bg-black border border-secondary rounded mb-2" style="max-height: 150px; overflow-y: auto;">
+                    <div id="fil-spools-list"
+                        class="list-group list-group-flush bg-black border border-secondary rounded mb-2"
+                        style="max-height: 150px; overflow-y: auto;">
                         <div class="p-2 text-muted text-center small">Checking inventory...</div>
                     </div>
-                    <button type="button" class="btn btn-warning w-100 fw-bold" id="btn-queue-all-spools" style="display:none;">
+                    <button type="button" class="btn btn-warning w-100 fw-bold" id="btn-queue-all-spools"
+                        style="display:none;">
                         ➕ Queue All Active Spools
                     </button>
                 </div>
             </div>
             <div class="modal-footer bg-dark border-top border-secondary justify-content-between">
-                <a href="#" id="btn-fil-open-spoolman" target="_blank" class="btn btn-outline-success me-2">Edit in Spoolman ↗️</a>
+                <a href="#" id="btn-fil-open-spoolman" target="_blank" class="btn btn-outline-success me-2">Edit in
+                    Spoolman ↗️</a>
                 <div>
-                    <button type="button" class="btn btn-success fw-bold" id="btn-fil-print-action">➕ Queue Swatch Label</button>
+                    <button type="button" class="btn btn-success fw-bold" id="btn-fil-print-action">➕ Queue Swatch
+                        Label</button>
                     <button type="button" class="btn btn-secondary ms-2" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
