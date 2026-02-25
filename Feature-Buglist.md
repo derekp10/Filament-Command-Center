@@ -17,6 +17,10 @@
 
 
 # **Print Queue Items**
+* Need a way to add newly created Filament/Spools to the print queue. This chould be based on one of many print flags in the spoolman database.
+* Needs a window/modal that lists all the spools/filaments missing a confirmed label printing (By database check box)
+* Data in the window should be filterable or sortable. So that If I want oldest first to work on back log, or Newest first if I want to work on something I've just added.
+* Things sent to the print queue should be flagged for printing in the database, so that they can be placed and tracked in a speprate list, so that once they are printed, it can be flagged as printed and updated as such in the database. (Database = Spoolman)
 
 
 # **Command Center Items**
@@ -26,7 +30,7 @@
     - Some fields we might not want to bring in. Will need to go over the list of fields to bring in. And to leave alone.
     - Add a button to the details modal to easily get more of the same filament. (This would be a custom button that we can configure in the config file, so that it can be different for different filaments.)
     - A confirmation maybe to auto add a new spool of the same filament to the database when the button is clicked if the user buys more filament. Or an easy button to add a new spool, that fills in most of the standard data, but stuff that would be unique to the new spool, like price, product link (if it happens to be one that provides a good link like prusament ones)
-* Spools might need to have a text field added to store the product data (Prusament: https://prusament.com/spool/17705/5b1a183b26/) as this is more spool level data, than filament level data.
+*Add spool button on the list of spools in the filament details modal that links you to the details of the spool.
 
 
 # **Location List**
@@ -126,3 +130,4 @@ Production Functionality Fix list
 * Add background refreshing used in Location Manger, etc... to update spool text (update weight other data)
 * Need to add a routine to clean up the logs after a while. We don't have that currently, and I'm sure things have gotten out of hand on production.
 * Refactoring setup code to be dynamic. For existing instances when someone is installing command center for the first time on an existing spoolman server, we just add the needed data fields that command center needs/uses. But on brand new installs (with no existing data) We can maintain existing code to get it started, or leverage the inport/export data for this in some way.
+* Spools might need to have a text field added to store the product data (Prusament: https://prusament.com/spool/17705/5b1a183b26/) as this is more spool level data, than filament level data.
