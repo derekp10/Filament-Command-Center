@@ -569,7 +569,7 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null) => {
 
 window.ejectSpool = (sid, loc, pickup) => {
     if (pickup) {
-        fetch('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: "ID:" + sid }) })
+        fetch('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: "ID:" + sid, source: 'keyboard' }) })
             .then(r => r.json())
             .then(res => {
                 if (res.type === 'spool') {
@@ -609,7 +609,7 @@ window.manualAddSpool = () => {
     const val = document.getElementById('manual-spool-id').value.trim();
     if (!val) return;
     setProcessing(true);
-    fetch('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: val }) })
+    fetch('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: val, source: 'keyboard' }) })
         .then(r => r.json())
         .then(res => {
             setProcessing(false);

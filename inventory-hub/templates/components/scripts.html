@@ -7,6 +7,8 @@
 
 <script src="{{ url_for('static', filename='js/modules/inv_queue.js') }}"></script>
 
+<script src="{{ url_for('static', filename='js/modules/inv_backlog.js') }}"></script>
+
 <script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}"></script>
@@ -20,7 +22,7 @@
         // Initialize Modals
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal',
             'actionModal', 'safetyModal', 'queueModal', 'spoolModal',
-            'filamentModal'].forEach(id => {
+            'filamentModal', 'backlogModal'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) modals[id] = new bootstrap.Modal(el);
             });
@@ -130,19 +132,32 @@
             }
         });
 
+        state.scanStartTime = 0;
         document.addEventListener('keydown', (e) => {
             const g = document.getElementById('focus-guard');
             if ((g && g.style.display === 'flex') || state.processing || e.target.tagName === 'INPUT') return;
 
             if (e.key === 'Enter') {
                 e.preventDefault();
-                if (state.scanBuffer.length > 0) processScan(state.scanBuffer);
+                if (state.scanBuffer.length > 0) {
+                    const elapsed = Date.now() - state.scanStartTime;
+                    // Normal human typing takes much longer. Scanners fire instantly < 120ms
+                    const source = elapsed < 120 ? 'barcode' : 'keyboard';
+                    processScan(state.scanBuffer, source);
+                }
                 state.scanBuffer = "";
+                state.scanStartTime = 0;
             }
             else if (e.key.length === 1) {
+                if (state.scanBuffer.length === 0) {
+                    state.scanStartTime = Date.now();
+                }
                 state.scanBuffer += e.key;
                 clearTimeout(state.bufferTimeout);
-                state.bufferTimeout = setTimeout(() => state.scanBuffer = "", 2000);
+                state.bufferTimeout = setTimeout(() => {
+                    state.scanBuffer = "";
+                    state.scanStartTime = 0;
+                }, 2000);
             }
         });
 

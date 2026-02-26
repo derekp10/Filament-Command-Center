@@ -1,0 +1,24 @@
+# Epic 1: Label Verification & Backlog
+
+The "Missing Labels Backlog" feature is now fully implemented.
+
+## Changes Made
+- **Database**: Added `needs_label_print` boolean flag to [setup_fields.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/setup-and-rebuild/setup_fields.py) for both Spools and Filaments.
+- **Backend API**: Added new endpoints `/api/print_queue/pending`, `/api/print_queue/mark_printed`, and `/api/print_queue/set_flag` to track the backlog.
+- **Frontend UI**: Built [modals_missing_labels.html](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/templates/components/modals_missing_labels.html) for the backlog, hooked up a dedicated dashboard button, and created [inv_backlog.js](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_backlog.js) with sorting/filtering capabilities.
+  - **Hash Validation**: To prevent UI flickering, the frontend now quietly queries the API and converts the array to a JSON string `lastBacklogHash`. The DOM is only rebuilt if the live Spoolman data differs from the existing hash, solving the 5-second polling wipe.
+  - **Bulk Queueing**: Added persistent checkboxes to each item and a "Queue Selected" action bar. If the DOM is forced to rebuild during a background change, your checked items are preserved and restored instantly.
+  - **Clickable Details & Swatches**: Backlog items now display precise color swatch circles parsed from Spoolman attributes (e.g. `filament.extra.multi_color_hexes`), and row clicks now invoke [openSpoolDetails()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_details.js#4-90) and [openFilamentDetails()](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/static/js/modules/inv_details.js#91-237).
+- **Keyboard vs Scanner Logic**: Tracked timestamp logic in [scripts.html](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/templates/components/scripts.html). Keystroke buffer speeds under 120ms classify as [barcode](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/tests/test_print_queue.py#56-70) scans and will automatically clear the print flag. Manual entries taking longer are flagged as [keyboard](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/tests/test_print_queue.py#71-83) and will safely preserve the flag.
+
+## Validation Results
+- Verified that [setup_fields.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/setup-and-rebuild/setup_fields.py) successfully connects and registers the `needs_label_print` field in the Spoolman DB. 
+- A Python unit test suite [test_print_queue.py](file:///d:/My%20Documents/Documents/3D%20Printing/Filament%20Command%20Center/inventory-hub/tests/test_print_queue.py) was created to validate the backend API. It confirms that:
+  - The backlog correctly fetches and filters items.
+  - Legacy IDs cannot be manually marked as verified.
+  - "Barcode" scans securely clear label flags.
+  - "Keyboard" entries intentionally bypass the flag clearing process.
+- **All 5 Pytest unit tests are passing.**
+
+> [!TIP]
+> You can now restart your application to test the new Label Backlog on the Command Center UI. Once you are happy with Epic 1, we can begin work on **Epic 2: New Spool/Filament Creation Workflow**.

@@ -1,0 +1,57 @@
+<!-- MISSING LABELS BACKLOG MODAL -->
+<div class="modal fade" id="backlogModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content text-white"
+            style="background-color: #1a1a1a; box-shadow: 0 0 20px rgba(0,0,0,0.8); border: 1px solid #444;">
+            <div
+                class="modal-header border-secondary border-bottom-0 pb-0 d-flex justify-content-between align-items-center">
+                <h5 class="modal-title font-monospace text-warning">🏷️ Label Backlog</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+
+            <div class="modal-body pt-2">
+                <div class="d-flex justify-content-between mb-3 gap-2">
+                    <select id="backlog-filter" class="form-select bg-dark text-white border-secondary w-auto"
+                        onchange="window.fetchBacklog()">
+                        <option value="all">All Types</option>
+                        <option value="spool">Spools Only</option>
+                        <option value="filament">Filaments Only</option>
+                    </select>
+                    <select id="backlog-sort" class="form-select bg-dark text-white border-secondary w-auto"
+                        onchange="window.fetchBacklog()">
+                        <option value="created_newest">Newest First (Created Date)</option>
+                        <option value="created_oldest">Oldest First (Created Date)</option>
+                        <option value="id_desc">ID Descending</option>
+                        <option value="id_asc">ID Ascending</option>
+                        <option value="brand_asc">Brand (A-Z)</option>
+                    </select>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mb-2 px-1">
+                    <div>
+                        <input class="form-check-input me-1 bg-dark border-secondary" type="checkbox"
+                            id="backlog-select-all" onclick="window.toggleBacklogSelectAll()">
+                        <label class="form-check-label text-info small cursor-pointer" for="backlog-select-all">Select
+                            All</label>
+                    </div>
+                    <button class="btn btn-sm btn-outline-warning disabled" id="btn-backlog-queue-selected"
+                        onclick="window.queueSelectedBacklog()">
+                        🖨️ Queue Selected (0)
+                    </button>
+                </div>
+
+                <div id="backlog-list" class="list-group mb-3" style="max-height: 50vh; overflow-y: auto;">
+                    <div class="text-center text-muted p-3">Loading backlog...</div>
+                </div>
+
+                <div class="alert alert-info py-2 mb-0 font-monospace small">
+                    ℹ️ Scan physical barcodes to automatically clear items, or click 'Mark Printed' manually. Only
+                    Standard IDs are supported for manual marking.
+                </div>
+            </div>
+            <div class="modal-footer border-secondary mt-0 pt-0">
+                <button class="btn btn-secondary w-100 font-monospace btn-lg" data-bs-dismiss="modal">CLOSE</button>
+            </div>
+        </div>
+    </div>
+</div>

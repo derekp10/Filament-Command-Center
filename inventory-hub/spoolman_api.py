@@ -59,15 +59,23 @@ def update_spool(sid, data):
                 data['location'] = ''
                 
         clean_data = sanitize_outbound_data(data)
-        resp = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
-        if not resp.ok:
-            state.logger.error(f"❌ DB REJECTED: {resp.status_code} | Msg: {resp.text}")
-            state.add_log_entry(f"❌ DB Error {resp.status_code}", "ERROR")
-            return False
-        return True
+        r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
+        if r.ok: return r.json()
+        state.logger.error(f"Failed to update spool {sid}: {r.status_code} - {r.text}")
     except Exception as e:
-        state.logger.error(f"Spoolman Connection Failed: {e}")
-        return False
+        state.logger.error(f"API Error updating spool {sid}: {e}")
+    return None
+
+def update_filament(fid, data):
+    sm_url, _ = config_loader.get_api_urls()
+    sanitized = sanitize_outbound_data(data)
+    try:
+        r = requests.patch(f"{sm_url}/api/v1/filament/{fid}", json=sanitized, timeout=2)
+        if r.ok: return r.json()
+        state.logger.error(f"Failed to update filament {fid}: {r.status_code} - {r.text}")
+    except Exception as e:
+        state.logger.error(f"API Error updating filament {fid}: {e}")
+    return None
 
 def format_spool_display(spool_data):
     """Creates the text and color for the UI."""
