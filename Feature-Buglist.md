@@ -26,11 +26,6 @@
     - Other sites I might not be aware of and which we can evaluate later for this data.
     - Support for Open Print Tags (Initialize,Read, and Write) (https://github.com/OpenPrintTag/openprinttag-specification)
 
-# **Location Manger Items**
-* The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
-* Ability to assigne a box slot to a printhead/mmu, so that a scan to that box slot will auto load the spool into the printhead/mmu. (This would be a per box setting)
-    - I think this exists, but need to confirm in code.
-
 
 # **Print Queue Items**
 * Need a way to add newly created Filament/Spools to the print queue. This chould be based on one of many print flags in the spoolman database. (Both buitl in and "extra Field" type data we've added to spoolman.)
@@ -38,6 +33,10 @@
 * Data in the window should be filterable or sortable. So that If I want oldest first to work on back log, or Newest first if I want to work on something I've just added.
 * Things sent to the print queue should be flagged for printing in the database, so that they can be placed and tracked in a speprate list, so that once they are printed, it can be flagged as printed and updated as such in the database. (Database = Spoolman)
 
+# **Location Manger Items**
+* The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
+* Ability to assigne a box slot to a printhead/mmu, so that a scan to that box slot will auto load the spool into the printhead/mmu. (This would be a per box setting)
+    - I think this exists, but need to confirm in code.
 
 # **Command Center Items**
 
