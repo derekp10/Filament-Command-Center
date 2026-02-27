@@ -483,5 +483,51 @@
         box-shadow: 0 0 15px rgba(214, 51, 255, 0.4) !important;
     }
 
+    /* --- DARK MODE UI CONTRAST FIXES --- */
+    /* Ensure Bootstrap outline buttons are visible against dark backgrounds before hover */
+    .btn-outline-secondary {
+        color: #ccc;
+        border-color: #6c757d;
+    }
+
+    .btn-outline-secondary:hover {
+        color: #fff;
+        background-color: #6c757d;
+        border-color: #6c757d;
+    }
+
+    .btn-outline-info {
+        color: #00d4ff;
+        border-color: #00d4ff;
+    }
+
+    .btn-outline-info:hover {
+        color: #000;
+        background-color: #00d4ff;
+        border-color: #00d4ff;
+    }
+
+    .btn-outline-warning {
+        color: #ffc107;
+        border-color: #ffc107;
+    }
+
+    .btn-outline-warning:hover {
+        color: #000;
+        background-color: #ffc107;
+        border-color: #ffc107;
+    }
+
+    .btn-outline-danger {
+        color: #ff4444;
+        border-color: #ff4444;
+    }
+
+    .btn-outline-danger:hover {
+        color: #fff;
+        background-color: #ff4444;
+        border-color: #ff4444;
+    }
+
     /* NOTE: @media print removed to prevent conflicts with label_spool.html */
 </style>
