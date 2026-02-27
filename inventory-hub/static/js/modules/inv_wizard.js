@@ -74,8 +74,8 @@ window.wizardSelectType = (mode) => {
     wizardState.mode = mode;
 
     // Update active button styling
-    document.querySelectorAll('.type-selector').forEach(el => el.classList.remove('border-primary', 'bg-primary-subtle'));
-    document.getElementById(`btn-type-${mode}`).classList.add('border-primary', 'bg-primary-subtle');
+    document.querySelectorAll('.type-selector').forEach(el => el.classList.remove('wiz-active-card'));
+    document.getElementById(`btn-type-${mode}`).classList.add('wiz-active-card');
 
     // Show/Hide Dynamic Areas
     const dynamicArea = document.getElementById('material-dynamic-area');

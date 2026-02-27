@@ -148,7 +148,7 @@ const renderManagerNav = () => {
                 <div class="nav-label">READY TO SLOT</div>
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
-                <div style="font-size:1.0rem; color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${curInfo.line2}</div>
+                <div class="text-pop" style="font-size:1.0rem; color:#fff; font-weight:bold;">${curInfo.line2}</div>
             </div>
         </div>`;
 
@@ -221,7 +221,7 @@ const renderGrid = (data, max) => {
                     
                     <div class="text-center mt-2 mb-2">
                         <div style="font-size:0.8rem; color:#ccc; background: rgba(0,0,0,0.7); border-radius: 4px; display: inline-block; padding: 2px 6px;">CURRENTLY AT:</div>
-                        <div style="font-size:1.1rem; font-weight:900; color:#fff; text-shadow: 2px 2px 4px #000;">${item.deployed_to || "Unknown"}</div>
+                        <div class="text-pop" style="font-size:1.1rem; font-weight:900; color:#fff;">${item.deployed_to || "Unknown"}</div>
                     </div>
 
                     <div class="slot-info-gold text-center" style="background: rgba(0,0,0,0.7); border-radius: 5px; padding: 5px; margin: 0 5px; border: 1px solid #444;">
@@ -246,7 +246,7 @@ const renderGrid = (data, max) => {
                         <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 3px solid white;"></div>
                         <div class="slot-info-gold" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
                             <div class="text-line-1">${info.line1}</div>
-                            <div class="text-line-2" style="color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${info.line2}</div>
+                            <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold;">${info.line2}</div>
                             <div class="text-line-3">${info.line3}</div>
                             <div class="text-line-4">${info.line4}</div>
                         </div>
@@ -307,12 +307,12 @@ const renderList = (data, locId) => {
 
         depositCard.innerHTML = `
             <div class="list-inner-gold" style="background: ${styles.inner}; justify-content: center; align-items: center; flex-direction: column; padding: 15px;">
-                <div style="font-size: 1.5rem; font-weight: 900; color: #fff; text-shadow: 2px 2px 4px #000; text-transform: uppercase;">
+                <div class="text-pop" style="font-size: 1.5rem; font-weight: 900; color: #fff; text-transform: uppercase;">
                     ⬇️ DEPOSIT HERE
                 </div>
                 <div id="qr-deposit-trigger" class="bg-white p-2 rounded mb-2 mt-2" style="box-shadow: 0 4px 10px rgba(0,0,0,0.5);"></div>
                 
-                <div style="color: #fff; text-shadow: 1px 1px 3px #000; margin-top: 5px; font-weight: bold;">
+                <div class="text-pop-light" style="color: #fff; margin-top: 5px; font-weight: bold;">
                     #${item.id} - ${item.display}
                 </div>
             </div>`;
@@ -444,7 +444,7 @@ const renderBadgeHTML = (s, i, locId) => {
                 <div class="id-badge-gold">#${s.id}</div>
                 <div class="d-flex flex-column text-white">
                      <div class="text-line-1">${info.line1}</div>
-                     <div class="text-line-2" style="color:#fff; font-weight:bold; text-shadow: 2px 2px 4px #000;">${info.line2}</div>
+                     <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold;">${info.line2}</div>
                      <div class="text-line-3">${info.line3}</div>
                      <div class="text-line-4">${info.line4}</div>
                 </div>

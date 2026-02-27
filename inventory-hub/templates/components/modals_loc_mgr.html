@@ -1,196 +1,362 @@
 <style>
     /* --- MODAL SIZING & THEME --- */
-    #manageModal .modal-dialog { max-width: 1000px; }
-    #manageModal .modal-body { background: #121212 !important; min-height: 400px; }
-    #manageModal .modal-header { background: #1f1f1f !important; border-bottom: 1px solid #444 !important; }
-    #manageModal .modal-footer { background: #1f1f1f !important; border-top: 1px solid #444 !important; }
+    #manageModal .modal-dialog {
+        max-width: 1000px;
+    }
+
+    #manageModal .modal-body {
+        background: #121212 !important;
+        min-height: 400px;
+    }
+
+    #manageModal .modal-header {
+        background: #1f1f1f !important;
+        border-bottom: 1px solid #444 !important;
+    }
+
+    #manageModal .modal-footer {
+        background: #1f1f1f !important;
+        border-top: 1px solid #444 !important;
+    }
 
     /* --- LIST VIEW FIXES (Sticky Header Only) --- */
-    .sticky-th th { 
-        position: sticky; top: 0; z-index: 10; 
-        background-color: #1f1f1f; 
-        box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+    .sticky-th th {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background-color: #1f1f1f;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
     }
 
     /* --- NUCLEAR Z-INDEX FIX --- */
-    #queueModal, #spoolModal, #filamentModal, #actionModal, #safetyModal, #confirmModal {
+    #queueModal,
+    #spoolModal,
+    #filamentModal,
+    #actionModal,
+    #safetyModal,
+    #confirmModal {
         z-index: 1100 !important;
     }
 
     /* --- RED ZONE: NAV DECK --- */
-    #loc-mgr-nav-deck { 
-        display: flex; gap: 10px; width: 100%; align-items: stretch; height: 200px; 
+    #loc-mgr-nav-deck {
+        display: flex;
+        gap: 10px;
+        width: 100%;
+        align-items: stretch;
+        height: 200px;
     }
-    
+
     #loc-mgr-nav-deck .nav-card {
         height: 100%;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-        border: 2px solid rgba(255,255,255,0.2);
-        flex: 1; 
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+        border: 2px solid rgba(255, 255, 255, 0.2);
+        flex: 1;
         cursor: pointer;
         transition: transform 0.1s;
-        overflow: hidden; 
-        display: flex; flex-direction: column;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
         box-sizing: border-box;
     }
-    
+
     #loc-mgr-nav-deck .nav-card-center {
-        flex: 2; 
+        flex: 2;
         border: 2px solid #fff;
         box-shadow: 0 0 20px rgba(0, 212, 255, 0.2);
         z-index: 2;
     }
-    
-    #loc-mgr-nav-deck .nav-card:active { transform: scale(0.98); }
-    
+
+    #loc-mgr-nav-deck .nav-card:active {
+        transform: scale(0.98);
+    }
+
     .nav-inner {
-        height: 100%; width: 100%; box-sizing: border-box;
-        background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important;
+        height: 100%;
+        width: 100%;
+        box-sizing: border-box;
+        background-size: cover !important;
+        background-repeat: no-repeat !important;
+        background-position: center !important;
     }
 
     /* GOLD STANDARD: High Contrast Nav Labels */
     #loc-mgr-nav-deck .nav-label {
-        font-size: 0.8rem; font-weight: 900; letter-spacing: 2px;
-        text-transform: uppercase; margin-bottom: 8px;
-        color: #fff; 
-        text-shadow: 2px 2px 4px #000;
+        font-size: 0.8rem;
+        font-weight: 900;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+        color: #fff;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
     }
-    
+
     /* GOLD STANDARD: High Contrast Nav Text */
     #loc-mgr-nav-deck .nav-text-main {
-        font-size: 1.1rem; font-weight: 800; line-height: 1.2;
-        color: #fff; 
-        text-shadow: 2px 2px 4px #000;
+        font-size: 1.1rem;
+        font-weight: 800;
+        line-height: 1.2;
+        color: #fff;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
     }
-    
-    .nav-qr { background: white; padding: 5px; border-radius: 4px; flex-shrink: 0; }
+
+    .nav-qr {
+        background: white;
+        padding: 5px;
+        border-radius: 4px;
+        flex-shrink: 0;
+    }
 
     /* --- YELLOW ZONE: SLOT GRID --- */
     #slot-grid-container {
-        display: grid; 
-        grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); 
-        gap: 15px; justify-content: center;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+        gap: 15px;
+        justify-content: center;
     }
-    
+
     #slot-grid-container .slot-btn {
-        height: auto !important; min-height: 280px !important;
-        justify-content: flex-start !important; padding: 0 !important;
-        background: #111; border: none; 
+        height: auto !important;
+        min-height: 280px !important;
+        justify-content: flex-start !important;
+        padding: 0 !important;
+        background: #111;
+        border: none;
         position: relative;
         transition: transform 0.1s ease-in-out;
     }
-    #slot-grid-container .slot-btn:active { transform: scale(0.96); }
-    
-    .slot-inner-gold {
-        padding: 10px; height: 100%; width: 100%;
-        display: flex; flex-direction: column; justify-content: space-between; align-items: center;
-        margin: 4px; height: calc(100% - 8px); width: calc(100% - 8px);
-        background-size: cover !important; background-repeat: no-repeat !important;
+
+    #slot-grid-container .slot-btn:active {
+        transform: scale(0.96);
     }
-    
+
+    .slot-inner-gold {
+        padding: 10px;
+        height: 100%;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        align-items: center;
+        margin: 4px;
+        height: calc(100% - 8px);
+        width: calc(100% - 8px);
+        background-size: cover !important;
+        background-repeat: no-repeat !important;
+    }
+
     .slot-btn.empty .slot-inner-gold {
-        border: 2px dashed #444; 
+        border: 2px dashed #444;
         background: transparent;
     }
 
     .slot-header {
-        width: 100%; text-align: center;
-        background: transparent; border: none; margin-bottom: 5px;
-    }
-    
-    /* GOLD STANDARD: Slot Numbers pop now */
-    .slot-num-gold {
-        font-weight: 900; letter-spacing: 1px; font-size: 1.1rem;
-        color: #fff; 
-        text-shadow: 2px 2px 4px #000;
-        opacity: 1; /* Was 0.7 */
+        width: 100%;
+        text-align: center;
+        background: transparent;
+        border: none;
+        margin-bottom: 5px;
     }
 
-    .slot-info-gold { text-align: center; margin: 8px 0; width: 100%; }
-    
+    /* GOLD STANDARD: Slot Numbers pop now */
+    .slot-num-gold {
+        font-weight: 900;
+        letter-spacing: 1px;
+        font-size: 1.1rem;
+        color: #fff;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+        opacity: 1;
+        /* Was 0.7 */
+    }
+
+    .slot-info-gold {
+        text-align: center;
+        margin: 8px 0;
+        width: 100%;
+    }
+
     /* --- GLOBAL TEXT POP STYLES (Grid & List) --- */
-    .text-line-1 { 
-        font-size: 0.85rem; font-weight: 700; color: #fff; 
-        text-shadow: 2px 2px 4px #000; 
+    .text-line-1 {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: #fff;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
     }
-    .text-line-2 { 
-        font-size: 0.9rem; font-weight: 800; color: #fff; 
-        text-shadow: 2px 2px 4px #000; margin-top: 2px; 
+
+    .text-line-2 {
+        font-size: 0.9rem;
+        font-weight: 800;
+        color: #fff;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+        margin-top: 2px;
     }
-    .text-line-3 { 
-        font-size: 1.1rem; font-weight: 900; color: #fff; 
-        text-shadow: 2px 2px 4px #000; margin: 4px 0; line-height: 1.1; 
+
+    .text-line-3 {
+        font-size: 1.1rem;
+        font-weight: 900;
+        color: #fff;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+        margin: 4px 0;
+        line-height: 1.1;
     }
-    .text-line-4 { 
-        font-size: 0.9rem; font-weight: 700; color: #fff; 
-        text-shadow: 2px 2px 4px #000; 
+
+    .text-line-4 {
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: #fff;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
     }
 
     .btn-label-compact {
-        background: #ffc107; color: #000;
-        border-radius: 6px; padding: 4px 10px;
-        font-weight: 900; font-size: 0.9rem;
-        display: flex; align-items: center; gap: 6px;
-        box-shadow: 0 4px 5px rgba(0,0,0,0.3);
-        border: 2px solid #fff; margin-top: auto;
-        cursor: pointer; transition: transform 0.1s;
+        background: #ffc107;
+        color: #000;
+        border-radius: 6px;
+        padding: 4px 10px;
+        font-weight: 900;
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        box-shadow: 0 4px 5px rgba(0, 0, 0, 0.3);
+        border: 2px solid #fff;
+        margin-top: auto;
+        cursor: pointer;
+        transition: transform 0.1s;
     }
-    .btn-label-compact:active { transform: scale(0.9); }
+
+    .btn-label-compact:active {
+        transform: scale(0.9);
+    }
 
     /* --- GREEN ZONE: LIST & EJECT --- */
-    .manage-list-item { margin-bottom: 10px; border: 1px solid #444; }
+    .manage-list-item {
+        margin-bottom: 10px;
+        border: 1px solid #444;
+    }
+
     .list-inner-gold {
-        display: flex; justify-content: space-between; align-items: center;
-        padding: 8px 15px; background: inherit; border-radius: 8px; min-height: 80px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 15px;
+        background: inherit;
+        border-radius: 8px;
+        min-height: 80px;
     }
-    .list-left { display: flex; align-items: center; gap: 15px; overflow: hidden; }
-    
+
+    .list-left {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        overflow: hidden;
+    }
+
     .id-badge-gold {
-        background: #000; color: #fff; border: 2px solid #fff; 
-        font-weight: 900; font-size: 1.2rem; padding: 5px 8px; 
-        border-radius: 6px; min-width: 60px; text-align: center;
+        background: #000;
+        color: #fff;
+        border: 2px solid #fff;
+        font-weight: 900;
+        font-size: 1.2rem;
+        padding: 5px 8px;
+        border-radius: 6px;
+        min-width: 60px;
+        text-align: center;
     }
-    
-    .action-group-gold { display: flex; gap: 10px; }
+
+    .action-group-gold {
+        display: flex;
+        gap: 10px;
+    }
+
     .action-badge {
-        display: flex; flex-direction: column; align-items: center; justify-content: center;
-        background: #1f1f1f; border: 1px solid #555; border-radius: 6px; padding: 6px;
-        min-width: 75px; height: auto; 
-        cursor: pointer; transition: transform 0.1s;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #1f1f1f;
+        border: 1px solid #555;
+        border-radius: 6px;
+        padding: 6px;
+        min-width: 75px;
+        height: auto;
+        cursor: pointer;
+        transition: transform 0.1s;
     }
-    .action-badge:active { transform: scale(0.95); }
-    
-    .badge-qr { background: #fff; padding: 5px; border-radius: 4px; margin-bottom: 6px; }
-    
+
+    .action-badge:active {
+        transform: scale(0.95);
+    }
+
+    .badge-qr {
+        background: #fff;
+        padding: 5px;
+        border-radius: 4px;
+        margin-bottom: 6px;
+    }
+
     .qr-bg-white {
-        background-color: white; padding: 5px; border-radius: 6px; margin-bottom: 5px;
+        background-color: white;
+        padding: 5px;
+        border-radius: 6px;
+        margin-bottom: 5px;
     }
 
     .badge-btn-gold {
-        font-weight: 900; font-size: 0.85rem; text-transform: uppercase;
-        width: 100%; text-align: center; border-radius: 3px; padding: 4px 0; color: #000;
+        font-weight: 900;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        width: 100%;
+        text-align: center;
+        border-radius: 3px;
+        padding: 4px 0;
+        color: #000;
         line-height: 1;
     }
-    .btn-pick-bg { background-color: #0d6efd; color: white; }
-    .btn-print-bg { background-color: #ffc107; color: black; }
-    .btn-trash-bg { background-color: #dc3545; color: white; }
-    
-    .eject-card-inner {
-        display: flex; justify-content: space-between; align-items: center; 
-        padding: 10px 20px; background: rgba(220, 53, 69, 0.15);
+
+    .btn-pick-bg {
+        background-color: #0d6efd;
+        color: white;
     }
-    .eject-label-text { font-size: 1.5rem; font-weight: 900; color: #dc3545; text-transform: uppercase; letter-spacing: 2px; }
+
+    .btn-print-bg {
+        background-color: #ffc107;
+        color: black;
+    }
+
+    .btn-trash-bg {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    .eject-card-inner {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 20px;
+        background: rgba(220, 53, 69, 0.15);
+    }
+
+    .eject-label-text {
+        font-size: 1.5rem;
+        font-weight: 900;
+        color: #dc3545;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+    }
 
     /* FOOTER DONE QR */
     #qr-footer-block {
-        background: #1f1f1f; 
-        border: 1px solid #555; 
+        background: #1f1f1f;
+        border: 1px solid #555;
         border-radius: 6px;
         padding: 8px;
         min-width: 90px;
-        display: flex; justify-content: center; align-items: center;
+        display: flex;
+        justify-content: center;
+        align-items: center;
     }
-    #qr-modal-done { 
+
+    #qr-modal-done {
         margin: 0;
         width: 65px !important;
         height: 65px !important;
@@ -198,10 +364,12 @@
         border-radius: 4px;
         overflow: hidden;
         flex-shrink: 0;
-        padding: 6px; 
+        padding: 6px;
         box-sizing: border-box;
     }
-    #qr-modal-done img, #qr-modal-done canvas {
+
+    #qr-modal-done img,
+    #qr-modal-done canvas {
         width: 100% !important;
         height: 100% !important;
         display: block;
@@ -209,9 +377,15 @@
         image-rendering: pixelated;
     }
 
-    #manage-empty-msg .empty-state-text { color: #fff !important; opacity: 0.9; }
-    #manage-empty-msg p { color: #ccc !important; font-size: 1.1rem; }
+    #manage-empty-msg .empty-state-text {
+        color: #fff !important;
+        opacity: 0.9;
+    }
 
+    #manage-empty-msg p {
+        color: #ccc !important;
+        font-size: 1.1rem;
+    }
 </style>
 
 <div class="modal fade" id="locMgrModal" tabindex="-1">
@@ -223,7 +397,8 @@
             </div>
             <div class="modal-body p-0">
                 <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-dark">
-                    <span id="loc-count" class="text-info fw-bold" style="font-size: 1.1rem; text-shadow: 1px 1px 3px #000;">Loading...</span>
+                    <span id="loc-count" class="text-info fw-bold"
+                        style="font-size: 1.1rem; text-shadow: 1px 1px 3px #000;">Loading...</span>
                     <button class="btn btn-success" onclick="openAddModal()">➕ Add Location</button>
                 </div>
                 <div class="table-responsive" style="max-height: 70vh;">
@@ -289,17 +464,19 @@
         <div class="modal-content">
             <div class="modal-header p-2 d-flex align-items-center">
                 <h5 class="modal-title ms-3 text-info flex-grow-1" id="manageTitle">Manage</h5>
-                <button class="btn btn-sm btn-outline-warning fw-bold me-2" onclick="window.printCurrentLocationLabel()">🖨️ Print Location Label</button>
+                <button class="btn btn-sm btn-outline-warning fw-bold me-2"
+                    onclick="window.printCurrentLocationLabel()">🖨️ Print Location Label</button>
                 <button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button>
             </div>
-            
+
             <div class="modal-body">
                 <input type="hidden" id="manage-loc-id">
-                
+
                 <div id="loc-mgr-nav-deck" class="mb-4"></div>
 
                 <div id="manage-grid-view" class="container-fluid px-1" style="display:none;">
-                    <div class="alert alert-info py-1 mb-3 small text-center fw-bold text-uppercase" style="background:#111; border:1px solid #00d4ff; color:#00d4ff;">
+                    <div class="alert alert-info py-1 mb-3 small text-center fw-bold text-uppercase"
+                        style="background:#111; border:1px solid #00d4ff; color:#00d4ff;">
                         Tap button or scan slot QR (CMD:SLOT:X)
                     </div>
                     <div id="slot-grid-container" class="slot-grid"></div>
@@ -313,17 +490,22 @@
                     </div>
                     <div id="manage-contents-list" class="mb-4"></div>
                 </div>
-                
+
                 <hr class="border-secondary mt-4">
-                
+
                 <div class="input-group mb-3">
-                    <input type="text" id="manual-spool-id" class="form-control form-control-lg bg-dark text-white border-secondary" placeholder="Enter Spool ID / Scan Legacy">
-                    <button class="btn btn-primary btn-lg fw-bold" onclick="window.manualAddSpool()">➕ Add (To Buffer)</button>
+                    <input type="text" id="manual-spool-id"
+                        class="form-control form-control-lg bg-dark text-white border-secondary"
+                        placeholder="Enter Spool ID / Scan Legacy">
+                    <button class="btn btn-primary btn-lg fw-bold" onclick="window.manualAddSpool()">➕ Add (To
+                        Buffer)</button>
                 </div>
-                
-                <div class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary gap-3">
-                    <button class="btn btn-success btn-lg flex-grow-1 fw-bold" onclick="closeManage()">✅ Done / Sync</button>
-                    
+
+                <div
+                    class="d-flex justify-content-between align-items-center bg-dark p-2 rounded border border-secondary gap-3">
+                    <button class="btn btn-success btn-lg flex-grow-1 fw-bold" onclick="closeManage()">✅ Done /
+                        Sync</button>
+
                     <div id="qr-footer-block" onclick="closeManage()" style="cursor:pointer;">
                         <div id="qr-modal-done"></div>
                     </div>
