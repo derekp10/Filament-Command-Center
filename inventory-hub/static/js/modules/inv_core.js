@@ -199,7 +199,7 @@ const fetchLocations = () => {
                             }
                         }
                         // GOLD STANDARD: High Contrast Pop
-                        statusHtml = `<span style="font-weight:900; font-size:1.1rem; color:${occColor}; text-shadow: 2px 2px 4px #000;">${l.Occupancy}</span>`;
+                        statusHtml = `<span class="text-pop" style="font-weight:900; font-size:1.1rem; color:${occColor};">${l.Occupancy}</span>`;
                     } else {
                         statusHtml = `<span style="color:#666; font-style:italic; font-weight:bold;">--</span>`;
                     }
@@ -223,7 +223,7 @@ const fetchLocations = () => {
                     return `
                 <tr>
                     <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem; white-space: nowrap;">${l.LocationID}</td>
-                    <td class="col-name" style="font-weight:800; font-size:1.1rem; color:#fff; text-shadow: 1px 1px 3px #000;">${l.Name}</td>
+                    <td class="col-name text-pop-light" style="font-weight:800; font-size:1.1rem; color:#fff;">${l.Name}</td>
                     <td class="col-status">${statusHtml} ${typeBadge}</td>
                     <td class="col-actions text-end">
                         ${l.Type !== 'Virtual' ? `

@@ -3,6 +3,9 @@
 
 # ** General **
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
+* **[UI Standardization]** Convert hard-coded inline JS/HTML `style="..."` brute-force stylings across the entire application into standardized global CSS configurations.
+* **[UI Testing]** Implement comprehensive Playwright E2E structural testing across all UI elements globally. Verify that elements are not cutting, squishing, or overlapping each other on resize or edge-cases. Also verify text contrast, ensuring text color never exactly matches the background color unless intended by design.
+* **MOBILE** Make the entire app mobile mobile friendly. I eventually would like all features to work mobilly, so that if a user doesn't have a barcode scanner, or we need data from an NFC tag, we can just use the app on a phone to get the data we need/results we want.
 * Add ability for a scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
     - Label Printed in Spoolman Spool data can be used to determin if a new (Spoolman Based ID) Label has been printed.
     - Filaments: Spoolman Reprint field/extra data, is set to Yes for all items that need to have a label reprinted with the new Spoolman ID. Null or No, mean that it already has a label with the spoolman ID.

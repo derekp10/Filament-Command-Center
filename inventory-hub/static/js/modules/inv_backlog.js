@@ -107,7 +107,7 @@ window.fetchBacklog = () => {
                                             <span style="color:#aaa;">Added:</span> <strong style="color:#ccc;">${date}</strong>
                                         </div>
                                     </div>
-                                    <div class="cham-text text-white text-truncate mt-1 w-100" title="${brand} - ${name}" style="font-weight: 800; font-size: 1.15rem; line-height: 1.2; text-shadow: 2px 2px 4px #000;">
+                                    <div class="cham-text text-white text-truncate mt-1 w-100 text-pop" title="${brand} - ${name}" style="font-weight: 800; font-size: 1.15rem; line-height: 1.2;">
                                         ${brand} - ${name}
                                     </div>
                                 </div>
