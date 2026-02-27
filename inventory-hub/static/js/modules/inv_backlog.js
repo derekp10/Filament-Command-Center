@@ -67,8 +67,10 @@ window.fetchBacklog = () => {
                 const icon = isSpool ? '🧵' : '🧪';
 
                 // Color and Name Fallbacks
-                const name = f?.extra?.original_color || f?.color_name || f?.name || 'Unknown';
+                const material = f?.material || '';
                 const brand = f?.vendor?.name || 'Unknown';
+                const colorOrName = f?.name || f?.color_name || f?.extra?.original_color || 'Unknown';
+                const name = `${material} - ${colorOrName}`.trim();
                 const date = item.registered ? new Date(item.registered).toLocaleDateString() : 'Unknown Date';
 
                 // Color Logic Matching inv_details.js Priority
