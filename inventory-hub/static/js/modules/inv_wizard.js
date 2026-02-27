@@ -230,6 +230,16 @@ window.wizardSetupFieldSync = () => {
         });
     }
 
+    // Lock all auto-synced Spool fields on initial render
+    document.querySelectorAll('.wizard-sync-btn.active-sync').forEach(btn => {
+        const spoolKey = btn.getAttribute('data-sync-target');
+        const targetEl = document.getElementById(`wiz_spool_ef_${spoolKey}`);
+        if (targetEl) {
+            targetEl.setAttribute('readonly', 'true');
+            targetEl.style.opacity = '0.7';
+        }
+    });
+
     // Find all Filament inputs that could act as Sync Sources
     const sources = document.querySelectorAll('.sync-source-fil');
 

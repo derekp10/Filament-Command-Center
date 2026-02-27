@@ -1,3 +1,6 @@
+import re
+from playwright.sync_api import Page, expect
+
 def test_wizard_field_sync(page: Page):
     """
     E2E test verifying that custom extra fields propagate from Filament to Spool automatically,
@@ -17,13 +20,14 @@ def test_wizard_field_sync(page: Page):
     # Wait for dynamic fields to render
     page.wait_for_timeout(1000)
     
-    sync_btns = page.locator(".wizard-sync-btn")
+    sync_btns = page.locator(".wizard-sync-btn.active-sync")
     
     # If the user hasn't defined matching fields in their DB, we can't fully run the E2E
     # without mocking the network response. So we do a soft test.
     if sync_btns.count() > 0:
-        btn = sync_btns.first
-        field_key = btn.get_attribute("data-sync-target")
+        active_btn = sync_btns.first
+        field_key = active_btn.get_attribute("data-sync-target")
+        btn = page.locator(f".wizard-sync-btn[data-sync-target='{field_key}']")
         
         fil_input = page.locator(f"#wiz_fil_ef_{field_key}")
         spool_input = page.locator(f"#wiz_spool_ef_{field_key}")
@@ -41,7 +45,7 @@ def test_wizard_field_sync(page: Page):
         # Test 2: Unlinking
         btn.click()
         expect(btn).not_to_have_class(re.compile(r"active-sync"))
-        expect(spool_input).not_to_have_attribute("readonly")
+        expect(spool_input).not_to_have_attribute("readonly", "true")
         
         # Modify Spool independently
         test_val_spool = "https://example.com/spool"
