@@ -59,15 +59,108 @@ def update_spool(sid, data):
                 data['location'] = ''
                 
         clean_data = sanitize_outbound_data(data)
-        resp = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
-        if not resp.ok:
-            state.logger.error(f"❌ DB REJECTED: {resp.status_code} | Msg: {resp.text}")
-            state.add_log_entry(f"❌ DB Error {resp.status_code}", "ERROR")
-            return False
-        return True
+        r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
+        if r.ok: return r.json()
+        state.logger.error(f"Failed to update spool {sid}: {r.status_code} - {r.text}")
     except Exception as e:
-        state.logger.error(f"Spoolman Connection Failed: {e}")
-        return False
+        state.logger.error(f"API Error updating spool {sid}: {e}")
+    return None
+
+def create_spool(data):
+    """Creates a new spool via POST to Spoolman."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        if 'location' in data and isinstance(data['location'], str):
+            if data['location'].strip().upper() == 'UNASSIGNED':
+                data['location'] = ''
+        
+        clean_data = sanitize_outbound_data(data)
+        r = requests.post(f"{sm_url}/api/v1/spool", json=clean_data, timeout=5)
+        if r.ok:
+            return r.json()
+        state.logger.error(f"Failed to create spool: {r.status_code} - {r.text}")
+    except Exception as e:
+        state.logger.error(f"API Error creating spool: {e}")
+    return None
+
+def update_filament(fid, data):
+    sm_url, _ = config_loader.get_api_urls()
+    sanitized = sanitize_outbound_data(data)
+    try:
+        r = requests.patch(f"{sm_url}/api/v1/filament/{fid}", json=sanitized, timeout=2)
+        if r.ok: return r.json()
+        state.logger.error(f"Failed to update filament {fid}: {r.status_code} - {r.text}")
+    except Exception as e:
+        state.logger.error(f"API Error updating filament {fid}: {e}")
+    return None
+
+def create_filament(data):
+    """Creates a new filament via POST to Spoolman."""
+    sm_url, _ = config_loader.get_api_urls()
+    sanitized = sanitize_outbound_data(data)
+    try:
+        r = requests.post(f"{sm_url}/api/v1/filament", json=sanitized, timeout=5)
+        if r.ok: 
+            return r.json()
+        state.logger.error(f"Failed to create filament: {r.status_code} - {r.text}")
+    except Exception as e:
+        state.logger.error(f"API Error creating filament: {e}")
+    return None
+
+def get_vendors():
+    """Fetches the list of all vendors from Spoolman."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.get(f"{sm_url}/api/v1/vendor", timeout=5)
+        if r.ok:
+            return r.json()
+    except Exception as e:
+        state.logger.error(f"API Error fetching vendors: {e}")
+    return []
+
+def create_vendor(data):
+    """Creates a brand new vendor via POST to Spoolman."""
+    sm_url, _ = config_loader.get_api_urls()
+    sanitized = sanitize_outbound_data(data)
+    try:
+        r = requests.post(f"{sm_url}/api/v1/vendor", json=sanitized, timeout=5)
+        if r.ok:
+            return r.json()
+        state.logger.error(f"Failed to create vendor: {r.status_code} - {r.text}")
+    except Exception as e:
+        state.logger.error(f"API Error creating vendor: {e}")
+    return None
+
+def update_extra_field_choices(entity_type, key, new_choices):
+    """Pulls existing field config, appends new choices, and PUTs back to Spoolman."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.get(f"{sm_url}/api/v1/field/{entity_type}", timeout=5)
+        if r.ok:
+            fields = r.json()
+            target = next((f for f in fields if f['key'] == key), None)
+            if target and 'choices' in target:
+                updated_choices = list(set(target['choices'] + new_choices))
+                updated_choices.sort()
+                
+                # PUT requires all required config parameters, not just the choices delta
+                payload = {
+                    "name": target["name"],
+                    "field_type": target["field_type"],
+                    "multi_choice": target.get("multi_choice", False),
+                    "choices": updated_choices
+                }
+                
+                post_r = requests.post(f"{sm_url}/api/v1/field/{entity_type}/{key}", json=payload, timeout=5)
+                if post_r.ok:
+                    return {"success": True, "msg": "Choices updated"}
+                else:
+                    return {"success": False, "msg": f"POST failed: {post_r.text}"}
+            else:
+                return {"success": False, "msg": "Field key not found or doesn't support choices"}
+    except Exception as e:
+        state.logger.error(f"API Error updating field choices: {e}")
+        return {"success": False, "msg": str(e)}
 
 def format_spool_display(spool_data):
     """Creates the text and color for the UI."""

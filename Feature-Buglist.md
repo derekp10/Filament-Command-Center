@@ -3,7 +3,7 @@
 
 # ** General **
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
-* Add ability for an scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
+* Add ability for a scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
     - Label Printed in Spoolman Spool data can be used to determin if a new (Spoolman Based ID) Label has been printed.
     - Filaments: Spoolman Reprint field/extra data, is set to Yes for all items that need to have a label reprinted with the new Spoolman ID. Null or No, mean that it already has a label with the spoolman ID.
       For Label printed field/extra data, if it has a legacy ID, this will probably be Yes, if it's a no, then it's new, and a label needs to be printed.
@@ -11,13 +11,22 @@
 * Its too easy to have multiple legacy spools with no exact id, where we could be assigning the wrong item, though in those cases we should probably just reprint new labels. Perhaps a pop up when there could be more than 1 spool attached to the legacy id, asking the user if they want to see the list of spools, or just reprint a new label.
 
 
-# **Location Manger Items**
-* The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
-* Ability to assigne a box slot to a printhead/mmu, so that a scan to that box slot will auto load the spool into the printhead/mmu. (This would be a per box setting)
+# **New Spool/Filament Creation**
+* Continue to support Spoolman's "Import from External" feature for filaments, but also empower it to use other sites if possible. The list of sites that come to mind are as follows:
+    - https://3dfilamentprofiles.com/
+    - https://github.com/OpenFilamentCollective/open-filament-database (Note: Check back occasionally to see if they have formalized an API)
+    - Prusament spool specific data links (Which are usually a QR code that links to a spools manufacturing data.)
+    - Purchase emails, or Amazon/Vendor product pages.
+    - Other sites I might not be aware of and which we can evaluate later for this data.
+    - Support for Open Print Tags (Initialize,Read, and Write) (https://github.com/OpenPrintTag/openprinttag-specification)
 
 
 # **Print Queue Items**
 
+# **Location Manger Items**
+* The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
+* Ability to assigne a box slot to a printhead/mmu, so that a scan to that box slot will auto load the spool into the printhead/mmu. (This would be a per box setting)
+    - I think this exists, but need to confirm in code.
 
 # **Command Center Items**
 
@@ -26,11 +35,10 @@
     - Some fields we might not want to bring in. Will need to go over the list of fields to bring in. And to leave alone.
     - Add a button to the details modal to easily get more of the same filament. (This would be a custom button that we can configure in the config file, so that it can be different for different filaments.)
     - A confirmation maybe to auto add a new spool of the same filament to the database when the button is clicked if the user buys more filament. Or an easy button to add a new spool, that fills in most of the standard data, but stuff that would be unique to the new spool, like price, product link (if it happens to be one that provides a good link like prusament ones)
-* Spools might need to have a text field added to store the product data (Prusament: https://prusament.com/spool/17705/5b1a183b26/) as this is more spool level data, than filament level data.
+*Add spool button on the list of spools in the filament details modal that links you to the details of the spool.
 
 
 # **Location List**
-* Unable to send items to the unassigned location in the location list with a QR code scan.
 
 
 # **Next Steps Items:**
@@ -126,3 +134,15 @@ Production Functionality Fix list
 * Add background refreshing used in Location Manger, etc... to update spool text (update weight other data)
 * Need to add a routine to clean up the logs after a while. We don't have that currently, and I'm sure things have gotten out of hand on production.
 * Refactoring setup code to be dynamic. For existing instances when someone is installing command center for the first time on an existing spoolman server, we just add the needed data fields that command center needs/uses. But on brand new installs (with no existing data) We can maintain existing code to get it started, or leverage the inport/export data for this in some way.
+* Spools might need to have a text field added to store the product data (Prusament: https://prusament.com/spool/17705/5b1a183b26/) as this is more spool level data, than filament level data.
+* Unable to send items to the unassigned location in the location list with a QR code scan.
+* Attempt to combine the creation of a new spool and filament into one step. 
+* Continue to support spoolmans ability to pull data from the vender up to filament (Empty Weight), and from Filament to Spool (Empty Spool Weight, price, etc.)
+* Add the ability to configure which extra fieds should be bound and propagated to the other type of item. (Filament <-> Spool) (I believe we have a purchase link that would be an example of this, where it's set on the filament, but not on the spool.)
+* Maintain the ability to add multiple spools of the same type at the same time. (THis is reperesented by the number box in spoolman next to add, allowing you to add more than one spool of the same filament at the same time)
+* Support clone feature for Spools, to auto populate an existing spool. 
+* Figure out a way to fill in density for filaments. This data isn't alwasy availabe from the vender, so we may need to use a default or calculate it somehow based on filament type.
+* Need a way to add newly created Filament/Spools to the print queue. This chould be based on one of many print flags in the spoolman database. (Both buitl in and "extra Field" type data we've added to spoolman.)
+* Needs a window/modal that lists all the spools/filaments missing a confirmed label printing (By database check box)
+* Data in the window should be filterable or sortable. So that If I want oldest first to work on back log, or Newest first if I want to work on something I've just added.
+* Things sent to the print queue should be flagged for printing in the database, so that they can be placed and tracked in a speprate list, so that once they are printed, it can be flagged as printed and updated as such in the database. (Database = Spoolman)

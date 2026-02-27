@@ -153,6 +153,7 @@ create_field("spool", "physical_source", "Physical Source", "text")
 # [ALEX FIX] Register the new Ghost Slot field
 create_field("spool", "physical_source_slot", "Physical Source Slot", "text")
 create_field("spool", "label_printed", "Label Printed", "boolean")
+create_field("spool", "needs_label_print", "Needs Label Print", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")
 create_field("spool", "product_url", "Product Page Link", "text") # [ALEX FIX] New custom field
@@ -174,6 +175,7 @@ create_field("filament", "slicer_profile", "Slicer Profile", "choice", choices=l
 
 filament_standards = [
     ("label_printed", "Label Printed", "boolean"),
+    ("needs_label_print", "Needs Label Print", "boolean"),
     ("sample_printed", "Sample Printed", "boolean"),
     ("product_url", "Product Page Link", "text"),
     ("purchase_url", "Purchase Link", "text"),

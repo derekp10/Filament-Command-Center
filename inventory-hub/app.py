@@ -10,7 +10,7 @@ import os
 import json
 import logging
 
-VERSION = "v154.25 (Overwrite CSV Logic)"
+VERSION = "v154.26 (Scale Weights Update)"
 app = Flask(__name__)
 
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
@@ -116,6 +116,134 @@ def api_print_label():
 
     # Browser Mode: Just return data
     return jsonify({"success": True, "method": "browser", "data": spool})
+
+# --- INVENTORY WIZARD ---
+@app.route('/api/external/vendors', methods=['GET'])
+def api_external_vendors():
+    """Proxy route to fetch Spoolman vendors for the Wizard dropdowns."""
+    vendors = spoolman_api.get_vendors()
+    return jsonify({"success": True, "vendors": vendors})
+
+@app.route('/api/filaments', methods=['GET'])
+def api_filaments():
+    """Proxy route to fetch Spoolman filaments, preventing CORS on port mismatch."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.get(f"{sm_url}/api/v1/filament", timeout=5)
+        if r.ok:
+            return jsonify({"success": True, "filaments": r.json()})
+    except Exception as e:
+        state.logger.error(f"API Error fetching filaments: {e}")
+    return jsonify({"success": False, "filaments": []})
+
+@app.route('/api/external/fields', methods=['GET'])
+def api_external_fields():
+    """Proxy route to fetch Spoolman custom Extra fields configuration (e.g. Filament Attributes, Spool Types)."""
+    sm_url, _ = config_loader.get_api_urls()
+    out = {"filament": [], "spool": []}
+    try:
+        rf = requests.get(f"{sm_url}/api/v1/field/filament", timeout=5)
+        if rf.ok: out["filament"] = rf.json()
+        
+        rs = requests.get(f"{sm_url}/api/v1/field/spool", timeout=5)
+        if rs.ok: out["spool"] = rs.json()
+        
+        return jsonify({"success": True, "fields": out})
+    except Exception as e:
+        state.logger.error(f"API Error fetching extra fields config: {e}")
+    return jsonify({"success": False, "fields": out})
+
+@app.route('/api/external/fields/add_choice', methods=['POST'])
+def api_external_fields_add_choice():
+    """Appends a new choice to a multi-choice field in Spoolman and updates the schema."""
+    data = request.json
+    entity_type = data.get('entity_type')
+    key = data.get('key')
+    new_choice = data.get('new_choice')
+    
+    if not all([entity_type, key, new_choice]):
+         return jsonify({"success": False, "msg": "Missing required fields."})
+         
+    res = spoolman_api.update_extra_field_choices(entity_type, key, [new_choice])
+    return jsonify(res)
+
+@app.route('/api/create_inventory_wizard', methods=['POST'])
+def api_create_inventory_wizard():
+    """Monolithic endpoint to handle creating Filaments and Spools in one shot."""
+    data = request.json
+    filament_id = data.get('filament_id')
+    filament_data = data.get('filament_data')
+    spool_data = data.get('spool_data')
+    quantity = int(data.get('quantity', 1))
+
+    created_spool_ids = []
+
+    try:
+        # Step 1: Resolve Filament
+        if not filament_id and filament_data:
+            # Check if a new vendor needs to be created
+            extra = filament_data.get('extra', {})
+            external_vendor = extra.pop('external_vendor_name', None)
+            if external_vendor:
+                new_ven = spoolman_api.create_vendor({"name": external_vendor})
+                if new_ven and 'id' in new_ven:
+                    filament_data['vendor_id'] = new_ven['id']
+                else:
+                    return jsonify({"success": False, "msg": f"Failed to create new Vendor '{external_vendor}' in Spoolman."})
+
+            # Create a brand new filament
+            new_fil = spoolman_api.create_filament(filament_data)
+            if new_fil and 'id' in new_fil:
+                filament_id = new_fil['id']
+            else:
+                return jsonify({"success": False, "msg": "Failed to create new Filament in Spoolman."})
+        
+        if not filament_id:
+            return jsonify({"success": False, "msg": "Missing Filament ID or valid Filament Data."})
+
+        # Step 2: Create Spool(s)
+        if spool_data:
+            spool_data['filament_id'] = filament_id
+            
+            for _ in range(quantity):
+                # Copy properties to ensure unique timestamps per spool creation request if needed
+                payload = dict(spool_data)
+                new_spool = spoolman_api.create_spool(payload)
+                if new_spool and 'id' in new_spool:
+                    created_spool_ids.append(new_spool['id'])
+                else:
+                    state.logger.error("A spool creation failed during bulk wizard execution.")
+            
+        return jsonify({
+            "success": True, 
+            "filament_id": filament_id, 
+            "created_spools": created_spool_ids
+        })
+
+    except Exception as e:
+        state.logger.error(f"Wizard Creation Error: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+
+import external_parsers # Added for plugin architecture
+
+@app.route('/api/external/search', methods=['GET'])
+def api_external_search():
+    """
+    Extensible handler for pulling template parameters from external databases.
+    Powered by `external_parsers.py` Plugins.
+    """
+    source = request.args.get('source', 'spoolman')
+    query = request.args.get('q', '').strip()
+    
+    try:
+        results = external_parsers.search_external(source, query)
+        return jsonify({"success": True, "source": source, "results": results})
+    except ValueError as e:
+        state.logger.warning(f"External API Router Error: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+    except Exception as e:
+        state.logger.error(f"External Search Handler Error: {e}")
+        return jsonify({"success": False, "msg": f"An error occurred pulling data: {e}"})
 
 # ... (Imports same as before) ...
 
@@ -509,6 +637,7 @@ def api_manage_contents():
 @app.route('/api/identify_scan', methods=['POST'])
 def api_identify_scan():
     text = request.json.get('text', '')
+    source = request.json.get('source', '')
     res = logic.resolve_scan(text)
 
     if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
@@ -533,6 +662,13 @@ def api_identify_scan():
     if res['type'] == 'spool':
         sid = res['id']; data = spoolman_api.get_spool(sid)
         if data:
+            if source == 'barcode':
+                extra = data.get('extra', {})
+                if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
+                    extra['needs_label_print'] = False
+                    spoolman_api.update_spool(sid, {'extra': extra})
+                    state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
+            
             info = spoolman_api.format_spool_display(data)
             return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
             
@@ -540,10 +676,123 @@ def api_identify_scan():
         fid = res['id']
         data = spoolman_api.get_filament(fid)
         if data:
+            if source == 'barcode':
+                extra = data.get('extra', {})
+                if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
+                    extra['needs_label_print'] = False
+                    spoolman_api.update_filament(fid, {'extra': extra})
+                    state.add_log_entry(f"✔️ Filament #{fid} Label Verified", "SUCCESS", "00ff00")
+            
             name = data.get('name', 'Unknown Filament')
             return jsonify({"type": "filament", "id": int(fid), "display": name})
 
     return jsonify(res)
+
+@app.route('/api/print_queue/pending', methods=['GET'])
+def api_print_queue_pending():
+    filter_type = request.args.get('filter', 'all')
+    sort_type = request.args.get('sort', 'created_newest')
+    
+    sm_url, _ = config_loader.get_api_urls()
+    items = []
+    
+    try:
+        # Fetch Spools
+        if filter_type in ['all', 'spool']:
+            r_spools = requests.get(f"{sm_url}/api/v1/spool?extra=%7B%22needs_label_print%22%3Atrue%7D", timeout=2)
+            if r_spools.ok:
+                for s in r_spools.json():
+                    s['type'] = 'spool'
+                    if 'vendor' in s.get('filament', {}): s['brand'] = s['filament']['vendor'].get('name', 'Unknown')
+                    items.append(s)
+        
+        # Fetch Filaments
+        if filter_type in ['all', 'filament']:
+            r_fils = requests.get(f"{sm_url}/api/v1/filament?extra=%7B%22needs_label_print%22%3Atrue%7D", timeout=2)
+            if r_fils.ok:
+                for f in r_fils.json():
+                    f['type'] = 'filament'
+                    if 'vendor' in f: f['brand'] = f['vendor'].get('name', 'Unknown')
+                    items.append(f)
+        
+        # Sorting
+        if sort_type == 'created_newest':
+            items.sort(key=lambda x: x.get('registered', ''), reverse=True)
+        elif sort_type == 'created_oldest':
+            items.sort(key=lambda x: x.get('registered', ''))
+        elif sort_type == 'id_desc':
+            items.sort(key=lambda x: x.get('id', 0), reverse=True)
+        elif sort_type == 'id_asc':
+            items.sort(key=lambda x: x.get('id', 0))
+        elif sort_type == 'brand_asc':
+            items.sort(key=lambda x: (x.get('brand', '').lower(), x.get('id', 0)))
+            
+        return jsonify({"success": True, "items": items})
+    except Exception as e:
+        state.logger.error(f"Error fetching pending print queue: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+
+@app.route('/api/print_queue/mark_printed', methods=['POST'])
+def api_print_queue_mark_printed():
+    data = request.json
+    item_id = data.get('id')
+    item_type = data.get('type')
+    
+    if not item_id or not item_type:
+        return jsonify({"success": False, "msg": "Missing ID or Type"})
+        
+    # Strictly reject legacy IDs (they usually start with strings or have weird formats). Make sure it's int convertible.
+    try:
+        item_id = int(item_id)
+    except ValueError:
+        return jsonify({"success": False, "msg": "Legacy IDs cannot be manually marked printed. Please scan."})
+        
+    try:
+        if item_type == 'spool':
+            spool_data = spoolman_api.get_spool(item_id)
+            if spool_data:
+                extra = spool_data.get('extra', {})
+                extra['needs_label_print'] = False   
+                res = spoolman_api.update_spool(item_id, {'extra': extra})
+                if res: return jsonify({"success": True})
+        elif item_type == 'filament':
+            fil_data = spoolman_api.get_filament(item_id)
+            if fil_data:
+                extra = fil_data.get('extra', {})
+                extra['needs_label_print'] = False
+                res = spoolman_api.update_filament(item_id, {'extra': extra})
+                if res: return jsonify({"success": True})
+                
+        return jsonify({"success": False, "msg": "Item not found or update failed"})
+    except Exception as e:
+        state.logger.error(f"Error marking {item_type} #{item_id} printed: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+
+@app.route('/api/print_queue/set_flag', methods=['POST'])
+def api_print_queue_set_flag():
+    data = request.json
+    item_id = data.get('id')
+    item_type = data.get('type')
+    
+    try:
+        if item_type == 'spool':
+            sd = spoolman_api.get_spool(item_id)
+            if sd:
+                ex = sd.get('extra', {})
+                ex['needs_label_print'] = True
+                spoolman_api.update_spool(item_id, {'extra': ex})
+                return jsonify({"success": True})
+        elif item_type == 'filament':
+            fd = spoolman_api.get_filament(item_id)
+            if fd:
+                ex = fd.get('extra', {})
+                ex['needs_label_print'] = True
+                spoolman_api.update_filament(item_id, {'extra': ex})
+                return jsonify({"success": True})
+        return jsonify({"success": False})
+    except Exception as e:
+        state.logger.error(f"Error setting needs_label_print: {e}")
+        return jsonify({"success": False})
 
 @app.route('/api/print_location_label', methods=['POST'])
 def api_print_location_label():

@@ -137,7 +137,7 @@ window.updateAuditVisuals = () => {
 };
 
 // --- SCAN ROUTER ---
-const processScan = (text) => {
+const processScan = (text, source = 'keyboard') => {
     const upper = text.toUpperCase();
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
     if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
@@ -156,7 +156,7 @@ const processScan = (text) => {
     if (state.activeModal === 'action') { if (upper.includes('CANCEL')) { closeModal('actionModal'); return; } if (upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
 
     setProcessing(true);
-    fetch('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
+    fetch('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source }) })
         .then(r => r.json())
         .then(res => {
             setProcessing(false);
