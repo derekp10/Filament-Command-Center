@@ -1,0 +1,234 @@
+<div class="modal fade" id="wizardModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content" style="background:#1a1a1a; border: 1px solid #444;">
+            <div class="modal-header border-secondary" style="background:#111;">
+                <h4 class="modal-title font-monospace fw-bold text-white d-flex align-items-center">
+                    <span class="text-primary me-2">📦</span> ADD INVENTORY WIZARD
+                </h4>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4 text-white">
+
+                <!-- STEP 1: MATERIAL SELECTION -->
+                <div class="wizard-step mb-5" id="step-1-material">
+                    <h5 class="text-info border-bottom border-dark pb-2 mb-3">STEP 1: MATERIAL SELECTION</h5>
+
+                    <div class="row px-2 gap-3 mb-3">
+                        <div class="col-md cham-card p-3 text-center cursor-pointer type-selector border-primary"
+                            id="btn-type-existing" onclick="wizardSelectType('existing')">
+                            <h3 class="mb-2">📋</h3>
+                            <h5 class="mb-0">Existing Filament</h5>
+                            <small class="text-muted">Use a material you've already defined</small>
+                        </div>
+                        <div class="col-md cham-card p-3 text-center cursor-pointer type-selector"
+                            id="btn-type-external" onclick="wizardSelectType('external')">
+                            <h3 class="mb-2">🌐</h3>
+                            <h5 class="mb-0">Import Database</h5>
+                            <small class="text-muted">Pull Spoolman manufacturer templates</small>
+                        </div>
+                        <div class="col-md cham-card p-3 text-center cursor-pointer type-selector" id="btn-type-manual"
+                            onclick="wizardSelectType('manual')">
+                            <h3 class="mb-2">🛠️</h3>
+                            <h5 class="mb-0">New Manual Form</h5>
+                            <small class="text-muted">Manually configure a brand new material</small>
+                        </div>
+                    </div>
+
+                    <!-- Variable Area for Step 1 -->
+                    <div id="material-dynamic-area" class="mt-4 p-3 rounded"
+                        style="background: rgba(0,0,0,0.3); border: 1px solid #333; display: none;">
+
+                        <!-- Existing Search -->
+                        <div id="area-existing" style="display:none;">
+                            <label class="form-label text-warning mb-1">Search Your Filaments</label>
+                            <input type="text" class="form-control bg-dark text-white border-secondary mb-2"
+                                id="wiz-search-existing" placeholder="Type to search your database..."
+                                onkeyup="wizardSearchExisting()">
+                            <select class="form-select bg-dark text-white border-secondary" id="wiz-existing-results"
+                                size="3" onchange="wizardExistingSelected()">
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+
+                        <!-- External Database Search -->
+                        <div id="area-external" style="display:none;">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <label class="form-label text-info mb-0">Search External Databases</label>
+                                <select class="form-select form-select-sm bg-dark text-white border-secondary w-auto"
+                                    id="wiz-external-source">
+                                    <option value="spoolman">Spoolman Native DB</option>
+                                    <option value="3dfp" disabled>3DFilamentProfiles (Coming Soon)</option>
+                                    <option value="opt" disabled>Open Print Tags (Coming Soon)</option>
+                                </select>
+                            </div>
+                            <div class="input-group mb-2">
+                                <input type="text" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-search-external" placeholder="e.g. Hatchbox PLA Black"
+                                    onkeypress="if(event.key==='Enter') wizardSearchExternal()">
+                                <button class="btn btn-outline-info" onclick="wizardSearchExternal()">Search</button>
+                            </div>
+                            <select class="form-select bg-dark text-white border-secondary" id="wiz-external-results"
+                                size="3" onchange="wizardExternalSelected()">
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: FILAMENT PROPERTIES (Hidden if Existing is used) -->
+                <div class="wizard-step mb-5" id="step-2-filament" style="display: none;">
+                    <h5 class="text-info border-bottom border-dark pb-2 mb-3">STEP 2: FILAMENT CONFIGURATION</h5>
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label small text-secondary mb-1">Vendor*</label>
+                            <!-- Switchable input for Vendor -->
+                            <div class="input-group">
+                                <select class="form-select bg-dark text-white border-secondary" id="wiz-fil-vendor-sel">
+                                    <option value="">-- Generic --</option>
+                                </select>
+                                <button class="btn btn-outline-secondary" type="button"
+                                    onclick="wizardToggleVendorMode()">✏️</button>
+                            </div>
+                            <input type="text" class="form-control bg-dark text-warning border-secondary mt-1"
+                                id="wiz-fil-vendor-new" placeholder="Or type new vendor..." style="display:none;">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small text-secondary mb-1">MaterialType*</label>
+                            <input type="text" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-fil-material" placeholder="PLA, PETG, ABS..."
+                                onkeyup="wizardAutoUpdateDensity()">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small text-secondary mb-1">Color Name</label>
+                            <input type="text" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-fil-color_name" placeholder="e.g. Galaxy Black">
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label small text-secondary mb-1">Color (Hex or Gradient)</label>
+                            <div class="input-group input-group-sm mb-1" id="wiz-fil-color-container">
+                                <input type="color"
+                                    class="form-control form-control-color bg-dark border-secondary px-1"
+                                    value="#FFFFFF" oninput="this.nextElementSibling.value = this.value.toUpperCase()">
+                                <input type="text"
+                                    class="form-control bg-dark text-white border-secondary font-monospace"
+                                    placeholder="#FFFFFF" value="#FFFFFF" id="wiz-fil-color_hex_0"
+                                    oninput="this.previousElementSibling.value = (this.value.startsWith('#') ? this.value : '#' + this.value).padEnd(7, '0').substring(0,7)">
+                                <button class="btn btn-outline-secondary" type="button" onclick="wizardAddColorHex()"
+                                    title="Add another color for gradients">➕</button>
+                            </div>
+                            <div id="wiz-fil-color-extra-container"></div>
+                            <select class="form-select form-select-sm bg-dark text-white border-secondary mt-1"
+                                id="wiz-fil-color-direction" style="display: none;">
+                                <option value="coextruded">Coextruded (Multi-Color)</option>
+                                <option value="longitudinal">Longitudinal (Gradient)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small text-secondary mb-1">Diameter (mm)</label>
+                            <input type="number" step="0.01" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-fil-diameter" value="1.75">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small text-secondary mb-1">Density (g/cm³)</label>
+                            <input type="number" step="0.01" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-fil-density" value="1.24">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small text-secondary mb-1">Net Weight (g)</label>
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-fil-weight" placeholder="1000">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small text-secondary mb-1" title="Tare weight of the spool">Empty Wt (g)</label>
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-fil-empty_weight" placeholder="Tare">
+                        </div>
+                    </div>
+
+                    <!-- DYNAMIC CUSTOM EXTRA FIELDS INJECTED HERE -->
+                    <h6 class="text-secondary border-bottom border-dark pb-1 mt-4 mb-3" style="font-size: 0.85rem;">
+                        CUSTOM FILAMENT ATTRIBUTES</h6>
+                    <div class="row g-3" id="wiz-fil-dynamic-extra-fields"></div>
+
+                    <!-- Hidden Container for Extra External Metadata -->
+                    <div id="wiz-fil-external-metadata" style="display:none;"></div>
+                </div>
+
+                <!-- STEP 3: SPOOL PROPERTIES -->
+                <div class="wizard-step mb-3" id="step-3-spool" style="display: none; opacity: 0.5;">
+                    <div class="d-flex justify-content-between align-items-end border-bottom border-dark pb-2 mb-3">
+                        <h5 class="text-info mb-0">STEP 3: SPOOL INSTANCES</h5>
+                        <div class="d-flex align-items-center bg-dark p-2 rounded border border-warning shadow-sm">
+                            <label class="text-warning me-2 mb-0 fw-bold fs-5">BULK QUANTITY TO CREATE:</label>
+                            <input type="number"
+                                class="form-control form-control-lg bg-dark text-warning border-warning font-monospace text-center fw-bold fs-4"
+                                id="wiz-spool-qty" value="1" min="1" max="50" style="width: 90px;">
+                        </div>
+                    </div>
+
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label small text-secondary mb-1">Location</label>
+                            <select class="form-select bg-dark text-white border-secondary" id="wiz-spool-location">
+                                <option value="">-- Unassigned --</option>
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small text-secondary mb-1">
+                                Empty Weight (g)
+                                <span class="text-info ms-1" style="font-size: 0.8rem;" title="Auto-synced from Filament Tab">🔗</span>
+                            </label>
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-spool-empty_weight" placeholder="(Inherited)" onkeyup="window.wizardCalcUsedWeight()">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small text-secondary mb-1" title="Overrides the Filament net weight if this particular spool is larger/smaller">Spool Net Wt (g)</label>
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-spool-initial_weight" placeholder="(Inherits Filament)" onkeyup="window.wizardCalcUsedWeight()">
+                        </div>
+                        
+                        <div class="col-md-4">
+                            <label class="form-label small text-secondary mb-1" title="Put an already-used spool on a scale and enter its total weight here.">Scale Gross Wt (g)</label>
+                            <input type="number" class="form-control bg-dark text-info border-info"
+                                id="wiz-spool-scale" placeholder="Calculate used..." onkeyup="window.wizardCalcUsedWeight()">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small text-secondary mb-1">Initial Used Wt (g)</label>
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-spool-used" value="0" onkeyup="window.wizardClearScaleWeight()">
+                        </div>
+                        <div class="col-md-4" style="display:none;">
+                            <label class="form-label small text-secondary mb-1">Price Paid ($)</label>
+                            <input type="number" step="0.01" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-spool-price" placeholder="0.00">
+                        </div>
+                        <div class="col-md-12">
+                            <label class="form-label small text-secondary mb-1">Comment/Notes</label>
+                            <input type="text" class="form-control bg-dark text-white border-secondary"
+                                id="wiz-spool-comment" placeholder="Optional notes...">
+                        </div>
+                    </div>
+
+                    <!-- DYNAMIC SPOOL EXTRA FIELDS INJECTED HERE -->
+                    <h6 class="text-secondary border-bottom border-dark pb-1 mt-4 mb-3" style="font-size: 0.85rem;">
+                        SPOOL CONFIGURATION</h6>
+                    <div class="row g-3" id="wiz-spool-dynamic-extra-fields"></div>
+                </div>
+
+            </div>
+
+            <div class="modal-footer border-secondary" style="background:#111;">
+                <div class="w-100 d-flex justify-content-between align-items-center">
+                    <div id="wiz-status-msg" class="text-info small font-monospace"></div>
+                    <div>
+                        <button class="btn btn-outline-danger me-2" data-bs-dismiss="modal">Cancel</button>
+                        <button class="btn btn-success fw-bold px-4 shadow" id="btn-wiz-submit" onclick="wizardSubmit()"
+                            disabled>CREATE INVENTORY</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

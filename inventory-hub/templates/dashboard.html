@@ -27,7 +27,12 @@
                     <span id="st-filabridge" class="status-dot status-off"></span> FilaBridge
                 </div>
 
-                <button class="btn btn-info ms-2" id="btn-backlog-count" onclick="window.openBacklogModal()">
+                <button class="btn btn-primary ms-3 fw-bold shadow-sm border border-light"
+                    onclick="window.openWizardModal()">
+                    ➕ ADD INVENTORY
+                </button>
+
+                <button class="btn btn-info ms-4" id="btn-backlog-count" onclick="window.openBacklogModal()">
                     🏷️ Backlog (0)
                 </button>
                 <button class="btn btn-warning ms-2" id="btn-queue-count" onclick="openQueueModal()">
@@ -87,6 +92,7 @@
 
     {% include 'components/modals_core.html' %}
     {% include 'components/modals_queue.html' %}
+    {% include 'components/modals_wizard.html' %}
     {% include 'components/modals_missing_labels.html' %}
     {% include 'components/modals_details.html' %}
     {% include 'components/modals_loc_mgr.html' %}

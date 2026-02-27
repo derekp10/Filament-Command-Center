@@ -10,7 +10,7 @@ import os
 import json
 import logging
 
-VERSION = "v154.25 (Overwrite CSV Logic)"
+VERSION = "v154.26 (Scale Weights Update)"
 app = Flask(__name__)
 
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
@@ -116,6 +116,134 @@ def api_print_label():
 
     # Browser Mode: Just return data
     return jsonify({"success": True, "method": "browser", "data": spool})
+
+# --- INVENTORY WIZARD ---
+@app.route('/api/external/vendors', methods=['GET'])
+def api_external_vendors():
+    """Proxy route to fetch Spoolman vendors for the Wizard dropdowns."""
+    vendors = spoolman_api.get_vendors()
+    return jsonify({"success": True, "vendors": vendors})
+
+@app.route('/api/filaments', methods=['GET'])
+def api_filaments():
+    """Proxy route to fetch Spoolman filaments, preventing CORS on port mismatch."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.get(f"{sm_url}/api/v1/filament", timeout=5)
+        if r.ok:
+            return jsonify({"success": True, "filaments": r.json()})
+    except Exception as e:
+        state.logger.error(f"API Error fetching filaments: {e}")
+    return jsonify({"success": False, "filaments": []})
+
+@app.route('/api/external/fields', methods=['GET'])
+def api_external_fields():
+    """Proxy route to fetch Spoolman custom Extra fields configuration (e.g. Filament Attributes, Spool Types)."""
+    sm_url, _ = config_loader.get_api_urls()
+    out = {"filament": [], "spool": []}
+    try:
+        rf = requests.get(f"{sm_url}/api/v1/field/filament", timeout=5)
+        if rf.ok: out["filament"] = rf.json()
+        
+        rs = requests.get(f"{sm_url}/api/v1/field/spool", timeout=5)
+        if rs.ok: out["spool"] = rs.json()
+        
+        return jsonify({"success": True, "fields": out})
+    except Exception as e:
+        state.logger.error(f"API Error fetching extra fields config: {e}")
+    return jsonify({"success": False, "fields": out})
+
+@app.route('/api/external/fields/add_choice', methods=['POST'])
+def api_external_fields_add_choice():
+    """Appends a new choice to a multi-choice field in Spoolman and updates the schema."""
+    data = request.json
+    entity_type = data.get('entity_type')
+    key = data.get('key')
+    new_choice = data.get('new_choice')
+    
+    if not all([entity_type, key, new_choice]):
+         return jsonify({"success": False, "msg": "Missing required fields."})
+         
+    res = spoolman_api.update_extra_field_choices(entity_type, key, [new_choice])
+    return jsonify(res)
+
+@app.route('/api/create_inventory_wizard', methods=['POST'])
+def api_create_inventory_wizard():
+    """Monolithic endpoint to handle creating Filaments and Spools in one shot."""
+    data = request.json
+    filament_id = data.get('filament_id')
+    filament_data = data.get('filament_data')
+    spool_data = data.get('spool_data')
+    quantity = int(data.get('quantity', 1))
+
+    created_spool_ids = []
+
+    try:
+        # Step 1: Resolve Filament
+        if not filament_id and filament_data:
+            # Check if a new vendor needs to be created
+            extra = filament_data.get('extra', {})
+            external_vendor = extra.pop('external_vendor_name', None)
+            if external_vendor:
+                new_ven = spoolman_api.create_vendor({"name": external_vendor})
+                if new_ven and 'id' in new_ven:
+                    filament_data['vendor_id'] = new_ven['id']
+                else:
+                    return jsonify({"success": False, "msg": f"Failed to create new Vendor '{external_vendor}' in Spoolman."})
+
+            # Create a brand new filament
+            new_fil = spoolman_api.create_filament(filament_data)
+            if new_fil and 'id' in new_fil:
+                filament_id = new_fil['id']
+            else:
+                return jsonify({"success": False, "msg": "Failed to create new Filament in Spoolman."})
+        
+        if not filament_id:
+            return jsonify({"success": False, "msg": "Missing Filament ID or valid Filament Data."})
+
+        # Step 2: Create Spool(s)
+        if spool_data:
+            spool_data['filament_id'] = filament_id
+            
+            for _ in range(quantity):
+                # Copy properties to ensure unique timestamps per spool creation request if needed
+                payload = dict(spool_data)
+                new_spool = spoolman_api.create_spool(payload)
+                if new_spool and 'id' in new_spool:
+                    created_spool_ids.append(new_spool['id'])
+                else:
+                    state.logger.error("A spool creation failed during bulk wizard execution.")
+            
+        return jsonify({
+            "success": True, 
+            "filament_id": filament_id, 
+            "created_spools": created_spool_ids
+        })
+
+    except Exception as e:
+        state.logger.error(f"Wizard Creation Error: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+
+import external_parsers # Added for plugin architecture
+
+@app.route('/api/external/search', methods=['GET'])
+def api_external_search():
+    """
+    Extensible handler for pulling template parameters from external databases.
+    Powered by `external_parsers.py` Plugins.
+    """
+    source = request.args.get('source', 'spoolman')
+    query = request.args.get('q', '').strip()
+    
+    try:
+        results = external_parsers.search_external(source, query)
+        return jsonify({"success": True, "source": source, "results": results})
+    except ValueError as e:
+        state.logger.warning(f"External API Router Error: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+    except Exception as e:
+        state.logger.error(f"External Search Handler Error: {e}")
+        return jsonify({"success": False, "msg": f"An error occurred pulling data: {e}"})
 
 # ... (Imports same as before) ...
 
