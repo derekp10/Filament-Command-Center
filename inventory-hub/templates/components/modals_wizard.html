@@ -14,7 +14,7 @@
                     <h5 class="text-info border-bottom border-dark pb-2 mb-3">STEP 1: MATERIAL SELECTION</h5>
 
                     <div class="row px-2 gap-3 mb-3">
-                        <div class="col-md cham-card p-3 text-center cursor-pointer type-selector border-primary"
+                        <div class="col-md cham-card p-3 text-center cursor-pointer type-selector wiz-active-card"
                             id="btn-type-existing" onclick="wizardSelectType('existing')">
                             <h3 class="mb-2">📋</h3>
                             <h5 class="mb-0">Existing Filament</h5>
@@ -140,7 +140,8 @@
                                 id="wiz-fil-weight" placeholder="1000">
                         </div>
                         <div class="col-md-2">
-                            <label class="form-label small text-secondary mb-1" title="Tare weight of the spool">Empty Wt (g)</label>
+                            <label class="form-label small text-secondary mb-1" title="Tare weight of the spool">Empty
+                                Wt (g)</label>
                             <input type="number" class="form-control bg-dark text-white border-secondary"
                                 id="wiz-fil-empty_weight" placeholder="Tare">
                         </div>
@@ -178,21 +179,28 @@
                         <div class="col-md-4">
                             <label class="form-label small text-secondary mb-1">
                                 Empty Weight (g)
-                                <span class="text-info ms-1" style="font-size: 0.8rem;" title="Auto-synced from Filament Tab">🔗</span>
+                                <span class="text-info ms-1" style="font-size: 0.8rem;"
+                                    title="Auto-synced from Filament Tab">🔗</span>
                             </label>
                             <input type="number" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-spool-empty_weight" placeholder="(Inherited)" onkeyup="window.wizardCalcUsedWeight()">
+                                id="wiz-spool-empty_weight" placeholder="(Inherited)"
+                                onkeyup="window.wizardCalcUsedWeight()">
                         </div>
                         <div class="col-md-4">
-                            <label class="form-label small text-secondary mb-1" title="Overrides the Filament net weight if this particular spool is larger/smaller">Spool Net Wt (g)</label>
+                            <label class="form-label small text-secondary mb-1"
+                                title="Overrides the Filament net weight if this particular spool is larger/smaller">Spool
+                                Net Wt (g)</label>
                             <input type="number" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-spool-initial_weight" placeholder="(Inherits Filament)" onkeyup="window.wizardCalcUsedWeight()">
+                                id="wiz-spool-initial_weight" placeholder="(Inherits Filament)"
+                                onkeyup="window.wizardCalcUsedWeight()">
                         </div>
-                        
+
                         <div class="col-md-4">
-                            <label class="form-label small text-secondary mb-1" title="Put an already-used spool on a scale and enter its total weight here.">Scale Gross Wt (g)</label>
-                            <input type="number" class="form-control bg-dark text-info border-info"
-                                id="wiz-spool-scale" placeholder="Calculate used..." onkeyup="window.wizardCalcUsedWeight()">
+                            <label class="form-label small text-secondary mb-1"
+                                title="Put an already-used spool on a scale and enter its total weight here.">Scale
+                                Gross Wt (g)</label>
+                            <input type="number" class="form-control bg-dark text-info border-info" id="wiz-spool-scale"
+                                placeholder="Calculate used..." onkeyup="window.wizardCalcUsedWeight()">
                         </div>
                         <div class="col-md-4">
                             <label class="form-label small text-secondary mb-1">Initial Used Wt (g)</label>
