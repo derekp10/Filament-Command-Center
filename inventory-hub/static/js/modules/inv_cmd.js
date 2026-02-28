@@ -426,8 +426,9 @@ window.addSpoolToBuffer = (id) => {
     // Instead of manually fetching and building the object, we just tell the 
     // scanner router that this ID was "scanned". This ensures consistent behavior 
     // and data formatting between physical scans and UI clicks.
+    // Must prefix with ID: so the Python backend doesn't think it's a legacy barcode
     console.log(`📥 Simulating Scan for Spool #${id}`);
-    processScan(id.toString());
+    processScan('ID:' + id.toString());
 };
 
 window.processScan = processScan;

@@ -217,7 +217,7 @@ const SearchEngine = {
                     // [CONTEXTUAL SCANNING]
                     // If the user clicks a Spool globally, pretend they scanned its Barcode!
                     // This automatically routes it to the Buffer, Drop tray, or manages it globally!
-                    actionTarget = `processScan('${item.id}', 'search')`;
+                    actionTarget = `processScan('ID:${item.id}', 'search')`;
                 } else {
                     actionTarget = `openSpoolDetails(${item.id})`;
                 }
@@ -243,27 +243,23 @@ const SearchEngine = {
             // [EPIC 4.2] Inline Action Buttons
             let actionButtons = '';
             if (!this.currentCallback) {
-                // [EPIC 4.2] Inline Action Buttons
-                let actionButtons = '';
-                if (!this.currentCallback) {
-                    const isFil = item.type === 'filament';
-                    // Properly escape double and single quotes to avoid breaking the HTML onclick attribute!
-                    const safeDisplay = item.display ? item.display.replace(/"/g, '&quot;').replace(/'/g, '&#39;') : '';
-                    const btnStyle = "font-size: 1.4rem; cursor:pointer; line-height: 1; opacity: 0.8;";
-                    // Simple opacity swaps completely bypass Chromium's GPU Rasterizer buffer.
-                    const hoverOn = "this.style.opacity='1'";
-                    const hoverOff = "this.style.opacity='0.8'";
+                const isFil = item.type === 'filament';
+                // Properly escape double and single quotes to avoid breaking the HTML onclick attribute!
+                const safeDisplay = item.display ? item.display.replace(/"/g, '&quot;').replace(/'/g, '&#39;') : '';
+                const btnStyle = "font-size: 1.4rem; cursor:pointer; line-height: 1; transition: transform 0.2s; display: inline-block;";
+                const hoverOn = "this.style.transform='scale(1.2)'";
+                const hoverOff = "this.style.transform='scale(1)'";
 
-                    actionButtons = `
+                actionButtons = `
                     <div class="d-flex gap-3 align-items-center" style="z-index: 10; margin-right: 5px;">
-                        ${!isFil && window.processScan ? `<div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); processScan('${item.id}', 'search')" title="Add to Buffer/Manage">📥</div>` : ''}
+                        ${!isFil && window.processScan ? `<div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); processScan('ID:${item.id}', 'search')" title="Add to Buffer/Manage">📥</div>` : ''}
                         <div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); ${isFil ? `openFilamentDetails(${item.id})` : `openSpoolDetails(${item.id})`}" title="View Details">🔍</div>
                         ${!isFil && window.addToQueue ? `<div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>` : ''}
                     </div>
                 `;
-                }
+            }
 
-                html += `
+            html += `
                 <div class="cham-card mb-2" style="background: ${styles.frame}; border: ${styles.border || '1px solid #333'}; cursor:pointer;" onclick="${actionTarget}">
                     <div class="cham-body p-2" style="background:${styles.inner}; display: flex; flex-direction: column; align-items: stretch;">
                         <!-- Row 1: ID, Actions, Location -->
@@ -280,16 +276,16 @@ const SearchEngine = {
                         </div>
                         <!-- Row 2: Name -->
                         <div class="d-flex justify-content-start text-start my-2 w-100">
-                             <div class="text-pop" style="font-weight:900; color:#fff; font-size:1.4rem; line-height: 1.2; word-break: break-all;">${item.display}</div>
+                             <div class="text-pop" style="font-weight:900; color:#fff; font-size:1.4rem; line-height: 1.2; word-break: break-all;">${item.display_short || item.display}</div>
                         </div>
                         <!-- Row 3: Weight -->
                         <div class="d-flex justify-content-end align-items-end mt-auto pt-1 w-100">
-                             <div class="text-pop text-nowrap" style="font-weight:bold; color:#fff; font-size: 1.2rem;"><i class="bi bi-mask"></i> ⚖️ ${item.remaining}g</div>
+                             <div class="text-pop text-nowrap" style="font-weight:bold; color:#fff; font-size: 1.2rem;">⚖️ ${item.remaining}g</div>
                         </div>
                     </div>
                 </div>
             `;
-            });
+        });
 
         resBox.innerHTML = html;
     },

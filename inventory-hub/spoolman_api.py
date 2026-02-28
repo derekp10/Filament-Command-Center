@@ -199,11 +199,15 @@ def format_spool_display(spool_data):
 
         vendor_obj = fil.get('vendor')
         brand = vendor_obj.get('name', 'Generic') if vendor_obj else 'Generic'
+        brand = str(brand).strip().title()
+        
         mat = fil.get('material', 'PLA')
+        mat = str(mat).strip().upper()
         
         fil_extra = fil.get('extra') or {}
         col_name = fil_extra.get('original_color')
         if not col_name: col_name = fil.get('name', 'Unknown')
+        if col_name: col_name = str(col_name).strip().title()
 
         parts = [f"#{sid}"]
         if ext_id: parts.append(f"[Legacy: {ext_id}]")
@@ -214,6 +218,9 @@ def format_spool_display(spool_data):
 
         display_text = " ".join(parts)
         
+        # [ALEX FIX] Generate a clean, non-redundant string for the new rich UI cards
+        display_short = f"{brand} {mat} ({col_name})"
+        
         # Color Logic
         multi_hex = fil.get('multi_color_hexes')
         if multi_hex:
@@ -223,6 +230,7 @@ def format_spool_display(spool_data):
 
         return {
             "text": display_text, 
+            "text_short": display_short,
             "color": final_color, 
             "slot": slot,
             "details": {
@@ -237,7 +245,7 @@ def format_spool_display(spool_data):
 
     except Exception as e:
         state.logger.error(f"Format Error: {e}")
-        return {"text": f"#{spool_data.get('id', '?')} Error", "color": "ff0000", "slot": ""}
+        return {"text": f"#{spool_data.get('id', '?')} Error", "text_short": "Error", "color": "ff0000", "slot": ""}
 
 def get_spools_at_location_detailed(loc_name):
     sm_url, _ = config_loader.get_api_urls()
@@ -479,8 +487,14 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 locDisplay = p_source if is_ghost else sloc
             else:
                 # Formatting a raw Filament context
+                v_name = str(vid.get('name', 'Generic')).strip().title()
+                m_name = str(fil.get('material', 'PLA')).strip().upper()
+                c_name = str(color_name).strip().title() if color_name else str(fil.get('name', 'Unknown')).strip().title()
+                
+                base_text = f"{v_name} {m_name} ({c_name})"
                 info = {
-                    "text": f"#{fil.get('id', '?')} {vid.get('name', 'Generic')} {fil.get('material', 'PLA')} ({color_name})",
+                    "text": f"#{fil.get('id', '?')} {base_text}",
+                    "text_short": base_text,
                     "color": base_color.split(',')[0] if base_color else "888888", # Grab first color for the card trim
                     "slot": ""
                 }
@@ -488,6 +502,7 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
             results.append({
                 'id': item['id'],
                 'display': info['text'],
+                'display_short': info.get('text_short', info['text']),
                 'color': info['color'],
                 'slot': final_slot,
                 'location': locDisplay,

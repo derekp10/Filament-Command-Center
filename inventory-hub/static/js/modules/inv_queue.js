@@ -2,7 +2,11 @@
 console.log("🚀 Loaded Module: QUEUE");
 
 // Expose globally
-window.labelQueue = [];
+try {
+    window.labelQueue = JSON.parse(localStorage.getItem('fcc_label_queue')) || [];
+} catch (e) {
+    window.labelQueue = [];
+}
 let labelQueue = window.labelQueue;
 
 // Modal Instances & Data
@@ -11,6 +15,7 @@ let multiSpoolModal = null;
 let multiSpoolData = []; // Store search results here
 
 window.updateQueueUI = () => {
+    localStorage.setItem('fcc_label_queue', JSON.stringify(labelQueue));
     const btn = document.getElementById('btn-queue-count');
     if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
     document.dispatchEvent(new CustomEvent('inventory:queue-updated', { detail: { queue: labelQueue } }));
