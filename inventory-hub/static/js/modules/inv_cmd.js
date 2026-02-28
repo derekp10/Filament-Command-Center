@@ -429,3 +429,5 @@ window.addSpoolToBuffer = (id) => {
     console.log(`📥 Simulating Scan for Spool #${id}`);
     processScan(id.toString());
 };
+
+window.processScan = processScan;

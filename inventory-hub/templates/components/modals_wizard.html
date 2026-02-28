@@ -40,8 +40,13 @@
 
                         <!-- Existing Search -->
                         <div id="area-existing" style="display:none;">
-                            <label class="form-label text-warning mb-1">Search Your Filaments</label>
-                            <input type="text" class="form-control bg-dark text-white border-secondary mb-2"
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <label class="form-label text-warning mb-0">Search Your Filaments</label>
+                                <button type="button" class="btn btn-sm btn-outline-info"
+                                    onclick="if(window.wizardOpenGlobalSearch) window.wizardOpenGlobalSearch();">🔍
+                                    Advanced Search</button>
+                            </div>
+                            <input type="text" class="form-control bg-dark text-white border-secondary mb-2 mt-2"
                                 id="wiz-search-existing" placeholder="Type to search your database..."
                                 onkeyup="wizardSearchExisting()">
                             <select class="form-select bg-dark text-white border-secondary" id="wiz-existing-results"

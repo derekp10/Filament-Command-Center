@@ -1,4 +1,10 @@
 <style>
+    /* Fix Offcanvas Backdrop Z-Index to remain above Modals */
+    .offcanvas-backdrop {
+        z-index: 1085 !important;
+        /* Above Modal 1055, Below Offcanvas 1090 */
+    }
+
     /* --- DARK MODE KIOSK THEME (Layout & Print Fix) --- */
     body {
         background-color: #000;
@@ -229,6 +235,19 @@
     .action-badge:active {
         transform: scale(0.95);
         background: #333;
+    }
+
+    /* Interactive Location Badge Hover */
+    .loc-badge-hover {
+        transition: all 0.2s ease-in-out;
+        opacity: 0.85;
+    }
+
+    .loc-badge-hover:hover {
+        opacity: 1;
+        transform: scale(1.05);
+        box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+        filter: brightness(1.2);
     }
 
     .badge-qr {

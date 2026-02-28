@@ -118,6 +118,21 @@ def get_vendors():
         state.logger.error(f"API Error fetching vendors: {e}")
     return []
 
+def get_materials() -> list[str]:
+    """Fetches a unique list of all materials across all filaments from Spoolman."""
+    sm_url, _ = config_loader.get_api_urls()
+    materials = set()
+    try:
+        r = requests.get(f"{sm_url}/api/v1/filament", timeout=5)
+        if r.ok:
+            for fil in r.json():
+                mat = fil.get("material")
+                if mat:
+                    materials.add(mat)
+    except Exception as e:
+        state.logger.error(f"API Error fetching materials: {e}")
+    return sorted(list(materials))
+
 def create_vendor(data):
     """Creates a brand new vendor via POST to Spoolman."""
     sm_url, _ = config_loader.get_api_urls()
@@ -323,3 +338,173 @@ def find_filament_by_legacy_id(legacy_id):
                     return fil['id']
     except Exception as e: state.logger.error(f"Legacy Filament Lookup Error: {e}")
     return None
+
+def hex_to_rgb(hex_str):
+    """Converts a #RRGGBB hex string to an (R, G, B) tuple. Returns None if invalid."""
+    if not hex_str: return None
+    h = hex_str.lstrip('#')
+    try:
+        if len(h) == 6:
+            return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+        if len(h) == 3:
+            return tuple(int(h[i]*2, 16) for i in (0, 1, 2))
+    except ValueError:
+        pass
+    return None
+
+def hex_distance(hex1, hex2):
+    """Calculates roughly the visual distance between two hex colors."""
+    rgb1 = hex_to_rgb(hex1)
+    rgb2 = hex_to_rgb(hex2)
+    if rgb1 is None or rgb2 is None: return float('inf')
+    return sum((rgb1[i] - rgb2[i]) ** 2 for i in range(3)) ** 0.5
+
+def get_best_color_distance(target_hex, compare_hex_csv):
+    """
+    Given a target_hex, evaluates one or more hex codes separated by commas (multi-color).
+    Returns the shortest distance among the options.
+    """
+    if not compare_hex_csv:
+        return float('inf')
+        
+    distances = []
+    for h in compare_hex_csv.split(','):
+        h = h.strip()
+        if h:
+            distances.append(hex_distance(target_hex, h))
+            
+    if not distances:
+        return float('inf')
+    return min(distances)
+
+def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool"):
+    """
+    Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
+    Returns a sorted list of dictionaries matching the criteria.
+    """
+    sm_url, _ = config_loader.get_api_urls()
+    results = []
+    
+    try:
+        if target_type == "filament":
+            resp = requests.get(f"{sm_url}/api/v1/filament", timeout=10)
+        else:
+            resp = requests.get(f"{sm_url}/api/v1/spool", timeout=10)
+            
+        if not resp.ok:
+            state.logger.error(f"Failed to fetch {target_type}s for search: {resp.status_code}")
+            return []
+            
+        all_items = resp.json()
+        
+        # Tokenize the query for ANY-ORDER matching (e.g. "pla green" == "green pla")
+        raw_query = query.strip().lower()
+        query_tokens = [t for t in raw_query.split() if t]
+        
+        mat_lower = material.strip().lower()
+        ven_lower = vendor.strip().lower()
+        
+        for item in all_items:
+            # Normalize access whether it's a spool containing a filament, or the filament itself
+            if target_type == "filament":
+                fil = item
+                spool = None
+            else:
+                spool = item
+                fil = spool.get('filament', {})
+                
+            vid = fil.get('vendor', {}) or {}
+            
+            # 1. Evaluate explicit dropdown text filters
+            if mat_lower and mat_lower not in str(fil.get('material', '')).lower(): continue
+            if ven_lower and ven_lower not in str(vid.get('name', '')).lower(): continue
+            
+            # 2. Evaluate Weight states (Spool Only)
+            rem = 0
+            if spool:
+                rem = spool.get('remaining_weight')
+                if rem is None: rem = 0
+                if only_in_stock and rem <= 0: continue
+                if empty and rem > 0: continue
+            
+            # 3. Fuzzy Keyword Match (Tokenized)
+            # Support `color_hexes` for multi-color gradients
+            base_color = str(fil.get('multi_color_hexes', ''))
+            if not base_color:
+                base_color = str(fil.get('color_hex', ''))
+                
+            color_name = str(fil.get('extra', {}).get('original_color', '')).lower() if fil.get('extra') else ""
+            
+            if query_tokens:
+                # Build a single robust string representing all the item's metadata
+                item_id = str(item.get('id', ''))
+                matchable = f"{item_id} {str(fil.get('name', '')).lower()} {str(fil.get('material', '')).lower()} {str(vid.get('name', '')).lower()} {color_name}"
+                
+                # ALL tokens must be present somewhere in the matchable string
+                token_match_failed = False
+                for token in query_tokens:
+                    if token not in matchable:
+                        token_match_failed = True
+                        break
+                
+                if token_match_failed:
+                    continue
+                    
+            # 4. Color Matching Algorithm (Gradient Aware)
+            c_dist = 0
+            if color_hex:
+                c_dist = get_best_color_distance(color_hex, base_color)
+                # If they explicitly wanted a color and parsing failed or no color exists, light penalty
+                if c_dist == float('inf'): c_dist = 999 
+                
+            # 5. Format display & Inject Context
+            # We adapt format_spool_display to handle returning standard data, then extract it for our unified card list
+            locDisplay = ""
+            is_ghost = False
+            final_slot = ""
+            
+            if spool:
+                info = format_spool_display(spool)
+                sloc = str(spool.get('location', '')).strip()
+                
+                if not sloc:
+                    extra = spool.get('extra', {})
+                    p_source = str(extra.get('physical_source', '')).strip().replace('"', '')
+                    if p_source:
+                        is_ghost = True
+                        ghost_slot = str(extra.get('physical_source_slot', '')).strip('"')
+                
+                final_slot = info['slot']
+                if is_ghost and locals().get('ghost_slot'): final_slot = ghost_slot
+                locDisplay = p_source if is_ghost else sloc
+            else:
+                # Formatting a raw Filament context
+                info = {
+                    "text": f"#{fil.get('id', '?')} {vid.get('name', 'Generic')} {fil.get('material', 'PLA')} ({color_name})",
+                    "color": base_color.split(',')[0] if base_color else "888888", # Grab first color for the card trim
+                    "slot": ""
+                }
+                
+            results.append({
+                'id': item['id'],
+                'display': info['text'],
+                'color': info['color'],
+                'slot': final_slot,
+                'location': locDisplay,
+                'is_ghost': is_ghost,
+                'remaining': rem,
+                'color_dist': c_dist,
+                'type': target_type
+            })
+            
+        # Sort by color distance (closest first), then by ID (newest first usually)
+        if color_hex:
+            results.sort(key=lambda x: (x['color_dist'], -x['id']))
+        else:
+            results.sort(key=lambda x: -x['id'])
+            
+        return results
+        
+    except Exception as e:
+        state.logger.error(f"Search Spools API Error: {e}")
+        return []

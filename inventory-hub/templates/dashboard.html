@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Filament Command Center {{ version }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
     {% include 'components/styles.html' %}
@@ -26,6 +27,11 @@
                 <div class="status-label" onclick="window.open(FILABRIDGE_URL, '_blank')" style="cursor: pointer;">
                     <span id="st-filabridge" class="status-dot status-off"></span> FilaBridge
                 </div>
+
+                <button class="btn btn-secondary ms-4 fw-bold shadow-sm border border-light"
+                    onclick="SearchEngine.open()">
+                    🔍 SEARCH
+                </button>
 
                 <button class="btn btn-primary ms-3 fw-bold shadow-sm border border-light"
                     onclick="window.openWizardModal()">
@@ -97,6 +103,15 @@
     {% include 'components/modals_details.html' %}
     {% include 'components/modals_loc_mgr.html' %}
     {% include 'components/label_spool.html' %}
+    {% include 'components/offcanvas_search.html' %}
+    <!-- Global Floating Action Button for Search -->
+    <button class="btn btn-primary shadow-lg border border-info"
+        style="position: fixed; bottom: 30px; right: 30px; width: 65px; height: 65px; border-radius: 50%; z-index: 1080; display: flex; align-items: center; justify-content: center; font-size: 26px; transition: transform 0.2s;"
+        onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'"
+        onclick="SearchEngine.open()" title="Global Inventory Search">
+        🔍
+    </button>
+
     {% include 'components/scripts.html' %}
 
     <script>
