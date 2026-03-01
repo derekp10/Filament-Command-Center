@@ -125,8 +125,8 @@ Production Functionality Fix list
     - High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
 * Added color coding to the badges on the location (Location Type)
 * Added color indicate of dryerbox/tool fullness (1/1 Green, 2/1 Red, < Max White)
-* Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
-* Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here, for spools that are assigned to the location, but doesn't have a slot attached to them.
+* ~~Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.~~
+* ~~Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here, for spools that are assigned to the location, but doesn't have a slot attached to them.~~
 * Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to. This might be because we added the LOC: indicater, and it might just not be parcing correctly now.
     - Currently items assigned using a slot QR code "LOC:CR-MDB-1:SLOT:4" are being stored in spoolman as a "CR-MDB-1:SLOT:4" location
         * Could be advantagous to have the slots have there own loation in Spoolman. But I don't have a direct use case currently for it. Perhapes you might have one.
@@ -156,8 +156,8 @@ Production Functionality Fix list
 * Continue to support spoolmans ability to pull data from the vender up to filament (Empty Weight), and from Filament to Spool (Empty Spool Weight, price, etc.)
 * Add the ability to configure which extra fieds should be bound and propagated to the other type of item. (Filament <-> Spool) (I believe we have a purchase link that would be an example of this, where it's set on the filament, but not on the spool.)
 * Maintain the ability to add multiple spools of the same type at the same time. (THis is reperesented by the number box in spoolman next to add, allowing you to add more than one spool of the same filament at the same time)
-* Support clone feature for Spools, to auto populate an existing spool. 
-* Figure out a way to fill in density for filaments. This data isn't alwasy availabe from the vender, so we may need to use a default or calculate it somehow based on filament type.
+* ~~Support clone feature for Spools, to auto populate an existing spool.~~ (Completed Epic 2)
+* ~~Figure out a way to fill in density for filaments. This data isn't alwasy availabe from the vender, so we may need to use a default or calculate it somehow based on filament type.~~ (Completed Epic 2)
 * Need a way to add newly created Filament/Spools to the print queue. This chould be based on one of many print flags in the spoolman database. (Both buitl in and "extra Field" type data we've added to spoolman.)
 * Needs a window/modal that lists all the spools/filaments missing a confirmed label printing (By database check box)
 * Data in the window should be filterable or sortable. So that If I want oldest first to work on back log, or Newest first if I want to work on something I've just added.
