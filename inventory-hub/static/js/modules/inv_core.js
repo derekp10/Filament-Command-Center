@@ -32,24 +32,46 @@ let state = {
 
 // --- INITIALIZATION HELPERS ---
 const requestWakeLock = async () => {
-    // 1. Try native API first (mostly for mobiles/tablets where it works reliably)
-    if ('wakeLock' in navigator) {
-        try { wakeLock = await navigator.wakeLock.request('screen'); }
-        catch (err) { console.log("Native WakeLock failed. Relying on NoSleep fallback.", err); }
-    }
+    const acquireLock = async () => {
+        if ('wakeLock' in navigator) {
+            try {
+                wakeLock = await navigator.wakeLock.request('screen');
+                console.log("🔌 Native WakeLock acquired.");
+            } catch (err) {
+                console.log("Native WakeLock failed.", err);
+            }
+        }
+    };
 
-    // 2. Setup NoSleep.js media fallback for Laptops (requires a user gesture)
-    if (window.NoSleep) {
-        const noSleep = new window.NoSleep();
-        const enableNoSleep = () => {
-            noSleep.enable();
-            document.removeEventListener('click', enableNoSleep, false);
-            document.removeEventListener('touchstart', enableNoSleep, false);
-            console.log("NoSleep.js armed via user interaction.");
-        };
-        document.addEventListener('click', enableNoSleep, false);
-        document.addEventListener('touchstart', enableNoSleep, false);
-    }
+    // 1. Try to acquire immediately (works on some mobile browsers without gesture)
+    await acquireLock();
+
+    // 2. The browser automatically releases the lock if the user switches tabs or minimizes.
+    // We MUST re-acquire it every time they come back to the page.
+    document.addEventListener('visibilitychange', async () => {
+        if (wakeLock !== null && document.visibilityState === 'visible') {
+            await acquireLock();
+        }
+    });
+
+    // 3. Setup NoSleep.js fallback AND Native WakeLock via explicit user interaction.
+    // Modern desktop browsers (Chrome/Edge on laptops) strictly block both WakeLock and Autoplay Video (NoSleep) 
+    // unless the user has physically clicked the page first.
+    let noSleepInstance = null;
+    const enableWakeLocks = async () => {
+        await acquireLock(); // Fire native lock again now that we have a gesture!
+        if (window.NoSleep && !noSleepInstance) {
+            noSleepInstance = new window.NoSleep();
+            noSleepInstance.enable();
+            console.log("🎬 NoSleep.js armed via user interaction.");
+        }
+        // We only need to catch the *first* interaction to bypass the security wall.
+        document.removeEventListener('click', enableWakeLocks, false);
+        document.removeEventListener('touchstart', enableWakeLocks, false);
+    };
+
+    document.addEventListener('click', enableWakeLocks, false);
+    document.addEventListener('touchstart', enableWakeLocks, false);
 };
 
 // --- UI HELPERS ---
