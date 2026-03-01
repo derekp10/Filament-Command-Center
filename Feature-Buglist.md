@@ -44,6 +44,7 @@ NoSleep.min.js:2 Wake Lock active.
     - I think this exists, but need to confirm in code.
 
 # **Command Center Items**
+* ~~Screen still times out on laptop.~~ (Fixed via robust native WakeLock API re-acquisition)
 
 # **Details (Filament/Spool) Modal **
 * Bring in more data from spoolman into the details modals. It be nice to see at purchase link to easily get more of the same filament.
