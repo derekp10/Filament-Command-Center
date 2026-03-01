@@ -124,6 +124,22 @@ def api_external_vendors():
     vendors = spoolman_api.get_vendors()
     return jsonify({"success": True, "vendors": vendors})
 
+@app.route('/api/vendors', methods=['GET'])
+def api_vendors():
+    """Returns a list of all vendors in Spoolman."""
+    try:
+        return jsonify({"success": True, "vendors": spoolman_api.get_vendors()})
+    except Exception as e:
+        return jsonify({"success": False, "msg": str(e)}), 500
+
+@app.route('/api/materials', methods=['GET'])
+def api_materials():
+    """Returns a list of all unique materials in Spoolman."""
+    try:
+        return jsonify({"success": True, "materials": spoolman_api.get_materials()})
+    except Exception as e:
+        return jsonify({"success": False, "msg": str(e)}), 500
+
 @app.route('/api/filaments', methods=['GET'])
 def api_filaments():
     """Proxy route to fetch Spoolman filaments, preventing CORS on port mismatch."""
@@ -135,6 +151,28 @@ def api_filaments():
     except Exception as e:
         state.logger.error(f"API Error fetching filaments: {e}")
     return jsonify({"success": False, "filaments": []})
+
+@app.route('/api/filaments/<int:filament_id>', methods=['GET'])
+def api_get_filament(filament_id):
+    """Fetches a specific filament to read its details."""
+    try:
+        data = spoolman_api.get_filament(filament_id)
+        if data:
+            return jsonify({"success": True, "data": data})
+        return jsonify({"success": False, "msg": "Filament not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "msg": str(e)}), 500
+
+@app.route('/api/spools/<int:spool_id>', methods=['GET'])
+def api_get_spool(spool_id):
+    """Fetches a specific spool to read its complete filament mapping."""
+    try:
+        spool = spoolman_api.get_spool(spool_id)
+        if spool:
+            return jsonify({"success": True, "data": spool})
+        return jsonify({"success": False, "msg": "Spool not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "msg": str(e)}), 500
 
 @app.route('/api/external/fields', methods=['GET'])
 def api_external_fields():
@@ -244,6 +282,36 @@ def api_external_search():
     except Exception as e:
         state.logger.error(f"External Search Handler Error: {e}")
         return jsonify({"success": False, "msg": f"An error occurred pulling data: {e}"})
+
+@app.route('/api/search', methods=['GET'])
+def api_search_inventory():
+    """
+    Search endpoint for finding spools based on fuzzy queries, attributes, and colors.
+    Used by the new global Offcanvas search component.
+    """
+    query = request.args.get('q', '')
+    material = request.args.get('material', '')
+    vendor = request.args.get('vendor', '')
+    color_hex = request.args.get('hex', '')
+    
+    only_in_stock = request.args.get('in_stock', 'false').lower() == 'true'
+    empty = request.args.get('empty', 'false').lower() == 'true'
+    target_type = request.args.get('type', 'spool')
+    
+    try:
+        results = spoolman_api.search_inventory(
+            query=query, 
+            material=material, 
+            vendor=vendor, 
+            color_hex=color_hex, 
+            only_in_stock=only_in_stock, 
+            empty=empty,
+            target_type=target_type
+        )
+        return jsonify({"success": True, "results": results})
+    except Exception as e:
+        state.logger.error(f"API Search Error: {e}")
+        return jsonify({"success": False, "msg": str(e)})
 
 # ... (Imports same as before) ...
 

@@ -25,6 +25,18 @@
 
 
 # **Print Queue Items**
+* Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
+inv_search.js:292 Uncaught SyntaxError: Unexpected token ')'Understand this error
+inv_cmd.js:2 🚀 Loaded Module: COMMAND CENTER
+inv_core.js:282 🔄 Smart Sync Protocol Initiated (5s Interval)
+:8000/favicon.ico:1  Failed to load resource: the server responded with a status of 404 (NOT FOUND)Understand this error
+inv_core.js:48 NoSleep.js armed via user interaction.
+NoSleep.min.js:2 Wake Lock active.
+8(index):1932 Uncaught ReferenceError: SearchEngine is not defined
+    at HTMLButtonElement.onclick ((index):1932:71)Understand this error
+4(index):600 Uncaught ReferenceError: SearchEngine is not defined
+    at HTMLButtonElement.onclick ((index):600:51)
+
 
 # **Location Manger Items**
 * The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
@@ -32,6 +44,7 @@
     - I think this exists, but need to confirm in code.
 
 # **Command Center Items**
+
 
 # **Details (Filament/Spool) Modal **
 * Bring in more data from spoolman into the details modals. It be nice to see at purchase link to easily get more of the same filament.
@@ -149,3 +162,4 @@ Production Functionality Fix list
 * Needs a window/modal that lists all the spools/filaments missing a confirmed label printing (By database check box)
 * Data in the window should be filterable or sortable. So that If I want oldest first to work on back log, or Newest first if I want to work on something I've just added.
 * Things sent to the print queue should be flagged for printing in the database, so that they can be placed and tracked in a speprate list, so that once they are printed, it can be flagged as printed and updated as such in the database. (Database = Spoolman)
+* Screen still times out on laptop. (Fixed via robust native WakeLock API re-acquisition)

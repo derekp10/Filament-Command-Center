@@ -1,0 +1,79 @@
+<div class="offcanvas offcanvas-end text-bg-dark" tabindex="-1" id="offcanvasSearch"
+    aria-labelledby="offcanvasSearchLabel" style="width: 500px; max-width: 100vw; z-index: 1090;" data-bs-scroll="true"
+    data-bs-backdrop="true">
+    <div class="offcanvas-header border-bottom border-secondary d-flex flex-column align-items-start">
+        <div class="d-flex justify-content-between align-items-center w-100 mb-3">
+            <h5 class="offcanvas-title font-monospace fw-bold mb-0" id="offcanvasSearchLabel">
+                <span class="text-info me-2">🔍</span> FIND SPOOL
+            </h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas"
+                aria-label="Close"></button>
+        </div>
+        <div class="d-flex justify-content-between align-items-center w-100">
+            <div class="btn-group" role="group" aria-label="Target Type Toggle">
+                <input type="radio" class="btn-check" name="global-search-type" id="searchTypeSpools" value="spool"
+                    autocomplete="off" checked onmousedown="setTimeout(()=>this.blur(), 50)">
+                <label class="btn btn-outline-info btn-sm text-white border-secondary"
+                    for="searchTypeSpools">Spools</label>
+
+                <input type="radio" class="btn-check" name="global-search-type" id="searchTypeFilaments"
+                    value="filament" autocomplete="off" onmousedown="setTimeout(()=>this.blur(), 50)">
+                <label class="btn btn-outline-warning btn-sm text-white border-secondary"
+                    for="searchTypeFilaments">Filaments</label>
+            </div>
+            <button class="btn btn-outline-danger btn-sm" type="button" id="global-search-clear-all"
+                title="Reset all search filters">Reset 🗑️</button>
+        </div>
+    </div>
+
+    <div class="offcanvas-body d-flex flex-column gap-3">
+        <!-- Search Input Header -->
+        <div class="search-controls">
+            <div class="input-group mb-2">
+                <span class="input-group-text bg-dark border-secondary text-info">🔎</span>
+                <input type="text" id="global-search-query" class="form-control bg-dark text-white border-secondary"
+                    placeholder="Type material, brand, color...">
+            </div>
+
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+                <!-- Color Hex Picker -->
+                <div class="input-group input-group-sm" style="width: 155px;">
+                    <span class="input-group-text bg-dark border-secondary px-1 py-0">
+                        <input type="color" id="global-search-color-picker"
+                            class="form-control form-control-color bg-dark border-0 p-0 m-0" value="#000000"
+                            style="width:24px; height:24px;" title="Match Color Distance">
+                    </span>
+                    <input type="text" id="global-search-color-hex"
+                        class="form-control bg-dark text-white border-secondary font-monospace" placeholder="#Hex"
+                        title="Leave empty to ignore color">
+                    <button class="btn btn-outline-secondary px-2 py-0" type="button" id="global-search-clear-color"
+                        title="Clear Color Filter">❌</button>
+                </div>
+
+                <!-- Quick Filters -->
+                <select id="global-search-material"
+                    class="form-select form-select-sm bg-dark text-white border-secondary" style="width: 100px;">
+                    <option value="">Any Mat</option>
+                    <!-- Dynamically populated by UI loop -->
+                </select>
+
+                <div class="form-check form-switch ms-auto">
+                    <input class="form-check-input" type="checkbox" role="switch" id="global-search-in-stock" checked>
+                    <label class="form-check-label small text-info" for="global-search-in-stock">In Stock</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search Status / Context Info -->
+        <div id="global-search-context" class="small text-muted fst-italic" style="display:none;"></div>
+
+        <!-- Results Container inside an overflowable body -->
+        <div id="global-search-results" class="flex-grow-1 overflow-auto pe-2">
+            <div class="text-center text-muted mt-5">
+                <h1 class="opacity-25 mb-3">💬</h1>
+                <p>Type to search your Spoolman inventory.</p>
+            </div>
+        </div>
+
+    </div>
+</div>

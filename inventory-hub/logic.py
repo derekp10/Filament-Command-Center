@@ -58,7 +58,14 @@ def resolve_scan(text):
              return {'type': 'location', 'id': clean_loc}
         return {'type': 'error', 'msg': 'Empty Location Code'}
 
-    # 4. DIRECT SPOOL ID
+    # 4. EXPLICIT LEGACY ID (Manual Override)
+    if upper_text.startswith("LEGACY:") or upper_text.startswith("LEG:") or upper_text.startswith("OLD:"):
+        clean_id = upper_text.split(":")[-1].strip()
+        rid = spoolman_api.find_spool_by_legacy_id(clean_id, strict_mode=True)
+        if rid: return {'type': 'spool', 'id': rid}
+        return {'type': 'error', 'msg': f'Legacy Spool ID {clean_id} not found'}
+
+    # 5. DIRECT SPOOL ID
     if upper_text.startswith("ID:") or upper_text.startswith("SPL:"):
         prefix_len = 3 if upper_text.startswith("ID:") else 4
         clean_id = text[prefix_len:].strip()
@@ -83,23 +90,23 @@ def resolve_scan(text):
 
     # 7. PURE NUMBER SCAN (Priority Stack)
     if text.isdigit():
-        # Priority 1: Legacy Spool
-        rid = spoolman_api.find_spool_by_legacy_id(text, strict_mode=True)
-        if rid: return {'type': 'spool', 'id': rid}
-        
-        # Priority 2: Legacy Filament
-        fid = spoolman_api.find_filament_by_legacy_id(text)
-        if fid: return {'type': 'filament', 'id': fid}
-        
-        # Priority 3: Direct Spool ID
+        # Priority 1: Direct Spool ID
         spool_check = spoolman_api.get_spool(text)
         if spool_check and spool_check.get('id'):
             return {'type': 'spool', 'id': int(text)}
 
-        # Priority 4: Direct Filament ID
+        # Priority 2: Direct Filament ID
         fil_check = spoolman_api.get_filament(text)
         if fil_check and fil_check.get('id'):
             return {'type': 'filament', 'id': int(text)}
+
+        # Priority 3: Legacy Spool
+        rid = spoolman_api.find_spool_by_legacy_id(text, strict_mode=True)
+        if rid: return {'type': 'spool', 'id': rid}
+        
+        # Priority 4: Legacy Filament
+        fid = spoolman_api.find_filament_by_legacy_id(text)
+        if fid: return {'type': 'filament', 'id': fid}
         
         return {'type': 'error', 'msg': 'ID Not Found'}
         

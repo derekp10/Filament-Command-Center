@@ -586,6 +586,63 @@ window.wizardExistingSelected = () => {
     }
 };
 
+window.wizardOpenGlobalSearch = () => {
+    if (window.SearchEngine) {
+        // Force the offcanvas search engine to look for Filaments if possible
+        const filRadio = document.getElementById('searchTypeFilaments');
+        if (filRadio) filRadio.checked = true;
+
+        SearchEngine.open({
+            mode: 'select',
+            callback: (id, type) => {
+                const processFilament = (filId, filData = null) => {
+                    wizardState.selectedFilamentId = filId;
+
+                    let displayString = `Filament ID: ${filId} (From Advanced Search)`;
+                    if (filData) {
+                        const vendor = filData.vendor ? filData.vendor.name : "Generic";
+                        const mat = filData.material || "Unknown";
+                        const name = filData.name || "Unnamed";
+                        displayString = `${vendor} ${mat} - ${name} (ID: ${filId})`;
+                        document.getElementById('wiz-status-msg').innerHTML = `Selected via Advanced Search: <strong>${displayString}</strong>`;
+                    } else {
+                        document.getElementById('wiz-status-msg').innerHTML = `Selected via Advanced Search (Filament ID: <strong>${filId}</strong>)`;
+                    }
+
+                    // Spoof the native select box so the UI knows
+                    const sel = document.getElementById('wiz-existing-results');
+                    sel.innerHTML = `<option value="${filId}" selected>${displayString}</option>`;
+                    wizardValidateSubmit();
+                };
+
+                if (type === 'spool') {
+                    // Extract filament ID from the spool
+                    fetch(`/api/spools/${id}`)
+                        .then(r => r.json())
+                        .then(d => {
+                            if (d.success && d.data && d.data.filament) {
+                                processFilament(d.data.filament.id, d.data.filament);
+                            } else {
+                                alert("Could not resolve Filament from this Spool.");
+                            }
+                        });
+                } else {
+                    // Fetch full Filament details since we only have the ID from SearchEngine
+                    fetch(`/api/filaments/${id}`)
+                        .then(r => r.json())
+                        .then(d => {
+                            if (d.success && d.data) {
+                                processFilament(id, d.data);
+                            } else {
+                                processFilament(id); // Fallback to raw ID
+                            }
+                        });
+                }
+            }
+        });
+    }
+};
+
 // --- EXTERNAL DATABASE LOGIC ---
 window.wizardSearchExternal = () => {
     let term = document.getElementById('wiz-search-external').value.trim();
