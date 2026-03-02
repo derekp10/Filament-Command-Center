@@ -1,6 +1,7 @@
 {
     "comment": "--- GLOBAL CONFIGURATION ---",
     "server_ip": "192.168.1.100",
+    "SCRAPER_API_KEY": "",
     "spoolman_port": 7912,
     "filabridge_port": 5000,
     "sync_delay": 0.5,

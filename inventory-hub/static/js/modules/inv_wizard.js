@@ -435,7 +435,10 @@ const wizardGenerateFieldHTML = (field, entityType) => {
 };
 
 window.wizardAddMultiChoiceChip = (entityType, key) => {
-    const input = document.getElementById(`ef_input_${key}`);
+    const contextPrefix = entityType === 'fil' ? 'fil' : 'spool';
+    const inputId = `wiz-${contextPrefix}-extra-${key}`;
+    const input = document.getElementById(inputId);
+    if (!input) return;
     const val = input.value.trim();
     if (!val) return;
 
@@ -653,6 +656,18 @@ window.wizardSearchExternal = () => {
     if (term.includes('prusament.com/spool/')) {
         document.getElementById('wiz-external-source').value = 'prusament';
         source = 'prusament';
+    }
+
+    // Auto-detect Amazon URLs
+    if (term.includes('amazon.com') || term.includes('/dp/')) {
+        document.getElementById('wiz-external-source').value = 'amazon';
+        source = 'amazon';
+    }
+
+    // Auto-detect 3D Filament Profiles URLs
+    if (term.includes('3dfilamentprofiles.com')) {
+        document.getElementById('wiz-external-source').value = '3dfp';
+        source = '3dfp';
     }
 
     if (term.length < 2) return;

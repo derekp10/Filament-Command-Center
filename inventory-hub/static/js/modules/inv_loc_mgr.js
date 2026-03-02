@@ -102,13 +102,12 @@ const getRichInfo = (item) => {
     const brand = d.brand || "Generic";
     const material = d.material || "PLA";
     const name = d.color_name || item.display.replace(/#\d+/, '').trim();
-    const qName = name.startsWith('"') ? name : `"${name}"`;
     const weight = d.weight ? `[${Math.round(d.weight)}g]` : "";
 
     return {
         line1: `#${item.id} ${legacy}`,
         line2: `${brand} ${material}`,
-        line3: qName,
+        line3: name,
         line4: weight
     };
 };
@@ -733,10 +732,8 @@ document.addEventListener('inventory:sync-pulse', () => {
                         }
 
                         const t3 = node.querySelector('.text-line-3');
-                        if (t3) {
-                            const qName = fresh.display.replace(/^#\d+\s*/, '').trim();
-                            t3.innerText = qName.startsWith('"') ? qName : `"${qName}"`;
-                        }
+                        const nameStr = fresh.display.replace(/^#\d+\s*/, '').trim();
+                        t3.innerText = nameStr;
                     }
 
                     // --- Apply to LIST items ---
@@ -753,10 +750,8 @@ document.addEventListener('inventory:sync-pulse', () => {
                         }
 
                         const t3 = node.querySelector('.text-line-3') || node.querySelector('.mt-2 strong');
-                        if (t3) {
-                            const qName = fresh.display.replace(/^#\d+\s*/, '').trim();
-                            t3.innerText = qName.startsWith('"') ? qName : `"${qName}"`;
-                        }
+                        const nameStr = fresh.display.replace(/^#\d+\s*/, '').trim();
+                        t3.innerText = nameStr;
                     }
                 });
             })
