@@ -15,8 +15,11 @@
 
 
 # **New Spool/Filament Creation**
+* ~~Live: Names are not working correctly on spools, shows "" instead of the name.~~ (Fixed in `inv_loc_mgr.js`)
+* ~~Live: Cannot create spools manually.~~ (Fixed JSON serialization in `spoolman_api.py`)
+* ~~Live: Filament attributs doesn't seem to work, cant add any to it.~~ (Fixed ID parsing in `inv_wizard.js`)
 * Continue to support Spoolman's "Import from External" feature for filaments, but also empower it to use other sites if possible. The list of sites that come to mind are as follows:
-    - https://3dfilamentprofiles.com/
+    - ~~https://3dfilamentprofiles.com/ ~~ (Not supported or allowed.)
     - https://github.com/OpenFilamentCollective/open-filament-database (Note: Check back occasionally to see if they have formalized an API)
     - Prusament spool specific data links (Which are usually a QR code that links to a spools manufacturing data.)
     - Purchase emails, or Amazon/Vendor product pages.
@@ -25,17 +28,6 @@
 
 
 # **Print Queue Items**
-* Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
-inv_search.js:292 Uncaught SyntaxError: Unexpected token ')'Understand this error
-inv_cmd.js:2 🚀 Loaded Module: COMMAND CENTER
-inv_core.js:282 🔄 Smart Sync Protocol Initiated (5s Interval)
-:8000/favicon.ico:1  Failed to load resource: the server responded with a status of 404 (NOT FOUND)Understand this error
-inv_core.js:48 NoSleep.js armed via user interaction.
-NoSleep.min.js:2 Wake Lock active.
-8(index):1932 Uncaught ReferenceError: SearchEngine is not defined
-    at HTMLButtonElement.onclick ((index):1932:71)Understand this error
-4(index):600 Uncaught ReferenceError: SearchEngine is not defined
-    at HTMLButtonElement.onclick ((index):600:51)
 
 
 # **Location Manger Items**
@@ -125,8 +117,8 @@ Production Functionality Fix list
     - High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
 * Added color coding to the badges on the location (Location Type)
 * Added color indicate of dryerbox/tool fullness (1/1 Green, 2/1 Red, < Max White)
-* Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.
-* Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here, for spools that are assigned to the location, but doesn't have a slot attached to them.
+* ~~Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.~~
+* ~~Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here, for spools that are assigned to the location, but doesn't have a slot attached to them.~~
 * Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to. This might be because we added the LOC: indicater, and it might just not be parcing correctly now.
     - Currently items assigned using a slot QR code "LOC:CR-MDB-1:SLOT:4" are being stored in spoolman as a "CR-MDB-1:SLOT:4" location
         * Could be advantagous to have the slots have there own loation in Spoolman. But I don't have a direct use case currently for it. Perhapes you might have one.
@@ -156,10 +148,11 @@ Production Functionality Fix list
 * Continue to support spoolmans ability to pull data from the vender up to filament (Empty Weight), and from Filament to Spool (Empty Spool Weight, price, etc.)
 * Add the ability to configure which extra fieds should be bound and propagated to the other type of item. (Filament <-> Spool) (I believe we have a purchase link that would be an example of this, where it's set on the filament, but not on the spool.)
 * Maintain the ability to add multiple spools of the same type at the same time. (THis is reperesented by the number box in spoolman next to add, allowing you to add more than one spool of the same filament at the same time)
-* Support clone feature for Spools, to auto populate an existing spool. 
-* Figure out a way to fill in density for filaments. This data isn't alwasy availabe from the vender, so we may need to use a default or calculate it somehow based on filament type.
+* ~~Support clone feature for Spools, to auto populate an existing spool.~~ (Completed Epic 2)
+* ~~Figure out a way to fill in density for filaments. This data isn't alwasy availabe from the vender, so we may need to use a default or calculate it somehow based on filament type.~~ (Completed Epic 2)
 * Need a way to add newly created Filament/Spools to the print queue. This chould be based on one of many print flags in the spoolman database. (Both buitl in and "extra Field" type data we've added to spoolman.)
 * Needs a window/modal that lists all the spools/filaments missing a confirmed label printing (By database check box)
 * Data in the window should be filterable or sortable. So that If I want oldest first to work on back log, or Newest first if I want to work on something I've just added.
 * Things sent to the print queue should be flagged for printing in the database, so that they can be placed and tracked in a speprate list, so that once they are printed, it can be flagged as printed and updated as such in the database. (Database = Spoolman)
 * Screen still times out on laptop. (Fixed via robust native WakeLock API re-acquisition)
+* Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.

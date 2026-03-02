@@ -6,7 +6,7 @@ import json
 # Add the parent directory to sys.path so we can import the modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from external_parsers import SpoolmanParser, PrusamentParser, search_external
+from external_parsers import SpoolmanParser, PrusamentParser, AmazonParser, search_external
 from unittest.mock import patch, Mock
 
 def test_spoolman_parser_mocked():
@@ -84,3 +84,78 @@ def test_router_function():
         
         with pytest.raises(ValueError):
             search_external("invalid_source", "test")
+
+def test_amazon_parser_matching():
+    url = "https://www.amazon.com/dp/B07DN3557G"
+    mock_html = """
+    <html>
+        <head>
+            <title>OVERTURE PETG Filament 1.75mm, 3D Printer Consumables, 1kg Spool (2.2lbs), Dimensional Accuracy +/- 0.05 mm, Fit Most FDM Printer, Black : Amazon.com : Industrial & Scientific</title>
+        </head>
+    </html>
+    """
+    
+    with patch('requests.get') as mock_get:
+        mock_response = Mock()
+        mock_response.ok = True
+        mock_response.text = mock_html
+        mock_get.return_value = mock_response
+        
+        res = AmazonParser.search(url)
+        
+    assert len(res) == 1
+    spool = res[0]
+    
+    # NLP Extractions
+    assert spool["vendor"]["name"] == "OVERTURE"
+    assert spool["material"] == "PETG"
+    assert spool["weight"] == 1000.0
+    assert spool["color_name"] == "Black"
+    assert spool["density"] == 1.27 # PETG
+    assert "PETG" in spool["name"]
+    assert spool["external_link"] == url
+
+def test_amazon_parser_invalid_query():
+    # Should ignore non-amazon URLs to prevent accidental scraping loops
+    res = AmazonParser.search("PLA Black")
+    assert len(res) == 0
+
+def test_threedfp_parser_matching():
+    url = "https://3dfilamentprofiles.com/brand/polymaker/polyterra-pla-cotton-white"
+    mock_html = """
+    <html>
+        <head><title>PolyTerra PLA Cotton White</title></head>
+        <body>
+            <h1>PolyMaker PolyTerra PLA</h1>
+            <div style="background-color: #F8F8F8;">Color Box</div>
+            <p>Density: 1.21 g/cm3</p>
+            <p>Spool Weight: 140 g</p>
+        </body>
+    </html>
+    """
+    
+    from external_parsers import ThreeDFPParser
+    
+    with patch('requests.get') as mock_get:
+        mock_response = Mock()
+        mock_response.ok = True
+        mock_response.text = mock_html
+        mock_get.return_value = mock_response
+        
+        res = ThreeDFPParser.search(url)
+        
+    assert len(res) == 1
+    spool = res[0]
+    
+    assert spool["vendor"]["name"] == "PolyMaker"
+    assert spool["material"] == "PLA"
+    assert spool["density"] == 1.21
+    assert spool["spool_weight"] == 140.0
+    assert spool["weight"] == 1000.0  # Default metric
+    assert spool["color_hex"] == "F8F8F8"
+    assert spool["external_link"] == url
+
+def test_threedfp_parser_invalid_query():
+    from external_parsers import ThreeDFPParser
+    res = ThreeDFPParser.search("PLA Black")
+    assert len(res) == 0

@@ -3,6 +3,9 @@ import re
 import json
 import state
 import config_loader
+import urllib.parse
+import traceback
+from typing import Dict, Type, Any, List
 
 class BaseParser:
     """Abstract base class for all External Source Plugins."""
@@ -137,6 +140,202 @@ class PrusamentParser(BaseParser):
             state.logger.error(f"PrusamentParser Error: {e}")
             return []
 
+class AmazonParser(BaseParser):
+    @staticmethod
+    def get_source_id():
+        return "amazon"
+
+    @staticmethod
+    def search(query: str) -> list[dict]:
+        """
+        Accepts an Amazon URL (e.g. https://www.amazon.com/dp/B07DN3557G).
+        Scrapes the <title> tag via ScraperAPI to bypass strict AWS WAF limits.
+        Attempts regex extraction of Brand, Material, Color, and Weight.
+        """
+        if "amazon.com" not in query and "/dp/" not in query:
+            return []
+
+        try:
+            # Amazon WAF reliably blocks almost all localized TLS impersonators in python (playwright, tls_client, cffi).
+            # The only sustainable method to scrape Amazon Titles directly is via a third-party residential proxy like ScraperAPI.
+            
+            cfg = config_loader.load_config()
+            scraper_api_key = cfg.get("SCRAPER_API_KEY", "")
+            if not scraper_api_key:
+                import os
+                scraper_api_key = os.environ.get("SCRAPER_API_KEY", "")
+                
+            if not scraper_api_key:
+                state.logger.error("Amazon Parser requires a ScraperAPI key in config.json or ENV to bypass WAF.")
+                return []
+                
+            payload = {
+                'api_key': scraper_api_key,
+                'url': query,
+                'render': 'false', # Javascript execution is not needed just for the Title tag, saving proxy cost
+                'country_code': 'us'
+            }
+            
+            # Simple requests works perfectly fine through the proxy
+            r = requests.get('https://api.scraperapi.com/', params=payload, timeout=20)
+            
+            if not r.ok:
+                state.logger.warning(f"Amazon ScraperAPI fetch failed: {r.status_code}")
+                return []
+                
+            html = r.text
+            
+            # Defensive check
+            if "To discuss automated access to Amazon data please contact" in html or "api-services-support@amazon.com" in html or "challenge-container" in html:
+                state.logger.error("Amazon Scraping Blocked: Bot detection CAPTCHA served despite ScraperAPI.")
+                return []
+                
+            title_match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE)
+            if not title_match:
+                state.logger.warning("Amazon title tag not found in HTML.")
+                return []
+                
+            title = title_match.group(1).replace(" : Amazon.com : Industrial & Scientific", "").strip()
+            title_upper = title.upper()
+            
+            # --- NLP Extraction Logic ---
+            # 1. Material
+            material = "Unknown"
+            if "PLA+" in title_upper or "PLA PLUS" in title_upper: material = "PLA+"
+            elif "PLA" in title_upper: material = "PLA"
+            elif "PETG" in title_upper: material = "PETG"
+            elif "ABS" in title_upper: material = "ABS"
+            elif "TPU" in title_upper: material = "TPU"
+            elif "ASA" in title_upper: material = "ASA"
+
+            # 2. Brand (Usually the first word in the title)
+            brand = "Generic"
+            words = title.split()
+            if words:
+                brand = words[0]
+                
+            # Known Brand Corrections
+            if "HATCHBOX" in title_upper: brand = "HATCHBOX"
+            elif "OVERTURE" in title_upper: brand = "OVERTURE"
+            elif "SUNLU" in title_upper: brand = "SUNLU"
+            elif "ESUN" in title_upper: brand = "eSUN"
+            elif "ELEGOO" in title_upper: brand = "ELEGOO"
+            
+            # 3. Weight
+            weight = 1000
+            if re.search(r"1\s?kg", title_upper) or "2.2" in title_upper: weight = 1000
+            elif re.search(r"2\s?kg", title_upper): weight = 2000
+            elif re.search(r"3\s?kg", title_upper): weight = 3000
+            elif re.search(r"5\s?kg", title_upper): weight = 5000
+            
+            # 4. Color Names (Fuzzy Matching on common vocabulary)
+            color_name = "Unknown Color"
+            colors = ["Black", "White", "Red", "Blue", "Green", "Yellow", "Orange", "Purple", "Pink", "Silver", "Gold", "Grey", "Gray", "Clear", "Transparent", "Brown", "Cyan", "Magenta"]
+            for c in colors:
+                if c.upper() in title_upper:
+                    color_name = c
+                    break
+
+            # 5. Fallback Density (Amazon rarely lists this natively in the title)
+            density = 1.24
+            if material == "PETG": density = 1.27
+            elif material == "ABS": density = 1.04
+
+            # Generate Standard Spoolman payload
+            standard_obj = {
+                "id": f"amazon_{brand.lower()}_{material.lower()}",
+                "name": title[:60] + "...", # Spoolman names shouldn't be too long
+                "material": material,
+                "vendor": {"name": brand},
+                "weight": float(weight),
+                "spool_weight": 200.0, # Guess standard spool weight
+                "diameter": 1.75,
+                "density": float(density),
+                "color_hex": "", # Leave blank so user picks it
+                "color_name": color_name,
+                "external_link": query,
+                "extra": {
+                    "amazon_title": title
+                }
+            }
+            return [standard_obj]
+            
+        except Exception as e:
+            state.logger.error(f"AmazonParser Error: {e}")
+            return []
+
+class ThreeDFPParser(BaseParser):
+    @staticmethod
+    def get_source_id():
+        return "3dfp"
+
+    @staticmethod
+    def search(query: str) -> list[dict]:
+        """
+        Accepts a 3DFilamentProfiles URL (e.g. https://3dfilamentprofiles.com/brand/xyz).
+        Scrapes their standard tabular display logic.
+        """
+        if "3dfilamentprofiles.com" not in query:
+            return []
+
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml"
+        }
+        
+        try:
+            r = requests.get(query, headers=headers, timeout=5)
+            if not r.ok:
+                state.logger.warning(f"3DFP URL fetch failed: {r.status_code}")
+                return []
+                
+            html = r.text
+            
+            # Usually 3DFP puts the product name right in the main H1 or title
+            title_match = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.IGNORECASE)
+            name = title_match.group(1).strip() if title_match else "Unknown Filament"
+            
+            # Basic fallback NLP (similar to Amazon) if their DOM structure changes
+            name_upper = name.upper()
+            
+            material = "Unknown"
+            if "PLA+" in name_upper or "PLA PLUS" in name_upper: material = "PLA+"
+            elif "PLA" in name_upper: material = "PLA"
+            elif "PETG" in name_upper: material = "PETG"
+            elif "ABS" in name_upper: material = "ABS"
+            elif "TPU" in name_upper: material = "TPU"
+            
+            # Let's see if we can find hex code embedded (they often use style="background-color: #...")
+            hex_match = re.search(r"background-color:\s*#([0-9a-fA-F]{6})", html)
+            color_hex = hex_match.group(1) if hex_match else ""
+            
+            # Let's extract Density if listed "Density: 1.24 g/cm3"
+            density_match = re.search(r"Density[\s\S]*?(\d+\.\d+)", html, re.IGNORECASE)
+            density = float(density_match.group(1)) if density_match else 1.24
+            
+            # Spool Weight is often explicitly listed
+            spool_wt_match = re.search(r"Spool Weight[\s\S]*?(\d+)\s*g", html, re.IGNORECASE)
+            spool_weight = float(spool_wt_match.group(1)) if spool_wt_match else 200.0
+
+            standard_obj = {
+                "id": f"3dfp_{name.replace(' ', '_').lower()}",
+                "name": name[:60],
+                "material": material,
+                "vendor": {"name": name.split()[0] if name else "Generic"},
+                "weight": 1000.0, # Defaulting, can be refined
+                "spool_weight": spool_weight,
+                "diameter": 1.75,
+                "density": density,
+                "color_hex": color_hex,
+                "color_name": "Unknown",
+                "external_link": query
+            }
+            return [standard_obj]
+            
+        except Exception as e:
+            state.logger.error(f"3DFPParser Error: {e}")
+            return []
+
 class OpenFilamentParser(BaseParser):
     @staticmethod
     def get_source_id():
@@ -151,6 +350,8 @@ class OpenFilamentParser(BaseParser):
 PARSERS = {
     SpoolmanParser.get_source_id(): SpoolmanParser,
     PrusamentParser.get_source_id(): PrusamentParser,
+    AmazonParser.get_source_id(): AmazonParser,
+    ThreeDFPParser.get_source_id(): ThreeDFPParser,
     OpenFilamentParser.get_source_id(): OpenFilamentParser
 }
 

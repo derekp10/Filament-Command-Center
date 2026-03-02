@@ -28,25 +28,32 @@ def get_filament(fid):
     try: return requests.get(f"{sm_url}/api/v1/filament/{fid}", timeout=3).json()
     except: return None
 
+import json
+
 def sanitize_outbound_data(data):
     """Ensures extra fields are properly formatted as JSON strings for Spoolman."""
     if 'extra' not in data or not data['extra']: return data
     clean_extra = {}
     for key, value in data['extra'].items(): # type: ignore
         if value is None: continue 
-        if type(value) is bool:
+        if isinstance(value, bool):
             clean_extra[key] = "true" if value else "false"
-        elif key in JSON_STRING_FIELDS:
-            val_str = str(value).strip()
-            if not (val_str.startswith('"') and val_str.endswith('"')):
-                clean_extra[key] = f'"{val_str}"'
+        elif isinstance(value, (int, float, list, dict)):
+            clean_extra[key] = json.dumps(value)
+        elif isinstance(value, str):
+            val_str = value.strip()
+            if val_str.lower() == 'true':
+                clean_extra[key] = "true"
+            elif val_str.lower() == 'false':
+                clean_extra[key] = "false"
             else:
-                clean_extra[key] = val_str
+                try:
+                    json.loads(val_str)
+                    clean_extra[key] = val_str
+                except ValueError:
+                    clean_extra[key] = json.dumps(val_str)
         else:
-            val_str = str(value)
-            if val_str.lower() == 'false': clean_extra[key] = "false"
-            elif val_str.lower() == 'true': clean_extra[key] = "true"
-            else: clean_extra[key] = val_str
+            clean_extra[key] = json.dumps(str(value))
     data['extra'] = clean_extra
     return data
 
