@@ -26,7 +26,7 @@
 
 
 # **Print Queue Items**
-* Should set the needs label printed flag to default true. This would require an update to setup_fields.py to possibly update any null values? We should set the default property to true when the field is added.
+* Some values are being set to yes, most are null. What is the process for setting them to true? Also are the null values being treated as false?
 
 # **Location Manger Items**
 * The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
