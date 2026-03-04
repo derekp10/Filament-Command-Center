@@ -101,6 +101,17 @@ def create_field(entity_type, key, name, f_type, choices=None, multi=False, forc
         else: print(f"   ❌ Error {resp.status_code}: {resp.text}")
     except Exception as e: print(f"   ❌ Connection Error: {e}")
 
+def delete_field(entity_type, key):
+    """Actively retires and removes a deprecated field from Spoolman."""
+    print(f"🧹 Retiring {entity_type} field: {key}...")
+    try:
+        resp = requests.delete(f"{SPOOLMAN_IP}/api/v1/field/{entity_type}/{key}")
+        if resp.status_code in [200, 204]: print("   ✅ Retired and deleted.")
+        elif resp.status_code == 404: print("   ℹ️ Already removed (Not Found).")
+        else: print(f"   ⚠️ Could not retire {resp.status_code}: {resp.text}")
+    except Exception as e: print(f"   ❌ Connection Error during retire: {e}")
+
+
 # --- CHOICE EXTRACTOR ---
 def get_clean_choices(csv_path, column_name):
     choices = set()
@@ -152,11 +163,15 @@ print("\n--- Setting up SPOOL Fields ---")
 create_field("spool", "physical_source", "Physical Source", "text")
 # [ALEX FIX] Register the new Ghost Slot field
 create_field("spool", "physical_source_slot", "Physical Source Slot", "text")
-create_field("spool", "label_printed", "Label Printed", "boolean")
 create_field("spool", "needs_label_print", "Needs Label Print", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")
 create_field("spool", "product_url", "Product Page Link", "text") # [ALEX FIX] New custom field
+
+# --- RETIRE LEGACY FIELDS ---
+delete_field("spool", "label_printed")
+delete_field("filament", "label_printed")
+delete_field("filament", "spoolman_reprint")
 
 # --- CRITICAL: FORCE RESET CONTAINER SLOT TO TEXT ---
 create_field("spool", "container_slot", "Container / MMU Slot", "text", force_reset=True)
@@ -174,14 +189,12 @@ create_field("filament", "shore_hardness", "Shore Hardness", "choice", choices=l
 create_field("filament", "slicer_profile", "Slicer Profile", "choice", choices=list(profiles), multi=False)
 
 filament_standards = [
-    ("label_printed", "Label Printed", "boolean"),
     ("needs_label_print", "Needs Label Print", "boolean"),
     ("sample_printed", "Sample Printed", "boolean"),
     ("product_url", "Product Page Link", "text"),
     ("purchase_url", "Purchase Link", "text"),
     ("sheet_link", "Sheet Row Link", "text"),
     ("price_total", "Price (w/ Tax)", "text"),
-    ("spoolman_reprint", "Spoolman Reprint", "boolean"),
     ("original_color", "Original Color", "text"),
     ("drying_temp", "Drying Temp", "text"),
     ("drying_time", "Drying Time", "text"),

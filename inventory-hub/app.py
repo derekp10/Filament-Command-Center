@@ -734,8 +734,10 @@ def api_identify_scan():
                 extra = data.get('extra', {})
                 if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
                     extra['needs_label_print'] = False
-                    spoolman_api.update_spool(sid, {'extra': extra})
-                    state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
+                    if spoolman_api.update_spool(sid, {'extra': extra}):
+                        state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
+                    else:
+                        state.add_log_entry(f"❌ Failed to verify Spool #{sid} label", "WARNING")
             
             info = spoolman_api.format_spool_display(data)
             return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
@@ -748,8 +750,10 @@ def api_identify_scan():
                 extra = data.get('extra', {})
                 if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
                     extra['needs_label_print'] = False
-                    spoolman_api.update_filament(fid, {'extra': extra})
-                    state.add_log_entry(f"✔️ Filament #{fid} Label Verified", "SUCCESS", "00ff00")
+                    if spoolman_api.update_filament(fid, {'extra': extra}):
+                        state.add_log_entry(f"✔️ Filament #{fid} Label Verified", "SUCCESS", "00ff00")
+                    else:
+                        state.add_log_entry(f"❌ Failed to verify Filament #{fid} label", "WARNING")
             
             name = data.get('name', 'Unknown Filament')
             return jsonify({"type": "filament", "id": int(fid), "display": name})

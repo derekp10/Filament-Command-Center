@@ -202,7 +202,7 @@ const wizardFetchExtraFields = () => {
                     sContainer.innerHTML = '';
                     d.fields.spool.sort((a, b) => (a.order || 0) - (b.order || 0));
                     d.fields.spool.forEach(field => {
-                        if (['label_printed', 'needs_label_print', 'physical_source', 'physical_source_slot', 'container_slot'].includes(field.key)) return;
+                        if (['needs_label_print', 'physical_source', 'physical_source_slot', 'container_slot'].includes(field.key)) return;
 
                         // If Temp Resistance is still 'text' in Spoolman, hide it so they can change it to Choice later
                         if (field.key === 'spool_temp' && field.field_type === 'text') return;

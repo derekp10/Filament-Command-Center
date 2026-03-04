@@ -46,6 +46,10 @@ def sanitize_outbound_data(data):
                 clean_extra[key] = "true"
             elif val_str.lower() == 'false':
                 clean_extra[key] = "false"
+            elif key in JSON_STRING_FIELDS:
+                # [ALEX FIX] bypass json.loads() for specifically strict string fields (like container_slot)
+                # to prevent numbers inside strings like "4" from becoming integer 4 and breaking Spoolman's DB constraints.
+                clean_extra[key] = json.dumps(val_str)
             else:
                 # [ALEX FIX] Spoolman strictly requires that *all* custom Extra fields, even plain strings, 
                 # be sent as valid JSON strings. This means they must include the literal double-quotes.
