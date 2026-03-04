@@ -89,9 +89,11 @@ def test_amazon_parser_matching():
     url = "https://www.amazon.com/dp/B07DN3557G"
     mock_html = """
     <html>
-        <head>
-            <title>OVERTURE PETG Filament 1.75mm, 3D Printer Consumables, 1kg Spool (2.2lbs), Dimensional Accuracy +/- 0.05 mm, Fit Most FDM Printer, Black : Amazon.com : Industrial & Scientific</title>
-        </head>
+        <body>
+            <div data-asin="B07DN3557G">
+                <h2>OVERTURE PETG Filament 1.75mm, 3D Printer Consumables, 1kg Spool (2.2lbs), Dimensional Accuracy +/- 0.05 mm, Fit Most FDM Printer, Black</h2>
+            </div>
+        </body>
     </html>
     """
     

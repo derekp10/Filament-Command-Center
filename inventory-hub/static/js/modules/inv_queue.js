@@ -209,6 +209,7 @@ const persistQueue = () => {
     }).catch(e => console.warn("Queue Save Failed", e));
 };
 
+let queueInitialLoad = true;
 const loadQueue = () => {
     fetch('/api/state/queue')
         .then(r => r.json())
@@ -218,16 +219,23 @@ const loadQueue = () => {
                 const serverStr = JSON.stringify(data);
 
                 if (currentStr !== serverStr) {
-                    labelQueue.length = 0;
-                    data.forEach(item => labelQueue.push(item));
+                    // [ALEX BUGFIX]: If the server restarted, it sets GLOBAL_QUEUE to `[]`.
+                    // If this client holds a localStorage queue on initial load, re-seed the server!
+                    if (queueInitialLoad && serverStr === '[]' && labelQueue.length > 0) {
+                        persistQueue();
+                    } else {
+                        labelQueue.length = 0;
+                        data.forEach(item => labelQueue.push(item));
 
-                    const btn = document.getElementById('btn-queue-count');
-                    if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
+                        const btn = document.getElementById('btn-queue-count');
+                        if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
 
-                    if (modals.queueModal && document.getElementById('queueModal').classList.contains('show')) {
-                        window.openQueueModal();
+                        if (modals.queueModal && document.getElementById('queueModal').classList.contains('show')) {
+                            window.openQueueModal();
+                        }
                     }
                 }
+                queueInitialLoad = false;
             }
         })
         .catch(e => console.warn("Queue Load Failed", e));

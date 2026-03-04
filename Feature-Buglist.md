@@ -1,4 +1,5 @@
 # **New Issues:**
+* Amazon Parser: Multi-pack spools with different colors (e.g. 4x1kg) currently calculate as a single 4000g spool instead of 4 individual 1000g spools.
 
 
 # ** General **
@@ -15,9 +16,8 @@
 
 
 # **New Spool/Filament Creation**
-* ~~Live: Names are not working correctly on spools, shows "" instead of the name.~~ (Fixed in `inv_loc_mgr.js`)
-* ~~Live: Cannot create spools manually.~~ (Fixed JSON serialization in `spoolman_api.py`)
-* ~~Live: Filament attributs doesn't seem to work, cant add any to it.~~ (Fixed ID parsing in `inv_wizard.js`)
+* Filament attributs still don't work, cant add any to it. This still doesn't work on the prod/live build. I cant select them and have them add to the list. Add button also doesn't work.
+* Extruder and bed temps are missing from the filament side for data entry.
 * Continue to support Spoolman's "Import from External" feature for filaments, but also empower it to use other sites if possible. The list of sites that come to mind are as follows:
     - ~~https://3dfilamentprofiles.com/ ~~ (Not supported or allowed.)
     - https://github.com/OpenFilamentCollective/open-filament-database (Note: Check back occasionally to see if they have formalized an API)
@@ -25,6 +25,15 @@
     - Purchase emails, or Amazon/Vendor product pages.
     - Other sites I might not be aware of and which we can evaluate later for this data.
     - Support for Open Print Tags (Initialize,Read, and Write) (https://github.com/OpenPrintTag/openprinttag-specification)
+* Failing to update slot value on  live, probably on dev as well:
+2026-03-02 23:08:47.918515+00:002026-03-02 15:08:47,918 - ERROR - Failed to update spool 99: 400 - {"message":"Invalid extra field for key container_slot: Value is not a string."}
+2026-03-02 23:08:52.268480+00:002026-03-02 15:08:52,268 - INFO - 🔎 XL-4: 1 item(s)
+2026-03-02 23:08:56.655131+00:002026-03-02 15:08:56,655 - ERROR - Failed to update spool 158: 400 - {"message":"Invalid extra field for key container_slot: Value is not a string."}
+2026-03-02 23:08:59.784637+00:002026-03-02 15:08:59,784 - INFO - 🔎 LR-MDB-2: 0 item(s)
+2026-03-02 23:09:41.862788+00:002026-03-02 15:09:41,862 - WARNING - ⏏️ Ejected #187
+2026-03-03 04:42:33.772242+00:002026-03-02 20:42:33,772 - INFO - ✔️ Spool #145 Label Verified
+* Label Verified fired off, but I couldn't confirm if it actually marked anything or not. If it is updating, it might not be updating a value is used universally. Backlog number didn't go down.
+* No way to easily edit spool data after creation.
 
 
 # **Print Queue Items**
@@ -47,6 +56,7 @@
 
 
 # **Location List**
+* CR-MDB-1:SLOT:4, treated as a location not a slot in a box.
 
 
 # **Next Steps Items:**
@@ -156,3 +166,5 @@ Production Functionality Fix list
 * Things sent to the print queue should be flagged for printing in the database, so that they can be placed and tracked in a speprate list, so that once they are printed, it can be flagged as printed and updated as such in the database. (Database = Spoolman)
 * Screen still times out on laptop. (Fixed via robust native WakeLock API re-acquisition)
 * Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
+* ~~Live: Names are not working correctly on spools, shows "" instead of the name.~~ (Fixed in `inv_loc_mgr.js`)
+* ~~Live: Cannot create spools manually.~~ (Fixed JSON serialization in `spoolman_api.py`)
