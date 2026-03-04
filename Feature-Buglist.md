@@ -16,9 +16,6 @@
 
 
 # **New Spool/Filament Creation**
-* Filament attributs still don't work, cant add any to it. This still doesn't work on the prod/live build. I cant select them and have them add to the list. Add button also doesn't work.
-* Extruder and bed temps are missing from the filament side for data entry.
-* No way to easily edit spool data after creation.
 * Continue to support Spoolman's "Import from External" feature for filaments, but also empower it to use other sites if possible. The list of sites that come to mind are as follows:
     - ~~https://3dfilamentprofiles.com/ ~~ (Not supported or allowed.)
     - https://github.com/OpenFilamentCollective/open-filament-database (Note: Check back occasionally to see if they have formalized an API)
@@ -28,9 +25,8 @@
     - Support for Open Print Tags (Initialize,Read, and Write) (https://github.com/OpenPrintTag/openprinttag-specification)
 
 
-
 # **Print Queue Items**
-
+* Should set the needs label printed flag to default true. This would require an update to setup_fields.py to possibly update any null values? We should set the default property to true when the field is added.
 
 # **Location Manger Items**
 * The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
@@ -163,3 +159,6 @@ Production Functionality Fix list
 * Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
 * ~~Live: Names are not working correctly on spools, shows "" instead of the name.~~ (Fixed in `inv_loc_mgr.js`)
 * ~~Live: Cannot create spools manually.~~ (Fixed JSON serialization in `spoolman_api.py`)
+* Filament attributs still don't work, cant add any to it. This still doesn't work on the prod/live build. I cant select them and have them add to the list. Add button also doesn't work.
+* Extruder and bed temps are missing from the filament side for data entry.
+* No way to easily edit spool data after creation.
