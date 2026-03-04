@@ -5,10 +5,11 @@ let wizardState = {
     mode: 'manual', // 'existing', 'external', 'manual'
     vendors: [],
     selectedFilamentId: null,
-    externalMetaData: null
+    externalMetaData: null,
+    editSpoolId: null
 };
 
-window.openWizardModal = () => {
+window.openWizardModal = async () => {
     wizardReset();
     if (window.modals && window.modals.wizardModal) {
         window.modals.wizardModal.show();
@@ -18,9 +19,11 @@ window.openWizardModal = () => {
         window.modals.wizardModal = m;
         m.show();
     }
-    wizardFetchVendors();
-    wizardFetchLocations();
-    wizardFetchExtraFields();
+    await Promise.all([
+        wizardFetchVendors(),
+        wizardFetchLocations(),
+        wizardFetchExtraFields()
+    ]);
 };
 
 const wizardReset = () => {
@@ -41,6 +44,18 @@ const wizardReset = () => {
     document.getElementById('wiz-spool-qty').value = 1;
 
     document.getElementById('wiz-spool-used').value = 0;
+
+    // Reset Edit State button styles
+    const submitBtn = document.getElementById('btn-wiz-submit');
+    if (submitBtn) {
+        submitBtn.innerText = "CREATE INVENTORY";
+        submitBtn.classList.remove('btn-primary');
+        submitBtn.classList.add('btn-success');
+    }
+    const step1 = document.getElementById('step-1-material');
+    if (step1) step1.style.display = 'block';
+    const qtyBox = document.getElementById('wiz-spool-qty');
+    if (qtyBox && qtyBox.parentElement) qtyBox.parentElement.style.display = 'flex';
 
     // Reset View
     wizardSelectType('manual');
@@ -143,7 +158,7 @@ window.wizardClearScaleWeight = () => {
 
 // --- DATA FETCHERS ---
 const wizardFetchVendors = () => {
-    fetch('/api/external/vendors')
+    return fetch('/api/external/vendors')
         .then(r => r.json())
         .then(d => {
             if (d.success) {
@@ -158,7 +173,7 @@ const wizardFetchVendors = () => {
 };
 
 const wizardFetchLocations = () => {
-    fetch('/api/locations')
+    return fetch('/api/locations')
         .then(r => r.json())
         .then(d => {
             if (Array.isArray(d)) {
@@ -175,7 +190,7 @@ const wizardFetchLocations = () => {
 };
 
 const wizardFetchExtraFields = () => {
-    fetch('/api/external/fields')
+    return fetch('/api/external/fields')
         .then(r => r.json())
         .then(d => {
             if (d.success && d.fields) {
@@ -202,7 +217,7 @@ const wizardFetchExtraFields = () => {
                     sContainer.innerHTML = '';
                     d.fields.spool.sort((a, b) => (a.order || 0) - (b.order || 0));
                     d.fields.spool.forEach(field => {
-                        if (['label_printed', 'needs_label_print', 'physical_source', 'physical_source_slot', 'container_slot'].includes(field.key)) return;
+                        if (['needs_label_print', 'physical_source', 'physical_source_slot', 'container_slot'].includes(field.key)) return;
 
                         // If Temp Resistance is still 'text' in Spoolman, hide it so they can change it to Choice later
                         if (field.key === 'spool_temp' && field.field_type === 'text') return;
@@ -395,16 +410,33 @@ const wizardGenerateFieldHTML = (field, entityType) => {
     const inputId = `wiz_${entityType}_ef_${field.key}`;
 
     if (field.field_type === 'choice' && field.multi_choice) {
-        // Searchable Datalist Chip System
-        html += `<div class="d-flex flex-wrap gap-1 mb-1 chip-container" id="chip-container-${entityType}-${field.key}"></div>
-                 <div class="input-group input-group-sm">
-                    <input type="text" class="form-control bg-dark text-white border-secondary sync-source-${entityType}" list="dl_${entityType}_${field.key}" id="${inputId}" data-key="${field.key}" placeholder="Search or type new..." onkeydown="if(event.key === 'Enter') { event.preventDefault(); wizardAddMultiChoiceChip('${entityType}', '${field.key}'); }">
-                    <datalist id="dl_${entityType}_${field.key}">`;
-        field.choices.forEach(c => { html += `<option value="${c}">`; });
-        html += `   </datalist>
-                    <button class="btn btn-outline-secondary px-3" type="button" 
-                            onclick="wizardAddMultiChoiceChip('${entityType}', '${field.key}')" 
-                            title="Add attribute">Add</button>
+        // Custom Searchable Tag/Chip System (Replaces Native Datalist)
+        html += `<div class="position-relative wizard-chip-multiselect" id="wizard-ms-${entityType}-${field.key}">
+                    <div class="form-control bg-dark text-white border-secondary d-flex flex-wrap align-items-center gap-1 p-1" style="min-height: 38px; cursor: text;" onclick="document.getElementById('${inputId}').focus()">
+                        <div class="chip-container d-flex flex-wrap gap-1" id="chip-container-${entityType}-${field.key}"></div>
+                        <input type="text" 
+                               class="border-0 bg-transparent text-white flex-grow-1 chip-input sync-source-${entityType}" 
+                               id="${inputId}" 
+                               data-key="${field.key}" 
+                               placeholder="Search or type new..." 
+                               autocomplete="off"
+                               style="outline: none; min-width: 120px;"
+                               onfocus="wizardMultiselectFocus('${entityType}', '${field.key}')"
+                               onblur="wizardMultiselectBlur('${entityType}', '${field.key}')"
+                               oninput="wizardMultiselectFilter('${entityType}', '${field.key}')"
+                               onkeydown="wizardMultiselectKeydown(event, '${entityType}', '${field.key}')">
+                    </div>
+                    <div class="autocomplete-dropdown position-absolute w-100 bg-dark border border-secondary rounded shadow-lg" 
+                         id="dropdown-${entityType}-${field.key}" 
+                         style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">`;
+
+        // Populate the dropdown with initial options
+        field.choices.forEach(c => {
+            html += `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option" 
+                          onmousedown="wizardMultiselectSelect(event, '${entityType}', '${field.key}', this.innerText)">${c}</div>`;
+        });
+
+        html += `   </div>
                  </div>`;
 
     } else if (field.field_type === 'choice' && !field.multi_choice) {
@@ -434,15 +466,14 @@ const wizardGenerateFieldHTML = (field, entityType) => {
     return html;
 };
 
-window.wizardAddMultiChoiceChip = (entityType, key) => {
-    const contextPrefix = entityType === 'fil' ? 'fil' : 'spool';
-    const inputId = `wiz-${contextPrefix}-extra-${key}`;
+window.wizardAddMultiChoiceChip = (entityType, key, directVal = null) => {
+    const inputId = `wiz_${entityType}_ef_${key}`;
     const input = document.getElementById(inputId);
     if (!input) return;
-    const val = input.value.trim();
+    const val = (directVal !== null ? directVal : input.value).trim();
     if (!val) return;
 
-    const container = document.getElementById(`chip-container-${key}`);
+    const container = document.getElementById(`chip-container-${entityType}-${key}`);
     // Check if chip is already in the list to prevent duplicates
     const escapedVal = CSS.escape(val);
     if (container.querySelector(`[data-value="${escapedVal}"]`)) {
@@ -476,6 +507,115 @@ window.wizardAddMultiChoiceChip = (entityType, key) => {
                            data-value="${val}">${val} &times;</span>`;
     container.insertAdjacentHTML('beforeend', chipHtml);
     input.value = '';
+
+    // Reset Filtering
+    if (window.wizardMultiselectFilter) window.wizardMultiselectFilter(entityType, key);
+};
+
+// --- CHIP MULTISELECT LOGIC ---
+window.wizardMultiselectFocus = (entityType, key) => {
+    const dropdown = document.getElementById(`dropdown-${entityType}-${key}`);
+    if (dropdown) {
+        dropdown.style.display = 'block';
+        wizardMultiselectFilter(entityType, key); // Filter initial list
+    }
+};
+
+window.wizardMultiselectBlur = (entityType, key) => {
+    setTimeout(() => {
+        const dropdown = document.getElementById(`dropdown-${entityType}-${key}`);
+        if (dropdown) dropdown.style.display = 'none';
+
+        // Auto-commit on blur if typed text exists
+        const input = document.getElementById(`wiz_${entityType}_ef_${key}`);
+        if (input && input.value.trim().length > 0) {
+            wizardAddMultiChoiceChip(entityType, key);
+        }
+    }, 150); // Delay allows click event on dropdown to fire first
+};
+
+window.wizardMultiselectFilter = (entityType, key) => {
+    const qs = document.getElementById(`wiz_${entityType}_ef_${key}`).value.toLowerCase();
+    const dropdown = document.getElementById(`dropdown-${entityType}-${key}`);
+    if (!dropdown) return;
+
+    let hasVisible = false;
+    Array.from(dropdown.children).forEach(option => {
+        option.classList.remove('active', 'bg-primary'); // Clear selections on filter
+        if (option.innerText.toLowerCase().includes(qs)) {
+            option.style.display = 'block';
+            hasVisible = true;
+        } else {
+            option.style.display = 'none';
+        }
+    });
+
+    dropdown.style.display = hasVisible ? 'block' : 'none';
+};
+
+window.wizardMultiselectKeydown = (event, entityType, key) => {
+    const input = document.getElementById(`wiz_${entityType}_ef_${key}`);
+    const dropdown = document.getElementById(`dropdown-${entityType}-${key}`);
+    if (!input) return;
+
+    let visibleOptions = [];
+    if (dropdown && dropdown.style.display !== 'none') {
+        visibleOptions = Array.from(dropdown.children).filter(el => el.style.display !== 'none');
+    }
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (!visibleOptions.length) return;
+        event.preventDefault();
+
+        let currentIndex = visibleOptions.findIndex(el => el.classList.contains('active'));
+
+        // Remove active class from all
+        visibleOptions.forEach(el => el.classList.remove('active', 'bg-primary'));
+
+        if (event.key === 'ArrowDown') {
+            currentIndex = currentIndex + 1 >= visibleOptions.length ? 0 : currentIndex + 1;
+        } else {
+            currentIndex = currentIndex - 1 < 0 ? visibleOptions.length - 1 : currentIndex - 1;
+        }
+
+        const nextActive = visibleOptions[currentIndex];
+        nextActive.classList.add('active', 'bg-primary');
+
+        // Ensure visible in scroll view
+        const dropRect = dropdown.getBoundingClientRect();
+        const itemRect = nextActive.getBoundingClientRect();
+        if (itemRect.bottom > dropRect.bottom) {
+            dropdown.scrollTop += (itemRect.bottom - dropRect.bottom);
+        } else if (itemRect.top < dropRect.top) {
+            dropdown.scrollTop -= (dropRect.top - itemRect.top);
+        }
+        return;
+    }
+
+    if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault(); // Prevent tab jump
+
+        if (visibleOptions.length > 0) {
+            // Find active option, if none, use first visible
+            let selected = visibleOptions.find(el => el.classList.contains('active')) || visibleOptions[0];
+            wizardAddMultiChoiceChip(entityType, key, selected.innerText);
+            return;
+        }
+        wizardAddMultiChoiceChip(entityType, key); // Fallback to current text
+    } else if (event.key === 'Backspace' && input.value === '') {
+        // Find last chip and remove it
+        const container = document.getElementById(`chip-container-${entityType}-${key}`);
+        if (container && container.lastElementChild) {
+            container.removeChild(container.lastElementChild);
+        }
+    }
+};
+
+window.wizardMultiselectSelect = (event, entityType, key, value) => {
+    event.preventDefault(); // Prevent blur trigger
+    wizardAddMultiChoiceChip(entityType, key, value);
+    const input = document.getElementById(`wiz_${entityType}_ef_${key}`);
+    if (input) input.focus(); // Keep focus after click
 };
 
 window.wizardPromptNewChoice = (entityType, key) => {
@@ -824,6 +964,9 @@ window.wizardSubmit = async () => {
         if (wizardState.mode === 'existing') {
             target_fid = wizardState.selectedFilamentId;
         } else {
+            if (wizardState.mode === 'edit_spool') {
+                target_fid = wizardState.selectedFilamentId; // Pass through ID so backend knows which Filament to update
+            }
             // Hex Parsing for Multiple Colors
             const colorInputs = Array.from(document.querySelectorAll('input[id^="wiz-fil-color_hex_"]'));
             const colors = colorInputs.map(i => i.value.replace('#', '').toUpperCase()).filter(c => c.length === 6);
@@ -883,22 +1026,29 @@ window.wizardSubmit = async () => {
 
             if (wizardState.mode === 'external' && wizardState.externalMetaData) {
                 const t = wizardState.externalMetaData;
-                if (t.extruder_temp) f_payload.settings_extruder_temp = t.extruder_temp;
-                if (t.bed_temp) f_payload.settings_bed_temp = t.bed_temp;
+                if (t.extruder_temp && !getVal('wiz-fil-settings_extruder_temp')) f_payload.settings_extruder_temp = t.extruder_temp;
+                if (t.bed_temp && !getVal('wiz-fil-settings_bed_temp')) f_payload.settings_bed_temp = t.bed_temp;
                 if (t.article_number) f_payload.article_number = t.article_number;
             }
+
+            // Map Native Temp Fields Explicitly
+            if (getVal('wiz-fil-settings_extruder_temp')) f_payload.settings_extruder_temp = parseInt(getVal('wiz-fil-settings_extruder_temp'));
+            if (getVal('wiz-fil-settings_bed_temp')) f_payload.settings_bed_temp = parseInt(getVal('wiz-fil-settings_bed_temp'));
 
             Object.keys(f_payload).forEach(k => f_payload[k] == null && delete f_payload[k]);
         }
 
         const payload = {
+            spool_id: wizardState.editSpoolId, // Used by Edit router
             filament_id: target_fid,
             filament_data: f_payload,
             spool_data: sp_payload,
             quantity: qty
         };
 
-        const res = await fetch('/api/create_inventory_wizard', {
+        const endpoint = wizardState.mode === 'edit_spool' ? '/api/edit_spool_wizard' : '/api/create_inventory_wizard';
+
+        const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -906,7 +1056,7 @@ window.wizardSubmit = async () => {
         const data = await res.json();
 
         if (data.success) {
-            msg.innerHTML = `<span class="text-success fw-bold">Success! Spool(s) Generated.</span>`;
+            msg.innerHTML = `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
 
             // Keep modal open across all modes so user can rapidly create subsequent items.
             setTimeout(() => {
@@ -926,7 +1076,7 @@ window.wizardSubmit = async () => {
 };
 
 // --- SPOOL CLONE LOGIC ---
-window.openCloneWizard = (spoolId) => {
+window.openCloneWizard = async (spoolId) => {
     // Hide Spool Modal or Backlog Modal if open
     const smEl = document.getElementById('spoolModal');
     if (smEl) {
@@ -939,8 +1089,8 @@ window.openCloneWizard = (spoolId) => {
         bm.hide();
     }
 
-    // Reset and Open Wizard
-    openWizardModal();
+    // Reset and Open Wizard (Wait for Extrad fields DOM injection!)
+    await openWizardModal();
 
     // Temporarily disable submit while fetching clone data
     document.getElementById('btn-wiz-submit').disabled = true;
@@ -977,5 +1127,164 @@ window.openCloneWizard = (spoolId) => {
             console.error("Clone Wizard Error:", err);
             document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to connect for clone.</span>';
             document.getElementById('btn-wiz-submit').disabled = false;
+        });
+};
+
+// --- SPOOL EDIT LOGIC ---
+window.openEditWizard = async (spoolId) => {
+    // Hide Spool Modal or Backlog Modal if open
+    const smEl = document.getElementById('spoolModal');
+    if (smEl) {
+        const sm = bootstrap.Modal.getInstance(smEl) || new bootstrap.Modal(smEl);
+        sm.hide();
+    }
+    const bmEl = document.getElementById('backlogModal');
+    if (bmEl) {
+        const bm = bootstrap.Modal.getInstance(bmEl) || new bootstrap.Modal(bmEl);
+        bm.hide();
+    }
+
+    // Reset and Open Wizard (Wait for dynamically mapped DOM structures first!)
+    await openWizardModal();
+
+    // Temporarily disable submit while fetching edit data
+    document.getElementById('btn-wiz-submit').disabled = true;
+    document.getElementById('wiz-status-msg').innerHTML = '<span class="text-warning">Loading spool data for edit...</span>';
+
+    // Change Button Text
+    const submitBtn = document.getElementById('btn-wiz-submit');
+    submitBtn.innerText = "SAVE CHANGES";
+    submitBtn.classList.replace('btn-success', 'btn-primary');
+
+    // Fetch Spool data to edit
+    fetch(`/api/spool_details?id=${spoolId}`)
+        .then(r => r.json())
+        .then(d => {
+            if (!d || !d.filament) {
+                document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to fetch spool data.</span>';
+                return;
+            }
+
+            // Custom UI State for Edit
+            wizardState.mode = 'edit_spool';
+            wizardState.editSpoolId = spoolId;
+            wizardState.selectedFilamentId = d.filament.id;
+
+            // Hide Step 1 completely
+            const step1 = document.getElementById('step-1-material');
+            if (step1) step1.style.display = 'none';
+            // Show Step 2 and Step 3
+            document.getElementById('step-2-filament').style.display = 'block';
+            document.getElementById('step-3-spool').style.display = 'block';
+            document.getElementById('step-3-spool').style.opacity = '1';
+
+            // Hide the Bulk Quantity box
+            const qtyBox = document.getElementById('wiz-spool-qty');
+            if (qtyBox && qtyBox.parentElement) qtyBox.parentElement.style.display = 'none';
+            if (qtyBox) qtyBox.value = 1;
+
+            const f = d.filament;
+            // Pre-fill Filament
+            if (f.vendor) {
+                const vSel = document.getElementById('wiz-fil-vendor-sel');
+                let found = false;
+                for (let i = 0; i < vSel.options.length; i++) {
+                    if (vSel.options[i].text.toLowerCase() === f.vendor.name.toLowerCase()) {
+                        vSel.selectedIndex = i;
+                        document.getElementById('wiz-fil-vendor-sel').style.display = 'block';
+                        document.getElementById('wiz-fil-vendor-new').style.display = 'none';
+                        found = true; break;
+                    }
+                }
+                if (!found) {
+                    document.getElementById('wiz-fil-vendor-sel').style.display = 'none';
+                    document.getElementById('wiz-fil-vendor-new').style.display = 'block';
+                    document.getElementById('wiz-fil-vendor-new').value = f.vendor.name;
+                }
+            } else {
+                document.getElementById('wiz-fil-vendor-sel').selectedIndex = 0;
+            }
+
+            document.getElementById('wiz-fil-material').value = f.material || '';
+            document.getElementById('wiz-fil-color_name').value = f.name || '';
+            document.getElementById('wiz-fil-color_hex_0').value = `#${f.color_hex || 'FFFFFF'}`;
+            document.getElementById('wiz-fil-color_hex_0').previousElementSibling.value = `#${f.color_hex || 'FFFFFF'}`;
+            document.getElementById('wiz-fil-diameter').value = f.diameter || 1.75;
+            document.getElementById('wiz-fil-density').value = f.density || 1.24;
+            document.getElementById('wiz-fil-weight').value = f.weight || 1000;
+            document.getElementById('wiz-fil-empty_weight').value = f.spool_weight !== null ? f.spool_weight : '';
+
+            // Map Temperatures
+            if (document.getElementById('wiz-fil-settings_extruder_temp')) {
+                document.getElementById('wiz-fil-settings_extruder_temp').value = f.settings_extruder_temp || '';
+            }
+            if (document.getElementById('wiz-fil-settings_bed_temp')) {
+                document.getElementById('wiz-fil-settings_bed_temp').value = f.settings_bed_temp || '';
+            }
+
+            // Filament Extra
+            if (f.extra) {
+                Object.entries(f.extra).forEach(([k, v]) => {
+                    const input = document.getElementById(`wiz_fil_ef_${k}`);
+                    if (input) {
+                        if (input.type === 'checkbox') {
+                            input.checked = v === true || v === 'true';
+                        } else if (input.classList.contains('sync-source-fil') && document.getElementById(`chip-container-fil-${k}`)) {
+                            // Populate chips (Coerce strings to Arrays if necessary)
+                            let parsedArr = [];
+                            if (Array.isArray(v)) {
+                                parsedArr = v;
+                            } else if (typeof v === 'string') {
+                                if (v.startsWith('[') && v.endsWith(']')) {
+                                    try { parsedArr = JSON.parse(v); } catch (e) { parsedArr = [v]; }
+                                } else {
+                                    parsedArr = v.split(',').map(s => s.trim()).filter(s => s);
+                                }
+                            } else {
+                                parsedArr = [v];
+                            }
+
+                            const cContainer = document.getElementById(`chip-container-fil-${k}`);
+                            cContainer.innerHTML = '';
+                            parsedArr.forEach(val => {
+                                const chipHtml = `<span class="badge rounded-pill text-bg-primary border border-primary cursor-pointer dynamic-chip" 
+                                                       onclick="this.remove()" data-key="${k}" data-selected="true" data-value="${val}">${val} &times;</span>`;
+                                cContainer.insertAdjacentHTML('beforeend', chipHtml);
+                            });
+                        } else {
+                            input.value = v;
+                        }
+                    }
+                });
+            }
+
+            // Pre-fill Spool
+            document.getElementById('wiz-spool-location').value = d.location || "";
+            document.getElementById('wiz-spool-empty_weight').value = d.spool_weight !== null ? d.spool_weight : "";
+            document.getElementById('wiz-spool-initial_weight').value = d.initial_weight !== null ? d.initial_weight : "";
+            document.getElementById('wiz-spool-used').value = d.used_weight || 0;
+            document.getElementById('wiz-spool-comment').value = d.comment || "";
+
+            // Spool Extra
+            if (d.extra) {
+                Object.entries(d.extra).forEach(([k, v]) => {
+                    const input = document.getElementById(`wiz_spool_ef_${k}`);
+                    if (input) {
+                        if (input.type === 'checkbox') {
+                            input.checked = v === true || v === 'true';
+                        } else {
+                            input.value = v;
+                        }
+                    }
+                });
+            }
+
+            document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Editing Spool #${spoolId}.</span>`;
+            submitBtn.disabled = false;
+        })
+        .catch(err => {
+            console.error("Edit Wizard Error:", err);
+            document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to connect for edit.</span>';
+            submitBtn.disabled = false;
         });
 };

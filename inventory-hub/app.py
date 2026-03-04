@@ -262,6 +262,46 @@ def api_create_inventory_wizard():
         state.logger.error(f"Wizard Creation Error: {e}")
         return jsonify({"success": False, "msg": str(e)})
 
+
+@app.route('/api/edit_spool_wizard', methods=['POST'])
+def api_edit_spool_wizard():
+    """Endpoint to handle natively editing Filaments and Spools from the Wizard Edit UI."""
+    data = request.json
+    spool_id = data.get('spool_id')
+    filament_id = data.get('filament_id')
+    filament_data = data.get('filament_data')
+    spool_data = data.get('spool_data')
+
+    if not spool_id:
+        return jsonify({"success": False, "msg": "Missing Spool ID for edit session."})
+
+    try:
+        # Update Spool First
+        if spool_data:
+            spool_res = spoolman_api.update_spool(spool_id, spool_data)
+            if not spool_res:
+                return jsonify({"success": False, "msg": f"Failed to gracefully update Spool {spool_id}."})
+        
+        # Update Filament Second (if applicable)
+        if filament_id and filament_data:
+            # Handle spontaneous vendor generation explicitly
+            if 'extra' in filament_data:
+                external_vendor = filament_data['extra'].pop('external_vendor_name', None)
+                if external_vendor:
+                    new_ven = spoolman_api.create_vendor({"name": external_vendor})
+                    if new_ven and 'id' in new_ven:
+                        filament_data['vendor_id'] = new_ven['id']
+                    
+            fil_res = spoolman_api.update_filament(filament_id, filament_data)
+            if not fil_res:
+                state.logger.warning(f"Failed to cleanly update Filament {filament_id} during spool edit.")
+
+        return jsonify({"success": True, "spool_id": spool_id})
+
+    except Exception as e:
+        state.logger.error(f"Wizard Edit Error: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+
 import external_parsers # Added for plugin architecture
 
 @app.route('/api/external/search', methods=['GET'])
@@ -546,6 +586,7 @@ def api_get_locations():
         if not sm_loc or not isinstance(sm_loc, str): continue
         loc_name = sm_loc.strip()
         loc_id_upper = loc_name.upper()
+        if loc_id_upper == "UNASSIGNED": continue # Prevent duplicate from legacy strings
         if loc_id_upper and loc_id_upper not in local_map:
             # Create a virtual entry for Spoolman native locations
             local_map[loc_id_upper] = {
@@ -566,6 +607,7 @@ def api_get_locations():
             for s in resp.json():
                 if not isinstance(s, dict): continue
                 loc = str(s.get('location', '')).upper().strip()
+                if loc == 'UNASSIGNED': loc = "" # Coerce to true blank
                 extra = s.get('extra')
                 if not isinstance(extra, dict): extra = {}
                 
@@ -597,6 +639,8 @@ def api_get_locations():
 
     for row in csv_rows:
         lid = str(row['LocationID']).upper()
+        if lid == "UNASSIGNED": continue # Skip if somehow in CSV
+        
         max_s = row.get('Max Spools', '')
         try:
             max_val = int(max_s) if max_s else 0
@@ -734,8 +778,10 @@ def api_identify_scan():
                 extra = data.get('extra', {})
                 if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
                     extra['needs_label_print'] = False
-                    spoolman_api.update_spool(sid, {'extra': extra})
-                    state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
+                    if spoolman_api.update_spool(sid, {'extra': extra}):
+                        state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
+                    else:
+                        state.add_log_entry(f"❌ Failed to verify Spool #{sid} label", "WARNING")
             
             info = spoolman_api.format_spool_display(data)
             return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
@@ -748,8 +794,10 @@ def api_identify_scan():
                 extra = data.get('extra', {})
                 if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
                     extra['needs_label_print'] = False
-                    spoolman_api.update_filament(fid, {'extra': extra})
-                    state.add_log_entry(f"✔️ Filament #{fid} Label Verified", "SUCCESS", "00ff00")
+                    if spoolman_api.update_filament(fid, {'extra': extra}):
+                        state.add_log_entry(f"✔️ Filament #{fid} Label Verified", "SUCCESS", "00ff00")
+                    else:
+                        state.add_log_entry(f"❌ Failed to verify Filament #{fid} label", "WARNING")
             
             name = data.get('name', 'Unknown Filament')
             return jsonify({"type": "filament", "id": int(fid), "display": name})

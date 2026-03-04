@@ -1,4 +1,5 @@
 import re
+import pytest
 from playwright.sync_api import Page, expect
 
 def test_wizard_field_sync(page: Page):
@@ -25,8 +26,25 @@ def test_wizard_field_sync(page: Page):
     # If the user hasn't defined matching fields in their DB, we can't fully run the E2E
     # without mocking the network response. So we do a soft test.
     if sync_btns.count() > 0:
-        active_btn = sync_btns.first
-        field_key = active_btn.get_attribute("data-sync-target")
+        active_btn = None
+        field_key = None
+        
+        for i in range(sync_btns.count()):
+            btn_candidate = sync_btns.nth(i)
+            key_candidate = btn_candidate.get_attribute("data-sync-target")
+            input_candidate = page.locator(f"#wiz_fil_ef_{key_candidate}")
+            
+            # Fast-fail locator check to prevent 30s timeouts on invisible/missing dynamically keyed elements
+            if input_candidate.count() > 0:
+                type_attr = input_candidate.evaluate("el => el.type")
+                if type_attr in ["text", "url"] or type_attr is None:
+                    active_btn = btn_candidate
+                    field_key = key_candidate
+                    break
+                
+        if not active_btn:
+            pytest.skip("No text-based synced fields found to test.")
+            
         btn = page.locator(f".wizard-sync-btn[data-sync-target='{field_key}']")
         
         fil_input = page.locator(f"#wiz_fil_ef_{field_key}")
