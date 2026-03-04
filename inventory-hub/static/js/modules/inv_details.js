@@ -165,7 +165,7 @@ const openFilamentDetails = (fid, silent = false) => {
                                 const row = document.createElement('div');
                                 row.className = "list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center p-2 small";
 
-                                // Updated Layout with "Add to Buffer" Button
+                                // Updated Layout with View Details, Add to Buffer, and Queue Buttons
                                 row.innerHTML = `
                             <div class="d-flex align-items-center">
                                 <span class="text-info fw-bold me-2">ID: ${s.id}</span> 
@@ -174,6 +174,11 @@ const openFilamentDetails = (fid, silent = false) => {
                             </div>
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-secondary me-2">${location}</span>
+                                <button class="btn btn-sm btn-outline-warning py-0 px-2 me-1" 
+                                    onclick="if(modals.filamentModal) modals.filamentModal.hide(); window.openSpoolDetails(${s.id});" 
+                                    title="View Spool Details">
+                                    🔍
+                                </button>
                                 <button class="btn btn-sm btn-outline-success py-0 px-2 me-1" 
                                     onclick="window.addSpoolToBuffer(${s.id})" 
                                     title="Add to Buffer">

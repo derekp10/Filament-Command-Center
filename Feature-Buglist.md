@@ -52,7 +52,6 @@
     - Some fields we might not want to bring in. Will need to go over the list of fields to bring in. And to leave alone.
     - Add a button to the details modal to easily get more of the same filament. (This would be a custom button that we can configure in the config file, so that it can be different for different filaments.)
     - A confirmation maybe to auto add a new spool of the same filament to the database when the button is clicked if the user buys more filament. Or an easy button to add a new spool, that fills in most of the standard data, but stuff that would be unique to the new spool, like price, product link (if it happens to be one that provides a good link like prusament ones)
-*Add spool button on the list of spools in the filament details modal that links you to the details of the spool.
 
 
 # **Location List**
@@ -112,6 +111,7 @@ Production Functionality Fix list
 * Fix Location Manager UI Dryer box slot locations not correctly displaying all filament information
 
 # **Done**
+* Add spool button on the list of spools in the filament details modal that links you to the details of the spool.
 * Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
 * Side Quest: Spool card coloring system doens't seem to handle 4+ colors in a swatch for generating gradiant
