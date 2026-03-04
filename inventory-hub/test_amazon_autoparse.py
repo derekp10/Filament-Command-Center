@@ -5,7 +5,7 @@ import config_loader
 cfg = config_loader.load_config()
 scraper_api_key = cfg.get("SCRAPER_API_KEY", "")
 
-url = "https://www.amazon.com/dp/B07DN3557G"
+url = "https://www.amazon.com/s?k=3D+printer+filament+B07DN3557G"
 payload = {
     'api_key': scraper_api_key,
     'url': url,

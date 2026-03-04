@@ -149,16 +149,25 @@ class AmazonParser(BaseParser):
     def search(query: str) -> list[dict]:
         """
         Accepts an Amazon URL (e.g. https://www.amazon.com/dp/B07DN3557G).
-        Scrapes the <title> tag via ScraperAPI to bypass strict AWS WAF limits.
-        Attempts regex extraction of Brand, Material, Color, and Weight.
+        Extracts the ASIN and scrapes the Amazon Search results using ScraperAPI to bypass strict AWS WAF limits.
+        Attempts regex and NLP extraction of Brand, Material, Color, and Weight from the product title.
         """
         if "amazon.com" not in query and "/dp/" not in query:
             return []
 
         try:
-            # Amazon WAF reliably blocks almost all localized TLS impersonators in python (playwright, tls_client, cffi).
-            # The only sustainable method to scrape Amazon Titles directly is via a third-party residential proxy like ScraperAPI.
+            # Extract ASIN from the URL
+            asin_match = re.search(r'(?:/dp/|/gp/product/)([A-Z0-9]{10})', query)
+            if not asin_match:
+                state.logger.error("Amazon URL does not contain a recognizable 10-character ASIN.")
+                return []
+            asin = asin_match.group(1)
             
+            # WAF Bypass: Amazon heavily protects direct /dp/ routes.
+            # However, their search endpoint (/s?k=ASIN) often has lower security thresholds.
+            # We append '3D Printer Filament' to the search to prevent sponsored cross-category ads from hijacking the top result.
+            search_url = f"https://www.amazon.com/s?k=3D+printer+filament+{asin}"
+
             cfg = config_loader.load_config()
             scraper_api_key = cfg.get("SCRAPER_API_KEY", "")
             if not scraper_api_key:
@@ -171,13 +180,12 @@ class AmazonParser(BaseParser):
                 
             payload = {
                 'api_key': scraper_api_key,
-                'url': query,
-                'render': 'false', # Javascript execution is not needed just for the Title tag, saving proxy cost
+                'url': search_url,
+                'render': 'false', 
                 'country_code': 'us'
             }
             
-            # Simple requests works perfectly fine through the proxy
-            r = requests.get('https://api.scraperapi.com/', params=payload, timeout=20)
+            r = requests.get('https://api.scraperapi.com/', params=payload, timeout=30)
             
             if not r.ok:
                 state.logger.warning(f"Amazon ScraperAPI fetch failed: {r.status_code}")
@@ -185,17 +193,45 @@ class AmazonParser(BaseParser):
                 
             html = r.text
             
-            # Defensive check
             if "To discuss automated access to Amazon data please contact" in html or "api-services-support@amazon.com" in html or "challenge-container" in html:
                 state.logger.error("Amazon Scraping Blocked: Bot detection CAPTCHA served despite ScraperAPI.")
                 return []
                 
-            title_match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE)
-            if not title_match:
-                state.logger.warning("Amazon title tag not found in HTML.")
+            try:
+                from bs4 import BeautifulSoup
+            except ImportError:
+                state.logger.error("BeautifulSoup4 is required for Amazon parsing. Please install with: pip install beautifulsoup4")
+                return []
+
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            title = ""
+            # Strict ASIN match in the search DOM
+            asin_div = soup.find('div', {'data-asin': asin})
+            if asin_div:
+                title_el = asin_div.find('h2')
+                if title_el:
+                    title = title_el.get_text(strip=True)
+            
+            # Fallback 1: Try finding the first long H2 tag (most likely the single product result)
+            if not title:
+                headers = soup.find_all('h2')
+                for h in headers:
+                    text = h.get_text(strip=True)
+                    if len(text) > 40: # Amazon titles are typically long
+                        title = text
+                        break
+
+            # Fallback 2: Regex extraction for <span a-text-normal> (used in some mobile layouts)
+            if not title:
+                title_match = re.search(r'<span class="a-size-medium a-color-base a-text-normal"[^>]*>(.*?)</span>', html, re.IGNORECASE)
+                if title_match:
+                    title = re.sub(r'<[^>]*>', '', title_match.group(1)).strip()
+
+            if not title:
+                state.logger.warning("Amazon title could not be extracted from the DOM structure.")
                 return []
                 
-            title = title_match.group(1).replace(" : Amazon.com : Industrial & Scientific", "").strip()
             title_upper = title.upper()
             
             # --- NLP Extraction Logic ---
@@ -221,12 +257,29 @@ class AmazonParser(BaseParser):
             elif "ESUN" in title_upper: brand = "eSUN"
             elif "ELEGOO" in title_upper: brand = "ELEGOO"
             
-            # 3. Weight
-            weight = 1000
-            if re.search(r"1\s?kg", title_upper) or "2.2" in title_upper: weight = 1000
-            elif re.search(r"2\s?kg", title_upper): weight = 2000
-            elif re.search(r"3\s?kg", title_upper): weight = 3000
-            elif re.search(r"5\s?kg", title_upper): weight = 5000
+            # 3. Weight Regex Parsing
+            weight = 1000.0 # Default fallback
+            
+            # Try to look for total weight first e.g. "4KG" or "1.5 KG"
+            total_match = re.search(r'(\d+(?:\.\d+)?)\s*KG', title_upper)
+            if total_match:
+                try:
+                    val = float(total_match.group(1))
+                    if 0.1 <= val <= 20.0: # Sanity check
+                        weight = val * 1000.0
+                except ValueError:
+                    pass
+
+            # If we still think it's 1000g, check if we found multipack keywords
+            if weight == 1000.0:
+                multipack = 1
+                mp_match = re.search(r'(\d+)\s*(?:pk|pack|rolls|spools|kg/roll)', title_upper)
+                if mp_match:
+                    try: 
+                        multipack = int(mp_match.group(1))
+                        weight = 1000.0 * multipack
+                    except ValueError: 
+                        pass
             
             # 4. Color Names (Fuzzy Matching on common vocabulary)
             color_name = "Unknown Color"

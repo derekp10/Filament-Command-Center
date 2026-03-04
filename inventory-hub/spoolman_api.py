@@ -47,10 +47,15 @@ def sanitize_outbound_data(data):
             elif val_str.lower() == 'false':
                 clean_extra[key] = "false"
             else:
+                # [ALEX FIX] Spoolman strictly requires that *all* custom Extra fields, even plain strings, 
+                # be sent as valid JSON strings. This means they must include the literal double-quotes.
+                # A value of `Basic` will fail, but `"Basic"` will pass.
                 try:
+                    # If it's already a valid JSON object/array/number/quoted-string, leave it
                     json.loads(val_str)
                     clean_extra[key] = val_str
                 except ValueError:
+                    # If it's a naked string, wrap it in double quotes via json.dumps
                     clean_extra[key] = json.dumps(val_str)
         else:
             clean_extra[key] = json.dumps(str(value))

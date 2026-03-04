@@ -10,9 +10,7 @@ payload = {
         "diameter": 1.75,
         "density": 1.24,
         "color_hex": "FF0000",
-        "extra": {
-            "slicer_profile": "Basic"
-        }
+        "extra": {}
     },
     "spool_data": {
         "used_weight": 0,
