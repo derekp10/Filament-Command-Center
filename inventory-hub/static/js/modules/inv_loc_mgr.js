@@ -143,7 +143,8 @@ const renderManagerNav = () => {
 
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame}; ${curStyle.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}">
-            <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center;">
+            <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center; position:relative;">
+                <div style="position:absolute; top:5px; right:5px; cursor:pointer; font-size:1.2rem; background: rgba(0,0,0,0.5); border-radius: 4px; padding: 2px 4px; z-index: 10;" onclick="event.stopPropagation(); window.openEditWizard(${curItem.id});" title="Edit Spool">✏️</div>
                 <div class="nav-label">READY TO SLOT</div>
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>

@@ -1,6 +1,25 @@
 import requests # type: ignore
 import state # type: ignore
 import config_loader # type: ignore
+import json
+
+def parse_inbound_data(data):
+    """Recursively intercepts data incoming from Spoolman and deserializes JSON strings safely."""
+    if isinstance(data, list):
+        for item in data:
+            parse_inbound_data(item)
+    elif isinstance(data, dict):
+        if 'extra' in data and isinstance(data['extra'], dict):
+            for key, value in data['extra'].items():
+                if isinstance(value, str):
+                    try:
+                        parsed = json.loads(value)
+                        data['extra'][key] = parsed
+                    except ValueError:
+                        pass
+        if 'filament' in data and isinstance(data['filament'], dict):
+            parse_inbound_data(data['filament'])
+    return data
 
 # Constants for JSON sanitation
 # [ALEX FIX] Added 'physical_source_slot', and 'product_url' to ensure strict JSON string formatting
@@ -8,7 +27,7 @@ JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "physic
 
 def get_spool(sid):
     sm_url, _ = config_loader.get_api_urls()
-    try: return requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3).json()
+    try: return parse_inbound_data(requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3).json())
     except: return None
 
 def get_all_locations():
@@ -25,10 +44,8 @@ def get_all_locations():
 def get_filament(fid):
     """Fetches a specific filament definition."""
     sm_url, _ = config_loader.get_api_urls()
-    try: return requests.get(f"{sm_url}/api/v1/filament/{fid}", timeout=3).json()
+    try: return parse_inbound_data(requests.get(f"{sm_url}/api/v1/filament/{fid}", timeout=3).json())
     except: return None
-
-import json
 
 def sanitize_outbound_data(data):
     """Ensures extra fields are properly formatted as JSON strings for Spoolman."""
@@ -273,7 +290,7 @@ def get_spools_at_location_detailed(loc_name):
     try:
         resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
         if resp.ok:
-            for s in resp.json():
+            for s in parse_inbound_data(resp.json()):
                 sloc = s.get('location', '').strip()
                 extra = s.get('extra', {})
                 match = False
@@ -326,7 +343,7 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
         fil_resp = requests.get(f"{sm_url}/api/v1/filament", timeout=5)
         target_filament_id = None
         if fil_resp.ok:
-            for fil in fil_resp.json():
+            for fil in parse_inbound_data(fil_resp.json()):
                 ext = str(fil.get('external_id', '')).strip().replace('"','')
                 if ext == legacy_id:
                     target_filament_id = fil['id']
@@ -335,7 +352,7 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
             spool_resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
             if spool_resp.ok:
                 candidates = []
-                for spool in spool_resp.json():
+                for spool in parse_inbound_data(spool_resp.json()):
                     if spool.get('filament', {}).get('id') == target_filament_id:
                         if (spool.get('remaining_weight') or 0) > 10:
                             return spool['id']
@@ -356,7 +373,7 @@ def find_filament_by_legacy_id(legacy_id):
     try:
         resp = requests.get(f"{sm_url}/api/v1/filament", timeout=5)
         if resp.ok:
-            for fil in resp.json():
+            for fil in parse_inbound_data(resp.json()):
                 ext = str(fil.get('external_id', '')).strip().replace('"','')
                 if ext == legacy_id:
                     return fil['id']
@@ -419,7 +436,7 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
             state.logger.error(f"Failed to fetch {target_type}s for search: {resp.status_code}")
             return []
             
-        all_items = resp.json()
+        all_items = parse_inbound_data(resp.json())
         
         # Tokenize the query for ANY-ORDER matching (e.g. "pla green" == "green pla")
         raw_query = query.strip().lower()

@@ -254,6 +254,7 @@ const SearchEngine = {
                     <div class="d-flex gap-3 align-items-center" style="z-index: 10; margin-right: 5px;">
                         ${!isFil && window.processScan ? `<div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); processScan('ID:${item.id}', 'search')" title="Add to Buffer/Manage">📥</div>` : ''}
                         <div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); ${isFil ? `openFilamentDetails(${item.id})` : `openSpoolDetails(${item.id})`}" title="View Details">🔍</div>
+                        ${!isFil ? `<div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); window.openEditWizard(${item.id});" title="Edit Spool">✏️</div>` : ''}
                         ${!isFil && window.addToQueue ? `<div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>` : ''}
                     </div>
                 `;

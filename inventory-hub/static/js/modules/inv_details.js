@@ -175,9 +175,14 @@ const openFilamentDetails = (fid, silent = false) => {
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-secondary me-2">${location}</span>
                                 <button class="btn btn-sm btn-outline-warning py-0 px-2 me-1" 
-                                    onclick="if(modals.filamentModal) modals.filamentModal.hide(); window.openSpoolDetails(${s.id});" 
+                                    onclick="if(modals.filamentModal) modals.filamentModal.hide(); openSpoolDetails(${s.id});" 
                                     title="View Spool Details">
                                     🔍
+                                </button>
+                                <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1" 
+                                    onclick="if(modals.filamentModal) modals.filamentModal.hide(); window.openEditWizard(${s.id});" 
+                                    title="Edit Spool">
+                                    ✏️
                                 </button>
                                 <button class="btn btn-sm btn-outline-success py-0 px-2 me-1" 
                                     onclick="window.addSpoolToBuffer(${s.id})" 
