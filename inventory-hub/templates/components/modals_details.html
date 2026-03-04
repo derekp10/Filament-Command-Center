@@ -38,22 +38,18 @@
                 </div>
             </div>
             <div class="modal-footer bg-dark border-top border-secondary justify-content-between">
-                <div>
-                    <a href="#" id="btn-open-spoolman" target="_blank" class="btn btn-outline-info me-2">Open Spoolman
-                        ↗️</a>
-                    <button type="button" class="btn btn-outline-success me-2" id="btn-spool-to-filament">🧬 View
-                        Swatch</button>
-                    <button type="button" class="btn btn-outline-warning me-2" id="btn-clone-spool"
-                        onclick="openCloneWizard(document.getElementById('detail-id').innerText)">🐑 Clone
-                        Spool</button>
+                <div class="d-flex gap-2">
+                    <a href="#" id="btn-open-spoolman" target="_blank" class="btn btn-outline-info">Spoolman ↗️</a>
+                    <button type="button" class="btn btn-outline-success" id="btn-spool-to-filament"
+                        title="View Swatch">🧬 Swatch</button>
+                    <button type="button" class="btn btn-outline-warning" id="btn-clone-spool"
+                        onclick="openCloneWizard(document.getElementById('detail-id').innerText)">🐑 Clone</button>
                     <button type="button" class="btn btn-outline-primary" id="btn-edit-spool"
-                        onclick="openEditWizard(document.getElementById('detail-id').innerText)">✏️ Edit
-                        Spool</button>
+                        onclick="openEditWizard(document.getElementById('detail-id').innerText)">✏️ Edit</button>
                 </div>
-                <div>
-                    <button type="button" class="btn btn-warning fw-bold" id="btn-print-action">➕ Queue Spool
-                        Label</button>
-                    <button type="button" class="btn btn-secondary ms-2" data-bs-dismiss="modal">Close</button>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-warning fw-bold" id="btn-print-action">➕ Queue Label</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>
@@ -109,12 +105,11 @@
                 </div>
             </div>
             <div class="modal-footer bg-dark border-top border-secondary justify-content-between">
-                <a href="#" id="btn-fil-open-spoolman" target="_blank" class="btn btn-outline-success me-2">Edit in
-                    Spoolman ↗️</a>
-                <div>
-                    <button type="button" class="btn btn-success fw-bold" id="btn-fil-print-action">➕ Queue Swatch
+                <a href="#" id="btn-fil-open-spoolman" target="_blank" class="btn btn-outline-success">Spoolman ↗️</a>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-success fw-bold" id="btn-fil-print-action">➕ Queue
                         Label</button>
-                    <button type="button" class="btn btn-secondary ms-2" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>
