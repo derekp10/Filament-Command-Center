@@ -19,6 +19,7 @@
 * Fix filament icon to be the DNA one, to match filament icon representation in other modals.
 
 # **Search Function**
+* Search by remaining weight.
 * Add label print button to filament cards.
 * Add refresh button to update results. 
 * Add ability to clone/easy fill filament details for creating a new spool & filament.
