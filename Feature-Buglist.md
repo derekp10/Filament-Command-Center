@@ -6,16 +6,30 @@
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
 * **[UI Standardization]** Convert hard-coded inline JS/HTML `style="..."` brute-force stylings across the entire application into standardized global CSS configurations.
 * **[UI Testing]** Implement comprehensive Playwright E2E structural testing across all UI elements globally. Verify that elements are not cutting, squishing, or overlapping each other on resize or edge-cases. Also verify text contrast, ensuring text color never exactly matches the background color unless intended by design.
-* **MOBILE** Make the entire app mobile mobile friendly. I eventually would like all features to work mobilly, so that if a user doesn't have a barcode scanner, or we need data from an NFC tag, we can just use the app on a phone to get the data we need/results we want.
+* **MOBILE** Make the entire app mobile friendly. I eventually would like all features to work mobilly, so that if a user doesn't have a barcode scanner, or we need data from an NFC tag, we can just use the app on a phone to get the data we need/results we want.
 * Add ability for a scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
     - Label Printed in Spoolman Spool data can be used to determin if a new (Spoolman Based ID) Label has been printed.
     - Filaments: Spoolman Reprint field/extra data, is set to Yes for all items that need to have a label reprinted with the new Spoolman ID. Null or No, mean that it already has a label with the spoolman ID.
       For Label printed field/extra data, if it has a legacy ID, this will probably be Yes, if it's a no, then it's new, and a label needs to be printed.
 * Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
 * Its too easy to have multiple legacy spools with no exact id, where we could be assigning the wrong item, though in those cases we should probably just reprint new labels. Perhaps a pop up when there could be more than 1 spool attached to the legacy id, asking the user if they want to see the list of spools, or just reprint a new label.
+* Track unprinted filament samples and create a button/queue like we have for labels.
 
+# **Label Backlog**
+* Fix filament icon to be the DNA one, to match filament icon representation in other modals.
+
+# **Search Function**
+* Add label print button to filament cards.
+* Add refresh button to update results. 
+* Add ability to clone/easy fill filament details for creating a new spool & filament.
 
 # **New Spool/Filament Creation**
+* When changes are made to spoolman extra fields, they usually ignore sort order in the database of which field comes next when displaying. We need a way to prevent that from happening with fields we add new data to. (Filament Attributes is a good example of this.) We should also make sure any amy modifications done with Setup_fields.py also save and restore the sort order correctly, for future updates. I had custom sort orders but now they don't exist anymore, not that spoolman utilized them anyway it seemed.
+* Step 1: Material Selection, should have a more fitting name, as it is more the methiod of creating a new item than it is about selecting a meterial.
+* Clean up filament attributes, remove/consolidate (X;Y items and similar items such as Carbon-Fiber & Carbon Fiber) This will require work on changeing the database so setup_fields.py can be used to handle it. Need to change over data that uses the remove modifications to use the new one instead.
+* Add ability to clone/easy fill filament details for creating a new spool & filament.
+* Give meterial type the ability to auto complete based on existing types in the database. (Enter should complete, mirror selecting (Up/Down to select) from the filament attributes field.)
+* Change so that tab moves to next field instead of auto completing on the filament Attributs field. Will use return to auto complete.
 * Continue to support Spoolman's "Import from External" feature for filaments, but also empower it to use other sites if possible. The list of sites that come to mind are as follows:
     - ~~https://3dfilamentprofiles.com/ ~~ (Not supported or allowed.)
     - https://github.com/OpenFilamentCollective/open-filament-database (Note: Check back occasionally to see if they have formalized an API)
@@ -37,6 +51,7 @@
 
 
 # **Details (Filament/Spool) Modal **
+* No feedback when clicking on the + Queue Label button. (Need to add a toast notification or something similar.)
 * Bring in more data from spoolman into the details modals. It be nice to see at purchase link to easily get more of the same filament.
     - Some fields we might not want to bring in. Will need to go over the list of fields to bring in. And to leave alone.
     - Add a button to the details modal to easily get more of the same filament. (This would be a custom button that we can configure in the config file, so that it can be different for different filaments.)
