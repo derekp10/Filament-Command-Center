@@ -19,7 +19,9 @@
 * Fix filament icon to be the DNA one, to match filament icon representation in other modals.
 
 # **Search Function**
-* Search by remaining weight.
+* Tighten up the space between the buttons on the spool cards, so that locations has more room. I noticed that some locations are so long that the border on running off the screen.
+* For filaments, add count of rolls avaiable of that color to the card. Use spool icon we've been using elsewhere. (🧵)
+* Search by and filter by remaining weight.
 * Add label print button to filament cards.
 * Add refresh button to update results. 
 * Add ability to clone/easy fill filament details for creating a new spool & filament.
@@ -44,6 +46,8 @@
 * Some values are being set to yes, most are null. What is the process for setting them to true? Also are the null values being treated as false?
 
 # **Location Manger Items**
+* Ejecting something from a a toolhead/mmu slot doesn't removes it from the slot as well as marking it as unslotted. It should retain the slot, but be unmarked as deployed. (Unless this contridects exsiting eject logic.)
+* Change Trash to eject on the stored/unslotted filament section, to match terminology used in other places.
 * The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
 * Ability to assigne a box slot to a printhead/mmu, so that a scan to that box slot will auto load the spool into the printhead/mmu. (This would be a per box setting)
     - I think this exists, but need to confirm in code.
