@@ -46,7 +46,7 @@
 * Some values are being set to yes, most are null. What is the process for setting them to true? Also are the null values being treated as false?
 
 # **Location Manger Items**
-* Ejecting something from a a toolhead/mmu slot doesn't removes it from the slot as well as marking it as unslotted. It should retain the slot, but be unmarked as deployed. (Unless this contridects exsiting eject logic.)
+* Ejecting something from a a toolhead/mmu slot removes it from the slot as well as marking it as unslotted. It should retain the slot, but be unmarked as deployed. (Unless this contridects exsiting eject logic.)
 * Change Trash to eject on the stored/unslotted filament section, to match terminology used in other places.
 * The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
 * Ability to assigne a box slot to a printhead/mmu, so that a scan to that box slot will auto load the spool into the printhead/mmu. (This would be a per box setting)
