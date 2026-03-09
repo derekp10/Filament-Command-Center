@@ -14,6 +14,7 @@
 * Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
 * Its too easy to have multiple legacy spools with no exact id, where we could be assigning the wrong item, though in those cases we should probably just reprint new labels. Perhaps a pop up when there could be more than 1 spool attached to the legacy id, asking the user if they want to see the list of spools, or just reprint a new label.
 * Track unprinted filament samples and create a button/queue like we have for labels.
+* Archived spools need to to be easily identifiable in the UI. Currently the only way to see is in spoolman. (Modals, possibly filament/spool cards)
 
 # **Label Backlog**
 * Fix filament icon to be the DNA one, to match filament icon representation in other modals.
@@ -27,6 +28,7 @@
 * Add ability to clone/easy fill filament details for creating a new spool & filament.
 
 # **New Spool/Filament Creation**
+* Empty spool weight doesn't always seem to update the back end correctly.
 * When changes are made to spoolman extra fields, they usually ignore sort order in the database of which field comes next when displaying. We need a way to prevent that from happening with fields we add new data to. (Filament Attributes is a good example of this.) We should also make sure any amy modifications done with Setup_fields.py also save and restore the sort order correctly, for future updates. I had custom sort orders but now they don't exist anymore, not that spoolman utilized them anyway it seemed.
 * Step 1: Material Selection, should have a more fitting name, as it is more the methiod of creating a new item than it is about selecting a meterial.
 * Clean up filament attributes, remove/consolidate (X;Y items and similar items such as Carbon-Fiber & Carbon Fiber) This will require work on changeing the database so setup_fields.py can be used to handle it. Need to change over data that uses the remove modifications to use the new one instead.
