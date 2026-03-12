@@ -20,6 +20,7 @@
 * Fix filament icon to be the DNA one, to match filament icon representation in other modals.
 
 # **Search Function**
+* Weight values might need to be rounded to the nearest .00 (Instead of displaying 33.860000000000014g)
 * Tighten up the space between the buttons on the spool cards, so that locations has more room. I noticed that some locations are so long that the border on running off the screen.
 * For filaments, add count of rolls avaiable of that color to the card. Use spool icon we've been using elsewhere. (🧵)
 * Search by and filter by remaining weight.
@@ -48,6 +49,7 @@
 * Some values are being set to yes, most are null. What is the process for setting them to true? Also are the null values being treated as false?
 
 # **Location Manger Items**
+* Removing an item from a toolhead/mmu slot should set filabridge slot to empty.
 * Ejecting something from a a toolhead/mmu slot removes it from the slot as well as marking it as unslotted. It should retain the slot, but be unmarked as deployed. (Unless this contridects exsiting eject logic.)
 * Change Trash to eject on the stored/unslotted filament section, to match terminology used in other places.
 * The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
@@ -55,6 +57,7 @@
     - I think this exists, but need to confirm in code.
 
 # **Command Center Items**
+* Change auto refresh to be a pause button instead for live activity. I've had too many times where I was looking for information to populate in the command center, but wasn't refreshing because that's where my mouse happend to be when I refocused the window.
 
 
 # **Details (Filament/Spool) Modal **
