@@ -20,6 +20,7 @@
 * Fix filament icon to be the DNA one, to match filament icon representation in other modals.
 
 # **Search Function**
+* Confirmed label print should be displayed somewhere on card. Perhaps chaning the printer icon to a checkmark for spools that have been confirmed printed.
 * Weight values might need to be rounded to the nearest .00 (Instead of displaying 33.860000000000014g)
 * Tighten up the space between the buttons on the spool cards, so that locations has more room. I noticed that some locations are so long that the border on running off the screen.
 * For filaments, add count of rolls avaiable of that color to the card. Use spool icon we've been using elsewhere. (🧵)
