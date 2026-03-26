@@ -327,7 +327,9 @@ def get_spools_at_location_detailed(loc_name):
                         'color': info['color'], 
                         'slot': final_slot,
                         'is_ghost': is_ghost,             # Flag for UI
-                        'deployed_to': sloc if is_ghost else None # Where is it really?
+                        'deployed_to': sloc if is_ghost else None, # Where is it really?
+                        'remaining_weight': s.get('remaining_weight'),
+                        'details': info.get('details', {})
                     })
     except: pass
     return found

@@ -150,7 +150,7 @@ const processScan = (text, source = 'keyboard') => {
                                 if (state.heldSpools.some(s => s.id === item.id)) {
                                     showToast("Already in Buffer", "warning");
                                 } else {
-                                    state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color });
+                                    state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color, remaining_weight: item.remaining_weight, details: item.details });
                                     renderBuffer();
                                     showToast(`Picked up #${item.id} from Slot ${res.slot}`);
                                     // Optional: If you want to see the manager too, uncomment next line:
@@ -173,7 +173,7 @@ const processScan = (text, source = 'keyboard') => {
                 const locData = state.allLocations.find(l => l.LocationID === res.id);
                 if ((!locData || parseInt(locData['Max Spools']) <= 1) && res.contents && res.contents.length > 0) {
                     const spool = res.contents[0];
-                    state.heldSpools.unshift({ id: spool.id, display: spool.display, color: spool.color });
+                    state.heldSpools.unshift({ id: spool.id, display: spool.display, color: spool.color, remaining_weight: spool.remaining_weight, details: spool.details });
                     renderBuffer();
                     showToast("⚡ Quick Pick: #" + spool.id);
                     state.lastScannedLoc = res.id;
@@ -187,7 +187,7 @@ const processScan = (text, source = 'keyboard') => {
                 state.lastScannedLoc = null;
                 if (!res.display) { showToast("Spool ID found but data missing!", "error"); return; }
                 if (state.heldSpools.some(s => s.id === res.id)) showToast("Already in Buffer", "warning");
-                else { state.heldSpools.unshift({ id: res.id, display: res.display, color: res.color }); renderBuffer(); }
+                else { state.heldSpools.unshift({ id: res.id, display: res.display, color: res.color, remaining_weight: res.remaining_weight, details: res.details }); renderBuffer(); }
             } else if (res.type === 'filament') {
                 openFilamentDetails(res.id);
             } else if (res.type === 'error') showToast(res.msg, 'error');
@@ -306,6 +306,8 @@ const loadBuffer = () => {
                     console.log("🔄 Syncing Buffer from Server...");
                     state.heldSpools = data;
                     if (window.renderBuffer) window.renderBuffer();
+                    // [ALEX FIX] Trigger a proactive backfill sync since old DB state didn't track remaining_weight
+                    setTimeout(liveRefreshBuffer, 500);
                 }
             }
             window.isBufferSyncing = false; // Unblock
@@ -336,9 +338,11 @@ const liveRefreshBuffer = () => {
             let changed = false;
             state.heldSpools.forEach(s => {
                 const fresh = data[s.id];
-                if (fresh && (fresh.display !== s.display || fresh.color !== s.color)) {
+                if (fresh && (fresh.display !== s.display || fresh.color !== s.color || fresh.remaining_weight !== s.remaining_weight || !s.details)) {
                     s.display = fresh.display;
                     s.color = fresh.color;
+                    s.remaining_weight = fresh.remaining_weight;
+                    s.details = fresh.details;
                     changed = true;
 
                     // Surgically update DOM
@@ -351,10 +355,12 @@ const liveRefreshBuffer = () => {
                         card.style.background = styles.frame;
                         if (styles.border) card.style.boxShadow = 'inset 0 0 0 2px #555';
                         else card.style.boxShadow = '';
-                        const inner = card.querySelector('.buffer-inner');
+                        const inner = card.querySelector('.cham-body');
                         if (inner) inner.style.background = styles.inner;
                         const textEl = card.querySelector('.cham-text');
                         if (textEl) textEl.innerText = cleanText;
+                        const weightEl = card.querySelector('.js-cmd-weight');
+                        if (weightEl) weightEl.innerText = `⚖️ ${fresh.type === 'filament' ? '---' : (fresh.remaining_weight !== undefined && fresh.remaining_weight !== null ? Math.round(fresh.remaining_weight) + 'g' : '---')}`;
                     });
 
                     // Update Nav Deck Cards
@@ -363,10 +369,12 @@ const liveRefreshBuffer = () => {
                         card.style.background = styles.frame;
                         if (styles.border) card.style.boxShadow = 'inset 0 0 0 2px #555';
                         else card.style.boxShadow = '';
-                        const inner = card.querySelector('.nav-inner');
+                        const inner = card.querySelector('.cham-body');
                         if (inner) inner.style.background = styles.inner;
-                        const nameEl = card.querySelector('.nav-name');
+                        const nameEl = card.querySelector('.cham-text'); // Fallback logic
                         if (nameEl) nameEl.innerText = cleanText;
+                        const weightEl = card.querySelector('.js-cmd-weight');
+                        if (weightEl) weightEl.innerText = `⚖️ ${fresh.type === 'filament' ? '---' : (fresh.remaining_weight !== undefined && fresh.remaining_weight !== null ? Math.round(fresh.remaining_weight) + 'g' : '---')}`;
                     });
                 }
             });

@@ -97,6 +97,7 @@
 * Add the ability to configure which extra fields should be bound and propagated to the other type of item. (Filament <-> Spool).
 * Spools might need to have a text field added to store the product data (Prusament link, etc.).
 * Add background refreshing used in Location Manager, etc... to update spool text (update weight other data).
+* Python server auto-reload on new code changes.
 
 
 # **On Hold**

@@ -394,7 +394,9 @@ def get_live_spools_data(spool_ids):
                 info = spoolman_api.format_spool_display(spool_data)
                 results[str(sid)] = {
                     "display": info["text"],
-                    "color": info["color"]
+                    "color": info["color"],
+                    "remaining_weight": spool_data.get("remaining_weight"),
+                    "details": info.get("details", {})
                 }
         except Exception as e:
             state.logger.error(f"Failed to live-refresh spool {sid}: {e}")

@@ -41,7 +41,7 @@ const SpoolCardBuilder = {
         // Core visual styles
         let styles;
         try {
-            styles = window.getFilamentStyle(item.color);
+            styles = getFilamentStyle(item.color);
         } catch (e) {
             styles = { frame: '#' + (item.color || '555555'), inner: `rgba(0,0,0,0.6)`, border: '1px solid #333' };
         }
@@ -51,12 +51,12 @@ const SpoolCardBuilder = {
         let actionTarget = '';
         let wrapperStyle = `background: ${styles.frame}; border: ${styles.border || '1px solid #333'}; cursor:pointer;`;
         
-        let customInnerBg = styles.inner;
+        let customInnerBg = `background: ${styles.inner};`;
         
         // Hazard striping & layout tweaks for Location Manager specific states (GHOST / DEPLOYED)
         if (item.is_ghost) {
             wrapperStyle += ` border: 2px dashed ${styles.frame}; background: #111;`;
-            customInnerBg = `repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.frame}; background-size: cover;`;
+            customInnerBg = `background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.frame}; background-size: cover;`;
         }
 
         // --- CONTEXT: ACTION BINDINGS & CLASSES ---
@@ -206,10 +206,17 @@ const SpoolCardBuilder = {
             outerClasses += `buffer-item ${options.isFirst ? 'active-item' : ''} `;
             actionTarget = `openSpoolDetails(${item.id})`;
             
+            const printHoverClick = typeof addToQueue !== 'undefined' ? `event.stopPropagation(); addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');` : '';
+            
             navActionsHTML = `
-                <div class="d-flex align-items-center gap-2">
-                    <div id="qr-buf-${i}" class="bg-white p-1 rounded" style="width: 40px; height: 40px;"></div>
-                    <div style="font-size: 1.8rem; cursor:pointer;" onclick="event.stopPropagation(); window.removeBufferItem(${item.id})" title="Drop from Buffer">❌</div>
+                <div class="d-flex gap-3 align-items-center" style="z-index: 10; margin-right: 5px;">
+                    <div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); openSpoolDetails(${item.id})" title="View Details">🔍</div>
+                    <div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); typeof openEditWizard !== 'undefined' && openEditWizard(${item.id});" title="Edit Spool">✏️</div>
+                    <div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="${printHoverClick}" title="Add to Print Queue">🖨️</div>
+                </div>
+                <div class="d-flex align-items-center gap-2 ms-2 ps-2 border-start border-secondary">
+                    <div id="qr-buf-${i}" class="bg-white p-1 rounded d-flex align-items-center justify-content-center" style="min-width: 74px; min-height: 74px;"></div>
+                    <div style="font-size: 1.8rem; cursor:pointer; color: #ff4444;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#ff4444'" onclick="event.stopPropagation(); typeof removeBufferItem !== 'undefined' && removeBufferItem(${item.id})" title="Drop from Buffer">❌</div>
                 </div>
             `;
             // Simplified Buffer Row Layout (mostly standard 3-row but compressed)
@@ -281,8 +288,8 @@ const SpoolCardBuilder = {
                          <div class="text-white-50" style="font-size: 0.85rem;">
                             ${isFil ? '' : info.line1.includes('Legacy') ? info.line1.split(' ')[1] : ''}
                          </div>
-                         <div class="text-pop text-nowrap" style="font-weight:bold; color:#fff; font-size: 1.2rem;">
-                            ⚖️ ${item.remaining || '---'}
+                         <div class="text-pop text-nowrap js-cmd-weight" style="font-weight:bold; color:#fff; font-size: 1.2rem;">
+                            ⚖️ ${isFil ? '---' : (item.remaining_weight !== undefined && item.remaining_weight !== null ? Math.round(item.remaining_weight) + 'g' : (item.remaining || '---'))}
                          </div>
                     </div>
 
