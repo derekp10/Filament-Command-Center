@@ -592,8 +592,8 @@ window.wizardMultiselectKeydown = (event, entityType, key) => {
         return;
     }
 
-    if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault(); // Prevent tab jump
+    if (event.key === 'Enter') {
+        event.preventDefault(); // Prevent modal form submission on enter
 
         if (visibleOptions.length > 0) {
             // Find active option, if none, use first visible

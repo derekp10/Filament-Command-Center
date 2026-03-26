@@ -5,15 +5,12 @@
 * **[UI Standardization]** Convert hard-coded inline JS/HTML `style="..."` brute-force stylings across the entire application into standardized global CSS configurations.
 * Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
 * Side Quest: Spool card coloring system doesn't seem to handle 4+ colors in a swatch for generating gradient.
-* Fix Gray text on Gray background and X close button.
-* Fix first line (Headers scrolling with the window).
 * Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
 
 ## 🗂️ Modals & Add Inventory Wizard
 * Extra long filament/spool names cause the Add Inventory Wizard buttons to become skewed with cancel above Create Inventory. Text data and UI buttons should not be a part of the same frame.
 * Step 1: Material Selection should have a more fitting name, as it is more the method of creating a new item than it is about selecting a material.
 * Give material type the ability to auto-complete based on existing types in the database. (Enter should complete, mirror selecting (Up/Down to select) from the filament attributes field).
-* Change so that Tab moves to next field instead of auto-completing on the Filament Attributes field. Will use Return to auto-complete.
 * Background refreshes on the spool list for a filament can cause a button click to be lost if occurring during a refresh. Should only refresh if changed hash changes, used elsewhere. This only happens on the 2nd item on the list, possibly more.
 * No feedback when clicking on the + Queue Label button. (Need to add a toast notification or something similar).
 * Bring in more data from Spoolman into the details modals. It'd be nice to see a purchase link to easily get more of the same filament.
@@ -143,3 +140,6 @@ All 3 of these things are important and have value. We should table for now, and
 * **UI/UX:** Globally swapped the generic spool emoji (🧵) for the specific DNA vector (🧬) when referring to Filament roots across the Multi-Spool Queue Modal and UI Builders.
 * **UI/UX:** Added a dedicated "Refresh" button directly natively integrated into the Search Offcanvas to easily pull immediate REST queries without clearing query states.
 * **UI/UX:** Contextually renamed the "TRASH" interface button to "EJECT" inside Location Manager cards dynamically whenever the target spool does not hold a specific structural slot assignment, unifying command terminology.
+* **UI/UX:** Injected `position: sticky; top: 0;` natively to all globally generated dark-table headers across the application so that structural dataset columns never vanish when scrolling a deep component list.
+* **UI/UX:** Globally replaced the dark-grey-on-dark-grey Bootstrap modal close button arrays with the `.btn-close-white` variant, pushing the `X` into a high-contrast visual priority above the system backdrops.
+* **UI/UX:** Explicitly unbound the `Tab` sequence bypass from the Filament Attributes multiselect tag engine loop; users can now safely form-tab to the next wizard field logically, while `Enter` retains explicit commit control logic.
