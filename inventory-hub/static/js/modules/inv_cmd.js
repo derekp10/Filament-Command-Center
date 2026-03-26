@@ -12,21 +12,7 @@ const renderBuffer = () => {
             z.innerHTML = `<div class="buffer-empty-msg">Buffer Empty</div>`;
         } else {
             z.innerHTML = state.heldSpools.map((s, i) => {
-                const styles = getFilamentStyle(s.color);
-                const cleanText = (s.display || "").replace(/^#\d+\s*/, '').trim();
-                return `
-                <div class="cham-card buffer-item ${i === 0 ? 'active-item' : ''}" data-spool-id="${s.id}" style="background: ${styles.frame}; ${styles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}">
-                    <div class="cham-body buffer-inner" style="background: ${styles.inner};">
-                        <div class="cham-text-group" onclick="openSpoolDetails(${s.id})" style="cursor:pointer">
-                            <div class="cham-id-badge text-pop" style="color: #fff;">#${s.id}</div>
-                            <div class="cham-text text-pop" style="color: #fff; font-weight: 800;">${cleanText}</div>
-                        </div>
-                        <div class="buffer-actions">
-                            <div id="qr-buf-${i}" class="buffer-qr"></div>
-                            <div class="btn-buffer-x" onclick="window.removeBufferItem(${s.id})">❌</div>
-                        </div>
-                    </div>
-                </div>`;
+                return window.SpoolCardBuilder.buildCard(s, 'buffer', { isFirst: i === 0, index: i });
             }).join('');
 
             state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:" + s.id, 74));
@@ -42,30 +28,9 @@ const renderBuffer = () => {
             const nextStyles = getFilamentStyle(nextSpool.color);
 
             n.style.display = 'flex';
-            n.innerHTML = `
-                <div class="cham-card nav-card" data-spool-id="${prevSpool.id}" style="background: ${prevStyles.frame}; ${prevStyles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}" onclick="window.prevBuffer()">
-                    <div class="cham-body nav-inner" style="background:${prevStyles.inner};">
-                        <div id="qr-nav-prev" class="nav-qr"></div>
-                        <div>
-                            <div class="nav-label text-pop" style="color: #fff; font-weight: 900;">◀ PREV</div>
-                            <div class="nav-name text-pop" style="color: #fff; font-weight: 800;">
-                                ${prevSpool.display.replace(/^#\d+\s*/, '')}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="cham-card nav-card" data-spool-id="${nextSpool.id}" style="background: ${nextStyles.frame}; ${nextStyles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}" onclick="window.nextBuffer()">
-                    <div class="cham-body nav-inner" style="background:${nextStyles.inner};">
-                        <div style="text-align:right;">
-                            <div class="nav-label text-pop" style="color: #fff; font-weight: 900;">NEXT ▶</div>
-                            <div class="nav-name text-pop" style="color: #fff; font-weight: 800;">
-                                ${nextSpool.display.replace(/^#\d+\s*/, '')}
-                            </div>
-                        </div>
-                        <div id="qr-nav-next" class="nav-qr"></div>
-                    </div>
-                </div>
-            `;
+            n.innerHTML = 
+                window.SpoolCardBuilder.buildCard(prevSpool, 'buffer_nav', { navDirection: 'prev', navAction: 'window.prevBuffer()' }) + 
+                window.SpoolCardBuilder.buildCard(nextSpool, 'buffer_nav', { navDirection: 'next', navAction: 'window.nextBuffer()' });
             generateSafeQR("qr-nav-prev", "CMD:PREV", 74);
             generateSafeQR("qr-nav-next", "CMD:NEXT", 74);
         } else { n.style.display = 'none'; }

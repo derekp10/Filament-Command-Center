@@ -127,18 +127,7 @@ const renderManagerNav = () => {
         let html = '';
 
         if (prevItem) {
-            const prevStyle = getFilamentStyle(prevItem.color);
-            const prevInfo = getRichInfo(prevItem);
-            html += `
-            <div class="cham-card nav-card" style="background: ${prevStyle.frame}; ${prevStyle.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}" onclick="window.prevBuffer()">
-                <div class="cham-body nav-inner" style="background:${prevStyle.inner}; display:flex; align-items:center; padding:5px 10px;">
-                    <div id="qr-nav-prev" class="nav-qr me-2"></div>
-                    <div>
-                        <div class="nav-label text-start">◀ PREV</div>
-                        <div class="nav-text-main" style="font-size:0.9rem;">#${prevItem.id}<br>${prevInfo.line3}</div>
-                    </div>
-                </div>
-            </div>`;
+            html += window.SpoolCardBuilder.buildCard(prevItem, 'buffer_nav', { navDirection: 'prev', navAction: 'window.prevBuffer()' });
         } else { html += `<div style="flex:1;"></div>`; }
 
         html += `
@@ -153,18 +142,7 @@ const renderManagerNav = () => {
         </div>`;
 
         if (nextItem) {
-            const nextStyle = getFilamentStyle(nextItem.color);
-            const nextInfo = getRichInfo(nextItem);
-            html += `
-            <div class="cham-card nav-card" style="background: ${nextStyle.frame}; ${nextStyle.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}" onclick="nextBuffer();">
-                <div class="cham-body nav-inner" style="background:${nextStyle.inner}; display:flex; align-items:center; justify-content:flex-end; padding:5px 10px;">
-                    <div style="text-align:right;">
-                        <div class="nav-label">NEXT ▶</div>
-                        <div class="nav-text-main" style="font-size:0.9rem;">#${nextItem.id}<br>${nextInfo.line3}</div>
-                    </div>
-                    <div id="qr-nav-next" class="nav-qr ms-2"></div>
-                </div>
-            </div>`;
+            html += window.SpoolCardBuilder.buildCard(nextItem, 'buffer_nav', { navDirection: 'next', navAction: 'window.nextBuffer()' });
         } else { html += `<div style="flex:1;"></div>`; }
 
         n.innerHTML = html;
@@ -195,87 +173,28 @@ const renderGrid = (data, max) => {
         else unslotted.push(i);
     });
 
+    let gridHTML = "";
     for (let i = 1; i <= max; i++) {
         const item = state.currentGrid[i];
-        const div = document.createElement('div');
-        div.className = item ? "cham-card slot-btn full" : "slot-btn empty";
-        div.onclick = () => handleSlotInteraction(i);
-
         if (item) {
-            div.setAttribute('data-spool-id', item.id);
-            const styles = getFilamentStyle(item.color);
-            const info = getRichInfo(item);
-
-            // [ALEX FIX] Ghost / Deployed Styling
-            if (item.is_ghost) {
-                div.style.background = "#111"; // Very dark backing
-                div.style.border = `3px dashed ${styles.frame}`; // Bright colored border
-
-                div.innerHTML = `
-                <div class="slot-inner-gold" style="background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.frame}; background-size: cover;">
-                    
-                    <div class="slot-header d-flex flex-column align-items-center mb-2 mt-1">
-                        <div class="slot-num-gold" style="color:#ccc;">SLOT ${i}</div>
-                        <div class="badge bg-warning text-dark mt-1" style="font-size:0.9rem; width: fit-content;">DEPLOYED</div>
-                    </div>
-                    
-                    <div class="text-center mt-2 mb-2">
-                        <div style="font-size:0.8rem; color:#ccc; background: rgba(0,0,0,0.7); border-radius: 4px; display: inline-block; padding: 2px 6px;">CURRENTLY AT:</div>
-                        <div class="text-pop" style="font-size:1.1rem; font-weight:900; color:#fff;">${item.deployed_to || "Unknown"}</div>
-                    </div>
-
-                    <div class="slot-info-gold text-center" style="background: rgba(0,0,0,0.7); border-radius: 5px; padding: 5px; margin: 0 5px; border: 1px solid #444;">
-                        <div class="text-line-1" style="color: #aaa;">${info.line1}</div>
-                        <div class="text-line-3" style="font-weight:bold; color: #fff;">${info.line3}</div>
-                    </div>
-
-                    <div class="d-grid gap-2 mt-auto pb-2 px-2 pt-2">
-                        <button class="btn btn-sm" style="background-color: #ffc107; color: #000; font-weight: bold; border: 2px solid #b38600; box-shadow: 0 4px 6px rgba(0,0,0,0.5);" onclick="event.stopPropagation(); doAssign('${document.getElementById('manage-loc-id').value}', ${item.id}, ${i})">
-                            ↩️ RETURN
-                        </button>
-                    </div>
-                </div>`;
-
-            } else {
-                // STANDARD RENDER (Normal Item)
-                div.style.background = styles.frame;
-                if (styles.border) div.style.boxShadow = 'inset 0 0 0 2px #555';
-                div.innerHTML = `
-                    <div class="slot-inner-gold" style="background:${styles.inner};">
-                        <div class="slot-header"><div class="slot-num-gold">SLOT ${i}</div></div>
-                        <div id="qr-slot-${i}" class="bg-white p-1 rounded" style="border: 3px solid white;"></div>
-                        <div class="slot-info-gold" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
-                            <div class="text-line-1">${info.line1}</div>
-                            <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold;">${info.line2}</div>
-                            <div class="text-line-3">${info.line3}</div>
-                            <div class="text-line-4">${info.line4}</div>
-                        </div>
-                        <div class="btn-label-compact js-btn-label">
-                            <span style="font-size:1.2rem;">📷</span> LABEL
-                        </div>
-                    </div>`;
-
-                const btn = div.querySelector('.js-btn-label');
-                if (btn) {
-                    btn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        window.addToQueue({ id: item.id, type: 'spool', display: item.display });
-                    });
-                }
-            }
+            gridHTML += window.SpoolCardBuilder.buildCard(item, 'loc_grid', { slotNum: i, locId: document.getElementById('manage-loc-id').value });
         } else {
             // FIX: Removed opacity:0.5 from QR div to make it sharp and scannable
-            div.innerHTML = `
-                <div class="slot-inner-gold">
-                    <div class="slot-header"><div class="slot-num-gold" style="color:#555;">SLOT ${i}</div></div>
-                    <div id="qr-slot-${i}" class="bg-white p-2 rounded mt-3 mb-3"></div>
-                    <div class="fs-4 text-muted fw-bold" style="margin-top:20px;">EMPTY</div>
-                    <div style="height:35px;"></div>
+            gridHTML += `
+                <div class="slot-btn empty" onclick="handleSlotInteraction(${i})">
+                    <div class="slot-inner-gold">
+                        <div class="slot-header"><div class="slot-num-gold" style="color:#555;">SLOT ${i}</div></div>
+                        <div id="qr-slot-${i}" class="bg-white p-2 rounded mt-3 mb-3"></div>
+                        <div class="fs-4 text-muted fw-bold" style="margin-top:20px;">EMPTY</div>
+                        <div style="height:35px;"></div>
+                    </div>
                 </div>`;
         }
+    }
+    grid.innerHTML = gridHTML;
 
-        grid.appendChild(div);
-
+    for (let i = 1; i <= max; i++) {
+        const item = state.currentGrid[i];
         requestAnimationFrame(() => {
             if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:" + i, 90);
             else generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:" + i, 80);
@@ -410,61 +329,7 @@ const renderUnslotted = (items) => {
 };
 
 const renderBadgeHTML = (s, i, locId) => {
-    const styles = getFilamentStyle(s.color);
-    const info = getRichInfo(s);
-
-    // [ALEX FIX] Ghost / Deployed Styling for List View (Single Slot)
-    if (s.is_ghost) {
-        return `
-        <div class="cham-card manage-list-item" data-spool-id="${s.id}" style="background:#111; border: 2px dashed ${styles.frame}">
-            <div class="list-inner-gold" style="background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), ${styles.frame}; background-size: cover;">
-                <div class="list-left">
-                    <div class="badge bg-warning text-dark mb-1" style="width:fit-content;">DEPLOYED</div>
-                    <div class="text-white mt-1" style="font-size:0.9rem; background: rgba(0,0,0,0.7); padding: 2px 6px; border-radius: 4px; display: inline-block;">
-                        <span style="color:#aaa;">Currently at:</span> <strong style="color:#fff;">${s.deployed_to || "Unknown"}</strong>
-                    </div>
-                    <div class="mt-2 text-white" style="background: rgba(0,0,0,0.7); padding: 4px 8px; border-radius: 4px;">
-                        ${info.line1} - <strong>${info.line3}</strong>
-                    </div>
-                </div>
-                <div class="action-group-gold" style="justify-content: center; align-items: center;">
-                    <div class="action-badge" style="flex: 0 0 auto; height: fit-content; width: 90px; margin: auto;" onclick="doAssign('${locId}', ${s.id}, '${s.slot || ''}')">
-                        <div class="badge-btn-gold btn-pick-bg" style="background: #ffc107; color:#000; box-shadow: 0 4px 6px rgba(0,0,0,0.5); padding: 12px 5px; height: auto; border-radius: 6px;">↩️ RETURN</div>
-                    </div>
-                </div>
-            </div>
-        </div>`;
-    }
-
-    // Standard Render
-    return `
-    <div class="cham-card manage-list-item" data-spool-id="${s.id}" style="background:${styles.frame}; ${styles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}">
-        <div class="list-inner-gold" style="background: ${styles.inner};">
-            <div class="list-left" style="cursor:pointer;" onclick="openSpoolDetails(${s.id})">
-                <div class="id-badge-gold">#${s.id}</div>
-                <div class="d-flex flex-column text-white">
-                     <div class="text-line-1">${info.line1}</div>
-                     <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold;">${info.line2}</div>
-                     <div class="text-line-3">${info.line3}</div>
-                     <div class="text-line-4">${info.line4}</div>
-                </div>
-            </div>
-            <div class="action-group-gold">
-                <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', true)">
-                    <div id="qr-pick-${i}" class="badge-qr"></div>
-                    <div class="badge-btn-gold btn-pick-bg">PICK</div>
-                </div>
-                <div class="action-badge js-btn-label">
-                    <div id="qr-print-${i}" class="badge-qr"></div>
-                    <div class="badge-btn-gold btn-print-bg">LABEL</div>
-                </div>
-                <div class="action-badge" onclick="ejectSpool(${s.id}, '${locId}', false)">
-                    <div id="qr-trash-${i}" class="badge-qr"></div>
-                    <div class="badge-btn-gold btn-trash-bg">TRASH</div>
-                </div>
-            </div>
-        </div>
-    </div>`;
+    return window.SpoolCardBuilder.buildCard(s, 'loc_list', { locId: locId, index: i });
 };
 
 const renderBadgeQRs = (s, i) => {
