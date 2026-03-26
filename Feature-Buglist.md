@@ -1,5 +1,5 @@
 # **New Issues:**
-* Amazon Parser: Multi-pack spools with different colors (e.g. 4x1kg) currently calculate as a single 4000g spool instead of 4 individual 1000g spools.
+* ONHOLD: Amazon Parser: Multi-pack spools with different colors (e.g. 4x1kg) currently calculate as a single 4000g spool instead of 4 individual 1000g spools.
 
 
 # ** General **
@@ -15,21 +15,26 @@
 * Its too easy to have multiple legacy spools with no exact id, where we could be assigning the wrong item, though in those cases we should probably just reprint new labels. Perhaps a pop up when there could be more than 1 spool attached to the legacy id, asking the user if they want to see the list of spools, or just reprint a new label.
 * Track unprinted filament samples and create a button/queue like we have for labels.
 * Archived spools need to to be easily identifiable in the UI. Currently the only way to see is in spoolman. (Modals, possibly filament/spool cards)
+* Help button to provide inforemation on how to use a modal, and to try and store information about how things work in the code.
 
 # **Label Backlog**
 * Fix filament icon to be the DNA one, to match filament icon representation in other modals.
 
 # **Search Function**
+* Results sometimes use a different card style for filament/spools, where the buttons are missing from them. We should be using the same code for both. This happend in conjunction with using the advanced search function in the Add Enventory Wizzard, Existing filament Section.
+* Should be able to decode filament ID's that were scanned in using the barcode scanner (Using the input speed check used in another part, command center I believe to check if it was entered by hand or scanned in, inorder to determin if it should be marked as printed.)
 * Confirmed label print should be displayed somewhere on card. Perhaps chaning the printer icon to a checkmark for spools that have been confirmed printed.
 * Weight values might need to be rounded to the nearest .00 (Instead of displaying 33.860000000000014g)
 * Tighten up the space between the buttons on the spool cards, so that locations has more room. I noticed that some locations are so long that the border on running off the screen.
 * For filaments, add count of rolls avaiable of that color to the card. Use spool icon we've been using elsewhere. (🧵)
 * Search by and filter by remaining weight.
-* Add label print button to filament cards.
-* Add refresh button to update results. 
+* Add label print button to filament sample cards.
+* Add refresh button to update results to search UI. 
 * Add ability to clone/easy fill filament details for creating a new spool & filament.
 
 # **New Spool/Filament Creation**
+* For existing filaments advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
+* Extra long filament/spool names cause the add inventory wizzard buttons to become skewed with cancel above Create Inventory. Text data and ui buttons should not be a part of the same inframe.
 * Empty spool weight doesn't always seem to update the back end correctly.
 * When changes are made to spoolman extra fields, they usually ignore sort order in the database of which field comes next when displaying. We need a way to prevent that from happening with fields we add new data to. (Filament Attributes is a good example of this.) We should also make sure any amy modifications done with Setup_fields.py also save and restore the sort order correctly, for future updates. I had custom sort orders but now they don't exist anymore, not that spoolman utilized them anyway it seemed.
 * Step 1: Material Selection, should have a more fitting name, as it is more the methiod of creating a new item than it is about selecting a meterial.
@@ -41,13 +46,13 @@
     - ~~https://3dfilamentprofiles.com/ ~~ (Not supported or allowed.)
     - https://github.com/OpenFilamentCollective/open-filament-database (Note: Check back occasionally to see if they have formalized an API)
     - Prusament spool specific data links (Which are usually a QR code that links to a spools manufacturing data.)
-    - Purchase emails, or Amazon/Vendor product pages.
+    - Purchase emails, or Amazon/Vendor product pages. (ON HOLD)
     - Other sites I might not be aware of and which we can evaluate later for this data.
     - Support for Open Print Tags (Initialize,Read, and Write) (https://github.com/OpenPrintTag/openprinttag-specification)
 
 
 # **Print Queue Items**
-* Some values are being set to yes, most are null. What is the process for setting them to true? Also are the null values being treated as false?
+* Some values are being set to yes, most are null. What is the process for setting them to true? Also are the null values being treated as false? (I don't remember specifics on this one.)
 
 # **Location Manger Items**
 * Removing an item from a toolhead/mmu slot should set filabridge slot to empty.
@@ -62,6 +67,8 @@
 
 
 # **Details (Filament/Spool) Modal **
+* Background refreshes on the spool list for a filament can cause a button click to be lost if occuring during a refresh. Should only refresh if changed hash changes, used elsewhere. This only happens on the 2nd item on the list, possibly more.
+* Clone button on a spool didn't properly load in the spool/filament to be duplicated in to the existing filament section of the add inventory wizzard.
 * No feedback when clicking on the + Queue Label button. (Need to add a toast notification or something similar.)
 * Bring in more data from spoolman into the details modals. It be nice to see at purchase link to easily get more of the same filament.
     - Some fields we might not want to bring in. Will need to go over the list of fields to bring in. And to leave alone.
