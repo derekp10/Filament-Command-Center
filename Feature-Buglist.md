@@ -3,9 +3,7 @@
 ## 🎨 UI & Theming
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
 * **[UI Standardization]** Convert hard-coded inline JS/HTML `style="..."` brute-force stylings across the entire application into standardized global CSS configurations.
-* Tighten up the space between the buttons on the spool cards, so that locations have more room. I noticed that some locations are so long that the border is running off the screen.
 * Fix filament icon to be the DNA one, to match filament icon representation in other modals.
-* Black filaments need a better way to show border or a better gradient in the color.
 * Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
 * Side Quest: Spool card coloring system doesn't seem to handle 4+ colors in a swatch for generating gradient.
 * Fix Gray text on Gray background and X close button.
@@ -30,14 +28,13 @@
 * No way to easily edit spool data after creation.
 * Attempt to combine the creation of a new spool and filament into one step.
 * Maintain the ability to add multiple spools of the same type at the same time.
+* Implement a robust global window/modal management system to dynamically handle z-index stacking, backdrop layering, and body scrolling when multiple modals are open concurrently.
 
 ## 🔍 Search, Display & Filtering
 * Find spool functionality. Basically make finding a spool/filament easier than using Spoolman. Better support for color searches.
-* Results sometimes use a different card style for filament/spools, where the buttons are missing from them. We should be using the same code for both. This happened in conjunction with using the advanced search function in the Add Inventory Wizard.
 * Add refresh button to update results to search UI.
 * For filaments, add count of rolls available of that color to the card. Use spool icon we've been using elsewhere. (🧵)
 * Search by and filter by remaining weight.
-* Weight values might need to be rounded to the nearest .00 (Instead of displaying 33.860000000000014g).
 * Track unprinted filament samples and create a button/queue like we have for labels.
 * Archived spools need to be easily identifiable in the UI. Currently the only way to see is in Spoolman (Modals, possibly filament/spool cards).
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
@@ -141,3 +138,8 @@ All 3 of these things are important and have value. We should table for now, and
 * **Live Activity:** Implemented background polling for Filabridge `GET /api/print-errors` to expose `gcode` parsing errors in the Live Activity log.
 * **System:** Engineered a native CSS physical shield inside `scripts.html` to consume hardware `mousedown`/`click` wake-up hits natively when the Scanner Pauses.
 * **System:** Set it so that the screen don't sleep. Screen still times out on laptop. Fixed via robust native WakeLock API re-acquisition.
+* **UI/UX:** Unify Filament/Spool UI Cards into a universal `SpoolCardBuilder` engine to guarantee all Command Center sections (Search, Location, Buffer) share the exact same structural HTML layout and style. 
+* **UI/UX:** Fixed Location Manager footer action buttons squishing into each other and clipping their colorful backgrounds by properly wrapping the flexbox grid and padding the text elements.
+* **UI/UX:** Addressed the "Black filaments need a better way to show border" bug by mathematically injecting a dark metallic/carbon diagonal gradient for perfectly dark spools in `getFilamentStyle`.
+* **UI/UX:** Fixed the floating point display issue for weight metrics (`33.860000000014g`) by stripping backend calculations and handling clean structural `Math.round` execution securely inside the browser via the new card builder logic.
+* **Bug Fix:** Fixed the Spool Edit modal bug where opening it over the Location Manager caused the editing dialog to pop up behind the backdrop, blocking interaction.

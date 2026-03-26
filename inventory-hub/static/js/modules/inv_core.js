@@ -153,7 +153,7 @@ const getFilamentStyle = (colorStr) => {
     if (colors.length === 1) colors.push(colors[0]);
 
     // 5. Generate Gradients
-    const frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
+    let frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
 
     let innerGrad;
     if (colors.length > 1 && colors[0] !== colors[1]) {
@@ -166,7 +166,7 @@ const getFilamentStyle = (colorStr) => {
         innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
     }
 
-    // 6. Black border fix
+    // 6. Black border fix & Texture
     let borderStyle = "";
     if (colors.length > 0) {
         let isAllDark = true;
@@ -176,7 +176,12 @@ const getFilamentStyle = (colorStr) => {
             const r = parseInt(hex.substring(0, 2), 16), g = parseInt(hex.substring(2, 4), 16), b = parseInt(hex.substring(4, 6), 16);
             if (r > 35 || g > 35 || b > 35) { isAllDark = false; break; }
         }
-        if (isAllDark) borderStyle = "2px solid #666";
+        if (isAllDark) {
+            borderStyle = "2px solid #555";
+            // Prettify black by giving it a smooth diagonal dark metallic sheen instead of a solid void
+            frameGrad = `linear-gradient(135deg, #444444 0%, #1a1a1a 40%, #050505 100%)`;
+            innerGrad = `linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.9) 100%)`;
+        }
     }
 
     return { frame: frameGrad, inner: innerGrad, border: borderStyle };

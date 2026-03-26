@@ -131,23 +131,24 @@ const SpoolCardBuilder = {
                     <div class="d-flex gap-3 align-items-center" style="z-index: 10; margin-right: 5px;">
                         <div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); openSpoolDetails(${item.id})" title="View Details">🔍</div>
                         <div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="event.stopPropagation(); window.openEditWizard(${item.id});" title="Edit Spool">✏️</div>
+                        <div style="${btnStyle}" onmouseover="${hoverOn}" onmouseout="${hoverOff}" onclick="${printHoverClick}" title="Add to Print Queue">🖨️</div>
                     </div>
                 `;
 
                 // Add Row 4 for Physical QR scanning + large button interactions.
                 row4FooterHTML = `
-                    <div class="d-flex justify-content-around mt-2 pt-2 border-top border-secondary" style="background: rgba(0,0,0,0.2); border-radius: 0 0 6px 6px;">
-                        <div class="action-badge" onclick="event.stopPropagation(); ejectSpool(${item.id}, '${locId}', true)">
+                    <div class="d-flex justify-content-around flex-wrap mt-2 pt-2 border-top border-secondary" style="background: rgba(0,0,0,0.2); border-radius: 0 0 6px 6px;">
+                        <div class="action-badge mb-1" onclick="event.stopPropagation(); ejectSpool(${item.id}, '${locId}', true)">
                             <div id="qr-pick-${i}" class="badge-qr"></div>
-                            <div class="badge-btn-gold btn-pick-bg pb-1" style="font-size: 0.9rem;">✋ PICK</div>
+                            <div class="badge-btn-gold btn-pick-bg pb-1 px-2 rounded" style="font-size: 0.9rem;">✋ PICK</div>
                         </div>
-                        <div class="action-badge js-btn-label" onclick="${printHoverClick}">
+                        <div class="action-badge mb-1 js-btn-label" onclick="${printHoverClick}">
                             <div id="qr-print-${i}" class="badge-qr"></div>
-                            <div class="badge-btn-gold btn-print-bg pb-1" style="font-size: 0.9rem;">🖨️ LABEL</div>
+                            <div class="badge-btn-gold btn-print-bg pb-1 px-2 rounded" style="font-size: 0.9rem;">🖨️ LABEL</div>
                         </div>
-                        <div class="action-badge" onclick="event.stopPropagation(); ejectSpool(${item.id}, '${locId}', false)">
+                        <div class="action-badge mb-1" onclick="event.stopPropagation(); ejectSpool(${item.id}, '${locId}', false)">
                             <div id="qr-trash-${i}" class="badge-qr"></div>
-                            <div class="badge-btn-gold btn-trash-bg pb-1" style="font-size: 0.9rem;">🗑️ TRASH</div>
+                            <div class="badge-btn-gold btn-trash-bg pb-1 px-2 rounded" style="font-size: 0.9rem;">🗑️ TRASH</div>
                         </div>
                     </div>
                 `;

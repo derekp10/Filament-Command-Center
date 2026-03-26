@@ -247,7 +247,6 @@ def format_spool_display(spool_data):
         parts.append(brand)
         parts.append(mat)
         parts.append(f"({col_name})")
-        parts.append(f"[{rem}g]")
 
         display_text = " ".join(parts)
         
