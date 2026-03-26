@@ -1,197 +1,142 @@
-# **New Issues:**
-* ONHOLD: Amazon Parser: Multi-pack spools with different colors (e.g. 4x1kg) currently calculate as a single 4000g spool instead of 4 individual 1000g spools.
+# **Active Backlog (Organized by Feature Area)**
 
-
-# ** General **
-* High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowning) - EVERYWHERE () If we have color, I'd like to maintain it, but just give it that bit of pop use a compatible color. I don't wish to change every item of text to Black/White, so maintain existing colors, but give them a pop approperiate for there color.
+## 🎨 UI & Theming
+* High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
 * **[UI Standardization]** Convert hard-coded inline JS/HTML `style="..."` brute-force stylings across the entire application into standardized global CSS configurations.
-* **[UI Testing]** Implement comprehensive Playwright E2E structural testing across all UI elements globally. Verify that elements are not cutting, squishing, or overlapping each other on resize or edge-cases. Also verify text contrast, ensuring text color never exactly matches the background color unless intended by design.
-* **MOBILE** Make the entire app mobile friendly. I eventually would like all features to work mobilly, so that if a user doesn't have a barcode scanner, or we need data from an NFC tag, we can just use the app on a phone to get the data we need/results we want.
-* Add ability for a scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label) (On hold needs better plan of attack)
-    - Label Printed in Spoolman Spool data can be used to determin if a new (Spoolman Based ID) Label has been printed.
-    - Filaments: Spoolman Reprint field/extra data, is set to Yes for all items that need to have a label reprinted with the new Spoolman ID. Null or No, mean that it already has a label with the spoolman ID.
-      For Label printed field/extra data, if it has a legacy ID, this will probably be Yes, if it's a no, then it's new, and a label needs to be printed.
-* Find spool functionality. Basically make finding a spool/filament easier than using spoolman. Better support for color searches.
-* Its too easy to have multiple legacy spools with no exact id, where we could be assigning the wrong item, though in those cases we should probably just reprint new labels. Perhaps a pop up when there could be more than 1 spool attached to the legacy id, asking the user if they want to see the list of spools, or just reprint a new label.
-* Track unprinted filament samples and create a button/queue like we have for labels.
-* Archived spools need to to be easily identifiable in the UI. Currently the only way to see is in spoolman. (Modals, possibly filament/spool cards)
-* Help button to provide inforemation on how to use a modal, and to try and store information about how things work in the code.
-
-# **Label Backlog**
+* Tighten up the space between the buttons on the spool cards, so that locations have more room. I noticed that some locations are so long that the border is running off the screen.
 * Fix filament icon to be the DNA one, to match filament icon representation in other modals.
-
-# **Search Function**
-* Results sometimes use a different card style for filament/spools, where the buttons are missing from them. We should be using the same code for both. This happend in conjunction with using the advanced search function in the Add Enventory Wizzard, Existing filament Section.
-* Should be able to decode filament ID's that were scanned in using the barcode scanner (Using the input speed check used in another part, command center I believe to check if it was entered by hand or scanned in, inorder to determin if it should be marked as printed.)
-* Confirmed label print should be displayed somewhere on card. Perhaps chaning the printer icon to a checkmark for spools that have been confirmed printed.
-* Weight values might need to be rounded to the nearest .00 (Instead of displaying 33.860000000000014g)
-* Tighten up the space between the buttons on the spool cards, so that locations has more room. I noticed that some locations are so long that the border on running off the screen.
-* For filaments, add count of rolls avaiable of that color to the card. Use spool icon we've been using elsewhere. (🧵)
-* Search by and filter by remaining weight.
-* Add label print button to filament sample cards.
-* Add refresh button to update results to search UI. 
-* Add ability to clone/easy fill filament details for creating a new spool & filament.
-
-# **New Spool/Filament Creation**
-* For existing filaments advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
-* Extra long filament/spool names cause the add inventory wizzard buttons to become skewed with cancel above Create Inventory. Text data and ui buttons should not be a part of the same inframe.
-* Empty spool weight doesn't always seem to update the back end correctly.
-* When changes are made to spoolman extra fields, they usually ignore sort order in the database of which field comes next when displaying. We need a way to prevent that from happening with fields we add new data to. (Filament Attributes is a good example of this.) We should also make sure any amy modifications done with Setup_fields.py also save and restore the sort order correctly, for future updates. I had custom sort orders but now they don't exist anymore, not that spoolman utilized them anyway it seemed.
-* Step 1: Material Selection, should have a more fitting name, as it is more the methiod of creating a new item than it is about selecting a meterial.
-* Clean up filament attributes, remove/consolidate (X;Y items and similar items such as Carbon-Fiber & Carbon Fiber) This will require work on changeing the database so setup_fields.py can be used to handle it. Need to change over data that uses the remove modifications to use the new one instead.
-* Add ability to clone/easy fill filament details for creating a new spool & filament.
-* Give meterial type the ability to auto complete based on existing types in the database. (Enter should complete, mirror selecting (Up/Down to select) from the filament attributes field.)
-* Change so that tab moves to next field instead of auto completing on the filament Attributs field. Will use return to auto complete.
-* Continue to support Spoolman's "Import from External" feature for filaments, but also empower it to use other sites if possible. The list of sites that come to mind are as follows:
-    - ~~https://3dfilamentprofiles.com/ ~~ (Not supported or allowed.)
-    - https://github.com/OpenFilamentCollective/open-filament-database (Note: Check back occasionally to see if they have formalized an API)
-    - Prusament spool specific data links (Which are usually a QR code that links to a spools manufacturing data.)
-    - Purchase emails, or Amazon/Vendor product pages. (ON HOLD)
-    - Other sites I might not be aware of and which we can evaluate later for this data.
-    - Support for Open Print Tags (Initialize,Read, and Write) (https://github.com/OpenPrintTag/openprinttag-specification)
-
-
-# **Print Queue Items**
-* Some values are being set to yes, most are null. What is the process for setting them to true? Also are the null values being treated as false? (I don't remember specifics on this one.)
-
-# **Location Manger Items**
-* Removing an item from a toolhead/mmu slot should set filabridge slot to empty.
-* Ejecting something from a a toolhead/mmu slot removes it from the slot as well as marking it as unslotted. It should retain the slot, but be unmarked as deployed. (Unless this contridects exsiting eject logic.)
-* Change Trash to eject on the stored/unslotted filament section, to match terminology used in other places.
-* The ability to configure a box to change the slot order to go from left to right, or right to left. (This would be a per box setting)
-* Ability to assigne a box slot to a printhead/mmu, so that a scan to that box slot will auto load the spool into the printhead/mmu. (This would be a per box setting)
-    - I think this exists, but need to confirm in code.
-
-# **Command Center Items**
-* Change auto refresh to be a pause button instead for live activity. I've had too many times where I was looking for information to populate in the command center, but wasn't refreshing because that's where my mouse happend to be when I refocused the window.
-
-
-# **Details (Filament/Spool) Modal **
-* Background refreshes on the spool list for a filament can cause a button click to be lost if occuring during a refresh. Should only refresh if changed hash changes, used elsewhere. This only happens on the 2nd item on the list, possibly more.
-* Clone button on a spool didn't properly load in the spool/filament to be duplicated in to the existing filament section of the add inventory wizzard.
-* No feedback when clicking on the + Queue Label button. (Need to add a toast notification or something similar.)
-* Bring in more data from spoolman into the details modals. It be nice to see at purchase link to easily get more of the same filament.
-    - Some fields we might not want to bring in. Will need to go over the list of fields to bring in. And to leave alone.
-    - Add a button to the details modal to easily get more of the same filament. (This would be a custom button that we can configure in the config file, so that it can be different for different filaments.)
-    - A confirmation maybe to auto add a new spool of the same filament to the database when the button is clicked if the user buys more filament. Or an easy button to add a new spool, that fills in most of the standard data, but stuff that would be unique to the new spool, like price, product link (if it happens to be one that provides a good link like prusament ones)
-
-
-# **Location List**
-* CR-MDB-1:SLOT:4, treated as a location not a slot in a box.
-
-
-# **Next Steps Items:**
-
-## **Current:**
-
-
-## **Future:**
-2. ⚖️ The "Weigh-Out" Protocol
-The Issue: When you click Eject, the spool is removed, but the weight remains whatever Spoolman last recorded.
-
-The Missing Feature:
-
-An option (perhaps a toggle or a specific "Weigh & Eject" button) to update the remaining weight before removing the spool.
-
-Crucial for keeping inventory accurate after a print job or manual usage.
-
-This is pretty important for spools with a QR code on them. So we may want to tread this one differently, and hash it out better as things evolve.
-
-5. 🔄 Bulk Moves
-The Discussion: We briefly touched on moving entire boxes.
-
-The Missing Feature:
-
-The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
-
-6. Shapeshifting QR Codes in more places. (like Audit button)
-
-7. Refactor dashboard to be more modular if possible, and reduce token size/context requirements for some modifications.
-
-# **On Hold **
-1. Standardize the size of all QR codes to match that of the sizes used on the command center. (Audit, eject, drop, etc)
-2. If legacy barcode has no spools attached to it, UI should warn about this, perhapes give option to add new spool?
-3. Spoolman ExternalID is not a visible field to add to the data when viewing it in spoolman. As much as I don't want to duplicate data in the database, being able to see that data in the view lists might be handy. But this is very low priority, and may be achived by other means like inport/export Process or not needed depending on UI/config/features added. We should evaluate this after we've added more features to Command Center.
-
-
-# **New/Future Features **
-1. High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
-    - Adaptive High-Contrast Pop (Shadows Only) on colors
-
-2. Maybe we should probably figure out a way to set up a dev version for Spoolman and filabridge. So that I can test in dev, and maybe start using the prod version for actual prod activities, without messing up existing configurations in the database. This would probably be highly reliant on being able to sync data from Prod to test. We will probably have to build a list of apps or code to handling this, like the Import/Export feature. But also some sort of configuration UI within Command Center, for setting up the config files. We should probably refactor out hard coded configs that are bound to my instance and gear it more twords customzation, so that if others want to use this they can.
-
-3. On the front of 2, make as much of command Center user configuarble as possible, using UI elements and a config inport/export feature.
-
-
-# **Overarching issue**
-I think we've inadverntaly created 3 levels of logic/complexity here. 1. The physical, Scanning stuff and efficiently Moving it, 2. A UI layer, for debugging, but should only really need to be looked at to confirm things when where you were expecting, and 3, a full on interface that is easier to move spools around than having to use spoolmans lack luster interface.
-
-All 3 of these things are important and have value. And I think this is something that we should table for now, and come back to once we've gotten more of the functionality in place and working.
-
-# **I THINK there done?**
-Production Functionality Fix list
-* Fix Location Manager UI Dryer box slot locations not correctly displaying all filament information
-
-# **Done**
-* Fix `container_slot` serialization error causing Spoolman database update rejections (`400 - Invalid extra field for key container_slot: Value is not a string`).
-* Fix ghost `Label Verified` log spam when Spoolman API explicitly rejected backward backlog reductions. Consolidated tracker logic strictly to `needs_label_print`.
-* Add spool button on the list of spools in the filament details modal that links you to the details of the spool.
-* Sometimes the swatch isn't showing the right color I think. Also Doesn't handle multi-color spools currently.
-* Loading spools into buffer from filament definition doesn't load all spool data into card.
-* Side Quest: Spool card coloring system doens't seem to handle 4+ colors in a swatch for generating gradiant
-* Locations QR Codes should contain a LOC: code, and a LOC: code should be used to help identify locations. (Too many manual entry items accidently turn into locations by accident on misstyping)
-    - Pehraps we just refactor this code an check its logic.
-    - Keep existing logic to allow for backwords compatibility, but allow for LOC: codes for future items.
-* Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without (Effectivly doubling the line count.)
-* Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field
-* Add unassigned Location in Location List.
+* Black filaments need a better way to show border or a better gradient in the color.
+* Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
+* Side Quest: Spool card coloring system doesn't seem to handle 4+ colors in a swatch for generating gradient.
 * Fix Gray text on Gray background and X close button.
-* Fix first line (Headers scrolling with the window)
-* Improve readibility for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme)
-    - High-Contrast Pop (White Text + Heavy Black Shadow) - EVERYWHERE ()
-* Added color coding to the badges on the location (Location Type)
-* Added color indicate of dryerbox/tool fullness (1/1 Green, 2/1 Red, < Max White)
-* ~~Ejecting from slot is not showing as being ejected by setting slot to empty. Is this bug, or design? Possibly an ejecting last slot item bug? Seems to happen on slots and unassigned items in the box.~~
-* ~~Trash button, which I think doese the same thing as ejecting, also doesn't seem to work here, for spools that are assigned to the location, but doesn't have a slot attached to them.~~
-* Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to. This might be because we added the LOC: indicater, and it might just not be parcing correctly now.
-    - Currently items assigned using a slot QR code "LOC:CR-MDB-1:SLOT:4" are being stored in spoolman as a "CR-MDB-1:SLOT:4" location
-        * Could be advantagous to have the slots have there own loation in Spoolman. But I don't have a direct use case currently for it. Perhapes you might have one.
-* Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assigne all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
-    - This should probably be the default for non-drier boxes.
-* Location Manager not syncing status across browser instances?
-* COME BACK AND ADDRESS ISSUES IN setup_fields.py (Non destructive of existing choice fields, check error codes)
-* Fix backend logging to not repeate this filling the logs with non useful data. 
-    - 2026-02-14 06:01:08,706 - INFO - ✅ Loaded Prod Config: /config.json
-* Fixed Print Queue displaying "No Loc" for all spools.
-* Added "Send to Print Queue" button for individual spools inside the Filament Details popup.
-* Refactored Location DB to use JSON config instead of CSV, added native sync for Spoolman Location API, and built automated tests.
-* Fixed Undo Buffer Restoration to correctly recall spools to the buffer and reversed Toolhead Ejection cascades.
-* Fixed swatch circles in the "Live Activity" Dashboard log pane to accurately display CSS conic gradients mathematically divided for multi-color filament spools.
-* Implemented background polling for Filabridge `GET /api/print-errors` to expose `gcode` parsing errors in the Live Activity log.
-* Engineered a native CSS physical shield inside `scripts.html` to consume hardware `mousedown`/`click` wake-up hits natively when the Scanner Pauses, preventing accidental button triggers.
-* Set it so that the screen don't sleep. (Needs to be tested on laptop)
-    - Doesn't seem to work on Laptop
-* Eject should auto disable if we move off of the command screen to anyother screen or modal
-* Black filaments need a better way to show border or a better gradiant in the color
-* Add background refreshing used in Location Manger, etc... to update spool text (update weight other data)
-* Need to add a routine to clean up the logs after a while. We don't have that currently, and I'm sure things have gotten out of hand on production.
-* Refactoring setup code to be dynamic. For existing instances when someone is installing command center for the first time on an existing spoolman server, we just add the needed data fields that command center needs/uses. But on brand new installs (with no existing data) We can maintain existing code to get it started, or leverage the inport/export data for this in some way.
-* Spools might need to have a text field added to store the product data (Prusament: https://prusament.com/spool/17705/5b1a183b26/) as this is more spool level data, than filament level data.
-* Unable to send items to the unassigned location in the location list with a QR code scan.
-* Attempt to combine the creation of a new spool and filament into one step. 
-* Continue to support spoolmans ability to pull data from the vender up to filament (Empty Weight), and from Filament to Spool (Empty Spool Weight, price, etc.)
-* Add the ability to configure which extra fieds should be bound and propagated to the other type of item. (Filament <-> Spool) (I believe we have a purchase link that would be an example of this, where it's set on the filament, but not on the spool.)
-* Maintain the ability to add multiple spools of the same type at the same time. (THis is reperesented by the number box in spoolman next to add, allowing you to add more than one spool of the same filament at the same time)
-* ~~Support clone feature for Spools, to auto populate an existing spool.~~ (Completed Epic 2)
-* ~~Figure out a way to fill in density for filaments. This data isn't alwasy availabe from the vender, so we may need to use a default or calculate it somehow based on filament type.~~ (Completed Epic 2)
-* Need a way to add newly created Filament/Spools to the print queue. This chould be based on one of many print flags in the spoolman database. (Both buitl in and "extra Field" type data we've added to spoolman.)
-* Needs a window/modal that lists all the spools/filaments missing a confirmed label printing (By database check box)
-* Data in the window should be filterable or sortable. So that If I want oldest first to work on back log, or Newest first if I want to work on something I've just added.
-* Things sent to the print queue should be flagged for printing in the database, so that they can be placed and tracked in a speprate list, so that once they are printed, it can be flagged as printed and updated as such in the database. (Database = Spoolman)
-* Screen still times out on laptop. (Fixed via robust native WakeLock API re-acquisition)
-* Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
-* ~~Live: Names are not working correctly on spools, shows "" instead of the name.~~ (Fixed in `inv_loc_mgr.js`)
-* ~~Live: Cannot create spools manually.~~ (Fixed JSON serialization in `spoolman_api.py`)
-* Filament attributs still don't work, cant add any to it. This still doesn't work on the prod/live build. I cant select them and have them add to the list. Add button also doesn't work.
+* Fix first line (Headers scrolling with the window).
+* Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
+
+## 🗂️ Modals & Add Inventory Wizard
+* Extra long filament/spool names cause the Add Inventory Wizard buttons to become skewed with cancel above Create Inventory. Text data and UI buttons should not be a part of the same frame.
+* Step 1: Material Selection should have a more fitting name, as it is more the method of creating a new item than it is about selecting a material.
+* Give material type the ability to auto-complete based on existing types in the database. (Enter should complete, mirror selecting (Up/Down to select) from the filament attributes field).
+* Change so that Tab moves to next field instead of auto-completing on the Filament Attributes field. Will use Return to auto-complete.
+* Background refreshes on the spool list for a filament can cause a button click to be lost if occurring during a refresh. Should only refresh if changed hash changes, used elsewhere. This only happens on the 2nd item on the list, possibly more.
+* No feedback when clicking on the + Queue Label button. (Need to add a toast notification or something similar).
+* Bring in more data from Spoolman into the details modals. It'd be nice to see a purchase link to easily get more of the same filament.
+    - Some fields we might not want to bring in. Will need to go over the list of fields to bring in and leave alone.
+    - Add a button to the details modal to easily get more of the same filament. (Configure in config file).
+    - A confirmation maybe to auto add a new spool of the same filament when the button is clicked. Or an easy button to fill in standard data, but prompt for unique info (price, product link).
+* Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
+* For existing filaments, advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
+* Filament attributes still don't work, can't add any to it. This still doesn't work on the prod/live build. I can't select them and have them add to the list. Add button also doesn't work.
 * Extruder and bed temps are missing from the filament side for data entry.
 * No way to easily edit spool data after creation.
+* Attempt to combine the creation of a new spool and filament into one step.
+* Maintain the ability to add multiple spools of the same type at the same time.
+
+## 🔍 Search, Display & Filtering
+* Find spool functionality. Basically make finding a spool/filament easier than using Spoolman. Better support for color searches.
+* Results sometimes use a different card style for filament/spools, where the buttons are missing from them. We should be using the same code for both. This happened in conjunction with using the advanced search function in the Add Inventory Wizard.
+* Add refresh button to update results to search UI.
+* For filaments, add count of rolls available of that color to the card. Use spool icon we've been using elsewhere. (🧵)
+* Search by and filter by remaining weight.
+* Weight values might need to be rounded to the nearest .00 (Instead of displaying 33.860000000000014g).
+* Track unprinted filament samples and create a button/queue like we have for labels.
+* Archived spools need to be easily identifiable in the UI. Currently the only way to see is in Spoolman (Modals, possibly filament/spool cards).
+* Loading spools into buffer from filament definition doesn't load all spool data into card.
+
+## 📍 Location Management & Scanning
+* Removing an item from a toolhead/MMU slot should set filabridge slot to empty.
+* Ejecting something from a toolhead/MMU slot removes it from the slot as well as marking it as unslotted. It should retain the slot, but be unmarked as deployed.
+* Change Trash to eject on the stored/unslotted filament section, to match terminology used in other places.
+* The ability to configure a box to change the slot order to go from left to right, or right to left.
+* Ability to assign a box slot to a printhead/MMU, so that a scan to that box slot will auto load the spool.
+* CR-MDB-1:SLOT:4 is treated as a location not a slot in a box.
+* ⚖️ **The "Weigh-Out" Protocol**: Option (toggle or specific "Weigh & Eject" button) to update remaining weight before removing the spool. Important for spools with a QR code on them.
+* 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
+* Shapeshifting QR Codes in more places (like Audit button).
+* Locations QR Codes should contain a `LOC:` code, and a `LOC:` code should be used to help identify locations. (Keep existing logic to allow for backwards compatibility, but allow for `LOC:` codes for future items).
+* Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without.
+* Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field.
+* Add unassigned Location in Location List.
+* Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to.
+* Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assign all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
+* Location Manager not syncing status across browser instances?
+* Unable to send items to the unassigned location in the location list with a QR code scan.
+
+## 🎟️ Print Queue, Labels & Filament Usage
+* Add ability for a scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label).
+    - Label Printed in Spoolman Spool data can be used to determine if a new Label has been printed.
+    - Filaments: Spoolman Reprint field is set to Yes for items that need to have a label reprinted. Null or No mean that it already has a label with the Spoolman ID.
+* It's too easy to have multiple legacy spools with no exact ID, where we could be assigning the wrong item... perhaps a pop-up when there could be more than 1 spool attached to the legacy ID, asking the user if they want to see the list of spools, or just reprint a new label.
+* Should be able to decode filament IDs that were scanned in using the barcode scanner (using input speed check to determine if marked as printed).
+* Confirmed label print should be displayed somewhere on the card. Perhaps changing the printer icon to a checkmark for confirmed spools.
+* Add label print button to filament sample cards.
+* Some values in Print Queue are being set to yes, most are null. What is the process for setting them to true?
+* Need a way to add newly created Filament/Spools to the print queue based on print flags in the database.
+* Needs a window/modal that lists all the spools/filaments missing a confirmed label printing (By database check box).
+* Data in the missing label window should be filterable or sortable (Oldest first, Newest first).
+* Things sent to the print queue should be flagged for printing in the database, so that they can be placed and tracked in a separate list.
+* Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
+
+## ⚙️ App Flow, Architecture & Database
+* **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones.
+* Refactor dashboard to be more modular if possible, and reduce token size/context requirements.
+* Make as much of Command Center user configurable as possible, using UI elements and a config import/export feature.
+* **[UI Testing]** Implement comprehensive Playwright E2E structural testing across all UI elements globally. Verify that elements are not cutting, squishing, or overlapping each other.
+* Empty spool weight doesn't always seem to update the backend correctly.
+* When changes are made to Spoolman extra fields, they usually ignore sort order in the database. We need a way to restore sort order.
+* Clean up filament attributes, remove/consolidate (X;Y items and similar items such as Carbon-Fiber & Carbon Fiber). Requires Setup_fields.py changes.
+* Continue to support Spoolman's "Import from External" feature for filaments...
+    - open-filament-database
+    - Prusament spool specific data links
+    - Open Print Tags (Initialize, Read, and Write)
+* Maybe we should figure out a way to set up a dev version for Spoolman and filabridge.
+* Change auto refresh to be a pause button instead for live activity.
+* COME BACK AND ADDRESS ISSUES IN setup_fields.py (Non destructive of existing choice fields, check error codes).
+* Need to add a routine to clean up the logs after a while.
+* Refactoring setup code to be dynamic. On brand new installs, maintain existing code to get it started.
+* Continue to support Spoolman's ability to pull data from the vendor up to filament (Empty Weight), and from Filament to Spool (price, etc.)
+* Add the ability to configure which extra fields should be bound and propagated to the other type of item. (Filament <-> Spool).
+* Spools might need to have a text field added to store the product data (Prusament link, etc.).
+* Add background refreshing used in Location Manager, etc... to update spool text (update weight other data).
+
+
+# **On Hold**
+* Amazon Parser: Multi-pack spools with different colors (e.g. 4x1kg) currently calculate as a single 4000g spool instead of 4 individual 1000g spools.
+* Continue to support Spoolman's "Import from External" feature... Purchase emails, or Amazon/Vendor product pages.
+* Standardize the size of all QR codes to match that of the sizes used on the command center. (Audit, eject, drop, etc).
+* If legacy barcode has no spools attached to it, UI should warn about this, perhaps give option to add new spool?
+* Spoolman ExternalID is not a visible field in Spoolman UI. Very low priority.
+
+
+# **Overarching Issue**
+I think we've inadvertently created 3 levels of logic/complexity here:
+1. The physical, Scanning stuff and efficiently Moving it
+2. A UI layer, for debugging, but should only really need to be looked at to confirm things
+3. A full on interface that is easier to move spools around than having to use Spoolman's lackluster interface.
+All 3 of these things are important and have value. We should table for now, and come back to once we've gotten more of the functionality in place.
+
+
+# **Done**
+* **UI/UX:** Add ability to clone/easy fill filament details for creating a new spool & filament.
+* **UI/UX:** Clone button on a spool didn't properly load in the spool/filament to be duplicated into the existing filament section of the add inventory wizard.
+* **UI/UX:** Fix Location Manager UI Dryer box slot locations not correctly displaying all filament information.
+* **Modals:** Add spool button on the list of spools in the filament details modal that links you to the details of the spool.
+* **Modals:** Added "Send to Print Queue" button for individual spools inside the Filament Details popup.
+* **Bug Fix:** Live: Names are not working correctly on spools, shows "" instead of the name. (Fixed in `inv_loc_mgr.js`)
+* **Bug Fix:** Live: Cannot create spools manually. (Fixed JSON serialization in `spoolman_api.py`)
+* **Feature:** Support clone feature for Spools, to auto populate an existing spool. (Completed Epic 2)
+* **Feature:** Figure out a way to fill in density for filaments. (Completed Epic 2)
+* **Database:** Fix `container_slot` serialization error causing Spoolman database update rejections (`400 - Invalid extra field for key container_slot: Value is not a string`).
+* **Location:** Added color coding to the badges on the location (Location Type).
+* **Location:** Added color indicate of dryerbox/tool fullness (1/1 Green, 2/1 Red, < Max White).
+* **Location:** Ejecting from slot is not showing as being ejected by setting slot to empty.
+* **Location:** Trash button, which I think does the same thing as ejecting, also doesn't seem to work here, for spools that are assigned to the location, but doesn't have a slot attached to them.
+* **Location:** Refactored Location DB to use JSON config instead of CSV, added native sync for Spoolman Location API, and built automated tests.
+* **Logging:** Fix ghost `Label Verified` log spam when Spoolman API explicitly rejected backward backlog reductions.
+* **Command Center:** Fixed Undo Buffer Restoration to correctly recall spools to the buffer and reversed Toolhead Ejection cascades.
+* **Command Center:** Eject should auto disable if we move off of the command screen to any other screen or modal.
+* **Command Center:** Fix backend logging to not repeat non-useful data in the logs.
+* **Print Queue:** Fixed Print Queue displaying "No Loc" for all spools.
+* **Live Activity:** Fixed swatch circles in the "Live Activity" Dashboard log pane to accurately display CSS conic gradients mathematically divided for multi-color filament spools.
+* **Live Activity:** Implemented background polling for Filabridge `GET /api/print-errors` to expose `gcode` parsing errors in the Live Activity log.
+* **System:** Engineered a native CSS physical shield inside `scripts.html` to consume hardware `mousedown`/`click` wake-up hits natively when the Scanner Pauses.
+* **System:** Set it so that the screen don't sleep. Screen still times out on laptop. Fixed via robust native WakeLock API re-acquisition.
