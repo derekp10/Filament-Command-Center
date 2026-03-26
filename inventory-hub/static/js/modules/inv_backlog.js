@@ -64,7 +64,7 @@ window.fetchBacklog = () => {
             items.forEach(item => {
                 const isSpool = item.type === 'spool';
                 const f = isSpool ? item.filament : item;
-                const icon = isSpool ? '🧵' : '🧪';
+                const icon = isSpool ? '🧵' : '🧬';
 
                 // Color and Name Fallbacks
                 const material = f?.material || '';

@@ -3,7 +3,6 @@
 ## 🎨 UI & Theming
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
 * **[UI Standardization]** Convert hard-coded inline JS/HTML `style="..."` brute-force stylings across the entire application into standardized global CSS configurations.
-* Fix filament icon to be the DNA one, to match filament icon representation in other modals.
 * Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
 * Side Quest: Spool card coloring system doesn't seem to handle 4+ colors in a swatch for generating gradient.
 * Fix Gray text on Gray background and X close button.
@@ -32,7 +31,6 @@
 
 ## 🔍 Search, Display & Filtering
 * Find spool functionality. Basically make finding a spool/filament easier than using Spoolman. Better support for color searches.
-* Add refresh button to update results to search UI.
 * For filaments, add count of rolls available of that color to the card. Use spool icon we've been using elsewhere. (🧵)
 * Search by and filter by remaining weight.
 * Track unprinted filament samples and create a button/queue like we have for labels.
@@ -42,7 +40,6 @@
 ## 📍 Location Management & Scanning
 * Removing an item from a toolhead/MMU slot should set filabridge slot to empty.
 * Ejecting something from a toolhead/MMU slot removes it from the slot as well as marking it as unslotted. It should retain the slot, but be unmarked as deployed.
-* Change Trash to eject on the stored/unslotted filament section, to match terminology used in other places.
 * The ability to configure a box to change the slot order to go from left to right, or right to left.
 * Ability to assign a box slot to a printhead/MMU, so that a scan to that box slot will auto load the spool.
 * CR-MDB-1:SLOT:4 is treated as a location not a slot in a box.
@@ -143,3 +140,6 @@ All 3 of these things are important and have value. We should table for now, and
 * **UI/UX:** Addressed the "Black filaments need a better way to show border" bug by mathematically injecting a dark metallic/carbon diagonal gradient for perfectly dark spools in `getFilamentStyle`.
 * **UI/UX:** Fixed the floating point display issue for weight metrics (`33.860000000014g`) by stripping backend calculations and handling clean structural `Math.round` execution securely inside the browser via the new card builder logic.
 * **Bug Fix:** Fixed the Spool Edit modal bug where opening it over the Location Manager caused the editing dialog to pop up behind the backdrop, blocking interaction.
+* **UI/UX:** Globally swapped the generic spool emoji (🧵) for the specific DNA vector (🧬) when referring to Filament roots across the Multi-Spool Queue Modal and UI Builders.
+* **UI/UX:** Added a dedicated "Refresh" button directly natively integrated into the Search Offcanvas to easily pull immediate REST queries without clearing query states.
+* **UI/UX:** Contextually renamed the "TRASH" interface button to "EJECT" inside Location Manager cards dynamically whenever the target spool does not hold a specific structural slot assignment, unifying command terminology.

@@ -70,6 +70,13 @@ const SearchEngine = {
                 });
             }
 
+            const refreshBtn = document.getElementById('global-search-refresh');
+            if (refreshBtn) {
+                refreshBtn.addEventListener('click', () => {
+                    this.executeSearch();
+                });
+            }
+
             // Cleanup on hide
             el.addEventListener('hidden.bs.offcanvas', () => {
                 this.currentCallback = null;

@@ -148,7 +148,7 @@ const SpoolCardBuilder = {
                         </div>
                         <div class="action-badge mb-1" onclick="event.stopPropagation(); ejectSpool(${item.id}, '${locId}', false)">
                             <div id="qr-trash-${i}" class="badge-qr"></div>
-                            <div class="badge-btn-gold btn-trash-bg pb-1 px-2 rounded" style="font-size: 0.9rem;">🗑️ TRASH</div>
+                            <div class="badge-btn-gold btn-trash-bg pb-1 px-2 rounded" style="font-size: 0.9rem;">${(!item.slot || locId === 'unassigned') ? '⏏️ EJECT' : '🗑️ TRASH'}</div>
                         </div>
                     </div>
                 `;
