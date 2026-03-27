@@ -133,6 +133,7 @@ const openFilamentDetails = (fid, silent = false) => {
             if (btnQueueSwatch) {
                 btnQueueSwatch.onclick = () => {
                     addToQueue({ id: d.id, type: 'filament', display: d.name });
+                    showToast('Label added to print queue!', 'success');
                 };
             }
 
