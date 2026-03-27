@@ -1,5 +1,5 @@
 # **Done**
-* **UI/UX:** Add ability to clone/easy fill filament details for creating a new spool & filament.
+* **Bug Fix:** Fixed remaining weight on spool cards rendering as excessively long unrounded decimal strings (e.g. `987.654321987g`). Rounded at the source in `spoolman_api.py` `search_inventory()` and added a defensive `Math.round()` guard on the fallback path in `ui_builder.js`.
 * **UI/UX:** Clone button on a spool didn't properly load in the spool/filament to be duplicated into the existing filament section of the add inventory wizard.
 * **UI/UX:** Fix Location Manager UI Dryer box slot locations not correctly displaying all filament information.
 * **Modals:** Add spool button on the list of spools in the filament details modal that links you to the details of the spool.

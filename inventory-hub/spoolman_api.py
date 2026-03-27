@@ -544,7 +544,7 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 'slot': final_slot,
                 'location': locDisplay,
                 'is_ghost': is_ghost,
-                'remaining': rem,
+                'remaining': round(rem) if isinstance(rem, float) else rem,
                 'color_dist': c_dist,
                 'type': target_type,
                 'archived': item.get('archived', False)

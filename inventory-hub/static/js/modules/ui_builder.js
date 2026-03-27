@@ -296,7 +296,7 @@ const SpoolCardBuilder = {
                             <div class="text-white-50" style="font-size: 0.85rem;">${isFil ? '' : info.line1.includes('Legacy') ? info.line1.split(' ')[1] : ''}</div>
                          </div>
                          <div class="text-pop text-nowrap js-cmd-weight" style="font-weight:bold; color:#fff; font-size: 1.2rem;">
-                            ⚖️ ${isFil ? '---' : (item.remaining_weight !== undefined && item.remaining_weight !== null ? Math.round(item.remaining_weight) + 'g' : (item.remaining || '---'))}
+                            ⚖️ ${isFil ? '---' : (item.remaining_weight !== undefined && item.remaining_weight !== null ? Math.round(item.remaining_weight) + 'g' : (item.remaining != null && item.remaining !== '---' ? Math.round(item.remaining) + 'g' : '---'))}
                          </div>
                     </div>
 
