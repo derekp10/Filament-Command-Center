@@ -1,4 +1,5 @@
 # **Done**
+* **Feature:** Added the ability to directly toggle the `Archived` status of a spool from within the "Edit Spool" modal interface. Bound the state to both the edit wizard submission payload and injected a synchronized dynamic badge into the "Spool Details" viewing modal.
 * **Bug Fix:** Bound a missing `showToast()` confirmation feedback trigger natively onto the `+ Queue Label` action inside the Filament Details popup to verify database insertion.
 * **Bug Fix:** Fixed remaining weight on spool cards rendering as excessively long unrounded decimal strings (e.g. `987.654321987g`). Rounded at the source in `spoolman_api.py` `search_inventory()` and added a defensive `Math.round()` guard on the fallback path in `ui_builder.js`.
 * **UI/UX:** Clone button on a spool didn't properly load in the spool/filament to be duplicated into the existing filament section of the add inventory wizard.
