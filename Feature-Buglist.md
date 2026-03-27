@@ -28,7 +28,6 @@
 * Implement a robust global window/modal management system to dynamically handle z-index stacking, backdrop layering, and body scrolling when multiple modals are open concurrently.
 
 ## 🔍 Search, Display & Filtering
-* **Bug:** The `[📦 ARCHIVED]` badge is still failing to display natively on generated cards inside the Command Center buffer and the global Search UI.
 * **Bug:** Displayed remaining weight for spools is sometimes rendering with excessively long unrounded decimal strings.
 * Find spool functionality. Basically make finding a spool/filament easier than using Spoolman. Better support for color searches.
 * For filaments, add count of rolls available of that color to the card. Use spool icon we've been using elsewhere. (🧵)
