@@ -942,6 +942,7 @@ window.wizardSubmit = async () => {
             initial_weight: parseFloat(getVal('wiz-spool-initial_weight')) || null,
             location: getVal('wiz-spool-location') || '',
             comment: getVal('wiz-spool-comment') || '',
+            archived: document.getElementById('wiz-spool-archived')?.checked || false,
             extra: {}
         };
 
@@ -1120,6 +1121,9 @@ window.openCloneWizard = async (spoolId) => {
             document.getElementById('wiz-spool-empty_weight').value = d.spool_weight !== null ? d.spool_weight : "";
             document.getElementById('wiz-spool-used').value = 0; // Fresh spool is usually 0
             document.getElementById('wiz-spool-comment').value = d.comment || "";
+            if (document.getElementById('wiz-spool-archived')) {
+                document.getElementById('wiz-spool-archived').checked = false;
+            }
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Spool #${spoolId}.</span>`;
         })
@@ -1283,6 +1287,9 @@ window.openEditWizard = async (spoolId) => {
             document.getElementById('wiz-spool-initial_weight').value = d.initial_weight !== null ? d.initial_weight : "";
             document.getElementById('wiz-spool-used').value = d.used_weight || 0;
             document.getElementById('wiz-spool-comment').value = d.comment || "";
+            if (document.getElementById('wiz-spool-archived')) {
+                document.getElementById('wiz-spool-archived').checked = d.archived || false;
+            }
 
             // Spool Extra
             if (d.extra) {

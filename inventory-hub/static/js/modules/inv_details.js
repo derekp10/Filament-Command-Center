@@ -13,6 +13,11 @@ const openSpoolDetails = (id, silent = false) => {
             const fil = d.filament || {}; // Safe access
 
             document.getElementById('detail-id').innerText = d.id;
+            const archBadge = document.getElementById('detail-archived-badge');
+            if (archBadge) {
+                if (d.archived) archBadge.classList.remove('d-none');
+                else archBadge.classList.add('d-none');
+            }
             document.getElementById('detail-material').innerText = fil.material || "Unknown";
             document.getElementById('detail-vendor').innerText = fil.vendor?.name || "Unknown";
             document.getElementById('detail-weight').innerText = (fil.weight || 0) + "g";

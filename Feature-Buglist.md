@@ -8,7 +8,6 @@
 * Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
 
 ## 🗂️ Modals & Add Inventory Wizard
-* **Feature:** Add the ability to directly toggle the `Archived` status of a spool from within the "Edit Spool" modal interface.
 * Extra long filament/spool names cause the Add Inventory Wizard buttons to become skewed with cancel above Create Inventory. Text data and UI buttons should not be a part of the same frame.
 * Step 1: Material Selection should have a more fitting name, as it is more the method of creating a new item than it is about selecting a material.
 * Give material type the ability to auto-complete based on existing types in the database. (Enter should complete, mirror selecting (Up/Down to select) from the filament attributes field).
