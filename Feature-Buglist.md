@@ -20,7 +20,7 @@
     - A confirmation maybe to auto add a new spool of the same filament when the button is clicked. Or an easy button to fill in standard data, but prompt for unique info (price, product link).
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
 * For existing filaments, advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
-* Filament attributes still don't work, can't add any to it. This still doesn't work on the prod/live build. I can't select them and have them add to the list. Add button also doesn't work.
+
 * Extruder and bed temps are missing from the filament side for data entry.
 * No way to easily edit spool data after creation.
 * Attempt to combine the creation of a new spool and filament into one step, so that the user doesn't need to create the filament first before being able to create the spool.
@@ -145,6 +145,7 @@ All 3 of these things are important and have value. We should table for now, and
 * **UI/UX:** Injected `position: sticky; top: 0;` natively to all globally generated dark-table headers across the application so that structural dataset columns never vanish when scrolling a deep component list.
 * **UI/UX:** Globally replaced the dark-grey-on-dark-grey Bootstrap modal close button arrays with the `.btn-close-white` variant, pushing the `X` into a high-contrast visual priority above the system backdrops.
 * **UI/UX:** Explicitly unbound the `Tab` sequence bypass from the Filament Attributes multiselect tag engine loop; users can now safely form-tab to the next wizard field logically, while `Enter` retains explicit commit control logic.
+* **Bug Fix:** Fixed Filament Attributes being completely non-functional — selections couldn't be made, items couldn't be added to the list, and the Add button had no effect.
 * **UI/UX:** Relabeled "STEP 1: MATERIAL SELECTION" to "STEP 1: CREATION METHOD" across the Inventory Wizard structural HTML to clarify that you are determining *how* a spool is sourced rather than strictly mapping internal materials.
 * **UI/UX:** Bound a global green `showToast()` confirmation feedback trigger natively onto the `+ Queue Label` action scripts within both the Filament and Spool view contexts to verify database insertion.
 * **UI/UX:** Injected dynamic `item.archived` checks broadly into the universal `SpoolCardBuilder` string processor, appending a highly-visible red `[📦 ARCHIVED]` tag right onto the item name element directly dynamically so hidden obsolete artifacts are blatantly identifiable across all Location/Buffer/Search panes.

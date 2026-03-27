@@ -338,11 +338,12 @@ const liveRefreshBuffer = () => {
             let changed = false;
             state.heldSpools.forEach(s => {
                 const fresh = data[s.id];
-                if (fresh && (fresh.display !== s.display || fresh.color !== s.color || fresh.remaining_weight !== s.remaining_weight || !s.details)) {
+                if (fresh && (fresh.display !== s.display || fresh.color !== s.color || fresh.remaining_weight !== s.remaining_weight || !s.details || fresh.archived !== s.archived)) {
                     s.display = fresh.display;
                     s.color = fresh.color;
                     s.remaining_weight = fresh.remaining_weight;
                     s.details = fresh.details;
+                    s.archived = fresh.archived;
                     changed = true;
 
                     // Surgically update DOM
