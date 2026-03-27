@@ -11,9 +11,11 @@ const SpoolCardBuilder = {
     getRichInfo(item) {
         const d = item.details || {};
         const legacy = d.external_id ? `[Legacy: ${d.external_id}]` : "";
+        const isArch = (item.archived === true || String(item.archived).toLowerCase() === 'true');
+        const archivedBadge = isArch ? ` <span class="badge text-bg-danger position-relative ms-1 px-1" style="font-size: 0.65rem; top: -2px;">📦 ARCHIVED</span>` : "";
         const brand = d.brand || "Generic";
         const material = d.material || "PLA";
-        const name = d.color_name || (item.display || "").replace(/#\d+/, '').trim();
+        const name = (d.color_name || (item.display || "").replace(/#\d+/, '').trim()) + archivedBadge;
         const weight = d.weight ? `[${Math.round(d.weight)}g]` : "";
 
         return {

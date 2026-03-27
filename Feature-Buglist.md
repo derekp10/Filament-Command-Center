@@ -22,16 +22,16 @@
 * Filament attributes still don't work, can't add any to it. This still doesn't work on the prod/live build. I can't select them and have them add to the list. Add button also doesn't work.
 * Extruder and bed temps are missing from the filament side for data entry.
 * No way to easily edit spool data after creation.
-* Attempt to combine the creation of a new spool and filament into one step.
+* Attempt to combine the creation of a new spool and filament into one step, so that the user doesn't need to create the filament first before being able to create the spool.
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Implement a robust global window/modal management system to dynamically handle z-index stacking, backdrop layering, and body scrolling when multiple modals are open concurrently.
 
 ## 🔍 Search, Display & Filtering
+* **Bug:** The `[📦 ARCHIVED]` badge is still failing to display natively on generated cards inside the Command Center buffer and the global Search UI.
 * Find spool functionality. Basically make finding a spool/filament easier than using Spoolman. Better support for color searches.
 * For filaments, add count of rolls available of that color to the card. Use spool icon we've been using elsewhere. (🧵)
 * Search by and filter by remaining weight.
 * Track unprinted filament samples and create a button/queue like we have for labels.
-* Archived spools need to be easily identifiable in the UI. Currently the only way to see is in Spoolman (Modals, possibly filament/spool cards).
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
 
 ## 📍 Location Management & Scanning
@@ -143,3 +143,9 @@ All 3 of these things are important and have value. We should table for now, and
 * **UI/UX:** Injected `position: sticky; top: 0;` natively to all globally generated dark-table headers across the application so that structural dataset columns never vanish when scrolling a deep component list.
 * **UI/UX:** Globally replaced the dark-grey-on-dark-grey Bootstrap modal close button arrays with the `.btn-close-white` variant, pushing the `X` into a high-contrast visual priority above the system backdrops.
 * **UI/UX:** Explicitly unbound the `Tab` sequence bypass from the Filament Attributes multiselect tag engine loop; users can now safely form-tab to the next wizard field logically, while `Enter` retains explicit commit control logic.
+* **UI/UX:** Relabeled "STEP 1: MATERIAL SELECTION" to "STEP 1: CREATION METHOD" across the Inventory Wizard structural HTML to clarify that you are determining *how* a spool is sourced rather than strictly mapping internal materials.
+* **UI/UX:** Bound a global green `showToast()` confirmation feedback trigger natively onto the `+ Queue Label` action scripts within both the Filament and Spool view contexts to verify database insertion.
+* **UI/UX:** Injected dynamic `item.archived` checks broadly into the universal `SpoolCardBuilder` string processor, appending a highly-visible red `[📦 ARCHIVED]` tag right onto the item name element directly dynamically so hidden obsolete artifacts are blatantly identifiable across all Location/Buffer/Search panes.
+* **Bug Fix:** Fixed the Search UI completely ignoring the 'In Stock' toggle state by dynamically appending `?allow_archived=true` to the native Spoolman REST queries whenever the toggle is deactivated, bypassing Spoolman's default hidden state payload.
+* **Bug Fix:** Fixed explicitly typed Command Center scan payloads dropping the archive identifier. Fixed a multi-layer disconnect where `/api/identify_scan` failed to map the JSON key, AND `inv_cmd.js` aggressively stripped unmapped keys from the `state.heldSpools` cache arrays before passing the object to the card builder.
+* **Bug Fix:** Fixed explicit `[📦 ARCHIVED]` display omission across Search and Buffer UI. Resolved a secondary backend logic loop in `spoolman_api.py` dropping the archived dictionary flag during search generation, and concurrently softened Javascript boolean checks in `ui_builder.js` to ensure payload string conversions render correctly.

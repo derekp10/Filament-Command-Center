@@ -428,10 +428,13 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
     results = []
     
     try:
+        # If the user toggles 'In Stock' off (meaning they want to see everything), we must explicitly tell Spoolman API to return archived items
+        archived_param = "" if only_in_stock else "?allow_archived=true"
+        
         if target_type == "filament":
-            resp = requests.get(f"{sm_url}/api/v1/filament", timeout=10)
+            resp = requests.get(f"{sm_url}/api/v1/filament{archived_param}", timeout=10)
         else:
-            resp = requests.get(f"{sm_url}/api/v1/spool", timeout=10)
+            resp = requests.get(f"{sm_url}/api/v1/spool{archived_param}", timeout=10)
             
         if not resp.ok:
             state.logger.error(f"Failed to fetch {target_type}s for search: {resp.status_code}")
@@ -543,7 +546,8 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 'is_ghost': is_ghost,
                 'remaining': rem,
                 'color_dist': c_dist,
-                'type': target_type
+                'type': target_type,
+                'archived': item.get('archived', False)
             })
             
         # Sort by color distance (closest first), then by ID (newest first usually)

@@ -790,7 +790,8 @@ def api_identify_scan():
                 "display": info['text'], 
                 "color": info['color'],
                 "remaining_weight": data.get("remaining_weight"),
-                "details": info.get("details", {})
+                "details": info.get("details", {}),
+                "archived": data.get("archived", False)
             })
             
     if res['type'] == 'filament':

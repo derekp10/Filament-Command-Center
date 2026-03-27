@@ -150,7 +150,7 @@ const processScan = (text, source = 'keyboard') => {
                                 if (state.heldSpools.some(s => s.id === item.id)) {
                                     showToast("Already in Buffer", "warning");
                                 } else {
-                                    state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color, remaining_weight: item.remaining_weight, details: item.details });
+                                    state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color, remaining_weight: item.remaining_weight, details: item.details, archived: item.archived });
                                     renderBuffer();
                                     showToast(`Picked up #${item.id} from Slot ${res.slot}`);
                                     // Optional: If you want to see the manager too, uncomment next line:
@@ -173,7 +173,7 @@ const processScan = (text, source = 'keyboard') => {
                 const locData = state.allLocations.find(l => l.LocationID === res.id);
                 if ((!locData || parseInt(locData['Max Spools']) <= 1) && res.contents && res.contents.length > 0) {
                     const spool = res.contents[0];
-                    state.heldSpools.unshift({ id: spool.id, display: spool.display, color: spool.color, remaining_weight: spool.remaining_weight, details: spool.details });
+                    state.heldSpools.unshift({ id: spool.id, display: spool.display, color: spool.color, remaining_weight: spool.remaining_weight, details: spool.details, archived: spool.archived });
                     renderBuffer();
                     showToast("⚡ Quick Pick: #" + spool.id);
                     state.lastScannedLoc = res.id;
@@ -187,7 +187,7 @@ const processScan = (text, source = 'keyboard') => {
                 state.lastScannedLoc = null;
                 if (!res.display) { showToast("Spool ID found but data missing!", "error"); return; }
                 if (state.heldSpools.some(s => s.id === res.id)) showToast("Already in Buffer", "warning");
-                else { state.heldSpools.unshift({ id: res.id, display: res.display, color: res.color, remaining_weight: res.remaining_weight, details: res.details }); renderBuffer(); }
+                else { state.heldSpools.unshift({ id: res.id, display: res.display, color: res.color, remaining_weight: res.remaining_weight, details: res.details, archived: res.archived }); renderBuffer(); }
             } else if (res.type === 'filament') {
                 openFilamentDetails(res.id);
             } else if (res.type === 'error') showToast(res.msg, 'error');
