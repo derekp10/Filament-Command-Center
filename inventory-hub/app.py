@@ -784,7 +784,15 @@ def api_identify_scan():
                         state.add_log_entry(f"❌ Failed to verify Spool #{sid} label", "WARNING")
             
             info = spoolman_api.format_spool_display(data)
-            return jsonify({"type": "spool", "id": int(sid), "display": info['text'], "color": info['color']})
+            return jsonify({
+                "type": "spool", 
+                "id": int(sid), 
+                "display": info['text'], 
+                "color": info['color'],
+                "remaining_weight": data.get("remaining_weight"),
+                "details": info.get("details", {}),
+                "archived": data.get("archived", False)
+            })
             
     if res['type'] == 'filament':
         fid = res['id']

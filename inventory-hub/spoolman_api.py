@@ -247,7 +247,6 @@ def format_spool_display(spool_data):
         parts.append(brand)
         parts.append(mat)
         parts.append(f"({col_name})")
-        parts.append(f"[{rem}g]")
 
         display_text = " ".join(parts)
         
@@ -327,7 +326,9 @@ def get_spools_at_location_detailed(loc_name):
                         'color': info['color'], 
                         'slot': final_slot,
                         'is_ghost': is_ghost,             # Flag for UI
-                        'deployed_to': sloc if is_ghost else None # Where is it really?
+                        'deployed_to': sloc if is_ghost else None, # Where is it really?
+                        'remaining_weight': s.get('remaining_weight'),
+                        'details': info.get('details', {})
                     })
     except: pass
     return found
@@ -427,10 +428,13 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
     results = []
     
     try:
+        # If the user toggles 'In Stock' off (meaning they want to see everything), we must explicitly tell Spoolman API to return archived items
+        archived_param = "" if only_in_stock else "?allow_archived=true"
+        
         if target_type == "filament":
-            resp = requests.get(f"{sm_url}/api/v1/filament", timeout=10)
+            resp = requests.get(f"{sm_url}/api/v1/filament{archived_param}", timeout=10)
         else:
-            resp = requests.get(f"{sm_url}/api/v1/spool", timeout=10)
+            resp = requests.get(f"{sm_url}/api/v1/spool{archived_param}", timeout=10)
             
         if not resp.ok:
             state.logger.error(f"Failed to fetch {target_type}s for search: {resp.status_code}")
@@ -542,7 +546,8 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 'is_ghost': is_ghost,
                 'remaining': rem,
                 'color_dist': c_dist,
-                'type': target_type
+                'type': target_type,
+                'archived': item.get('archived', False)
             })
             
         # Sort by color distance (closest first), then by ID (newest first usually)

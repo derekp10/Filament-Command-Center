@@ -592,8 +592,8 @@ window.wizardMultiselectKeydown = (event, entityType, key) => {
         return;
     }
 
-    if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault(); // Prevent tab jump
+    if (event.key === 'Enter') {
+        event.preventDefault(); // Prevent modal form submission on enter
 
         if (visibleOptions.length > 0) {
             // Find active option, if none, use first visible
@@ -1142,6 +1142,25 @@ window.openEditWizard = async (spoolId) => {
     if (bmEl) {
         const bm = bootstrap.Modal.getInstance(bmEl) || new bootstrap.Modal(bmEl);
         bm.hide();
+    }
+    // Bootstrap 5 Stacked Modal Fix:
+    if (!window._wizardZIndexBound) {
+        window._wizardZIndexBound = true;
+        const wizEl = document.getElementById('wizardModal');
+        // Wait for backdrop creation to escalate its z-index
+        wizEl.addEventListener('shown.bs.modal', function () {
+            wizEl.style.setProperty('z-index', '1060', 'important');
+            const drops = document.querySelectorAll('.modal-backdrop');
+            if (drops.length > 1) {
+                drops[drops.length - 1].style.setProperty('z-index', '1059', 'important');
+            }
+        });
+        // Restore body scroll state for the remaining open modal
+        wizEl.addEventListener('hidden.bs.modal', function () {
+            if (document.querySelectorAll('.modal.show').length > 0) {
+                document.body.classList.add('modal-open');
+            }
+        });
     }
 
     // Reset and Open Wizard (Wait for dynamically mapped DOM structures first!)

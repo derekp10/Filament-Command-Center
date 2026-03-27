@@ -2,20 +2,21 @@
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
 <script src="{{ url_for('static', filename='js/NoSleep.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_core.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_wizard.js') }}?v=4"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_core.js') }}?v=1.2"></script>
+<script src="{{ url_for('static', filename='js/modules/ui_builder.js') }}?v=1.9"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_wizard.js') }}?v=6"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_details.js') }}"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_queue.js') }}"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_backlog.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_backlog.js') }}?v=1.1"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_search.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_search.js') }}?v=1.1"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=1.2"></script>
 
 <script>
     // Module Initialization
@@ -91,6 +92,7 @@
                 if (idText) {
                     addToQueue({ id: parseInt(idText), type: 'spool', display: document.getElementById('detail-color-name').innerText });
                     modals.spoolModal.hide();
+                    showToast('Label added to print queue!', 'success');
                 }
             };
         }
@@ -101,6 +103,7 @@
                 if (idText) {
                     addToQueue({ id: parseInt(idText), type: 'filament', display: document.getElementById('fil-detail-color-name').innerText });
                     modals.filamentModal.hide();
+                    showToast('Label added to print queue!', 'success');
                 }
             };
         }
