@@ -39,6 +39,9 @@ const SpoolCardBuilder = {
         const typeIcon = isFil ? '🧬' : '🧵';
         const safeDisplay = item.display ? item.display.replace(/"/g, '&quot;').replace(/'/g, '&#39;') : '';
         const info = this.getRichInfo(item);
+        // Compute archived badge for Row 3 (weight row, left side)
+        const isArchived = (item.archived === true || String(item.archived).toLowerCase() === 'true');
+        const archivedBadgeHTML = isArchived ? `<span class="badge text-bg-danger px-2 py-1" style="font-size: 0.8rem; letter-spacing: 0.02em;">📦 ARCHIVED</span>` : '';
 
         // Core visual styles
         let styles;
@@ -287,12 +290,13 @@ const SpoolCardBuilder = {
                     </div>
 
                     <!-- Row 3: Metrics (Weight) -->
-                    <div class="d-flex justify-content-between align-items-end mt-auto pt-1 w-100 ps-1">
-                         <div class="text-white-50" style="font-size: 0.85rem;">
-                            ${isFil ? '' : info.line1.includes('Legacy') ? info.line1.split(' ')[1] : ''}
+                    <div class="d-flex justify-content-between align-items-center mt-auto pt-1 w-100 ps-1">
+                         <div class="d-flex flex-column gap-1">
+                            ${archivedBadgeHTML}
+                            <div class="text-white-50" style="font-size: 0.85rem;">${isFil ? '' : info.line1.includes('Legacy') ? info.line1.split(' ')[1] : ''}</div>
                          </div>
                          <div class="text-pop text-nowrap js-cmd-weight" style="font-weight:bold; color:#fff; font-size: 1.2rem;">
-                            ⚖️ ${isFil ? '---' : (item.remaining_weight !== undefined && item.remaining_weight !== null ? Math.round(item.remaining_weight) + 'g' : (item.remaining || '---'))}
+                            ⚖️ ${isFil ? '---' : (item.remaining_weight !== undefined && item.remaining_weight !== null ? Math.round(item.remaining_weight) + 'g' : (item.remaining != null && item.remaining !== '---' ? Math.round(item.remaining) + 'g' : '---'))}
                          </div>
                     </div>
 

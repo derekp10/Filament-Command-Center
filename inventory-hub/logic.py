@@ -396,7 +396,8 @@ def get_live_spools_data(spool_ids):
                     "display": info["text"],
                     "color": info["color"],
                     "remaining_weight": spool_data.get("remaining_weight"),
-                    "details": info.get("details", {})
+                    "details": info.get("details", {}),
+                    "archived": spool_data.get("archived", False)
                 }
         except Exception as e:
             state.logger.error(f"Failed to live-refresh spool {sid}: {e}")
