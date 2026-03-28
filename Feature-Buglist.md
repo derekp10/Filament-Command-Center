@@ -23,6 +23,7 @@
 * Attempt to combine the creation of a new spool and filament into one step, so that the user doesn't need to create the filament first before being able to create the spool.
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Implement a robust global window/modal management system to dynamically handle z-index stacking, backdrop layering, and body scrolling when multiple modals are open concurrently.
+  - *Must include auto-collapsing the Search off-canvas menu when triggering a new modal (like Edit Spool) to reduce redundant clicks.*
 
 ## 🔍 Search, Display & Filtering
 * Find spool functionality. Basically make finding a spool/filament easier than using Spoolman. Better support for color searches.
