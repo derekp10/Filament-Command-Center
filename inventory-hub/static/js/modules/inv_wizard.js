@@ -148,12 +148,48 @@ window.wizardCalcUsedWeight = () => {
 
     let used = (netWt + emptyWt) - scaleWt;
     if (used < 0) used = 0;
+    if (used > netWt) used = netWt; // [ALEX FIX] Spoolman crashes if used > initial_weight
 
     document.getElementById('wiz-spool-used').value = used.toFixed(0);
+    document.getElementById('wiz-spool-remaining').value = (netWt - used).toFixed(0);
+};
+
+window.wizardCalcUsedFromRemaining = () => {
+    const remaining = parseFloat(document.getElementById('wiz-spool-remaining').value);
+    if (isNaN(remaining)) return;
+    
+    let netWt = parseFloat(document.getElementById('wiz-spool-initial_weight').value);
+    if (isNaN(netWt)) {
+        netWt = parseFloat(document.getElementById('wiz-fil-weight').value) || 1000;
+    }
+    
+    let used = netWt - remaining;
+    if (used < 0) used = 0;
+    if (used > netWt) used = netWt;
+    
+    document.getElementById('wiz-spool-used').value = used.toFixed(0);
+    document.getElementById('wiz-spool-scale').value = '';
+};
+
+window.wizardCalcRemainingFromUsed = () => {
+    const used = parseFloat(document.getElementById('wiz-spool-used').value);
+    if (isNaN(used)) return;
+    
+    let netWt = parseFloat(document.getElementById('wiz-spool-initial_weight').value);
+    if (isNaN(netWt)) {
+        netWt = parseFloat(document.getElementById('wiz-fil-weight').value) || 1000;
+    }
+    
+    let remaining = netWt - used;
+    if (remaining < 0) remaining = 0;
+    
+    document.getElementById('wiz-spool-remaining').value = remaining.toFixed(0);
+    document.getElementById('wiz-spool-scale').value = '';
 };
 
 window.wizardClearScaleWeight = () => {
     document.getElementById('wiz-spool-scale').value = '';
+    window.wizardCalcRemainingFromUsed();
 };
 
 // --- DATA FETCHERS ---
@@ -1124,6 +1160,7 @@ window.openCloneWizard = async (spoolId) => {
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = false;
             }
+            window.wizardCalcRemainingFromUsed();
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Spool #${spoolId}.</span>`;
         })
@@ -1290,6 +1327,7 @@ window.openEditWizard = async (spoolId) => {
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = d.archived || false;
             }
+            window.wizardCalcRemainingFromUsed();
 
             // Spool Extra
             if (d.extra) {

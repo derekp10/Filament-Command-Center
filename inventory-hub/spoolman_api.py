@@ -91,6 +91,19 @@ def update_spool(sid, data):
             if data['location'].strip().upper() == 'UNASSIGNED':
                 data['location'] = ''
                 
+        # [ALEX FIX] Ensure used_weight never crashes SQLAlchemy due to constraint by artificially capping to initial_weight
+        if 'used_weight' in data:
+            current_initial = data.get('initial_weight')
+            if current_initial is None:
+                # Need to lookup current initial_weight if it's missing from dirty payload
+                existing = get_spool(sid)
+                if existing and 'initial_weight' in existing:
+                    current_initial = existing['initial_weight']
+                    
+            if current_initial is not None and data['used_weight'] > current_initial:
+                state.logger.warning(f"Capping used_weight {data['used_weight']} to initial_weight {current_initial} for Spool {sid}")
+                data['used_weight'] = current_initial
+                
         clean_data = sanitize_outbound_data(data)
         r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
         if r.ok: return r.json()
@@ -106,6 +119,12 @@ def create_spool(data):
         if 'location' in data and isinstance(data['location'], str):
             if data['location'].strip().upper() == 'UNASSIGNED':
                 data['location'] = ''
+                
+        # [ALEX FIX] Ensure used_weight never crashes SQLAlchemy due to constraint on creation
+        if 'used_weight' in data and 'initial_weight' in data:
+            if data['used_weight'] > data['initial_weight']:
+                state.logger.warning(f"Capping used_weight {data['used_weight']} to initial_weight {data['initial_weight']} during creation.")
+                data['used_weight'] = data['initial_weight']
         
         clean_data = sanitize_outbound_data(data)
         r = requests.post(f"{sm_url}/api/v1/spool", json=clean_data, timeout=5)

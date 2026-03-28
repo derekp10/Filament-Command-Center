@@ -203,7 +203,7 @@
                                 id="wiz-spool-empty_weight" placeholder="(Inherited)"
                                 onkeyup="window.wizardCalcUsedWeight()">
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-3">
                             <label class="form-label small text-secondary mb-1"
                                 title="Overrides the Filament net weight if this particular spool is larger/smaller">Spool
                                 Net Wt (g)</label>
@@ -212,17 +212,22 @@
                                 onkeyup="window.wizardCalcUsedWeight()">
                         </div>
 
-                        <div class="col-md-4">
+                        <div class="col-md-3">
                             <label class="form-label small text-secondary mb-1"
                                 title="Put an already-used spool on a scale and enter its total weight here.">Scale
                                 Gross Wt (g)</label>
                             <input type="number" class="form-control bg-dark text-info border-info" id="wiz-spool-scale"
                                 placeholder="Calculate used..." onkeyup="window.wizardCalcUsedWeight()">
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-3">
+                            <label class="form-label small text-secondary mb-1 text-success">Remaining Wt (g)</label>
+                            <input type="number" class="form-control bg-dark text-success border-success fw-bold"
+                                id="wiz-spool-remaining" placeholder="Calc..." onkeyup="window.wizardCalcUsedFromRemaining()">
+                        </div>
+                        <div class="col-md-3">
                             <label class="form-label small text-secondary mb-1">Initial Used Wt (g)</label>
                             <input type="number" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-spool-used" value="0" onkeyup="window.wizardClearScaleWeight()">
+                                id="wiz-spool-used" value="0" onkeyup="window.wizardCalcRemainingFromUsed()">
                         </div>
                         <div class="col-md-4" style="display:none;">
                             <label class="form-label small text-secondary mb-1">Price Paid ($)</label>
