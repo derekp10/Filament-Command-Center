@@ -31,6 +31,8 @@
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
 
 ## 📍 Location Management & Scanning
+* Spools sometimes retain a location assignment in the database.
+* Add ability to manually edit and assign location data directly on a spool (fallback for when a barcode scan update gets missed or fails).
 * Removing an item from a toolhead/MMU slot should set filabridge slot to empty.
 * Ejecting something from a toolhead/MMU slot removes it from the slot as well as marking it as unslotted. It should retain the slot, but be unmarked as deployed.
 * The ability to configure a box to change the slot order to go from left to right, or right to left.
