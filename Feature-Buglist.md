@@ -6,6 +6,7 @@
 * Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
 * Side Quest: Spool card coloring system doesn't seem to handle 4+ colors in a swatch for generating gradient.
 * Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
+* Spool 'Archived' status badge colors are inconsistent (some yellow, most red). Standardize to a single color (e.g. Red) globally across all views.
 
 ## 🗂️ Modals & Add Inventory Wizard
 * Extra long filament/spool names cause the Add Inventory Wizard buttons to become skewed with cancel above Create Inventory. Text data and UI buttons should not be a part of the same frame.
@@ -21,6 +22,7 @@
 * Extruder and bed temps are missing from the filament side for data entry.
 * Attempt to combine the creation of a new spool and filament into one step, so that the user doesn't need to create the filament first before being able to create the spool.
 * Maintain the ability to add multiple spools of the same type at the same time.
+* Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
 * Implement a robust global window/modal management system to dynamically handle z-index stacking, backdrop layering, and body scrolling when multiple modals are open concurrently.
   - *Must include auto-collapsing the Search off-canvas menu when triggering a new modal (like Edit Spool) to reduce redundant clicks.*
 
@@ -29,6 +31,7 @@
 * Search by and filter by remaining weight.
 * Track unprinted filament samples and create a button/queue like we have for labels.
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
+* Location label for deployed items in the search window is too long and breaks the layout by pushing action buttons out of the card. Refactor Spool Card layout to move Location Data to a new dedicated row (e.g. between Row 1 and Row 2).
 
 ## 📍 Location Management & Scanning
 * Spools sometimes retain a location assignment in the database.
