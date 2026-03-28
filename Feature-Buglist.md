@@ -8,12 +8,10 @@
 * Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
 
 ## 🗂️ Modals & Add Inventory Wizard
-* **Feature:** Add the ability to directly toggle the `Archived` status of a spool from within the "Edit Spool" modal interface.
 * Extra long filament/spool names cause the Add Inventory Wizard buttons to become skewed with cancel above Create Inventory. Text data and UI buttons should not be a part of the same frame.
 * Step 1: Material Selection should have a more fitting name, as it is more the method of creating a new item than it is about selecting a material.
 * Give material type the ability to auto-complete based on existing types in the database. (Enter should complete, mirror selecting (Up/Down to select) from the filament attributes field).
 * Background refreshes on the spool list for a filament can cause a button click to be lost if occurring during a refresh. Should only refresh if changed hash changes, used elsewhere. This only happens on the 2nd item on the list, possibly more.
-* No feedback when clicking on the + Queue Label button. (Need to add a toast notification or something similar).
 * Bring in more data from Spoolman into the details modals. It'd be nice to see a purchase link to easily get more of the same filament.
     - Some fields we might not want to bring in. Will need to go over the list of fields to bring in and leave alone.
     - Add a button to the details modal to easily get more of the same filament. (Configure in config file).

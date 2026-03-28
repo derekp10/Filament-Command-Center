@@ -1,4 +1,9 @@
 # **Done**
+* **Feature:** Designed and implemented a bi-directional "Remaining Wt (g)" fields synchronizer in the Wizard Editor to allow users to directly zero-out Filabridge-depleted spools without performing reverse math, natively protected by pre-flight validation preventing Spoolman DB initialization weight violation crashes.
+* **Bug Fix:** Isolated and diagnosed TrueNAS dataset permission issues creating `ReadOnly` lockups on Dev Spoolman that resulted in continuous 500 Internal Server Error returns for single-field Boolean patch attempts.
+* **Bug Fix:** Fixed the Spool Archive toggle throwing a 500 "Failed to gracefully update Spool" error by implementing a backend dictionary diff in `api_edit_spool_wizard` to drop unmodified values, circumventing Spoolman 0.19.1 internal crashes caused by redundant string rewrites on extra fields and weight schemas.
+* **Feature:** Added the ability to directly toggle the `Archived` status of a spool from within the "Edit Spool" modal interface. Bound the state to both the edit wizard submission payload and injected a synchronized dynamic badge into the "Spool Details" viewing modal.
+* **Bug Fix:** Bound a missing `showToast()` confirmation feedback trigger natively onto the `+ Queue Label` action inside the Filament Details popup to verify database insertion.
 * **Bug Fix:** Fixed remaining weight on spool cards rendering as excessively long unrounded decimal strings (e.g. `987.654321987g`). Rounded at the source in `spoolman_api.py` `search_inventory()` and added a defensive `Math.round()` guard on the fallback path in `ui_builder.js`.
 * **UI/UX:** Clone button on a spool didn't properly load in the spool/filament to be duplicated into the existing filament section of the add inventory wizard.
 * **UI/UX:** Fix Location Manager UI Dryer box slot locations not correctly displaying all filament information.

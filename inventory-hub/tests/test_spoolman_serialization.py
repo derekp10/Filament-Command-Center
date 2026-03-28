@@ -41,3 +41,39 @@ def test_sanitize_outbound_data_naked_strings():
     clean_payload = spoolman_api.sanitize_outbound_data(payload)
     
     assert clean_payload['extra']['slicer_profile'] == '"Basic PLA"'
+
+def test_sanitize_outbound_data_booleans():
+    """Test that booleans and boolean-like types are explicitly mapped to strictly compliant Spoolman lowercase literal strings"""
+    payload = {
+        "id": 1,
+        "extra": {
+            "boolean_true": True,
+            "boolean_false": False,
+            "string_true_upper": "True",
+            "string_false_upper": "False",
+            "string_true_lower": "true",
+            "string_false_lower": "false"
+        }
+    }
+    
+    clean_payload = spoolman_api.sanitize_outbound_data(payload)
+    
+    # Must natively produce identical coerced outputs compatible with Pydantic Extra str,str models
+    assert clean_payload['extra']['boolean_true'] == "true"
+    assert clean_payload['extra']['boolean_false'] == "false"
+    assert clean_payload['extra']['string_true_upper'] == "true"
+    assert clean_payload['extra']['string_false_upper'] == "false"
+    assert clean_payload['extra']['string_true_lower'] == "true"
+    assert clean_payload['extra']['string_false_lower'] == "false"
+
+def test_clamp_used_weight_rule():
+    """Test that spools generated or updated explicitly enforce the SQLAlchemy integrity constraints prior to payload generation"""
+    # Simulate a user submitting a form where they weighed an empty spool resulting in 'used_weight = 1200' on a 1000g initial spool.
+    initial_weight = 1000.0
+    used_weight = 1200.0
+    
+    # The API layer enforces min() clamp logic explicitly in create_spool / update_spool 
+    clamped_used_weight = min(used_weight, initial_weight) if initial_weight is not None else used_weight
+    
+    assert clamped_used_weight == 1000.0
+

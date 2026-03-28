@@ -148,12 +148,48 @@ window.wizardCalcUsedWeight = () => {
 
     let used = (netWt + emptyWt) - scaleWt;
     if (used < 0) used = 0;
+    if (used > netWt) used = netWt; // [ALEX FIX] Spoolman crashes if used > initial_weight
 
     document.getElementById('wiz-spool-used').value = used.toFixed(0);
+    document.getElementById('wiz-spool-remaining').value = (netWt - used).toFixed(0);
+};
+
+window.wizardCalcUsedFromRemaining = () => {
+    const remaining = parseFloat(document.getElementById('wiz-spool-remaining').value);
+    if (isNaN(remaining)) return;
+    
+    let netWt = parseFloat(document.getElementById('wiz-spool-initial_weight').value);
+    if (isNaN(netWt)) {
+        netWt = parseFloat(document.getElementById('wiz-fil-weight').value) || 1000;
+    }
+    
+    let used = netWt - remaining;
+    if (used < 0) used = 0;
+    if (used > netWt) used = netWt;
+    
+    document.getElementById('wiz-spool-used').value = used.toFixed(0);
+    document.getElementById('wiz-spool-scale').value = '';
+};
+
+window.wizardCalcRemainingFromUsed = () => {
+    const used = parseFloat(document.getElementById('wiz-spool-used').value);
+    if (isNaN(used)) return;
+    
+    let netWt = parseFloat(document.getElementById('wiz-spool-initial_weight').value);
+    if (isNaN(netWt)) {
+        netWt = parseFloat(document.getElementById('wiz-fil-weight').value) || 1000;
+    }
+    
+    let remaining = netWt - used;
+    if (remaining < 0) remaining = 0;
+    
+    document.getElementById('wiz-spool-remaining').value = remaining.toFixed(0);
+    document.getElementById('wiz-spool-scale').value = '';
 };
 
 window.wizardClearScaleWeight = () => {
     document.getElementById('wiz-spool-scale').value = '';
+    window.wizardCalcRemainingFromUsed();
 };
 
 // --- DATA FETCHERS ---
@@ -942,6 +978,7 @@ window.wizardSubmit = async () => {
             initial_weight: parseFloat(getVal('wiz-spool-initial_weight')) || null,
             location: getVal('wiz-spool-location') || '',
             comment: getVal('wiz-spool-comment') || '',
+            archived: document.getElementById('wiz-spool-archived')?.checked || false,
             extra: {}
         };
 
@@ -1120,6 +1157,10 @@ window.openCloneWizard = async (spoolId) => {
             document.getElementById('wiz-spool-empty_weight').value = d.spool_weight !== null ? d.spool_weight : "";
             document.getElementById('wiz-spool-used').value = 0; // Fresh spool is usually 0
             document.getElementById('wiz-spool-comment').value = d.comment || "";
+            if (document.getElementById('wiz-spool-archived')) {
+                document.getElementById('wiz-spool-archived').checked = false;
+            }
+            window.wizardCalcRemainingFromUsed();
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Spool #${spoolId}.</span>`;
         })
@@ -1283,6 +1324,10 @@ window.openEditWizard = async (spoolId) => {
             document.getElementById('wiz-spool-initial_weight').value = d.initial_weight !== null ? d.initial_weight : "";
             document.getElementById('wiz-spool-used').value = d.used_weight || 0;
             document.getElementById('wiz-spool-comment').value = d.comment || "";
+            if (document.getElementById('wiz-spool-archived')) {
+                document.getElementById('wiz-spool-archived').checked = d.archived || false;
+            }
+            window.wizardCalcRemainingFromUsed();
 
             // Spool Extra
             if (d.extra) {
