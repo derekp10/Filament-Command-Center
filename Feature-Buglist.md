@@ -18,7 +18,6 @@
     - A confirmation maybe to auto add a new spool of the same filament when the button is clicked. Or an easy button to fill in standard data, but prompt for unique info (price, product link).
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
 * For existing filaments, advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
-
 * Extruder and bed temps are missing from the filament side for data entry.
 * Attempt to combine the creation of a new spool and filament into one step, so that the user doesn't need to create the filament first before being able to create the spool.
 * Maintain the ability to add multiple spools of the same type at the same time.
@@ -42,7 +41,7 @@
 * ⚖️ **The "Weigh-Out" Protocol**: Option (toggle or specific "Weigh & Eject" button) to update remaining weight before removing the spool. Important for spools with a QR code on them.
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
-* Locations QR Codes should contain a `LOC:` code, and a `LOC:` code should be used to help identify locations. (Keep existing logic to allow for backwards compatibility, but allow for `LOC:` codes for future items).
+* Locations QR Codes should contain a `LOC:` code, and a `LOC:` code should be used to help identify locations. (Keep existing logic to allow for backwards compatibility, but allow for `LOC:` codes for future items). Legacy Location QR codes (WIthout the LOC: prefix) should have a warning attached in the live activity log.
 * Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without.
 * Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field.
 * Add unassigned Location in Location List.
