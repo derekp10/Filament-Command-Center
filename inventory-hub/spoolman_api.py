@@ -450,8 +450,14 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
         # If the user toggles 'In Stock' off (meaning they want to see everything), we must explicitly tell Spoolman API to return archived items
         archived_param = "" if only_in_stock else "?allow_archived=true"
         
+        spools_for_count = []
         if target_type == "filament":
             resp = requests.get(f"{sm_url}/api/v1/filament{archived_param}", timeout=10)
+            try:
+                s_resp = requests.get(f"{sm_url}/api/v1/spool{archived_param}", timeout=10)
+                if s_resp.ok:
+                    spools_for_count = parse_inbound_data(s_resp.json())
+            except: pass
         else:
             resp = requests.get(f"{sm_url}/api/v1/spool{archived_param}", timeout=10)
             
@@ -460,6 +466,14 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
             return []
             
         all_items = parse_inbound_data(resp.json())
+        
+        # Build quick lookup for spool counts if we are answering a filament search
+        spool_counts = {}
+        if target_type == "filament" and spools_for_count:
+            for s in spools_for_count:
+                fid = s.get('filament', {}).get('id')
+                if fid:
+                    spool_counts[fid] = spool_counts.get(fid, 0) + 1
         
         # Tokenize the query for ANY-ORDER matching (e.g. "pla green" == "green pla")
         raw_query = query.strip().lower()
@@ -566,7 +580,8 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 'remaining': round(rem) if isinstance(rem, float) else rem,
                 'color_dist': c_dist,
                 'type': target_type,
-                'archived': item.get('archived', False)
+                'archived': item.get('archived', False),
+                'spools_count': spool_counts.get(item['id'], 0) if target_type == "filament" else None
             })
             
         # Sort by color distance (closest first), then by ID (newest first usually)

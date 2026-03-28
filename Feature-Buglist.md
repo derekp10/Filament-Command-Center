@@ -20,14 +20,12 @@
 * For existing filaments, advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
 
 * Extruder and bed temps are missing from the filament side for data entry.
-* No way to easily edit spool data after creation.
 * Attempt to combine the creation of a new spool and filament into one step, so that the user doesn't need to create the filament first before being able to create the spool.
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Implement a robust global window/modal management system to dynamically handle z-index stacking, backdrop layering, and body scrolling when multiple modals are open concurrently.
 
 ## 🔍 Search, Display & Filtering
 * Find spool functionality. Basically make finding a spool/filament easier than using Spoolman. Better support for color searches.
-* For filaments, add count of rolls available of that color to the card. Use spool icon we've been using elsewhere. (🧵)
 * Search by and filter by remaining weight.
 * Track unprinted filament samples and create a button/queue like we have for labels.
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
