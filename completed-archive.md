@@ -1,4 +1,6 @@
 # **Done**
+* **Feature:** Added dynamic Spool counts `🧵 X Spool(s)` natively into the Filament Card UI template to easily identify stock limits without opening menus. Added seamless backing API loop integration to fetch counts dynamically.
+* **Feature:** Built a robust native "Edit Spool" modal into the Add Inventory Wizard system, circumventing the need to enter Spoolman web UI to adjust core physical characteristics or identifiers on existing inventory.
 * **Feature:** Designed and implemented a bi-directional "Remaining Wt (g)" fields synchronizer in the Wizard Editor to allow users to directly zero-out Filabridge-depleted spools without performing reverse math, natively protected by pre-flight validation preventing Spoolman DB initialization weight violation crashes.
 * **Bug Fix:** Isolated and diagnosed TrueNAS dataset permission issues creating `ReadOnly` lockups on Dev Spoolman that resulted in continuous 500 Internal Server Error returns for single-field Boolean patch attempts.
 * **Bug Fix:** Fixed the Spool Archive toggle throwing a 500 "Failed to gracefully update Spool" error by implementing a backend dictionary diff in `api_edit_spool_wizard` to drop unmodified values, circumventing Spoolman 0.19.1 internal crashes caused by redundant string rewrites on extra fields and weight schemas.
