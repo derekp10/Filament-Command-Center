@@ -64,7 +64,6 @@
 * **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones.
 * Refactor dashboard to be more modular if possible, and reduce token size/context requirements.
 * Make as much of Command Center user configurable as possible, using UI elements and a config import/export feature.
-
 * Empty spool weight doesn't always seem to update the backend correctly.
 * When changes are made to Spoolman extra fields, they usually ignore sort order in the database. We need a way to restore sort order.
 * Clean up filament attributes, remove/consolidate (X;Y items and similar items such as Carbon-Fiber & Carbon Fiber). Requires Setup_fields.py changes.
