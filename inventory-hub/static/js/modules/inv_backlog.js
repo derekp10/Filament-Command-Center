@@ -8,15 +8,10 @@ window.openBacklogModal = () => {
 
 let lastBacklogHash = "";
 
-// Helper to safely transition from the Backlog modal to a Detail modal
+// Helper to safely stack from the Backlog modal to a Detail modal
 window.openBacklogDetail = (id, isSpool) => {
-    if (window.modals && window.modals.backlogModal) {
-        window.modals.backlogModal.hide();
-    }
-    setTimeout(() => {
-        if (isSpool) openSpoolDetails(id);
-        else openFilamentDetails(id);
-    }, 300);
+    if (isSpool) openSpoolDetails(id);
+    else openFilamentDetails(id);
 };
 
 window.fetchBacklog = () => {

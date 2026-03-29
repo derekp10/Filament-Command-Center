@@ -186,7 +186,7 @@ const openFilamentDetails = (fid, silent = false) => {
                                     🔍
                                 </button>
                                 <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1" 
-                                    onclick="if(modals.filamentModal) modals.filamentModal.hide(); window.openEditWizard(${s.id});" 
+                                    onclick="window.openEditWizard(${s.id});" 
                                     title="Edit Spool">
                                     ✏️
                                 </button>
@@ -220,9 +220,8 @@ const openFilamentDetails = (fid, silent = false) => {
                                     });
                                     if (added > 0) {
                                         showToast(`Queued ${added} spools!`);
-                                        // Close this modal and open the queue to confirm
-                                        if (modals.filamentModal) modals.filamentModal.hide();
-                                        setTimeout(() => window.openQueueModal(), 300);
+                                        // Open the queue to confirm, let it stack natively!
+                                        window.openQueueModal();
                                     } else {
                                         showToast("All spools already in queue", "info");
                                     }

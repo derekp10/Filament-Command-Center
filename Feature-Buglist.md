@@ -21,8 +21,7 @@
 * Extruder and bed temps are missing from the filament side for data entry.
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
-* Implement a robust global window/modal management system to dynamically handle z-index stacking, backdrop layering, and body scrolling when multiple modals are open concurrently.
-  - *Must include auto-collapsing the Search off-canvas menu when triggering a new modal (like Edit Spool) to reduce redundant clicks.*
+
 
 ## 🔍 Search, Display & Filtering
 * Find spool functionality. Basically make finding a spool/filament easier than using Spoolman. Better support for color searches.

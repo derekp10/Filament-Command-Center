@@ -325,8 +325,47 @@ window.startSmartSync = () => {
     }, 5000); // 5 Second Heartbeat
 };
 
-// Auto-start the heartbeat
-document.addEventListener('DOMContentLoaded', window.startSmartSync);
+// --- GLOBAL MODAL / WINDOW MANAGER ---
+document.addEventListener('DOMContentLoaded', () => {
+    // Start Heartbeat
+    window.startSmartSync();
+
+    // 1. When a modal starts showing
+    document.addEventListener('show.bs.modal', function (event) {
+        // Auto-collapse Search Offcanvas if open to reduce clicks
+        const offcanvasEl = document.getElementById('offcanvasSearch');
+        if (offcanvasEl && offcanvasEl.classList.contains('show')) {
+            const os = bootstrap.Offcanvas.getInstance(offcanvasEl);
+            if (os) os.hide();
+        }
+
+        // Calculate and apply stacking z-index for the modal wrapper
+        const openModals = document.querySelectorAll('.modal.show').length;
+        // BS5 default modal z-index is 1055. Add 10 per subsequent tier.
+        const newModalZ = 1055 + (openModals * 10);
+        event.target.style.setProperty('z-index', newModalZ, 'important');
+    });
+
+    // 2. When modal finishes animating (backdrop is strictly in the DOM)
+    document.addEventListener('shown.bs.modal', function () {
+        // Find the last added backdrop and stack it purely behind our new modal
+        const backdrops = document.querySelectorAll('.modal-backdrop');
+        if (backdrops.length > 0) {
+            const baseBackdropZIndex = 1050; // BS5 default backdrop z-index
+            const newBackdropZ = baseBackdropZIndex + ((backdrops.length - 1) * 10);
+            backdrops[backdrops.length - 1].style.setProperty('z-index', newBackdropZ, 'important');
+        }
+    });
+
+    // 3. When a modal finishes hiding
+    document.addEventListener('hidden.bs.modal', function () {
+        // Bootstrap aggressively strips '.modal-open' from body when *any* modal hides.
+        // We must forcefully restore it if there are other modals still 'underneath' it.
+        if (document.querySelectorAll('.modal.show').length > 0) {
+            document.body.classList.add('modal-open');
+        }
+    });
+});
 
 // [Code Guardian] Wake Lock Persistence
 document.addEventListener('visibilitychange', async () => {
