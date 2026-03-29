@@ -1,5 +1,6 @@
 # **Active Backlog (Organized by Feature Area)**
 
+
 ## 🎨 UI & Theming
 * Fix the borders on black filaments not standing out in the correct spot in the list (Lost contrast against dark UI backgrounds).
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
@@ -63,7 +64,7 @@
 * **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones.
 * Refactor dashboard to be more modular if possible, and reduce token size/context requirements.
 * Make as much of Command Center user configurable as possible, using UI elements and a config import/export feature.
-* **[UI Testing]** Implement comprehensive Playwright E2E structural testing across all UI elements globally. Verify that elements are not cutting, squishing, or overlapping each other.
+
 * Empty spool weight doesn't always seem to update the backend correctly.
 * When changes are made to Spoolman extra fields, they usually ignore sort order in the database. We need a way to restore sort order.
 * Clean up filament attributes, remove/consolidate (X;Y items and similar items such as Carbon-Fiber & Carbon Fiber). Requires Setup_fields.py changes.

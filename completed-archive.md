@@ -1,4 +1,8 @@
 # **Done**
+- [x] **[UI Testing]** Implemented comprehensive Playwright E2E structural testing across all UI elements globally to detect layout regressions.
+- [x] **Bug Fix:** Fixed `DIV#.fcc-card-action-btn` internal content structurally overflowing its strict dimensions.
+- [x] **Bug Fix:** Fixed missing inset `box-shadow` on Spool/Filament Cards that are assigned a gradient style.
+- [x] **Bug Fix:** Fixed empty `.text-white` elements rendering fully collapsed/squished on the DOM by improving JS scanner logic.
 - [x] **[UI Standardization]** Converted hard-coded inline JS/HTML `style="..."` brute-force stylings across the entire application into standardized global `fcc-spool-card` CSS configurations.
 - [x] **UI/UX:** Stabilized Spool Card rendering logic for "Deployed/Ghost" states, restoring complex multi-layered gradient backgrounds natively protected against background live-sync loops across the Buffer UI.
 - [x] **Modals:** Implemented a robust global window/modal management system in `inv_core.js` to mathematically handle dynamic z-index stacking, backdrop layering, and body scrolling when multiple modals are open concurrently. Bound auto-collapse triggers to the Search off-canvas menu to reduce redundant clicks when launching subsequent dialogs.

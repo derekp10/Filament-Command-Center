@@ -637,9 +637,11 @@ body {
 .fcc-card-action-btn {
     font-size: 1.4rem !important;
     cursor: pointer !important;
-    line-height: 1 !important;
     transition: transform 0.2s !important;
-    display: inline-block !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 28px !important;
 }
 
 .fcc-card-action-btn:hover {

@@ -57,16 +57,17 @@ const SpoolCardBuilder = {
         let wrapperStyle = `background: ${styles.frame}; ${styles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}`;
         
         let customInnerBg = `background: ${styles.inner};`;
+        const shadowColor = (styles.frame && styles.frame.includes('gradient')) ? 'rgba(255,255,255,0.3)' : styles.frame;
         if (mode === 'search_result' || mode === 'loc_grid' || mode === 'loc_list' || mode === 'search' || mode === 'buffer') {
             // Apply inner border/glow for specific modes
-            customInnerBg = `border-top: 1px solid rgba(255,255,255,0.2); background: linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}; border-radius: 6px; box-shadow: inset 0 0 0 1px ${styles.frame}; padding: 0.5rem;`;
+            customInnerBg = `border-top: 1px solid rgba(255,255,255,0.2); background: linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}; border-radius: 6px; box-shadow: inset 0 0 0 1px ${shadowColor} !important; padding: 0.5rem;`;
         }
         
         // Hazard striping & layout tweaks for states (GHOST / DEPLOYED)
         if (item.is_ghost) {
             outerClasses += 'is-ghost ';
             // Add hazard stripes for ghost items (Stacked strictly ON TOP of the inner glow gradient)
-            customInnerBg = `border-top: 1px solid rgba(255,255,255,0.2); background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}; border-radius: 6px; box-shadow: inset 0 0 0 1px ${styles.frame}; padding: 0.5rem; background-size: cover;`;
+            customInnerBg = `border-top: 1px solid rgba(255,255,255,0.2); background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}; border-radius: 6px; box-shadow: inset 0 0 0 1px ${shadowColor} !important; padding: 0.5rem; background-size: cover;`;
         }
 
         // --- CONTEXT: ACTION BINDINGS & CLASSES ---
