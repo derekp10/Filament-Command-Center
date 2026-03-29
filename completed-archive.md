@@ -1,4 +1,5 @@
 # **Done**
+- [x] **UI/UX:** Location label for deployed items in the search window is too long and breaks the layout by pushing action buttons out of the card. Refactored Spool Card layout to move Location Data to a new dedicated row.
 - [x] **UI/UX:** Extra long filament/spool names cause the Add Inventory Wizard buttons to become skewed with cancel above Create Inventory. Text data and UI buttons should not be a part of the same frame.
 * **System/UI:** Removed legacy task "combine creation of spool and filament" from backlog since it was inherently solved by the Add Inventory Wizard's monolithic payload structure. Included minor cleanup of duplicate DOM ID in modal structural HTML.
 * **Feature:** Added dynamic Spool counts `🧵 X Spool(s)` natively into the Filament Card UI template to easily identify stock limits without opening menus. Added seamless backing API loop integration to fetch counts dynamically.

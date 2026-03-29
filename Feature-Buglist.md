@@ -29,7 +29,6 @@
 * Search by and filter by remaining weight.
 * Track unprinted filament samples and create a button/queue like we have for labels.
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
-* Location label for deployed items in the search window is too long and breaks the layout by pushing action buttons out of the card. Refactor Spool Card layout to move Location Data to a new dedicated row (e.g. between Row 1 and Row 2).
 
 ## 📍 Location Management & Scanning
 * Spools sometimes retain a location assignment in the database.
