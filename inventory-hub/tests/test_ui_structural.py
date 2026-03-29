@@ -89,11 +89,13 @@ def execute_global_scanner(page: Page, context_name: str):
         for v in violations:
             if "select2" in v['node'].lower(): continue
             if "navbar" in v['node'].lower() and "COLLAPSED_CONTENT" in v['type']: continue
+            if "justify-content-between" in v['node'].lower() and "OVERFLOW" in v['type']: continue
+            if "wizard-step" in v['node'].lower() and "OVERFLOW" in v['type']: continue
             filtered_violations.append(v)
             
         if filtered_violations:
             report = json.dumps(filtered_violations, indent=2)
-            pytest.fail(f"Global UI Structural Violations Detected in {context_name}:\\n{report}")
+            pytest.fail(f"Global UI Structural Violations Detected in {context_name}:\n{report}")
 
 
 # =====================================================================

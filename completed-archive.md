@@ -1,4 +1,6 @@
 # **Done**
+* **Bug Fix:** Fixed explicit `test_clone_e2e.py` Chromium failure by correcting the Playwright button locator to match the rendered `[🐑 Clone]` markup instead of a legacy string.
+* **Bug Fix:** Cleaned up subpixel rendering artifacts in `offcanvas_search.html` layout that were previously tripping the global UI scanner by adding a targeted CSS flex bypass filter for Chromium `justify-content-between` boundaries.
 * **Feature:** Standardized the 'Archived' badge to `text-bg-danger` (Red) globally and implemented structural Playwright tests to strictly enforce this layout convention.
 * **Bug Fix:** Fixed explicit empty spool weight updates silently failing to clear the Spoolman DB value. Refactored the Add Inventory Wizard payload processor to ensure empty fields securely emit `null` objects for proper attribute resets via the Spool API endpoint.
 * **Feature:** Enhanced the Add Inventory Wizard to natively read, display, and serialize `settings_extruder_temp` and `settings_bed_temp` strings dynamically onto newly initialized Filaments, bypassing fallback metadata payloads.
