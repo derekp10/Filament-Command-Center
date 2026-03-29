@@ -219,13 +219,18 @@
                             <input type="number" class="form-control bg-dark text-info border-info" id="wiz-spool-scale"
                                 placeholder="Calculate used..." onkeyup="window.wizardCalcUsedWeight()">
                         </div>
+                        <div class="col-md-3" id="container-wiz-spool-recent-usage" style="display: none;">
+                            <label class="form-label small text-danger mb-1 fw-bold" title="Manually log filament used on latest print">+ Add Printed Wt (g)</label>
+                            <input type="number" class="form-control bg-dark text-danger border-danger fw-bold"
+                                id="wiz-spool-recent-usage" placeholder="e.g. 150" onkeyup="window.wizardCalcFromRecentUsage()">
+                        </div>
                         <div class="col-md-3">
                             <label class="form-label small text-secondary mb-1 text-success">Remaining Wt (g)</label>
                             <input type="number" class="form-control bg-dark text-success border-success fw-bold"
                                 id="wiz-spool-remaining" placeholder="Calc..." onkeyup="window.wizardCalcUsedFromRemaining()">
                         </div>
                         <div class="col-md-3">
-                            <label class="form-label small text-secondary mb-1">Initial Used Wt (g)</label>
+                            <label class="form-label small text-secondary mb-1">Total Used Wt (g)</label>
                             <input type="number" class="form-control bg-dark text-white border-secondary"
                                 id="wiz-spool-used" value="0" onkeyup="window.wizardCalcRemainingFromUsed()">
                         </div>

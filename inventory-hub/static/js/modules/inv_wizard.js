@@ -44,6 +44,12 @@ const wizardReset = () => {
     document.getElementById('wiz-spool-qty').value = 1;
 
     document.getElementById('wiz-spool-used').value = 0;
+    
+    wizardState.original_used_weight = 0;
+    const usageContainer = document.getElementById('container-wiz-spool-recent-usage');
+    if (usageContainer) usageContainer.style.display = 'none';
+    const recentInput = document.getElementById('wiz-spool-recent-usage');
+    if (recentInput) recentInput.value = '';
 
     // Reset Edit State button styles
     const submitBtn = document.getElementById('btn-wiz-submit');
@@ -185,6 +191,18 @@ window.wizardCalcRemainingFromUsed = () => {
     
     document.getElementById('wiz-spool-remaining').value = remaining.toFixed(0);
     document.getElementById('wiz-spool-scale').value = '';
+};
+
+window.wizardCalcFromRecentUsage = () => {
+    let recent = parseFloat(document.getElementById('wiz-spool-recent-usage').value);
+    if (isNaN(recent)) recent = 0;
+    
+    let baseUsed = wizardState.original_used_weight || 0;
+    let newTotal = baseUsed + recent;
+    if (newTotal < 0) newTotal = 0;
+    
+    document.getElementById('wiz-spool-used').value = newTotal.toFixed(0);
+    window.wizardCalcRemainingFromUsed();
 };
 
 window.wizardClearScaleWeight = () => {
@@ -1093,6 +1111,27 @@ window.wizardSubmit = async () => {
         if (data.success) {
             msg.innerHTML = `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
 
+            // Reset Weigh-Out Protocol tracking on save so subsequent saves don't double-dip
+            if (wizardState.mode === 'edit_spool') {
+                const recentInput = document.getElementById('wiz-spool-recent-usage');
+                if (recentInput && recentInput.value) {
+                    recentInput.value = '';
+                    wizardState.original_used_weight = parseFloat(document.getElementById('wiz-spool-used').value) || 0;
+                    
+                    // Visual feedback flash (accounting for Bootstrap !important classes)
+                    const remInput = document.getElementById('wiz-spool-remaining');
+                    if (remInput) {
+                        remInput.style.transition = "background-color 0.4s ease-out";
+                        remInput.classList.remove('bg-dark');
+                        remInput.classList.add('bg-success', 'text-white');
+                        setTimeout(() => { 
+                            remInput.classList.remove('bg-success', 'text-white');
+                            remInput.classList.add('bg-dark'); 
+                        }, 800);
+                    }
+                }
+            }
+
             // Keep modal open across all modes so user can rapidly create subsequent items.
             setTimeout(() => {
                 msg.innerHTML = "";
@@ -1280,6 +1319,12 @@ window.openEditWizard = async (spoolId) => {
             document.getElementById('wiz-spool-empty_weight').value = d.spool_weight !== null ? d.spool_weight : "";
             document.getElementById('wiz-spool-initial_weight').value = d.initial_weight !== null ? d.initial_weight : "";
             document.getElementById('wiz-spool-used').value = d.used_weight || 0;
+            
+            // WEIGH-OUT PROTOCOL: Store original value and show input
+            wizardState.original_used_weight = d.used_weight || 0;
+            const usageContainer = document.getElementById('container-wiz-spool-recent-usage');
+            if (usageContainer) usageContainer.style.display = 'block';
+
             document.getElementById('wiz-spool-comment').value = d.comment || "";
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = d.archived || false;

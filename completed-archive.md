@@ -1,4 +1,5 @@
 # **Done**
+* ⚖️ **The "Weigh-Out" Protocol / Manual Usage Input**: Added a specific "+ Add Printed Wt (g)" field into the wizard modal to manually log filament usage delta from the printer screen, gracefully adjusting the Spoolman database when filabridge auto-logging fails or times out.
 * **Bug Fix:** Fixed the `Location` update in the Spool Details modal throwing a 400 Bad Request API error when set to `Unassigned` by correcting a schema typo (`physical_source_sub` to `physical_source_slot`) in the backend force unassign logic.
 * **Feature:** Standardized the UI background refresh "no-wiggle" hashing logic globally. Implemented strict state caching in the Filament Details, Spool Details, Location Manager, and Live Logs to prevent silent 5-second pulses from destructively overwriting complex DOM components and dropping user button clicks.
 * **Feature Implemented:** Added ability to manually edit and assign location data directly on a spool, including a force unassign Ghost mechanism.
