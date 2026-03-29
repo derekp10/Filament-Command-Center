@@ -37,7 +37,7 @@
 * The ability to configure a box to change the slot order to go from left to right, or right to left.
 * Ability to assign a box slot to a printhead/MMU, so that a scan to that box slot will auto load the spool.
 * CR-MDB-1:SLOT:4 is treated as a location not a slot in a box.
-* ⚖️ **The "Weigh-Out" Protocol**: Option (toggle or specific "Weigh & Eject" button) to update remaining weight before removing the spool. Important for spools with a QR code on them.
+* ⚖️ **The "Weigh-Out" Protocol**: Option (toggle or specific "Weigh & Eject" button) to update remaining weight before removing the spool. Important for spools with a QR code on them. This should be done when filabridge reports an error, or perhaps adding a way to update the spools in the ui based off the printer interface data.
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
 * Locations QR Codes should contain a `LOC:` code, and a `LOC:` code should be used to help identify locations. (Keep existing logic to allow for backwards compatibility, but allow for `LOC:` codes for future items). Legacy Location QR codes (WIthout the LOC: prefix) should have a warning attached in the live activity log.
