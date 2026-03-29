@@ -29,9 +29,8 @@ def test_wizard_manual_creation(page: Page):
     page.fill("#wiz-fil-density", "1.24")
     page.fill("#wiz-fil-diameter", "1.75")
     
-    # We use nth(0) because the DOM currently has duplicate #wiz-fil-weight IDs
-    weight_inputs = page.locator("#wiz-fil-weight")
-    weight_inputs.nth(0).fill("1000")
+    # Fill the Net Weight
+    page.fill("#wiz-fil-weight", "1000")
     
     # Fill empty spool weight
     page.fill("#wiz-fil-empty_weight", "250")

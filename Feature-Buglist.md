@@ -20,7 +20,6 @@
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
 * For existing filaments, advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
 * Extruder and bed temps are missing from the filament side for data entry.
-* Attempt to combine the creation of a new spool and filament into one step, so that the user doesn't need to create the filament first before being able to create the spool.
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
 * Implement a robust global window/modal management system to dynamically handle z-index stacking, backdrop layering, and body scrolling when multiple modals are open concurrently.
