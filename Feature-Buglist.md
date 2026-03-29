@@ -1,6 +1,7 @@
 # **Active Backlog (Organized by Feature Area)**
 
 ## 🎨 UI & Theming
+* Fix the borders on black filaments not standing out in the correct spot in the list (Lost contrast against dark UI backgrounds).
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
 * Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
 * Side Quest: Spool card coloring system doesn't seem to handle 4+ colors in a swatch for generating gradient.
