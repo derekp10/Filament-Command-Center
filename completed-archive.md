@@ -1,4 +1,5 @@
 # **Done**
+* **Feature Implemented:** Added ability to manually edit and assign location data directly on a spool, including a force unassign Ghost mechanism.
 * **Bug Fix:** Fixed explicit `test_clone_e2e.py` Chromium failure by correcting the Playwright button locator to match the rendered `[🐑 Clone]` markup instead of a legacy string.
 * **Bug Fix:** Cleaned up subpixel rendering artifacts in `offcanvas_search.html` layout that were previously tripping the global UI scanner by adding a targeted CSS flex bypass filter for Chromium `justify-content-between` boundaries.
 * **Feature:** Standardized the 'Archived' badge to `text-bg-danger` (Red) globally and implemented structural Playwright tests to strictly enforce this layout convention.

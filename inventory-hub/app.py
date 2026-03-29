@@ -759,13 +759,16 @@ def api_manage_contents():
                 spool_id = resolution['id']
             elif resolution and resolution['type'] == 'error':
                  return jsonify({"success": False, "msg": resolution['msg']})
-    elif action == 'remove':
+    elif action in ['remove', 'force_unassign']:
         if str(spool_input).isdigit(): spool_id = int(spool_input)
         
     if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
 
     if action == 'remove':
         if logic.perform_smart_eject(spool_id): return jsonify({"success": True})
+        else: return jsonify({"success": False, "msg": "DB Update Failed"})
+    elif action == 'force_unassign':
+        if logic.perform_force_unassign(spool_id): return jsonify({"success": True})
         else: return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'add':
         origin = data.get('origin', '')

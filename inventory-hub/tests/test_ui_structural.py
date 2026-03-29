@@ -126,6 +126,11 @@ def test_structural_global_modals(page: Page):
     expect(page.locator("#wizardModal")).to_be_visible()
     page.wait_for_timeout(1000)
     execute_global_scanner(page, "Inventory Wizard Modal")
+    
+    # Trigger spool details modal (empty state is fine for structural layout bounds)
+    page.evaluate("() => { const m = new bootstrap.Modal(document.getElementById('spoolModal')); m.show(); }")
+    page.wait_for_timeout(1000)
+    execute_global_scanner(page, "Spool Details Modal")
 
 
 # =====================================================================

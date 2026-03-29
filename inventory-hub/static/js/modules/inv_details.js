@@ -18,6 +18,19 @@ const openSpoolDetails = (id, silent = false) => {
                 if (d.archived) archBadge.classList.remove('d-none');
                 else archBadge.classList.add('d-none');
             }
+
+            let locDisplay = d.location && d.location.trim() !== "" ? d.location : "Unassigned";
+            if (locDisplay === "Unassigned" && d.extra?.physical_source) {
+                locDisplay = `Deployed: ${d.extra.physical_source.replace(/"/g, '')}`;
+            }
+            const locBadge = document.getElementById('detail-location-badge');
+            if (locBadge) {
+                locBadge.innerText = locDisplay;
+                if (locDisplay === "Unassigned") locBadge.className = "badge bg-secondary ms-2 me-1";
+                else if (locDisplay.startsWith("Deployed:")) locBadge.className = "badge bg-warning text-dark ms-2 me-1";
+                else locBadge.className = "badge bg-info text-dark ms-2 me-1";
+            }
+
             document.getElementById('detail-material').innerText = fil.material || "Unknown";
             document.getElementById('detail-vendor').innerText = fil.vendor?.name || "Unknown";
             document.getElementById('detail-weight').innerText = (fil.weight || 0) + "g";
@@ -275,3 +288,84 @@ document.addEventListener('inventory:sync-pulse', () => {
         if (fid) openFilamentDetails(fid, true); // Silent Refresh
     }
 });
+
+// --- MANUAL LOCATION OVERRIDE ---
+window.promptEditLocation = (spoolId, currentLoc) => {
+    let defaultLoc = currentLoc || "Unassigned";
+    if (defaultLoc.startsWith("Deployed: ")) defaultLoc = defaultLoc.replace("Deployed: ", "");
+    if (defaultLoc === "Unassigned") defaultLoc = "";
+
+    fetch('/api/locations')
+        .then(r => r.json())
+        .then(locs => {
+            let optionsHtml = '<option value="">-- Unassigned --</option>';
+            if (Array.isArray(locs)) {
+                locs.forEach(l => {
+                    const type = (l.Type || '').toLowerCase();
+                    if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return;
+                    if (l.LocationID === 'Unassigned') return;
+                    
+                    const isSelected = l.LocationID === defaultLoc ? 'selected' : '';
+                    optionsHtml += `<option value="${l.LocationID}" ${isSelected}>${l.Name} (${l.LocationID})</option>`;
+                });
+            }
+
+            Swal.fire({
+                title: 'Force Location Override',
+                html: `
+                    <div class="text-start">
+                        <label class="form-label text-warning small mb-1">Select New Location</label>
+                        <select id="swal-override-loc" class="form-select bg-dark text-white border-warning">
+                            ${optionsHtml}
+                        </select>
+                        <small class="text-muted mt-2 d-block">
+                            Bypasses scanning protocols to forcefully move the spool in the database.
+                        </small>
+                    </div>
+                `,
+                showCancelButton: true,
+                confirmButtonColor: '#ffaa00',
+                background: '#1e1e1e',
+                color: '#fff',
+                confirmButtonText: 'Force Move',
+                preConfirm: () => {
+                    const popup = Swal.getPopup();
+                    const sel = popup ? popup.querySelector('#swal-override-loc') : null;
+                    return sel ? sel.value : "";
+                }
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    const newLoc = result.value;
+                    
+                    if (typeof setProcessing === 'function') setProcessing(true);
+                    const payload = {
+                        action: newLoc === "" ? 'force_unassign' : 'add',
+                        location: newLoc,
+                        spool_id: spoolId,
+                        origin: 'manual_override'
+                    };
+                    
+                    fetch('/api/manage_contents', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    })
+                    .then(r => r.json())
+                    .then(res => {
+                        if (typeof setProcessing === 'function') setProcessing(false);
+                        if(res.status === 'success' || res.success) {
+                            showToast('Location updated via override', 'success');
+                            document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+                            openSpoolDetails(spoolId, true); 
+                        } else {
+                            showToast(res.msg || 'Override failed', 'error');
+                        }
+                    })
+                    .catch(e => {
+                        if (typeof setProcessing === 'function') setProcessing(false);
+                        showToast('Override Network Error', 'error');
+                    });
+                }
+            });
+        });
+};
