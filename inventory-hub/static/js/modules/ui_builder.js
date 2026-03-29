@@ -277,10 +277,12 @@ const SpoolCardBuilder = {
                             </div>
                         </div>
                         <div class="d-flex align-items-center gap-2">
-                            ${locBadgeHTML}
                             ${navActionsHTML}
                         </div>
                     </div>
+
+                    <!-- Row 1.5: Location Badge (Dedicated Row) -->
+                    ${locBadgeHTML ? `<div class="d-flex justify-content-start align-items-center mb-1 w-100 ps-1">${locBadgeHTML}</div>` : ''}
 
                     <!-- Row 2: Display Name -->
                     <div class="d-flex justify-content-start text-start my-2 w-100 ps-1 flex-grow-1">
