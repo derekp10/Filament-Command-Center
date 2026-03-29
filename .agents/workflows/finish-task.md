@@ -7,7 +7,7 @@ description: Merges, commits, and archives completed tasks in one go.
 **Step 1: The Paperwork (List Cleanup)**
 * Cross-reference the completed code changes with the `@feature-buglist.md` file.
 * Remove the completed line items entirely from `@feature-buglist.md` to keep it lightweight.
-* Open the `@completed-archive.md` file and safely insert the finished items at the **very top** of the list (right underneath the header), adding standard Markdown checkboxes.
+* Open the `@completed-archive.md` file and safely insert the finished items at the **very top** of the list (right underneath the header).
 * **Strict Constraint:** Do not modify, refactor, or touch any actual system code during this paperwork step. 
 
 **Step 2: The Automated Commit**
