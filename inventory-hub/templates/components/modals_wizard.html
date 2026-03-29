@@ -1,7 +1,7 @@
-<div class="modal fade" id="wizardModal" tabindex="-1" style="z-index: 1060 !important;">
-    <div class="modal-dialog modal-xl modal-dialog-centered" style="z-index: 1061;">
-        <div class="modal-content" style="background:#1a1a1a; border: 1px solid #444;">
-            <div class="modal-header border-secondary" style="background:#111;">
+<div class="modal fade fcc-modal-wizard" id="wizardModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-centered fcc-modal-wizard-dialog">
+        <div class="modal-content fcc-modal-details">
+            <div class="modal-header border-secondary fcc-modal-header">
                 <h4 class="modal-title font-monospace fw-bold text-white d-flex align-items-center">
                     <span class="text-primary me-2">📦</span> ADD INVENTORY WIZARD
                 </h4>
@@ -35,8 +35,7 @@
                     </div>
 
                     <!-- Variable Area for Step 1 -->
-                    <div id="material-dynamic-area" class="mt-4 p-3 rounded"
-                        style="background: rgba(0,0,0,0.3); border: 1px solid #333; display: none;">
+                    <div id="material-dynamic-area" class="mt-4 p-3 rounded fcc-wizard-dynamic-area" style="display: none;">
 
                         <!-- Existing Search -->
                         <div id="area-existing" style="display:none;">
@@ -165,7 +164,7 @@
                     </div>
 
                     <!-- DYNAMIC CUSTOM EXTRA FIELDS INJECTED HERE -->
-                    <h6 class="text-secondary border-bottom border-dark pb-1 mt-4 mb-3" style="font-size: 0.85rem;">
+                    <h6 class="text-secondary border-bottom border-dark pb-1 mt-4 mb-3 fcc-subtext">
                         CUSTOM FILAMENT ATTRIBUTES</h6>
                     <div class="row g-3" id="wiz-fil-dynamic-extra-fields"></div>
 
@@ -180,8 +179,8 @@
                         <div class="d-flex align-items-center bg-dark p-2 rounded border border-warning shadow-sm">
                             <label class="text-warning me-2 mb-0 fw-bold fs-5">BULK QUANTITY TO CREATE:</label>
                             <input type="number"
-                                class="form-control form-control-lg bg-dark text-warning border-warning font-monospace text-center fw-bold fs-4"
-                                id="wiz-spool-qty" value="1" min="1" max="50" style="width: 90px;">
+                                class="form-control form-control-lg bg-dark text-warning border-warning font-monospace text-center fw-bold fs-4 w-90px"
+                                id="wiz-spool-qty" value="1" min="1" max="50">
                         </div>
                     </div>
 
@@ -196,7 +195,8 @@
                         <div class="col-md-4">
                             <label class="form-label small text-secondary mb-1">
                                 Empty Weight (g)
-                                <span class="text-info ms-1" style="font-size: 0.8rem;"
+                                <span class="text-info ms-1 fcc-wiz-hint">(Optional)</span>
+                                <span class="text-info ms-1 fcc-subtext"
                                     title="Auto-synced from Filament Tab">🔗</span>
                             </label>
                             <input type="number" class="form-control bg-dark text-white border-secondary"
@@ -248,14 +248,14 @@
                     </div>
 
                     <!-- DYNAMIC SPOOL EXTRA FIELDS INJECTED HERE -->
-                    <h6 class="text-secondary border-bottom border-dark pb-1 mt-4 mb-3" style="font-size: 0.85rem;">
+                    <h6 class="text-secondary border-bottom border-dark pb-1 mt-4 mb-3 fcc-subtext">
                         SPOOL CONFIGURATION</h6>
                     <div class="row g-3" id="wiz-spool-dynamic-extra-fields"></div>
                 </div>
 
             </div>
 
-            <div class="modal-footer border-secondary flex-column align-items-stretch" style="background:#111;">
+            <div class="modal-footer border-secondary flex-column align-items-stretch fcc-modal-footer">
                 <div id="wiz-status-msg" class="text-info small font-monospace text-break text-start mb-2 w-100"></div>
                 <div class="d-flex justify-content-end w-100">
                     <button class="btn btn-outline-danger me-2" data-bs-dismiss="modal">Cancel</button>

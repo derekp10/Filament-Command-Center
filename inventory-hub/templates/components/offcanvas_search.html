@@ -1,5 +1,5 @@
-<div class="offcanvas offcanvas-end text-bg-dark" tabindex="-1" id="offcanvasSearch"
-    aria-labelledby="offcanvasSearchLabel" style="width: 500px; max-width: 100vw; z-index: 1090;" data-bs-scroll="true"
+<div class="offcanvas offcanvas-end text-bg-dark fcc-offcanvas-search" tabindex="-1" id="offcanvasSearch"
+    aria-labelledby="offcanvasSearchLabel" data-bs-scroll="true"
     data-bs-backdrop="true">
     <div class="offcanvas-header border-bottom border-secondary d-flex flex-column align-items-start">
         <div class="d-flex justify-content-between align-items-center w-100 mb-3">
@@ -41,11 +41,11 @@
 
             <div class="d-flex flex-wrap gap-2 align-items-center">
                 <!-- Color Hex Picker -->
-                <div class="input-group input-group-sm" style="width: 155px;">
+                <div class="input-group input-group-sm w-155px">
                     <span class="input-group-text bg-dark border-secondary px-1 py-0">
                         <input type="color" id="global-search-color-picker"
-                            class="form-control form-control-color bg-dark border-0 p-0 m-0" value="#000000"
-                            style="width:24px; height:24px;" title="Match Color Distance">
+                            class="form-control form-control-color bg-dark border-0 p-0 m-0 fcc-color-swatch-sm" value="#000000"
+                            title="Match Color Distance">
                     </span>
                     <input type="text" id="global-search-color-hex"
                         class="form-control bg-dark text-white border-secondary font-monospace" placeholder="#Hex"
@@ -56,7 +56,7 @@
 
                 <!-- Quick Filters -->
                 <select id="global-search-material"
-                    class="form-select form-select-sm bg-dark text-white border-secondary" style="width: 100px;">
+                    class="form-select form-select-sm bg-dark text-white border-secondary w-100px">
                     <option value="">Any Mat</option>
                     <!-- Dynamically populated by UI loop -->
                 </select>

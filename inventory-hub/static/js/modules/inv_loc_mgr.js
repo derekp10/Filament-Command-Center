@@ -132,8 +132,12 @@ const renderManagerNav = () => {
 
         html += `
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame}; ${curStyle.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}">
-            <div class="cham-body nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center; position:relative;">
-                <div style="position:absolute; top:5px; right:5px; cursor:pointer; font-size:1.2rem; background: rgba(0,0,0,0.5); border-radius: 4px; padding: 2px 4px; z-index: 10;" onclick="event.stopPropagation(); window.openEditWizard(${curItem.id});" title="Edit Spool">✏️</div>
+            <div class="fcc-spool-card-inner nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center; position:relative;">
+                <div style="position:absolute; top:5px; right:5px; display:flex; gap:6px; z-index: 10;">
+                    <div class="fcc-card-action-btn" onclick="event.stopPropagation(); openSpoolDetails(${curItem.id});" title="View Details">🔍</div>
+                    <div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.openEditWizard(${curItem.id});" title="Edit Spool">✏️</div>
+                    <div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.addToQueue({ id: ${curItem.id}, type: 'spool', display: '${curItem.display ? curItem.display.replace(/[\'"]/g, '') : ''}' }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>
+                </div>
                 <div class="nav-label">READY TO SLOT</div>
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
@@ -333,9 +337,9 @@ const renderBadgeHTML = (s, i, locId) => {
 };
 
 const renderBadgeQRs = (s, i) => {
-    generateSafeQR(`qr-pick-${i}`, "ID:" + s.id, 50);
-    generateSafeQR(`qr-print-${i}`, "CMD:PRINT:" + s.id, 50);
-    generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:" + s.id, 50);
+    generateSafeQR(`qr-pick-${i}`, "ID:" + s.id, 70);
+    generateSafeQR(`qr-print-${i}`, "CMD:PRINT:" + s.id, 70);
+    generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:" + s.id, 70);
 };
 
 // --- INTERACTION ---
@@ -589,12 +593,14 @@ document.addEventListener('inventory:sync-pulse', () => {
                         node.style.background = styles.frame;
                         if (styles.border) node.style.boxShadow = 'inset 0 0 0 2px #555';
                         else node.style.boxShadow = '';
-                        const inner = node.querySelector('.slot-inner-gold');
-                        if (inner) {
-                            // Don't overwrite repeating-linear-gradient for ghosts
-                            if (!inner.style.background.includes('repeating-linear-gradient')) {
-                                inner.style.background = styles.inner;
+                        const inner = node.querySelector('.fcc-spool-card-inner') || node.querySelector('.slot-inner-gold');
+                        if (inner && inner.style) {
+                            if (node.classList.contains('is-ghost')) {
+                                inner.style.background = `repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}`;
+                            } else {
+                                inner.style.background = `linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}`;
                             }
+                            inner.style.boxShadow = `inset 0 0 0 1px ${styles.frame}`;
                         }
 
                         const t3 = node.querySelector('.text-line-3');
@@ -604,15 +610,17 @@ document.addEventListener('inventory:sync-pulse', () => {
 
                     // --- Apply to LIST items ---
                     if (node.classList.contains('manage-list-item')) {
-                        // Don't overwrite Ghost styling
-                        if (!node.style.background.includes('#111')) {
-                            node.style.background = styles.frame;
-                            if (styles.border) node.style.boxShadow = 'inset 0 0 0 2px #555';
-                            else node.style.boxShadow = '';
-                        }
-                        const inner = node.querySelector('.list-inner-gold');
-                        if (inner && !inner.style.background.includes('repeating-linear-gradient')) {
-                            inner.style.background = styles.inner;
+                        node.style.background = styles.frame;
+                        if (styles.border) node.style.boxShadow = 'inset 0 0 0 2px #555';
+                        else node.style.boxShadow = '';
+                        const inner = node.querySelector('.fcc-spool-card-inner') || node.querySelector('.list-inner-gold');
+                        if (inner && inner.style) {
+                            if (node.classList.contains('is-ghost')) {
+                                inner.style.background = `repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}`;
+                            } else {
+                                inner.style.background = `linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}`;
+                            }
+                            inner.style.boxShadow = `inset 0 0 0 1px ${styles.frame}`;
                         }
 
                         const t3 = node.querySelector('.text-line-3') || node.querySelector('.mt-2 strong');

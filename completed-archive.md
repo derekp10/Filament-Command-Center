@@ -1,4 +1,6 @@
 # **Done**
+- [x] **[UI Standardization]** Converted hard-coded inline JS/HTML `style="..."` brute-force stylings across the entire application into standardized global `fcc-spool-card` CSS configurations.
+- [x] **UI/UX:** Stabilized Spool Card rendering logic for "Deployed/Ghost" states, restoring complex multi-layered gradient backgrounds natively protected against background live-sync loops across the Buffer UI.
 - [x] **Modals:** Implemented a robust global window/modal management system in `inv_core.js` to mathematically handle dynamic z-index stacking, backdrop layering, and body scrolling when multiple modals are open concurrently. Bound auto-collapse triggers to the Search off-canvas menu to reduce redundant clicks when launching subsequent dialogs.
 - [x] **UI/UX:** Location label for deployed items in the search window is too long and breaks the layout by pushing action buttons out of the card. Refactored Spool Card layout to move Location Data to a new dedicated row.
 - [x] **UI/UX:** Extra long filament/spool names cause the Add Inventory Wizard buttons to become skewed with cancel above Create Inventory. Text data and UI buttons should not be a part of the same frame.
