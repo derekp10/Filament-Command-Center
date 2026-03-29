@@ -1,5 +1,5 @@
 # **Active Backlog (Organized by Feature Area)**
-
+* Look into unifying all the data update logic used for checking on changes on the back end and bringing those forward.
 
 ## 🎨 UI & Theming
 * Fix the borders on black filaments not standing out in the correct spot in the list (Lost contrast against dark UI backgrounds).
