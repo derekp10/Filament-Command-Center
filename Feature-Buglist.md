@@ -24,7 +24,6 @@
 
 
 ## 🔍 Search, Display & Filtering
-* Find spool functionality. Basically make finding a spool/filament easier than using Spoolman. Better support for color searches.
 * Search by and filter by remaining weight.
 * Track unprinted filament samples and create a button/queue like we have for labels.
 * Loading spools into buffer from filament definition doesn't load all spool data into card.
@@ -58,10 +57,6 @@
 * Confirmed label print should be displayed somewhere on the card. Perhaps changing the printer icon to a checkmark for confirmed spools.
 * Add label print button to filament sample cards.
 * Some values in Print Queue are being set to yes, most are null. What is the process for setting them to true?
-* Need a way to add newly created Filament/Spools to the print queue based on print flags in the database.
-* Needs a window/modal that lists all the spools/filaments missing a confirmed label printing (By database check box).
-* Data in the missing label window should be filterable or sortable (Oldest first, Newest first).
-* Things sent to the print queue should be flagged for printing in the database, so that they can be placed and tracked in a separate list.
 * Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
 
 ## ⚙️ App Flow, Architecture & Database
