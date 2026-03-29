@@ -1,4 +1,5 @@
 # **Done**
+- [x] **UI/UX:** Extra long filament/spool names cause the Add Inventory Wizard buttons to become skewed with cancel above Create Inventory. Text data and UI buttons should not be a part of the same frame.
 * **System/UI:** Removed legacy task "combine creation of spool and filament" from backlog since it was inherently solved by the Add Inventory Wizard's monolithic payload structure. Included minor cleanup of duplicate DOM ID in modal structural HTML.
 * **Feature:** Added dynamic Spool counts `🧵 X Spool(s)` natively into the Filament Card UI template to easily identify stock limits without opening menus. Added seamless backing API loop integration to fetch counts dynamically.
 * **Feature:** Built a robust native "Edit Spool" modal into the Add Inventory Wizard system, circumventing the need to enter Spoolman web UI to adjust core physical characteristics or identifiers on existing inventory.

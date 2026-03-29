@@ -9,7 +9,6 @@
 * Spool 'Archived' status badge colors are inconsistent (some yellow, most red). Standardize to a single color (e.g. Red) globally across all views.
 
 ## 🗂️ Modals & Add Inventory Wizard
-* Extra long filament/spool names cause the Add Inventory Wizard buttons to become skewed with cancel above Create Inventory. Text data and UI buttons should not be a part of the same frame.
 * Step 1: Material Selection should have a more fitting name, as it is more the method of creating a new item than it is about selecting a material.
 * Give material type the ability to auto-complete based on existing types in the database. (Enter should complete, mirror selecting (Up/Down to select) from the filament attributes field).
 * Background refreshes on the spool list for a filament can cause a button click to be lost if occurring during a refresh. Should only refresh if changed hash changes, used elsewhere. This only happens on the 2nd item on the list, possibly more.
