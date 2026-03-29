@@ -1,4 +1,6 @@
 # **Done**
+* **Bug Fix:** Fixed the `Location` update in the Spool Details modal throwing a 400 Bad Request API error when set to `Unassigned` by correcting a schema typo (`physical_source_sub` to `physical_source_slot`) in the backend force unassign logic.
+* **Feature:** Standardized the UI background refresh "no-wiggle" hashing logic globally. Implemented strict state caching in the Filament Details, Spool Details, Location Manager, and Live Logs to prevent silent 5-second pulses from destructively overwriting complex DOM components and dropping user button clicks.
 * **Feature Implemented:** Added ability to manually edit and assign location data directly on a spool, including a force unassign Ghost mechanism.
 * **Bug Fix:** Fixed explicit `test_clone_e2e.py` Chromium failure by correcting the Playwright button locator to match the rendered `[🐑 Clone]` markup instead of a legacy string.
 * **Bug Fix:** Cleaned up subpixel rendering artifacts in `offcanvas_search.html` layout that were previously tripping the global UI scanner by adding a targeted CSS flex bypass filter for Chromium `justify-content-between` boundaries.

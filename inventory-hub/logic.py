@@ -271,7 +271,7 @@ def perform_force_unassign(spool_id):
     # to guarantee Spoolman API removes them instead of ignoring dropped keys
     extra['container_slot'] = ""
     extra['physical_source'] = ""
-    extra['physical_source_sub'] = ""
+    extra['physical_source_slot'] = ""
     
     if spoolman_api.update_spool(spool_id, {"location": "", "extra": extra}):
         state.add_log_entry(f"🗑️ Force Unassigned #{spool_id}", "WARNING")

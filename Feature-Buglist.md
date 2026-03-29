@@ -1,5 +1,4 @@
 # **Active Backlog (Organized by Feature Area)**
-* Look into unifying all the data update logic used for checking on changes on the back end and bringing those forward.
 
 ## 🎨 UI & Theming
 * Fix the borders on black filaments not standing out in the correct spot in the list (Lost contrast against dark UI backgrounds).
@@ -11,7 +10,6 @@
 ## 🗂️ Modals & Add Inventory Wizard
 * Step 1: Material Selection should have a more fitting name, as it is more the method of creating a new item than it is about selecting a material.
 * Give material type the ability to auto-complete based on existing types in the database. (Enter should complete, mirror selecting (Up/Down to select) from the filament attributes field).
-* Background refreshes on the spool list for a filament can cause a button click to be lost if occurring during a refresh. Should only refresh if changed hash changes, used elsewhere. This only happens on the 2nd item on the list, possibly more.
 * Bring in more data from Spoolman into the details modals. It'd be nice to see a purchase link to easily get more of the same filament.
     - Some fields we might not want to bring in. Will need to go over the list of fields to bring in and leave alone.
     - Add a button to the details modal to easily get more of the same filament. (Configure in config file).

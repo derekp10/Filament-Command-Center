@@ -203,6 +203,12 @@ const fetchLocations = () => {
             const finalList = d;
             state.allLocations = finalList;
 
+            // --- NO WIGGLE CHECK ---
+            const contentHash = JSON.stringify(finalList);
+            if (state.lastLocationsHash === contentHash) return;
+            state.lastLocationsHash = contentHash;
+            // -----------------------
+
             // 2. Update Total Count with Pop Style
             const countEl = document.getElementById('loc-count');
             if (countEl) countEl.innerText = "Total Locations: " + finalList.length;
@@ -267,6 +273,12 @@ const fetchLocations = () => {
 
 const updateLogState = (force = false) => {
     if (!state.logsPaused || force) fetch('/api/logs').then(r => r.json()).then(d => {
+        // --- NO WIGGLE CHECK ---
+        const contentHash = JSON.stringify(d);
+        if (!force && state.lastLogHash === contentHash) return;
+        state.lastLogHash = contentHash;
+        // -----------------------
+
         const logsEl = document.getElementById('live-logs');
         if (logsEl) logsEl.innerHTML = d.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
 

@@ -7,6 +7,13 @@ const openSpoolDetails = (id, silent = false) => {
         .then(r => r.json())
         .then(d => {
             if (!silent) setProcessing(false);
+
+            // --- NO WIGGLE CHECK ---
+            const contentHash = JSON.stringify(d);
+            if (silent && typeof state !== 'undefined' && state.lastSpoolDetailsHash === contentHash) return;
+            if (typeof state !== 'undefined') state.lastSpoolDetailsHash = contentHash;
+            // -----------------------
+
             if (!d || !d.id) { showToast("Details Data Missing!", "error"); return; }
 
             // --- 1. Basic Info ---
@@ -112,9 +119,20 @@ const openFilamentDetails = (fid, silent = false) => {
     fetch(`/api/filament_details?id=${fid}`)
         .then(r => r.json())
         .then(d => {
+            // --- NO WIGGLE CHECK (Info) ---
+            const infoHash = JSON.stringify(d);
+            let skipInfoRender = false;
+            if (silent && typeof state !== 'undefined' && state.lastFilamentInfoHash === infoHash) {
+                skipInfoRender = true;
+            } else if (typeof state !== 'undefined') {
+                state.lastFilamentInfoHash = infoHash;
+            }
+            // ------------------------------
+
             if (!d || !d.id) { if (!silent) setProcessing(false); showToast("Filament Data Missing!", "error"); return; }
 
-            // --- Populate Basic Details ---
+            if (!skipInfoRender) {
+                // --- Populate Basic Details ---
             document.getElementById('fil-detail-id').innerText = d.id;
             document.getElementById('fil-detail-vendor').innerText = d.vendor ? d.vendor.name : "Unknown";
             document.getElementById('fil-detail-material').innerText = d.material || "Unknown";
@@ -146,13 +164,14 @@ const openFilamentDetails = (fid, silent = false) => {
                 btnLink.href = baseUrl ? `${baseUrl.replace(/\/$/, "")}/filament/show/${d.id}` : `/filament/show/${d.id}`;
             }
 
-            // Action: Queue Swatch Label
-            const btnQueueSwatch = document.getElementById('btn-fil-print-action');
-            if (btnQueueSwatch) {
-                btnQueueSwatch.onclick = () => {
-                    addToQueue({ id: d.id, type: 'filament', display: d.name });
-                    showToast('Label added to print queue!', 'success');
-                };
+                // Action: Queue Swatch Label
+                const btnQueueSwatch = document.getElementById('btn-fil-print-action');
+                if (btnQueueSwatch) {
+                    btnQueueSwatch.onclick = () => {
+                        addToQueue({ id: d.id, type: 'filament', display: d.name });
+                        showToast('Label added to print queue!', 'success');
+                    };
+                }
             }
 
             // --- NEW: Fetch Associated Spools for this Filament ---
@@ -167,6 +186,15 @@ const openFilamentDetails = (fid, silent = false) => {
                 fetch(`/api/spools_by_filament?id=${fid}`)
                     .then(r => r.json())
                     .then(spools => {
+                        // --- NO WIGGLE CHECK (Spools) ---
+                        const spoolsHash = JSON.stringify(spools);
+                        if (silent && typeof state !== 'undefined' && state.lastFilamentSpoolsHash === spoolsHash) {
+                            if (!silent) setProcessing(false); 
+                            return;
+                        }
+                        if (typeof state !== 'undefined') state.lastFilamentSpoolsHash = spoolsHash;
+                        // --------------------------------
+
                         if (!silent) setProcessing(false); // Done loading
                         listContainer.innerHTML = "";
 
