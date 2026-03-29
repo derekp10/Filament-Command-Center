@@ -973,9 +973,9 @@ window.wizardSubmit = async () => {
 
         // Construct Spool Payload
         let sp_payload = {
-            used_weight: parseFloat(getVal('wiz-spool-used')) || 0,
-            empty_weight: parseFloat(getVal('wiz-spool-empty_weight')) || null,
-            initial_weight: parseFloat(getVal('wiz-spool-initial_weight')) || null,
+            used_weight: getVal('wiz-spool-used') !== "" ? parseFloat(getVal('wiz-spool-used')) : 0,
+            empty_weight: getVal('wiz-spool-empty_weight') !== "" ? parseFloat(getVal('wiz-spool-empty_weight')) : null,
+            initial_weight: getVal('wiz-spool-initial_weight') !== "" ? parseFloat(getVal('wiz-spool-initial_weight')) : null,
             location: getVal('wiz-spool-location') || '',
             comment: getVal('wiz-spool-comment') || '',
             archived: document.getElementById('wiz-spool-archived')?.checked || false,
@@ -993,7 +993,7 @@ window.wizardSubmit = async () => {
             }
         });
 
-        Object.keys(sp_payload).forEach(k => sp_payload[k] == null && delete sp_payload[k]);
+        Object.keys(sp_payload).forEach(k => { if (sp_payload[k] === undefined || Number.isNaN(sp_payload[k])) delete sp_payload[k]; });
 
         let f_payload = null;
         let target_fid = null;
@@ -1011,11 +1011,13 @@ window.wizardSubmit = async () => {
             f_payload = {
                 name: getVal('wiz-fil-color_name') || 'Unknown',
                 material: getVal('wiz-fil-material') || 'PLA',
-                weight: parseFloat(getVal('wiz-fil-weight')) || 1000,
-                spool_weight: parseFloat(getVal('wiz-fil-empty_weight')) || null,
-                diameter: parseFloat(getVal('wiz-fil-diameter')) || 1.75,
-                density: parseFloat(getVal('wiz-fil-density')) || 1.24,
+                weight: getVal('wiz-fil-weight') !== "" ? parseFloat(getVal('wiz-fil-weight')) : 1000,
+                spool_weight: getVal('wiz-fil-empty_weight') !== "" ? parseFloat(getVal('wiz-fil-empty_weight')) : null,
+                diameter: getVal('wiz-fil-diameter') !== "" ? parseFloat(getVal('wiz-fil-diameter')) : 1.75,
+                density: getVal('wiz-fil-density') !== "" ? parseFloat(getVal('wiz-fil-density')) : 1.24,
                 color_hex: colors.length > 0 ? colors[0] : 'FFFFFF',
+                settings_extruder_temp: getVal('wiz-fil-settings_extruder_temp') !== "" ? parseInt(getVal('wiz-fil-settings_extruder_temp')) : null,
+                settings_bed_temp: getVal('wiz-fil-settings_bed_temp') !== "" ? parseInt(getVal('wiz-fil-settings_bed_temp')) : null,
                 extra: {}
             };
 
@@ -1068,11 +1070,7 @@ window.wizardSubmit = async () => {
                 if (t.article_number) f_payload.article_number = t.article_number;
             }
 
-            // Map Native Temp Fields Explicitly
-            if (getVal('wiz-fil-settings_extruder_temp')) f_payload.settings_extruder_temp = parseInt(getVal('wiz-fil-settings_extruder_temp'));
-            if (getVal('wiz-fil-settings_bed_temp')) f_payload.settings_bed_temp = parseInt(getVal('wiz-fil-settings_bed_temp'));
-
-            Object.keys(f_payload).forEach(k => f_payload[k] == null && delete f_payload[k]);
+            Object.keys(f_payload).forEach(k => { if (f_payload[k] === undefined || Number.isNaN(f_payload[k])) delete f_payload[k]; });
         }
 
         const payload = {

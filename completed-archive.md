@@ -1,4 +1,7 @@
 # **Done**
+* **Feature:** Standardized the 'Archived' badge to `text-bg-danger` (Red) globally and implemented structural Playwright tests to strictly enforce this layout convention.
+* **Bug Fix:** Fixed explicit empty spool weight updates silently failing to clear the Spoolman DB value. Refactored the Add Inventory Wizard payload processor to ensure empty fields securely emit `null` objects for proper attribute resets via the Spool API endpoint.
+* **Feature:** Enhanced the Add Inventory Wizard to natively read, display, and serialize `settings_extruder_temp` and `settings_bed_temp` strings dynamically onto newly initialized Filaments, bypassing fallback metadata payloads.
 * **[UI Testing]** Implemented comprehensive Playwright E2E structural testing across all UI elements globally to detect layout regressions.
 * **Bug Fix:** Fixed `DIV#.fcc-card-action-btn` internal content structurally overflowing its strict dimensions.
 * **Bug Fix:** Fixed missing inset `box-shadow` on Spool/Filament Cards that are assigned a gradient style.

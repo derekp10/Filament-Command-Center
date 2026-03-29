@@ -7,7 +7,6 @@
 * Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
 * Side Quest: Spool card coloring system doesn't seem to handle 4+ colors in a swatch for generating gradient.
 * Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
-* Spool 'Archived' status badge colors are inconsistent (some yellow, most red). Standardize to a single color (e.g. Red) globally across all views.
 
 ## 🗂️ Modals & Add Inventory Wizard
 * Step 1: Material Selection should have a more fitting name, as it is more the method of creating a new item than it is about selecting a material.
@@ -19,7 +18,6 @@
     - A confirmation maybe to auto add a new spool of the same filament when the button is clicked. Or an easy button to fill in standard data, but prompt for unique info (price, product link).
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
 * For existing filaments, advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
-* Extruder and bed temps are missing from the filament side for data entry.
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
 
@@ -64,7 +62,6 @@
 * **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones.
 * Refactor dashboard to be more modular if possible, and reduce token size/context requirements.
 * Make as much of Command Center user configurable as possible, using UI elements and a config import/export feature.
-* Empty spool weight doesn't always seem to update the backend correctly.
 * When changes are made to Spoolman extra fields, they usually ignore sort order in the database. We need a way to restore sort order.
 * Clean up filament attributes, remove/consolidate (X;Y items and similar items such as Carbon-Fiber & Carbon Fiber). Requires Setup_fields.py changes.
 * Continue to support Spoolman's "Import from External" feature for filaments...

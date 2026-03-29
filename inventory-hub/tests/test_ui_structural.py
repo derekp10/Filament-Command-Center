@@ -232,3 +232,25 @@ def test_structural_wizard_modal(page: Page):
     
     box = modal_dialog.bounding_box()
     assert box['width'] >= 400, f"Wizard Modal squished horizontally to {box['width']}px"
+
+def test_structural_archived_badges(page: Page):
+    """Verifies that all variations of 'Archived' badges across the UI consistently use the hazard red (text-bg-danger) class and reject warning/yellow versions."""
+    page.goto("http://localhost:8000")
+    
+    # Open global search to ensure some spool cards might render (if database populated)
+    page.locator('nav button:has-text("SEARCH")').click()
+    page.wait_for_timeout(500)
+    page.locator('#global-search-query').fill("a")
+    page.wait_for_timeout(1500)
+    
+    # Check all elements with the fcc-archived-badge designation
+    badges = page.locator('.fcc-archived-badge')
+    count = badges.count()
+    if count == 0:
+        pytest.skip("No archived badges rendered to verify.")
+        
+    for i in range(count):
+        badge = badges.nth(i)
+        classes = badge.evaluate("el => el.className")
+        assert "text-bg-danger" in classes, "Archived badge missing text-bg-danger class!"
+        assert "bg-warning" not in classes, "Archived badge incorrectly using bg-warning class!"
