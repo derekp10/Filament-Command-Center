@@ -255,14 +255,12 @@
 
             </div>
 
-            <div class="modal-footer border-secondary" style="background:#111;">
-                <div class="w-100 d-flex justify-content-between align-items-center">
-                    <div id="wiz-status-msg" class="text-info small font-monospace"></div>
-                    <div>
-                        <button class="btn btn-outline-danger me-2" data-bs-dismiss="modal">Cancel</button>
-                        <button class="btn btn-success fw-bold px-4 shadow" id="btn-wiz-submit" onclick="wizardSubmit()"
-                            disabled>CREATE INVENTORY</button>
-                    </div>
+            <div class="modal-footer border-secondary flex-column align-items-stretch" style="background:#111;">
+                <div id="wiz-status-msg" class="text-info small font-monospace text-break text-start mb-2 w-100"></div>
+                <div class="d-flex justify-content-end w-100">
+                    <button class="btn btn-outline-danger me-2" data-bs-dismiss="modal">Cancel</button>
+                    <button class="btn btn-success fw-bold px-4 shadow" id="btn-wiz-submit" onclick="wizardSubmit()"
+                        disabled>CREATE INVENTORY</button>
                 </div>
             </div>
         </div>
