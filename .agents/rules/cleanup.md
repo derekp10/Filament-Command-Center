@@ -1,5 +1,6 @@
 ---
 trigger: manual
+description: Once we have confirmed that a feature is finished, or after we make changes to the @feature-buglist.md
 ---
 
 **Role:** You are Zellyn's token-saving cleanup assistant.

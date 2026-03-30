@@ -149,21 +149,28 @@ const getFilamentStyle = (colorStr) => {
         return hex ? '#' + hex : '#333';
     });
 
-    // 4. Force at least 2 colors for a gradient
+    // 4. Force at least 2 colors for interpolation
+    const isSolid = colors.length === 1 || (colors.length > 1 && colors[0] === colors[1]);
     if (colors.length === 1) colors.push(colors[0]);
 
-    // 5. Generate Gradients
-    let frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
-
+    // 5. Generate Physical Frame Gradients (Buttons)
+    let frameGrad;
     let innerGrad;
-    if (colors.length > 1 && colors[0] !== colors[1]) {
-        // Multi-color inner: transparent dark overlay + colors
+
+    if (isSolid) {
+        let hex = colors[0].replace('#', '');
+        if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+        const r = parseInt(hex.substring(0, 2), 16) || 0;
+        const g = parseInt(hex.substring(2, 4), 16) || 0;
+        const b = parseInt(hex.substring(4, 6), 16) || 0;
+        // Smoothly fade the base color into partial transparency to create a deeply rich vibrant bottom
+        frameGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},1) 0%, rgba(${r},${g},${b},0.6) 100%)`;
+        innerGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},0.4) 0%, rgba(${r},${g},${b},0.1) 100%)`;
+    } else {
+        // Multi-color filaments use a diagonal stripe or sweep to showcase all components
+        frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
         const gradColors = colors.map(c => getHexDark(c, 0.8));
         innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), linear-gradient(135deg, ${gradColors.join(', ')})`;
-    } else {
-        // Single-color inner: simple fade to black
-        const lastColorDark = getHexDark(colors[0], 0.3);
-        innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
     }
 
     // 6. Black border fix & Texture
@@ -174,17 +181,17 @@ const getFilamentStyle = (colorStr) => {
             let hex = c.replace('#', '');
             if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
             const r = parseInt(hex.substring(0, 2), 16), g = parseInt(hex.substring(2, 4), 16), b = parseInt(hex.substring(4, 6), 16);
-            if (r > 35 || g > 35 || b > 35) { isAllDark = false; break; }
+            if (r > 55 || g > 55 || b > 55) { isAllDark = false; break; }
         }
         if (isAllDark) {
-            borderStyle = "2px solid #555";
-            // Prettify black by giving it a smooth diagonal dark metallic sheen instead of a solid void
-            frameGrad = `linear-gradient(135deg, #444444 0%, #1a1a1a 40%, #050505 100%)`;
+            borderStyle = true; // Boolean flag legacy passthrough
+            // Explicit override for pure black colors to guarantee contrast rim (fades #555 to deep black)
+            frameGrad = `linear-gradient(to bottom, #555555 0%, #1a1a1a 100%)`;
             innerGrad = `linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.9) 100%)`;
         }
     }
 
-    return { frame: frameGrad, inner: innerGrad, border: borderStyle };
+    return { frame: frameGrad, inner: innerGrad, border: borderStyle, base: colors[0], isSolid: isSolid };
 };
 
 const hexToRgb = (hex) => {
@@ -202,6 +209,12 @@ const fetchLocations = () => {
             // [ALEX FIX] Backend now provides Unassigned, so we use 'd' directly
             const finalList = d;
             state.allLocations = finalList;
+
+            // --- NO WIGGLE CHECK ---
+            const contentHash = JSON.stringify(finalList);
+            if (state.lastLocationsHash === contentHash) return;
+            state.lastLocationsHash = contentHash;
+            // -----------------------
 
             // 2. Update Total Count with Pop Style
             const countEl = document.getElementById('loc-count');
@@ -267,6 +280,12 @@ const fetchLocations = () => {
 
 const updateLogState = (force = false) => {
     if (!state.logsPaused || force) fetch('/api/logs').then(r => r.json()).then(d => {
+        // --- NO WIGGLE CHECK ---
+        const contentHash = JSON.stringify(d);
+        if (!force && state.lastLogHash === contentHash) return;
+        state.lastLogHash = contentHash;
+        // -----------------------
+
         const logsEl = document.getElementById('live-logs');
         if (logsEl) logsEl.innerHTML = d.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
 
@@ -325,8 +344,47 @@ window.startSmartSync = () => {
     }, 5000); // 5 Second Heartbeat
 };
 
-// Auto-start the heartbeat
-document.addEventListener('DOMContentLoaded', window.startSmartSync);
+// --- GLOBAL MODAL / WINDOW MANAGER ---
+document.addEventListener('DOMContentLoaded', () => {
+    // Start Heartbeat
+    window.startSmartSync();
+
+    // 1. When a modal starts showing
+    document.addEventListener('show.bs.modal', function (event) {
+        // Auto-collapse Search Offcanvas if open to reduce clicks
+        const offcanvasEl = document.getElementById('offcanvasSearch');
+        if (offcanvasEl && offcanvasEl.classList.contains('show')) {
+            const os = bootstrap.Offcanvas.getInstance(offcanvasEl);
+            if (os) os.hide();
+        }
+
+        // Calculate and apply stacking z-index for the modal wrapper
+        const openModals = document.querySelectorAll('.modal.show').length;
+        // BS5 default modal z-index is 1055. Add 10 per subsequent tier.
+        const newModalZ = 1055 + (openModals * 10);
+        event.target.style.setProperty('z-index', newModalZ, 'important');
+    });
+
+    // 2. When modal finishes animating (backdrop is strictly in the DOM)
+    document.addEventListener('shown.bs.modal', function () {
+        // Find the last added backdrop and stack it purely behind our new modal
+        const backdrops = document.querySelectorAll('.modal-backdrop');
+        if (backdrops.length > 0) {
+            const baseBackdropZIndex = 1050; // BS5 default backdrop z-index
+            const newBackdropZ = baseBackdropZIndex + ((backdrops.length - 1) * 10);
+            backdrops[backdrops.length - 1].style.setProperty('z-index', newBackdropZ, 'important');
+        }
+    });
+
+    // 3. When a modal finishes hiding
+    document.addEventListener('hidden.bs.modal', function () {
+        // Bootstrap aggressively strips '.modal-open' from body when *any* modal hides.
+        // We must forcefully restore it if there are other modals still 'underneath' it.
+        if (document.querySelectorAll('.modal.show').length > 0) {
+            document.body.classList.add('modal-open');
+        }
+    });
+});
 
 // [Code Guardian] Wake Lock Persistence
 document.addEventListener('visibilitychange', async () => {

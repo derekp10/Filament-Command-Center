@@ -8,7 +8,12 @@
             <div class="modal-body bg-dark text-white">
                 <div class="row">
                     <div class="col-md-6">
-                        <p class="mb-1"><strong>ID:</strong> <span id="detail-id" class="text-info"></span><span id="detail-archived-badge" class="badge bg-warning text-dark ms-2 d-none">📦 ARCHIVED</span></p>
+                        <p class="mb-1"><strong>ID:</strong> <span id="detail-id" class="text-info"></span><span id="detail-archived-badge" class="badge text-bg-danger ms-2 d-none fcc-archived-badge">📦 ARCHIVED</span></p>
+                        <p class="mb-1 d-flex align-items-center mb-1">
+                            <strong>Location:</strong> 
+                            <span id="detail-location-badge" class="badge bg-secondary ms-2 me-1"></span>
+                            <button class="btn btn-sm btn-outline-secondary py-0 px-1 border-0" onclick="promptEditLocation(document.getElementById('detail-id').innerText, document.getElementById('detail-location-badge').innerText)" title="Force/Override Location">✏️</button>
+                        </p>
                         <p class="mb-1"><strong>Material:</strong> <span id="detail-material"></span></p>
                         <p class="mb-1"><strong>Vendor:</strong> <span id="detail-vendor"></span></p>
                         <p class="mb-1"><strong>Weight:</strong> <span id="detail-weight"></span></p>
@@ -17,8 +22,7 @@
                                 class="fw-bold text-success"></span></p>
                     </div>
                     <div class="col-md-6 text-center">
-                        <div id="detail-swatch"
-                            style="width: 80px; height: 80px; border-radius: 50%; margin: 0 auto; border: 3px solid #fff; box-shadow: 0 0 10px rgba(255,255,255,0.2);">
+                        <div id="detail-swatch" class="fcc-modal-swatch-circle">
                         </div>
                         <p class="mt-2 mb-0 fw-bold" id="detail-color-name"></p>
                         <p class="text-muted small" id="detail-hex"></p>
@@ -76,8 +80,7 @@
                         <p class="mb-1"><strong>Density:</strong> <span id="fil-detail-density"></span></p>
                     </div>
                     <div class="col-md-6 text-center">
-                        <div id="fil-detail-swatch"
-                            style="width: 80px; height: 80px; border-radius: 12px; margin: 0 auto; border: 3px solid #fff; box-shadow: 0 0 15px rgba(0,255,0,0.2);">
+                        <div id="fil-detail-swatch" class="fcc-modal-swatch-square">
                         </div>
                         <p class="mt-2 mb-0 fw-bold" id="fil-detail-color-name"></p>
                         <p class="text-muted small" id="fil-detail-hex"></p>
@@ -94,8 +97,7 @@
                         <span id="fil-spool-count" class="badge bg-secondary">0</span>
                     </label>
                     <div id="fil-spools-list"
-                        class="list-group list-group-flush bg-black border border-secondary rounded mb-2"
-                        style="max-height: 150px; overflow-y: auto;">
+                        class="list-group list-group-flush bg-black border border-secondary rounded mb-2 max-h-150px overflow-y-auto">
                         <div class="p-2 text-muted text-center small">Checking inventory...</div>
                     </div>
                     <button type="button" class="btn btn-warning w-100 fw-bold" id="btn-queue-all-spools"

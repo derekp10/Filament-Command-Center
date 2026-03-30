@@ -262,6 +262,22 @@ def perform_smart_eject(spool_id):
             return True
     return False
 
+def perform_force_unassign(spool_id):
+    spool_data = spoolman_api.get_spool(spool_id)
+    if not spool_data: return False
+    extra = spool_data.get('extra', {})
+    
+    # [ALEX FIX] Explicitly overwrite slots and sources with empty strings
+    # to guarantee Spoolman API removes them instead of ignoring dropped keys
+    extra['container_slot'] = ""
+    extra['physical_source'] = ""
+    extra['physical_source_slot'] = ""
+    
+    if spoolman_api.update_spool(spool_id, {"location": "", "extra": extra}):
+        state.add_log_entry(f"🗑️ Force Unassigned #{spool_id}", "WARNING")
+        return True
+    return False
+
 def perform_undo():
     if not state.UNDO_STACK: return {"success": False, "msg": "History empty."}
     last = state.UNDO_STACK.pop()

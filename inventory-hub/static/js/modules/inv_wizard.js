@@ -22,7 +22,8 @@ window.openWizardModal = async () => {
     await Promise.all([
         wizardFetchVendors(),
         wizardFetchLocations(),
-        wizardFetchExtraFields()
+        wizardFetchExtraFields(),
+        wizardFetchMaterials()
     ]);
 };
 
@@ -44,6 +45,12 @@ const wizardReset = () => {
     document.getElementById('wiz-spool-qty').value = 1;
 
     document.getElementById('wiz-spool-used').value = 0;
+    
+    wizardState.original_used_weight = 0;
+    const usageContainer = document.getElementById('container-wiz-spool-recent-usage');
+    if (usageContainer) usageContainer.style.display = 'none';
+    const recentInput = document.getElementById('wiz-spool-recent-usage');
+    if (recentInput) recentInput.value = '';
 
     // Reset Edit State button styles
     const submitBtn = document.getElementById('btn-wiz-submit');
@@ -187,9 +194,133 @@ window.wizardCalcRemainingFromUsed = () => {
     document.getElementById('wiz-spool-scale').value = '';
 };
 
+window.wizardCalcFromRecentUsage = () => {
+    let recent = parseFloat(document.getElementById('wiz-spool-recent-usage').value);
+    if (isNaN(recent)) recent = 0;
+    
+    let baseUsed = wizardState.original_used_weight || 0;
+    let newTotal = baseUsed + recent;
+    if (newTotal < 0) newTotal = 0;
+    
+    document.getElementById('wiz-spool-used').value = newTotal.toFixed(0);
+    window.wizardCalcRemainingFromUsed();
+};
+
 window.wizardClearScaleWeight = () => {
     document.getElementById('wiz-spool-scale').value = '';
     window.wizardCalcRemainingFromUsed();
+};
+
+// --- DATA FETCHERS ---
+const wizardFetchMaterials = () => {
+    return fetch('/api/filaments')
+        .then(r => r.json())
+        .then(d => {
+            if (d.success && d.filaments) {
+                const materials = [...new Set(d.filaments.map(f => f.material).filter(Boolean))].sort(function (a, b) {
+                    return a.toLowerCase().localeCompare(b.toLowerCase());
+                });
+                wizardState.materials = materials;
+                const dropdown = document.getElementById('dropdown-material');
+                if (dropdown) {
+                    dropdown.innerHTML = materials.map(m => 
+                        `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option" 
+                              onmousedown="window.wizardMaterialSelect(event, '${m.replace(/'/g, "\\'")}')">${m}</div>`
+                    ).join('');
+                }
+            }
+        });
+};
+
+window.wizardMaterialFocus = () => {
+    const dropdown = document.getElementById('dropdown-material');
+    if (dropdown) {
+        dropdown.style.display = 'block';
+        if (window.wizardMaterialFilter) window.wizardMaterialFilter();
+    }
+};
+
+window.wizardMaterialBlur = () => {
+    setTimeout(() => {
+        const dropdown = document.getElementById('dropdown-material');
+        if (dropdown) dropdown.style.display = 'none';
+    }, 150);
+};
+
+window.wizardMaterialFilter = () => {
+    const input = document.getElementById('wiz-fil-material');
+    const dropdown = document.getElementById('dropdown-material');
+    if (!input || !dropdown) return;
+    const qs = input.value.toLowerCase();
+    
+    let hasVisible = false;
+    Array.from(dropdown.children).forEach(option => {
+        option.classList.remove('active', 'bg-primary');
+        if (option.innerText.toLowerCase().includes(qs)) {
+            option.style.display = 'block';
+            hasVisible = true;
+        } else {
+            option.style.display = 'none';
+        }
+    });
+    dropdown.style.display = hasVisible ? 'block' : 'none';
+};
+
+window.wizardMaterialKeydown = (event) => {
+    const input = document.getElementById('wiz-fil-material');
+    const dropdown = document.getElementById('dropdown-material');
+    if (!input || !dropdown || dropdown.style.display === 'none') {
+        if (event.key === 'Enter') event.preventDefault();
+        return;
+    }
+
+    let visibleOptions = Array.from(dropdown.children).filter(el => el.style.display !== 'none');
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (!visibleOptions.length) return;
+        event.preventDefault();
+
+        let currentIndex = visibleOptions.findIndex(el => el.classList.contains('active'));
+        visibleOptions.forEach(el => el.classList.remove('active', 'bg-primary'));
+
+        if (event.key === 'ArrowDown') {
+            currentIndex = currentIndex + 1 >= visibleOptions.length ? 0 : currentIndex + 1;
+        } else {
+            currentIndex = currentIndex - 1 < 0 ? visibleOptions.length - 1 : currentIndex - 1;
+        }
+
+        const nextActive = visibleOptions[currentIndex];
+        nextActive.classList.add('active', 'bg-primary');
+
+        const dropRect = dropdown.getBoundingClientRect();
+        const itemRect = nextActive.getBoundingClientRect();
+        if (itemRect.bottom > dropRect.bottom) {
+            dropdown.scrollTop += (itemRect.bottom - dropRect.bottom);
+        } else if (itemRect.top < dropRect.top) {
+            dropdown.scrollTop -= (dropRect.top - itemRect.top);
+        }
+        return;
+    }
+
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        if (visibleOptions.length > 0) {
+            let selected = visibleOptions.find(el => el.classList.contains('active')) || visibleOptions[0];
+            window.wizardMaterialSelect(event, selected.innerText);
+        }
+    }
+};
+
+window.wizardMaterialSelect = (event, value) => {
+    event.preventDefault();
+    const input = document.getElementById('wiz-fil-material');
+    if (input) {
+        input.value = value;
+        input.focus();
+        if (window.wizardAutoUpdateDensity) window.wizardAutoUpdateDensity();
+    }
+    const dropdown = document.getElementById('dropdown-material');
+    if (dropdown) dropdown.style.display = 'none';
 };
 
 // --- DATA FETCHERS ---
@@ -973,9 +1104,9 @@ window.wizardSubmit = async () => {
 
         // Construct Spool Payload
         let sp_payload = {
-            used_weight: parseFloat(getVal('wiz-spool-used')) || 0,
-            empty_weight: parseFloat(getVal('wiz-spool-empty_weight')) || null,
-            initial_weight: parseFloat(getVal('wiz-spool-initial_weight')) || null,
+            used_weight: getVal('wiz-spool-used') !== "" ? parseFloat(getVal('wiz-spool-used')) : 0,
+            empty_weight: getVal('wiz-spool-empty_weight') !== "" ? parseFloat(getVal('wiz-spool-empty_weight')) : null,
+            initial_weight: getVal('wiz-spool-initial_weight') !== "" ? parseFloat(getVal('wiz-spool-initial_weight')) : null,
             location: getVal('wiz-spool-location') || '',
             comment: getVal('wiz-spool-comment') || '',
             archived: document.getElementById('wiz-spool-archived')?.checked || false,
@@ -993,7 +1124,7 @@ window.wizardSubmit = async () => {
             }
         });
 
-        Object.keys(sp_payload).forEach(k => sp_payload[k] == null && delete sp_payload[k]);
+        Object.keys(sp_payload).forEach(k => { if (sp_payload[k] === undefined || Number.isNaN(sp_payload[k])) delete sp_payload[k]; });
 
         let f_payload = null;
         let target_fid = null;
@@ -1011,11 +1142,13 @@ window.wizardSubmit = async () => {
             f_payload = {
                 name: getVal('wiz-fil-color_name') || 'Unknown',
                 material: getVal('wiz-fil-material') || 'PLA',
-                weight: parseFloat(getVal('wiz-fil-weight')) || 1000,
-                spool_weight: parseFloat(getVal('wiz-fil-empty_weight')) || null,
-                diameter: parseFloat(getVal('wiz-fil-diameter')) || 1.75,
-                density: parseFloat(getVal('wiz-fil-density')) || 1.24,
+                weight: getVal('wiz-fil-weight') !== "" ? parseFloat(getVal('wiz-fil-weight')) : 1000,
+                spool_weight: getVal('wiz-fil-empty_weight') !== "" ? parseFloat(getVal('wiz-fil-empty_weight')) : null,
+                diameter: getVal('wiz-fil-diameter') !== "" ? parseFloat(getVal('wiz-fil-diameter')) : 1.75,
+                density: getVal('wiz-fil-density') !== "" ? parseFloat(getVal('wiz-fil-density')) : 1.24,
                 color_hex: colors.length > 0 ? colors[0] : 'FFFFFF',
+                settings_extruder_temp: getVal('wiz-fil-settings_extruder_temp') !== "" ? parseInt(getVal('wiz-fil-settings_extruder_temp')) : null,
+                settings_bed_temp: getVal('wiz-fil-settings_bed_temp') !== "" ? parseInt(getVal('wiz-fil-settings_bed_temp')) : null,
                 extra: {}
             };
 
@@ -1068,11 +1201,7 @@ window.wizardSubmit = async () => {
                 if (t.article_number) f_payload.article_number = t.article_number;
             }
 
-            // Map Native Temp Fields Explicitly
-            if (getVal('wiz-fil-settings_extruder_temp')) f_payload.settings_extruder_temp = parseInt(getVal('wiz-fil-settings_extruder_temp'));
-            if (getVal('wiz-fil-settings_bed_temp')) f_payload.settings_bed_temp = parseInt(getVal('wiz-fil-settings_bed_temp'));
-
-            Object.keys(f_payload).forEach(k => f_payload[k] == null && delete f_payload[k]);
+            Object.keys(f_payload).forEach(k => { if (f_payload[k] === undefined || Number.isNaN(f_payload[k])) delete f_payload[k]; });
         }
 
         const payload = {
@@ -1095,6 +1224,27 @@ window.wizardSubmit = async () => {
         if (data.success) {
             msg.innerHTML = `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
 
+            // Reset Weigh-Out Protocol tracking on save so subsequent saves don't double-dip
+            if (wizardState.mode === 'edit_spool') {
+                const recentInput = document.getElementById('wiz-spool-recent-usage');
+                if (recentInput && recentInput.value) {
+                    recentInput.value = '';
+                    wizardState.original_used_weight = parseFloat(document.getElementById('wiz-spool-used').value) || 0;
+                    
+                    // Visual feedback flash (accounting for Bootstrap !important classes)
+                    const remInput = document.getElementById('wiz-spool-remaining');
+                    if (remInput) {
+                        remInput.style.transition = "background-color 0.4s ease-out";
+                        remInput.classList.remove('bg-dark');
+                        remInput.classList.add('bg-success', 'text-white');
+                        setTimeout(() => { 
+                            remInput.classList.remove('bg-success', 'text-white');
+                            remInput.classList.add('bg-dark'); 
+                        }, 800);
+                    }
+                }
+            }
+
             // Keep modal open across all modes so user can rapidly create subsequent items.
             setTimeout(() => {
                 msg.innerHTML = "";
@@ -1114,17 +1264,6 @@ window.wizardSubmit = async () => {
 
 // --- SPOOL CLONE LOGIC ---
 window.openCloneWizard = async (spoolId) => {
-    // Hide Spool Modal or Backlog Modal if open
-    const smEl = document.getElementById('spoolModal');
-    if (smEl) {
-        const sm = bootstrap.Modal.getInstance(smEl) || new bootstrap.Modal(smEl);
-        sm.hide();
-    }
-    const bmEl = document.getElementById('backlogModal');
-    if (bmEl) {
-        const bm = bootstrap.Modal.getInstance(bmEl) || new bootstrap.Modal(bmEl);
-        bm.hide();
-    }
 
     // Reset and Open Wizard (Wait for Extrad fields DOM injection!)
     await openWizardModal();
@@ -1173,36 +1312,6 @@ window.openCloneWizard = async (spoolId) => {
 
 // --- SPOOL EDIT LOGIC ---
 window.openEditWizard = async (spoolId) => {
-    // Hide Spool Modal or Backlog Modal if open
-    const smEl = document.getElementById('spoolModal');
-    if (smEl) {
-        const sm = bootstrap.Modal.getInstance(smEl) || new bootstrap.Modal(smEl);
-        sm.hide();
-    }
-    const bmEl = document.getElementById('backlogModal');
-    if (bmEl) {
-        const bm = bootstrap.Modal.getInstance(bmEl) || new bootstrap.Modal(bmEl);
-        bm.hide();
-    }
-    // Bootstrap 5 Stacked Modal Fix:
-    if (!window._wizardZIndexBound) {
-        window._wizardZIndexBound = true;
-        const wizEl = document.getElementById('wizardModal');
-        // Wait for backdrop creation to escalate its z-index
-        wizEl.addEventListener('shown.bs.modal', function () {
-            wizEl.style.setProperty('z-index', '1060', 'important');
-            const drops = document.querySelectorAll('.modal-backdrop');
-            if (drops.length > 1) {
-                drops[drops.length - 1].style.setProperty('z-index', '1059', 'important');
-            }
-        });
-        // Restore body scroll state for the remaining open modal
-        wizEl.addEventListener('hidden.bs.modal', function () {
-            if (document.querySelectorAll('.modal.show').length > 0) {
-                document.body.classList.add('modal-open');
-            }
-        });
-    }
 
     // Reset and Open Wizard (Wait for dynamically mapped DOM structures first!)
     await openWizardModal();
@@ -1323,6 +1432,12 @@ window.openEditWizard = async (spoolId) => {
             document.getElementById('wiz-spool-empty_weight').value = d.spool_weight !== null ? d.spool_weight : "";
             document.getElementById('wiz-spool-initial_weight').value = d.initial_weight !== null ? d.initial_weight : "";
             document.getElementById('wiz-spool-used').value = d.used_weight || 0;
+            
+            // WEIGH-OUT PROTOCOL: Store original value and show input
+            wizardState.original_used_weight = d.used_weight || 0;
+            const usageContainer = document.getElementById('container-wiz-spool-recent-usage');
+            if (usageContainer) usageContainer.style.display = 'block';
+
             document.getElementById('wiz-spool-comment').value = d.comment || "";
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = d.archived || false;

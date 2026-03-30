@@ -26,7 +26,7 @@ def test_clone_spool_button(page: Page):
     expect(spool_modal).to_be_visible()
     
     # 6. Click 'Clone Spool'
-    spool_modal.get_by_role("button", name=re.compile("Clone Spool")).click()
+    spool_modal.get_by_role("button", name=re.compile("Clone")).click()
     
     # 7. Verify Spool modal closes and Wizard opens
     wizard = page.locator("#wizardModal")

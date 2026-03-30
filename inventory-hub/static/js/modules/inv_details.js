@@ -7,6 +7,13 @@ const openSpoolDetails = (id, silent = false) => {
         .then(r => r.json())
         .then(d => {
             if (!silent) setProcessing(false);
+
+            // --- NO WIGGLE CHECK ---
+            const contentHash = JSON.stringify(d);
+            if (silent && typeof state !== 'undefined' && state.lastSpoolDetailsHash === contentHash) return;
+            if (typeof state !== 'undefined') state.lastSpoolDetailsHash = contentHash;
+            // -----------------------
+
             if (!d || !d.id) { showToast("Details Data Missing!", "error"); return; }
 
             // --- 1. Basic Info ---
@@ -18,6 +25,36 @@ const openSpoolDetails = (id, silent = false) => {
                 if (d.archived) archBadge.classList.remove('d-none');
                 else archBadge.classList.add('d-none');
             }
+
+            let locDisplay = d.location && d.location.trim() !== "" ? d.location : "Unassigned";
+            if (locDisplay === "Unassigned" && d.extra?.physical_source) {
+                locDisplay = `Deployed: ${d.extra.physical_source.replace(/"/g, '')}`;
+            }
+            const locBadge = document.getElementById('detail-location-badge');
+            if (locBadge) {
+                locBadge.innerText = locDisplay;
+                if (locDisplay === "Unassigned") {
+                    locBadge.className = "badge bg-secondary ms-2 me-1";
+                    locBadge.style.cursor = "default";
+                    locBadge.onclick = null;
+                    locBadge.title = "";
+                } else if (locDisplay.startsWith("Deployed:")) {
+                    locBadge.className = "badge bg-warning text-dark ms-2 me-1";
+                    locBadge.style.cursor = "default";
+                    locBadge.onclick = null;
+                    locBadge.title = "";
+                } else {
+                    // It's a normal location, make it clickable
+                    locBadge.className = "badge bg-info text-dark ms-2 me-1";
+                    locBadge.style.cursor = "pointer";
+                    locBadge.title = "View Location Details";
+                    locBadge.onclick = () => {
+                        if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
+                        if (window.openManage) window.openManage(d.location);
+                    };
+                }
+            }
+
             document.getElementById('detail-material').innerText = fil.material || "Unknown";
             document.getElementById('detail-vendor').innerText = fil.vendor?.name || "Unknown";
             document.getElementById('detail-weight').innerText = (fil.weight || 0) + "g";
@@ -44,7 +81,7 @@ const openSpoolDetails = (id, silent = false) => {
                 console.log(`🎨 Spool #${d.id} Swatch Color:`, rawColor);
 
                 const styles = getFilamentStyle(rawColor);
-                swatch.style.background = styles.frame;
+                swatch.style.background = styles.isSolid ? styles.base : styles.frame;
                 if (styles.border) swatch.style.boxShadow = 'inset 0 0 0 2px #555';
                 else swatch.style.boxShadow = '';
             }
@@ -90,7 +127,7 @@ const openSpoolDetails = (id, silent = false) => {
 
             if (!silent && modals.spoolModal) modals.spoolModal.show();
         })
-        .catch(e => { if (!silent) setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
+        .catch(e => { if (!silent) setProcessing(false); console.error(e); showToast("Err: " + (e.message || "Catch Exception"), "error"); });
 };
 
 const openFilamentDetails = (fid, silent = false) => {
@@ -99,9 +136,20 @@ const openFilamentDetails = (fid, silent = false) => {
     fetch(`/api/filament_details?id=${fid}`)
         .then(r => r.json())
         .then(d => {
+            // --- NO WIGGLE CHECK (Info) ---
+            const infoHash = JSON.stringify(d);
+            let skipInfoRender = false;
+            if (silent && typeof state !== 'undefined' && state.lastFilamentInfoHash === infoHash) {
+                skipInfoRender = true;
+            } else if (typeof state !== 'undefined') {
+                state.lastFilamentInfoHash = infoHash;
+            }
+            // ------------------------------
+
             if (!d || !d.id) { if (!silent) setProcessing(false); showToast("Filament Data Missing!", "error"); return; }
 
-            // --- Populate Basic Details ---
+            if (!skipInfoRender) {
+                // --- Populate Basic Details ---
             document.getElementById('fil-detail-id').innerText = d.id;
             document.getElementById('fil-detail-vendor').innerText = d.vendor ? d.vendor.name : "Unknown";
             document.getElementById('fil-detail-material').innerText = d.material || "Unknown";
@@ -121,7 +169,7 @@ const openFilamentDetails = (fid, silent = false) => {
 
                 console.log("🎨 Filament Swatch Color:", rawColor); // Debug
                 const styles = getFilamentStyle(rawColor);
-                swatch.style.background = styles.frame;
+                swatch.style.background = styles.isSolid ? styles.base : styles.frame;
                 if (styles.border) swatch.style.boxShadow = 'inset 0 0 0 2px #555';
                 else swatch.style.boxShadow = '';
             }
@@ -133,13 +181,14 @@ const openFilamentDetails = (fid, silent = false) => {
                 btnLink.href = baseUrl ? `${baseUrl.replace(/\/$/, "")}/filament/show/${d.id}` : `/filament/show/${d.id}`;
             }
 
-            // Action: Queue Swatch Label
-            const btnQueueSwatch = document.getElementById('btn-fil-print-action');
-            if (btnQueueSwatch) {
-                btnQueueSwatch.onclick = () => {
-                    addToQueue({ id: d.id, type: 'filament', display: d.name });
-                    showToast('Label added to print queue!', 'success');
-                };
+                // Action: Queue Swatch Label
+                const btnQueueSwatch = document.getElementById('btn-fil-print-action');
+                if (btnQueueSwatch) {
+                    btnQueueSwatch.onclick = () => {
+                        addToQueue({ id: d.id, type: 'filament', display: d.name });
+                        showToast('Label added to print queue!', 'success');
+                    };
+                }
             }
 
             // --- NEW: Fetch Associated Spools for this Filament ---
@@ -154,6 +203,15 @@ const openFilamentDetails = (fid, silent = false) => {
                 fetch(`/api/spools_by_filament?id=${fid}`)
                     .then(r => r.json())
                     .then(spools => {
+                        // --- NO WIGGLE CHECK (Spools) ---
+                        const spoolsHash = JSON.stringify(spools);
+                        if (silent && typeof state !== 'undefined' && state.lastFilamentSpoolsHash === spoolsHash) {
+                            if (!silent) setProcessing(false); 
+                            return;
+                        }
+                        if (typeof state !== 'undefined') state.lastFilamentSpoolsHash = spoolsHash;
+                        // --------------------------------
+
                         if (!silent) setProcessing(false); // Done loading
                         listContainer.innerHTML = "";
 
@@ -186,7 +244,7 @@ const openFilamentDetails = (fid, silent = false) => {
                                     🔍
                                 </button>
                                 <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1" 
-                                    onclick="if(modals.filamentModal) modals.filamentModal.hide(); window.openEditWizard(${s.id});" 
+                                    onclick="window.openEditWizard(${s.id});" 
                                     title="Edit Spool">
                                     ✏️
                                 </button>
@@ -220,9 +278,8 @@ const openFilamentDetails = (fid, silent = false) => {
                                     });
                                     if (added > 0) {
                                         showToast(`Queued ${added} spools!`);
-                                        // Close this modal and open the queue to confirm
-                                        if (modals.filamentModal) modals.filamentModal.hide();
-                                        setTimeout(() => window.openQueueModal(), 300);
+                                        // Open the queue to confirm, let it stack natively!
+                                        window.openQueueModal();
                                     } else {
                                         showToast("All spools already in queue", "info");
                                     }
@@ -276,3 +333,84 @@ document.addEventListener('inventory:sync-pulse', () => {
         if (fid) openFilamentDetails(fid, true); // Silent Refresh
     }
 });
+
+// --- MANUAL LOCATION OVERRIDE ---
+window.promptEditLocation = (spoolId, currentLoc) => {
+    let defaultLoc = currentLoc || "Unassigned";
+    if (defaultLoc.startsWith("Deployed: ")) defaultLoc = defaultLoc.replace("Deployed: ", "");
+    if (defaultLoc === "Unassigned") defaultLoc = "";
+
+    fetch('/api/locations')
+        .then(r => r.json())
+        .then(locs => {
+            let optionsHtml = '<option value="">-- Unassigned --</option>';
+            if (Array.isArray(locs)) {
+                locs.forEach(l => {
+                    const type = (l.Type || '').toLowerCase();
+                    if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return;
+                    if (l.LocationID === 'Unassigned') return;
+                    
+                    const isSelected = l.LocationID === defaultLoc ? 'selected' : '';
+                    optionsHtml += `<option value="${l.LocationID}" ${isSelected}>${l.Name} (${l.LocationID})</option>`;
+                });
+            }
+
+            Swal.fire({
+                title: 'Force Location Override',
+                html: `
+                    <div class="text-start">
+                        <label class="form-label text-warning small mb-1">Select New Location</label>
+                        <select id="swal-override-loc" class="form-select bg-dark text-white border-warning">
+                            ${optionsHtml}
+                        </select>
+                        <small class="text-muted mt-2 d-block">
+                            Bypasses scanning protocols to forcefully move the spool in the database.
+                        </small>
+                    </div>
+                `,
+                showCancelButton: true,
+                confirmButtonColor: '#ffaa00',
+                background: '#1e1e1e',
+                color: '#fff',
+                confirmButtonText: 'Force Move',
+                preConfirm: () => {
+                    const popup = Swal.getPopup();
+                    const sel = popup ? popup.querySelector('#swal-override-loc') : null;
+                    return sel ? sel.value : "";
+                }
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    const newLoc = result.value;
+                    
+                    if (typeof setProcessing === 'function') setProcessing(true);
+                    const payload = {
+                        action: newLoc === "" ? 'force_unassign' : 'add',
+                        location: newLoc,
+                        spool_id: spoolId,
+                        origin: 'manual_override'
+                    };
+                    
+                    fetch('/api/manage_contents', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    })
+                    .then(r => r.json())
+                    .then(res => {
+                        if (typeof setProcessing === 'function') setProcessing(false);
+                        if(res.status === 'success' || res.success) {
+                            showToast('Location updated via override', 'success');
+                            document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+                            openSpoolDetails(spoolId, true); 
+                        } else {
+                            showToast(res.msg || 'Override failed', 'error');
+                        }
+                    })
+                    .catch(e => {
+                        if (typeof setProcessing === 'function') setProcessing(false);
+                        showToast('Override Network Error', 'error');
+                    });
+                }
+            });
+        });
+};

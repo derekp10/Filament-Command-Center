@@ -283,8 +283,8 @@ def api_edit_spool_wizard():
             if original_spool:
                 dirty_spool_data = {}
                 for k, v in spool_data.items():
-                    if k == 'empty_weight':
-                        if v is not None and v != original_spool.get('spool_weight'):
+                    if k == 'empty_weight' or k == 'spool_weight':
+                        if v != original_spool.get('spool_weight'):
                             dirty_spool_data['spool_weight'] = v
                     elif k == 'extra':
                         # Diff extra fields dict
@@ -759,13 +759,16 @@ def api_manage_contents():
                 spool_id = resolution['id']
             elif resolution and resolution['type'] == 'error':
                  return jsonify({"success": False, "msg": resolution['msg']})
-    elif action == 'remove':
+    elif action in ['remove', 'force_unassign']:
         if str(spool_input).isdigit(): spool_id = int(spool_input)
         
     if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
 
     if action == 'remove':
         if logic.perform_smart_eject(spool_id): return jsonify({"success": True})
+        else: return jsonify({"success": False, "msg": "DB Update Failed"})
+    elif action == 'force_unassign':
+        if logic.perform_force_unassign(spool_id): return jsonify({"success": True})
         else: return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'add':
         origin = data.get('origin', '')

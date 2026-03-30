@@ -8,15 +8,10 @@ window.openBacklogModal = () => {
 
 let lastBacklogHash = "";
 
-// Helper to safely transition from the Backlog modal to a Detail modal
+// Helper to safely stack from the Backlog modal to a Detail modal
 window.openBacklogDetail = (id, isSpool) => {
-    if (window.modals && window.modals.backlogModal) {
-        window.modals.backlogModal.hide();
-    }
-    setTimeout(() => {
-        if (isSpool) openSpoolDetails(id);
-        else openFilamentDetails(id);
-    }, 300);
+    if (isSpool) openSpoolDetails(id);
+    else openFilamentDetails(id);
 };
 
 window.fetchBacklog = () => {
@@ -84,7 +79,7 @@ window.fetchBacklog = () => {
                 const modalTarget = isSpool ? 'openSpoolDetails' : 'openFilamentDetails';
 
                 html += `
-                <div class="cham-card mb-2 backlog-row w-100" id="backlog-item-${item.id}-${item.type}" style="background: ${styles.frame}; ${styles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}">
+                <div class="cham-card mb-2 backlog-row w-100" id="backlog-item-${item.id}-${item.type}" style="background: ${styles.frame};">
                     <div class="cham-body d-flex justify-content-between align-items-center w-100 p-2" style="background: ${styles.inner}; border-radius: 8px; min-height: 75px;">
                         
                         <div class="d-flex align-items-center flex-grow-1" style="min-width: 0;">

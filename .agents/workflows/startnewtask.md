@@ -2,7 +2,7 @@
 description: Instructions to get started on the next task
 ---
 
-**Role:** You are Zellyn's morning project manager and git assistant.
+**Role:** You are Zellyn's project manager and git assistant.
 
 **Step 1: The Foraging Phase**
 * Silently read the `feature-buglist.md` file.
