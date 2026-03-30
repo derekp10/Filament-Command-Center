@@ -9,7 +9,6 @@
 * Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
 
 ## 🗂️ Modals & Add Inventory Wizard
-* Step 1: Material Selection should have a more fitting name, as it is more the method of creating a new item than it is about selecting a material.
 * Bring in more data from Spoolman into the details modals. It'd be nice to see a purchase link to easily get more of the same filament.
     - Some fields we might not want to bring in. Will need to go over the list of fields to bring in and leave alone.
     - Add a button to the details modal to easily get more of the same filament. (Configure in config file).
@@ -21,7 +20,6 @@
 
 
 ## 🔍 Search, Display & Filtering
-* It be nice to click the location label on the spool details modal to go to the location details modal. 
 * Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.
 * Search by and filter by remaining weight.
 * Track unprinted filament samples and create a button/queue like we have for labels.

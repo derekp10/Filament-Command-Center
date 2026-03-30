@@ -158,6 +158,11 @@ const getFilamentStyle = (colorStr) => {
     let innerGrad;
 
     if (isSolid) {
+        let hex = colors[0].replace('#', '');
+        if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+        const r = parseInt(hex.substring(0, 2), 16) || 0;
+        const g = parseInt(hex.substring(2, 4), 16) || 0;
+        const b = parseInt(hex.substring(4, 6), 16) || 0;
         // Smoothly fade the base color into partial transparency to create a deeply rich vibrant bottom
         frameGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},1) 0%, rgba(${r},${g},${b},0.6) 100%)`;
         innerGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},0.4) 0%, rgba(${r},${g},${b},0.1) 100%)`;
@@ -186,7 +191,7 @@ const getFilamentStyle = (colorStr) => {
         }
     }
 
-    return { frame: frameGrad, inner: innerGrad, border: borderStyle };
+    return { frame: frameGrad, inner: innerGrad, border: borderStyle, base: colors[0], isSolid: isSolid };
 };
 
 const hexToRgb = (hex) => {

@@ -33,9 +33,26 @@ const openSpoolDetails = (id, silent = false) => {
             const locBadge = document.getElementById('detail-location-badge');
             if (locBadge) {
                 locBadge.innerText = locDisplay;
-                if (locDisplay === "Unassigned") locBadge.className = "badge bg-secondary ms-2 me-1";
-                else if (locDisplay.startsWith("Deployed:")) locBadge.className = "badge bg-warning text-dark ms-2 me-1";
-                else locBadge.className = "badge bg-info text-dark ms-2 me-1";
+                if (locDisplay === "Unassigned") {
+                    locBadge.className = "badge bg-secondary ms-2 me-1";
+                    locBadge.style.cursor = "default";
+                    locBadge.onclick = null;
+                    locBadge.title = "";
+                } else if (locDisplay.startsWith("Deployed:")) {
+                    locBadge.className = "badge bg-warning text-dark ms-2 me-1";
+                    locBadge.style.cursor = "default";
+                    locBadge.onclick = null;
+                    locBadge.title = "";
+                } else {
+                    // It's a normal location, make it clickable
+                    locBadge.className = "badge bg-info text-dark ms-2 me-1";
+                    locBadge.style.cursor = "pointer";
+                    locBadge.title = "View Location Details";
+                    locBadge.onclick = () => {
+                        if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
+                        if (window.openManage) window.openManage(d.location);
+                    };
+                }
             }
 
             document.getElementById('detail-material').innerText = fil.material || "Unknown";
@@ -64,7 +81,7 @@ const openSpoolDetails = (id, silent = false) => {
                 console.log(`🎨 Spool #${d.id} Swatch Color:`, rawColor);
 
                 const styles = getFilamentStyle(rawColor);
-                swatch.style.background = styles.frame;
+                swatch.style.background = styles.isSolid ? styles.base : styles.frame;
                 if (styles.border) swatch.style.boxShadow = 'inset 0 0 0 2px #555';
                 else swatch.style.boxShadow = '';
             }
@@ -110,7 +127,7 @@ const openSpoolDetails = (id, silent = false) => {
 
             if (!silent && modals.spoolModal) modals.spoolModal.show();
         })
-        .catch(e => { if (!silent) setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
+        .catch(e => { if (!silent) setProcessing(false); console.error(e); showToast("Err: " + (e.message || "Catch Exception"), "error"); });
 };
 
 const openFilamentDetails = (fid, silent = false) => {
@@ -152,7 +169,7 @@ const openFilamentDetails = (fid, silent = false) => {
 
                 console.log("🎨 Filament Swatch Color:", rawColor); // Debug
                 const styles = getFilamentStyle(rawColor);
-                swatch.style.background = styles.frame;
+                swatch.style.background = styles.isSolid ? styles.base : styles.frame;
                 if (styles.border) swatch.style.boxShadow = 'inset 0 0 0 2px #555';
                 else swatch.style.boxShadow = '';
             }
