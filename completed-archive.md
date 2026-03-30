@@ -1,4 +1,5 @@
 # **Done**
+* **Feature:** Upgraded the Add Inventory Wizard's `MaterialType` input into a dynamic auto-complete dropdown. It parses the Spoolman database for existing material strings, filters live on keystroke, and supports Up/Down/Enter keyboard navigation to mirror the Filament Attributes standard.
 * **UI/UX:** Fixed the borders on solid/black filaments losing contrast against dark UI backgrounds. Refactored `inv_core.js` physically lighting models to globally standardize the "fancy button" UI component dynamic across Solid, Gradient, and Black filament components, rigorously protected by E2E Playwright DOM structural tests.
 * ⚖️ **The "Weigh-Out" Protocol / Manual Usage Input**: Added a specific "+ Add Printed Wt (g)" field into the wizard modal to manually log filament usage delta from the printer screen, gracefully adjusting the Spoolman database when filabridge auto-logging fails or times out.
 * **Bug Fix:** Fixed the `Location` update in the Spool Details modal throwing a 400 Bad Request API error when set to `Unassigned` by correcting a schema typo (`physical_source_sub` to `physical_source_slot`) in the backend force unassign logic.

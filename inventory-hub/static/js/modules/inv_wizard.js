@@ -22,7 +22,8 @@ window.openWizardModal = async () => {
     await Promise.all([
         wizardFetchVendors(),
         wizardFetchLocations(),
-        wizardFetchExtraFields()
+        wizardFetchExtraFields(),
+        wizardFetchMaterials()
     ]);
 };
 
@@ -208,6 +209,118 @@ window.wizardCalcFromRecentUsage = () => {
 window.wizardClearScaleWeight = () => {
     document.getElementById('wiz-spool-scale').value = '';
     window.wizardCalcRemainingFromUsed();
+};
+
+// --- DATA FETCHERS ---
+const wizardFetchMaterials = () => {
+    return fetch('/api/filaments')
+        .then(r => r.json())
+        .then(d => {
+            if (d.success && d.filaments) {
+                const materials = [...new Set(d.filaments.map(f => f.material).filter(Boolean))].sort(function (a, b) {
+                    return a.toLowerCase().localeCompare(b.toLowerCase());
+                });
+                wizardState.materials = materials;
+                const dropdown = document.getElementById('dropdown-material');
+                if (dropdown) {
+                    dropdown.innerHTML = materials.map(m => 
+                        `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option" 
+                              onmousedown="window.wizardMaterialSelect(event, '${m.replace(/'/g, "\\'")}')">${m}</div>`
+                    ).join('');
+                }
+            }
+        });
+};
+
+window.wizardMaterialFocus = () => {
+    const dropdown = document.getElementById('dropdown-material');
+    if (dropdown) {
+        dropdown.style.display = 'block';
+        if (window.wizardMaterialFilter) window.wizardMaterialFilter();
+    }
+};
+
+window.wizardMaterialBlur = () => {
+    setTimeout(() => {
+        const dropdown = document.getElementById('dropdown-material');
+        if (dropdown) dropdown.style.display = 'none';
+    }, 150);
+};
+
+window.wizardMaterialFilter = () => {
+    const input = document.getElementById('wiz-fil-material');
+    const dropdown = document.getElementById('dropdown-material');
+    if (!input || !dropdown) return;
+    const qs = input.value.toLowerCase();
+    
+    let hasVisible = false;
+    Array.from(dropdown.children).forEach(option => {
+        option.classList.remove('active', 'bg-primary');
+        if (option.innerText.toLowerCase().includes(qs)) {
+            option.style.display = 'block';
+            hasVisible = true;
+        } else {
+            option.style.display = 'none';
+        }
+    });
+    dropdown.style.display = hasVisible ? 'block' : 'none';
+};
+
+window.wizardMaterialKeydown = (event) => {
+    const input = document.getElementById('wiz-fil-material');
+    const dropdown = document.getElementById('dropdown-material');
+    if (!input || !dropdown || dropdown.style.display === 'none') {
+        if (event.key === 'Enter') event.preventDefault();
+        return;
+    }
+
+    let visibleOptions = Array.from(dropdown.children).filter(el => el.style.display !== 'none');
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (!visibleOptions.length) return;
+        event.preventDefault();
+
+        let currentIndex = visibleOptions.findIndex(el => el.classList.contains('active'));
+        visibleOptions.forEach(el => el.classList.remove('active', 'bg-primary'));
+
+        if (event.key === 'ArrowDown') {
+            currentIndex = currentIndex + 1 >= visibleOptions.length ? 0 : currentIndex + 1;
+        } else {
+            currentIndex = currentIndex - 1 < 0 ? visibleOptions.length - 1 : currentIndex - 1;
+        }
+
+        const nextActive = visibleOptions[currentIndex];
+        nextActive.classList.add('active', 'bg-primary');
+
+        const dropRect = dropdown.getBoundingClientRect();
+        const itemRect = nextActive.getBoundingClientRect();
+        if (itemRect.bottom > dropRect.bottom) {
+            dropdown.scrollTop += (itemRect.bottom - dropRect.bottom);
+        } else if (itemRect.top < dropRect.top) {
+            dropdown.scrollTop -= (dropRect.top - itemRect.top);
+        }
+        return;
+    }
+
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        if (visibleOptions.length > 0) {
+            let selected = visibleOptions.find(el => el.classList.contains('active')) || visibleOptions[0];
+            window.wizardMaterialSelect(event, selected.innerText);
+        }
+    }
+};
+
+window.wizardMaterialSelect = (event, value) => {
+    event.preventDefault();
+    const input = document.getElementById('wiz-fil-material');
+    if (input) {
+        input.value = value;
+        input.focus();
+        if (window.wizardAutoUpdateDensity) window.wizardAutoUpdateDensity();
+    }
+    const dropdown = document.getElementById('dropdown-material');
+    if (dropdown) dropdown.style.display = 'none';
 };
 
 // --- DATA FETCHERS ---

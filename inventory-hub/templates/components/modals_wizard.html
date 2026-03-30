@@ -98,9 +98,18 @@
                         </div>
                         <div class="col-md-4">
                             <label class="form-label small text-secondary mb-1">MaterialType*</label>
-                            <input type="text" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-fil-material" placeholder="PLA, PETG, ABS..."
-                                onkeyup="wizardAutoUpdateDensity()">
+                            <div class="position-relative wizard-single-autocomplete" id="wizard-autocomplete-material">
+                                <input type="text" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-fil-material" placeholder="PLA, PETG, ABS..." autocomplete="off"
+                                    onfocus="window.wizardMaterialFocus()"
+                                    onblur="window.wizardMaterialBlur()"
+                                    oninput="window.wizardMaterialFilter(); window.wizardAutoUpdateDensity();"
+                                    onkeydown="window.wizardMaterialKeydown(event)">
+                                <div class="autocomplete-dropdown position-absolute w-100 bg-dark border border-secondary rounded shadow-lg" 
+                                     id="dropdown-material" 
+                                     style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">
+                                </div>
+                            </div>
                         </div>
                         <div class="col-md-4">
                             <label class="form-label small text-secondary mb-1">Color Name</label>
