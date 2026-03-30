@@ -52,15 +52,14 @@ const SpoolCardBuilder = {
         }
 
         // Setup outer container wrapping and specific interaction overrides (clicks / classes)
-        let outerClasses = 'fcc-spool-card mb-2 ';
+        let outerClasses = `fcc-spool-card mb-2 `;
         let actionTarget = '';
-        let wrapperStyle = `background: ${styles.frame}; ${styles.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}`;
+        let wrapperStyle = `background: ${styles.frame};`;
         
         let customInnerBg = `background: ${styles.inner};`;
-        const shadowColor = (styles.frame && styles.frame.includes('gradient')) ? 'rgba(255,255,255,0.3)' : styles.frame;
         if (mode === 'search_result' || mode === 'loc_grid' || mode === 'loc_list' || mode === 'search' || mode === 'buffer') {
-            // Apply inner border/glow for specific modes
-            customInnerBg = `border-top: 1px solid rgba(255,255,255,0.2); background: linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}; border-radius: 6px; box-shadow: inset 0 0 0 1px ${shadowColor} !important; padding: 0.5rem;`;
+            // Flow the styles.frame background dynamically across the interior for rich inner gradients, stripping the harsh glossy halo
+            customInnerBg = `background: linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}; border-radius: 6px; padding: 0.5rem;`;
         }
         
         // Hazard striping & layout tweaks for states (GHOST / DEPLOYED)

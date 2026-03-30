@@ -3,7 +3,7 @@
 * Add a work flow for easily getting to filaments involved in a filabrige error, reported in the live activity log. This way when this error does occure theres a way to get to a list of the filaments involved directly and update the amount of grams used by the printer onto the spools directly, without having to look them up one by one.
 
 ## 🎨 UI & Theming
-* Fix the borders on black filaments not standing out in the correct spot in the list (Lost contrast against dark UI backgrounds).
+
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
 * Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
 * Side Quest: Spool card coloring system doesn't seem to handle 4+ colors in a swatch for generating gradient.

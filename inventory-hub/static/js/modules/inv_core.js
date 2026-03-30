@@ -149,21 +149,23 @@ const getFilamentStyle = (colorStr) => {
         return hex ? '#' + hex : '#333';
     });
 
-    // 4. Force at least 2 colors for a gradient
+    // 4. Force at least 2 colors for interpolation
+    const isSolid = colors.length === 1 || (colors.length > 1 && colors[0] === colors[1]);
     if (colors.length === 1) colors.push(colors[0]);
 
-    // 5. Generate Gradients
-    let frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
-
+    // 5. Generate Physical Frame Gradients (Buttons)
+    let frameGrad;
     let innerGrad;
-    if (colors.length > 1 && colors[0] !== colors[1]) {
-        // Multi-color inner: transparent dark overlay + colors
+
+    if (isSolid) {
+        // Smoothly fade the base color into partial transparency to create a deeply rich vibrant bottom
+        frameGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},1) 0%, rgba(${r},${g},${b},0.6) 100%)`;
+        innerGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},0.4) 0%, rgba(${r},${g},${b},0.1) 100%)`;
+    } else {
+        // Multi-color filaments use a diagonal stripe or sweep to showcase all components
+        frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
         const gradColors = colors.map(c => getHexDark(c, 0.8));
         innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), linear-gradient(135deg, ${gradColors.join(', ')})`;
-    } else {
-        // Single-color inner: simple fade to black
-        const lastColorDark = getHexDark(colors[0], 0.3);
-        innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, ${lastColorDark} 100%)`;
     }
 
     // 6. Black border fix & Texture
@@ -174,12 +176,12 @@ const getFilamentStyle = (colorStr) => {
             let hex = c.replace('#', '');
             if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
             const r = parseInt(hex.substring(0, 2), 16), g = parseInt(hex.substring(2, 4), 16), b = parseInt(hex.substring(4, 6), 16);
-            if (r > 35 || g > 35 || b > 35) { isAllDark = false; break; }
+            if (r > 55 || g > 55 || b > 55) { isAllDark = false; break; }
         }
         if (isAllDark) {
-            borderStyle = "2px solid #555";
-            // Prettify black by giving it a smooth diagonal dark metallic sheen instead of a solid void
-            frameGrad = `linear-gradient(135deg, #444444 0%, #1a1a1a 40%, #050505 100%)`;
+            borderStyle = true; // Boolean flag legacy passthrough
+            // Explicit override for pure black colors to guarantee contrast rim (fades #555 to deep black)
+            frameGrad = `linear-gradient(to bottom, #555555 0%, #1a1a1a 100%)`;
             innerGrad = `linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.9) 100%)`;
         }
     }
