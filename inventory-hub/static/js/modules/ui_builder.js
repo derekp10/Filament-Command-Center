@@ -66,7 +66,7 @@ const SpoolCardBuilder = {
         if (item.is_ghost) {
             outerClasses += 'is-ghost ';
             // Add hazard stripes for ghost items (Stacked strictly ON TOP of the inner glow gradient)
-            customInnerBg = `border-top: 1px solid rgba(255,255,255,0.2); background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}; border-radius: 6px; box-shadow: inset 0 0 0 1px ${shadowColor} !important; padding: 0.5rem; background-size: cover;`;
+            customInnerBg = `border-top: 1px solid rgba(255,255,255,0.2); background: repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}; border-radius: 6px; box-shadow: inset 0 0 0 1px ${styles.frame} !important; padding: 0.5rem; background-size: cover;`;
         }
 
         // --- CONTEXT: ACTION BINDINGS & CLASSES ---
