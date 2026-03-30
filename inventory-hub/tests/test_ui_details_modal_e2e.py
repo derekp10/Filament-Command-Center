@@ -10,7 +10,15 @@ def test_details_modal_interactions(page: Page):
     """
     page.goto("http://localhost:8000")
     
-    # 1. Ensure page loads and at least one card is visible
+    # 1. Open Search Offcanvas to guarantee spool cards are loaded
+    page.locator('nav button:has-text("SEARCH")').click()
+    page.wait_for_selector("#offcanvasSearch", timeout=5000)
+    
+    # Trigger a generic search to populate results
+    search_input = page.locator('#global-search-query')
+    search_input.fill("a")
+    
+    # Wait for the view details button to appear on a search result card
     page.wait_for_selector(".fcc-card-action-btn[title='View Details']", timeout=10000)
     
     # Track console errors to ensure "r is not defined" or similar bugs do not regress
