@@ -1,6 +1,13 @@
 # **Active Backlog (Organized by Feature Area)**
 
-* Add a work flow for easily getting to filaments involved in a filabrige error, reported in the live activity log. This way when this error does occure theres a way to get to a list of the filaments involved directly and update the amount of grams used by the printer onto the spools directly, without having to look them up one by one.
+* Add a work flow for easily getting to filaments involved in a filabrige error, reported in the live activity log. This way when this error does occure theres a way to get to a list of the filaments involved directly and update the amount of grams used by the printer onto the spools directly, without having to look them up one by one. If possible, it would be nice to be able to do a more aggressive request of the gcode file, to get the data we need, and just update the filaments involved in the error directly, with little to no user intervention.
+
+* Sortible otpions to the columns on location list. 
+* Modifications to the location list, splitting out type badge from the counts section, so they have there own columns.
+* Ability to add/customize/change type in the Edit Loction Modal, for creating or editing existing locations. I think we moved this off of a .CSV basede list, and now it generates and stores based on spoolman data? But I'm not sure. Toolhead appears to be missing from this list.
+* Better grouping of locations lists data. The encoded id's can sometimes be used to generate a grouping, (anything that starts with CR, is in the Computer room, DR, Dining room, LR, living room etc...)
+* A way to display the QR code for a location on screen so that it can be used for assigning locations in place of a physical label.
+* A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
 
 ## 🎨 UI & Theming
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
@@ -18,7 +25,6 @@
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
 
-
 ## 🔍 Search, Display & Filtering
 * Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.
 * Search by and filter by remaining weight.
@@ -35,7 +41,7 @@
 
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
-* Locations QR Codes should contain a `LOC:` code, and a `LOC:` code should be used to help identify locations. (Keep existing logic to allow for backwards compatibility, but allow for `LOC:` codes for future items). Legacy Location QR codes (WIthout the LOC: prefix) should have a warning attached in the live activity log.
+* Locations QR Codes should contain a `LOC:` code, and a `LOC:` code should be used to help identify locations. (Keep existing logic to allow for backwards compatibility, but allow for `LOC:` codes for future items). *IMPORTANT*: Legacy Location QR codes (WIthout the LOC: prefix) should have a warning attached in the live activity log.
 * Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without.
 * Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field.
 * Add unassigned Location in Location List.
@@ -91,3 +97,7 @@ I think we've inadvertently created 3 levels of logic/complexity here:
 2. A UI layer, for debugging, but should only really need to be looked at to confirm things
 3. A full on interface that is easier to move spools around than having to use Spoolman's lackluster interface.
 All 3 of these things are important and have value. We should table for now, and come back to once we've gotten more of the functionality in place.
+
+# **New related project to be integrated **
+
+* [Feature] Build Project Color Loadout Add-on -> (See /docs/project-color-loadout/roadmap.md)

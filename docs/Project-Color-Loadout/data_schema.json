@@ -1,0 +1,42 @@
+{
+    "project_id": "uuid-1234-5678",
+    "project_name": "Minecraft Enzo",
+    "target_printer": "Prusa XL 5T",
+    "file_tracking": {
+        "injected_id_marker": true,
+        "base_directory_alias": "truenas_projects",
+        "relative_path": "/Toys/Enzo/Minecraft Enzo.3mf"
+    },
+    "lock_status": "Slot-Locked",
+    "thumbnail_base64": "data:image/png;base64,...",
+    "last_printed": "2026-04-05T14:30:00Z",
+    "notes": "Zombie Colors - Printed great, kids loved it!",
+    "slots": [
+        {
+            "slot_number": 1,
+            "slicer_part_name": "volume_1",
+            "slicer_role": "Primary",
+            "custom_alias": "Skin/Base",
+            "sync_name_to_file": true,
+            "preferred_hex": "#4F7942",
+            "preferred_material": "PLA",
+            "required_weight_g": 45.2,
+            "runout_strategy": "SpoolJoin",
+            "fallback_slot_number": 5,
+            "assigned_spool_id": 104
+        },
+        {
+            "slot_number": 2,
+            "slicer_part_name": "support_enforcer",
+            "slicer_role": "Support Interface",
+            "custom_alias": "Easy Peel Supports",
+            "sync_name_to_file": false,
+            "preferred_hex": "#000000",
+            "preferred_material": "PETG",
+            "required_weight_g": 12.1,
+            "runout_strategy": "Pause",
+            "fallback_slot_number": null,
+            "assigned_spool_id": 108
+        }
+    ]
+}
