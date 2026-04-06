@@ -70,7 +70,8 @@ window.fetchBacklog = () => {
 
                 // Color Logic Matching inv_details.js Priority
                 const rawColor = f?.multi_color_hexes || f?.color_hex || f?.extra?.multi_color_hexes || f?.extra?.color_hex || "333";
-                const styles = getFilamentStyle(rawColor);
+                const direction = f?.multi_color_direction || f?.extra?.multi_color_direction || "longitudinal";
+                const styles = getFilamentStyle(rawColor, direction);
 
                 const typeIdKey = `${item.type}-${item.id}`;
                 const isCheckedAttr = checkedIds.has(typeIdKey) ? 'checked' : '';

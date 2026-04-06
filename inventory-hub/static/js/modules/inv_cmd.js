@@ -24,8 +24,8 @@ const renderBuffer = () => {
         if (state.heldSpools.length > 1) {
             const nextSpool = state.heldSpools[1];
             const prevSpool = state.heldSpools[state.heldSpools.length - 1];
-            const prevStyles = getFilamentStyle(prevSpool.color);
-            const nextStyles = getFilamentStyle(nextSpool.color);
+            const prevStyles = getFilamentStyle(prevSpool.color, prevSpool.color_direction || 'longitudinal');
+            const nextStyles = getFilamentStyle(nextSpool.color, nextSpool.color_direction || 'longitudinal');
 
             n.style.display = 'flex';
             n.innerHTML = 
@@ -353,7 +353,7 @@ const liveRefreshBuffer = () => {
                     changed = true;
 
                     // Surgically update DOM
-                    const styles = getFilamentStyle(s.color);
+                    const styles = getFilamentStyle(s.color, s.color_direction || 'longitudinal');
                     const cleanText = s.display.replace(/^#\d+\s*/, '').trim();
 
                     // Update Main Buffer Cards

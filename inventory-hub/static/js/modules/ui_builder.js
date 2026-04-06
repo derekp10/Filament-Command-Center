@@ -46,7 +46,7 @@ const SpoolCardBuilder = {
         // Core visual styles
         let styles;
         try {
-            styles = getFilamentStyle(item.color);
+            styles = getFilamentStyle(item.color, item.color_direction || 'longitudinal');
         } catch (e) {
             styles = { frame: '#' + (item.color || '555555'), inner: `rgba(0,0,0,0.6)`, border: '1px solid #333' };
         }

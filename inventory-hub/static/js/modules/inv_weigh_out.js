@@ -43,7 +43,7 @@ const renderWeighOutList = () => {
 
     let html = "";
     activeSpools.forEach((spool, index) => {
-        const styles = getFilamentStyle(spool.color);
+        const styles = getFilamentStyle(spool.color, spool.color_direction || 'longitudinal');
         const nameParts = spool.display.split('-');
         let mainName = spool.display;
         if(nameParts.length > 2) {

@@ -1,4 +1,5 @@
 # **Done**
+* **System/UI:** Overhauled Spool Card coloring logic to natively support 4+ colors on a single swatch. Dynamically rendering 'coaxial' filaments as segmented conic pie-gradients while allowing 'longitudinal' elements to blend evenly without crashing the styling engine.
 * **Feature:** Overhauled the Location List UI ("Glow-up"), separating Type and Status styling into dedicated sortable columns capable of dynamic ascending/descending alignment numerically.
 * **Feature:** Handled Unassigned Spools natively appending them as a virtual catching location at the solid top sorting position of the Location Manager list.
 * **Feature:** Built a universal Location QR Overlay Modal and quick-access header scanner block embedded into the Location List actions for immediate physical deployment label mapping.

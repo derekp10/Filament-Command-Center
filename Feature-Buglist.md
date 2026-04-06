@@ -27,12 +27,13 @@
 
 * Clicking on scales on the filament card should bring up the scales modal for directly handling all the various way we would want to update weight. (Mostly what's found in the weight section on the edit modal, but including location possibly and archive/unarchive.)
 
+* Modify add inventory wizzard/editor to support Coextruded and Logitudinal options for the colors assigned to a filament. For reference from spoolmans line on this: "Filaments can have multiple colors in two ways: either through coextrusion, like dual-color filaments with consistent multi-colors, or through longitudinal color changes, like gradient filaments that shift colors along the spool."
+
 # **Active Backlog (Organized by Feature Area)**
 
 ## 🎨 UI & Theming
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
 * Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
-* Side Quest: Spool card coloring system doesn't seem to handle 4+ colors in a swatch for generating gradient.
 * Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
 
 ## 🗂️ Modals & Add Inventory Wizard

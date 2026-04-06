@@ -124,7 +124,7 @@ const getHexDark = (hex, opacity = 0.3) => {
 
 
 /* [Search Anchor] */
-const getFilamentStyle = (colorStr) => {
+const getFilamentStyle = (colorStr, direction = 'longitudinal') => {
     // [ALEX FIX] Robust Color Parsing (Shared by Buffer & Modals)
     if (!colorStr) colorStr = "333";
 
@@ -151,6 +151,14 @@ const getFilamentStyle = (colorStr) => {
         return hex ? '#' + hex : '#333';
     });
 
+    // Save full colors before capping for coaxial rendering
+    const fullColors = [...colors];
+
+    // 3.5. Cap at 3 colors to prevent gradient mess (LONGITUDINAL Standard)
+    if (colors.length > 3) {
+        colors = colors.slice(0, 3);
+    }
+
     // 4. Force at least 2 colors for interpolation
     const isSolid = colors.length === 1 || (colors.length > 1 && colors[0] === colors[1]);
     if (colors.length === 1) colors.push(colors[0]);
@@ -159,20 +167,30 @@ const getFilamentStyle = (colorStr) => {
     let frameGrad;
     let innerGrad;
 
-    if (isSolid) {
-        let hex = colors[0].replace('#', '');
-        if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-        const r = parseInt(hex.substring(0, 2), 16) || 0;
-        const g = parseInt(hex.substring(2, 4), 16) || 0;
-        const b = parseInt(hex.substring(4, 6), 16) || 0;
-        // Smoothly fade the base color into partial transparency to create a deeply rich vibrant bottom
-        frameGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},1) 0%, rgba(${r},${g},${b},0.6) 100%)`;
-        innerGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},0.4) 0%, rgba(${r},${g},${b},0.1) 100%)`;
+    if (direction === 'coaxial' && !isSolid) {
+        if (fullColors.length === 1) fullColors.push(fullColors[0]);
+        const sliceSize = 100.0 / fullColors.length;
+        const conicStops = fullColors.map((c, i) => `${c} ${i === 0 ? "0%" : (i * sliceSize).toFixed(2) + "%"} ${((i + 1) * sliceSize).toFixed(2) + "%"}`).join(', ');
+        frameGrad = `conic-gradient(${conicStops})`;
+        
+        const darkStops = fullColors.map((c, i) => `${getHexDark(c, 0.8)} ${i === 0 ? "0%" : (i * sliceSize).toFixed(2) + "%"} ${((i + 1) * sliceSize).toFixed(2) + "%"}`).join(', ');
+        innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), conic-gradient(${darkStops})`;
     } else {
-        // Multi-color filaments use a diagonal stripe or sweep to showcase all components
-        frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
-        const gradColors = colors.map(c => getHexDark(c, 0.8));
-        innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), linear-gradient(135deg, ${gradColors.join(', ')})`;
+        if (isSolid) {
+            let hex = colors[0].replace('#', '');
+            if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+            const r = parseInt(hex.substring(0, 2), 16) || 0;
+            const g = parseInt(hex.substring(2, 4), 16) || 0;
+            const b = parseInt(hex.substring(4, 6), 16) || 0;
+            // Smoothly fade the base color into partial transparency to create a deeply rich vibrant bottom
+            frameGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},1) 0%, rgba(${r},${g},${b},0.6) 100%)`;
+            innerGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},0.4) 0%, rgba(${r},${g},${b},0.1) 100%)`;
+        } else {
+            // Multi-color filaments use a diagonal stripe or sweep to showcase all components
+            frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
+            const gradColors = colors.map(c => getHexDark(c, 0.8));
+            innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), linear-gradient(135deg, ${gradColors.join(', ')})`;
+        }
     }
 
     // 6. Black border fix & Texture

@@ -33,8 +33,9 @@ def dashboard():
     # [Code Guardian] Fetch FilaBridge URL for Dashboard Button
     _, fb_api_url = config_loader.get_api_urls()
     fb_ui_url = fb_api_url.replace('/api', '')
+    buy_more_url_template = cfg.get('buy_more_url_template', '')
     
-    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url, filabridge_url=fb_ui_url)
+    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url, filabridge_url=fb_ui_url, buy_more_template=buy_more_url_template)
 
 # --- HELPER FUNCTIONS ---
 def clean_string(s):
@@ -381,6 +382,7 @@ def api_search_inventory():
     
     only_in_stock = request.args.get('in_stock', 'false').lower() == 'true'
     empty = request.args.get('empty', 'false').lower() == 'true'
+    min_weight = request.args.get('min_weight', '')
     target_type = request.args.get('type', 'spool')
     
     try:
@@ -391,7 +393,8 @@ def api_search_inventory():
             color_hex=color_hex, 
             only_in_stock=only_in_stock, 
             empty=empty,
-            target_type=target_type
+            target_type=target_type,
+            min_weight=min_weight
         )
         return jsonify({"success": True, "results": results})
     except Exception as e:

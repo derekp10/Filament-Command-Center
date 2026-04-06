@@ -14,7 +14,7 @@ const SearchEngine = {
             this.offcanvas = new bootstrap.Offcanvas(el, { backdrop: true });
 
             // Attach UI listeners
-            const trig = ['global-search-query', 'global-search-color-hex', 'global-search-material'];
+            const trig = ['global-search-query', 'global-search-color-hex', 'global-search-material', 'global-search-min-weight'];
             trig.forEach(id => {
                 const node = document.getElementById(id);
                 if (node) {
@@ -58,12 +58,14 @@ const SearchEngine = {
                     const h = document.getElementById('global-search-color-hex');
                     const m = document.getElementById('global-search-material');
                     const c = document.getElementById('global-search-color-picker');
+                    const mw = document.getElementById('global-search-min-weight');
                     const s = document.getElementById('global-search-in-stock');
 
                     if (q) q.value = '';
                     if (h) h.value = '';
                     if (m) m.value = '';
                     if (c) c.value = '#000000';
+                    if (mw) mw.value = '';
                     if (s) s.checked = true;
 
                     this.debounceTrigger();
@@ -101,7 +103,8 @@ const SearchEngine = {
         const queryInput = document.getElementById('global-search-query');
         const colorInput = document.getElementById('global-search-color-hex');
         const matInput = document.getElementById('global-search-material');
-        const hasState = queryInput.value || colorInput.value || matInput.value;
+        const mwInput = document.getElementById('global-search-min-weight');
+        const hasState = queryInput.value || colorInput.value || matInput.value || mwInput.value;
 
         if (!hasState) {
             document.getElementById('global-search-in-stock').checked = true;
@@ -141,6 +144,7 @@ const SearchEngine = {
         const query = document.getElementById('global-search-query').value.trim();
         const material = document.getElementById('global-search-material').value;
         const colorHex = document.getElementById('global-search-color-hex').value.trim();
+        const minWeight = document.getElementById('global-search-min-weight').value;
         const inStock = document.getElementById('global-search-in-stock').checked;
         const tgtTypeNode = document.querySelector('input[name="global-search-type"]:checked');
         const targetType = tgtTypeNode ? tgtTypeNode.value : 'spool';
@@ -148,7 +152,7 @@ const SearchEngine = {
         const resBox = document.getElementById('global-search-results');
 
         // If nothing is typed, don't execute a massive search, just show empty state
-        if (!query && !material && !colorHex) {
+        if (!query && !material && !colorHex && !minWeight) {
             resBox.innerHTML = `
                 <div class="text-center text-muted mt-5">
                     <h1 class="opacity-25 mb-3">💬</h1>
@@ -165,6 +169,7 @@ const SearchEngine = {
                 q: query,
                 material: material,
                 hex: colorHex,
+                min_weight: minWeight,
                 in_stock: inStock,
                 type: targetType
             });
