@@ -16,9 +16,6 @@
 
 * "Deposit here" barcode for adding items to a location from the buffer throws an error when scanning, but clicking on it works fine.
 
-* Check to make sure that a backend refresh doesn't interrupt a barcode scan mid scan and then loose the scan. I think that just happened to me, as I had to scan a spool twice, as the first time it looked like it loaded for a second and then unloaded.
-
-* Dedicated bulk weigh out modal, for directly scanning/keying in filaments, and direct access to updating just the weight values. So that I can have a stack of spools from a previous print, and just update those directly with out having to fiddle with, scanning, clicking edit, editing, saving, and repeating for each spool.
 
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
 
@@ -27,6 +24,12 @@
 * Loading a dryer box, at the very least, slots load with an initial data set, and then i think the 5 second tick goes off, and fills them in completely. Seems to be a difference between what the initial card load does, and the data provided from the 5 second tick. We should probably make the initial card load load the same data as the 5 second tick.
 
 * Adjust filament list and stystem to allow for unassigned filaments to fall back to a room based location, based on the dryerbox location (LR for Living room, CR for Computer room) So that we can avoid the spool instantly going into the unassigned zone. Will need to parent locations to rooms, and allow rooms to have a list of filaments that includes all sub-locations. (Dryerboxes, carts, shelves etc...)
+
+* Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
+
+* If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
+
+* Clicking on scales on the filament card should bring up the scales modal for directly handling all the various way we would want to update weight. (Mostly what's found in the weight section on the edit modal, but including location possibly and archive/unarchive.)
 
 # **Active Backlog (Organized by Feature Area)**
 
@@ -76,7 +79,7 @@
     - Label Printed in Spoolman Spool data can be used to determine if a new Label has been printed.
     - Filaments: Spoolman Reprint field is set to Yes for items that need to have a label reprinted. Null or No mean that it already has a label with the Spoolman ID.
 * It's too easy to have multiple legacy spools with no exact ID, where we could be assigning the wrong item... perhaps a pop-up when there could be more than 1 spool attached to the legacy ID, asking the user if they want to see the list of spools, or just reprint a new label.
-* Should be able to decode filament IDs that were scanned in using the barcode scanner (using input speed check to determine if marked as printed).
+
 * Confirmed label print should be displayed somewhere on the card. Perhaps changing the printer icon to a checkmark for confirmed spools.
 * Add label print button to filament sample cards.
 * Some values in Print Queue are being set to yes, most are null. What is the process for setting them to true?

@@ -328,6 +328,25 @@ def api_edit_spool_wizard():
         state.logger.error(f"Wizard Edit Error: {e}")
         return jsonify({"success": False, "msg": str(e)})
 
+@app.route('/api/spool/update', methods=['POST'])
+def api_spool_update():
+    """Generic endpoint to partially update a spool from frontend modules"""
+    try:
+        data = request.json
+        spool_id = data.get('id')
+        updates = data.get('updates')
+        
+        if not spool_id or not updates:
+            return jsonify({"status": "error", "msg": "Missing id or updates"})
+            
+        res = spoolman_api.update_spool(spool_id, updates)
+        if res:
+            return jsonify({"status": "success"})
+        return jsonify({"status": "error", "msg": "Failed to update spool"})
+    except Exception as e:
+        state.logger.error(f"Spool Update Error: {e}")
+        return jsonify({"status": "error", "msg": str(e)})
+
 import external_parsers # Added for plugin architecture
 
 @app.route('/api/external/search', methods=['GET'])
@@ -803,10 +822,14 @@ def api_identify_scan():
     if res['type'] == 'spool':
         sid = res['id']; data = spoolman_api.get_spool(sid)
         if data:
-            if source == 'barcode':
+            if source == 'barcode' and text.strip().upper().startswith('ID:'):
                 extra = data.get('extra', {})
+                dirty = False
                 if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
                     extra['needs_label_print'] = False
+                    dirty = True
+                
+                if dirty:
                     if spoolman_api.update_spool(sid, {'extra': extra}):
                         state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
                     else:
@@ -827,12 +850,16 @@ def api_identify_scan():
         fid = res['id']
         data = spoolman_api.get_filament(fid)
         if data:
-            if source == 'barcode':
+            if source == 'barcode' and text.strip().upper().startswith('FIL:'):
                 extra = data.get('extra', {})
+                dirty = False
                 if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
                     extra['needs_label_print'] = False
+                    dirty = True
+
+                if dirty:
                     if spoolman_api.update_filament(fid, {'extra': extra}):
-                        state.add_log_entry(f"✔️ Filament #{fid} Label Verified", "SUCCESS", "00ff00")
+                        state.add_log_entry(f"✔️ Filament #{fid} Label & Sample Verified", "SUCCESS", "00ff00")
                     else:
                         state.add_log_entry(f"❌ Failed to verify Filament #{fid} label", "WARNING")
             

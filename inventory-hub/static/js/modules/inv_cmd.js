@@ -106,6 +106,7 @@ const processScan = (text, source = 'keyboard') => {
     const upper = text.toUpperCase();
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
     if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
+    if (upper === 'CMD:WEIGH') { window.openWeighOutModal(); return; }
     if (upper === 'CMD:DROP') { toggleDropMode(); return; }
     if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
     if (upper === 'CMD:EJECTALL') { triggerEjectAll(document.getElementById('manage-loc-id').value); return; }

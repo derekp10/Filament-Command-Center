@@ -93,6 +93,11 @@
                 <div id="qr-audit" class="deck-qr"></div>
                 <div id="lbl-audit" class="deck-label text-purple">AUDIT</div>
             </div>
+
+            <div id="btn-deck-weigh" class="deck-btn" onclick="window.openWeighOutModal()">
+                <div id="qr-weigh" class="deck-qr"></div>
+                <div id="lbl-weigh" class="deck-label text-success">WEIGH</div>
+            </div>
         </div>
     </div>
 
@@ -102,6 +107,7 @@
     {% include 'components/modals_missing_labels.html' %}
     {% include 'components/modals_details.html' %}
     {% include 'components/modals_loc_mgr.html' %}
+    {% include 'components/modals_weigh_out.html' %}
     {% include 'components/label_spool.html' %}
     {% include 'components/offcanvas_search.html' %}
     <!-- Global Floating Action Button for Search -->

@@ -53,47 +53,62 @@ def test_mark_printed_success(client):
         assert args[0] == 10
         assert args[1]['extra']['needs_label_print'] is False
 
-    def test_identify_scan_barcode_clears_flag(client):
-        """Test that a physical barcode scan clears the needs_label_print flag"""
-        with patch('logic.resolve_scan') as mock_resolve, patch('spoolman_api.get_spool') as mock_get, patch('spoolman_api.update_spool') as mock_update, patch('state.add_log_entry') as mock_log, patch('spoolman_api.format_spool_display', return_value={'text':'foo', 'color':'#fff'}):
-            mock_resolve.return_value = {"type": "spool", "id": 10}
-            mock_get.return_value = {"id": 10, "extra": {"needs_label_print": True}}
-            mock_update.return_value = {"id": 10} # Success
-            
-            res = client.post('/api/identify_scan', json={"text": "ID:10", "source": "barcode"})
-            data = res.get_json()
-            assert data['type'] == 'spool'
-            
-            # It should update the spool to clear the flag
-            mock_update.assert_called_once()
-            args, _ = mock_update.call_args
-            assert args[1]['extra']['needs_label_print'] is False
-            
-            # Check success log
-            mock_log.assert_called_once()
-            assert "Label Verified" in mock_log.call_args[0][0]
+def test_identify_scan_barcode_clears_flag(client):
+    """Test that a physical barcode scan clears the needs_label_print flag and sets label_printed"""
+    with patch('logic.resolve_scan') as mock_resolve, patch('spoolman_api.get_spool') as mock_get, patch('spoolman_api.update_spool') as mock_update, patch('state.add_log_entry') as mock_log, patch('spoolman_api.format_spool_display', return_value={'text':'foo', 'color':'#fff'}):
+        mock_resolve.return_value = {"type": "spool", "id": 10}
+        mock_get.return_value = {"id": 10, "extra": {"needs_label_print": True}}
+        mock_update.return_value = {"id": 10} # Success
+        
+        res = client.post('/api/identify_scan', json={"text": "ID:10", "source": "barcode"})
+        data = res.get_json()
+        assert data['type'] == 'spool'
+        
+        # It should update the spool to clear the flag
+        mock_update.assert_called_once()
+        args, _ = mock_update.call_args
+        assert args[1]['extra']['needs_label_print'] is False
+        
+        # Check success log
+        mock_log.assert_called_once()
+        assert "Label Verified" in mock_log.call_args[0][0]
 
-    def test_identify_scan_barcode_database_rejection(client):
-        """Test that a failed Spoolman database update logs a warning and blocks ghost success messages"""
-        with patch('logic.resolve_scan') as mock_resolve, patch('spoolman_api.get_spool') as mock_get, patch('spoolman_api.update_spool') as mock_update, patch('state.add_log_entry') as mock_log, patch('spoolman_api.format_spool_display', return_value={'text':'foo', 'color':'#fff'}):
-            mock_resolve.return_value = {"type": "spool", "id": 10}
-            mock_get.return_value = {"id": 10, "extra": {"needs_label_print": True}}
-            # Simulate Spoolman API rejecting the payload (e.g. 400 Bad Request)
-            mock_update.return_value = None 
-            
-            res = client.post('/api/identify_scan', json={"text": "ID:10", "source": "barcode"})
-            data = res.get_json()
-            assert data['type'] == 'spool'
-            
-            # It should attempt the update
-            mock_update.assert_called_once()
-            
-            # Check failure log 
-            mock_log.assert_called_once()
-            log_msg = mock_log.call_args[0][0]
-            log_level = mock_log.call_args[0][1]
-            assert "Failed to verify" in log_msg
-            assert log_level == "WARNING"
+def test_identify_scan_barcode_filament(client):
+    """Test that a physical barcode scan on a filament clears needs_label_print"""
+    with patch('logic.resolve_scan') as mock_resolve, patch('spoolman_api.get_filament') as mock_get, patch('spoolman_api.update_filament') as mock_update, patch('state.add_log_entry') as mock_log:
+        mock_resolve.return_value = {"type": "filament", "id": 5}
+        mock_get.return_value = {"id": 5, "extra": {"needs_label_print": True}}
+        mock_update.return_value = {"id": 5} # Success
+        
+        res = client.post('/api/identify_scan', json={"text": "FIL:5", "source": "barcode"})
+        data = res.get_json()
+        assert data['type'] == 'filament'
+        
+        mock_update.assert_called_once()
+        args, _ = mock_update.call_args
+        assert args[1]['extra']['needs_label_print'] is False
+
+def test_identify_scan_barcode_database_rejection(client):
+    """Test that a failed Spoolman database update logs a warning and blocks ghost success messages"""
+    with patch('logic.resolve_scan') as mock_resolve, patch('spoolman_api.get_spool') as mock_get, patch('spoolman_api.update_spool') as mock_update, patch('state.add_log_entry') as mock_log, patch('spoolman_api.format_spool_display', return_value={'text':'foo', 'color':'#fff'}):
+        mock_resolve.return_value = {"type": "spool", "id": 10}
+        mock_get.return_value = {"id": 10, "extra": {"needs_label_print": True}}
+        # Simulate Spoolman API rejecting the payload (e.g. 400 Bad Request)
+        mock_update.return_value = None 
+        
+        res = client.post('/api/identify_scan', json={"text": "ID:10", "source": "barcode"})
+        data = res.get_json()
+        assert data['type'] == 'spool'
+        
+        # It should attempt the update
+        mock_update.assert_called_once()
+        
+        # Check failure log 
+        mock_log.assert_called_once()
+        log_msg = mock_log.call_args[0][0]
+        log_level = mock_log.call_args[0][1]
+        assert "Failed to verify" in log_msg
+        assert log_level == "WARNING"
 
 def test_identify_scan_keyboard_keeps_flag(client):
     """Test that manual keyboard typing does NOT clear the needs_label_print flag"""
