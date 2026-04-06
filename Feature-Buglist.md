@@ -1,18 +1,34 @@
-# **Active Backlog (Organized by Feature Area)**
+# **New and Unsorted Features/Bugs**
 
-* Add a work flow for easily getting to filaments involved in a filabrige error, reported in the live activity log. This way when this error does occure theres a way to get to a list of the filaments involved directly and update the amount of grams used by the printer onto the spools directly, without having to look them up one by one. If possible, it would be nice to be able to do a more aggressive request of the gcode file, to get the data we need, and just update the filaments involved in the error directly, with little to no user intervention.
+* Add a work flow for easily getting to filaments involved in a filabrige error, reported in the live activity log. This way when this error does occure theres a way to get to a list of the filaments involved directly and update the amount of grams used by the printer onto the spools directly, without having to look them up one by one. If possible, it would be nice to be able to do a more aggressive request of the gcode file from the printer, to get the data we need, and just update the filaments involved in the error directly, with little to no user intervention.
 
-* Sortible otpions to the columns on location list. 
+* Sortible otpions to the columns on location list.
+
 * Modifications to the location list, splitting out type badge from the counts section, so they have there own columns.
+
 * Ability to add/customize/change type in the Edit Loction Modal, for creating or editing existing locations. I think we moved this off of a .CSV basede list, and now it generates and stores based on spoolman data? But I'm not sure. Toolhead appears to be missing from this list.
+
 * Better grouping of locations lists data. The encoded id's can sometimes be used to generate a grouping, (anything that starts with CR, is in the Computer room, DR, Dining room, LR, living room etc...)
+
 * A way to display the QR code for a location on screen so that it can be used for assigning locations in place of a physical label.
+
 * A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
+
 * "Deposit here" barcode for adding items to a location from the buffer throws an error when scanning, but clicking on it works fine.
 
 * Check to make sure that a backend refresh doesn't interrupt a barcode scan mid scan and then loose the scan. I think that just happened to me, as I had to scan a spool twice, as the first time it looked like it loaded for a second and then unloaded.
 
 * Dedicated bulk weigh out modal, for directly scanning/keying in filaments, and direct access to updating just the weight values. So that I can have a stack of spools from a previous print, and just update those directly with out having to fiddle with, scanning, clicking edit, editing, saving, and repeating for each spool.
+
+* Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
+
+* Scanning a new spool into a dryer box slot doesn't imidiately unload the currently existing spool. We may want to entirely re think the way the eject process works when replacing one spool out for another. This is mostly a dryer box thing.
+
+* Loading a dryer box, at the very least, slots load with an initial data set, and then i think the 5 second tick goes off, and fills them in completely. Seems to be a difference between what the initial card load does, and the data provided from the 5 second tick. We should probably make the initial card load load the same data as the 5 second tick.
+
+* Adjust filament list and stystem to allow for unassigned filaments to fall back to a room based location, based on the dryerbox location (LR for Living room, CR for Computer room) So that we can avoid the spool instantly going into the unassigned zone. Will need to parent locations to rooms, and allow rooms to have a list of filaments that includes all sub-locations. (Dryerboxes, carts, shelves etc...)
+
+# **Active Backlog (Organized by Feature Area)**
 
 ## 🎨 UI & Theming
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
