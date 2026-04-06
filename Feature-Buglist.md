@@ -12,6 +12,8 @@
 
 * Check to make sure that a backend refresh doesn't interrupt a barcode scan mid scan and then loose the scan. I think that just happened to me, as I had to scan a spool twice, as the first time it looked like it loaded for a second and then unloaded.
 
+* Dedicated bulk weigh out modal, for directly scanning/keying in filaments, and direct access to updating just the weight values. So that I can have a stack of spools from a previous print, and just update those directly with out having to fiddle with, scanning, clicking edit, editing, saving, and repeating for each spool.
+
 ## 🎨 UI & Theming
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
 * Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
