@@ -1,0 +1,26 @@
+[
+  {
+    "slot_number": 1,
+    "slicer_part_name": "volume_1",
+    "slicer_role": "Primary",
+    "custom_alias": "Skin/Base",
+    "sync_name_to_file": true,
+    "preferred_hex": "#4F7942",
+    "preferred_material": "PLA",
+    "required_weight_g": 45.2,
+    "runout_strategy": "SpoolJoin",
+    "fallback_slot_number": 5
+  },
+  {
+    "slot_number": 2,
+    "slicer_part_name": "support_enforcer",
+    "slicer_role": "Support Interface",
+    "custom_alias": "Easy Peel Supports",
+    "sync_name_to_file": false,
+    "preferred_hex": "#000000",
+    "preferred_material": "PETG",
+    "required_weight_g": 12.1,
+    "runout_strategy": "Pause",
+    "fallback_slot_number": null
+  }
+]
