@@ -79,7 +79,6 @@
     - Label Printed in Spoolman Spool data can be used to determine if a new Label has been printed.
     - Filaments: Spoolman Reprint field is set to Yes for items that need to have a label reprinted. Null or No mean that it already has a label with the Spoolman ID.
 * It's too easy to have multiple legacy spools with no exact ID, where we could be assigning the wrong item... perhaps a pop-up when there could be more than 1 spool attached to the legacy ID, asking the user if they want to see the list of spools, or just reprint a new label.
-
 * Confirmed label print should be displayed somewhere on the card. Perhaps changing the printer icon to a checkmark for confirmed spools.
 * Add label print button to filament sample cards.
 * Some values in Print Queue are being set to yes, most are null. What is the process for setting them to true?
