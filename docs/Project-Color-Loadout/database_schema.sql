@@ -18,10 +18,21 @@ CREATE TABLE Projects (
     last_printed DATETIME,
     notes TEXT,                                  -- Success/Failure notes
     
-    -- 🌟 THE HYBRID MAGIC COLUMN 🌟
+    -- ✨ THE HYBRID MAGIC COLUMN ✨
     -- This stores the entire JSON array of your toolhead slots!
     -- Using SQLite's JSON1 extension, we can still query inside this text block if needed.
     loadout_data TEXT 
+);
+
+-- ==========================================
+-- 🎨 TABLE 1.5: Global_Palettes (Theme Swapping)
+-- ==========================================
+-- This allows the user to save a color loadout and apply it to other projects.
+
+CREATE TABLE Global_Palettes (
+    palette_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    palette_name TEXT UNIQUE NOT NULL,           -- e.g., "Watermelon Theme"
+    loadout_data TEXT                            -- JSON1 Array of slots to be applied
 );
 
 -- ==========================================

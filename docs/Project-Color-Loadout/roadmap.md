@@ -1,29 +1,31 @@
-### 🗺️ Project Color Loadout: LLM Development Roadmap (v3.0)
+### 🗺️ Project Color Loadout: LLM Development Roadmap (v4.0)
 
 **Phase 1: The Hybrid Database & Core UI (The Foundation)**
 * **Goal:** Create a lightning-fast relational database that retains JSON flexibility, plus the frontend UI.
 * **Tasks:**
-    * Build the SQLite schema (`Projects`, `Filament_Links`, `Print_Queue`).
+    * Build the SQLite schema (`Projects`, `Global_Palettes`, `Filament_Index`, `Print_Queue`).
     * Implement the `JSON1` extension: Store the complex `slots` array directly in a `loadout_data` text column for ultimate flexibility.
     * Build the "Project Library" grid view and "Project Detail" view.
     * Build the "Where is this used?" reverse-lookup UI for the existing FCC Filament modal.
 * **Dependencies:** None.
 
-**Phase 2: The Magic Parsers & Source of Truth (Reading Files)**
-* **Goal:** Automate data entry and establish the "Reverse Sync" rule.
+**Phase 2: Drag & Drop, Magic Parsers & Smart Draft**
+* **Goal:** Zero-friction data entry and establish the "Reverse Sync" rule.
 * **Tasks:**
     * **Establish Source of Truth:** The Original `.3mf` is the *Geometry/Settings Master*. The Database is the *Color Master*.
-    * Build `.3mf` parser: Read XML for hex colors, extract **Slicer Roles**, and detect "Painted" (Slot-Locked) vs "Part-Based" (Swappable).
-    * Build `.gcode` parser: Read metadata for weight/material, decode Base64 thumbnail for UI previews.
+    * **Drag & Drop Zone:** UI element to drop `.3mf`/`.gcode` files directly into the browser.
+    * **Smart Draft Import:** Browser unzips dropped `.3mf`, extracts XML hex colors, and auto-matches to Spoolman inventory via Delta-E math to pre-fill the loadout.
+    * **Syncthing Resolution:** Match dropped file names to the mirrored TrueNAS directory so network uploads aren't required.
 * **Dependencies:** Phase 1 database ready to receive parsed data.
 
-**Phase 3: The Orchestrator & Spooler (Minimizing Physical Labor)**
-* **Goal:** Optimize the printing schedule to drastically reduce manual spool swaps.
+**Phase 3: Global Palettes & 4D Queue Optimization**
+* **Goal:** Manage color themes and optimize the printing schedule to drastically reduce manual spool swaps.
 * **Tasks:**
+    * **Global Palettes:** Ability to save a toolhead color configuration as a named theme (e.g., "Zombie Colors") and apply it to any project.
     * Build the **Print Queue** UI.
-    * Create the **"Lazy Swap" Algorithm:** Sort queued projects based on maximum overlap with the active printer's current filament loadout.
-    * **Aesthetic Compromise Toggle:** Add a "Strict Colors" switch. If OFF, the app can merge similar colors (e.g., two slightly different greens) into the same loaded slot to save a spool swap.
-    * **The Spooler Directory:** Create a temporary TrueNAS folder (`/fcc_spooler/`). Generate the actively color-mapped `.3mf` and `.gcode` files here to keep original project folders clean. Auto-delete when the print finishes.
+    * Create the **"4D Lazy Swap" Algorithm:** Analyze the *entire* Print Queue. Calculate the optimal print sequence and slot assignments to minimize total physical spool changes across the whole batch.
+    * **Aesthetic Compromise Toggle:** Add a "Strict Colors" switch. If OFF, the app can merge similar colors into the same loaded slot.
+    * **The Spooler Directory:** Create a temporary TrueNAS folder (`/fcc_spooler/`). Generate the actively color-mapped files here to keep original folders clean. Auto-delete when finished.
 * **Dependencies:** Phase 1 & 2 logic.
 
 **Phase 4: Inventory Sync & Smart Shopping (The APIs)**

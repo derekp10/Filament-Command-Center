@@ -16,17 +16,29 @@ This document outlines the internal communication routing between the Project Co
 
 ---
 
-## 2. The "Lazy Swap" Optimizer (Queue Logic)
-**Goal:** Sort the print queue to minimize physical spool swaps.
+## 1.5. Drag & Drop + Smart Draft Import
+**Goal:** Instantly build a loadout from a dropped file using local Syncthing data.
+* **Trigger:** User drops `.3mf` into the browser UI.
+* **Action:** Browser parses XML, sends `POST /api/loadout/import/draft`.
+* **Logic:** Backend uses Delta-E to match hex colors to Spoolman DB. Resolves file path using Syncthing mirror. Returns pre-filled JSON to UI.
 
-* **API Call:** `POST /api/loadout/queue/optimize`
+## 1.8. Palette Management (Global Themes)
+**Goal:** Save and recall favorite color assignments.
+* `POST /api/loadout/palettes` -> Saves current UI slots as a reusable Global Palette.
+* `GET /api/loadout/palettes` -> Fetches saved themes for the "Apply Palette" dropdown.
+
+---
+
+## 2. The "4D Chess" Optimizer (Queue Logic)
+**Goal:** Analyze the entire queue to minimize total physical spool swaps across a batch.
+* **API Call:** `POST /api/loadout/queue/optimize_batch`
 * **Payload Sent:** Array of queued `project_id`s.
 * **Logic Steps:**
-  1. Fetch current active loadout from FCC (e.g., "Slot 1 is Red, Slot 2 is Blue").
-  2. Query `loadout_data` for all queued projects.
-  3. **Sort:** Order projects by highest color overlap with the active printer state.
-  4. **Auto-Remap:** If a project is `Swappable` (not Slot-Locked), virtually reassign its `slot_number`s to match the active printer state.
-* **Output:** A sorted JSON array of the optimized print queue.
+  1. Analyze all colors required by all queued projects.
+  2. Map highest-frequency colors to static slots (e.g., Slot 1 is always Black for this batch).
+  3. Sort queue order to delay necessary spool swaps until the end of the batch.
+  4. Auto-remap `slot_number`s in `Swappable` projects to match this optimized timeline.
+* **Output:** A JSON "Batch Roadmap" detailing print sequence and exact swap interventions required.
 
 ---
 
