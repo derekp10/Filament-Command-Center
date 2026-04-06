@@ -83,7 +83,7 @@
 * Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
 
 ## ⚙️ App Flow, Architecture & Database
-* **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones.
+* **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements.
 * Refactor dashboard to be more modular if possible, and reduce token size/context requirements.
 * Make as much of Command Center user configurable as possible, using UI elements and a config import/export feature.
 * When changes are made to Spoolman extra fields, they usually ignore sort order in the database. We need a way to restore sort order.
@@ -121,4 +121,4 @@ All 3 of these things are important and have value. We should table for now, and
 
 # **New related project to be integrated **
 
-* [Feature] Build Project Color Loadout Add-on -> (See /docs/project-color-loadout/roadmap.md)
+* [Feature] Build Project Color Loadout Add-on -> (See /docs/Project-Color-Loadout/)
