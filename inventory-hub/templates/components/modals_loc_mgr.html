@@ -1,3 +1,20 @@
+<!-- Global Location View QR Modal -->
+<div class="modal fade" id="locQrViewModal" tabindex="-1">
+    <div class="modal-dialog modal-sm modal-dialog-centered">
+        <div class="modal-content border-info rounded-3">
+            <div class="modal-header bg-dark border-bottom border-info">
+                <h5 class="modal-title text-info fw-bold" id="locQrViewTitle">Location QR Code</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center bg-dark text-white p-4">
+                <div id="loc-qr-view-container" class="bg-white p-3 rounded d-inline-block shadow-lg mx-auto mb-3"></div>
+                <div id="loc-qr-view-label" class="fs-4 fw-bold mt-2 text-pop">LOC:...</div>
+                 <div class="small text-muted mt-2">Scan via Command Center or external devices</div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="modal fade" id="locMgrModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-scrollable modal-dialog-centered">
         <div class="modal-content">
@@ -14,9 +31,10 @@
                     <table class="table table-dark table-hover mb-0">
                         <thead class="sticky-th">
                             <tr>
-                                <th style="width:10%">ID</th>
-                                <th style="width:45%">Name</th>
-                                <th style="width:20%">Status</th>
+                                <th style="width:15%; cursor:pointer;" onclick="sortLocations('LocationID')">ID ↕️</th>
+                                <th style="width:35%; cursor:pointer;" onclick="sortLocations('Name')">Name ↕️</th>
+                                <th style="width:15%; cursor:pointer;" onclick="sortLocations('Type')">Type ↕️</th>
+                                <th style="width:10%; cursor:pointer;" onclick="sortLocations('Occupancy')">Status ↕️</th>
                                 <th class="text-end" style="width:25%">Actions</th>
                             </tr>
                         </thead>
@@ -73,6 +91,9 @@
         <div class="modal-content">
             <div class="modal-header p-2 d-flex align-items-center">
                 <h5 class="modal-title ms-3 text-info flex-grow-1" id="manageTitle">Manage</h5>
+                <div id="manage-loc-qr-wrap" class="bg-white rounded me-3 cursor-pointer shadow-sm" style="width: 58px; height: 58px; display:flex; justify-content:center; align-items:center; padding: 6px;" onclick="showGlobalQrModal(document.getElementById('manage-loc-id').value)" title="Enlarge Location QR">
+                     <div id="manage-loc-qr-mini"></div>
+                </div>
                 <button class="btn btn-sm btn-outline-warning fw-bold me-2"
                     onclick="window.printCurrentLocationLabel()">🖨️ Print Location Label</button>
                 <button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button>

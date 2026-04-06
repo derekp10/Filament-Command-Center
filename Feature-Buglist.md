@@ -2,15 +2,11 @@
 
 * Add a work flow for easily getting to filaments involved in a filabrige error, reported in the live activity log. This way when this error does occure theres a way to get to a list of the filaments involved directly and update the amount of grams used by the printer onto the spools directly, without having to look them up one by one. If possible, it would be nice to be able to do a more aggressive request of the gcode file from the printer, to get the data we need, and just update the filaments involved in the error directly, with little to no user intervention.
 
-* Sortible otpions to the columns on location list.
-
-* Modifications to the location list, splitting out type badge from the counts section, so they have there own columns.
 
 * Ability to add/customize/change type in the Edit Loction Modal, for creating or editing existing locations. I think we moved this off of a .CSV basede list, and now it generates and stores based on spoolman data? But I'm not sure. Toolhead appears to be missing from this list.
 
 * Better grouping of locations lists data. The encoded id's can sometimes be used to generate a grouping, (anything that starts with CR, is in the Computer room, DR, Dining room, LR, living room etc...)
 
-* A way to display the QR code for a location on screen so that it can be used for assigning locations in place of a physical label.
 
 * A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
 
@@ -65,10 +61,8 @@
 
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
-* Locations QR Codes should contain a `LOC:` code, and a `LOC:` code should be used to help identify locations. (Keep existing logic to allow for backwards compatibility, but allow for `LOC:` codes for future items). *IMPORTANT*: Legacy Location QR codes (WIthout the LOC: prefix) should have a warning attached in the live activity log.
 * Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without.
 * Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field.
-* Add unassigned Location in Location List.
 * Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to.
 * Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assign all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
 * Location Manager not syncing status across browser instances?

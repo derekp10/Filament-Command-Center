@@ -52,4 +52,24 @@ def test_request_wakelock_fallback():
         content = f.read()
 
     assert "window.NoSleep" in content
-    assert "noSleep.enable()" in content
+    assert "noSleepInstance.enable()" in content or "noSleep.enable()" in content
+
+def test_location_list_features_exist():
+    """
+    Ensures that the Location List has the explicit sorting logic and 
+    column definitions in place as requested in the Glow-up feature.
+    """
+    js_path = os.path.join(os.path.dirname(__file__), "..", "inventory-hub", "static", "js", "modules", "inv_core.js")
+    with open(js_path, "r", encoding="utf-8") as f:
+        js_content = f.read()
+
+    assert "state.locSortBy" in js_content, "Missing sorting state injection for Location List"
+    assert "window.sortLocations =" in js_content, "Missing sortLocations handler"
+    assert "Unassigned" in js_content, "Missing Unassigned fall-back injection"
+
+    html_path = os.path.join(os.path.dirname(__file__), "..", "inventory-hub", "templates", "components", "modals_loc_mgr.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+
+    assert "onclick=\"sortLocations('LocationID')\"" in html_content, "Missing column sorting UI binds"
+    assert "locQrViewModal" in html_content, "Missing QR Overlay in Loc Mgr Modal"

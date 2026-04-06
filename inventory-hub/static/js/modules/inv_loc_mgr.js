@@ -49,6 +49,9 @@ window.openManage = (id) => {
             }
 
             renderManagerNav();
+            // Generate QR for specific location
+            const safeId = String(id).replace(/['"]/g, '');
+            generateSafeQR('manage-loc-qr-mini', 'LOC:' + safeId, 45);
             generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
 
             // Prime the Hash to prevent "First Pulse Wiggle"

@@ -1,4 +1,8 @@
 # **Done**
+* **Feature:** Overhauled the Location List UI ("Glow-up"), separating Type and Status styling into dedicated sortable columns capable of dynamic ascending/descending alignment numerically.
+* **Feature:** Handled Unassigned Spools natively appending them as a virtual catching location at the solid top sorting position of the Location Manager list.
+* **Feature:** Built a universal Location QR Overlay Modal and quick-access header scanner block embedded into the Location List actions for immediate physical deployment label mapping.
+* **System/UI:** Standardized legacy location assignments globally by ensuring proper backend `LOC:` validations with new frontend Toast scanning safeguards tied explicitly to `/api/log_event` recording.
 * **Bug Fix:** Fixed explicit data-type validation in the Bulk Weigh-Out modal. Corrected a JavaScript input listener that fed a parsed string into an integer-based `Set`, which caused saved updates to instantly visually reappear on the DOM.
 * **Bug Fix:** Hardened the API barcode parsing constraints to protect against legacy integer IDs triggering the new automatic label tracking flags. Ensured only strict `ID:` and `FIL:` prefix patterns are permitted to zero-out the `needs_label_print` status within Spoolman.
 * **UI/UX:** Fixed dark text visibility and input box geometric clipping issues on the new Bulk Weigh-Out Modal by adapting the elements to standard dark-mode layout parameters.

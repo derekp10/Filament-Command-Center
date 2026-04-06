@@ -1190,6 +1190,13 @@ def api_spools_refresh():
         return jsonify({})
     return jsonify(logic.get_live_spools_data(spools))
 
+@app.route('/api/log_event', methods=['POST'])
+def api_log_event():
+    msg = request.json.get('msg', '')
+    level = request.json.get('level', 'INFO')
+    if msg: state.add_log_entry(msg, level)
+    return jsonify({"success": True})
+
 @app.route('/api/logs', methods=['GET'])
 def api_get_logs_route():
     sm_url, fb_url = config_loader.get_api_urls()

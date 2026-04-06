@@ -72,6 +72,12 @@
         "Label Printed": "Yes"
     },
     {
+        "LocationID": "CR",
+        "Name": "Computer Room",
+        "Type": "Shelf",
+        "Max Spools": "0"
+    },
+    {
         "LocationID": "CR-CT-1",
         "Location": "Computer Room",
         "Device Identifier": "",
@@ -276,6 +282,12 @@
         "Label Printed": "Yes"
     },
     {
+        "LocationID": "DR",
+        "Name": "Dinning Room",
+        "Type": "Shelf",
+        "Max Spools": "0"
+    },
+    {
         "LocationID": "DR-CT-1",
         "Location": "Dinning Room",
         "Device Identifier": "",
@@ -300,18 +312,6 @@
         "Label Printed": "Yes"
     },
     {
-        "LocationID": "DR-CT-1-R2-R",
-        "Location": "Dinning Room",
-        "Device Identifier": "",
-        "Device Type": "",
-        "Type": "Cart",
-        "Order": "3",
-        "Row": "",
-        "Max Spools": "",
-        "Name": "Dining Room Cart 1 Row 2 Right",
-        "Label Printed": "Yes"
-    },
-    {
         "LocationID": "DR-CT-1-R2-L",
         "Location": "Dinning Room",
         "Device Identifier": "",
@@ -324,15 +324,15 @@
         "Label Printed": "Yes"
     },
     {
-        "LocationID": "DR-CT-1-R3-R",
+        "LocationID": "DR-CT-1-R2-R",
         "Location": "Dinning Room",
         "Device Identifier": "",
         "Device Type": "",
         "Type": "Cart",
-        "Order": "5",
+        "Order": "3",
         "Row": "",
         "Max Spools": "",
-        "Name": "Dining Room Cart 1 Row 3 Right",
+        "Name": "Dining Room Cart 1 Row 2 Right",
         "Label Printed": "Yes"
     },
     {
@@ -348,15 +348,15 @@
         "Label Printed": "Yes"
     },
     {
-        "LocationID": "DR-CT-1-R4-R",
+        "LocationID": "DR-CT-1-R3-R",
         "Location": "Dinning Room",
         "Device Identifier": "",
         "Device Type": "",
         "Type": "Cart",
-        "Order": "7",
+        "Order": "5",
         "Row": "",
         "Max Spools": "",
-        "Name": "Dining Room Cart 1 Row 4 Right",
+        "Name": "Dining Room Cart 1 Row 3 Right",
         "Label Printed": "Yes"
     },
     {
@@ -372,6 +372,24 @@
         "Label Printed": "Yes"
     },
     {
+        "LocationID": "DR-CT-1-R4-R",
+        "Location": "Dinning Room",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Type": "Cart",
+        "Order": "7",
+        "Row": "",
+        "Max Spools": "",
+        "Name": "Dining Room Cart 1 Row 4 Right",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "LR",
+        "Name": "Living Room",
+        "Type": "Shelf",
+        "Max Spools": "0"
+    },
+    {
         "LocationID": "LR-MDB-1",
         "Location": "Living Room",
         "Device Identifier": "Creality Space Pi X4",
@@ -382,6 +400,18 @@
         "Max Spools": "4",
         "Name": "Living Room Multi-Dryer Box",
         "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "LR-MDB-2",
+        "Location": "Living Room",
+        "Device Identifier": "Sunlu Filament Dryer E2",
+        "Device Type": "Multi",
+        "Type": "Dryer Box",
+        "Order": "1",
+        "Row": "",
+        "Max Spools": "2",
+        "Name": "Sunlu Filament Dryer E2",
+        "Label Printed": "No"
     },
     {
         "LocationID": "LR-SD-1",
@@ -516,6 +546,18 @@
         "Label Printed": "Yes"
     },
     {
+        "LocationID": "TST-MDB-1",
+        "Location": "",
+        "Device Identifier": "Test Filament Dryer",
+        "Device Type": "Multi",
+        "Type": "Dryer Box",
+        "Order": "0",
+        "Row": "",
+        "Max Spools": "6",
+        "Name": "Test Filament Dryer",
+        "Label Printed": "No"
+    },
+    {
         "LocationID": "XL-1",
         "Location": "Living Room",
         "Device Identifier": "\ud83e\udd9d",
@@ -574,29 +616,5 @@
         "Max Spools": "1",
         "Name": "\ud83e\udd9d XL Tool Head 5",
         "Label Printed": "Yes"
-    },
-    {
-        "LocationID": "LR-MDB-2",
-        "Location": "Living Room",
-        "Device Identifier": "Sunlu Filament Dryer E2",
-        "Device Type": "Multi",
-        "Type": "Dryer Box",
-        "Order": "1",
-        "Row": "",
-        "Max Spools": "2",
-        "Name": "Sunlu Filament Dryer E2",
-        "Label Printed": "No"
-    },
-    {
-        "LocationID": "TST-MDB-1",
-        "Location": "",
-        "Device Identifier": "Test Filament Dryer",
-        "Device Type": "Multi",
-        "Type": "Dryer Box",
-        "Order": "0",
-        "Row": "",
-        "Max Spools": "6",
-        "Name": "Test Filament Dryer",
-        "Label Printed": "No"
     }
 ]

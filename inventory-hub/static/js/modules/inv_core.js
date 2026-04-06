@@ -22,6 +22,8 @@ let state = {
 
     // Manager
     currentGrid: {},
+    locSortBy: 'LocationID',
+    locSortDir: 1,
 
     // Modals
     modalCallbacks: [],
@@ -206,19 +208,60 @@ const fetchLocations = () => {
     fetch('/api/locations')
         .then(r => r.json())
         .then(d => {
-            // [ALEX FIX] Backend now provides Unassigned, so we use 'd' directly
+            // [ALEX FIX] Ensure Unassigned is in the list
+            let hasUnassigned = d.some(l => l.LocationID === 'Unassigned');
+            if(!hasUnassigned) {
+                d.unshift({
+                    LocationID: 'Unassigned',
+                    Name: 'Unassigned Spools',
+                    Type: 'Virtual',
+                    Occupancy: '--'
+                });
+            }
+
+            // Apply Sort
+            d.sort((a, b) => {
+                // Ensure Unassigned is always solidly at the top
+                if (a.LocationID === 'Unassigned') return -1;
+                if (b.LocationID === 'Unassigned') return 1;
+
+                let valA = a[state.locSortBy] || '';
+                let valB = b[state.locSortBy] || '';
+
+                if (state.locSortBy === 'Occupancy') {
+                    const parseOcc = (v) => {
+                        if (!v || v === '--') return -1;
+                        if (typeof v === 'string') {
+                            const firstPart = v.split('/')[0];
+                            return parseInt(firstPart) || 0;
+                        }
+                        return v;
+                    };
+                    valA = parseOcc(valA);
+                    valB = parseOcc(valB);
+                } else {
+                    if (typeof valA === 'string') valA = valA.toLowerCase();
+                    if (typeof valB === 'string') valB = valB.toLowerCase();
+                }
+                
+                if (valA < valB) return -1 * state.locSortDir;
+                if (valA > valB) return 1 * state.locSortDir;
+                return 0;
+            });
+
             const finalList = d;
             state.allLocations = finalList;
 
             // --- NO WIGGLE CHECK ---
-            const contentHash = JSON.stringify(finalList);
+            const contentHash = JSON.stringify(finalList) + "|" + state.locSortBy + "|" + state.locSortDir;
             if (state.lastLocationsHash === contentHash) return;
             state.lastLocationsHash = contentHash;
             // -----------------------
 
             // 2. Update Total Count with Pop Style
             const countEl = document.getElementById('loc-count');
-            if (countEl) countEl.innerText = "Total Locations: " + finalList.length;
+            // Subtract 1 for Unassigned so it doesn't inflate the Physical box count
+            if (countEl) countEl.innerText = "Total Locations: " + (finalList.length > 0 ? finalList.length - 1 : 0);
 
             const table = document.getElementById('location-table');
             if (table) {
@@ -227,7 +270,7 @@ const fetchLocations = () => {
                     let statusHtml = '';
                     let occColor = '#fff'; // Default White (Under Capacity)
 
-                    if (l.Occupancy) {
+                    if (l.Occupancy && l.Occupancy !== '--') {
                         const parts = l.Occupancy.split('/');
                         if (parts.length === 2) {
                             const cur = parseInt(parts[0]);
@@ -258,14 +301,16 @@ const fetchLocations = () => {
                     // [ALEX FIX] High Contrast for Virtual
                     else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
 
-                    const typeBadge = `<span class="badge ${badgeClass}" style="margin-left:8px; box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
+                    const typeBadge = `<span class="badge ${badgeClass}" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
 
                     return `
                 <tr>
                     <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem; white-space: nowrap;">${l.LocationID}</td>
                     <td class="col-name text-pop-light" style="font-weight:800; font-size:1.1rem; color:#fff;">${l.Name}</td>
-                    <td class="col-status">${statusHtml} ${typeBadge}</td>
-                    <td class="col-actions text-end">
+                    <td class="col-type">${typeBadge}</td>
+                    <td class="col-status">${statusHtml}</td>
+                    <td class="col-actions text-end" style="white-space: nowrap;">
+                        <button class="btn btn-sm btn-outline-light me-1 btn-qr" onclick="window.showGlobalQrModal('${l.LocationID}')" title="Show QR">📱 QR</button>
                         ${l.Type !== 'Virtual' ? `
                         <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${l.LocationID}">✏️</button>
                         <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${l.LocationID}">🗑️</button>
@@ -276,6 +321,31 @@ const fetchLocations = () => {
                 }).join('');
             }
         });
+};
+
+window.sortLocations = (col) => {
+    if (state.locSortBy === col) {
+        state.locSortDir *= -1;
+    } else {
+        state.locSortBy = col;
+        state.locSortDir = 1;
+    }
+    state.lastLocationsHash = null; // Force DOM re-render
+    fetchLocations();
+};
+
+window.showGlobalQrModal = (locId) => {
+    if (!locId) return;
+    const safeStr = String(locId).replace(/['"]/g, '');
+    generateSafeQR('loc-qr-view-container', "LOC:" + safeStr, 200);
+    const labelEl = document.getElementById('loc-qr-view-label');
+    if (labelEl) labelEl.innerText = "LOC:" + safeStr;
+    
+    if (!modals.locQrViewModal) {
+        const el = document.getElementById('locQrViewModal');
+        if(el) modals.locQrViewModal = new bootstrap.Modal(el);
+    }
+    if (modals.locQrViewModal) modals.locQrViewModal.show();
 };
 
 const updateLogState = (force = false) => {
