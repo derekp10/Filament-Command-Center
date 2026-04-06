@@ -8,6 +8,9 @@
 * Better grouping of locations lists data. The encoded id's can sometimes be used to generate a grouping, (anything that starts with CR, is in the Computer room, DR, Dining room, LR, living room etc...)
 * A way to display the QR code for a location on screen so that it can be used for assigning locations in place of a physical label.
 * A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
+* "Deposit here" barcode for adding items to a location from the buffer throws an error when scanning, but clicking on it works fine.
+
+* Check to make sure that a backend refresh doesn't interrupt a barcode scan mid scan and then loose the scan. I think that just happened to me, as I had to scan a spool twice, as the first time it looked like it loaded for a second and then unloaded.
 
 ## 🎨 UI & Theming
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
