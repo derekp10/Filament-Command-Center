@@ -29,6 +29,14 @@
 
 * Modify add inventory wizzard/editor to support Coextruded and Logitudinal options for the colors assigned to a filament. For reference from spoolmans line on this: "Filaments can have multiple colors in two ways: either through coextrusion, like dual-color filaments with consistent multi-colors, or through longitudinal color changes, like gradient filaments that shift colors along the spool."
 
+* Ability to edit filament specific data in some fassion. currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool.
+
+* No easy way to create a new spool using only the filament display modal. (No clone button, but cloning wouldn't make sense here.)
+
+* A way to display inactive spools in the filament modals spool's list. (Perhaps a toggle or someting to enable showning all spools.) Incase something get set to archive when it shouldn't have.
+
+* Fix spools that don't have a purchase link in the purchase link section of spoolman (custom field I believe.), revert to using the filaments purchase link. If the spool is saved, propigate that data forward. (To fix spools that somehow didn't get updated when we added the purchase link field to spools.)
+
 # **Active Backlog (Organized by Feature Area)**
 
 ## 🎨 UI & Theming
