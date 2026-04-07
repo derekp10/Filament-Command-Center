@@ -48,6 +48,8 @@
 
 * Filabrige status light, appears to be blinking for some reason.
 
+* In location manager, if an item is added to a loction that has slots, and there is a free slot, auto assign the item into that free slot. (If there are multiple free slots, fill the first empty one.)
+
 
 # **Active Backlog (Organized by Feature Area)**
 
