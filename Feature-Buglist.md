@@ -1,53 +1,27 @@
 # **New and Unsorted Features/Bugs**
 
-
-
 * Ability to add/customize/change type in the Edit Loction Modal, for creating or editing existing locations. I think we moved this off of a .CSV basede list, and now it generates and stores based on spoolman data? But I'm not sure. Toolhead appears to be missing from this list.
-
 * Better grouping of locations lists data. The encoded id's can sometimes be used to generate a grouping, (anything that starts with CR, is in the Computer room, DR, Dining room, LR, living room etc...)
-
-
 * A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
-
 * "Deposit here" barcode for adding items to a location from the buffer throws an error when scanning, but clicking on it works fine.
-
-
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
-
 * Scanning a new spool into a dryer box slot doesn't imidiately unload the currently existing spool. We may want to entirely re think the way the eject process works when replacing one spool out for another. This is mostly a dryer box thing.
-
 * Loading a dryer box, at the very least, slots load with an initial data set, and then i think the 5 second tick goes off, and fills them in completely. Seems to be a difference between what the initial card load does, and the data provided from the 5 second tick. We should probably make the initial card load load the same data as the 5 second tick.
-
 * Adjust filament list and stystem to allow for unassigned filaments to fall back to a room based location, based on the dryerbox location (LR for Living room, CR for Computer room) So that we can avoid the spool instantly going into the unassigned zone. Will need to parent locations to rooms, and allow rooms to have a list of filaments that includes all sub-locations. (Dryerboxes, carts, shelves etc...)
-
 * Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
-
 * If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
-
 * Clicking on scales on the filament card should bring up the scales modal for directly handling all the various way we would want to update weight. (Mostly what's found in the weight section on the edit modal, but including location possibly and archive/unarchive.)
-
 * Modify add inventory wizzard/editor to support Coextruded and Logitudinal options for the colors assigned to a filament. For reference from spoolmans line on this: "Filaments can have multiple colors in two ways: either through coextrusion, like dual-color filaments with consistent multi-colors, or through longitudinal color changes, like gradient filaments that shift colors along the spool."
-
 * Ability to edit filament specific data in some fassion. currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool.
-
 * No easy way to create a new spool using only the filament display modal. (No clone button, but cloning wouldn't make sense here.)
-
 * A way to display inactive spools in the filament modals spool's list. (Perhaps a toggle or someting to enable showning all spools.) Incase something get set to archive when it shouldn't have.
-
 * Fix spools that don't have a purchase link in the purchase link section of spoolman (custom field I believe.), revert to using the filaments purchase link. If the spool is saved, propigate that data forward. (To fix spools that somehow didn't get updated when we added the purchase link field to spools.)
-
 * Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. (I'm not sure what all we'd want to put here, but it'd be nice to have.)
-
 * Sometimes after adding an item to a dryerbox slot, scanning the toolhead QR to assigned it to the correct toolhead doesn't seem to do that? Not sure about this one, Need more data.
-
 * No way to eject sloted spools from dryerbox slots? (How have we missed this for so long.)
-
 * Force location override modal the dropdown should be searchable to find a location, or a close match to the location. To make reassignments easier on users.
-
 * Location barcode scanns sometmes just don't seem to assigne the filament to the correct location. (Could be a bug with last location that we haven't fixed. Need to investigate.)
-
 * Filabrige status light, appears to be blinking for some reason.
-
 * In location manager, if an item is added to a loction that has slots, and there is a free slot, auto assign the item into that free slot. (If there are multiple free slots, fill the first empty one.)
 
 
