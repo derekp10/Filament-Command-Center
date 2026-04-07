@@ -46,6 +46,8 @@
 
 * Location barcode scanns sometmes just don't seem to assigne the filament to the correct location. (Could be a bug with last location that we haven't fixed. Need to investigate.)
 
+* Filabrige status light, appears to be blinking for some reason.
+
 
 # **Active Backlog (Organized by Feature Area)**
 
