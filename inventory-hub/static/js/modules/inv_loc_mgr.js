@@ -49,6 +49,9 @@ window.openManage = (id) => {
             }
 
             renderManagerNav();
+            // Generate QR for specific location
+            const safeId = String(id).replace(/['"]/g, '');
+            generateSafeQR('manage-loc-qr-mini', 'LOC:' + safeId, 45);
             generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
 
             // Prime the Hash to prevent "First Pulse Wiggle"
@@ -122,7 +125,7 @@ const renderManagerNav = () => {
         const curItem = state.heldSpools[0];
         const prevItem = state.heldSpools.length > 1 ? state.heldSpools[state.heldSpools.length - 1] : null;
         const nextItem = state.heldSpools.length > 1 ? state.heldSpools[1] : null;
-        const curStyle = getFilamentStyle(curItem.color);
+        const curStyle = getFilamentStyle(curItem.color, curItem.color_direction || 'longitudinal');
         const curInfo = getRichInfo(curItem);
         let html = '';
 
@@ -219,7 +222,7 @@ const renderList = (data, locId) => {
     // 1. DEPOSIT CARD
     if (state.heldSpools.length > 0) {
         const item = state.heldSpools[0];
-        const styles = getFilamentStyle(item.color);
+        const styles = getFilamentStyle(item.color, item.color_direction || 'longitudinal');
 
         if (emptyMsg) emptyMsg.style.display = 'none';
 
@@ -586,7 +589,7 @@ document.addEventListener('inventory:sync-pulse', () => {
                     const fresh = data[id];
                     if (!fresh) return;
 
-                    const styles = getFilamentStyle(fresh.color);
+                    const styles = getFilamentStyle(fresh.color, fresh.color_direction || 'longitudinal');
 
                     // --- Apply to GRID items ---
                     if (node.classList.contains('slot-btn')) {

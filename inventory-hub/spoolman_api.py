@@ -278,11 +278,14 @@ def format_spool_display(spool_data):
             final_color = multi_hex 
         else:
             final_color = fil.get('color_hex', 'ffffff')
+            
+        direction = fil.get('multi_color_direction') or fil_extra.get('multi_color_direction') or 'longitudinal'
 
         return {
             "text": display_text, 
             "text_short": display_short,
             "color": final_color, 
+            "color_direction": direction,
             "slot": slot,
             "details": {
                 "id": sid,
@@ -438,7 +441,7 @@ def get_best_color_distance(target_hex, compare_hex_csv):
         return float('inf')
     return min(distances)
 
-def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool"):
+def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight=""):
     """
     Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
     Returns a sorted list of dictionaries matching the criteria.
@@ -504,6 +507,10 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 if rem is None: rem = 0
                 if only_in_stock and rem <= 0: continue
                 if empty and rem > 0: continue
+                if min_weight:
+                    try:
+                        if rem < float(min_weight): continue
+                    except: pass
             
             # 3. Fuzzy Keyword Match (Tokenized)
             # Support `color_hexes` for multi-color gradients
@@ -569,11 +576,14 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                     "slot": ""
                 }
                 
+            direction = str(fil.get('multi_color_direction') or fil.get('extra', {}).get('multi_color_direction') or '')
+            
             results.append({
                 'id': item['id'],
                 'display': info['text'],
                 'display_short': info.get('text_short', info['text']),
                 'color': info['color'],
+                'color_direction': direction,
                 'slot': final_slot,
                 'location': locDisplay,
                 'is_ghost': is_ghost,
@@ -585,10 +595,17 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
             })
             
         # Sort by color distance (closest first), then by ID (newest first usually)
+        # If min_weight is present, we prioritize sorting by ascending weight to surface near-empty spools first
         if color_hex:
-            results.sort(key=lambda x: (x['color_dist'], -x['id']))
+            if min_weight:
+                results.sort(key=lambda x: (x['color_dist'], x['remaining'], -x['id']))
+            else:
+                results.sort(key=lambda x: (x['color_dist'], -x['id']))
         else:
-            results.sort(key=lambda x: -x['id'])
+            if min_weight:
+                results.sort(key=lambda x: (x['remaining'], -x['id']))
+            else:
+                results.sort(key=lambda x: -x['id'])
             
         return results
         

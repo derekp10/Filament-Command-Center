@@ -78,9 +78,10 @@ const openSpoolDetails = (id, silent = false) => {
                     || fil.extra?.color_hex
                     || "333";
 
-                console.log(`🎨 Spool #${d.id} Swatch Color:`, rawColor);
+                const direction = fil.multi_color_direction || fil.extra?.multi_color_direction || 'longitudinal';
+                console.log(`🎨 Spool #${d.id} Swatch Color:`, rawColor, "Direction:", direction);
 
-                const styles = getFilamentStyle(rawColor);
+                const styles = getFilamentStyle(rawColor, direction);
                 swatch.style.background = styles.isSolid ? styles.base : styles.frame;
                 if (styles.border) swatch.style.boxShadow = 'inset 0 0 0 2px #555';
                 else swatch.style.boxShadow = '';
@@ -116,7 +117,31 @@ const openSpoolDetails = (id, silent = false) => {
                 }
             }
 
-            // --- 5. Swatch Link Action ---
+            // --- 5. Buy More Link (Spool) ---
+            const btnBuyMore = document.getElementById('detail-btn-buy-more');
+            if (btnBuyMore) {
+                let pUrl = d.extra?.purchase_url || "";
+                if (pUrl.startsWith('"') && pUrl.endsWith('"')) pUrl = pUrl.substring(1, pUrl.length - 1);
+                
+                if (pUrl && pUrl.startsWith('http')) {
+                    btnBuyMore.href = pUrl;
+                    btnBuyMore.classList.remove('d-none');
+                } else if (typeof BUY_MORE_URL_TEMPLATE !== 'undefined' && BUY_MORE_URL_TEMPLATE) {
+                    const vendor = encodeURIComponent(fil.vendor?.name || "Generic");
+                    const material = encodeURIComponent(fil.material || "PLA");
+                    const color = encodeURIComponent(fil.extra?.original_color || fil.name || "");
+                    const dynamicUrl = BUY_MORE_URL_TEMPLATE
+                        .replace(/\{\{vendor\}\}/g, vendor)
+                        .replace(/\{\{material\}\}/g, material)
+                        .replace(/\{\{color\}\}/g, color);
+                    btnBuyMore.href = dynamicUrl;
+                    btnBuyMore.classList.remove('d-none');
+                } else {
+                    btnBuyMore.classList.add('d-none');
+                }
+            }
+
+            // --- 6. Swatch Link Action ---
             const btnSwatch = document.getElementById('btn-spool-to-filament');
             if (btnSwatch) {
                 if (d.filament) {
@@ -167,8 +192,9 @@ const openFilamentDetails = (fid, silent = false) => {
                 // Check multi_color_hexes first, then fall back to standard color_hex
                 const rawColor = d.multi_color_hexes || d.color_hex || "333";
 
-                console.log("🎨 Filament Swatch Color:", rawColor); // Debug
-                const styles = getFilamentStyle(rawColor);
+                const direction = d.multi_color_direction || d.extra?.multi_color_direction || 'longitudinal';
+                console.log("🎨 Filament Swatch Color:", rawColor, "Direction:", direction); // Debug
+                const styles = getFilamentStyle(rawColor, direction);
                 swatch.style.background = styles.isSolid ? styles.base : styles.frame;
                 if (styles.border) swatch.style.boxShadow = 'inset 0 0 0 2px #555';
                 else swatch.style.boxShadow = '';
@@ -179,6 +205,30 @@ const openFilamentDetails = (fid, silent = false) => {
             if (btnLink) {
                 const baseUrl = (typeof SPOOLMAN_URL !== 'undefined' && SPOOLMAN_URL) ? SPOOLMAN_URL : "";
                 btnLink.href = baseUrl ? `${baseUrl.replace(/\/$/, "")}/filament/show/${d.id}` : `/filament/show/${d.id}`;
+            }
+
+            // --- Buy More Link (Filament) ---
+            const btnFilBuyMore = document.getElementById('fil-btn-buy-more');
+            if (btnFilBuyMore) {
+                let pUrl = d.extra?.purchase_url || "";
+                if (pUrl.startsWith('"') && pUrl.endsWith('"')) pUrl = pUrl.substring(1, pUrl.length - 1);
+                
+                if (pUrl && pUrl.startsWith('http')) {
+                    btnFilBuyMore.href = pUrl;
+                    btnFilBuyMore.classList.remove('d-none');
+                } else if (typeof BUY_MORE_URL_TEMPLATE !== 'undefined' && BUY_MORE_URL_TEMPLATE) {
+                    const vendor = encodeURIComponent(d.vendor?.name || "Generic");
+                    const material = encodeURIComponent(d.material || "PLA");
+                    const color = encodeURIComponent(d.extra?.original_color || d.name || "");
+                    const dynamicUrl = BUY_MORE_URL_TEMPLATE
+                        .replace(/\{\{vendor\}\}/g, vendor)
+                        .replace(/\{\{material\}\}/g, material)
+                        .replace(/\{\{color\}\}/g, color);
+                    btnFilBuyMore.href = dynamicUrl;
+                    btnFilBuyMore.classList.remove('d-none');
+                } else {
+                    btnFilBuyMore.classList.add('d-none');
+                }
             }
 
                 // Action: Queue Swatch Label

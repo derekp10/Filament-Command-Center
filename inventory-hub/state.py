@@ -37,7 +37,7 @@ f_handler = RotatingFileHandler('hub.log', maxBytes=1000000, backupCount=5)
 f_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 logger.addHandler(f_handler)
 
-def add_log_entry(msg, category="INFO", color_hex=None):
+def add_log_entry(msg, category="INFO", color_hex=None, meta=None):
     """Adds a log entry to the in-memory list and the system log."""
     timestamp = time.strftime("%H:%M:%S")
     
@@ -78,6 +78,9 @@ def add_log_entry(msg, category="INFO", color_hex=None):
         ui_msg = msg
 
     entry = {"time": timestamp, "msg": ui_msg, "type": category}
+    if meta:
+        entry["meta"] = meta
+        
     RECENT_LOGS.insert(0, entry)
     if len(RECENT_LOGS) > 50: RECENT_LOGS.pop()
     

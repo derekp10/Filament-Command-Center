@@ -24,8 +24,8 @@ const renderBuffer = () => {
         if (state.heldSpools.length > 1) {
             const nextSpool = state.heldSpools[1];
             const prevSpool = state.heldSpools[state.heldSpools.length - 1];
-            const prevStyles = getFilamentStyle(prevSpool.color);
-            const nextStyles = getFilamentStyle(nextSpool.color);
+            const prevStyles = getFilamentStyle(prevSpool.color, prevSpool.color_direction || 'longitudinal');
+            const nextStyles = getFilamentStyle(nextSpool.color, nextSpool.color_direction || 'longitudinal');
 
             n.style.display = 'flex';
             n.innerHTML = 
@@ -106,6 +106,7 @@ const processScan = (text, source = 'keyboard') => {
     const upper = text.toUpperCase();
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
     if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
+    if (upper === 'CMD:WEIGH') { window.openWeighOutModal(); return; }
     if (upper === 'CMD:DROP') { toggleDropMode(); return; }
     if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
     if (upper === 'CMD:EJECTALL') { triggerEjectAll(document.getElementById('manage-loc-id').value); return; }
@@ -168,6 +169,11 @@ const processScan = (text, source = 'keyboard') => {
                         });
                 }
             } else if (res.type === 'location') {
+                if (!text.toUpperCase().startsWith('LOC:')) {
+                    const msg = "⚠️ Legacy Location Label Scanned! Features may be limited. Print a new LOC: label when possible.";
+                    showToast(msg, "warning");
+                    fetch('/api/log_event', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({msg: "SCAN LOG: Legacy Location Barcode Scanned", level: "WARNING"}) });
+                }
                 if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
                 if (state.heldSpools.length > 0) { performContextAssign(res.id); state.lastScannedLoc = null; return; }
                 const locData = state.allLocations.find(l => l.LocationID === res.id);
@@ -347,7 +353,7 @@ const liveRefreshBuffer = () => {
                     changed = true;
 
                     // Surgically update DOM
-                    const styles = getFilamentStyle(s.color);
+                    const styles = getFilamentStyle(s.color, s.color_direction || 'longitudinal');
                     const cleanText = s.display.replace(/^#\d+\s*/, '').trim();
 
                     // Update Main Buffer Cards

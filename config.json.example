@@ -17,11 +17,13 @@
         "mode": "browser",
         "csv_path": "./labels/print_queue.csv"
     },
+    "buy_more_url_template": "https://www.amazon.com/s?k={{vendor}}+{{color}}+{{material}}",
     
     "comment_maps": "--- INVENTORY HUB SETTINGS ---",
     "printer_map": {
         "PRINTER_1": {"printer_name": "My Printer", "position": 0}
     },
     "feeder_map": {},
-    "dryer_slots": []
+    "dryer_slots": [],
+    "auto_recover_filabridge_errors": true
 }

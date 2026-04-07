@@ -1,18 +1,53 @@
-# **Active Backlog (Organized by Feature Area)**
+# **New and Unsorted Features/Bugs**
 
-* Add a work flow for easily getting to filaments involved in a filabrige error, reported in the live activity log. This way when this error does occure theres a way to get to a list of the filaments involved directly and update the amount of grams used by the printer onto the spools directly, without having to look them up one by one. If possible, it would be nice to be able to do a more aggressive request of the gcode file, to get the data we need, and just update the filaments involved in the error directly, with little to no user intervention.
 
-* Sortible otpions to the columns on location list. 
-* Modifications to the location list, splitting out type badge from the counts section, so they have there own columns.
+
 * Ability to add/customize/change type in the Edit Loction Modal, for creating or editing existing locations. I think we moved this off of a .CSV basede list, and now it generates and stores based on spoolman data? But I'm not sure. Toolhead appears to be missing from this list.
+
 * Better grouping of locations lists data. The encoded id's can sometimes be used to generate a grouping, (anything that starts with CR, is in the Computer room, DR, Dining room, LR, living room etc...)
-* A way to display the QR code for a location on screen so that it can be used for assigning locations in place of a physical label.
+
+
 * A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
+
+* "Deposit here" barcode for adding items to a location from the buffer throws an error when scanning, but clicking on it works fine.
+
+
+* Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
+
+* Scanning a new spool into a dryer box slot doesn't imidiately unload the currently existing spool. We may want to entirely re think the way the eject process works when replacing one spool out for another. This is mostly a dryer box thing.
+
+* Loading a dryer box, at the very least, slots load with an initial data set, and then i think the 5 second tick goes off, and fills them in completely. Seems to be a difference between what the initial card load does, and the data provided from the 5 second tick. We should probably make the initial card load load the same data as the 5 second tick.
+
+* Adjust filament list and stystem to allow for unassigned filaments to fall back to a room based location, based on the dryerbox location (LR for Living room, CR for Computer room) So that we can avoid the spool instantly going into the unassigned zone. Will need to parent locations to rooms, and allow rooms to have a list of filaments that includes all sub-locations. (Dryerboxes, carts, shelves etc...)
+
+* Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
+
+* If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
+
+* Clicking on scales on the filament card should bring up the scales modal for directly handling all the various way we would want to update weight. (Mostly what's found in the weight section on the edit modal, but including location possibly and archive/unarchive.)
+
+* Modify add inventory wizzard/editor to support Coextruded and Logitudinal options for the colors assigned to a filament. For reference from spoolmans line on this: "Filaments can have multiple colors in two ways: either through coextrusion, like dual-color filaments with consistent multi-colors, or through longitudinal color changes, like gradient filaments that shift colors along the spool."
+
+* Ability to edit filament specific data in some fassion. currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool.
+
+* No easy way to create a new spool using only the filament display modal. (No clone button, but cloning wouldn't make sense here.)
+
+* A way to display inactive spools in the filament modals spool's list. (Perhaps a toggle or someting to enable showning all spools.) Incase something get set to archive when it shouldn't have.
+
+* Fix spools that don't have a purchase link in the purchase link section of spoolman (custom field I believe.), revert to using the filaments purchase link. If the spool is saved, propigate that data forward. (To fix spools that somehow didn't get updated when we added the purchase link field to spools.)
+
+* Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. (I'm not sure what all we'd want to put here, but it'd be nice to have.)
+
+* Sometimes after adding an item to a dryerbox slot, scanning the toolhead QR to assigned it to the correct toolhead doesn't seem to do that? Not sure about this one, Need more data.
+
+* No way to eject sloted spools from dryerbox slots? (How have we missed this for so long.)
+
+
+# **Active Backlog (Organized by Feature Area)**
 
 ## 🎨 UI & Theming
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
 * Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
-* Side Quest: Spool card coloring system doesn't seem to handle 4+ colors in a swatch for generating gradient.
 * Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
 
 ## 🗂️ Modals & Add Inventory Wizard
@@ -41,10 +76,8 @@
 
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
-* Locations QR Codes should contain a `LOC:` code, and a `LOC:` code should be used to help identify locations. (Keep existing logic to allow for backwards compatibility, but allow for `LOC:` codes for future items). *IMPORTANT*: Legacy Location QR codes (WIthout the LOC: prefix) should have a warning attached in the live activity log.
 * Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without.
 * Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field.
-* Add unassigned Location in Location List.
 * Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to.
 * Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assign all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
 * Location Manager not syncing status across browser instances?
@@ -55,14 +88,13 @@
     - Label Printed in Spoolman Spool data can be used to determine if a new Label has been printed.
     - Filaments: Spoolman Reprint field is set to Yes for items that need to have a label reprinted. Null or No mean that it already has a label with the Spoolman ID.
 * It's too easy to have multiple legacy spools with no exact ID, where we could be assigning the wrong item... perhaps a pop-up when there could be more than 1 spool attached to the legacy ID, asking the user if they want to see the list of spools, or just reprint a new label.
-* Should be able to decode filament IDs that were scanned in using the barcode scanner (using input speed check to determine if marked as printed).
 * Confirmed label print should be displayed somewhere on the card. Perhaps changing the printer icon to a checkmark for confirmed spools.
 * Add label print button to filament sample cards.
 * Some values in Print Queue are being set to yes, most are null. What is the process for setting them to true?
 * Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
 
 ## ⚙️ App Flow, Architecture & Database
-* **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones.
+* **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements.
 * Refactor dashboard to be more modular if possible, and reduce token size/context requirements.
 * Make as much of Command Center user configurable as possible, using UI elements and a config import/export feature.
 * When changes are made to Spoolman extra fields, they usually ignore sort order in the database. We need a way to restore sort order.
@@ -100,4 +132,4 @@ All 3 of these things are important and have value. We should table for now, and
 
 # **New related project to be integrated **
 
-* [Feature] Build Project Color Loadout Add-on -> (See /docs/project-color-loadout/roadmap.md)
+* [Feature] Build Project Color Loadout Add-on -> (See /docs/Project-Color-Loadout/)

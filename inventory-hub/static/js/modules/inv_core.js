@@ -22,6 +22,8 @@ let state = {
 
     // Manager
     currentGrid: {},
+    locSortBy: 'LocationID',
+    locSortDir: 1,
 
     // Modals
     modalCallbacks: [],
@@ -122,7 +124,7 @@ const getHexDark = (hex, opacity = 0.3) => {
 
 
 /* [Search Anchor] */
-const getFilamentStyle = (colorStr) => {
+const getFilamentStyle = (colorStr, direction = 'longitudinal') => {
     // [ALEX FIX] Robust Color Parsing (Shared by Buffer & Modals)
     if (!colorStr) colorStr = "333";
 
@@ -149,6 +151,14 @@ const getFilamentStyle = (colorStr) => {
         return hex ? '#' + hex : '#333';
     });
 
+    // Save full colors before capping for coaxial rendering
+    const fullColors = [...colors];
+
+    // 3.5. Cap at 3 colors to prevent gradient mess (LONGITUDINAL Standard)
+    if (colors.length > 3) {
+        colors = colors.slice(0, 3);
+    }
+
     // 4. Force at least 2 colors for interpolation
     const isSolid = colors.length === 1 || (colors.length > 1 && colors[0] === colors[1]);
     if (colors.length === 1) colors.push(colors[0]);
@@ -157,20 +167,30 @@ const getFilamentStyle = (colorStr) => {
     let frameGrad;
     let innerGrad;
 
-    if (isSolid) {
-        let hex = colors[0].replace('#', '');
-        if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-        const r = parseInt(hex.substring(0, 2), 16) || 0;
-        const g = parseInt(hex.substring(2, 4), 16) || 0;
-        const b = parseInt(hex.substring(4, 6), 16) || 0;
-        // Smoothly fade the base color into partial transparency to create a deeply rich vibrant bottom
-        frameGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},1) 0%, rgba(${r},${g},${b},0.6) 100%)`;
-        innerGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},0.4) 0%, rgba(${r},${g},${b},0.1) 100%)`;
+    if (direction === 'coaxial' && !isSolid) {
+        if (fullColors.length === 1) fullColors.push(fullColors[0]);
+        const sliceSize = 100.0 / fullColors.length;
+        const conicStops = fullColors.map((c, i) => `${c} ${i === 0 ? "0%" : (i * sliceSize).toFixed(2) + "%"} ${((i + 1) * sliceSize).toFixed(2) + "%"}`).join(', ');
+        frameGrad = `conic-gradient(${conicStops})`;
+        
+        const darkStops = fullColors.map((c, i) => `${getHexDark(c, 0.8)} ${i === 0 ? "0%" : (i * sliceSize).toFixed(2) + "%"} ${((i + 1) * sliceSize).toFixed(2) + "%"}`).join(', ');
+        innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), conic-gradient(${darkStops})`;
     } else {
-        // Multi-color filaments use a diagonal stripe or sweep to showcase all components
-        frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
-        const gradColors = colors.map(c => getHexDark(c, 0.8));
-        innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), linear-gradient(135deg, ${gradColors.join(', ')})`;
+        if (isSolid) {
+            let hex = colors[0].replace('#', '');
+            if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+            const r = parseInt(hex.substring(0, 2), 16) || 0;
+            const g = parseInt(hex.substring(2, 4), 16) || 0;
+            const b = parseInt(hex.substring(4, 6), 16) || 0;
+            // Smoothly fade the base color into partial transparency to create a deeply rich vibrant bottom
+            frameGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},1) 0%, rgba(${r},${g},${b},0.6) 100%)`;
+            innerGrad = `linear-gradient(to bottom, rgba(${r},${g},${b},0.4) 0%, rgba(${r},${g},${b},0.1) 100%)`;
+        } else {
+            // Multi-color filaments use a diagonal stripe or sweep to showcase all components
+            frameGrad = `linear-gradient(135deg, ${colors.join(', ')})`;
+            const gradColors = colors.map(c => getHexDark(c, 0.8));
+            innerGrad = `linear-gradient(to bottom, rgba(0,0,0,0.95) 30%, rgba(0,0,0,0.4) 100%), linear-gradient(135deg, ${gradColors.join(', ')})`;
+        }
     }
 
     // 6. Black border fix & Texture
@@ -206,19 +226,60 @@ const fetchLocations = () => {
     fetch('/api/locations')
         .then(r => r.json())
         .then(d => {
-            // [ALEX FIX] Backend now provides Unassigned, so we use 'd' directly
+            // [ALEX FIX] Ensure Unassigned is in the list
+            let hasUnassigned = d.some(l => l.LocationID === 'Unassigned');
+            if(!hasUnassigned) {
+                d.unshift({
+                    LocationID: 'Unassigned',
+                    Name: 'Unassigned Spools',
+                    Type: 'Virtual',
+                    Occupancy: '--'
+                });
+            }
+
+            // Apply Sort
+            d.sort((a, b) => {
+                // Ensure Unassigned is always solidly at the top
+                if (a.LocationID === 'Unassigned') return -1;
+                if (b.LocationID === 'Unassigned') return 1;
+
+                let valA = a[state.locSortBy] || '';
+                let valB = b[state.locSortBy] || '';
+
+                if (state.locSortBy === 'Occupancy') {
+                    const parseOcc = (v) => {
+                        if (!v || v === '--') return -1;
+                        if (typeof v === 'string') {
+                            const firstPart = v.split('/')[0];
+                            return parseInt(firstPart) || 0;
+                        }
+                        return v;
+                    };
+                    valA = parseOcc(valA);
+                    valB = parseOcc(valB);
+                } else {
+                    if (typeof valA === 'string') valA = valA.toLowerCase();
+                    if (typeof valB === 'string') valB = valB.toLowerCase();
+                }
+                
+                if (valA < valB) return -1 * state.locSortDir;
+                if (valA > valB) return 1 * state.locSortDir;
+                return 0;
+            });
+
             const finalList = d;
             state.allLocations = finalList;
 
             // --- NO WIGGLE CHECK ---
-            const contentHash = JSON.stringify(finalList);
+            const contentHash = JSON.stringify(finalList) + "|" + state.locSortBy + "|" + state.locSortDir;
             if (state.lastLocationsHash === contentHash) return;
             state.lastLocationsHash = contentHash;
             // -----------------------
 
             // 2. Update Total Count with Pop Style
             const countEl = document.getElementById('loc-count');
-            if (countEl) countEl.innerText = "Total Locations: " + finalList.length;
+            // Subtract 1 for Unassigned so it doesn't inflate the Physical box count
+            if (countEl) countEl.innerText = "Total Locations: " + (finalList.length > 0 ? finalList.length - 1 : 0);
 
             const table = document.getElementById('location-table');
             if (table) {
@@ -227,7 +288,7 @@ const fetchLocations = () => {
                     let statusHtml = '';
                     let occColor = '#fff'; // Default White (Under Capacity)
 
-                    if (l.Occupancy) {
+                    if (l.Occupancy && l.Occupancy !== '--') {
                         const parts = l.Occupancy.split('/');
                         if (parts.length === 2) {
                             const cur = parseInt(parts[0]);
@@ -258,14 +319,16 @@ const fetchLocations = () => {
                     // [ALEX FIX] High Contrast for Virtual
                     else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
 
-                    const typeBadge = `<span class="badge ${badgeClass}" style="margin-left:8px; box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
+                    const typeBadge = `<span class="badge ${badgeClass}" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
 
                     return `
                 <tr>
                     <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem; white-space: nowrap;">${l.LocationID}</td>
                     <td class="col-name text-pop-light" style="font-weight:800; font-size:1.1rem; color:#fff;">${l.Name}</td>
-                    <td class="col-status">${statusHtml} ${typeBadge}</td>
-                    <td class="col-actions text-end">
+                    <td class="col-type">${typeBadge}</td>
+                    <td class="col-status">${statusHtml}</td>
+                    <td class="col-actions text-end" style="white-space: nowrap;">
+                        <button class="btn btn-sm btn-outline-light me-1 btn-qr" onclick="window.showGlobalQrModal('${l.LocationID}')" title="Show QR">📱 QR</button>
                         ${l.Type !== 'Virtual' ? `
                         <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${l.LocationID}">✏️</button>
                         <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${l.LocationID}">🗑️</button>
@@ -278,6 +341,31 @@ const fetchLocations = () => {
         });
 };
 
+window.sortLocations = (col) => {
+    if (state.locSortBy === col) {
+        state.locSortDir *= -1;
+    } else {
+        state.locSortBy = col;
+        state.locSortDir = 1;
+    }
+    state.lastLocationsHash = null; // Force DOM re-render
+    fetchLocations();
+};
+
+window.showGlobalQrModal = (locId) => {
+    if (!locId) return;
+    const safeStr = String(locId).replace(/['"]/g, '');
+    generateSafeQR('loc-qr-view-container', "LOC:" + safeStr, 200);
+    const labelEl = document.getElementById('loc-qr-view-label');
+    if (labelEl) labelEl.innerText = "LOC:" + safeStr;
+    
+    if (!modals.locQrViewModal) {
+        const el = document.getElementById('locQrViewModal');
+        if(el) modals.locQrViewModal = new bootstrap.Modal(el);
+    }
+    if (modals.locQrViewModal) modals.locQrViewModal.show();
+};
+
 const updateLogState = (force = false) => {
     if (!state.logsPaused || force) fetch('/api/logs').then(r => r.json()).then(d => {
         // --- NO WIGGLE CHECK ---
@@ -287,7 +375,16 @@ const updateLogState = (force = false) => {
         // -----------------------
 
         const logsEl = document.getElementById('live-logs');
-        if (logsEl) logsEl.innerHTML = d.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
+        if (logsEl) {
+            logsEl.innerHTML = d.logs.map(l => {
+                let extraHtml = '';
+                if (l.meta && l.meta.type === 'filabridge_error') {
+                    const dataStr = encodeURIComponent(JSON.stringify(l.meta));
+                    extraHtml = `<button class="btn btn-sm btn-outline-warning ms-2 py-0 px-1" onclick="window.openFilaBridgeRecovery('${dataStr}')">💊 Fix</button>`;
+                }
+                return `<div class="log-${l.type}">[${l.time}] ${l.msg}${extraHtml}</div>`;
+            }).join('');
+        }
 
         const sSpool = document.getElementById('st-spoolman');
         const sFila = document.getElementById('st-filabridge');

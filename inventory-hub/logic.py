@@ -411,6 +411,7 @@ def get_live_spools_data(spool_ids):
                 results[str(sid)] = {
                     "display": info["text"],
                     "color": info["color"],
+                    "color_direction": info.get("color_direction", "longitudinal"),
                     "remaining_weight": spool_data.get("remaining_weight"),
                     "details": info.get("details", {}),
                     "archived": spool_data.get("archived", False)

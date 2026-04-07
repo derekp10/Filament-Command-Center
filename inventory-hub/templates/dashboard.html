@@ -93,6 +93,11 @@
                 <div id="qr-audit" class="deck-qr"></div>
                 <div id="lbl-audit" class="deck-label text-purple">AUDIT</div>
             </div>
+
+            <div id="btn-deck-weigh" class="deck-btn" onclick="window.openWeighOutModal()">
+                <div id="qr-weigh" class="deck-qr"></div>
+                <div id="lbl-weigh" class="deck-label text-success">WEIGH</div>
+            </div>
         </div>
     </div>
 
@@ -102,8 +107,10 @@
     {% include 'components/modals_missing_labels.html' %}
     {% include 'components/modals_details.html' %}
     {% include 'components/modals_loc_mgr.html' %}
+    {% include 'components/modals_weigh_out.html' %}
     {% include 'components/label_spool.html' %}
     {% include 'components/offcanvas_search.html' %}
+    {% include 'components/modals_filabridge_recovery.html' %}
     <!-- Global Floating Action Button for Search -->
     <button class="btn btn-primary shadow-lg border border-info fcc-fab-search"
         onclick="SearchEngine.open()" title="Global Inventory Search">
@@ -116,6 +123,7 @@
         // Inject the Spoolman URL from Python
         const SPOOLMAN_URL = "{{ spoolman_url }}";
         const FILABRIDGE_URL = "{{ filabridge_url }}";
+        const BUY_MORE_URL_TEMPLATE = "{{ buy_more_template }}";
 
         // [Code Guardian] Request Screen Wake Lock on Load
         document.addEventListener('DOMContentLoaded', () => {

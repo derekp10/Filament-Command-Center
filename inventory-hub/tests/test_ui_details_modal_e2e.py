@@ -56,3 +56,21 @@ def test_details_modal_interactions(page: Page):
         # Verify the Location Manager modal opens
         loc_manager = page.locator("#manageLocationModal")
         expect(loc_manager).to_be_visible()
+
+    # 5. Check "Buy More" button existence and formatting
+    # We navigate back to the Spool modal if it was closed
+    if cursor_style == "pointer":
+        page.locator(".btn-close-white", has_text="").last.click() # Close location manager
+        page.click(".fcc-card-action-btn[title='View Details']")
+        expect(modal).to_be_visible()
+
+    buy_more_btn = page.locator("#detail-btn-buy-more")
+    expect(buy_more_btn).to_be_attached()
+    
+    href = buy_more_btn.get_attribute("href")
+    
+    # It should either be a populated amazon link from our config, or a real purchase_url, or hidden if none.
+    # Our test system has the fallback URL configured in config.json
+    assert href is not None, "Buy More button must have an href attribute"
+    if not buy_more_btn.is_hidden():
+        assert href.startswith("http"), "Buy More URL must be a valid HTTP link"

@@ -33,8 +33,9 @@ def dashboard():
     # [Code Guardian] Fetch FilaBridge URL for Dashboard Button
     _, fb_api_url = config_loader.get_api_urls()
     fb_ui_url = fb_api_url.replace('/api', '')
+    buy_more_url_template = cfg.get('buy_more_url_template', '')
     
-    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url, filabridge_url=fb_ui_url)
+    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url, filabridge_url=fb_ui_url, buy_more_template=buy_more_url_template)
 
 # --- HELPER FUNCTIONS ---
 def clean_string(s):
@@ -328,6 +329,25 @@ def api_edit_spool_wizard():
         state.logger.error(f"Wizard Edit Error: {e}")
         return jsonify({"success": False, "msg": str(e)})
 
+@app.route('/api/spool/update', methods=['POST'])
+def api_spool_update():
+    """Generic endpoint to partially update a spool from frontend modules"""
+    try:
+        data = request.json
+        spool_id = data.get('id')
+        updates = data.get('updates')
+        
+        if not spool_id or not updates:
+            return jsonify({"status": "error", "msg": "Missing id or updates"})
+            
+        res = spoolman_api.update_spool(spool_id, updates)
+        if res:
+            return jsonify({"status": "success"})
+        return jsonify({"status": "error", "msg": "Failed to update spool"})
+    except Exception as e:
+        state.logger.error(f"Spool Update Error: {e}")
+        return jsonify({"status": "error", "msg": str(e)})
+
 import external_parsers # Added for plugin architecture
 
 @app.route('/api/external/search', methods=['GET'])
@@ -362,6 +382,7 @@ def api_search_inventory():
     
     only_in_stock = request.args.get('in_stock', 'false').lower() == 'true'
     empty = request.args.get('empty', 'false').lower() == 'true'
+    min_weight = request.args.get('min_weight', '')
     target_type = request.args.get('type', 'spool')
     
     try:
@@ -372,7 +393,8 @@ def api_search_inventory():
             color_hex=color_hex, 
             only_in_stock=only_in_stock, 
             empty=empty,
-            target_type=target_type
+            target_type=target_type,
+            min_weight=min_weight
         )
         return jsonify({"success": True, "results": results})
     except Exception as e:
@@ -803,10 +825,14 @@ def api_identify_scan():
     if res['type'] == 'spool':
         sid = res['id']; data = spoolman_api.get_spool(sid)
         if data:
-            if source == 'barcode':
+            if source == 'barcode' and text.strip().upper().startswith('ID:'):
                 extra = data.get('extra', {})
+                dirty = False
                 if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
                     extra['needs_label_print'] = False
+                    dirty = True
+                
+                if dirty:
                     if spoolman_api.update_spool(sid, {'extra': extra}):
                         state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
                     else:
@@ -827,12 +853,16 @@ def api_identify_scan():
         fid = res['id']
         data = spoolman_api.get_filament(fid)
         if data:
-            if source == 'barcode':
+            if source == 'barcode' and text.strip().upper().startswith('FIL:'):
                 extra = data.get('extra', {})
+                dirty = False
                 if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
                     extra['needs_label_print'] = False
+                    dirty = True
+
+                if dirty:
                     if spoolman_api.update_filament(fid, {'extra': extra}):
-                        state.add_log_entry(f"✔️ Filament #{fid} Label Verified", "SUCCESS", "00ff00")
+                        state.add_log_entry(f"✔️ Filament #{fid} Label & Sample Verified", "SUCCESS", "00ff00")
                     else:
                         state.add_log_entry(f"❌ Failed to verify Filament #{fid} label", "WARNING")
             
@@ -1139,6 +1169,126 @@ def api_smart_move():
         origin=request.json.get('origin', '')
     ))
 
+# --- FILABRIDGE ERROR RECOVERY ROUTES ---
+
+import prusalink_api
+
+@app.route('/api/fb_recovery_spools', methods=['GET'])
+def api_fb_recovery_spools():
+    printer_name = request.args.get('printer_name')
+    if not printer_name:
+        return jsonify({"success": False, "msg": "Missing printer_name"})
+    
+    cfg = config_loader.load_config()
+    printer_map = cfg.get("printer_map", {})
+    
+    # Find which FilaBridge toolheads map to which spoolman location keys
+    # Typically, the location ID is the key in printer_map, and it has 'printer_name'
+    target_locations = []
+    for loc_id, p_info in printer_map.items():
+        if p_info.get('printer_name') == printer_name:
+            target_locations.append(loc_id)
+            
+    if not target_locations:
+        return jsonify({"success": False, "msg": "Printer name not found in printer_map"})
+        
+    spools = []
+    for loc in target_locations:
+        loc_spools = spoolman_api.get_spools_at_location_detailed(loc)
+        spools.extend(loc_spools)
+        
+    return jsonify({"success": True, "spools": spools})
+
+@app.route('/api/fb_aggressive_parse', methods=['POST'])
+def api_fb_aggressive_parse():
+    data = request.json
+    printer_name = data.get('printer_name')
+    filename = data.get('filename')
+    error_id = data.get('error_id')
+    
+    if not all([printer_name, filename, error_id]):
+        return jsonify({"success": False, "msg": "Missing parameters"})
+        
+    _, fb_url = config_loader.get_api_urls()
+    fb_base = fb_url.replace('/api', '')
+    
+    # 1. Fetch credentials
+    creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
+    if not creds:
+        return jsonify({"success": False, "msg": "Could not fetch printer credentials from FilaBridge"})
+        
+    ip_addr = creds['ip_address']
+    api_key = creds['api_key']
+    
+    # 2. Parse GCode
+    state.add_log_entry(f"🔍 Starting aggressive parse for '{filename}' on {printer_name}...", "INFO")
+    usage_map = prusalink_api.download_gcode_and_parse_usage(ip_addr, api_key, filename)
+    
+    if not usage_map:
+        return jsonify({"success": False, "msg": "Failed to parse filament usage from GCode"})
+        
+    # 3. Apply weights to mapped spools
+    cfg = config_loader.load_config()
+    printer_map = cfg.get("printer_map", {})
+    
+    spools_updated = 0
+    for loc_id, p_info in printer_map.items():
+        if p_info.get('printer_name') == printer_name:
+            toolhead_idx = p_info.get('position', 0)
+            if toolhead_idx in usage_map:
+                weight_used = usage_map[toolhead_idx]
+                loc_spools = spoolman_api.get_spools_at_location(loc_id)
+                # Deduct weight directly
+                for sid in loc_spools:
+                    spool_data = spoolman_api.get_spool(sid)
+                    if spool_data and weight_used > 0:
+                        used = float(spool_data.get('used_weight', 0))
+                        new_used = used + weight_used
+                        if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+                            spools_updated += 1
+                            info = spoolman_api.format_spool_display(spool_data)
+                            state.add_log_entry(f"✔️ Auto-deducted {weight_used:.1f}g from #{sid}", "SUCCESS", info['color'])
+                            
+    # 4. Acknowledge Error
+    if spools_updated > 0:
+        ack = prusalink_api.acknowledge_filabridge_error(fb_url, error_id)
+        if ack:
+            return jsonify({"success": True, "msg": f"Successfully parsed and updated {spools_updated} spools."})
+        else:
+            return jsonify({"success": True, "msg": "Updated spools but failed to acknowledge error."})
+            
+    return jsonify({"success": False, "msg": "Parsed usage but no matching active spools found."})
+
+@app.route('/api/fb_manual_recovery', methods=['POST'])
+def api_fb_manual_recovery():
+    data = request.json
+    error_id = data.get('error_id')
+    updates = data.get('updates', {}) # dict of sid -> weight_used (diff)
+    
+    if not error_id:
+        return jsonify({"success": False, "msg": "Missing error_id"})
+        
+    spools_updated = 0
+    for sid, weight_used in updates.items():
+        try:
+            w = float(weight_used)
+            if w > 0:
+                spool_data = spoolman_api.get_spool(sid)
+                if spool_data:
+                    used = float(spool_data.get('used_weight', 0))
+                    new_used = used + w
+                    if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+                        spools_updated += 1
+                        info = spoolman_api.format_spool_display(spool_data)
+                        state.add_log_entry(f"✔️ Manually deducted {w:.1f}g from #{sid}", "SUCCESS", info['color'])
+        except ValueError:
+            pass
+            
+    _, fb_url = config_loader.get_api_urls()
+    prusalink_api.acknowledge_filabridge_error(fb_url, error_id)
+    
+    return jsonify({"success": True, "msg": f"Updated {spools_updated} spools."})
+
 # --- PERSISTENCE ROUTES ---
 @app.route('/api/state/buffer', methods=['GET', 'POST'])
 def api_state_buffer():
@@ -1163,6 +1313,13 @@ def api_spools_refresh():
         return jsonify({})
     return jsonify(logic.get_live_spools_data(spools))
 
+@app.route('/api/log_event', methods=['POST'])
+def api_log_event():
+    msg = request.json.get('msg', '')
+    level = request.json.get('level', 'INFO')
+    if msg: state.add_log_entry(msg, level)
+    return jsonify({"success": True})
+
 @app.route('/api/logs', methods=['GET'])
 def api_get_logs_route():
     sm_url, fb_url = config_loader.get_api_urls()
@@ -1180,6 +1337,10 @@ def api_get_logs_route():
                 err_resp = requests.get(f"{fb_url}/print-errors", timeout=2)
                 if err_resp.ok:
                     fb_errors = err_resp.json().get('errors', [])
+                    
+                    cfg = config_loader.load_config()
+                    auto_recover = cfg.get("auto_recover_filabridge_errors", False)
+                    
                     for err in fb_errors:
                         err_id = err.get('id')
                         # Only alert if we haven't seen it and the user hasn't naturally acknowledged it in FilaBridge
@@ -1189,10 +1350,46 @@ def api_get_logs_route():
                                 p_name = err.get('printer_name', 'Unknown Printer')
                                 f_name = err.get('filename', 'Unknown File')
                                 err_msg = err.get('error', 'Unknown Error')
-                                state.add_log_entry(
-                                    f"🔴 FilaBridge: [{p_name}] failed to parse weight for '{f_name}': {err_msg}",
-                                    "WARNING"
-                                )
+                                
+                                def _auto_recover_task(e_id, printer_name, filename, error_msg):
+                                    creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
+                                    if creds:
+                                        usage_map = prusalink_api.download_gcode_and_parse_usage(creds['ip_address'], creds['api_key'], filename)
+                                        if usage_map:
+                                            printer_map = config_loader.load_config().get("printer_map", {})
+                                            spools_updated = 0
+                                            for loc_id, p_info in printer_map.items():
+                                                if p_info.get('printer_name') == printer_name:
+                                                    toolhead_idx = p_info.get('position', 0)
+                                                    if toolhead_idx in usage_map:
+                                                        w_used = usage_map[toolhead_idx]
+                                                        for sid in spoolman_api.get_spools_at_location(loc_id):
+                                                            spool = spoolman_api.get_spool(sid)
+                                                            if spool and w_used > 0:
+                                                                spoolman_api.update_spool(sid, {"used_weight": float(spool.get('used_weight', 0)) + w_used})
+                                                                spools_updated += 1
+                                                                inf = spoolman_api.format_spool_display(spool)
+                                                                state.add_log_entry(f"✔️ Auto-deducted {w_used:.1f}g from #{sid} (FilaBridge Error)", "SUCCESS", inf['color'])
+                                            if spools_updated > 0:
+                                                prusalink_api.acknowledge_filabridge_error(fb_url, e_id)
+                                                return # Success
+                                                
+                                    # Fallback if auto-recover fails or wasn't applicable
+                                    state.add_log_entry(
+                                        f"🔴 FilaBridge: [{printer_name}] failed to parse weight for '{filename}': {error_msg}",
+                                        "WARNING",
+                                        meta={"type": "filabridge_error", "error_id": e_id, "printer_name": printer_name, "filename": filename}
+                                    )
+
+                                if auto_recover:
+                                    import threading
+                                    threading.Thread(target=_auto_recover_task, args=(err_id, p_name, f_name, err_msg), daemon=True).start()
+                                else:
+                                    state.add_log_entry(
+                                        f"🔴 FilaBridge: [{p_name}] failed to parse weight for '{f_name}': {err_msg}",
+                                        "WARNING",
+                                        meta={"type": "filabridge_error", "error_id": err_id, "printer_name": p_name, "filename": f_name}
+                                    )
             except Exception as e:
                 pass # Don't crash the log poller if FilaBridge errors endpoint times out
                 

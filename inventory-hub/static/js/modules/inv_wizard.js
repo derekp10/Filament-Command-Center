@@ -92,7 +92,7 @@ window.wizardAutoUpdateDensity = () => {
     densInput.value = density.toFixed(2);
 };
 
-window.wizardSelectType = (mode) => {
+window.wizardSelectType = (mode, skipSearch = false) => {
     wizardState.mode = mode;
 
     // Update active button styling
@@ -120,7 +120,7 @@ window.wizardSelectType = (mode) => {
 
         if (mode === 'existing') {
             filConfig.style.display = 'none';
-            wizardSearchExisting();
+            if (!skipSearch) wizardSearchExisting();
         } else {
             filConfig.style.display = 'block';
         }
@@ -1124,7 +1124,7 @@ window.wizardSubmit = async () => {
             }
         });
 
-        Object.keys(sp_payload).forEach(k => { if (sp_payload[k] === undefined || Number.isNaN(sp_payload[k])) delete sp_payload[k]; });
+        Object.keys(sp_payload).forEach(k => { if (sp_payload[k] === undefined || sp_payload[k] === null || Number.isNaN(sp_payload[k])) delete sp_payload[k]; });
 
         let f_payload = null;
         let target_fid = null;
@@ -1201,7 +1201,7 @@ window.wizardSubmit = async () => {
                 if (t.article_number) f_payload.article_number = t.article_number;
             }
 
-            Object.keys(f_payload).forEach(k => { if (f_payload[k] === undefined || Number.isNaN(f_payload[k])) delete f_payload[k]; });
+            Object.keys(f_payload).forEach(k => { if (f_payload[k] === undefined || f_payload[k] === null || Number.isNaN(f_payload[k])) delete f_payload[k]; });
         }
 
         const payload = {
@@ -1281,8 +1281,8 @@ window.openCloneWizard = async (spoolId) => {
                 return;
             }
 
-            // Switch to Existing Filament Mode
-            wizardSelectType('existing');
+            // Switch to Existing Filament Mode without wiping
+            wizardSelectType('existing', true);
 
             // Inject Filament into Dropdown & Auto-Select
             const f = d.filament;

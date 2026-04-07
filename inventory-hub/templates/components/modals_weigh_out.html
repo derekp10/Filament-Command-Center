@@ -1,0 +1,28 @@
+<!-- modals_weigh_out.html -->
+<div class="modal fade" id="weighOutModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content bg-dark border border-success border-2 shadow-lg">
+            <div class="modal-header border-bottom border-success border-opacity-50 text-white">
+                <h5 class="modal-title d-flex align-items-center gap-2">
+                    ⚖️ Bulk Weigh-Out
+                </h5>
+                <span class="badge bg-secondary ms-3" id="weigh-out-count">0 Spools Ready</span>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-white" style="background-color: #1a1e23; max-height: 70vh; overflow-y: auto;">
+                <div id="weigh-out-empty" class="text-center text-white-50 p-4">
+                    <h5>No Spools in Buffer</h5>
+                    <p>Scan some spools into the buffer first, or scan them now while this window is open!</p>
+                </div>
+                
+                <div id="weigh-out-list" class="d-flex flex-column gap-3">
+                    <!-- Spool rows will be injected here -->
+                </div>
+            </div>
+            <div class="modal-footer border-top border-success border-opacity-50 d-flex justify-content-between">
+                <div class="text-white-50 small">Scan new items to add to this list. Type weight and press Enter to save.</div>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>

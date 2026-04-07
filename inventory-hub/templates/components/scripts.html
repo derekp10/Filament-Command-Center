@@ -15,8 +15,8 @@
 <script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_search.js') }}?v=1.1"></script>
-
 <script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=1.2"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_weigh_out.js') }}?v=1.0"></script>
 
 <script>
     // Module Initialization
@@ -27,7 +27,7 @@
         // Initialize Modals
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal',
             'actionModal', 'safetyModal', 'queueModal', 'spoolModal',
-            'filamentModal', 'backlogModal'].forEach(id => {
+            'filamentModal', 'backlogModal', 'weighOutModal'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) modals[id] = new bootstrap.Modal(el);
             });
@@ -65,6 +65,7 @@
         generateSafeQR('qr-eject', 'CMD:EJECT', 85);
         generateSafeQR('qr-audit', 'CMD:AUDIT', 85);
         generateSafeQR('qr-locs', 'CMD:LOCATIONS', 85);
+        generateSafeQR('qr-weigh', 'CMD:WEIGH', 85);
 
         // Modal QRs
         const modalQRs = {
@@ -141,16 +142,33 @@
 
         state.scanStartTime = 0;
         document.addEventListener('keydown', (e) => {
-            const g = document.getElementById('focus-guard');
-            if ((g && g.style.display === 'flex') || state.processing || e.target.tagName === 'INPUT') return;
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
             if (e.key === 'Enter') {
                 e.preventDefault();
                 if (state.scanBuffer.length > 0) {
                     const elapsed = Date.now() - state.scanStartTime;
-                    // Normal human typing takes much longer. Scanners fire instantly < 120ms
-                    const source = elapsed < 120 ? 'barcode' : 'keyboard';
-                    processScan(state.scanBuffer, source);
+                    // Normal human typing takes much longer. Scanners fire instantly < 150ms
+                    const source = elapsed < 150 ? 'barcode' : 'keyboard';
+                    
+                    const g = document.getElementById('focus-guard');
+                    const isFrozen = (g && g.style.display === 'flex') || state.processing;
+                    
+                    if (isFrozen) {
+                        console.warn("UI frozen, queuing scan:", state.scanBuffer);
+                        const bffr = state.scanBuffer;
+                        const src = source;
+                        const tryProcess = setInterval(() => {
+                            const fg = document.getElementById('focus-guard');
+                            if (!state.processing && (!fg || fg.style.display !== 'flex')) {
+                                clearInterval(tryProcess);
+                                console.log("UI unfrozen, processing queued scan:", bffr);
+                                processScan(bffr, src);
+                            }
+                        }, 250);
+                    } else {
+                        processScan(state.scanBuffer, source);
+                    }
                 }
                 state.scanBuffer = "";
                 state.scanStartTime = 0;
