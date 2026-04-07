@@ -42,7 +42,6 @@
 
 * No way to eject sloted spools from dryerbox slots? (How have we missed this for so long.)
 
-* Trying to use the clone spool feature doesn't work. The auto load feature doesn't seem to work for the filament. Tried to create 2 new spools, it gave an ok that it was created, but didn't actually create anything. 
 
 # **Active Backlog (Organized by Feature Area)**
 
