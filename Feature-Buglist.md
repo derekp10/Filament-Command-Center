@@ -38,6 +38,12 @@
 
 * Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. (I'm not sure what all we'd want to put here, but it'd be nice to have.)
 
+* Sometimes after adding an item to a dryerbox slot, scanning the toolhead QR to assigned it to the correct toolhead doesn't seem to do that? Not sure about this one, Need more data.
+
+* No way to eject sloted spools from dryerbox slots? (How have we missed this for so long.)
+
+* Trying to use the clone spool feature doesn't work. The auto load feature doesn't seem to work for the filament. Tried to create 2 new spools, it gave an ok that it was created, but didn't actually create anything. 
+
 # **Active Backlog (Organized by Feature Area)**
 
 ## 🎨 UI & Theming
