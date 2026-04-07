@@ -11,7 +11,7 @@
 * Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
 * If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
 * Clicking on scales on the filament card should bring up the scales modal for directly handling all the various way we would want to update weight. (Mostly what's found in the weight section on the edit modal, but including location possibly and archive/unarchive.)
-* Modify add inventory wizzard/editor to support Coextruded and Logitudinal options for the colors assigned to a filament. For reference from spoolmans line on this: "Filaments can have multiple colors in two ways: either through coextrusion, like dual-color filaments with consistent multi-colors, or through longitudinal color changes, like gradient filaments that shift colors along the spool."
+
 * Ability to edit filament specific data in some fassion. currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool.
 * No easy way to create a new spool using only the filament display modal. (No clone button, but cloning wouldn't make sense here.)
 * A way to display inactive spools in the filament modals spool's list. (Perhaps a toggle or someting to enable showning all spools.) Incase something get set to archive when it shouldn't have.
@@ -29,7 +29,7 @@
 
 ## 🎨 UI & Theming
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
-* Sometimes the swatch isn't showing the right color I think. Also doesn't handle multi-color spools currently.
+
 * Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
 
 ## 🗂️ Modals & Add Inventory Wizard

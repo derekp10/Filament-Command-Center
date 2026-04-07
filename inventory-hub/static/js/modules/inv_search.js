@@ -85,6 +85,21 @@ const SearchEngine = {
                 document.getElementById('global-search-context').style.display = 'none';
             });
 
+            // React to universal synchronization events (e.g. edits saved in Wizard or other UI components)
+            document.addEventListener('inventory:sync-pulse', () => {
+                // Background refresh only if panel is open to save API calls
+                if (this.offcanvas && el.classList.contains('show')) {
+                    // Only reload if we aren't showing an empty state
+                    const queryInput = document.getElementById('global-search-query');
+                    const colorInput = document.getElementById('global-search-color-hex');
+                    const matInput = document.getElementById('global-search-material');
+                    const mwInput = document.getElementById('global-search-min-weight');
+                    if (queryInput.value || colorInput.value || matInput.value || mwInput.value) {
+                        this.executeSearch(true); // pass true for silent search
+                    }
+                }
+            });
+
             this.fetchMaterials();
         }
     },
@@ -140,7 +155,7 @@ const SearchEngine = {
         this.debounceTimer = setTimeout(() => this.executeSearch(), 300);
     },
 
-    async executeSearch() {
+    async executeSearch(silent = false) {
         const query = document.getElementById('global-search-query').value.trim();
         const material = document.getElementById('global-search-material').value;
         const colorHex = document.getElementById('global-search-color-hex').value.trim();
@@ -162,7 +177,7 @@ const SearchEngine = {
             return;
         }
 
-        resBox.innerHTML = `<div class="text-center text-info mt-4"><div class="spinner-border mb-2"></div><br><small>Searching Network...</small></div>`;
+        if (!silent) resBox.innerHTML = `<div class="text-center text-info mt-4"><div class="spinner-border mb-2"></div><br><small>Searching Network...</small></div>`;
 
         try {
             const params = new URLSearchParams({

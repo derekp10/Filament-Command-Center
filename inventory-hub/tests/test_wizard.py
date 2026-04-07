@@ -104,3 +104,36 @@ def test_filament_attributes_chips(mock_create_spool, mock_create_filament, clie
     assert "filament_attributes" in fil_call_args['extra']
     assert isinstance(fil_call_args['extra']['filament_attributes'], list)
     assert "Matte" in fil_call_args['extra']['filament_attributes']
+
+@patch('app.spoolman_api.create_filament')
+@patch('app.spoolman_api.create_spool')
+def test_create_inventory_multi_color(mock_create_spool, mock_create_filament, client):
+    """Ensure that the wizard cleanly passes through multi_color_hexes and directions."""
+    mock_create_filament.return_value = {'id': 3}
+    mock_create_spool.return_value = {'id': 102}
+
+    payload = {
+        "filament_data": {
+            "name": "Multi Color Test",
+            "material": "PLA",
+            "color_hex": "FF0000",
+            "multi_color_hexes": "FF0000,00FF00,0000FF",
+            "multi_color_direction": "coextruded",
+            "extra": {
+                "color_hexes": "FF0000,00FF00,0000FF"
+            }
+        },
+        "spool_data": {
+            "location": ""
+        },
+        "quantity": 1
+    }
+
+    response = client.post('/api/create_inventory_wizard', json=payload)
+    assert response.status_code == 200
+    
+    mock_create_filament.assert_called_once()
+    fil_call_args = mock_create_filament.call_args[0][0]
+    assert fil_call_args['multi_color_hexes'] == "FF0000,00FF00,0000FF"
+    assert fil_call_args['multi_color_direction'] == "coextruded"
+    assert fil_call_args['extra']['color_hexes'] == "FF0000,00FF00,0000FF"

@@ -154,10 +154,7 @@ const getFilamentStyle = (colorStr, direction = 'longitudinal') => {
     // Save full colors before capping for coaxial rendering
     const fullColors = [...colors];
 
-    // 3.5. Cap at 3 colors to prevent gradient mess (LONGITUDINAL Standard)
-    if (colors.length > 3) {
-        colors = colors.slice(0, 3);
-    }
+    // No artificial limit! Let linear-gradient sweep display all assigned colors
 
     // 4. Force at least 2 colors for interpolation
     const isSolid = colors.length === 1 || (colors.length > 1 && colors[0] === colors[1]);

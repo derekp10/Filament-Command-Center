@@ -41,6 +41,8 @@ const wizardReset = () => {
     document.getElementById('wiz-fil-color-extra-container').innerHTML = '';
     document.getElementById('wiz-fil-color_hex_0').value = '#FFFFFF';
     document.getElementById('wiz-fil-color_hex_0').previousElementSibling.value = '#FFFFFF';
+    const dirEl = document.getElementById('wiz-fil-color-direction');
+    if (dirEl) dirEl.style.display = 'none';
 
     document.getElementById('wiz-spool-qty').value = 1;
 
@@ -842,12 +844,56 @@ window.wizardAddColorHex = () => {
     const html = `
         <div class="input-group input-group-sm mb-1 mt-1">
             <input type="color" class="form-control form-control-color bg-dark border-secondary px-1" value="#000000" oninput="this.nextElementSibling.value = this.value.toUpperCase()">
-            <input type="text" class="form-control bg-dark text-white border-secondary font-monospace" placeholder="#Hex" value="#000000" id="wiz-fil-color_hex_${idx}" oninput="this.previousElementSibling.value = (this.value.startsWith('#') ? this.value : '#' + this.value).padEnd(7, '0').substring(0,7)">
+            <input type="text" class="form-control bg-dark text-white border-secondary font-monospace pb-wiz-color" placeholder="#Hex" value="#000000" id="wiz-fil-color_hex_${idx}" oninput="this.previousElementSibling.value = (this.value.startsWith('#') ? this.value : '#' + this.value).padEnd(7, '0').substring(0,7)">
             <button class="btn btn-outline-danger" type="button" onclick="this.parentElement.remove(); if(document.getElementById('wiz-fil-color-extra-container').children.length === 0) document.getElementById('wiz-fil-color-direction').style.display='none';" title="Remove color">🗑️</button>
         </div>
     `;
     container.insertAdjacentHTML('beforeend', html);
     document.getElementById('wiz-fil-color-direction').style.display = 'block';
+};
+
+window.wizardPopulateColors = (hexString, direction) => {
+    const container = document.getElementById('wiz-fil-color-extra-container');
+    container.innerHTML = '';
+    
+    const dirEl = document.getElementById('wiz-fil-color-direction');
+    if (dirEl) {
+        dirEl.style.display = 'none';
+        dirEl.value = direction || 'longitudinal';
+    }
+
+    if (!hexString) {
+        document.getElementById('wiz-fil-color_hex_0').value = '#FFFFFF';
+        document.getElementById('wiz-fil-color_hex_0').previousElementSibling.value = '#FFFFFF';
+        return;
+    }
+
+    const hexes = hexString.split(',').map(h => h.trim().replace('#', '').toUpperCase()).filter(h => h.length >= 3);
+    if (hexes.length === 0) {
+        document.getElementById('wiz-fil-color_hex_0').value = '#FFFFFF';
+        document.getElementById('wiz-fil-color_hex_0').previousElementSibling.value = '#FFFFFF';
+        return;
+    }
+
+    // Set first hex
+    document.getElementById('wiz-fil-color_hex_0').value = `#${hexes[0]}`;
+    document.getElementById('wiz-fil-color_hex_0').previousElementSibling.value = `#${hexes[0]}`;
+
+    // Add remaining hexes
+    for (let i = 1; i < hexes.length; i++) {
+        window.wizardAddColorHex();
+        // wizardAddColorHex injects HTML inside container. Find the last added element.
+        const inputs = container.querySelectorAll('input[type="text"]');
+        if (inputs.length > 0) {
+            const lastInput = inputs[inputs.length - 1];
+            lastInput.value = `#${hexes[i]}`;
+            lastInput.previousElementSibling.value = `#${hexes[i]}`;
+        }
+    }
+
+    if (hexes.length > 1 && dirEl) {
+        dirEl.style.display = 'block';
+    }
 };
 
 // --- EXISTING FILAMENT LOGIC ---
@@ -1023,8 +1069,11 @@ window.wizardExternalSelected = () => {
             // Auto-fill Step 2 Manual Form!
             document.getElementById('wiz-fil-material').value = temp.material || '';
             document.getElementById('wiz-fil-color_name').value = temp.color_name || temp.name || '';
-            document.getElementById('wiz-fil-color_hex_0').value = `#${temp.color_hex || 'FFFFFF'}`;
-            document.getElementById('wiz-fil-color_hex_0').previousElementSibling.value = `#${temp.color_hex || 'FFFFFF'}`;
+            
+            let colorPayload = temp.multi_color_hexes || temp.color_hexes || temp.color_hex || 'FFFFFF';
+            let colorDirection = temp.multi_color_direction || 'longitudinal';
+            if (window.wizardPopulateColors) window.wizardPopulateColors(colorPayload, colorDirection);
+            
             document.getElementById('wiz-fil-diameter').value = temp.diameter || temp.settings_extrusion_diameter || 1.75;
             document.getElementById('wiz-fil-density').value = temp.density || temp.settings_density || 1.24;
             document.getElementById('wiz-fil-weight').value = temp.weight || 1000;
@@ -1157,13 +1206,14 @@ window.wizardSubmit = async () => {
                 sp_payload.empty_weight = f_payload.spool_weight;
             }
 
-            // Note: Spoolman stores gradient sequences directly in DB or via 'color_hexes' comma-separated depending on fork.
-            // Spoolman 0.19.1 natively supports `color_hex` as string, and `multi_color_hexes` / `color_hexes` in recent forks.
-            // Let's pass the array into extra in case the user wants gradient rendering strings
+            // Note: Spoolman 0.19.1 natively supports `multi_color_hexes` 
             if (colors.length > 1) {
-                f_payload.extra['color_hexes'] = colors.join(','); // Standard gradient payload
                 f_payload.multi_color_direction = document.getElementById('wiz-fil-color-direction').value;
                 f_payload.multi_color_hexes = colors.join(',');
+                delete f_payload.color_hex; // FATAL ERROR PREVENTION: Spoolman schema prevents both
+            } else {
+                f_payload.multi_color_hexes = null;
+                f_payload.multi_color_direction = null;
             }
             // Extract Custom Dynamic Fields (Standard and Checkboxes)
             document.querySelectorAll('.dynamic-extra-field').forEach(el => {
@@ -1201,7 +1251,10 @@ window.wizardSubmit = async () => {
                 if (t.article_number) f_payload.article_number = t.article_number;
             }
 
-            Object.keys(f_payload).forEach(k => { if (f_payload[k] === undefined || f_payload[k] === null || Number.isNaN(f_payload[k])) delete f_payload[k]; });
+            Object.keys(f_payload).forEach(k => { 
+                if (f_payload[k] === undefined || Number.isNaN(f_payload[k])) delete f_payload[k]; 
+                else if (f_payload[k] === null && k !== 'multi_color_hexes' && k !== 'multi_color_direction') delete f_payload[k];
+            });
         }
 
         const payload = {
@@ -1223,6 +1276,7 @@ window.wizardSubmit = async () => {
 
         if (data.success) {
             msg.innerHTML = `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
+            document.dispatchEvent(new CustomEvent('inventory:sync-pulse')); // Instantly trigger UI rebinding across all open panels
 
             // Reset Weigh-Out Protocol tracking on save so subsequent saves don't double-dip
             if (wizardState.mode === 'edit_spool') {
@@ -1376,8 +1430,11 @@ window.openEditWizard = async (spoolId) => {
 
             document.getElementById('wiz-fil-material').value = f.material || '';
             document.getElementById('wiz-fil-color_name').value = f.name || '';
-            document.getElementById('wiz-fil-color_hex_0').value = `#${f.color_hex || 'FFFFFF'}`;
-            document.getElementById('wiz-fil-color_hex_0').previousElementSibling.value = `#${f.color_hex || 'FFFFFF'}`;
+            
+            let colorPayload = f.multi_color_hexes || (f.extra && f.extra.color_hexes) || f.color_hex || 'FFFFFF';
+            let colorDirection = f.multi_color_direction || (f.extra && f.extra.multi_color_direction) || 'longitudinal';
+            if (window.wizardPopulateColors) window.wizardPopulateColors(colorPayload, colorDirection);
+            
             document.getElementById('wiz-fil-diameter').value = f.diameter || 1.75;
             document.getElementById('wiz-fil-density').value = f.density || 1.24;
             document.getElementById('wiz-fil-weight').value = f.weight || 1000;

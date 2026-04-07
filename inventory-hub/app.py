@@ -322,6 +322,7 @@ def api_edit_spool_wizard():
             fil_res = spoolman_api.update_filament(filament_id, filament_data)
             if not fil_res:
                 state.logger.warning(f"Failed to cleanly update Filament {filament_id} during spool edit.")
+                return jsonify({"success": False, "msg": "Filament database update rejected. Check data formats mapping."})
 
         return jsonify({"success": True, "spool_id": spool_id})
 
@@ -844,6 +845,7 @@ def api_identify_scan():
                 "id": int(sid), 
                 "display": info['text'], 
                 "color": info['color'],
+                "color_direction": info.get("color_direction", "longitudinal"),
                 "remaining_weight": data.get("remaining_weight"),
                 "details": info.get("details", {}),
                 "archived": data.get("archived", False)
