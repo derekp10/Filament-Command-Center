@@ -42,6 +42,8 @@
 
 * No way to eject sloted spools from dryerbox slots? (How have we missed this for so long.)
 
+* Force location override modal the dropdown should be searchable to find a location, or a close match to the location. To make reassignments easier on users.
+
 
 # **Active Backlog (Organized by Feature Area)**
 
