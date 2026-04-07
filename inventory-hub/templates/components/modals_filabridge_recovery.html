@@ -1,0 +1,182 @@
+<div class="modal fade" id="fbRecoveryModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content bg-dark text-light border border-warning shadow-lg">
+            <div class="modal-header border-warning bg-warning bg-opacity-10 text-warning">
+                <h5 class="modal-title fw-bold">💊 FilaBridge Error Recovery</h5>
+                <button type="btn" class="btn-close btn-close-white" onclick="closeModal('fbRecoveryModal')" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger shadow-sm border border-danger">
+                    <strong>Printer:</strong> <span id="fb-rec-printer"></span><br>
+                    <strong>File:</strong> <span id="fb-rec-file"></span>
+                </div>
+                
+                <h6 class="fw-bold mb-3">🛠️ Connected Spools</h6>
+                <div id="fb-rec-spools-container" class="mb-3">
+                    <div class="text-center text-muted">Loading spools...</div>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top border-secondary">
+                    <div>
+                        <button class="btn btn-warning shadow-lg fw-bold" onclick="window.triggerAggressiveGcodeParse()">
+                            ⚡ Auto-Parse GCode
+                        </button>
+                    </div>
+                    <div>
+                        <button class="btn btn-secondary me-2" onclick="closeModal('fbRecoveryModal')">Cancel</button>
+                        <button class="btn btn-primary fw-bold" onclick="window.submitManualFilaBridgeRecovery()">Save Manual Adjustments</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+window._currentFbError = null;
+
+// Opens the modal when the Fix button is clicked on a log line
+window.openFilaBridgeRecovery = function(metaStr) {
+    try {
+        const meta = JSON.parse(decodeURIComponent(metaStr));
+        window._currentFbError = meta;
+        
+        document.getElementById('fb-rec-printer').innerText = meta.printer_name;
+        document.getElementById('fb-rec-file').innerText = meta.filename;
+        
+        const spoolsContainer = document.getElementById('fb-rec-spools-container');
+        spoolsContainer.innerHTML = '<div class="text-center text-info">Loading active spools from Command Center...</div>';
+        
+        if (!modals.fbRecoveryModal) {
+            const el = document.getElementById('fbRecoveryModal');
+            if (el) modals.fbRecoveryModal = new bootstrap.Modal(el);
+        }
+        modals.fbRecoveryModal.show();
+        state.activeModal = 'fbRecoveryModal';
+        
+        // Fetch active spools
+        fetch(`/api/fb_recovery_spools?printer_name=${encodeURIComponent(meta.printer_name)}`)
+            .then(res => res.json())
+            .then(data => {
+                if (!data.success) {
+                    spoolsContainer.innerHTML = `<div class="text-danger">Failed to load spools: ${data.msg}</div>`;
+                    return;
+                }
+                
+                if (data.spools.length === 0) {
+                    spoolsContainer.innerHTML = `<div class="text-warning">No spools appear to be assigned to this printer in Command Center!</div>`;
+                    return;
+                }
+                
+                // Build input forms
+                let html = '<div class="list-group list-group-flush bg-dark">';
+                data.spools.forEach(s => {
+                    const extra = s.extra || {};
+                    let brand = (s.filament && s.filament.vendor) ? s.filament.vendor.name : "Unknown Brand";
+                    let filamentName = s.filament ? s.filament.name : "Unknown Material";
+                    let hex = s.filament ? s.filament.color_hex : "555";
+                    let slot = extra.container_slot ? `[Slot ${extra.container_slot}]` : "";
+                    
+                    html += `
+                    <div class="list-group-item bg-dark text-light border-secondary d-flex justify-content-between align-items-center fb-spool-row" data-sid="${s.id}">
+                        <div>
+                            <span style="display:inline-block;width:15px;height:15px;background-color:#${hex};border-radius:50%;margin-right:8px;border:1px solid #fff;vertical-align:middle;"></span>
+                            <strong>#${s.id}</strong> ${brand} - ${filamentName} ${slot}
+                        </div>
+                        <div class="input-group input-group-sm" style="width: 150px;">
+                            <input type="number" class="form-control bg-secondary text-light border-dark fb-spool-input" placeholder="Grams Used" min="0" step="0.1">
+                            <span class="input-group-text bg-dark text-light border-secondary">g</span>
+                        </div>
+                    </div>`;
+                });
+                html += '</div>';
+                spoolsContainer.innerHTML = html;
+            })
+            .catch(err => {
+                spoolsContainer.innerHTML = `<div class="text-danger">Error loading spools.</div>`;
+            });
+            
+    } catch (e) {
+        console.error("Error parsing FilaBridge error meta:", e);
+    }
+};
+
+window.triggerAggressiveGcodeParse = function() {
+    if (!window._currentFbError) return;
+    
+    setProcessing(true);
+    fetch('/api/fb_aggressive_parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            printer_name: window._currentFbError.printer_name,
+            filename: window._currentFbError.filename,
+            error_id: window._currentFbError.error_id
+        })
+    })
+    .then(r => r.json())
+    .then(d => {
+        setProcessing(false);
+        if (d.success) {
+            showToast(d.msg, 'success');
+            closeModal('fbRecoveryModal');
+        } else {
+            alert("Auto-Parse Failed: " + d.msg + "\n\nPlease enter the weights manually.");
+        }
+    })
+    .catch(err => {
+        setProcessing(false);
+        alert("Error during auto-parse: " + err);
+    });
+};
+
+window.submitManualFilaBridgeRecovery = function() {
+    if (!window._currentFbError) return;
+    
+    const container = document.getElementById('fb-rec-spools-container');
+    const rows = container.querySelectorAll('.fb-spool-row');
+    
+    let updates = {};
+    let hasUpdates = false;
+    
+    rows.forEach(r => {
+        const sid = r.getAttribute('data-sid');
+        const input = r.querySelector('.fb-spool-input');
+        if (input && input.value) {
+            const val = parseFloat(input.value);
+            if (val > 0) {
+                updates[sid] = val;
+                hasUpdates = true;
+            }
+        }
+    });
+    
+    // Allow empty submission to just "acknowledge" the error if no filament was used?
+    // Let's ask for confirmation if no updates are found.
+    if (!hasUpdates) {
+        if (!confirm("You haven't entered any weight used. Are you sure you just want to dismiss this error?")) {
+            return;
+        }
+    }
+    
+    setProcessing(true);
+    fetch('/api/fb_manual_recovery', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            error_id: window._currentFbError.error_id,
+            updates: updates
+        })
+    })
+    .then(r => r.json())
+    .then(d => {
+        setProcessing(false);
+        if (d.success) {
+            showToast("Error explicitly resolved.", 'success');
+            closeModal('fbRecoveryModal');
+        } else {
+            showToast(d.msg, 'error');
+        }
+    });
+};
+</script>

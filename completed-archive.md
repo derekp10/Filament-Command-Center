@@ -1,4 +1,5 @@
 # **Done**
+* **Feature:** Built a comprehensive FilaBridge Error Recovery workflow. Added a secure PrusaLink API background worker to aggressively resolve, parse weight payloads, and acknowledge unhandled errors automatically. Injected a fallback "💊 Fix" inline recovery UI directly onto FilaBridge warning logs to allow immediate manual weight adjustments over active toolhead sockets.
 * **System/UI:** Overhauled Spool Card coloring logic to natively support 4+ colors on a single swatch. Dynamically rendering 'coaxial' filaments as segmented conic pie-gradients while allowing 'longitudinal' elements to blend evenly without crashing the styling engine.
 * **Feature:** Overhauled the Location List UI ("Glow-up"), separating Type and Status styling into dedicated sortable columns capable of dynamic ascending/descending alignment numerically.
 * **Feature:** Handled Unassigned Spools natively appending them as a virtual catching location at the solid top sorting position of the Location Manager list.

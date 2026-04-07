@@ -24,5 +24,6 @@
         "PRINTER_1": {"printer_name": "My Printer", "position": 0}
     },
     "feeder_map": {},
-    "dryer_slots": []
+    "dryer_slots": [],
+    "auto_recover_filabridge_errors": true
 }

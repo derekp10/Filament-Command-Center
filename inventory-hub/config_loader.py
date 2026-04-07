@@ -27,7 +27,8 @@ def load_config():
         "sync_delay": 0.5, 
         "printer_map": {}, 
         "feeder_map": {}, 
-        "dryer_slots": []
+        "dryer_slots": [],
+        "auto_recover_filabridge_errors": False
     }
     
     final_config = defaults.copy()

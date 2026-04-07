@@ -1,6 +1,5 @@
 # **New and Unsorted Features/Bugs**
 
-* Add a work flow for easily getting to filaments involved in a filabrige error, reported in the live activity log. This way when this error does occure theres a way to get to a list of the filaments involved directly and update the amount of grams used by the printer onto the spools directly, without having to look them up one by one. If possible, it would be nice to be able to do a more aggressive request of the gcode file from the printer, to get the data we need, and just update the filaments involved in the error directly, with little to no user intervention.
 
 
 * Ability to add/customize/change type in the Edit Loction Modal, for creating or editing existing locations. I think we moved this off of a .CSV basede list, and now it generates and stores based on spoolman data? But I'm not sure. Toolhead appears to be missing from this list.
@@ -36,6 +35,8 @@
 * A way to display inactive spools in the filament modals spool's list. (Perhaps a toggle or someting to enable showning all spools.) Incase something get set to archive when it shouldn't have.
 
 * Fix spools that don't have a purchase link in the purchase link section of spoolman (custom field I believe.), revert to using the filaments purchase link. If the spool is saved, propigate that data forward. (To fix spools that somehow didn't get updated when we added the purchase link field to spools.)
+
+* Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. (I'm not sure what all we'd want to put here, but it'd be nice to have.)
 
 # **Active Backlog (Organized by Feature Area)**
 

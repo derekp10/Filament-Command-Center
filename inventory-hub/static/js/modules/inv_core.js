@@ -375,7 +375,16 @@ const updateLogState = (force = false) => {
         // -----------------------
 
         const logsEl = document.getElementById('live-logs');
-        if (logsEl) logsEl.innerHTML = d.logs.map(l => `<div class="log-${l.type}">[${l.time}] ${l.msg}</div>`).join('');
+        if (logsEl) {
+            logsEl.innerHTML = d.logs.map(l => {
+                let extraHtml = '';
+                if (l.meta && l.meta.type === 'filabridge_error') {
+                    const dataStr = encodeURIComponent(JSON.stringify(l.meta));
+                    extraHtml = `<button class="btn btn-sm btn-outline-warning ms-2 py-0 px-1" onclick="window.openFilaBridgeRecovery('${dataStr}')">💊 Fix</button>`;
+                }
+                return `<div class="log-${l.type}">[${l.time}] ${l.msg}${extraHtml}</div>`;
+            }).join('');
+        }
 
         const sSpool = document.getElementById('st-spoolman');
         const sFila = document.getElementById('st-filabridge');
