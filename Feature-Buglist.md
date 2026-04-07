@@ -44,6 +44,8 @@
 
 * Force location override modal the dropdown should be searchable to find a location, or a close match to the location. To make reassignments easier on users.
 
+* Location barcode scanns sometmes just don't seem to assigne the filament to the correct location. (Could be a bug with last location that we haven't fixed. Need to investigate.)
+
 
 # **Active Backlog (Organized by Feature Area)**
 
