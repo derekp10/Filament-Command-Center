@@ -415,6 +415,7 @@ window.promptEditLocation = (spoolId, currentLoc) => {
             }
 
             Swal.fire({
+                target: document.getElementById('spoolModal') || document.body,
                 title: 'Force Location Override',
                 html: `
                     <div class="text-start">
