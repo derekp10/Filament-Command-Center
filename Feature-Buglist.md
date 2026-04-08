@@ -1,7 +1,6 @@
 # **New and Unsorted Features/Bugs**
 
-* Edit location button on spool details modal doesn't appear to work anymore.
-* Ejecting spools from within location manager seems to assign them to a deployed status when the aren't even assigned to a toolhead. They also do not leave there currently assigned box when being ejected using the eject button on there card. This is a Z-buffer issue.
+
 * A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
 * "Deposit here" barcode for adding items to a location from the buffer throws an error when scanning, but clicking on it works fine.
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
@@ -15,7 +14,7 @@
 * A way to display inactive spools in the filament modals spool's list. (Perhaps a toggle or someting to enable showning all spools.) Incase something get set to archive when it shouldn't have.
 * Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. (I'm not sure what all we'd want to put here, but it'd be nice to have.)
 * Sometimes after adding an item to a dryerbox slot, scanning the toolhead QR to assigned it to the correct toolhead doesn't seem to do that? Not sure about this one, Need more data.
-* No way to eject sloted spools from dryerbox slots? (How have we missed this for so long.)
+
 * Force location override modal the dropdown should be searchable to find a location, or a close match to the location. To make reassignments easier on users.
 * Location barcode scanns sometmes just don't seem to assigne the filament to the correct location. (Could be a bug with last location that we haven't fixed. Need to investigate.)
 * Filabrige status light, appears to be blinking for some reason.
