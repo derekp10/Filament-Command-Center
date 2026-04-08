@@ -20,5 +20,8 @@ description: Merges, commits, and archives completed tasks in one go.
 * Execute `git merge <name-of-the-current-feature-branch>` to combine the new code.
 * Execute `git branch -d <name-of-the-current-feature-branch>` to delete the temporary branch.
 
+** Step 5: Finishing up
+* Commit changes so the user doesn't have to.
+
 **Step 4: The Handoff**
 * Gracefully confirm that the code is merged, the branch is clean, and the lists are updated!
