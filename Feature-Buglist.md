@@ -25,7 +25,7 @@
 
 * Fix getting lagacy location scann errors with barcodes generated as part of the UI. All barcodes should use there proper prefex and be displayed using the current standards defined. I shouldn't see a lagacy barcode error when using the deploy QR code on a Manage Location window.
 
-* Ejecting a spool from a location that is a printer head or MMU slot shouldn't default its location to the printer directly, but perhaps to a room. Instead.
+* Ejecting a spool from a location that is a printer head or MMU slot shouldn't default its location to the printer directly, to it's last location, which should probably be a dryerbox of some sort and a slot in that dryerbox.
 
 * Review and unify update logic across the program, we have to many versions of update that keep getting orphined, or cause problems later on when they aren't included in a recent design change. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
 
