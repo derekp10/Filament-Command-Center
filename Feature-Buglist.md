@@ -12,10 +12,10 @@
 * Ability to edit filament specific data inside Filament command center. Currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool. Some sort of edit workflow for chaing data directly related to filaments.
 * A way to display inactive spools in the filament modals spool's list. (Perhaps a toggle or someting to enable showning all spools.) Incase something get set to archive when it shouldn't have.
 * Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. (I'm not sure what all we'd want to put here, but it'd be nice to have.)
-* Sometimes after adding an item to a dryerbox slot, scanning the toolhead QR to assigned it to the correct toolhead doesn't seem to do that? Not sure about this one, Need more data.
+
 
 * For the location override modal the dropdown used to display the locations available should be searchable to find a location, or a close match to the location. To make reassignments easier on users.
-* Location barcode scanns sometmes just don't seem to assigne the filament to the correct location. (Could be a bug with last location that we haven't fixed. Need to investigate.)
+
 * Filabrige status light, appears to be blinking for some reason.
 * In location manager, if an item is added to a loction that has slots, and there is a free slot, auto assign the item into that free slot. (If there are multiple free slots, fill the first empty one.)
 
@@ -25,7 +25,7 @@
 
 * Fix getting lagacy location scann errors with barcodes generated as part of the UI. All barcodes should use there proper prefex and be displayed using the current standards defined. I shouldn't see a lagacy barcode error when using the deploy QR code on a Manage Location window.
 
-* Ejecting a spool from a location that is a printer head or MMU slot shouldn't default its location to the printer directly, to it's last location, which should probably be a dryerbox of some sort and a slot in that dryerbox.
+
 
 * Review and unify update logic across the program, we have to many versions of update that keep getting orphined, or cause problems later on when they aren't included in a recent design change. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
 
@@ -54,8 +54,7 @@
 
 ## 📍 Location Management & Scanning
 * Refactor the entire location managment system from the ground up. It's currently being a bit too complicated, and I think it can be cleaned up a bit if we just rethink the flow of this process. We've bolted a lot of stuff onto this system, and the has caused it to become a bit too cumbersome to both code and work with. I think we need to build in a better system for linking locations and device/boxes/storage things. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
-* Spools sometimes retain a location assignment in the database. (This might be fixed.)
-* Removing an item from a toolhead/MMU slot should set filabridge slot to empty.
+
 
 * The ability to configure a box to change the slot order to go from left to right, or right to left.
 * Ability to assign a box slot to a printhead/MMU, so that a scan to that box slot will auto load the spool.
