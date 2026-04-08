@@ -31,7 +31,9 @@
 
 * Figure out why playright can't be run or is not installed on the local docker if that is the issue, otherwise find out if we need to add it to dev, and if needed add it to live/prod if it makes sense.
 
-* Fix search card filament type section to display the correct filament type for the item. (Spool 202 displays Generic PLA when it's actually a PETG filament) I also think we should probably split out the brand, to its own row from the color text. The color text should probably have its own row.
+
+
+* We should add an eject button to the center card in the caracell buffer interface so that we can remove items in the buffer with out having to exit all the way back to the command center main window. We could put an eject button with the other buttons on the top right corner.
 
 # **Active Backlog (Organized by Feature Area)**
 

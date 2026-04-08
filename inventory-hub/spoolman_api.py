@@ -257,6 +257,15 @@ def format_spool_display(spool_data):
         mat = str(mat).strip().upper()
         
         fil_extra = fil.get('extra') or {}
+        
+        raw_attrs = fil_extra.get('filament_attributes', '[]')
+        try:
+            attrs_list = json.loads(raw_attrs) if isinstance(raw_attrs, str) else raw_attrs
+            if not isinstance(attrs_list, list): attrs_list = []
+        except: attrs_list = []
+        clean_attrs = [str(a).strip().strip('"').strip("'") for a in attrs_list if a]
+        smart_mat = f"{' '.join(clean_attrs)} {mat}".strip() if clean_attrs else mat
+        
         col_name = fil_extra.get('original_color')
         if not col_name: col_name = fil.get('name', 'Unknown')
         if col_name: col_name = str(col_name).strip().title()
@@ -290,7 +299,7 @@ def format_spool_display(spool_data):
             "details": {
                 "id": sid,
                 "brand": brand,
-                "material": mat,
+                "material": smart_mat,
                 "color_name": col_name,
                 "weight": rem,
                 "temp": f"{fil.get('settings_extruder_temp', '')}°C" if fil.get('settings_extruder_temp') else ""
@@ -571,6 +580,15 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 # Formatting a raw Filament context
                 v_name = str(vid.get('name', 'Generic')).strip().title()
                 m_name = str(fil.get('material', 'PLA')).strip().upper()
+                
+                raw_attrs = fil.get('extra', {}).get('filament_attributes', '[]')
+                try:
+                    attrs_list = json.loads(raw_attrs) if isinstance(raw_attrs, str) else raw_attrs
+                    if not isinstance(attrs_list, list): attrs_list = []
+                except: attrs_list = []
+                clean_attrs = [str(a).strip().strip('"').strip("'") for a in attrs_list if a]
+                smart_m_name = f"{' '.join(clean_attrs)} {m_name}".strip() if clean_attrs else m_name
+                
                 c_name = str(color_name).strip().title() if color_name else str(fil.get('name', 'Unknown')).strip().title()
                 
                 base_text = f"{v_name} {m_name} ({c_name})"
@@ -578,7 +596,15 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                     "text": f"#{fil.get('id', '?')} {base_text}",
                     "text_short": base_text,
                     "color": base_color.split(',')[0] if base_color else "888888", # Grab first color for the card trim
-                    "slot": ""
+                    "slot": "",
+                    "details": {
+                        "id": fil.get('id', '?'),
+                        "brand": v_name,
+                        "material": smart_m_name,
+                        "color_name": c_name,
+                        "weight": 0,
+                        "temp": f"{fil.get('settings_extruder_temp', '')}°C" if fil.get('settings_extruder_temp') else ""
+                    }
                 }
                 
             direction = str(fil.get('multi_color_direction') or fil.get('extra', {}).get('multi_color_direction') or '')
@@ -596,7 +622,8 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 'color_dist': c_dist,
                 'type': target_type,
                 'archived': item.get('archived', False),
-                'spools_count': spool_counts.get(item['id'], 0) if target_type == "filament" else None
+                'spools_count': spool_counts.get(item['id'], 0) if target_type == "filament" else None,
+                'details': info.get('details', {})
             })
             
         # Sort by color distance (closest first), then by ID (newest first usually)

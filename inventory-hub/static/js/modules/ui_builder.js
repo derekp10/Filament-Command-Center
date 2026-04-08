@@ -292,9 +292,6 @@ const SpoolCardBuilder = {
                             <div class="fcc-card-id-badge text-pop d-flex align-items-center gap-1 fs-5">
                                 <span>${typeIcon}</span><span>#${item.id}</span>
                             </div>
-                            <div class="text-white-50 ms-1 d-none d-sm-block fw-bold" style="font-size: 0.9rem;">
-                                ${info.line2} <!-- Brand & Material -->
-                            </div>
                         </div>
                         <div class="d-flex align-items-center gap-2">
                             ${navActionsHTML}
@@ -304,10 +301,16 @@ const SpoolCardBuilder = {
                     <!-- Row 1.5: Location Badge (Dedicated Row) -->
                     ${locBadgeHTML ? `<div class="d-flex justify-content-start align-items-center mb-1 w-100 ps-1">${locBadgeHTML}</div>` : ''}
 
-                    <!-- Row 2: Display Name -->
-                    <div class="d-flex justify-content-start text-start my-2 w-100 ps-1 flex-grow-1">
-                         <div class="fcc-card-title text-pop">
-                            ${item.display_short || item.display}
+                    <!-- Row 2: Properties Stack (Material, Brand, Name) -->
+                    <div class="d-flex flex-column justify-content-center text-start mx-0 mb-2 mt-1 w-100 ps-1 flex-grow-1">
+                         <div class="fcc-card-material text-white-50 text-pop fw-bold" style="font-size: 0.95rem;">
+                            ${item.details ? item.details.material || "PLA" : "PLA"}
+                         </div>
+                         <div class="fcc-card-brand text-light text-pop fw-bold pb-1" style="font-size: 0.95rem;">
+                            ${item.details ? item.details.brand || "Generic" : "Generic"}
+                         </div>
+                         <div class="fcc-card-title text-pop" style="font-size: 1.25rem;">
+                            ${info.line3}
                          </div>
                     </div>
 
