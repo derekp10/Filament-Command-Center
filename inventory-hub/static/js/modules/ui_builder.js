@@ -168,27 +168,35 @@ const SpoolCardBuilder = {
             outerClasses += 'slot-btn full ';
             actionTarget = `handleSlotInteraction(${options.slotNum})`;
             
+            const printHoverClick = typeof addToQueue !== 'undefined' ? `event.stopPropagation(); addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');` : '';
+            
             if (item.is_ghost) {
                 // Small variant of deployed block (Return block)
                 return `
                 <div class="${outerClasses}" data-spool-id="${item.id}" style="${wrapperStyle} cursor:pointer;" onclick="${actionTarget}">
-                    <div class="slot-inner-gold pt-1" style="${customInnerBg}">
-                        <div class="d-flex flex-column align-items-center mb-1">
-                            <div class="slot-num-gold" style="color:#ccc;">SLOT ${options.slotNum}</div>
-                            <div class="badge bg-warning text-dark mt-1">DEPLOYED</div>
+                    <div class="slot-inner-gold pt-2 pb-2" style="${customInnerBg}">
+                        <div class="d-flex justify-content-between align-items-center w-100 px-1 mb-1">
+                            <div class="slot-num-gold" style="font-size:0.9rem; color:#ccc;">SLOT ${options.slotNum}</div>
+                            <div class="badge bg-warning text-dark">DEPLOYED</div>
                         </div>
-                        <div class="text-center mt-2 mb-2">
+                        
+                        <div class="text-center mb-1 w-100">
                             <div style="font-size:0.8rem; color:#ccc; background: rgba(0,0,0,0.7); border-radius: 4px; display: inline-block; padding: 2px 6px;">CURRENTLY AT:</div>
                             <div class="text-pop" style="font-size:1.1rem; font-weight:900; color:#fff;">${item.deployed_to || "Unknown"}</div>
                         </div>
-                        <div class="slot-info-gold text-center" style="background: rgba(0,0,0,0.7); border-radius: 5px; padding: 5px; margin: 0 5px; border: 1px solid #444;">
-                            <div class="text-line-1" style="color: #aaa;">${info.line1}</div>
-                            <div class="text-line-3" style="font-weight:bold; color: #fff;">${info.line3}</div>
+                        
+                        <div class="slot-info-gold text-center w-100 mb-2 mt-1" style="background: rgba(0,0,0,0.7); border-radius: 5px; padding: 5px; border: 1px solid #444; cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
+                            <div class="text-line-1" style="color: #aaa; font-size:0.9rem;">${info.line1} <span style="float:right; color:#ddd; font-weight:bold; font-size:0.95rem;">${info.line4 ? '⚖️ ' + info.line4 : ''}</span></div>
+                            <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold; font-size:1.0rem;">${info.line2}</div>
+                            <div class="text-line-3" style="font-weight:bold; color: #fff; font-size:0.95rem;">${info.line3}</div>
                         </div>
-                        <div class="d-grid gap-2 mt-auto pb-2 px-2 pt-2">
-                            <button class="btn btn-sm fcc-btn-return" style="border: 2px solid #b38600;" onclick="event.stopPropagation(); doAssign('${locId}', ${item.id}, ${options.slotNum})">
-                                ↩️ RETURN
-                            </button>
+                        
+                        <div class="d-flex justify-content-around gap-1 mt-2 w-100 pt-2 border-top" style="border-color: rgba(255,255,255,0.2) !important;">
+                            <div class="fcc-card-action-btn js-btn-pick" onclick="event.stopPropagation(); doAssign('${locId}', ${item.id}, ${options.slotNum})" title="Return Spool">↩️</div>
+                            <div class="fcc-card-action-btn" onclick="event.stopPropagation(); openSpoolDetails(${item.id})" title="View Details">🔍</div>
+                            <div class="fcc-card-action-btn" onclick="event.stopPropagation(); typeof openEditWizard !== 'undefined' && openEditWizard(${item.id});" title="Edit Spool">✏️</div>
+                            <div class="fcc-card-action-btn" onclick="${printHoverClick}" title="Add to Print Queue">🖨️</div>
+                            <div class="fcc-card-action-btn" onclick="event.stopPropagation(); ejectSpool(${item.id}, '${locId}', false)" title="Eject Spool">⏏️</div>
                         </div>
                     </div>
                 </div>`;
@@ -196,16 +204,25 @@ const SpoolCardBuilder = {
                 return `
                 <div class="${outerClasses}" data-spool-id="${item.id}" style="${wrapperStyle}" onclick="${actionTarget}">
                     <div class="slot-inner-gold" style="${customInnerBg}">
-                        <div class="slot-header"><div class="slot-num-gold">SLOT ${options.slotNum}</div></div>
-                        <div id="qr-slot-${options.slotNum}" class="bg-white p-1 rounded" style="border: 3px solid white;"></div>
-                        <div class="slot-info-gold" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
-                            <div class="text-line-1">${info.line1}</div>
-                            <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold;">${info.line2}</div>
-                            <div class="text-line-3">${info.line3}</div>
-                            <div class="text-line-4">${info.line4}</div>
+                        <div class="d-flex justify-content-between align-items-center w-100 mb-1 px-1">
+                            <div class="slot-num-gold" style="font-size:0.95rem;">SLOT ${options.slotNum}</div>
+                            <div style="color:#ddd; font-weight:bold; font-size:0.95rem;">${info.line4 ? '⚖️ ' + info.line4 : ''}</div>
                         </div>
-                        <div class="btn-label-compact js-btn-label" onclick="event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');">
-                            <span style="font-size:1.2rem;">📷</span> LABEL
+                        
+                        <div id="qr-slot-${options.slotNum}" class="bg-white p-1 rounded mb-2" style="border: 3px solid white;"></div>
+                        
+                        <div class="slot-info-gold w-100" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
+                            <div class="text-line-1" style="font-size:0.9rem;">${info.line1}</div>
+                            <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold; font-size:1.0rem;">${info.line2}</div>
+                            <div class="text-line-3" style="font-size:0.95rem;">${info.line3}</div>
+                        </div>
+                        
+                        <div class="d-flex justify-content-around gap-1 mt-2 w-100 pt-2 border-top" style="border-color: rgba(255,255,255,0.2) !important;">
+                            <div class="fcc-card-action-btn js-btn-pick" onclick="event.stopPropagation(); ejectSpool(${item.id}, '${locId}', true)" title="Pick Up Spool">✋</div>
+                            <div class="fcc-card-action-btn" onclick="event.stopPropagation(); openSpoolDetails(${item.id})" title="View Details">🔍</div>
+                            <div class="fcc-card-action-btn" onclick="event.stopPropagation(); typeof openEditWizard !== 'undefined' && openEditWizard(${item.id});" title="Edit Spool">✏️</div>
+                            <div class="fcc-card-action-btn" onclick="${printHoverClick}" title="Add to Print Queue">🖨️</div>
+                            <div class="fcc-card-action-btn" onclick="event.stopPropagation(); ejectSpool(${item.id}, '${locId}', false)" title="Eject Spool">⏏️</div>
                         </div>
                     </div>
                 </div>`;

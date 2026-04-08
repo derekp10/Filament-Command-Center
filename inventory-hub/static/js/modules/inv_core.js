@@ -382,6 +382,7 @@ const fetchLocations = () => {
             }
         });
 };
+window.fetchLocations = fetchLocations;
 
 window.sortLocations = (col) => {
     if (state.locSortBy === col) {
@@ -493,6 +494,15 @@ window.startSmartSync = () => {
         const locTable = document.getElementById('location-table');
         if (locTable && locTable.offsetParent !== null) {
             fetchLocations();
+        }
+
+        // 2.5. Refresh Location Manager Modal contents if open
+        const manageModal = document.getElementById('manageModal');
+        if (manageModal && manageModal.classList.contains('show')) {
+            const manageLocId = document.getElementById('manage-loc-id');
+            if (manageLocId && manageLocId.value && typeof window.refreshManageView === 'function') {
+                window.refreshManageView(manageLocId.value);
+            }
         }
 
         // 3. Broadcast Pulse for other modules (like Location Manager)

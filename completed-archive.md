@@ -1,4 +1,6 @@
 # **Done**
+* **UI/Location Manager**: Eliminated frontend data pop-in latency for Dryerboxes by matching the initial load data payload structure directly to the tick data array, ensuring immediate synchronized rendering.
+* **UI/Location Manager**: Fixed header occupancy race conditions where assigning a new spool wouldn't correctly recalculate the active header counts until the backend tick fired. Header counts are now mathmatically calculated in real-time on the client side during events.
 * **Bug Fix:** Fixed "Deposit here" barcode for adding items to a location from the buffer throwing an error when scanning by explicitly generating the barcode with a `LOC:` prefix.
 * **System:** Fixed the WakeLock persistence logic systematically failing on laptops by rewiring the API acquisition out of exponential visibility-change loops and anchoring it correctly to the primary DOMContentLoaded pulse.
 * Filaments no longer stay in there dryerboxes when assigned to a printer head. (Deployed State)
