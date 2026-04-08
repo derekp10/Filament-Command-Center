@@ -12,10 +12,7 @@
 * If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
 * Clicking on scales on the filament card should bring up the scales modal for directly handling all the various way we would want to update weight. (Mostly what's found in the weight section on the edit modal, but including location possibly and archive/unarchive.)
 
-* Ability to edit filament specific data in some fassion. currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool.
-* No easy way to create a new spool using only the filament display modal. (No clone button, but cloning wouldn't make sense here.)
 * A way to display inactive spools in the filament modals spool's list. (Perhaps a toggle or someting to enable showning all spools.) Incase something get set to archive when it shouldn't have.
-* Fix spools that don't have a purchase link in the purchase link section of spoolman (custom field I believe.), revert to using the filaments purchase link. If the spool is saved, propigate that data forward. (To fix spools that somehow didn't get updated when we added the purchase link field to spools.)
 * Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. (I'm not sure what all we'd want to put here, but it'd be nice to have.)
 * Sometimes after adding an item to a dryerbox slot, scanning the toolhead QR to assigned it to the correct toolhead doesn't seem to do that? Not sure about this one, Need more data.
 * No way to eject sloted spools from dryerbox slots? (How have we missed this for so long.)
@@ -33,10 +30,6 @@
 * Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
 
 ## 🗂️ Modals & Add Inventory Wizard
-* Bring in more data from Spoolman into the details modals. It'd be nice to see a purchase link to easily get more of the same filament.
-    - Some fields we might not want to bring in. Will need to go over the list of fields to bring in and leave alone.
-    - Add a button to the details modal to easily get more of the same filament. (Configure in config file).
-    - A confirmation maybe to auto add a new spool of the same filament when the button is clicked. Or an easy button to fill in standard data, but prompt for unique info (price, product link).
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
 * For existing filaments, advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
 * Maintain the ability to add multiple spools of the same type at the same time.

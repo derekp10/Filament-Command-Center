@@ -101,7 +101,7 @@ const openSpoolDetails = (id, silent = false) => {
             const btnProdUrl = document.getElementById('detail-btn-product-url');
 
             if (prodUrlContainer && btnProdUrl) {
-                let url = d.extra?.product_url || "";
+                let url = d.extra?.product_url || fil.extra?.product_url || "";
 
                 // Cleanse the Spoolman JSON string quotes if they exist
                 if (url.startsWith('"') && url.endsWith('"')) {
@@ -120,7 +120,7 @@ const openSpoolDetails = (id, silent = false) => {
             // --- 5. Buy More Link (Spool) ---
             const btnBuyMore = document.getElementById('detail-btn-buy-more');
             if (btnBuyMore) {
-                let pUrl = d.extra?.purchase_url || "";
+                let pUrl = d.extra?.purchase_url || fil.extra?.purchase_url || "";
                 if (pUrl.startsWith('"') && pUrl.endsWith('"')) pUrl = pUrl.substring(1, pUrl.length - 1);
                 
                 if (pUrl && pUrl.startsWith('http')) {
@@ -237,6 +237,15 @@ const openFilamentDetails = (fid, silent = false) => {
                     btnQueueSwatch.onclick = () => {
                         addToQueue({ id: d.id, type: 'filament', display: d.name });
                         showToast('Label added to print queue!', 'success');
+                    };
+                }
+
+                // Action: New Spool from Filament Wizard
+                const btnNewSpool = document.getElementById('btn-fil-new-spool');
+                if (btnNewSpool) {
+                    btnNewSpool.onclick = () => {
+                        if (modals.filamentModal) modals.filamentModal.hide();
+                        if (window.openNewSpoolFromFilamentWizard) window.openNewSpoolFromFilamentWizard(d.id);
                     };
                 }
             }

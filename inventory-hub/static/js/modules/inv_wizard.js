@@ -1364,6 +1364,48 @@ window.openCloneWizard = async (spoolId) => {
         });
 };
 
+// --- NEW SPOOL FROM FILAMENT LOGIC ---
+window.openNewSpoolFromFilamentWizard = async (filamentId) => {
+    // Reset and Open Wizard (Wait for Extra fields DOM injection!)
+    await openWizardModal();
+
+    // Temporarily disable submit while fetching data
+    document.getElementById('btn-wiz-submit').disabled = true;
+    document.getElementById('wiz-status-msg').innerHTML = '<span class="text-warning">Loading filament data...</span>';
+
+    fetch(`/api/filament_details?id=${filamentId}`)
+        .then(r => r.json())
+        .then(d => {
+            if (!d || !d.id) {
+                document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to fetch filament data.</span>';
+                return;
+            }
+
+            // Switch to Existing Filament Mode without wiping
+            wizardSelectType('existing', true);
+
+            // Inject Filament into Dropdown & Auto-Select
+            const name = `${d.vendor?.name || 'Generic'} ${d.material} - ${d.name || 'Unknown'}`;
+            const sel = document.getElementById('wiz-existing-results');
+            sel.innerHTML = `<option value="${d.id}" selected>${name} (ID: ${d.id})</option>`;
+            wizardExistingSelected();
+
+            // Smart defaults for fresh spool
+            document.getElementById('wiz-spool-used').value = 0;
+            if (document.getElementById('wiz-spool-archived')) {
+                document.getElementById('wiz-spool-archived').checked = false;
+            }
+            window.wizardCalcRemainingFromUsed();
+
+            document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Filament #${filamentId}.</span>`;
+        })
+        .catch(err => {
+            console.error("New Spool from Filament Wizard Error:", err);
+            document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to connect.</span>';
+            document.getElementById('btn-wiz-submit').disabled = false;
+        });
+};
+
 // --- SPOOL EDIT LOGIC ---
 window.openEditWizard = async (spoolId) => {
 
