@@ -250,6 +250,16 @@ def perform_smart_eject(spool_id):
 
     if saved_source:
         if saved_source.startswith('"'): saved_source = saved_source.strip('"') 
+        
+        # [ALEX FIX] Retain the assignment slot when returning home. 
+        # Move the saved slot back into container_slot
+        saved_slot = extra.get('physical_source_slot', '')
+        if saved_slot:
+            extra['container_slot'] = str(saved_slot).strip('"')
+            extra['physical_source_slot'] = ""
+        else:
+            extra['container_slot'] = ""
+            
         # Clear the source memory so we don't bounce back again later
         extra['physical_source'] = "" 
         
@@ -257,6 +267,8 @@ def perform_smart_eject(spool_id):
             state.add_log_entry(f"↩️ Returned #{spool_id} -> {saved_source}", "WARNING")
             return True
     else:
+        # [ALEX FIX] Normal unslotted eject
+        extra['container_slot'] = ""
         if spoolman_api.update_spool(spool_id, {"location": "", "extra": extra}):
             state.add_log_entry(f"⏏️ Ejected #{spool_id}", "WARNING")
             return True
@@ -408,13 +420,30 @@ def get_live_spools_data(spool_ids):
             spool_data = spoolman_api.get_spool(sid)
             if spool_data:
                 info = spoolman_api.format_spool_display(spool_data)
+                
+                sloc = str(spool_data.get('location', '')).strip()
+                extra = spool_data.get('extra', {})
+                is_ghost = False
+                p_source = str(extra.get('physical_source', '')).strip().replace('"', '')
+                if not sloc and p_source:
+                    is_ghost = True
+                ghost_slot = str(extra.get('physical_source_slot', '')).strip('"')
+                
+                final_slot = info.get('slot', '')
+                if is_ghost and ghost_slot:
+                    final_slot = ghost_slot
+
                 results[str(sid)] = {
                     "display": info["text"],
                     "color": info["color"],
                     "color_direction": info.get("color_direction", "longitudinal"),
                     "remaining_weight": spool_data.get("remaining_weight"),
                     "details": info.get("details", {}),
-                    "archived": spool_data.get("archived", False)
+                    "archived": spool_data.get("archived", False),
+                    "location": p_source if is_ghost else sloc,
+                    "is_ghost": is_ghost,
+                    "slot": final_slot,
+                    "deployed_to": sloc if is_ghost else None
                 }
         except Exception as e:
             state.logger.error(f"Failed to live-refresh spool {sid}: {e}")

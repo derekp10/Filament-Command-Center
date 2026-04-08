@@ -27,7 +27,6 @@
 ## 🎨 UI & Theming
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
 
-* Improve readability for the status line, that includes Location type and Amount of spools (1/x) Assigning a color to full boxes (possibly red or something that works with the theme).
 
 ## 🗂️ Modals & Add Inventory Wizard
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
@@ -39,12 +38,12 @@
 * Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.
 * Search by and filter by remaining weight.
 * Track unprinted filament samples and create a button/queue like we have for labels.
-* Loading spools into buffer from filament definition doesn't load all spool data into card.
+
 
 ## 📍 Location Management & Scanning
 * Spools sometimes retain a location assignment in the database.
 * Removing an item from a toolhead/MMU slot should set filabridge slot to empty.
-* Ejecting something from a toolhead/MMU slot removes it from the slot as well as marking it as unslotted. It should retain the slot, but be unmarked as deployed.
+
 * The ability to configure a box to change the slot order to go from left to right, or right to left.
 * Ability to assign a box slot to a printhead/MMU, so that a scan to that box slot will auto load the spool.
 * CR-MDB-1:SLOT:4 is treated as a location not a slot in a box.

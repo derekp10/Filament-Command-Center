@@ -17,7 +17,49 @@ window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations();
 window.openManage = (id) => {
     setProcessing(true);
 
-    document.getElementById('manageTitle').innerText = `Location Manager: ${id}`;
+    const loc = state.allLocations.find(l => l.LocationID == id);
+    if (!loc) { setProcessing(false); return; }
+
+    let occHtml = ``;
+    if (loc.Occupancy && loc.Occupancy !== '--') {
+        const parts = loc.Occupancy.split('/');
+        let occColor = '#fff';
+        let isEmpty = parseInt(parts[0]) === 0;
+
+        if (parts.length === 2 && !isNaN(parseInt(parts[0])) && !isNaN(parseInt(parts[1]))) {
+            if (parseInt(parts[0]) >= parseInt(parts[1])) occColor = '#ff4444'; // Red if full
+            else if (isEmpty) occColor = '#ffc107'; // Yellow if empty
+        } else if (isEmpty) {
+            occColor = '#ffc107';
+        }
+        
+        let emptyWarn = '';
+        if (occColor === '#ffc107') {
+            emptyWarn = `<span class="text-pop ms-2" style="font-size:1.4rem; color:#ffc107; font-weight: 900; line-height: 1;">⚠️ EMPTY</span>`;
+        }
+
+        let occText = `${loc.Occupancy} Spools`;
+        if (parts.length === 1 || isNaN(parseInt(parts[1]))) {
+            occText = `Total Spools: ${parseInt(parts[0])}`;
+        }
+
+        occHtml = `<span class="text-pop ms-3" style="color:${occColor}; font-size:1.1rem; border-left: 2px solid #555; padding-left: 12px;">${occText}</span>${emptyWarn}`;
+    }
+
+    let badgeClass = 'bg-secondary';
+    let badgeStyle = 'border:1px solid #555;';
+    const t = loc.Type || '';
+    if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
+    else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
+    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
+    else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
+    else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
+    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
+    else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
+    
+    const typeBadge = `<span class="badge ${badgeClass} ms-3 fs-6" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); padding-top: 5px; ${badgeStyle}">${loc.Type}</span>`;
+
+    document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${id} ${typeBadge} ${occHtml}</div>`;
     document.getElementById('manage-loc-id').value = id;
     const input = document.getElementById('manual-spool-id');
     if (input) input.value = "";
@@ -30,8 +72,7 @@ window.openManage = (id) => {
     document.getElementById('manage-grid-view').style.display = 'none';
     document.getElementById('manage-list-view').style.display = 'none';
 
-    const loc = state.allLocations.find(l => l.LocationID == id);
-    if (!loc) { setProcessing(false); return; }
+
 
     const isGrid = (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
 

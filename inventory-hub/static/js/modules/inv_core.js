@@ -292,12 +292,17 @@ const fetchLocations = () => {
                             const max = parseInt(parts[1]);
 
                             if (!isNaN(cur) && !isNaN(max)) {
-                                if (cur > max) occColor = '#ff4444';      // Red (Overfilled)
-                                else if (cur === max) occColor = '#00ff00'; // Green (Full)
+                                if (cur >= max) occColor = '#ff4444';      // Red (Full or Overfilled)
+                                else if (cur === 0) occColor = '#ffc107'; // Yellow (Empty)
+                                else occColor = '#fff'; // White (Default)
                             }
                         }
                         // GOLD STANDARD: High Contrast Pop
-                        statusHtml = `<span class="text-pop" style="font-weight:900; font-size:1.1rem; color:${occColor};">${l.Occupancy}</span>`;
+                        statusHtml = `<div class="d-flex align-items-center"><span class="text-pop" style="font-weight:900; font-size:1.1rem; color:${occColor};">${l.Occupancy}</span>`;
+                        if (occColor === '#ffc107') {
+                            statusHtml += `<span class="text-pop" title="Empty Capacity" style="font-size:1.3rem; margin-left: 6px; line-height: 1;">⚠️</span>`;
+                        }
+                        statusHtml += `</div>`;
                     } else {
                         statusHtml = `<span style="color:#666; font-style:italic; font-weight:bold;">--</span>`;
                     }
@@ -313,6 +318,7 @@ const fetchLocations = () => {
                     else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
                     else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
                     else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
+                    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
                     // [ALEX FIX] High Contrast for Virtual
                     else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
 

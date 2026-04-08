@@ -840,6 +840,20 @@ def api_identify_scan():
                         state.add_log_entry(f"❌ Failed to verify Spool #{sid} label", "WARNING")
             
             info = spoolman_api.format_spool_display(data)
+            
+            # Ensure ghost and slot location logic is provided directly in buffer payloads
+            sloc = str(data.get('location', '')).strip()
+            extra = data.get('extra', {})
+            is_ghost = False
+            p_source = str(extra.get('physical_source', '')).strip().replace('"', '')
+            if not sloc and p_source:
+                is_ghost = True
+            ghost_slot = str(extra.get('physical_source_slot', '')).strip('"')
+            
+            final_slot = info.get('slot', '')
+            if is_ghost and ghost_slot:
+                final_slot = ghost_slot
+
             return jsonify({
                 "type": "spool", 
                 "id": int(sid), 
@@ -848,7 +862,11 @@ def api_identify_scan():
                 "color_direction": info.get("color_direction", "longitudinal"),
                 "remaining_weight": data.get("remaining_weight"),
                 "details": info.get("details", {}),
-                "archived": data.get("archived", False)
+                "archived": data.get("archived", False),
+                "location": p_source if is_ghost else sloc,
+                "is_ghost": is_ghost,
+                "slot": final_slot,
+                "deployed_to": sloc if is_ghost else None
             })
             
     if res['type'] == 'filament':

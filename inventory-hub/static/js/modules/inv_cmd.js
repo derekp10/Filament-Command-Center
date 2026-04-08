@@ -182,7 +182,7 @@ const processScan = (text, source = 'keyboard') => {
                 const locData = state.allLocations.find(l => l.LocationID === res.id);
                 if ((!locData || parseInt(locData['Max Spools']) <= 1) && res.contents && res.contents.length > 0) {
                     const spool = res.contents[0];
-                    state.heldSpools.unshift({ id: spool.id, display: spool.display, color: spool.color, color_direction: spool.color_direction, remaining_weight: spool.remaining_weight, details: spool.details, archived: spool.archived });
+                    state.heldSpools.unshift({ id: spool.id, display: spool.display, color: spool.color, color_direction: spool.color_direction, remaining_weight: spool.remaining_weight, details: spool.details, archived: spool.archived, location: spool.location, is_ghost: spool.is_ghost, slot: spool.slot, deployed_to: spool.deployed_to });
                     renderBuffer();
                     showToast("⚡ Quick Pick: #" + spool.id);
                     state.lastScannedLoc = res.id;
@@ -196,7 +196,7 @@ const processScan = (text, source = 'keyboard') => {
                 state.lastScannedLoc = null;
                 if (!res.display) { showToast("Spool ID found but data missing!", "error"); return; }
                 if (state.heldSpools.some(s => s.id === res.id)) showToast("Already in Buffer", "warning");
-                else { state.heldSpools.unshift({ id: res.id, display: res.display, color: res.color, color_direction: res.color_direction, remaining_weight: res.remaining_weight, details: res.details, archived: res.archived }); renderBuffer(); }
+                else { state.heldSpools.unshift({ id: res.id, display: res.display, color: res.color, color_direction: res.color_direction, remaining_weight: res.remaining_weight, details: res.details, archived: res.archived, location: res.location, is_ghost: res.is_ghost, slot: res.slot, deployed_to: res.deployed_to }); renderBuffer(); }
             } else if (res.type === 'filament') {
                 openFilamentDetails(res.id);
             } else if (res.type === 'error') showToast(res.msg, 'error');
