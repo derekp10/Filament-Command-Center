@@ -495,7 +495,7 @@ window.handleSlotInteraction = (slot) => {
                     state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color });
                     if (window.renderBuffer) window.renderBuffer();
                     renderManagerNav();
-                    doEject(item.id, locId, false);
+                    closeModal('actionModal');
                 }
             },
             { label: "🗑️ Eject", action: () => { doEject(item.id, locId, false); } },
@@ -560,7 +560,6 @@ window.ejectSpool = (sid, loc, pickup) => {
                         renderManagerNav();
                     }
                 }
-                doEject(sid, loc);
             });
     } else {
         if (loc !== "Scan") requestConfirmation(`Eject spool #${sid}?`, () => doEject(sid, loc));

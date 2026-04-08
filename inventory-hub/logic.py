@@ -465,7 +465,7 @@ def get_live_spools_data(spool_ids):
                 extra = spool_data.get('extra', {})
                 is_ghost = False
                 p_source = str(extra.get('physical_source', '')).strip().replace('"', '')
-                if not sloc and p_source:
+                if p_source and sloc.upper() != p_source.upper():
                     is_ghost = True
                 ghost_slot = str(extra.get('physical_source_slot', '')).strip('"')
                 
