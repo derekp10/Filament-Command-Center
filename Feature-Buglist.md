@@ -1,6 +1,7 @@
 # **New and Unsorted Features/Bugs**
 
-
+* Edit location button on spool details modal doesn't appear to work anymore.
+* Ejecting spools from within location manager seems to assign them to a deployed status when the aren't even assigned to a toolhead. They also do not leave there currently assigned box when being ejected using the eject button on there card. This is a Z-buffer issue.
 * A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
 * "Deposit here" barcode for adding items to a location from the buffer throws an error when scanning, but clicking on it works fine.
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
