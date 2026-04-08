@@ -1,4 +1,5 @@
 # **Done**
+* **Bug Fix:** Fixed "Deposit here" barcode for adding items to a location from the buffer throwing an error when scanning by explicitly generating the barcode with a `LOC:` prefix.
 * **System:** Fixed the WakeLock persistence logic systematically failing on laptops by rewiring the API acquisition out of exponential visibility-change loops and anchoring it correctly to the primary DOMContentLoaded pulse.
 * Filaments no longer stay in there dryerboxes when assigned to a printer head. (Deployed State)
 * **Bug Fix:** Fixed the `Edit Location` override button on the Spool Details modal appearing unresponsive by elevating the SweetAlert2 popup's z-index to `15000!important` and bounding the `.swal2-container` directly to the `spoolModal` target, circumventing Bootstrap 5 modal stacking overlaps and focus-traps dynamically introduced by the `inv_core.js` layering engine.

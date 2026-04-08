@@ -2,7 +2,6 @@
 
 
 * A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
-* "Deposit here" barcode for adding items to a location from the buffer throws an error when scanning, but clicking on it works fine.
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
 * Scanning a new spool into a dryer box slot doesn't imidiately unload the currently existing spool. We may want to entirely re think the way the eject process works when replacing one spool out for another. This is mostly a dryer box thing.
 * Loading a dryer box, at the very least, slots load with an initial data set, and then i think the 5 second tick goes off, and fills them in completely. Seems to be a difference between what the initial card load does, and the data provided from the 5 second tick. We should probably make the initial card load load the same data as the 5 second tick.
@@ -20,6 +19,9 @@
 * Filabrige status light, appears to be blinking for some reason.
 * In location manager, if an item is added to a loction that has slots, and there is a free slot, auto assign the item into that free slot. (If there are multiple free slots, fill the first empty one.)
 
+* Toast for notifying a user that a location label is a legacy label doesn't stay up long enough to read, or catch if focusing on barcodes and moving things. We need a more detailed message in the activity log to say what the item was so the user can take action once the see the error in the activity list.
+
+* I know we fixed it for scanning items, but hand typed id's into the command center's main page can sometimes add an item, that then gets imidiately removed on backend refresh. We need to fix this from happening when loading items without the use of a barcode. (Basically bring the protections we recently added to barcode scans reguarding this issue, to also preserve manual entries too.)
 
 
 # **Active Backlog (Organized by Feature Area)**

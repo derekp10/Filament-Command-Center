@@ -383,17 +383,20 @@ const renderList = (data, locId) => {
                 generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
 
                 if (document.getElementById('qr-deposit-trigger')) {
-                    generateSafeQR('qr-deposit-trigger', locId, 85);
+                    const safeId = String(locId).replace(/['"]/g, '');
+                    generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85);
                 }
             });
         });
     } else {
         requestAnimationFrame(() => {
             if (document.getElementById('qr-deposit-trigger')) {
-                generateSafeQR('qr-deposit-trigger', locId, 85);
+                const safeId = String(locId).replace(/['"]/g, '');
+                generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85);
             }
         });
     }
+
 };
 
 const renderUnslotted = (items) => {
