@@ -75,7 +75,7 @@
 * **Live Activity:** Fixed swatch circles in the "Live Activity" Dashboard log pane to accurately display CSS conic gradients mathematically divided for multi-color filament spools.
 * **Live Activity:** Implemented background polling for Filabridge `GET /api/print-errors` to expose `gcode` parsing errors in the Live Activity log.
 * **System:** Engineered a native CSS physical shield inside `scripts.html` to consume hardware `mousedown`/`click` wake-up hits natively when the Scanner Pauses.
-* **System:** Set it so that the screen don't sleep. Screen still times out on laptop. Fixed via robust native WakeLock API re-acquisition.
+
 * **UI/UX:** Unify Filament/Spool UI Cards into a universal `SpoolCardBuilder` engine to guarantee all Command Center sections (Search, Location, Buffer) share the exact same structural HTML layout and style. 
 * **UI/UX:** Fixed Location Manager footer action buttons squishing into each other and clipping their colorful backgrounds by properly wrapping the flexbox grid and padding the text elements.
 * **UI/UX:** Addressed the "Black filaments need a better way to show border" bug by mathematically injecting a dark metallic/carbon diagonal gradient for perfectly dark spools in `getFilamentStyle`.
