@@ -227,12 +227,31 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
     state.UNDO_STACK.append(undo_record)
     return {"status": "success"}
 
-def perform_smart_eject(spool_id):
+def get_room_from_location(loc_id):
+    if not loc_id:
+        return ""
+    loc_id = loc_id.strip().upper()
+    if "-" not in loc_id:
+        return ""
+        
+    prefix = loc_id.split("-")[0]
+    
+    # Exclude known non-room prefixes we don't want to spawn virtual rooms for
+    # PM = Polymaker portable boxes, PJ = Project Carts, TST = System Tests
+    if prefix in ["TST", "TEST", "PM", "PJ"]:
+        return ""
+            
+    return prefix
+
+def perform_smart_eject(spool_id, confirmed_unassign=False):
     spool_data = spoolman_api.get_spool(spool_id)
     if not spool_data: return False
     
     current_location = spool_data.get('location', '').strip().upper()
     extra = spool_data.get('extra', {})
+    
+    # Save the original slot before we wipe it for processing
+    orig_container_slot = extra.get('container_slot', '')
     
     # [ALEX FIX] Explicitly overwrite the slot with empty string.
     # .pop() just removes the key, which causes PATCH to ignore it (keeping the old value).
@@ -247,6 +266,14 @@ def perform_smart_eject(spool_id):
         state.logger.info(f"🛑 Eject Loop Detected: Source is same as Location ({saved_source}). Clearing.")
         saved_source = None
         extra['physical_source'] = "" # Wipe the memory
+
+    # [ALEX FIX] Room hierarchy bypass
+    # If we are currently floating in a room, and the saved_source is a CHILD of this room,
+    # we NEVER bounce back down to the child box. We break the loop and eject to Unassigned.
+    if current_location and saved_source:
+        if saved_source.strip('"').upper().startswith(current_location + "-"):
+            state.logger.info(f"🛑 Bypassing Saved Source: {saved_source} is a child of {current_location}. Ejecting to Unassigned.")
+            saved_source = None
 
     if saved_source:
         if saved_source.startswith('"'): saved_source = saved_source.strip('"') 
@@ -267,10 +294,24 @@ def perform_smart_eject(spool_id):
             state.add_log_entry(f"↩️ Returned #{spool_id} -> {saved_source}", "WARNING")
             return True
     else:
-        # [ALEX FIX] Normal unslotted eject
+        # [ALEX FIX] Normal unslotted eject with Room Fallback
+        room_fallback = get_room_from_location(current_location)
+        target_loc = room_fallback if room_fallback else ""
+
+        # Protected Unassign
+        if target_loc == "" and current_location != "":
+            if not confirmed_unassign:
+                return "REQUIRE_CONFIRM"
+
+        if target_loc != "" and current_location != target_loc:
+            # Preserve slot data when moving from Box to Room (becomes a Ghost in the Box)
+            extra['physical_source'] = current_location
+            extra['physical_source_slot'] = orig_container_slot
+
         extra['container_slot'] = ""
-        if spoolman_api.update_spool(spool_id, {"location": "", "extra": extra}):
-            state.add_log_entry(f"⏏️ Ejected #{spool_id}", "WARNING")
+        if spoolman_api.update_spool(spool_id, {"location": target_loc, "extra": extra}):
+            dest_msg = f" to Room {target_loc}" if target_loc else " (Unassigned)"
+            state.add_log_entry(f"⏏️ Ejected #{spool_id}{dest_msg}", "WARNING")
             return True
     return False
 

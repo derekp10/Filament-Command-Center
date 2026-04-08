@@ -74,7 +74,7 @@
     {
         "LocationID": "CR",
         "Name": "Computer Room",
-        "Type": "Shelf",
+        "Type": "Room",
         "Max Spools": "0"
     },
     {
@@ -284,7 +284,7 @@
     {
         "LocationID": "DR",
         "Name": "Dinning Room",
-        "Type": "Shelf",
+        "Type": "Room",
         "Max Spools": "0"
     },
     {
@@ -386,7 +386,7 @@
     {
         "LocationID": "LR",
         "Name": "Living Room",
-        "Type": "Shelf",
+        "Type": "Room",
         "Max Spools": "0"
     },
     {
@@ -439,15 +439,9 @@
     },
     {
         "LocationID": "PJ-CT-1",
-        "Location": "",
-        "Device Identifier": "",
-        "Device Type": "",
-        "Type": "Cart",
-        "Order": "1",
-        "Row": "",
-        "Max Spools": "",
         "Name": "Project Cart 1",
-        "Label Printed": "Yes"
+        "Type": "Cart",
+        "Max Spools": ""
     },
     {
         "LocationID": "PM-DB-1",
@@ -607,14 +601,8 @@
     },
     {
         "LocationID": "XL-5",
-        "Location": "Living Room",
-        "Device Identifier": "\ud83e\udd9d",
-        "Device Type": "XL",
-        "Type": "Tool Head",
-        "Order": "5",
-        "Row": "",
-        "Max Spools": "1",
         "Name": "\ud83e\udd9d XL Tool Head 5",
-        "Label Printed": "Yes"
+        "Type": "Tool Head",
+        "Max Spools": "1"
     }
 ]

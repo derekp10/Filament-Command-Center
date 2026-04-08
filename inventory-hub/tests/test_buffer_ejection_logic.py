@@ -64,3 +64,73 @@ def test_smart_eject_restores_home_slot():
             with patch('state.add_log_entry'):
                 res = logic.perform_smart_eject(1)
                 assert res is True
+
+def test_get_room_from_location_parsing():
+    """Verify get_room_from_location parses parent rooms and filters exclusions."""
+    # We must patch locations database because it tries to load it to check for printers
+    with patch('locations_db.load_locations_list', return_value=[]):
+        assert logic.get_room_from_location("LR-MDB-1") == "LR"
+        assert logic.get_room_from_location("GAR-SHELF-5") == "GAR"
+        assert logic.get_room_from_location("BOX") == "" # No hyphen
+        assert logic.get_room_from_location("") == ""
+        assert logic.get_room_from_location("TST-TUBE") == "" # Excluded TST
+        assert logic.get_room_from_location("TEST-123") == "" # Excluded TEST
+        assert logic.get_room_from_location("PM-123") == "" # Excluded PM
+        assert logic.get_room_from_location("PJ-CART1") == "" # Excluded PJ
+        
+        # Tools/Printers are NO LONGER excluded, they generate root systems correctly
+        assert logic.get_room_from_location("PRINTER-1") == "PRINTER"
+        assert logic.get_room_from_location("CORE1-MMU") == "CORE1"
+
+def test_smart_eject_falls_back_to_room():
+    """Verify normal slotted ejection from a Box falls back to its Room and preserves ghost slot."""
+    mock_db = {
+        "id": 2,
+        "location": "LR-MDB-1",
+        "extra": {
+            "physical_source": "",
+            "physical_source_slot": "",
+            "container_slot": "5"
+        }
+    }
+    
+    def fake_update(sid, data):
+        assert data['location'] == "LR"
+        assert data['extra']['container_slot'] == ""
+        # Verifying Ghost logic on demotion
+        assert data['extra']['physical_source'] == "LR-MDB-1"
+        assert data['extra']['physical_source_slot'] == "5"
+        return True
+
+    with patch('spoolman_api.get_spool', return_value=mock_db):
+        with patch('spoolman_api.update_spool', side_effect=fake_update):
+            with patch('state.add_log_entry'):
+                with patch('locations_db.load_locations_list', return_value=[]):
+                    res = logic.perform_smart_eject(2)
+                    assert res is True
+
+def test_smart_eject_requires_confirm_for_unassigned():
+    """Verify ejecting from a Room (or no hyphen location) requires confirmation before moving to Unassigned."""
+    mock_db = {
+        "id": 3,
+        "location": "LR",
+        "extra": {
+            "physical_source": "LR-MDB-1",
+            "physical_source_slot": "5"
+        }
+    }
+    
+    with patch('spoolman_api.get_spool', return_value=mock_db):
+        res = logic.perform_smart_eject(3)
+        assert res == "REQUIRE_CONFIRM"
+        
+        # When confirmed, goes to Unassigned and wipes container slot
+        def fake_update_confirm(sid, data):
+            assert data['location'] == ""
+            assert data['extra']['container_slot'] == ""
+            return True
+            
+        with patch('spoolman_api.update_spool', side_effect=fake_update_confirm):
+            with patch('state.add_log_entry'):
+                res2 = logic.perform_smart_eject(3, confirmed_unassign=True)
+                assert res2 is True

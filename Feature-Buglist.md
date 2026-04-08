@@ -1,13 +1,12 @@
 # **New and Unsorted Features/Bugs**
 
-* Ability to add/customize/change type in the Edit Loction Modal, for creating or editing existing locations. I think we moved this off of a .CSV basede list, and now it generates and stores based on spoolman data? But I'm not sure. Toolhead appears to be missing from this list.
-* Better grouping of locations lists data. The encoded id's can sometimes be used to generate a grouping, (anything that starts with CR, is in the Computer room, DR, Dining room, LR, living room etc...)
+
 * A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
 * "Deposit here" barcode for adding items to a location from the buffer throws an error when scanning, but clicking on it works fine.
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
 * Scanning a new spool into a dryer box slot doesn't imidiately unload the currently existing spool. We may want to entirely re think the way the eject process works when replacing one spool out for another. This is mostly a dryer box thing.
 * Loading a dryer box, at the very least, slots load with an initial data set, and then i think the 5 second tick goes off, and fills them in completely. Seems to be a difference between what the initial card load does, and the data provided from the 5 second tick. We should probably make the initial card load load the same data as the 5 second tick.
-* Adjust filament list and stystem to allow for unassigned filaments to fall back to a room based location, based on the dryerbox location (LR for Living room, CR for Computer room) So that we can avoid the spool instantly going into the unassigned zone. Will need to parent locations to rooms, and allow rooms to have a list of filaments that includes all sub-locations. (Dryerboxes, carts, shelves etc...)
+
 * Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
 * If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
 * Clicking on scales on the filament card should bring up the scales modal for directly handling all the various way we would want to update weight. (Mostly what's found in the weight section on the edit modal, but including location possibly and archive/unarchive.)
@@ -55,7 +54,7 @@
 * Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to.
 * Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assign all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
 * Location Manager not syncing status across browser instances?
-* Unable to send items to the unassigned location in the location list with a QR code scan.
+* Refactor Locations Database to support true DB-driven Parent/Child hierarchies. Currently, location hierarchy (Room -> Box -> Slot) is handled via string prefix parsing (`LR-MDB-1` means `LR`). This breaks portable/transient containers like `PJ` or `PM` boxes when they move rooms, because moving them implies renaming them, which destroys their printed barcode (`LOC:LR-PM-1`). Need to add a `ParentLocation` column to the locations database and detach the barcode ID string from the physical hierarchy tree.
 
 ## 🎟️ Print Queue, Labels & Filament Usage
 * Add ability for a scan to update the label printed/filament printed status to true/yes, Spoolman Reprint (Label).

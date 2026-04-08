@@ -676,6 +676,44 @@ def api_get_locations():
 
     except: pass
 
+    # [ALEX FIX] Support Room logic correctly by adding grouped floating data
+    room_occupancy: dict[str, int] = {}
+    room_floating: dict[str, int] = {}
+    csv_rows = list(local_map.values())
+    
+    # 1. First Pass: Compute total Room occupancies
+    for loc, count in occupancy_map.items():
+        if loc and "-" in loc:
+            parent = loc.split("-")[0]
+            # Verify prefix is valid (not TST, PM, PJ, etc)
+            if parent not in ["TST", "TEST", "PM", "PJ"]:
+                room_occupancy[parent] = room_occupancy.get(parent, 0) + count
+        else:
+            # It's floating in a parent directly
+            if loc:
+                room_occupancy[loc] = room_occupancy.get(loc, 0) + count
+                room_floating[loc] = room_floating.get(loc, 0) + count
+
+    # 2. Inject Virtual Rooms/Printers if they don't exist
+    for parent in room_occupancy.keys():
+        if parent not in local_map:
+            # Check children types to determine if this is a Printer or a Room
+            is_printer = False
+            for c_loc, meta in local_map.items():
+                if c_loc.startswith(parent + "-"):
+                    t = str(meta.get('Type', '')).lower()
+                    if 'printer' in t or 'tool head' in t or 'mmu' in t:
+                        is_printer = True
+                        break
+                        
+            csv_rows.append({
+                "LocationID": parent,
+                "Name": f"{parent} System" if is_printer else f"{parent} (Room)",
+                "Type": "Printer" if is_printer else "Virtual Room",
+                "Max Spools": 0,
+                "OccupancyRaw": 0
+            })
+
     final_list = []
     # [ALEX FIX] Inject Virtual Unassigned Row
     final_list.append({
@@ -687,7 +725,7 @@ def api_get_locations():
     })
 
     for row in csv_rows:
-        lid = str(row['LocationID']).upper()
+        lid = str(row.get('LocationID', '')).upper()
         if lid == "UNASSIGNED": continue # Skip if somehow in CSV
         
         max_s = row.get('Max Spools', '')
@@ -697,9 +735,21 @@ def api_get_locations():
             max_val = 0
             
         curr_val = occupancy_map.get(lid, 0)
-        row['OccupancyRaw'] = curr_val 
-        if max_val > 0: row['Occupancy'] = f"{curr_val}/{max_val}"
-        else: row['Occupancy'] = f"{curr_val} items"
+        
+        # If this is a Room or parent, show aggregated plus floating
+        if lid in room_occupancy and "-" not in lid:
+            total_room = room_occupancy[lid]
+            floating = room_floating.get(lid, 0)
+            row['OccupancyRaw'] = total_room
+            if floating > 0:
+                row['Occupancy'] = f"{total_room} Total ({floating} floating)"
+            else:
+                row['Occupancy'] = f"{total_room} Total"
+        else:
+            row['OccupancyRaw'] = curr_val 
+            if max_val > 0: row['Occupancy'] = f"{curr_val}/{max_val}"
+            else: row['Occupancy'] = f"{curr_val} items"
+            
         final_list.append(row)
     return jsonify(final_list)
 
@@ -788,8 +838,14 @@ def api_manage_contents():
     if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
 
     if action == 'remove':
-        if logic.perform_smart_eject(spool_id): return jsonify({"success": True})
-        else: return jsonify({"success": False, "msg": "DB Update Failed"})
+        is_confirmed = data.get('confirmed', False)
+        result = logic.perform_smart_eject(spool_id, confirmed_unassign=is_confirmed)
+        if result == "REQUIRE_CONFIRM":
+            return jsonify({"success": False, "require_confirm": True, "msg": "Spool is already in a room. Confirm true unassign to nowhere?"})
+        elif result is True:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'force_unassign':
         if logic.perform_force_unassign(spool_id): return jsonify({"success": True})
         else: return jsonify({"success": False, "msg": "DB Update Failed"})

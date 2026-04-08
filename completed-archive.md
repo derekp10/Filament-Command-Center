@@ -1,4 +1,7 @@
 # **Done**
+* **Location Systems:** Engineered structural fallback hierarchies for Spools inside physical Rooms. Transient boxes (like MDB-1) seamlessly group spools into their parent Virtual Room boundaries during smart assignment workflows, preventing items from dropping into `Unassigned/Loose` buffers unnecessarily. 
+* **Location UI:** Engineered explicit grouping sub-headers inside the interactive `Location Manager` grid panels. Directly segregates and sorts internal physical sub-containers dynamically behind colorful bounded boxes nested perfectly beneath any globally targeted Room Parent.
+* **Location Configuration:** Injected dynamic root sorting capabilities to strictly prioritize native Printer allocations to the pinnacle of Location Tables. Included newly customizable assignments for Root Room systems and explicitly segmented `Virtual` (Unassigned) badges graphically to eliminate structural context confusion for Transient Carts and Rooms.
 * **UI/UX:** Improved readability for the status line, Location type, and amount of spools (1/x) with specific high-contrast color indicators for fully packed boxes.
 * **Buffer Sync:** Fixed loading spools into buffer from filament definition failing to load all advanced spool context data (like location/status) into the card correctly natively.
 * **Location/Ghost:** Fixed Ejecting an item from a toolhead/MMU slot carelessly wiping the slot tracking data. The slot correctly unsets the 'deployed' label natively but preserves legacy container_slot assignments consistently.

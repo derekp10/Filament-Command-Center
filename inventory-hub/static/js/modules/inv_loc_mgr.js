@@ -296,23 +296,90 @@ const renderList = (data, locId) => {
 
     // 2. Existing Items
     if (data.length > 0) {
-        data.forEach((s, i) => {
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = renderBadgeHTML(s, i, locId);
-            const el = tempDiv.firstElementChild;
-            const btnLabel = el.querySelector('.js-btn-label');
-            if (btnLabel) {
-                btnLabel.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    window.addToQueue({ id: s.id, type: 'spool', display: s.display });
-                });
+        const grouped = {};
+        data.forEach(s => {
+            const sLoc = s.location || "Unassigned";
+            if (!grouped[sLoc]) grouped[sLoc] = [];
+            grouped[sLoc].push(s);
+        });
+
+        const gKeys = Object.keys(grouped);
+        // Ensure the root parent location comes first
+        gKeys.sort((a,b) => {
+            if (a.toLowerCase() === locId.toLowerCase()) return -1;
+            if (b.toLowerCase() === locId.toLowerCase()) return 1;
+            return a.localeCompare(b);
+        });
+
+        const reOrderedData = [];
+        let flatIndex = 0;
+
+        const borderColors = ['border-info', 'border-warning', 'border-success', 'border-danger', 'border-primary', 'border-secondary'];
+
+        gKeys.forEach((gLoc, index) => {
+            const isFloating = gLoc.toLowerCase() === locId.toLowerCase();
+            const hideHeader = gKeys.length === 1 && isFloating;
+            
+            const groupWrapper = document.createElement('div');
+            const bColor = borderColors[index % borderColors.length];
+            
+            if (!hideHeader) {
+                groupWrapper.className = `p-2 mb-3 rounded border border-2 ${bColor} bg-dark`;
+                groupWrapper.style.boxShadow = "inset 0 0 10px rgba(0,0,0,0.5)";
+                
+                const subHead = document.createElement('div');
+                if (isFloating) {
+                    subHead.className = `d-flex justify-content-between align-items-center border-bottom border-2 pb-2 mb-2 ${bColor}`;
+                    subHead.innerHTML = `
+                        <div class="d-flex align-items-center">
+                            <span class="btn btn-sm btn-outline-light px-2 py-0 border-0 fs-5 me-2" onclick="this.parentElement.parentElement.nextElementSibling.classList.toggle('d-none'); this.innerText = this.innerText === '-' ? '+' : '-';">-</span>
+                            <h5 class="text-light m-0 fw-bold" style="font-size:1.1rem;">☁️ Loose / Floating</h5>
+                        </div>`;
+                } else {
+                    subHead.className = `d-flex justify-content-between align-items-center border-bottom border-2 pb-2 mb-2 ${bColor}`;
+                    const isPrinter = gLoc.includes('PRINTER') || gLoc.includes('CORE') || gLoc.includes('XL') || gLoc.includes('MK');
+                    const icon = isPrinter ? '🖨️' : '📦';
+                    subHead.innerHTML = `
+                         <div class="d-flex align-items-center">
+                              <span class="btn btn-sm btn-outline-light px-2 py-0 border-0 fs-5 me-2" onclick="this.parentElement.parentElement.nextElementSibling.classList.toggle('d-none'); this.innerText = this.innerText === '-' ? '+' : '-';">-</span>
+                              <h5 class="text-info m-0 fw-bold" style="font-size:1.1rem;">${icon} <span class="text-white">${gLoc}</span></h5>
+                         </div>
+                         <button class="btn btn-sm btn-outline-info py-0 px-2 fw-bold" onclick="openManage('${gLoc}')">Manage / View</button>`;
+                }
+                groupWrapper.appendChild(subHead);
             }
-            list.appendChild(el);
+            
+            const itemsContainer = document.createElement('div');
+            itemsContainer.className = "d-flex flex-column gap-2 mt-2";
+
+            grouped[gLoc].forEach(s => {
+                reOrderedData.push(s);
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = renderBadgeHTML(s, flatIndex, locId);
+                const el = tempDiv.firstElementChild;
+                const btnLabel = el.querySelector('.js-btn-label');
+                if (btnLabel) {
+                    btnLabel.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        window.addToQueue({ id: s.id, type: 'spool', display: s.display });
+                    });
+                }
+                itemsContainer.appendChild(el);
+                flatIndex++;
+            });
+            
+            if (!hideHeader) {
+                groupWrapper.appendChild(itemsContainer);
+                list.appendChild(groupWrapper);
+            } else {
+                // If it's just a single flat root location, just append items directly to avoid empty bounding box
+                itemsContainer.childNodes.forEach(child => list.appendChild(child.cloneNode(true)));
+            }
         });
 
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-                data.forEach((s, i) => renderBadgeQRs(s, i));
+                reOrderedData.forEach((s, i) => renderBadgeQRs(s, i));
                 generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
 
                 if (document.getElementById('qr-deposit-trigger')) {
@@ -501,12 +568,20 @@ window.ejectSpool = (sid, loc, pickup) => {
     }
 };
 
-window.doEject = (sid, loc) => {
+window.doEject = (sid, loc, isConfirmed = false) => {
     setProcessing(true);
-    fetch('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'remove', location: loc, spool_id: sid }) })
+    fetch('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'remove', location: loc, spool_id: sid, confirmed: isConfirmed }) })
         .then(r => r.json())
-        .then(() => {
+        .then((res) => {
             setProcessing(false);
+            
+            if (res.require_confirm) {
+                requestConfirmation(res.msg || `True Unassign spool #${sid}? It is currently floating in a room.`, () => {
+                    window.doEject(sid, loc, true);
+                });
+                return;
+            }
+            
             showToast("Ejected");
             if (loc !== "Scan") {
                 // [ALEX FIX] Force a re-render by clearing the hash. 
