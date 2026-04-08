@@ -303,12 +303,11 @@ def perform_smart_eject(spool_id, confirmed_unassign=False):
             if not confirmed_unassign:
                 return "REQUIRE_CONFIRM"
 
-        if target_loc != "" and current_location != target_loc:
-            # Preserve slot data when moving from Box to Room (becomes a Ghost in the Box)
-            extra['physical_source'] = current_location
-            extra['physical_source_slot'] = orig_container_slot
-
+        # Strictly clear source bindings so it doesn't become a ghost in its old container
+        extra['physical_source'] = ""
+        extra['physical_source_slot'] = ""
         extra['container_slot'] = ""
+
         if spoolman_api.update_spool(spool_id, {"location": target_loc, "extra": extra}):
             dest_msg = f" to Room {target_loc}" if target_loc else " (Unassigned)"
             state.add_log_entry(f"⏏️ Ejected #{spool_id}{dest_msg}", "WARNING")

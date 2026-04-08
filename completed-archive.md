@@ -1,4 +1,7 @@
 # **Done**
+* **System:** Fixed the WakeLock persistence logic systematically failing on laptops by rewiring the API acquisition out of exponential visibility-change loops and anchoring it correctly to the primary DOMContentLoaded pulse.
+* **Bug Fix:** Fixed the `Edit Location` override button on the Spool Details modal appearing unresponsive by elevating the SweetAlert2 popup's z-index to `15000!important` and bounding the `.swal2-container` directly to the `spoolModal` target, circumventing Bootstrap 5 modal stacking overlaps and focus-traps dynamically introduced by the `inv_core.js` layering engine.
+* **Bug Fix:** Fixed spools incorrectly spawning a sticky Yellow `Deployed` ghost copy inside their container box when ejected from the Location Manager. Adjusted the `perform_smart_eject` unassign logic to explicitly wipe the `physical_source` and `physical_source_slot` legacy fields during a forced ejection, preventing the fallback logic from falsely categorizing the item as deployed to a room.
 * **Location Systems:** Engineered structural fallback hierarchies for Spools inside physical Rooms. Transient boxes (like MDB-1) seamlessly group spools into their parent Virtual Room boundaries during smart assignment workflows, preventing items from dropping into `Unassigned/Loose` buffers unnecessarily. 
 * **Location UI:** Engineered explicit grouping sub-headers inside the interactive `Location Manager` grid panels. Directly segregates and sorts internal physical sub-containers dynamically behind colorful bounded boxes nested perfectly beneath any globally targeted Room Parent.
 * **Location Configuration:** Injected dynamic root sorting capabilities to strictly prioritize native Printer allocations to the pinnacle of Location Tables. Included newly customizable assignments for Root Room systems and explicitly segmented `Virtual` (Unassigned) badges graphically to eliminate structural context confusion for Transient Carts and Rooms.
@@ -73,7 +76,7 @@
 * **Live Activity:** Fixed swatch circles in the "Live Activity" Dashboard log pane to accurately display CSS conic gradients mathematically divided for multi-color filament spools.
 * **Live Activity:** Implemented background polling for Filabridge `GET /api/print-errors` to expose `gcode` parsing errors in the Live Activity log.
 * **System:** Engineered a native CSS physical shield inside `scripts.html` to consume hardware `mousedown`/`click` wake-up hits natively when the Scanner Pauses.
-* **System:** Set it so that the screen don't sleep. Screen still times out on laptop. Fixed via robust native WakeLock API re-acquisition.
+
 * **UI/UX:** Unify Filament/Spool UI Cards into a universal `SpoolCardBuilder` engine to guarantee all Command Center sections (Search, Location, Buffer) share the exact same structural HTML layout and style. 
 * **UI/UX:** Fixed Location Manager footer action buttons squishing into each other and clipping their colorful backgrounds by properly wrapping the flexbox grid and padding the text elements.
 * **UI/UX:** Addressed the "Black filaments need a better way to show border" bug by mathematically injecting a dark metallic/carbon diagonal gradient for perfectly dark spools in `getFilamentStyle`.

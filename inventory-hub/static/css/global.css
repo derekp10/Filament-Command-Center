@@ -9,6 +9,11 @@
     /* Above Modal 1055, Below Offcanvas 1090 */
 }
 
+/* Fix SweetAlert2 Z-Index to remain above dynamically stacked Modals */
+.swal2-container {
+    z-index: 15000 !important;
+}
+
 /* --- DARK MODE KIOSK THEME (Layout & Print Fix) --- */
 body {
     background-color: #000;
