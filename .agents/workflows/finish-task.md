@@ -22,6 +22,7 @@ description: Merges, commits, and archives completed tasks in one go.
 
 ** Step 5: Finishing up
 * Sync changes so the user doesn't have to.
+* Provide the option to merge dev changes into main for deployment.
 
 **Step 4: The Handoff**
 * Gracefully confirm that the code is merged, the branch is clean, and the lists are updated!
