@@ -556,12 +556,11 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 info = format_spool_display(spool)
                 sloc = str(spool.get('location', '')).strip()
                 
-                if not sloc:
-                    extra = spool.get('extra', {})
-                    p_source = str(extra.get('physical_source', '')).strip().replace('"', '')
-                    if p_source:
-                        is_ghost = True
-                        ghost_slot = str(extra.get('physical_source_slot', '')).strip('"')
+                extra = spool.get('extra', {})
+                p_source = str(extra.get('physical_source', '')).strip().replace('"', '')
+                if p_source and p_source.upper() != sloc.upper():
+                    is_ghost = True
+                    ghost_slot = str(extra.get('physical_source_slot', '')).strip('"')
                 
                 final_slot = info['slot']
                 if is_ghost and locals().get('ghost_slot'): final_slot = ghost_slot

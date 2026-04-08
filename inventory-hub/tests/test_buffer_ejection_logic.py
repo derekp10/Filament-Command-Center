@@ -97,9 +97,9 @@ def test_smart_eject_falls_back_to_room():
     def fake_update(sid, data):
         assert data['location'] == "LR"
         assert data['extra']['container_slot'] == ""
-        # Verifying Ghost logic on demotion
-        assert data['extra']['physical_source'] == "LR-MDB-1"
-        assert data['extra']['physical_source_slot'] == "5"
+        # Verifying Ghost logic is strictly wiped on unslotted demotion
+        assert data['extra']['physical_source'] == ""
+        assert data['extra']['physical_source_slot'] == ""
         return True
 
     with patch('spoolman_api.get_spool', return_value=mock_db):
