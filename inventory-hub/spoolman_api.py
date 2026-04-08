@@ -323,12 +323,14 @@ def get_spools_at_location_detailed(loc_name):
                     if not sloc: match = True
                 elif sloc.upper() == target_loc_upper:
                     match = True
+                elif "-" not in target_loc_upper and sloc.upper().startswith(target_loc_upper + "-"):
+                    match = True
                     
                 # 2. [ALEX FIX] Physical Source Match (The Ghost Logic)
                 # Strip the literal quotes that Spoolman adds to JSON String Fields!
                 if not match and not check_unassigned:
                     p_source = str(extra.get('physical_source', '')).strip().upper().replace('"', '')
-                    if p_source == target_loc_upper:
+                    if p_source == target_loc_upper or ("-" not in target_loc_upper and p_source.startswith(target_loc_upper + "-")):
                         match = True
                         is_ghost = True
                         # Strip quotes from the slot too!
@@ -347,6 +349,8 @@ def get_spools_at_location_detailed(loc_name):
                         'display': info['text'], 
                         'color': info['color'], 
                         'slot': final_slot,
+                        'location': sloc,                 # [ALEX FIX] Ensure UI can access exact physical location
+                        'archived': s.get('archived', False),
                         'is_ghost': is_ghost,             # Flag for UI
                         'deployed_to': sloc if is_ghost else None, # Where is it really?
                         'remaining_weight': s.get('remaining_weight'),

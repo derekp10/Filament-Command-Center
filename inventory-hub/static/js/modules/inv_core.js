@@ -154,10 +154,7 @@ const getFilamentStyle = (colorStr, direction = 'longitudinal') => {
     // Save full colors before capping for coaxial rendering
     const fullColors = [...colors];
 
-    // 3.5. Cap at 3 colors to prevent gradient mess (LONGITUDINAL Standard)
-    if (colors.length > 3) {
-        colors = colors.slice(0, 3);
-    }
+    // No artificial limit! Let linear-gradient sweep display all assigned colors
 
     // 4. Force at least 2 colors for interpolation
     const isSolid = colors.length === 1 || (colors.length > 1 && colors[0] === colors[1]);
@@ -257,6 +254,27 @@ const fetchLocations = () => {
                     };
                     valA = parseOcc(valA);
                     valB = parseOcc(valB);
+                } else if (state.locSortBy === 'LocationID') {
+                    // Extract tree root for parent-child grouping
+                    let rootA = (a.LocationID || '').split('-')[0];
+                    let rootB = (b.LocationID || '').split('-')[0];
+                    let typeA = '';
+                    let typeB = '';
+                    
+                    const rootAItem = d.find(l => l.LocationID === rootA);
+                    if (rootAItem) typeA = rootAItem.Type || '';
+                    const rootBItem = d.find(l => l.LocationID === rootB);
+                    if (rootBItem) typeB = rootBItem.Type || '';
+
+                    let isAPrinter = typeA.includes('Printer');
+                    let isBPrinter = typeB.includes('Printer');
+
+                    if (isAPrinter !== isBPrinter) {
+                        return (isAPrinter ? -1 : 1) * state.locSortDir;
+                    }
+
+                    if (typeof valA === 'string') valA = valA.toLowerCase();
+                    if (typeof valB === 'string') valB = valB.toLowerCase();
                 } else {
                     if (typeof valA === 'string') valA = valA.toLowerCase();
                     if (typeof valB === 'string') valB = valB.toLowerCase();
@@ -295,12 +313,17 @@ const fetchLocations = () => {
                             const max = parseInt(parts[1]);
 
                             if (!isNaN(cur) && !isNaN(max)) {
-                                if (cur > max) occColor = '#ff4444';      // Red (Overfilled)
-                                else if (cur === max) occColor = '#00ff00'; // Green (Full)
+                                if (cur >= max) occColor = '#ff4444';      // Red (Full or Overfilled)
+                                else if (cur === 0) occColor = '#ffc107'; // Yellow (Empty)
+                                else occColor = '#fff'; // White (Default)
                             }
                         }
                         // GOLD STANDARD: High Contrast Pop
-                        statusHtml = `<span class="text-pop" style="font-weight:900; font-size:1.1rem; color:${occColor};">${l.Occupancy}</span>`;
+                        statusHtml = `<div class="d-flex align-items-center"><span class="text-pop" style="font-weight:900; font-size:1.1rem; color:${occColor};">${l.Occupancy}</span>`;
+                        if (occColor === '#ffc107') {
+                            statusHtml += `<span class="text-pop" title="Empty Capacity" style="font-size:1.3rem; margin-left: 6px; line-height: 1;">⚠️</span>`;
+                        }
+                        statusHtml += `</div>`;
                     } else {
                         statusHtml = `<span style="color:#666; font-style:italic; font-weight:bold;">--</span>`;
                     }
@@ -316,14 +339,35 @@ const fetchLocations = () => {
                     else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
                     else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
                     else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
-                    // [ALEX FIX] High Contrast for Virtual
-                    else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
+                    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
+                    else if (t.includes('Room')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
+                    // [ALEX FIX] Ghostly, Hollow Look for Virtual
+                    else if (t.includes('Virtual')) { badgeClass = 'bg-transparent text-light'; badgeStyle = 'border:2px dashed #aaa; box-shadow: inset 0 0 5px rgba(255,255,255,0.2);'; }
 
                     const typeBadge = `<span class="badge ${badgeClass}" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
 
+                    let indent = '';
+                    let parentId = l.LocationID.includes('-') ? l.LocationID.split('-')[0] : l.LocationID;
+                    let isChild = false;
+                    let hasChildren = false;
+
+                    if (state.locSortBy === 'LocationID') {
+                        isChild = l.LocationID.includes('-') && !['TST','TEST','PM','PJ'].includes(parentId);
+                        if (isChild) {
+                            indent = '<span style="display:inline-block; width: 20px; border-left: 2px solid #555; border-bottom: 2px solid #555; height: 16px; margin-right: 8px; margin-bottom: 6px; margin-left: 10px;"></span>';
+                        } else {
+                            hasChildren = finalList.some(c => c.LocationID !== l.LocationID && c.LocationID.startsWith(l.LocationID + '-'));
+                            if (hasChildren && !['TST','TEST','PM','PJ'].includes(l.LocationID)) {
+                                indent = `<span onclick="window.toggleLocNode('${l.LocationID}', this)" style="cursor:pointer; font-family: monospace; border: 1px solid #555; border-radius: 3px; padding: 0 4px; margin-right: 6px; color:#aaa; background:#222; user-select:none; font-size:1rem; box-shadow:inset 0 0 3px #000;" class="text-pop-light">-</span>`;
+                            }
+                        }
+                    }
+
+                    const rowClass = isChild ? `loc-child-of-${parentId}` : '';
+
                     return `
-                <tr>
-                    <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem; white-space: nowrap;">${l.LocationID}</td>
+                <tr class="${rowClass}" id="loc-row-${l.LocationID}">
+                    <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem; white-space: nowrap;">${indent}${l.LocationID}</td>
                     <td class="col-name text-pop-light" style="font-weight:800; font-size:1.1rem; color:#fff;">${l.Name}</td>
                     <td class="col-type">${typeBadge}</td>
                     <td class="col-status">${statusHtml}</td>
@@ -350,6 +394,24 @@ window.sortLocations = (col) => {
     }
     state.lastLocationsHash = null; // Force DOM re-render
     fetchLocations();
+};
+
+window.toggleLocNode = (parentId, btnEl) => {
+    const isExpanded = btnEl.innerText === '-';
+    // Use .startsWith on ID rather than explicit classes to support deeper nesting dynamically
+    // Actually our loc-child-of class is perfect as it targets immediate children implicitly
+    const rows = document.querySelectorAll(`.loc-child-of-${parentId}`);
+    rows.forEach(r => {
+        r.style.display = isExpanded ? 'none' : '';
+    });
+    btnEl.innerText = isExpanded ? '+' : '-';
+    if(isExpanded) {
+        btnEl.style.color = '#fff';
+        btnEl.style.background = '#444';
+    } else {
+        btnEl.style.color = '#aaa';
+        btnEl.style.background = '#222';
+    }
 };
 
 window.showGlobalQrModal = (locId) => {

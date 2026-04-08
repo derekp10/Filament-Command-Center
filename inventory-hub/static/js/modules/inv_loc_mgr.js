@@ -17,7 +17,49 @@ window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations();
 window.openManage = (id) => {
     setProcessing(true);
 
-    document.getElementById('manageTitle').innerText = `Location Manager: ${id}`;
+    const loc = state.allLocations.find(l => l.LocationID == id);
+    if (!loc) { setProcessing(false); return; }
+
+    let occHtml = ``;
+    if (loc.Occupancy && loc.Occupancy !== '--') {
+        const parts = loc.Occupancy.split('/');
+        let occColor = '#fff';
+        let isEmpty = parseInt(parts[0]) === 0;
+
+        if (parts.length === 2 && !isNaN(parseInt(parts[0])) && !isNaN(parseInt(parts[1]))) {
+            if (parseInt(parts[0]) >= parseInt(parts[1])) occColor = '#ff4444'; // Red if full
+            else if (isEmpty) occColor = '#ffc107'; // Yellow if empty
+        } else if (isEmpty) {
+            occColor = '#ffc107';
+        }
+        
+        let emptyWarn = '';
+        if (occColor === '#ffc107') {
+            emptyWarn = `<span class="text-pop ms-2" style="font-size:1.4rem; color:#ffc107; font-weight: 900; line-height: 1;">⚠️ EMPTY</span>`;
+        }
+
+        let occText = `${loc.Occupancy} Spools`;
+        if (parts.length === 1 || isNaN(parseInt(parts[1]))) {
+            occText = `Total Spools: ${parseInt(parts[0])}`;
+        }
+
+        occHtml = `<span class="text-pop ms-3" style="color:${occColor}; font-size:1.1rem; border-left: 2px solid #555; padding-left: 12px;">${occText}</span>${emptyWarn}`;
+    }
+
+    let badgeClass = 'bg-secondary';
+    let badgeStyle = 'border:1px solid #555;';
+    const t = loc.Type || '';
+    if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
+    else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
+    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
+    else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
+    else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
+    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
+    else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
+    
+    const typeBadge = `<span class="badge ${badgeClass} ms-3 fs-6" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); padding-top: 5px; ${badgeStyle}">${loc.Type}</span>`;
+
+    document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${id} ${typeBadge} ${occHtml}</div>`;
     document.getElementById('manage-loc-id').value = id;
     const input = document.getElementById('manual-spool-id');
     if (input) input.value = "";
@@ -30,8 +72,7 @@ window.openManage = (id) => {
     document.getElementById('manage-grid-view').style.display = 'none';
     document.getElementById('manage-list-view').style.display = 'none';
 
-    const loc = state.allLocations.find(l => l.LocationID == id);
-    if (!loc) { setProcessing(false); return; }
+
 
     const isGrid = (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
 
@@ -255,23 +296,90 @@ const renderList = (data, locId) => {
 
     // 2. Existing Items
     if (data.length > 0) {
-        data.forEach((s, i) => {
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = renderBadgeHTML(s, i, locId);
-            const el = tempDiv.firstElementChild;
-            const btnLabel = el.querySelector('.js-btn-label');
-            if (btnLabel) {
-                btnLabel.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    window.addToQueue({ id: s.id, type: 'spool', display: s.display });
-                });
+        const grouped = {};
+        data.forEach(s => {
+            const sLoc = s.location || "Unassigned";
+            if (!grouped[sLoc]) grouped[sLoc] = [];
+            grouped[sLoc].push(s);
+        });
+
+        const gKeys = Object.keys(grouped);
+        // Ensure the root parent location comes first
+        gKeys.sort((a,b) => {
+            if (a.toLowerCase() === locId.toLowerCase()) return -1;
+            if (b.toLowerCase() === locId.toLowerCase()) return 1;
+            return a.localeCompare(b);
+        });
+
+        const reOrderedData = [];
+        let flatIndex = 0;
+
+        const borderColors = ['border-info', 'border-warning', 'border-success', 'border-danger', 'border-primary', 'border-secondary'];
+
+        gKeys.forEach((gLoc, index) => {
+            const isFloating = gLoc.toLowerCase() === locId.toLowerCase();
+            const hideHeader = gKeys.length === 1 && isFloating;
+            
+            const groupWrapper = document.createElement('div');
+            const bColor = borderColors[index % borderColors.length];
+            
+            if (!hideHeader) {
+                groupWrapper.className = `p-2 mb-3 rounded border border-2 ${bColor} bg-dark`;
+                groupWrapper.style.boxShadow = "inset 0 0 10px rgba(0,0,0,0.5)";
+                
+                const subHead = document.createElement('div');
+                if (isFloating) {
+                    subHead.className = `d-flex justify-content-between align-items-center border-bottom border-2 pb-2 mb-2 ${bColor}`;
+                    subHead.innerHTML = `
+                        <div class="d-flex align-items-center">
+                            <span class="btn btn-sm btn-outline-light px-2 py-0 border-0 fs-5 me-2" onclick="this.parentElement.parentElement.nextElementSibling.classList.toggle('d-none'); this.innerText = this.innerText === '-' ? '+' : '-';">-</span>
+                            <h5 class="text-light m-0 fw-bold" style="font-size:1.1rem;">☁️ Loose / Floating</h5>
+                        </div>`;
+                } else {
+                    subHead.className = `d-flex justify-content-between align-items-center border-bottom border-2 pb-2 mb-2 ${bColor}`;
+                    const isPrinter = gLoc.includes('PRINTER') || gLoc.includes('CORE') || gLoc.includes('XL') || gLoc.includes('MK');
+                    const icon = isPrinter ? '🖨️' : '📦';
+                    subHead.innerHTML = `
+                         <div class="d-flex align-items-center">
+                              <span class="btn btn-sm btn-outline-light px-2 py-0 border-0 fs-5 me-2" onclick="this.parentElement.parentElement.nextElementSibling.classList.toggle('d-none'); this.innerText = this.innerText === '-' ? '+' : '-';">-</span>
+                              <h5 class="text-info m-0 fw-bold" style="font-size:1.1rem;">${icon} <span class="text-white">${gLoc}</span></h5>
+                         </div>
+                         <button class="btn btn-sm btn-outline-info py-0 px-2 fw-bold" onclick="openManage('${gLoc}')">Manage / View</button>`;
+                }
+                groupWrapper.appendChild(subHead);
             }
-            list.appendChild(el);
+            
+            const itemsContainer = document.createElement('div');
+            itemsContainer.className = "d-flex flex-column gap-2 mt-2";
+
+            grouped[gLoc].forEach(s => {
+                reOrderedData.push(s);
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = renderBadgeHTML(s, flatIndex, locId);
+                const el = tempDiv.firstElementChild;
+                const btnLabel = el.querySelector('.js-btn-label');
+                if (btnLabel) {
+                    btnLabel.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        window.addToQueue({ id: s.id, type: 'spool', display: s.display });
+                    });
+                }
+                itemsContainer.appendChild(el);
+                flatIndex++;
+            });
+            
+            if (!hideHeader) {
+                groupWrapper.appendChild(itemsContainer);
+                list.appendChild(groupWrapper);
+            } else {
+                // If it's just a single flat root location, just append items directly to avoid empty bounding box
+                itemsContainer.childNodes.forEach(child => list.appendChild(child.cloneNode(true)));
+            }
         });
 
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-                data.forEach((s, i) => renderBadgeQRs(s, i));
+                reOrderedData.forEach((s, i) => renderBadgeQRs(s, i));
                 generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
 
                 if (document.getElementById('qr-deposit-trigger')) {
@@ -460,12 +568,20 @@ window.ejectSpool = (sid, loc, pickup) => {
     }
 };
 
-window.doEject = (sid, loc) => {
+window.doEject = (sid, loc, isConfirmed = false) => {
     setProcessing(true);
-    fetch('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'remove', location: loc, spool_id: sid }) })
+    fetch('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'remove', location: loc, spool_id: sid, confirmed: isConfirmed }) })
         .then(r => r.json())
-        .then(() => {
+        .then((res) => {
             setProcessing(false);
+            
+            if (res.require_confirm) {
+                requestConfirmation(res.msg || `True Unassign spool #${sid}? It is currently floating in a room.`, () => {
+                    window.doEject(sid, loc, true);
+                });
+                return;
+            }
+            
             showToast("Ejected");
             if (loc !== "Scan") {
                 // [ALEX FIX] Force a re-render by clearing the hash. 
