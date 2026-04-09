@@ -1,4 +1,6 @@
 # **Done**
+* **UI/UX:** Fixed the FilaBridge status light blinking erroneously by expanding the background polling API timeout thresholds.
+* **UI/UX:** Fixed the legacy location label scan toast disappearing too quickly by extending its duration and appending the raw barcode string directly into the persistent activity log entry.
 * **UI/UX (Quick Weigh):** Fixed gray-on-gray low-contrast text across the Quick Weigh, Filament Details, and Spool Details modals. Upgraded Bootstrap components from `.text-muted` to `.text-light` universally.
 * **Modals:** Replaced the Quick Weigh SweetAlert2 overlay with a completely native, non-conflicting Bootstrap Modal, resolving strict focus-trapping behaviors that prevented text input inside nested views.
 * **Feature:** Enhanced the Quick Weigh Adjustment field to natively parse mathematical operators. Standard inputs strictly deduct mathematically for smooth usage tracking, while explicit prefixes (e.g., `+50`) automatically convert into additive weight models. Bound explicitly to the `<Enter>` key listener for zero-click saving.

@@ -1407,11 +1407,11 @@ def api_log_event():
 def api_get_logs_route():
     sm_url, fb_url = config_loader.get_api_urls()
     sm_ok, fb_ok = False, False
-    try: sm_ok = requests.get(f"{sm_url}/api/v1/health", timeout=1).ok
+    try: sm_ok = requests.get(f"{sm_url}/api/v1/health", timeout=3).ok
     except: pass
     
     try: 
-        fb_resp = requests.get(f"{fb_url}/status", timeout=1)
+        fb_resp = requests.get(f"{fb_url}/status", timeout=3)
         fb_ok = fb_resp.ok
         
         # [NEW] Check for FilaBridge Print Errors

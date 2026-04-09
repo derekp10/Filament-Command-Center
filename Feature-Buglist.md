@@ -11,9 +11,9 @@
 * A way to display inactive spools in the filament modals spool's list. (Perhaps a toggle or someting to enable showning all spools.) Incase something get set to archive when it shouldn't have.
 * Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. (I'm not sure what all we'd want to put here, but it'd be nice to have.)
 * For the location override modal the dropdown used to display the locations available should be searchable to find a location, or a close match to the location. To make reassignments easier on users.
-* Filabrige status light, appears to be blinking for some reason.
+
 * In location manager, if an item is added to a loction that has slots, and there is a free slot, auto assign the item into that free slot. (If there are multiple free slots, fill the first empty one.)
-* Toast for notifying a user that a location label is a legacy label doesn't stay up long enough to read, or catch if focusing on barcodes and moving things. We need a more detailed message in the activity log to say what the item was so the user can take action once the see the error in the activity list.
+
 * I know we fixed it for scanning items, but hand typed id's into the command center's main page can sometimes add an item, that then gets imidiately removed on backend refresh. We need to fix this from happening when loading items without the use of a barcode. (Basically bring the protections we recently added to barcode scans reguarding this issue, to also preserve manual entries too.)
 * Fix getting lagacy location scann errors with barcodes generated as part of the UI. All barcodes should use there proper prefex and be displayed using the current standards defined. I shouldn't see a lagacy barcode error when using the deploy QR code on a Manage Location window.
 * Review and unify update logic across the program, we have to many versions of update that keep getting orphined, or cause problems later on when they aren't included in a recent design change. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
