@@ -33,6 +33,10 @@
 * For existing filaments, advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
+* For the add/edit inventory wizzard modal, make the location searchable like in the filament/spool display modal's version.
+* Spool's need a price section to track the cost at a spool level added to the Add/Edit inventory wizzard. I noticed this was missing when using the clone spool function.
+* Spool's empty weight when using the clone function didn't update the datbase.
+* Filament and Spool Detail Modal's should stay open in the back ground.
 
 ## 🔍 Search, Display & Filtering
 * Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.
@@ -95,6 +99,7 @@
 * Standardize the size of all QR codes to match that of the sizes used on the command center. (Audit, eject, drop, etc).
 * If legacy barcode has no spools attached to it, UI should warn about this, perhaps give option to add new spool?
 * Spoolman ExternalID is not a visible field in Spoolman UI. Very low priority.
+* Spool's need a purchase link for if they vary from the the filiments original purchase location.
 
 
 # **Overarching Issue**
