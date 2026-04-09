@@ -13,16 +13,20 @@ document.addEventListener('inventory:buffer-updated', () => {
 
 window.openLocationsModal = () => { modals.locMgrModal.show(); fetchLocations(); };
 
-// --- PRE-FLIGHT PROTOCOL ---
-window.openManage = (id) => {
-    setProcessing(true);
-
-    const loc = state.allLocations.find(l => l.LocationID == id);
-    if (!loc) { setProcessing(false); return; }
-
+window.updateManageTitle = (loc, itemArray = null) => {
     let occHtml = ``;
-    if (loc.Occupancy && loc.Occupancy !== '--') {
-        const parts = loc.Occupancy.split('/');
+    let occupancyStr = loc.Occupancy || '--';
+    
+    // [ALEX FIX] Real-time mathematical override for instantaneous title snappiness
+    // Safely parse capacity. Arrays returned from /api/get_contents represent direct physical counts.
+    if (itemArray !== null && loc['Max Spools']) {
+        const capacity = parseInt(loc['Max Spools']);
+        // Use realistic count ignoring virtual ghost spools? No, payload is physical items.
+        occupancyStr = `${itemArray.length}/${capacity > 0 ? capacity : '--'}`;
+    }
+
+    if (occupancyStr !== '--') {
+        const parts = occupancyStr.split('/');
         let occColor = '#fff';
         let isEmpty = parseInt(parts[0]) === 0;
 
@@ -38,7 +42,7 @@ window.openManage = (id) => {
             emptyWarn = `<span class="text-pop ms-2" style="font-size:1.4rem; color:#ffc107; font-weight: 900; line-height: 1;">⚠️ EMPTY</span>`;
         }
 
-        let occText = `${loc.Occupancy} Spools`;
+        let occText = `${occupancyStr} Spools`;
         if (parts.length === 1 || isNaN(parseInt(parts[1]))) {
             occText = `Total Spools: ${parseInt(parts[0])}`;
         }
@@ -59,7 +63,17 @@ window.openManage = (id) => {
     
     const typeBadge = `<span class="badge ${badgeClass} ms-3 fs-6" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); padding-top: 5px; ${badgeStyle}">${loc.Type}</span>`;
 
-    document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${id} ${typeBadge} ${occHtml}</div>`;
+    document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${loc.LocationID} ${typeBadge} ${occHtml}</div>`;
+};
+
+// --- PRE-FLIGHT PROTOCOL ---
+window.openManage = (id) => {
+    setProcessing(true);
+
+    const loc = state.allLocations.find(l => l.LocationID == id);
+    if (!loc) { setProcessing(false); return; }
+
+    window.updateManageTitle(loc);
     document.getElementById('manage-loc-id').value = id;
     const input = document.getElementById('manual-spool-id');
     if (input) input.value = "";
@@ -131,6 +145,7 @@ window.refreshManageView = (id) => {
             // -----------------------
 
             // Data changed? Okay, render it.
+            window.updateManageTitle(loc, d);
             renderManagerNav();
             const isGrid = (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
             if (isGrid) renderGrid(d, parseInt(loc['Max Spools']));
@@ -183,6 +198,7 @@ const renderManagerNav = () => {
                     <div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.addToQueue({ id: ${curItem.id}, type: 'spool', display: '${curItem.display ? curItem.display.replace(/[\'"]/g, '') : ''}' }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>
                 </div>
                 <div class="nav-label">READY TO SLOT</div>
+                ${(curItem.archived === true || String(curItem.archived).toLowerCase() === 'true') ? `<div class="badge text-bg-danger mb-2" style="font-size: 0.9rem;">📦 ARCHIVED</div>` : ''}
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
                 <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div class="text-pop" style="font-size:1.0rem; color:#fff; font-weight:bold;">${curInfo.line2}</div>
@@ -233,7 +249,7 @@ const renderGrid = (data, max) => {
                     <div class="slot-inner-gold">
                         <div class="slot-header"><div class="slot-num-gold" style="color:#555;">SLOT ${i}</div></div>
                         <div id="qr-slot-${i}" class="bg-white p-2 rounded mt-3 mb-3"></div>
-                        <div class="fs-4 text-muted fw-bold" style="margin-top:20px;">EMPTY</div>
+                        <div class="fs-4 text-light fw-bold" style="margin-top:20px;">EMPTY</div>
                         <div style="height:35px;"></div>
                     </div>
                 </div>`;
@@ -383,17 +399,20 @@ const renderList = (data, locId) => {
                 generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
 
                 if (document.getElementById('qr-deposit-trigger')) {
-                    generateSafeQR('qr-deposit-trigger', locId, 85);
+                    const safeId = String(locId).replace(/['"]/g, '');
+                    generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85);
                 }
             });
         });
     } else {
         requestAnimationFrame(() => {
             if (document.getElementById('qr-deposit-trigger')) {
-                generateSafeQR('qr-deposit-trigger', locId, 85);
+                const safeId = String(locId).replace(/['"]/g, '');
+                generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85);
             }
         });
     }
+
 };
 
 const renderUnslotted = (items) => {
@@ -526,6 +545,15 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null) => {
         }
     }
 
+    if (isFromBuffer) {
+        const spoolObj = state.heldSpools.find(s => String(s.id) === spoolIdStr);
+        if (spoolObj && (spoolObj.archived === true || String(spoolObj.archived).toLowerCase() === 'true')) {
+            showToast("Cannot assign an ARCHIVED spool to a location!", "error");
+            setProcessing(false);
+            return;
+        }
+    }
+
     fetch('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'add', location: loc, spool_id: "ID:" + spool, slot: finalSlot, origin: isFromBuffer ? 'buffer' : '' }) })
         .then(r => r.json())
         .then(res => {
@@ -540,6 +568,7 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null) => {
                     if (window.renderBuffer) window.renderBuffer();
                 }
 
+                if (window.fetchLocations) window.fetchLocations();
                 refreshManageView(loc);
             }
             else showToast(res.msg, 'error');
@@ -580,12 +609,17 @@ window.doEject = (sid, loc, isConfirmed = false) => {
                 });
                 return;
             }
+            if (!res.success) {
+                showToast(res.msg || "Failed to eject spool", "error");
+                return;
+            }
             
             showToast("Ejected");
             if (loc !== "Scan") {
                 // [ALEX FIX] Force a re-render by clearing the hash. 
                 // This ensures the UI updates to "Empty" even if the API data is cached/similar.
                 state.lastLocRenderHash = null;
+                if (window.fetchLocations) window.fetchLocations();
                 refreshManageView(loc);
             }
         })
@@ -620,7 +654,7 @@ window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, 
     setProcessing(true);
     fetch('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: loc }) })
         .then(r => r.json())
-        .then(() => { setProcessing(false); refreshManageView(loc); showToast("Cleared!"); });
+        .then(() => { setProcessing(false); if(window.fetchLocations) window.fetchLocations(); refreshManageView(loc); showToast("Cleared!"); });
 });
 
 window.printCurrentLocationLabel = () => {
@@ -672,81 +706,3 @@ window.openAddModal = () => {
 
 window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, { method: 'DELETE' }).then(fetchLocations));
 
-// --- SMART SYNC LISTENER (SURGICAL UPDATES ONLY) ---
-document.addEventListener('inventory:sync-pulse', () => {
-    const manageModal = document.getElementById('manageModal');
-    if (manageModal && manageModal.classList.contains('show') && !state.processing) {
-
-        // 1. Find all spool elements currently on screen in the Manager
-        const spoolNodes = document.querySelectorAll('#manageModal [data-spool-id]');
-        if (spoolNodes.length === 0) return;
-
-        // 2. Extract unique IDs
-        const spoolMap = {};
-        spoolNodes.forEach(node => {
-            const id = node.getAttribute('data-spool-id');
-            if (id) spoolMap[id] = true;
-        });
-
-        const spoolIds = Object.keys(spoolMap).map(id => parseInt(id));
-
-        // 3. Fetch latest display info from backend
-        fetch('/api/spools/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ spools: spoolIds })
-        })
-            .then(r => r.json())
-            .then(data => {
-                // 4. Surgically apply updates
-                spoolNodes.forEach(node => {
-                    const id = node.getAttribute('data-spool-id');
-                    const fresh = data[id];
-                    if (!fresh) return;
-
-                    const styles = getFilamentStyle(fresh.color, fresh.color_direction || 'longitudinal');
-
-                    // --- Apply to GRID items ---
-                    if (node.classList.contains('slot-btn')) {
-                        node.style.background = styles.frame;
-                        if (styles.border) node.style.boxShadow = 'inset 0 0 0 2px #555';
-                        else node.style.boxShadow = '';
-                        const inner = node.querySelector('.fcc-spool-card-inner') || node.querySelector('.slot-inner-gold');
-                        if (inner && inner.style) {
-                            if (node.classList.contains('is-ghost')) {
-                                inner.style.background = `repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}`;
-                            } else {
-                                inner.style.background = `linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}`;
-                            }
-                            inner.style.boxShadow = `inset 0 0 0 1px ${styles.frame}`;
-                        }
-
-                        const t3 = node.querySelector('.text-line-3');
-                        const nameStr = fresh.display.replace(/^#\d+\s*/, '').trim();
-                        t3.innerText = nameStr;
-                    }
-
-                    // --- Apply to LIST items ---
-                    if (node.classList.contains('manage-list-item')) {
-                        node.style.background = styles.frame;
-                        if (styles.border) node.style.boxShadow = 'inset 0 0 0 2px #555';
-                        else node.style.boxShadow = '';
-                        const inner = node.querySelector('.fcc-spool-card-inner') || node.querySelector('.list-inner-gold');
-                        if (inner && inner.style) {
-                            if (node.classList.contains('is-ghost')) {
-                                inner.style.background = `repeating-linear-gradient(45deg, rgba(0,0,0,0.8), rgba(0,0,0,0.8) 15px, rgba(0,0,0,0.3) 15px, rgba(0,0,0,0.3) 30px), linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}`;
-                            } else {
-                                inner.style.background = `linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.1) 100%), ${styles.frame}`;
-                            }
-                            inner.style.boxShadow = `inset 0 0 0 1px ${styles.frame}`;
-                        }
-
-                        const t3 = node.querySelector('.text-line-3') || node.querySelector('.mt-2 strong');
-                        const nameStr = fresh.display.replace(/^#\d+\s*/, '').trim();
-                        t3.innerText = nameStr;
-                    }
-                });
-            })
-            .catch(e => console.warn("Live Refresh Manager Failed", e));
-    }
-});

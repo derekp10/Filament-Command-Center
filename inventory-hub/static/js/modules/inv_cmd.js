@@ -228,12 +228,13 @@ const performContextAssign = (tid, slot = null) => {
                 state.heldSpools = [];
                 renderBuffer();
                 if (document.getElementById('manage-loc-id').value === tid) refreshManageView(tid);
+                if (window.fetchLocations) window.fetchLocations();
             } else showToast(res.msg, 'error');
         })
         .catch(() => setProcessing(false));
 };
 
-const triggerUndo = () => fetch('/api/undo', { method: 'POST' }).then(() => { updateLogState(); loadBuffer(); });
+const triggerUndo = () => fetch('/api/undo', { method: 'POST' }).then(() => { updateLogState(); loadBuffer(); if(window.fetchLocations) window.fetchLocations(); });
 
 const printLabel = (sid) => {
     showToast("🖨️ Requesting Label...");

@@ -257,9 +257,12 @@ const openFilamentDetails = (fid, silent = false) => {
 
             // Only run if the HTML element exists (safety check)
             if (listContainer) {
-                if (!silent) listContainer.innerHTML = "<div class='p-2 text-muted text-center small'>Checking inventory...</div>";
+                if (!silent) listContainer.innerHTML = "<div class='p-2 text-light text-center small'>Checking inventory...</div>";
 
-                fetch(`/api/spools_by_filament?id=${fid}`)
+                const toggleArchived = document.getElementById('toggle-show-archived');
+                const allowArchived = toggleArchived ? toggleArchived.checked : false;
+
+                fetch(`/api/spools_by_filament?id=${fid}&allow_archived=${allowArchived}`)
                     .then(r => r.json())
                     .then(spools => {
                         // --- NO WIGGLE CHECK (Spools) ---
@@ -292,7 +295,7 @@ const openFilamentDetails = (fid, silent = false) => {
                                 row.innerHTML = `
                             <div class="d-flex align-items-center">
                                 <span class="text-info fw-bold me-2">ID: ${s.id}</span> 
-                                <span class="text-muted me-2">|</span> 
+                                <span class="text-light me-2">|</span> 
                                 <span>${remaining}g</span>
                             </div>
                             <div class="d-flex align-items-center">
@@ -347,7 +350,7 @@ const openFilamentDetails = (fid, silent = false) => {
                         } else {
                             // No spools found
                             if (countBadge) countBadge.innerText = "0";
-                            listContainer.innerHTML = "<div class='p-2 text-muted text-center small'>No active spools found.</div>";
+                            listContainer.innerHTML = "<div class='p-2 text-light text-center small'>No spools found.</div>";
                             if (btnQueueAll) btnQueueAll.style.display = 'none';
                         }
 
@@ -423,7 +426,7 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                         <select id="swal-override-loc" class="form-select bg-dark text-white border-warning">
                             ${optionsHtml}
                         </select>
-                        <small class="text-muted mt-2 d-block">
+                        <small class="text-light mt-2 d-block">
                             Bypasses scanning protocols to forcefully move the spool in the database.
                         </small>
                     </div>
@@ -473,4 +476,16 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                 }
             });
         });
+};
+
+window.refreshFilamentSpools = () => {
+    const fidEl = document.getElementById('fil-detail-id');
+    if (fidEl && fidEl.innerText) {
+        // Clear caches so it forces a re-render
+        if (typeof state !== 'undefined') {
+            state.lastFilamentInfoHash = null;
+            state.lastFilamentSpoolsHash = null;
+        }
+        openFilamentDetails(fidEl.innerText, false);
+    }
 };

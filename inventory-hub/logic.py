@@ -156,7 +156,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
             # Don't eject the spool we are currently trying to move (if it's already there)
             if str(rid) not in [str(s) for s in spools]:
                 state.add_log_entry(f"⚠️ <b>Smart Load:</b> Ejecting #{rid} from {target}...", "WARNING")
-                if perform_smart_eject(rid):
+                if perform_smart_eject(rid, suppress_fb_unmap=True):
                     # Find out where it actually got sent to so we can bring it back!
                     ejected_data = spoolman_api.get_spool(rid)
                     if ejected_data:
@@ -190,10 +190,9 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
         # PRINTER MOVE
         if target in printer_map:
             src_info = loc_info_map.get(current_loc)
-            if src_info and src_info.get('Type') == 'Dryer Box':
-                new_extra['physical_source'] = current_loc
-                # [ALEX FIX] Save the slot! This was missing, causing the "Missing Ghost" bug.
-                new_extra['physical_source_slot'] = current_extra.get('container_slot')
+            # [Universal Fallback] Save origin anytime we move to a printer
+            new_extra['physical_source'] = current_loc
+            new_extra['physical_source_slot'] = current_extra.get('container_slot')
             
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 p = printer_map[target]
@@ -215,9 +214,8 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
             
         # GENERIC MOVE
         else:
-            # [ALEX FIX] Ghost Logic: If moving Dryer -> Tool, leave a breadcrumb (Source + Slot)
-            # We only do this if the target is a "Consumer" (Tool/MMU), not just a random cart.
-            if loc_info_map.get(current_loc, {}).get('Type') == 'Dryer Box' and is_toolhead:
+            # [Universal Fallback Ghost Logic]
+            if is_toolhead:
                  new_extra['physical_source'] = current_loc
                  new_extra['physical_source_slot'] = current_extra.get('container_slot')
 
@@ -243,12 +241,24 @@ def get_room_from_location(loc_id):
             
     return prefix
 
-def perform_smart_eject(spool_id, confirmed_unassign=False):
+def perform_smart_eject(spool_id, confirmed_unassign=False, suppress_fb_unmap=False):
     spool_data = spoolman_api.get_spool(spool_id)
     if not spool_data: return False
     
     current_location = spool_data.get('location', '').strip().upper()
     extra = spool_data.get('extra', {})
+    
+    cfg = config_loader.load_config()
+    printer_map = cfg.get("printer_map", {})
+    sm_url, fb_url = config_loader.get_api_urls()
+    
+    # Ensure toolhead is cleared from Filabridge if we eject from an integrated printer
+    if current_location in printer_map and not suppress_fb_unmap:
+        p = printer_map[current_location]
+        try:
+            requests.post(f"{fb_url}/map_toolhead", 
+                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}, timeout=3)
+        except: pass
     
     # Save the original slot before we wipe it for processing
     orig_container_slot = extra.get('container_slot', '')
@@ -294,9 +304,13 @@ def perform_smart_eject(spool_id, confirmed_unassign=False):
             state.add_log_entry(f"↩️ Returned #{spool_id} -> {saved_source}", "WARNING")
             return True
     else:
-        # [ALEX FIX] Normal unslotted eject with Room Fallback
-        room_fallback = get_room_from_location(current_location)
-        target_loc = room_fallback if room_fallback else ""
+        # Normal unslotted eject with Room Fallback
+        # [Universal Fallback fix] A printer is not a Room. If ejecting from a printer and missing physical_source, default to Unassigned.
+        if current_location in printer_map:
+            target_loc = ""
+        else:
+            room_fallback = get_room_from_location(current_location)
+            target_loc = room_fallback if room_fallback else ""
 
         # Protected Unassign
         if target_loc == "" and current_location != "":
@@ -318,6 +332,18 @@ def perform_force_unassign(spool_id):
     spool_data = spoolman_api.get_spool(spool_id)
     if not spool_data: return False
     extra = spool_data.get('extra', {})
+    current_location = spool_data.get('location', '').strip().upper()
+    
+    cfg = config_loader.load_config()
+    printer_map = cfg.get("printer_map", {})
+    sm_url, fb_url = config_loader.get_api_urls()
+    
+    if current_location in printer_map:
+        p = printer_map[current_location]
+        try:
+            requests.post(f"{fb_url}/map_toolhead", 
+                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}, timeout=3)
+        except: pass
     
     # [ALEX FIX] Explicitly overwrite slots and sources with empty strings
     # to guarantee Spoolman API removes them instead of ignoring dropped keys
