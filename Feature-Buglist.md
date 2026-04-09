@@ -35,6 +35,7 @@
 * Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
 * For the add/edit inventory wizzard modal, make the location searchable like in the filament/spool display modal's version.
 * We now have 2 purchase links for spools, one that virtually links to the filament value, the other is on it's own but part of the spool. We need to look into the code here and pair down to only one fied if possible, but retain functionality. Linked field enharrenting the value possibly. Or we just fix the code so it looks at what is available and takes the one that exists, with a preference for the spool specific one, which may be more uptodate, or specific for the pricing.
+* Filament ID and Spool ID should be visible on the edit version of the add inventory wizzard, so that a user can easily see what one they are working on.
 
 ## 🔍 Search, Display & Filtering
 * Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.
