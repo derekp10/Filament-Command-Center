@@ -1,4 +1,6 @@
 # **Done**
+* **Modals / UX:** For the Location Override Modal, completely replaced the native \`<datalist>\` implementation with a custom SweetAlert2 scrollable, live-filtering dropdown. This safely limits bounding constraints and allows instantaneous search visibility without restricting usability for exceptionally long location lists.
+* **UI / Fast Flow:** Added a dedicated 'Drop from Buffer' (`❌`) action directly into the primary top-center "Ready to Slot" buffer carousel card within the Location Manager modal. This guarantees users can seamlessly thrash unwanted spools dynamically while inspecting locations without forcing an exit.
 * **UI/UX:** Fixed the FilaBridge status light blinking erroneously by expanding the background polling API timeout thresholds.
 * **UI/UX:** Fixed the legacy location label scan toast disappearing too quickly by extending its duration and appending the raw barcode string directly into the persistent activity log entry.
 * **UI/UX (Quick Weigh):** Fixed gray-on-gray low-contrast text across the Quick Weigh, Filament Details, and Spool Details modals. Upgraded Bootstrap components from `.text-muted` to `.text-light` universally.

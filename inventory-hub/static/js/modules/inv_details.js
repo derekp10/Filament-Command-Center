@@ -405,27 +405,33 @@ window.promptEditLocation = (spoolId, currentLoc) => {
     fetch('/api/locations')
         .then(r => r.json())
         .then(locs => {
-            let optionsHtml = '<option value="">-- Unassigned --</option>';
+            const validLocs = [{id: "", name: "-- Unassigned --"}];
             if (Array.isArray(locs)) {
                 locs.forEach(l => {
                     const type = (l.Type || '').toLowerCase();
                     if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return;
                     if (l.LocationID === 'Unassigned') return;
-                    
-                    const isSelected = l.LocationID === defaultLoc ? 'selected' : '';
-                    optionsHtml += `<option value="${l.LocationID}" ${isSelected}>${l.Name} (${l.LocationID})</option>`;
+                    validLocs.push({id: l.LocationID, name: `${l.Name} (${l.LocationID})`});
                 });
             }
+
+            let listHtml = validLocs.map(l => `
+                <div class="swal-loc-item p-2 border-bottom border-dark cursor-pointer text-light" data-id="${l.id}" style="transition:0.2s; ${l.id === defaultLoc ? 'background:#444;' : 'background:transparent;'}">
+                    ${l.name}
+                </div>
+            `).join('');
 
             Swal.fire({
                 target: document.getElementById('spoolModal') || document.body,
                 title: 'Force Location Override',
                 html: `
                     <div class="text-start">
-                        <label class="form-label text-warning small mb-1">Select New Location</label>
-                        <select id="swal-override-loc" class="form-select bg-dark text-white border-warning">
-                            ${optionsHtml}
-                        </select>
+                        <label class="form-label text-warning small mb-1">Search New Location</label>
+                        <input type="text" id="swal-override-search" class="form-control bg-dark text-white border-warning mb-2" placeholder="Type to filter..." autocomplete="off">
+                        <input type="hidden" id="swal-override-loc" value="${defaultLoc}">
+                        <div id="swal-loc-list-container" class="border border-secondary rounded" style="max-height: 200px; overflow-y: auto; background: #111;">
+                            ${listHtml}
+                        </div>
                         <small class="text-light mt-2 d-block">
                             Bypasses scanning protocols to forcefully move the spool in the database.
                         </small>
@@ -436,6 +442,30 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                 background: '#1e1e1e',
                 color: '#fff',
                 confirmButtonText: 'Force Move',
+                didOpen: () => {
+                    const popup = Swal.getPopup();
+                    const searchInput = popup.querySelector('#swal-override-search');
+                    const hiddenInput = popup.querySelector('#swal-override-loc');
+                    const items = popup.querySelectorAll('.swal-loc-item');
+
+                    searchInput.addEventListener('input', (e) => {
+                        const term = e.target.value.toLowerCase();
+                        items.forEach(item => {
+                            if (item.innerText.toLowerCase().includes(term)) item.style.display = 'block';
+                            else item.style.display = 'none';
+                        });
+                    });
+
+                    items.forEach(item => {
+                        item.addEventListener('click', () => {
+                            items.forEach(i => i.style.background = 'transparent');
+                            item.style.background = '#444';
+                            hiddenInput.value = item.getAttribute('data-id');
+                        });
+                        item.addEventListener('mouseenter', () => { if(hiddenInput.value !== item.getAttribute('data-id')) item.style.background = '#222'; });
+                        item.addEventListener('mouseleave', () => { if(hiddenInput.value !== item.getAttribute('data-id')) item.style.background = 'transparent'; });
+                    });
+                },
                 preConfirm: () => {
                     const popup = Swal.getPopup();
                     const sel = popup ? popup.querySelector('#swal-override-loc') : null;
