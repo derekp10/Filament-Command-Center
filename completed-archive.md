@@ -1,4 +1,6 @@
 # **Done**
+* **Location Systems:** Synchronized the offline P-Touch label generator (`generate_location_labels.py`) with the core Web API structure. The offline generator now correctly includes explicitly sanitized `Cleaned_Name` strings and accurate `Slot` matrix identifiers to support hardware printers lacking Unicode compatibility.
+* **Location Systems:** Unified standard CSV output filenames globally; both explicit Web API generation routes and offline Python utility pipelines now consistently target the `slots_to_print.csv` artifact simultaneously, eliminating confusion.
 * **Modals / UX:** For the Location Override Modal, completely replaced the native \`<datalist>\` implementation with a custom SweetAlert2 scrollable, live-filtering dropdown. This safely limits bounding constraints and allows instantaneous search visibility without restricting usability for exceptionally long location lists.
 * **UI / Fast Flow:** Added a dedicated 'Drop from Buffer' (`❌`) action directly into the primary top-center "Ready to Slot" buffer carousel card within the Location Manager modal. This guarantees users can seamlessly thrash unwanted spools dynamically while inspecting locations without forcing an exit.
 * **UI/UX:** Fixed the FilaBridge status light blinking erroneously by expanding the background polling API timeout thresholds.

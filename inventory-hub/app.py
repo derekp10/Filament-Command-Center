@@ -599,7 +599,7 @@ def api_print_batch_csv():
             writer.writerows(items_to_print)
 
         # --- WRITE SLOTS IF GENERATED ---
-        slots_filename = "labels_slots.csv"
+        slots_filename = "slots_to_print.csv"
         if slots_to_print:
             slots_path = os.path.join(folder, slots_filename)
             slots_exists = os.path.exists(slots_path)

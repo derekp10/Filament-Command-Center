@@ -10,6 +10,19 @@ SOURCE_FILENAME = "3D Print Supplies - Locations.csv"
 LOCATIONS_OUTPUT = "locations_to_print.csv"
 SLOTS_OUTPUT = "slots_to_print.csv"
 
+def sanitize_label_text(text):
+    if not isinstance(text, str): return str(text)
+    replacements = {
+        "🦝": "Raccoon",
+        "⚡": "Bolt",
+        "🔥": "Fire",
+        "📦": "Box",
+        "⚠️": "Warn"
+    }
+    for char, name in replacements.items():
+        text = text.replace(char, name)
+    return text
+
 # --- PATH FINDER LOGIC ---
 def find_data_file():
     """Climbs up the directory tree until it finds the Data File."""
@@ -74,9 +87,11 @@ def process_locations():
         name = row.get('Name', '')
         
         # 1. ALWAYS generate the Main Location Label
+        clean_name_main = sanitize_label_text(name)
         all_loc_labels.append({
             "LocationID": loc_id,
             "Name": name,
+            "Cleaned_Name": clean_name_main,
             "QR_Code": loc_id 
         })
         
@@ -97,11 +112,14 @@ def process_locations():
             # Generate a label for EVERY slot
             for i in range(1, max_spools + 1):
                 slot_name = f"{name} Slot {i}"
+                clean_name_slot = f"{clean_name_main} Slot {i}"
                 slot_qr = f"LOC:{loc_id}:SLOT:{i}"
                 
                 all_slot_labels.append({
                     "LocationID": loc_id,
+                    "Slot": f"Slot {i}",
                     "Name": slot_name,
+                    "Cleaned_Name": clean_name_slot,
                     "QR_Code": slot_qr
                 })
 
@@ -111,7 +129,7 @@ def process_locations():
     if all_loc_labels:
         out_file = os.path.join(data_dir, LOCATIONS_OUTPUT)
         with open(out_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=["LocationID", "Name", "QR_Code"])
+            writer = csv.DictWriter(f, fieldnames=["LocationID", "Name", "Cleaned_Name", "QR_Code"])
             writer.writeheader()
             writer.writerows(all_loc_labels)
         print(f"✅ Generated {len(all_loc_labels)} LOCATION labels in:")
@@ -123,7 +141,7 @@ def process_locations():
     if all_slot_labels:
         slot_file = os.path.join(data_dir, SLOTS_OUTPUT)
         with open(slot_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=["LocationID", "Name", "QR_Code"])
+            writer = csv.DictWriter(f, fieldnames=["LocationID", "Slot", "Name", "Cleaned_Name", "QR_Code"])
             writer.writeheader()
             writer.writerows(all_slot_labels)
         print(f"✅ Generated {len(all_slot_labels)} SLOT labels in:")

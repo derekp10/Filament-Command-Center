@@ -48,8 +48,7 @@
 
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
-* Slots CSV generation seems to put in 2 versions, one with the cleaned name, and one without.
-* Slots CSV should include Slot + # (Slot 1, Slot 2, etc) as a field.
+
 * Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to.
 * Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assign all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
 * Location Manager not syncing status across browser instances?
