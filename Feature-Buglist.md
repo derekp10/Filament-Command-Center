@@ -6,7 +6,7 @@
 * Loading a dryer box, at the very least, slots load with an initial data set, and then i think the 5 second tick goes off, and fills them in completely. Seems to be a difference between what the initial card load does, and the data provided from the 5 second tick. We should probably make the initial card load load the same data as the 5 second tick.
 * Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
 * If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
-* Clicking on scales on the filament card should bring up the scales modal for directly handling all the various way we would want to update weight. (Mostly what's found in the weight section on the edit modal, but including location possibly and archive/unarchive.)
+
 * Ability to edit filament specific data inside Filament command center. Currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool. Some sort of edit workflow for chaing data directly related to filaments.
 
 * Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. (I'm not sure what all we'd want to put here, but it'd be nice to have.)
@@ -37,7 +37,7 @@
 ## 🔍 Search, Display & Filtering
 * Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.
 * Search by and filter by remaining weight.
-* Track unprinted filament samples and create a button/queue like we have for labels.
+
 
 
 ## 📍 Location Management & Scanning
@@ -64,6 +64,7 @@
 * It's too easy to have multiple legacy spools with no exact ID, where we could be assigning the wrong item... perhaps a pop-up when there could be more than 1 spool attached to the legacy ID, asking the user if they want to see the list of spools, or just reprint a new label.
 * Confirmed label print should be displayed somewhere on the card. Perhaps changing the printer icon to a checkmark for confirmed spools.
 * Add label print button to filament sample cards.
+
 * Some values in Print Queue are being set to yes, most are null. What is the process for setting them to true?
 * Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
 

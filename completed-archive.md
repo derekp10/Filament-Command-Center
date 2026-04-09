@@ -114,3 +114,4 @@
 * **Feature:** Implemented off-canvas Search dashboard to easily find spools without relying on Spoolman UI, including robust color-based search filtering.
 * **Feature:** Engineered complete Print Queue UI system, including modals to list/sort unprinted labels (`spoolman_reprint` flags) and batch print exports to P-Touch CSV interface.
 * **Feature:** Added a toggle to display inactive/archived spools in the filament details modal's spool list.
+* **Feature:** Bound the native scale/weight readout text dynamically onto SpoolCards to instantly launch the `QuickWeigh` adjustment modal when clicked, speeding up manual corrections.
