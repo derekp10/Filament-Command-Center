@@ -6,8 +6,36 @@ let wizardState = {
     vendors: [],
     selectedFilamentId: null,
     externalMetaData: null,
-    editSpoolId: null
+    editSpoolId: null,
+    returnToSpoolId: null, // Track which spool detail modal to re-open after wizard closes
+    returnToFilamentId: null // Track which filament detail modal to re-open after wizard closes
 };
+
+// --- WIZARD CLOSE → RE-OPEN DETAIL MODAL ---
+// Register immediately — this script loads after the DOM is fully parsed.
+(function() {
+    const wizEl = document.getElementById('wizardModal');
+    if (wizEl) {
+        wizEl.addEventListener('hidden.bs.modal', () => {
+            // Filament takes priority (it's the parent context when editing spools from filament view)
+            if (wizardState.returnToFilamentId) {
+                const fid = wizardState.returnToFilamentId;
+                wizardState.returnToFilamentId = null;
+                wizardState.returnToSpoolId = null; // Clear spool too
+                setTimeout(() => {
+                    if (typeof openFilamentDetails === 'function') openFilamentDetails(fid);
+                }, 200);
+            } else if (wizardState.returnToSpoolId) {
+                const sid = wizardState.returnToSpoolId;
+                wizardState.returnToSpoolId = null;
+                setTimeout(() => {
+                    if (typeof openSpoolDetails === 'function') openSpoolDetails(sid);
+                }, 200);
+            }
+        });
+        console.log("✅ Wizard close → re-open detail modal listener registered.");
+    }
+})();
 
 window.openWizardModal = async () => {
     wizardReset();
@@ -31,6 +59,8 @@ const wizardReset = () => {
     wizardState.mode = 'manual';
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
+    // Note: returnToSpoolId is NOT cleared here — it persists across reset so that
+    // after a clone/edit completes, the original spool detail modal can re-open.
 
     // Clear Form
     document.querySelectorAll('#wizardModal input[type="text"], #wizardModal input[type="number"]').forEach(i => i.value = '');
@@ -1154,13 +1184,18 @@ window.wizardSubmit = async () => {
         // Construct Spool Payload
         let sp_payload = {
             used_weight: getVal('wiz-spool-used') !== "" ? parseFloat(getVal('wiz-spool-used')) : 0,
-            empty_weight: getVal('wiz-spool-empty_weight') !== "" ? parseFloat(getVal('wiz-spool-empty_weight')) : null,
+            spool_weight: getVal('wiz-spool-empty_weight') !== "" ? parseFloat(getVal('wiz-spool-empty_weight')) : null,
             initial_weight: getVal('wiz-spool-initial_weight') !== "" ? parseFloat(getVal('wiz-spool-initial_weight')) : null,
             location: getVal('wiz-spool-location') || '',
             comment: getVal('wiz-spool-comment') || '',
+            price: getVal('wiz-spool-price') !== "" ? parseFloat(getVal('wiz-spool-price')) : null,
             archived: document.getElementById('wiz-spool-archived')?.checked || false,
             extra: {}
         };
+
+        // Purchase Link (Spool Extra)
+        const purchaseUrl = document.getElementById('wiz-spool-purchase_url')?.value?.trim();
+        if (purchaseUrl) sp_payload.extra.purchase_url = purchaseUrl;
 
         // Extract Dynamic Spool Fields
         document.querySelectorAll('.dynamic-extra-spool-field').forEach(el => {
@@ -1201,9 +1236,9 @@ window.wizardSubmit = async () => {
                 extra: {}
             };
 
-            // Cross-Inherit Empty Weight to Spool if left blank in Step 3
-            if (sp_payload.empty_weight === null && f_payload.spool_weight !== null) {
-                sp_payload.empty_weight = f_payload.spool_weight;
+            // Cross-Inherit Spool Weight from Filament if left blank in Step 3
+            if (sp_payload.spool_weight === null && f_payload.spool_weight !== null) {
+                sp_payload.spool_weight = f_payload.spool_weight;
             }
 
             // Note: Spoolman 0.19.1 natively supports `multi_color_hexes` 
@@ -1318,6 +1353,18 @@ window.wizardSubmit = async () => {
 
 // --- SPOOL CLONE LOGIC ---
 window.openCloneWizard = async (spoolId) => {
+    // Detect context: if filament modal is open, return there instead of spool
+    const filModal = document.getElementById('filamentModal');
+    if (filModal && filModal.classList.contains('show')) {
+        const fid = document.getElementById('fil-detail-id')?.innerText;
+        if (fid) {
+            wizardState.returnToFilamentId = fid;
+            wizardState.returnToSpoolId = null;
+        }
+    } else {
+        wizardState.returnToSpoolId = spoolId;
+        wizardState.returnToFilamentId = null;
+    }
 
     // Reset and Open Wizard (Wait for Extrad fields DOM injection!)
     await openWizardModal();
@@ -1347,9 +1394,18 @@ window.openCloneWizard = async (spoolId) => {
 
             // Pre-fill Spool parameters that usually carry over when cloning
             document.getElementById('wiz-spool-location').value = d.location || "";
-            document.getElementById('wiz-spool-empty_weight').value = d.spool_weight !== null ? d.spool_weight : "";
+            // Spool Weight: prefer spool-level, fall back to filament-level
+            const cloneSpoolWt = d.spool_weight !== null ? d.spool_weight : (d.filament?.spool_weight ?? "");
+            document.getElementById('wiz-spool-empty_weight').value = cloneSpoolWt;
             document.getElementById('wiz-spool-used').value = 0; // Fresh spool is usually 0
             document.getElementById('wiz-spool-comment').value = d.comment || "";
+            // Price & Purchase Link
+            if (d.price !== null && d.price !== undefined) {
+                document.getElementById('wiz-spool-price').value = d.price;
+            }
+            const clonePurchaseUrl = d.extra?.purchase_url || d.filament?.extra?.purchase_url || "";
+            const purchUrlEl = document.getElementById('wiz-spool-purchase_url');
+            if (purchUrlEl) purchUrlEl.value = typeof clonePurchaseUrl === 'string' ? clonePurchaseUrl.replace(/^"|"$/g, '') : "";
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = false;
             }
@@ -1366,6 +1422,10 @@ window.openCloneWizard = async (spoolId) => {
 
 // --- NEW SPOOL FROM FILAMENT LOGIC ---
 window.openNewSpoolFromFilamentWizard = async (filamentId) => {
+    // Track filament for re-opening detail modal after wizard closes
+    wizardState.returnToFilamentId = filamentId;
+    wizardState.returnToSpoolId = null;
+
     // Reset and Open Wizard (Wait for Extra fields DOM injection!)
     await openWizardModal();
 
@@ -1408,6 +1468,18 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
 
 // --- SPOOL EDIT LOGIC ---
 window.openEditWizard = async (spoolId) => {
+    // Detect context: if filament modal is open, return there instead of spool
+    const filModal = document.getElementById('filamentModal');
+    if (filModal && filModal.classList.contains('show')) {
+        const fid = document.getElementById('fil-detail-id')?.innerText;
+        if (fid) {
+            wizardState.returnToFilamentId = fid;
+            wizardState.returnToSpoolId = null;
+        }
+    } else {
+        wizardState.returnToSpoolId = spoolId;
+        wizardState.returnToFilamentId = null;
+    }
 
     // Reset and Open Wizard (Wait for dynamically mapped DOM structures first!)
     await openWizardModal();
@@ -1538,6 +1610,13 @@ window.openEditWizard = async (spoolId) => {
             if (usageContainer) usageContainer.style.display = 'block';
 
             document.getElementById('wiz-spool-comment').value = d.comment || "";
+            // Price & Purchase Link
+            if (d.price !== null && d.price !== undefined) {
+                document.getElementById('wiz-spool-price').value = d.price;
+            }
+            const editPurchaseUrl = d.extra?.purchase_url || d.filament?.extra?.purchase_url || "";
+            const editPurchUrlEl = document.getElementById('wiz-spool-purchase_url');
+            if (editPurchUrlEl) editPurchUrlEl.value = typeof editPurchaseUrl === 'string' ? editPurchaseUrl.replace(/^"|"$/g, '') : "";
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = d.archived || false;
             }

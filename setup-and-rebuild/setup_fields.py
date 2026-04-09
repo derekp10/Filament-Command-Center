@@ -167,6 +167,7 @@ create_field("spool", "needs_label_print", "Needs Label Print", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")
 create_field("spool", "product_url", "Product Page Link", "text") # [ALEX FIX] New custom field
+create_field("spool", "purchase_url", "Purchase Link", "text") # Spool-level purchase/re-order link
 
 # --- RETIRE LEGACY FIELDS ---
 delete_field("spool", "label_printed")

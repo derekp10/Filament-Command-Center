@@ -284,7 +284,7 @@ def api_edit_spool_wizard():
             if original_spool:
                 dirty_spool_data = {}
                 for k, v in spool_data.items():
-                    if k == 'empty_weight' or k == 'spool_weight':
+                    if k == 'spool_weight':
                         if v != original_spool.get('spool_weight'):
                             dirty_spool_data['spool_weight'] = v
                     elif k == 'extra':
@@ -298,7 +298,7 @@ def api_edit_spool_wizard():
                             dirty_spool_data['extra'] = dirty_extra
                     elif k in original_spool and original_spool[k] != v:
                         dirty_spool_data[k] = v
-                    elif k not in original_spool and k != 'empty_weight':
+                    elif k not in original_spool:
                          dirty_spool_data[k] = v
                 
                 spool_data = dirty_spool_data
