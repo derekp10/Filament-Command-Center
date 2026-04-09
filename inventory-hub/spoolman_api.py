@@ -23,7 +23,7 @@ def parse_inbound_data(data):
 
 # Constants for JSON sanitation
 # [ALEX FIX] Added 'physical_source_slot', and 'product_url' to ensure strict JSON string formatting
-JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "physical_source_slot", "original_color", "spool_temp", "product_url"]
+JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "physical_source_slot", "original_color", "spool_temp", "product_url", "purchase_url"]
 
 def get_spool(sid):
     sm_url, _ = config_loader.get_api_urls()

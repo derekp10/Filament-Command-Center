@@ -174,8 +174,8 @@ const processScan = (text, source = 'keyboard') => {
             } else if (res.type === 'location') {
                 if (!text.toUpperCase().startsWith('LOC:')) {
                     const msg = "⚠️ Legacy Location Label Scanned! Features may be limited. Print a new LOC: label when possible.";
-                    showToast(msg, "warning");
-                    fetch('/api/log_event', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({msg: "SCAN LOG: Legacy Location Barcode Scanned", level: "WARNING"}) });
+                    showToast(msg, "warning", 5000);
+                    fetch('/api/log_event', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({msg: "SCAN LOG: Legacy Location Barcode Scanned (" + text + ")", level: "WARNING"}) });
                 }
                 if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
                 if (state.heldSpools.length > 0) { performContextAssign(res.id); state.lastScannedLoc = null; return; }

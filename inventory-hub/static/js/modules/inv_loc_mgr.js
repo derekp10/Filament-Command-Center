@@ -193,6 +193,7 @@ const renderManagerNav = () => {
         <div class="cham-card nav-card nav-card-center" style="background: ${curStyle.frame}; ${curStyle.border ? 'box-shadow: inset 0 0 0 2px #555;' : ''}">
             <div class="fcc-spool-card-inner nav-inner" style="background:${curStyle.inner}; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:10px; text-align:center; position:relative;">
                 <div style="position:absolute; top:5px; right:5px; display:flex; gap:6px; z-index: 10;">
+                    <div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.removeBufferItem(${curItem.id});" title="Drop from Buffer">❌</div>
                     <div class="fcc-card-action-btn" onclick="event.stopPropagation(); openSpoolDetails(${curItem.id});" title="View Details">🔍</div>
                     <div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.openEditWizard(${curItem.id});" title="Edit Spool">✏️</div>
                     <div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.addToQueue({ id: ${curItem.id}, type: 'spool', display: '${curItem.display ? curItem.display.replace(/[\'"]/g, '') : ''}' }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>
