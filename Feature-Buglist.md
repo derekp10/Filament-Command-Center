@@ -18,6 +18,8 @@
 * Review and unify update logic across the program, we have to many versions of update that keep getting orphined, or cause problems later on when they aren't included in a recent design change. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
 * Figure out why playright can't be run or is not installed on the local docker if that is the issue, otherwise find out if we need to add it to dev, and if needed add it to live/prod if it makes sense.
 
+* Filabridge status light is still blinking on and of, just more eraticly now. Need to look into this further.
+
 
 # **Active Backlog (Organized by Feature Area)**
 
