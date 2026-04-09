@@ -113,3 +113,4 @@
 * **Bug Fix:** Fixed explicit `[📦 ARCHIVED]` display omission across Search and Buffer UI. Resolved a secondary backend logic loop in `spoolman_api.py` dropping the archived dictionary flag during search generation, and concurrently softened Javascript boolean checks in `ui_builder.js` to ensure payload string conversions render correctly.
 * **Feature:** Implemented off-canvas Search dashboard to easily find spools without relying on Spoolman UI, including robust color-based search filtering.
 * **Feature:** Engineered complete Print Queue UI system, including modals to list/sort unprinted labels (`spoolman_reprint` flags) and batch print exports to P-Touch CSV interface.
+* **Feature:** Added a toggle to display inactive/archived spools in the filament details modal's spool list.
