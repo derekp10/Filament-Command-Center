@@ -20,7 +20,7 @@
 
 * Filabridge status light is still blinking on and of, just more eraticly now. Need to look into this further.
 
-* Force location modal needs to be able to work with keyboard inputs, in that Up/down arrow move up and down the list. Enter selects the item, and Escape closes the modal.
+* Force location modal needs to be able to work with keyboard inputs, in that Up/down arrow move up and down the list. Enter selects the item, and Escape closes the modal. Focus should also start in the text box, so user doesn't have to click it to begin typing.
 
 
 # **Active Backlog (Organized by Feature Area)**
