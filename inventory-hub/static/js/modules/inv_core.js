@@ -92,8 +92,8 @@ const pauseLogs = (isPaused) => {
     state.logsPaused = isPaused;
     const el = document.getElementById('log-status');
     if (el) {
-        if (isPaused) { el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-muted'); }
-        else { el.innerText = "Auto-Refresh ON"; el.style.color = "#0f0"; el.classList.remove('text-muted'); }
+        if (isPaused) { el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-light'); }
+        else { el.innerText = "Auto-Refresh ON"; el.style.color = "#0f0"; el.classList.remove('text-light'); }
     }
 };
 

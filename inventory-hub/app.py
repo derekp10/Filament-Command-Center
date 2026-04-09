@@ -1223,14 +1223,21 @@ def api_get_spools_by_filament():
     fid = request.args.get('id')
     if not fid: return jsonify([])
     
+    allow_archived = request.args.get('allow_archived', 'false').lower() == 'true'
+    
     sm_url, _ = config_loader.get_api_urls()
     try:
         # Get spools filtered by filament_id
         # We ask Spoolman directly: "Give me all spools for Filament ID X"
-        resp = requests.get(f"{sm_url}/api/v1/spool?filament_id={fid}", timeout=5)
+        sm_req_url = f"{sm_url}/api/v1/spool?filament_id={fid}"
+        if allow_archived:
+            sm_req_url += "&allow_archived=true"
+        resp = requests.get(sm_req_url, timeout=5)
         if resp.ok:
-            # Filter out archived ones just in case
-            spools = [s for s in resp.json() if not s.get('archived')]
+            if allow_archived:
+                spools = resp.json()
+            else:
+                spools = [s for s in resp.json() if not s.get('archived')]
             return jsonify(spools)
         return jsonify([])
     except:

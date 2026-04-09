@@ -186,7 +186,7 @@ const SpoolCardBuilder = {
                         </div>
                         
                         <div class="slot-info-gold text-center w-100 mb-2 mt-1" style="background: rgba(0,0,0,0.7); border-radius: 5px; padding: 5px; border: 1px solid #444; cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
-                            <div class="text-line-1" style="color: #aaa; font-size:0.9rem;">${info.line1} <span style="float:right; color:#ddd; font-weight:bold; font-size:0.95rem;">${info.line4 ? '⚖️ ' + info.line4 : ''}</span></div>
+                            <div class="text-line-1" style="color: #aaa; font-size:0.9rem;">${info.line1} <span ${!isFil ? `style="float:right; color:#ddd; font-weight:bold; font-size:0.95rem; cursor:pointer;" onclick="event.stopPropagation(); if(window.openQuickWeigh) window.openQuickWeigh(${item.id})"` : `style="float:right; color:#ddd; font-weight:bold; font-size:0.95rem;"`}>${info.line4 ? '⚖️ ' + info.line4 : ''}</span></div>
                             <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold; font-size:1.0rem;">${info.line2}</div>
                             <div class="text-line-3" style="font-weight:bold; color: #fff; font-size:0.95rem;">${info.line3}</div>
                         </div>
@@ -206,7 +206,7 @@ const SpoolCardBuilder = {
                     <div class="slot-inner-gold" style="${customInnerBg}">
                         <div class="d-flex justify-content-between align-items-center w-100 mb-1 px-1">
                             <div class="slot-num-gold" style="font-size:0.95rem;">SLOT ${options.slotNum}</div>
-                            <div style="color:#ddd; font-weight:bold; font-size:0.95rem;">${info.line4 ? '⚖️ ' + info.line4 : ''}</div>
+                            <div ${!isFil ? `style="color:#ddd; font-weight:bold; font-size:0.95rem; cursor:pointer;" onclick="event.stopPropagation(); if(window.openQuickWeigh) window.openQuickWeigh(${item.id})"` : `style="color:#ddd; font-weight:bold; font-size:0.95rem;"`}>${info.line4 ? '⚖️ ' + info.line4 : ''}</div>
                         </div>
                         
                         <div id="qr-slot-${options.slotNum}" class="bg-white p-1 rounded mb-2" style="border: 3px solid white;"></div>
@@ -320,7 +320,7 @@ const SpoolCardBuilder = {
                             ${archivedBadgeHTML}
                             <div class="fcc-subtext">${isFil ? '' : info.line1.includes('Legacy') ? info.line1.split(' ')[1] : ''}</div>
                          </div>
-                         <div class="fcc-card-metric text-nowrap js-cmd-weight">
+                         <div class="fcc-card-metric text-nowrap js-cmd-weight" ${!isFil ? `style="cursor:pointer;" onclick="event.stopPropagation(); if(window.openQuickWeigh) window.openQuickWeigh(${item.id})"` : ''}>
                             ${isFil ? `🧵 ${item.spools_count !== undefined && item.spools_count !== null ? item.spools_count : 0} Spool(s)` : `⚖️ ${(item.remaining_weight !== undefined && item.remaining_weight !== null ? Math.round(item.remaining_weight) + 'g' : (item.remaining != null && item.remaining !== '---' ? Math.round(item.remaining) + 'g' : '---'))}`}
                          </div>
                     </div>

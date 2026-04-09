@@ -25,7 +25,7 @@
                         <div id="detail-swatch" class="fcc-modal-swatch-circle">
                         </div>
                         <p class="mt-2 mb-0 fw-bold" id="detail-color-name"></p>
-                        <p class="text-muted small" id="detail-hex"></p>
+                        <p class="text-light small" id="detail-hex"></p>
                     </div>
                 </div>
                 <hr class="border-secondary">
@@ -39,7 +39,7 @@
                     🛍️ Buy More
                 </a>
                 <div class="mb-3">
-                    <label class="form-label text-muted small">Comment / Notes</label>
+                    <label class="form-label text-light small">Comment / Notes</label>
                     <textarea class="form-control bg-black text-white border-secondary" id="detail-comment" rows="2"
                         readonly></textarea>
                 </div>
@@ -86,7 +86,7 @@
                         <div id="fil-detail-swatch" class="fcc-modal-swatch-square">
                         </div>
                         <p class="mt-2 mb-0 fw-bold" id="fil-detail-color-name"></p>
-                        <p class="text-muted small" id="fil-detail-hex"></p>
+                        <p class="text-light small" id="fil-detail-hex"></p>
                     </div>
                 </div>
                 <hr class="border-secondary">
@@ -94,18 +94,23 @@
                     🛍️ Buy More
                 </a>
                 <div class="mt-3">
-                    <label class="form-label text-muted small">Notes</label>
+                    <label class="form-label text-light small">Notes</label>
                     <textarea class="form-control bg-black text-white border-secondary" id="fil-detail-comment" rows="2"
                         readonly></textarea>
                 </div>
                 <div class="mt-3">
-                    <label class="form-label text-muted small d-flex justify-content-between">
-                        <span>Active Spools</span>
-                        <span id="fil-spool-count" class="badge bg-secondary">0</span>
-                    </label>
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <label class="form-label text-light small mb-0">
+                            Associated Spools <span id="fil-spool-count" class="badge bg-secondary ms-2">0</span>
+                        </label>
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" id="toggle-show-archived" onchange="if(typeof refreshFilamentSpools === 'function') refreshFilamentSpools()">
+                            <label class="form-check-label text-light small" for="toggle-show-archived">Show Inactive</label>
+                        </div>
+                    </div>
                     <div id="fil-spools-list"
                         class="list-group list-group-flush bg-black border border-secondary rounded mb-2 max-h-150px overflow-y-auto">
-                        <div class="p-2 text-muted text-center small">Checking inventory...</div>
+                        <div class="p-2 text-light text-center small">Checking inventory...</div>
                     </div>
                     <button type="button" class="btn btn-warning w-100 fw-bold" id="btn-queue-all-spools"
                         style="display:none;">

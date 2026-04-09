@@ -86,9 +86,33 @@ const SearchEngine = {
             });
 
             // React to universal synchronization events (e.g. edits saved in Wizard or other UI components)
-            document.addEventListener('inventory:sync-pulse', () => {
+            document.addEventListener('inventory:sync-pulse', (e) => {
+                // Actively intercept and locally patch DOM arrays from other modules to bypass backend network delay
+                const patch = e.detail?.updatedSpool;
+                if (patch && this.lastResults) {
+                    let changed = false;
+                    this.lastResults.forEach(r => {
+                        if (parseInt(r.id) === parseInt(patch.id)) {
+                            if (patch.updates.remaining_weight !== undefined) {
+                                r.remaining_weight = patch.updates.remaining_weight;
+                                changed = true;
+                            }
+                            if (patch.updates.archived !== undefined) {
+                                r.archived = patch.updates.archived;
+                                changed = true;
+                            }
+                        }
+                    });
+                    
+                    if (changed) {
+                        this.renderResults(this.lastResults);
+                        return; // Stop. We fully patched the UI visually, no need to trigger a heavy API search fetch.
+                    }
+                }
+
                 // Background refresh only if panel is open to save API calls
                 if (this.offcanvas && el.classList.contains('show')) {
+                    // Normal server refresh
                     // Only reload if we aren't showing an empty state
                     const queryInput = document.getElementById('global-search-query');
                     const colorInput = document.getElementById('global-search-color-hex');
@@ -126,7 +150,7 @@ const SearchEngine = {
 
             const resBox = document.getElementById('global-search-results');
             resBox.innerHTML = `
-                <div class="text-center text-muted mt-5">
+                <div class="text-center text-light mt-5">
                     <h1 class="opacity-25 mb-3">💬</h1>
                     <p>Type to search your Spoolman inventory.</p>
                 </div>
@@ -137,7 +161,7 @@ const SearchEngine = {
         if (options.callback) {
             this.currentCallback = options.callback;
             ctxNode.innerText = "Select a spool to insert it into the form.";
-            ctxNode.classList.remove('text-muted');
+            ctxNode.classList.remove('text-light');
             ctxNode.classList.add('text-warning');
             ctxNode.style.display = 'block';
         } else {
@@ -169,7 +193,7 @@ const SearchEngine = {
         // If nothing is typed, don't execute a massive search, just show empty state
         if (!query && !material && !colorHex && !minWeight) {
             resBox.innerHTML = `
-                <div class="text-center text-muted mt-5">
+                <div class="text-center text-light mt-5">
                     <h1 class="opacity-25 mb-3">💬</h1>
                     <p>Type to search your Spoolman inventory.</p>
                 </div>
@@ -204,6 +228,7 @@ const SearchEngine = {
     },
 
     renderResults(results) {
+        this.lastResults = results; // Cache locally to support zero-latency patches
         const resBox = document.getElementById('global-search-results');
 
         if (!results || results.length === 0) {

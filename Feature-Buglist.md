@@ -35,6 +35,7 @@
 
 * We should add an eject button to the center card in the caracell buffer interface so that we can remove items in the buffer with out having to exit all the way back to the command center main window. We could put an eject button with the other buttons on the top right corner.
 
+
 # **Active Backlog (Organized by Feature Area)**
 
 ## 🎨 UI & Theming

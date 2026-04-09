@@ -21,7 +21,7 @@ window.fetchBacklog = () => {
 
     // Auto-show a loading message ONLY if the list is completely empty
     if (list.innerHTML.trim() === '') {
-        list.innerHTML = `<div class="text-center text-muted p-3">Loading backlog...</div>`;
+        list.innerHTML = `<div class="text-center text-light p-3">Loading backlog...</div>`;
     }
 
     fetch(`/api/print_queue/pending?filter=${filter}&sort=${sort}`)

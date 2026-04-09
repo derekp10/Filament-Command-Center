@@ -249,7 +249,7 @@ const renderGrid = (data, max) => {
                     <div class="slot-inner-gold">
                         <div class="slot-header"><div class="slot-num-gold" style="color:#555;">SLOT ${i}</div></div>
                         <div id="qr-slot-${i}" class="bg-white p-2 rounded mt-3 mb-3"></div>
-                        <div class="fs-4 text-muted fw-bold" style="margin-top:20px;">EMPTY</div>
+                        <div class="fs-4 text-light fw-bold" style="margin-top:20px;">EMPTY</div>
                         <div style="height:35px;"></div>
                     </div>
                 </div>`;
@@ -705,4 +705,4 @@ window.openAddModal = () => {
 };
 
 window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, { method: 'DELETE' }).then(fetchLocations));
-
+

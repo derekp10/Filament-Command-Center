@@ -73,3 +73,25 @@ def test_location_list_features_exist():
 
     assert "onclick=\"sortLocations('LocationID')\"" in html_content, "Missing column sorting UI binds"
     assert "locQrViewModal" in html_content, "Missing QR Overlay in Loc Mgr Modal"
+
+def test_quick_weigh_triggers_in_ui_builder():
+    """Ensures that window.openQuickWeigh is bound in the card builder."""
+    js_path = os.path.join(os.path.dirname(__file__), "..", "inventory-hub", "static", "js", "modules", "ui_builder.js")
+    with open(js_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "window.openQuickWeigh" in content, "Missing quick weigh trigger in UI builder"
+
+def test_inv_weigh_out_logic_exists():
+    """Ensures quick weigh and unassign logic exists in the weigh out module."""
+    js_path = os.path.join(os.path.dirname(__file__), "..", "inventory-hub", "static", "js", "modules", "inv_weigh_out.js")
+    with open(js_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "window.openQuickWeigh =" in content, "Missing openQuickWeigh function"
+    assert "action: 'force_unassign'" in content, "Missing auto-unassign logic for 0g spools"
+
+def test_app_spools_by_filament_allow_archived():
+    """Ensures app.py handles allow_archived fallback for spools_by_filament."""
+    py_path = os.path.join(os.path.dirname(__file__), "..", "inventory-hub", "app.py")
+    with open(py_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "allow_archived = request.args.get('allow_archived'," in content, "Missing allow_archived query param parser"
