@@ -28,6 +28,20 @@
 
 * Double archive Badge. I want to keep one version over the other. The one that has the shadow backdrop and is on the same line as the color name is the one I like better. We need to move that one down to where the other one is to replace it, and then remove it from the color line. This may mean we need to look into how the cards display archived in all there various versions we have.
 
+* Adding filament to an archived filament should automatically unarchive the filament.
+
+* Add a cleaner easier way to see what filaments are on a printer, with out having to drill down into location list, and location manager to see them.
+
+# ** Filabridge Error Recovery **
+* Spools listed do not list the manufacturer or the type of filament only the ID's.
+* Should some how keep track of the spools currently in the printer at the time of the error, incase user changes filament before realizing that the error occured.
+* "Start aggressive Parce" Might not do anything? Need to test this.
+* Softlocks on processing, not sure if this is because it's still pulling the gcode, because it erroed out and didn't clear the processing UI block, or some other reason. A progress bar if it's activly transfer would be useful here.
+* Should more activly inform the user of what's going happening with the GCode parce.
+* Have a back up option for the user to provide the Gcode file if auto grab doesn't work.
+* [Question] How are we storing the gcode files we pull. And do we have code to clean up files after a certain amount of time.
+
+
 
 # **Active Backlog (Organized by Feature Area)**
 
