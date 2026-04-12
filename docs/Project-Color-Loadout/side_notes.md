@@ -1,0 +1,4 @@
+Core One Non-MMU: For PETG: 2-3 grams is in the buffer before first sensor trip so atleast 3-4 grams should be added to a project's required filament weight to be safe.
+Core One MMU: Needst to be updated baseed on length from FIDRA sensor in the mmu to the nozzel. Curerntly Unknown need to figure it out
+Core One INDX: Unknown
+XL: Need to weigh filament to get an idea of a per toolhead requirement. though logic behind determining if theres enough filament based on required amount per head could also be applied to MMU implementation. For PETG - Measured 4 grams here, but should round up to 5 just to be safe, It looks like i did trim the end here.

@@ -439,11 +439,13 @@ const updateLogState = (force = false) => {
         if (logsEl) {
             logsEl.innerHTML = d.logs.map(l => {
                 let extraHtml = '';
+                let extraClass = '';
                 if (l.meta && l.meta.type === 'filabridge_error') {
                     const dataStr = encodeURIComponent(JSON.stringify(l.meta));
+                    extraClass = ' filabridge-error-log';
                     extraHtml = `<button class="btn btn-sm btn-outline-warning ms-2 py-0 px-1" onclick="window.openFilaBridgeRecovery('${dataStr}')">💊 Fix</button>`;
                 }
-                return `<div class="log-${l.type}">[${l.time}] ${l.msg}${extraHtml}</div>`;
+                return `<div class="log-${l.type}${extraClass}">[${l.time}] ${l.msg}${extraHtml}</div>`;
             }).join('');
         }
 

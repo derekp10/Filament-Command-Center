@@ -20,12 +20,28 @@
 
 * Filabridge status light is still blinking on and of, just more eraticly now. Need to look into this further.
 
+* Force location modal needs to be able to work with keyboard inputs, in that Up/down arrow move up and down the list. Enter selects the item, and Escape closes the modal. Focus should also start in the text box, so user doesn't have to click it to begin typing.
+
+* Check to make sure that when a new filament barcode is scanned, that the proper database fields are updated to mark the filament as labeled, so it doesn't appear in the Backlog queue. I scanned on e but didn't see a message in the Live Activity log. Needs label print for (FIL:58) lists as null, don't know if this was because it was blank in the spoolman UI, because this is an old filament physical swatch.
+
+* Check to see if changes to spool card gradint/coextredud color modificaitons were also applied to the Filament cards. (They should have been, this is supposed to be a unified code set for this type of item.)
+
+* Double archive Badge. I want to keep one version over the other. The one that has the shadow backdrop and is on the same line as the color name is the one I like better. We need to move that one down to where the other one is to replace it, and then remove it from the color line. This may mean we need to look into how the cards display archived in all there various versions we have.
+
+* Adding filament to an archived filament should automatically unarchive the filament.
+
+* Add a cleaner easier way to see what filaments are on a printer, with out having to drill down into location list, and location manager to see them.
+
+
+
+
 
 # **Active Backlog (Organized by Feature Area)**
 
 ## 🎨 UI & Theming
 * Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird.
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
+* Theres a little animation and modal that appears when you add a new Slicer Profile in the Add/edit enventory wizzard. Its so nifty I want this used in other places. (I'm not sure if this is a sweetalert2 thing, or if we implemented ourselves.)
 
 
 ## 🗂️ Modals & Add Inventory Wizard
@@ -34,6 +50,11 @@
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
 * For the add/edit inventory wizzard modal, make the location searchable like in the filament/spool display modal's version.
+* We now have 2 purchase links for spools, one that virtually links to the filament value, the other is on it's own but part of the spool. We need to look into the code here and pair down to only one fied if possible, but retain functionality. Linked field enharrenting the value possibly. Or we just fix the code so it looks at what is available and takes the one that exists, with a preference for the spool specific one, which may be more uptodate, or specific for the pricing. One of them, the first one on the page, seems to not clear between usanges.
+* Filament ID and Spool ID should be visible on the edit version of the add inventory wizzard, so that a user can easily see what one they are working on.
+* Vendor should be searchable with keyboard shortcuts and a list that doesn't take up the full screen.
+* Adding a new slicer profile should automatically add that profile to the current filament being edited.
+* Spoolmans field ordering bug causing fields in the Add/Edit enventory window to move if a custom field is modified or has new items added to it. Need to look at locking down the order of things.
 
 ## 🔍 Search, Display & Filtering
 * Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.

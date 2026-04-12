@@ -1258,9 +1258,22 @@ import prusalink_api
 
 @app.route('/api/fb_recovery_spools', methods=['GET'])
 def api_fb_recovery_spools():
+    import os
     printer_name = request.args.get('printer_name')
+    error_id = request.args.get('error_id')
     if not printer_name:
         return jsonify({"success": False, "msg": "Missing printer_name"})
+        
+    if error_id:
+        try:
+            snap_path = os.path.join(os.path.dirname(__file__), "data", "filabridge_error_snapshots.json")
+            if os.path.exists(snap_path):
+                with open(snap_path, 'r', encoding='utf-8') as f:
+                    snapshots = json.load(f)
+                if error_id in snapshots:
+                    return jsonify({"success": True, "spools": snapshots[error_id]})
+        except Exception:
+            pass
     
     cfg = config_loader.load_config()
     printer_map = cfg.get("printer_map", {})
@@ -1281,6 +1294,11 @@ def api_fb_recovery_spools():
         spools.extend(loc_spools)
         
     return jsonify({"success": True, "spools": spools})
+
+@app.route('/api/fb_parse_status', methods=['GET'])
+def api_fb_parse_status():
+    import prusalink_api
+    return jsonify({"msg": prusalink_api.FB_PARSE_STATUS})
 
 @app.route('/api/fb_aggressive_parse', methods=['POST'])
 def api_fb_aggressive_parse():
@@ -1326,11 +1344,15 @@ def api_fb_aggressive_parse():
                     spool_data = spoolman_api.get_spool(sid)
                     if spool_data and weight_used > 0:
                         used = float(spool_data.get('used_weight', 0))
+                        initial = float(spool_data.get('initial_weight', 0) or 0)
+                        remaining = max(0, initial - used)
+                        new_remaining = max(0, remaining - weight_used)
                         new_used = used + weight_used
                         if spoolman_api.update_spool(sid, {"used_weight": new_used}):
                             spools_updated += 1
                             info = spoolman_api.format_spool_display(spool_data)
-                            state.add_log_entry(f"✔️ Auto-deducted {weight_used:.1f}g from #{sid}", "SUCCESS", info['color'])
+                            strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
+                            state.add_log_entry(f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
                             
     # 4. Acknowledge Error
     if spools_updated > 0:
@@ -1359,11 +1381,14 @@ def api_fb_manual_recovery():
                 spool_data = spoolman_api.get_spool(sid)
                 if spool_data:
                     used = float(spool_data.get('used_weight', 0))
+                    initial = float(spool_data.get('initial_weight', 0) or 0)
+                    remaining = max(0, initial - used)
+                    new_remaining = max(0, remaining - w)
                     new_used = used + w
                     if spoolman_api.update_spool(sid, {"used_weight": new_used}):
                         spools_updated += 1
                         info = spoolman_api.format_spool_display(spool_data)
-                        state.add_log_entry(f"✔️ Manually deducted {w:.1f}g from #{sid}", "SUCCESS", info['color'])
+                        state.add_log_entry(f"✔️ Manually deducted {w:.1f}g from Spool #{sid}: [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
         except ValueError:
             pass
             
@@ -1422,7 +1447,7 @@ def api_get_logs_route():
                     fb_errors = err_resp.json().get('errors', [])
                     
                     cfg = config_loader.load_config()
-                    auto_recover = cfg.get("auto_recover_filabridge_errors", False)
+                    auto_recover = cfg.get("auto_recover_filabridge_errors", True)
                     
                     for err in fb_errors:
                         err_id = err.get('id')
@@ -1434,7 +1459,31 @@ def api_get_logs_route():
                                 f_name = err.get('filename', 'Unknown File')
                                 err_msg = err.get('error', 'Unknown Error')
                                 
+                                # Snapshot active spools at time of error
+                                try:
+                                    import os
+                                    target_locations = []
+                                    printer_map = config_loader.load_config().get("printer_map", {})
+                                    for loc_id, p_info in printer_map.items():
+                                        if p_info.get('printer_name') == p_name:
+                                            target_locations.append(loc_id)
+                                    spools = []
+                                    for loc in target_locations:
+                                        spools.extend(spoolman_api.get_spools_at_location_detailed(loc))
+                                    snap_path = os.path.join(os.path.dirname(__file__), "data", "filabridge_error_snapshots.json")
+                                    snapshots = {}
+                                    if os.path.exists(snap_path):
+                                        with open(snap_path, 'r', encoding='utf-8') as f:
+                                            snapshots = json.load(f)
+                                    snapshots[err_id] = spools
+                                    os.makedirs(os.path.dirname(snap_path), exist_ok=True)
+                                    with open(snap_path, 'w', encoding='utf-8') as f:
+                                        json.dump(snapshots, f)
+                                except Exception as snap_e:
+                                    state.logger.error(f"Failed to snapshot spools for error {err_id}: {snap_e}")
+
                                 def _auto_recover_task(e_id, printer_name, filename, error_msg):
+                                    state.add_log_entry(f"🔄 Auto-Recovering FilaBridge Error for {printer_name}...", "INFO")
                                     creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
                                     if creds:
                                         usage_map = prusalink_api.download_gcode_and_parse_usage(creds['ip_address'], creds['api_key'], filename)
@@ -1449,10 +1498,16 @@ def api_get_logs_route():
                                                         for sid in spoolman_api.get_spools_at_location(loc_id):
                                                             spool = spoolman_api.get_spool(sid)
                                                             if spool and w_used > 0:
-                                                                spoolman_api.update_spool(sid, {"used_weight": float(spool.get('used_weight', 0)) + w_used})
-                                                                spools_updated += 1
-                                                                inf = spoolman_api.format_spool_display(spool)
-                                                                state.add_log_entry(f"✔️ Auto-deducted {w_used:.1f}g from #{sid} (FilaBridge Error)", "SUCCESS", inf['color'])
+                                                                used = float(spool.get('used_weight', 0))
+                                                                initial = float(spool.get('initial_weight', 0) or 0)
+                                                                remaining = max(0, initial - used)
+                                                                new_rem = max(0, remaining - w_used)
+                                                                new_used = used + w_used
+                                                                if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+                                                                    spools_updated += 1
+                                                                    inf = spoolman_api.format_spool_display(spool)
+                                                                    strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
+                                                                    state.add_log_entry(f"✔️ Auto-deducted {w_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_rem:.1f}g remaining]", "SUCCESS", inf['color'])
                                             if spools_updated > 0:
                                                 prusalink_api.acknowledge_filabridge_error(fb_url, e_id)
                                                 return # Success

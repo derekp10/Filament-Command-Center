@@ -16,11 +16,17 @@
                     <div class="text-center text-light">Loading spools...</div>
                 </div>
 
-                <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top border-secondary">
-                    <div>
-                        <button class="btn btn-warning shadow-lg fw-bold" onclick="window.triggerAggressiveGcodeParse()">
+                <div class="d-flex justify-content-between align-items-end mt-4 pt-3 border-top border-secondary">
+                    <div class="d-flex flex-column gap-2">
+                        <button id="btn-fb-auto-parse" class="btn btn-warning shadow-lg fw-bold" onclick="window.triggerAggressiveGcodeParse()">
                             ⚡ Auto-Parse GCode
                         </button>
+                        <div>
+                            <input type="file" id="fb-manual-upload" accept=".gcode,.bgcode" style="display:none;" onchange="window.handleManualGcodeUpload(event)">
+                            <button class="btn btn-sm btn-outline-info" onclick="document.getElementById('fb-manual-upload').click()">
+                                📁 Browse Local GCode...
+                            </button>
+                        </div>
                     </div>
                     <div>
                         <button class="btn btn-secondary me-2" onclick="closeModal('fbRecoveryModal')">Cancel</button>
@@ -71,17 +77,14 @@ window.openFilaBridgeRecovery = function(metaStr) {
                 // Build input forms
                 let html = '<div class="list-group list-group-flush bg-dark">';
                 data.spools.forEach(s => {
-                    const extra = s.extra || {};
-                    let brand = (s.filament && s.filament.vendor) ? s.filament.vendor.name : "Unknown Brand";
-                    let filamentName = s.filament ? s.filament.name : "Unknown Material";
-                    let hex = s.filament ? s.filament.color_hex : "555";
-                    let slot = extra.container_slot ? `[Slot ${extra.container_slot}]` : "";
+                    let hex = s.color || "555";
+                    let displayName = s.display || `<strong>#${s.id}</strong> Unknown Spool`;
                     
                     html += `
                     <div class="list-group-item bg-dark text-light border-secondary d-flex justify-content-between align-items-center fb-spool-row" data-sid="${s.id}">
                         <div>
                             <span style="display:inline-block;width:15px;height:15px;background-color:#${hex};border-radius:50%;margin-right:8px;border:1px solid #fff;vertical-align:middle;"></span>
-                            <strong>#${s.id}</strong> ${brand} - ${filamentName} ${slot}
+                            ${displayName}
                         </div>
                         <div class="input-group input-group-sm" style="width: 150px;">
                             <input type="number" class="form-control bg-secondary text-light border-dark fb-spool-input" placeholder="Grams Used" min="0" step="0.1">
@@ -105,6 +108,24 @@ window.triggerAggressiveGcodeParse = function() {
     if (!window._currentFbError) return;
     
     setProcessing(true);
+    const btn = document.getElementById('btn-fb-auto-parse');
+    const ogHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Fetching...`;
+    
+    // Fallback status poller to give UI feedback during the backend process
+    let pollInterval = setInterval(() => {
+        fetch('/api/fb_parse_status')
+            .then(r => r.json())
+            .then(st => {
+                if(st && st.msg) {
+                    const safeMsg = st.msg.replace('<', '&lt;').replace('>', '&gt;');
+                    btn.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> ${safeMsg}`;
+                }
+            })
+            .catch(e => {});
+    }, 1500);
+
     fetch('/api/fb_aggressive_parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -116,18 +137,58 @@ window.triggerAggressiveGcodeParse = function() {
     })
     .then(r => r.json())
     .then(d => {
+        clearInterval(pollInterval);
+        btn.disabled = false;
+        btn.innerHTML = ogHtml;
         setProcessing(false);
         if (d.success) {
             showToast(d.msg, 'success');
             closeModal('fbRecoveryModal');
         } else {
-            alert("Auto-Parse Failed: " + d.msg + "\n\nPlease enter the weights manually.");
+            alert("Auto-Parse Failed: " + d.msg + "\n\nPlease enter the weights manually or upload a local copy of the file.");
         }
     })
     .catch(err => {
+        clearInterval(pollInterval);
+        btn.disabled = false;
+        btn.innerHTML = ogHtml;
         setProcessing(false);
         alert("Error during auto-parse: " + err);
     });
+};
+
+};
+
+window.handleManualGcodeUpload = function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        const text = evt.target.result;
+        const match = text.match(/;?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)/);
+        if (match) {
+            const weightsStr = match[1];
+            const weights = weightsStr.split(',').map(w => w.trim());
+            const container = document.getElementById('fb-rec-spools-container');
+            const inputs = container.querySelectorAll('.fb-spool-input');
+            let matched = 0;
+            inputs.forEach((input, index) => {
+                if (index < weights.length) {
+                    const w = parseFloat(weights[index]);
+                    if (w > 0) {
+                        input.value = w;
+                        matched++;
+                    }
+                }
+            });
+            showToast(`Auto-filled weights from local file. Found ${matched} spools.`, 'success');
+        } else {
+            alert("Could not find 'filament used [g]' metadata in this file. It might not have been parsed by PrusaSlicer.");
+        }
+        e.target.value = ''; // Reset input
+    };
+    reader.readAsText(file);
 };
 
 window.submitManualFilaBridgeRecovery = function() {
