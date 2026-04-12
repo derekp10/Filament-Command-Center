@@ -1178,3 +1178,14 @@ body {
     font-size: 1.1rem;
 }
 
+/* FilaBridge Error Live Log Styling */
+.filabridge-error-log {
+    background-color: rgba(255, 0, 0, 0.25) !important;
+    border-left: 5px solid #ff0000 !important;
+    padding: 8px !important;
+    border-radius: 4px;
+    margin: 4px 0;
+    font-weight: bold;
+    color: #ffcccc !important;
+    text-shadow: 1px 1px 2px #000;
+}

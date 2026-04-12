@@ -32,16 +32,7 @@
 
 * Add a cleaner easier way to see what filaments are on a printer, with out having to drill down into location list, and location manager to see them.
 
-# ** Filabridge Error Recovery **
-* Spools listed do not list the manufacturer or the type of filament only the ID's.
-* Should some how keep track of the spools currently in the printer at the time of the error, incase user changes filament before realizing that the error occured.
-* "Start aggressive Parce" Might not do anything? Need to test this.
-* It's currently not possible to see if the aggressive pull of the gcode is doing anything on large files we should add a progress bar if it's activly transfer would be useful here.
-* Should more activly inform the user of what's going happening with the GCode parce.
-* Have a back up option for the user to provide the Gcode file if auto grab doesn't work.
-* [Question] How are we storing the gcode files we pull. And do we have code to clean up files after a certain amount of time.
-* Live Activity line notification should stand out more than just the standard orange were jusing. Perhaps a red or something else that works with color schemes?
-* Perhapes we monitor for failures like this, and just attempte to automatically update the filaments so the user doesn't have to even click the fix and aggressive pull buttons to get it started. We can report out if it works in the activity log, and if it doesn't still prompt them for the new numbers using the modal we have.
+
 
 
 

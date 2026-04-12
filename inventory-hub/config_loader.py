@@ -28,7 +28,7 @@ def load_config():
         "printer_map": {}, 
         "feeder_map": {}, 
         "dryer_slots": [],
-        "auto_recover_filabridge_errors": False
+        "auto_recover_filabridge_errors": True
     }
     
     final_config = defaults.copy()
