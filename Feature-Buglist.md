@@ -126,6 +126,11 @@ I think we've inadvertently created 3 levels of logic/complexity here:
 3. A full on interface that is easier to move spools around than having to use Spoolman's lackluster interface.
 All 3 of these things are important and have value. We should table for now, and come back to once we've gotten more of the functionality in place.
 
+## Stuff to watch ##
+
+# ** Filabridge Error Recovery **
+* Keep an eye on filabridge errors and note the type of recovery method used to fill in the missing weight data. (Fast-Fetch or RAM-Fetch) To see if Fast-Fetch (Based on a HTTP Range request of a file.) works.
+
 # **New related project to be integrated **
 
 * [Feature] Build Project Color Loadout Add-on -> (See /docs/Project-Color-Loadout/)
