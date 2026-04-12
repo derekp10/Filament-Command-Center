@@ -36,10 +36,11 @@
 * Spools listed do not list the manufacturer or the type of filament only the ID's.
 * Should some how keep track of the spools currently in the printer at the time of the error, incase user changes filament before realizing that the error occured.
 * "Start aggressive Parce" Might not do anything? Need to test this.
-* Softlocks on processing, not sure if this is because it's still pulling the gcode, because it erroed out and didn't clear the processing UI block, or some other reason. A progress bar if it's activly transfer would be useful here.
+* It's currently not possible to see if the aggressive pull of the gcode is doing anything on large files we should add a progress bar if it's activly transfer would be useful here.
 * Should more activly inform the user of what's going happening with the GCode parce.
 * Have a back up option for the user to provide the Gcode file if auto grab doesn't work.
 * [Question] How are we storing the gcode files we pull. And do we have code to clean up files after a certain amount of time.
+* Live Activity line notification should stand out more than just the standard orange were jusing. Perhaps a red or something else that works with color schemes?
 
 
 
