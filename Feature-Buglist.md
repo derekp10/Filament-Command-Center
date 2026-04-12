@@ -32,7 +32,7 @@
 
 * Add a cleaner easier way to see what filaments are on a printer, with out having to drill down into location list, and location manager to see them.
 
-
+* Ejecting a fillament while in the command center main menu buffer, doesn't clear the deployed status of the spool.
 
 
 
