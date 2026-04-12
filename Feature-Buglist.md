@@ -41,6 +41,7 @@
 * Have a back up option for the user to provide the Gcode file if auto grab doesn't work.
 * [Question] How are we storing the gcode files we pull. And do we have code to clean up files after a certain amount of time.
 * Live Activity line notification should stand out more than just the standard orange were jusing. Perhaps a red or something else that works with color schemes?
+* Perhapes we monitor for failures like this, and just attempte to automatically update the filaments so the user doesn't have to even click the fix and aggressive pull buttons to get it started. We can report out if it works in the activity log, and if it doesn't still prompt them for the new numbers using the modal we have.
 
 
 
