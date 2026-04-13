@@ -36,6 +36,12 @@
 
 * We either need a way to detect if MMU mode is one. Or change how M0 & M1 work for weight deductions. I did a test with a filament in both M0 and M1, and it deducted value from both I think. I'm not sure on this as I didn't mark down how much was in M1 before the test. But we shouldn't have seen any deduction from M0. Perhaps we just bind the two together, where no matter what mode M1 is alwasy either the first MMU slot or for when the mmu is disabled and the filamentjust direct feeds into the toolhead.
 
+* Smart eject doesn't seem to be called when a new spool is assigned to a toolhead that already has a spool assigned to it. (CoreOne+ Noticed issue)
+
+* Clicking on the edit button with a spool in a location (not slotted), dismissing the edit spool modal causes the details modal to pop up. Details should only pop up when the edit button was used from the details window. We need to work on this better to make the windows work right. A recent change is causing this bug. Adding the re-opening of the details modal after exiting edit i believe, is not considering the sorce of the edit click. We should probably look over the whole modal system because i thought we were using a better system than this that was more dynamic.
+
+* Eject button on unslotted location items doesn't actully remove from list, and pops up a modal/window for a second to confirm setting it to unassinged, but dissipears. The item should just be removed from the list, and set to it's last location. if it's last location is unknow, set to unassinged, or propt user about it, or warn in live activity.
+
 
 
 # **Active Backlog (Organized by Feature Area)**
