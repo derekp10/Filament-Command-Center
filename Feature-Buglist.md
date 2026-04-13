@@ -34,6 +34,8 @@
 
 * Ejecting a fillament while in the command center main menu buffer, doesn't clear the deployed status of the spool.
 
+* We either need a way to detect if MMU mode is one. Or change how M0 & M1 work for weight deductions. I did a test with a filament in both M0 and M1, and it deducted value from both I think. I'm not sure on this as I didn't mark down how much was in M1 before the test. But we shouldn't have seen any deduction from M0. Perhaps we just bind the two together, where no matter what mode M1 is alwasy either the first MMU slot or for when the mmu is disabled and the filamentjust direct feeds into the toolhead.
+
 
 
 # **Active Backlog (Organized by Feature Area)**
