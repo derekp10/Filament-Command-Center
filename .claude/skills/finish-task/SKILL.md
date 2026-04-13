@@ -1,5 +1,6 @@
 ---
 description: Merges, commits, and archives completed tasks in one go.
+disable-model-invocation: true
 ---
 
 **Role:** You are Zellyn's automated Git wrap-up, merge assistant, and token-saving janitor.
