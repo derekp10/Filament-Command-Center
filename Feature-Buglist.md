@@ -46,6 +46,8 @@
 
 * Spool cards displayed on the filament command center's main menu buffer, do not display there locations. This needs to be added so the user doesn't need to bring up the display modal to see it's current location.
 
+* It appears that while I was editing a spool's filament data that was sloted into a print head, saving caused it to be removed. We need to check to see why that is.
+
 
 # **Active Backlog (Organized by Feature Area)**
 
