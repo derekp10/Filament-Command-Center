@@ -261,3 +261,7 @@ def test_structural_archived_badges(page: Page):
         classes = badge.evaluate("el => el.className")
         assert "text-bg-danger" in classes, "Archived badge missing text-bg-danger class!"
         assert "bg-warning" not in classes, "Archived badge incorrectly using bg-warning class!"
+
+    # Archived badge must not appear on the color name line (text-line-3 or fcc-card-title)
+    name_line_badges = page.locator('.text-line-3 .fcc-archived-badge, .fcc-card-title .fcc-archived-badge')
+    assert name_line_badges.count() == 0, "Archived badge found on color name line — should only appear in Row 3!"

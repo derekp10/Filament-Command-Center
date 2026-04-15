@@ -26,8 +26,6 @@
 
 * Check to see if changes to spool card gradint/coextredud color modificaitons were also applied to the Filament cards. (They should have been, this is supposed to be a unified code set for this type of item.)
 
-* Double archive Badge. I want to keep one version over the other. The one that has the shadow backdrop and is on the same line as the color name is the one I like better. We need to move that one down to where the other one is to replace it, and then remove it from the color line. This may mean we need to look into how the cards display archived in all there various versions we have.
-
 * Adding filament to an archived filament should automatically unarchive the filament.
 
 * Add a cleaner easier way to see what filaments are on a printer, with out having to drill down into location list, and location manager to see them.
@@ -58,6 +56,7 @@
 ## 🎨 UI & Theming
 * Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird.
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
+* Audit `text-pop` class usage across all card types and UI elements. There are spots not currently using it that would benefit from the shadow (discovered when moving the archive badge to Row 3 — it looked flat without inheriting `text-pop` from its old parent). Not a global apply, but a targeted pass to find and add where it makes sense.
 * Theres a little animation and modal that appears when you add a new Slicer Profile in the Add/edit enventory wizzard. Its so nifty I want this used in other places. (I'm not sure if this is a sweetalert2 thing, or if we implemented ourselves.)
 
 

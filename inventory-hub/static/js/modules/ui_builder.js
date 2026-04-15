@@ -12,10 +12,9 @@ const SpoolCardBuilder = {
         const d = item.details || {};
         const legacy = d.external_id ? `[Legacy: ${d.external_id}]` : "";
         const isArch = (item.archived === true || String(item.archived).toLowerCase() === 'true');
-        const archivedBadge = isArch ? ` <span class="badge text-bg-danger position-relative ms-1 px-1 fcc-archived-badge" style="top: -2px;">📦 ARCHIVED</span>` : "";
-        const brand = d.brand || "Generic";
+                const brand = d.brand || "Generic";
         const material = d.material || "PLA";
-        const name = (d.color_name || (item.display || "").replace(/#\d+/, '').trim()) + archivedBadge;
+        const name = d.color_name || (item.display || "").replace(/#\d+/, '').trim();
         const weight = d.weight ? `[${Math.round(d.weight)}g]` : "";
 
         return {
@@ -41,7 +40,7 @@ const SpoolCardBuilder = {
         const info = this.getRichInfo(item);
         // Compute archived badge for Row 3 (weight row, left side)
         const isArchived = (item.archived === true || String(item.archived).toLowerCase() === 'true');
-        const archivedBadgeHTML = isArchived ? `<span class="badge text-bg-danger fcc-archived-badge">📦 ARCHIVED</span>` : '';
+        const archivedBadgeHTML = isArchived ? `<span class="badge text-bg-danger px-1 text-pop fcc-archived-badge">📦 ARCHIVED</span>` : '';
 
         // Core visual styles
         let styles;
