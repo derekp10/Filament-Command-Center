@@ -50,6 +50,8 @@
 
 * Currently using temp (Bed, Nozzle/Toolhead) in spoolman to store the low tempratures, but I really think we need to track the high tempratures for those values. Will need to look into the code and see what we can do to fix this. Will need to add extra fields for this on the filament side, and treat them not as custom fields in the ui placement, but as actual fields. Will need to reinfource the location of those fieds in the UI as custom fields have a tendency to re-order themselves. I have a line item for hammering down the field locations so they don't move around eveythime a custom entry is added into an extra field, so we should probably include this in that as well.
 
+* Possible issues with >1kg spools and tracking weights?
+
 
 # **Active Backlog (Organized by Feature Area)**
 
