@@ -1,4 +1,5 @@
 ---
+name: startnewtask
 description: Instructions to get started on the next task
 disable-model-invocation: true
 ---

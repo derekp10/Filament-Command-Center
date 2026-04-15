@@ -1,4 +1,5 @@
 ---
+name: finish-task
 description: Merges, commits, and archives completed tasks in one go.
 disable-model-invocation: true
 ---

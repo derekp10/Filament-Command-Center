@@ -1,4 +1,5 @@
 ---
+name: cleanup
 description: Once we have confirmed that a feature is finished, or after we make changes to the @feature-buglist.md
 disable-model-invocation: true
 ---
