@@ -283,3 +283,50 @@ def test_structural_buffer_location_badge(page: Page):
         # Row 1.5 badge: bg-info (located), bg-warning (deployed/ghost), or bg-secondary (unassigned)
         loc_badge = card.locator('.badge.bg-info, .badge.bg-warning, .badge.bg-secondary')
         assert loc_badge.count() > 0, f"Buffer card #{i} is missing a location badge in Row 1.5!"
+
+
+def test_wizard_escape_warns_when_dirty(page: Page):
+    """Escape on a dirty wizard shows unsaved-changes Swal; 'Keep Editing' leaves modal open;
+    'Discard & Close' closes it cleanly."""
+    page.goto("http://localhost:8000")
+    page.get_by_role("button", name="ADD INVENTORY").click()
+    expect(page.locator("#wizardModal")).to_be_visible()
+    page.wait_for_timeout(500)
+
+    # Make the form dirty
+    page.locator('#wiz-fil-color_name').fill("Test Color")
+
+    # Escape → Swal guard should appear, modal stays open
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+    swal = page.locator('.swal2-container')
+    expect(swal).to_be_visible()
+    expect(page.locator('.swal2-title')).to_have_text("Unsaved Changes")
+    expect(page.locator("#wizardModal")).to_be_visible()
+
+    # "Keep Editing" → Swal dismissed, modal still open
+    page.locator('button.swal2-cancel').click()
+    page.wait_for_timeout(400)
+    expect(page.locator('.swal2-container')).not_to_be_visible()
+    expect(page.locator("#wizardModal")).to_be_visible()
+
+    # Escape again → Swal reappears; "Discard & Close" → modal closes
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+    page.locator('button.swal2-confirm').click()
+    page.wait_for_timeout(400)
+    expect(page.locator("#wizardModal")).not_to_be_visible()
+
+
+def test_wizard_escape_no_warning_when_clean(page: Page):
+    """Escape on an untouched wizard closes it immediately with no Swal dialog."""
+    page.goto("http://localhost:8000")
+    page.get_by_role("button", name="ADD INVENTORY").click()
+    expect(page.locator("#wizardModal")).to_be_visible()
+    page.wait_for_timeout(500)
+
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+
+    expect(page.locator('.swal2-container')).not_to_be_visible()
+    expect(page.locator("#wizardModal")).not_to_be_visible()

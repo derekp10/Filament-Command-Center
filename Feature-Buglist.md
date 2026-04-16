@@ -52,7 +52,6 @@
 
 * Text Cacing is being changed on some manufactures (CC3D being Cc3D) and should just show the actual name without trying to correct it.
 
-* Hitting escape when trying to exit adding tags to filament attributes causes the unsaved window to close, loosing data currently entered. Should add varification that unsaved changes will be lost to the Add/Edit modal.
 
 
 * `test_structural_qr_codes` is failing — the test looks for an `<img>` inside `#qr-audit` and checks its bounding box, but it returns `None`. The QR code may be rendering as a `<canvas>` rather than an `<img>` at the time the test runs. Found during buffer location badge work (4/15/2026).
