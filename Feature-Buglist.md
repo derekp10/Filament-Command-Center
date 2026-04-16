@@ -52,11 +52,13 @@
 
 * Text Cacing is being changed on some manufactures (CC3D being Cc3D) and should just show the actual name without trying to correct it.
 
+* `test_manual_loc_override_e2e` is failing — the search offcanvas stays open and intercepts pointer events on the spool card's "View Details" button, causing a 30s timeout. The test needs to close the offcanvas before clicking the card. Found during structural test fix work (4/15/2026).
 
+* `test_loc_grid_layout_data_presence` is failing — expects 4 action buttons (Pick, Details, Edit, Eject) per grid slot but finds 5. A new button was added to the grid card layout without updating this test. Found during structural test fix work (4/15/2026).
 
-* `test_structural_qr_codes` is failing — the test looks for an `<img>` inside `#qr-audit` and checks its bounding box, but it returns `None`. The QR code may be rendering as a `<canvas>` rather than an `<img>` at the time the test runs. Found during buffer location badge work (4/15/2026).
+* `test_weigh_out_modal_e2e` is failing — expects the save button to show a checkmark emoji after weight entry, but the button shows a floppy disk emoji instead. Likely a UI change to the save button's state progression. Found during structural test fix work (4/15/2026).
 
-* `test_structural_spool_cards` is failing — its `.fcc-spool-card` selector picks up buffer cards as well as search results. Non-ghost buffer cards have a gradient but no `box-shadow` in their `customInnerBg` CSS (`ui_builder.js`), while the test expects all gradient cards to have a box-shadow. Fix: either add `box-shadow` to the non-ghost buffer card style, or scope the test selector to exclude `.buffer-item`. Found during buffer location badge work (4/15/2026).
+* `test_api_endpoint` is failing — the `search_inventory` function now accepts a `min_weight` parameter, but the test mock doesn't expect it. Test needs updating to include `min_weight=''`. Found during structural test fix work (4/15/2026).
 
 # **Active Backlog (Organized by Feature Area)**
 
@@ -136,6 +138,7 @@
 
 # **On Hold**
 * Amazon Parser: Multi-pack spools with different colors (e.g. 4x1kg) currently calculate as a single 4000g spool instead of 4 individual 1000g spools.
+* `test_amazon_parser_matching` is failing — BeautifulSoup4 is not installed in the Docker container. Parser returns empty results because the import fails silently. Blocked until `pip install beautifulsoup4` is added to the Docker image. Found during structural test fix work (4/15/2026).
 * Continue to support Spoolman's "Import from External" feature... Purchase emails, or Amazon/Vendor product pages.
 * Standardize the size of all QR codes to match that of the sizes used on the command center. (Audit, eject, drop, etc).
 * If legacy barcode has no spools attached to it, UI should warn about this, perhaps give option to add new spool?
