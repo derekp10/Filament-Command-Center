@@ -8,7 +8,9 @@ let wizardState = {
     externalMetaData: null,
     editSpoolId: null,
     returnToSpoolId: null, // Track which spool detail modal to re-open after wizard closes
-    returnToFilamentId: null // Track which filament detail modal to re-open after wizard closes
+    returnToFilamentId: null, // Track which filament detail modal to re-open after wizard closes
+    isDirty: false,    // true when the user has modified any form field or chip
+    forceClose: false  // set true to bypass the dirty guard when we want to programmatically close
 };
 
 // --- WIZARD CLOSE → RE-OPEN DETAIL MODAL ---
@@ -34,6 +36,42 @@ let wizardState = {
             }
         });
         console.log("✅ Wizard close → re-open detail modal listener registered.");
+
+        // --- UNSAVED CHANGES GUARD ---
+        // hide.bs.modal fires before the modal closes and supports preventDefault().
+        wizEl.addEventListener('hide.bs.modal', (event) => {
+            if (wizardState.forceClose) { wizardState.forceClose = false; return; }
+            if (wizardState.isDirty) {
+                event.preventDefault();
+                Swal.fire({
+                    target: wizEl,
+                    title: 'Unsaved Changes',
+                    text: 'You have unsaved changes. Discard them and close?',
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonText: 'Discard & Close',
+                    confirmButtonColor: '#dc3545',
+                    cancelButtonText: 'Keep Editing',
+                    background: '#1e1e1e',
+                    color: '#fff'
+                }).then(result => {
+                    if (result.isConfirmed) {
+                        wizardState.isDirty = false;
+                        wizardState.forceClose = true;
+                        window.modals.wizardModal.hide();
+                    }
+                });
+            }
+        });
+
+        // Track dirty state from any form input/change inside the wizard (delegated).
+        wizEl.addEventListener('input', () => { wizardState.isDirty = true; });
+        wizEl.addEventListener('change', () => { wizardState.isDirty = true; });
+
+        // Chip removal uses onclick="this.remove()" which bypasses input/change events.
+        wizEl.addEventListener('click', (e) => {
+            if (e.target.classList.contains('dynamic-chip')) wizardState.isDirty = true;
+        });
     }
 })();
 
@@ -101,6 +139,7 @@ const wizardReset = () => {
     document.getElementById('wiz-status-msg').innerText = "";
     document.getElementById('wiz-fil-vendor-sel').style.display = 'block';
     document.getElementById('wiz-fil-vendor-new').style.display = 'none';
+    wizardState.isDirty = false;
 };
 
 window.wizardAutoUpdateDensity = () => {
@@ -679,6 +718,7 @@ window.wizardAddMultiChoiceChip = (entityType, key, directVal = null) => {
         input.value = '';
         return;
     }
+    wizardState.isDirty = true;
 
     // Check if it's a known choice, or if we need to silently permanently add it to the Spoolman DB
     let isKnown = false;
@@ -1310,6 +1350,7 @@ window.wizardSubmit = async () => {
         const data = await res.json();
 
         if (data.success) {
+            wizardState.isDirty = false;
             msg.innerHTML = `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse')); // Instantly trigger UI rebinding across all open panels
 

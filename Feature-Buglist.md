@@ -26,21 +26,44 @@
 
 * Check to see if changes to spool card gradint/coextredud color modificaitons were also applied to the Filament cards. (They should have been, this is supposed to be a unified code set for this type of item.)
 
-* Double archive Badge. I want to keep one version over the other. The one that has the shadow backdrop and is on the same line as the color name is the one I like better. We need to move that one down to where the other one is to replace it, and then remove it from the color line. This may mean we need to look into how the cards display archived in all there various versions we have.
-
 * Adding filament to an archived filament should automatically unarchive the filament.
 
 * Add a cleaner easier way to see what filaments are on a printer, with out having to drill down into location list, and location manager to see them.
 
+* Ejecting a fillament while in the command center main menu buffer, doesn't clear the deployed status of the spool.
+
+* We either need a way to detect if MMU mode is one. Or change how M0 & M1 work for weight deductions. I did a test with a filament in both M0 and M1, and it deducted value from both I think. I'm not sure on this as I didn't mark down how much was in M1 before the test. But we shouldn't have seen any deduction from M0. Perhaps we just bind the two together, where no matter what mode M1 is alwasy either the first MMU slot or for when the mmu is disabled and the filamentjust direct feeds into the toolhead.
+
+* Smart eject doesn't seem to be called when a new spool is assigned to a toolhead that already has a spool assigned to it. (CoreOne+ Noticed issue)
+
+* Clicking on the edit button with a spool in a location (not slotted), dismissing the edit spool modal causes the details modal to pop up. Details should only pop up when the edit button was used from the details window. We need to work on this better to make the windows work right. A recent change is causing this bug. Adding the re-opening of the details modal after exiting edit i believe, is not considering the sorce of the edit click. We should probably look over the whole modal system because i thought we were using a better system than this that was more dynamic.
+
+* Eject button on unslotted location items doesn't actully remove from list, and pops up a modal/window for a second to confirm setting it to unassinged, but dissipears. The item should just be removed from the list, and set to it's last location. if it's last location is unknow, set to unassinged, or propt user about it, or warn in live activity.
+
+* An unknow issue caused the frontend to lock up, causing it to no longer update to take barcodes. A hard refresh (Control shift R and Control F5) fixed it. We need to figure out what caused this, and fix it so it doesn't happen again. This could be related to the eject button issue above. Also seemed to have cause updates to filabridge to stop until the front end was refreshed.
+
+* Spool cards displayed on the filament command center's main menu buffer, do not display there locations. This needs to be added so the user doesn't need to bring up the display modal to see it's current location.
+
+* It appears that while I was editing a spool's filament data that was sloted into a print head, saving caused it to be removed. We need to check to see why that is. Or the filament's location was listed the correct location, but it the location was regestring as empty 0/1 on location list modal, and nothing assigned inside the location manager modal.
+
+* Currently using temp (Bed, Nozzle/Toolhead) in spoolman to store the low tempratures, but I really think we need to track the high tempratures for those values. Will need to look into the code and see what we can do to fix this. Will need to add extra fields for this on the filament side, and treat them not as custom fields in the ui placement, but as actual fields. Will need to reinfource the location of those fieds in the UI as custom fields have a tendency to re-order themselves. I have a line item for hammering down the field locations so they don't move around eveythime a custom entry is added into an extra field, so we should probably include this in that as well.
+
+* Possible issues with >1kg spools and tracking weights?
+
+* Text Cacing is being changed on some manufactures (CC3D being Cc3D) and should just show the actual name without trying to correct it.
 
 
 
+* `test_structural_qr_codes` is failing — the test looks for an `<img>` inside `#qr-audit` and checks its bounding box, but it returns `None`. The QR code may be rendering as a `<canvas>` rather than an `<img>` at the time the test runs. Found during buffer location badge work (4/15/2026).
+
+* `test_structural_spool_cards` is failing — its `.fcc-spool-card` selector picks up buffer cards as well as search results. Non-ghost buffer cards have a gradient but no `box-shadow` in their `customInnerBg` CSS (`ui_builder.js`), while the test expects all gradient cards to have a box-shadow. Fix: either add `box-shadow` to the non-ghost buffer card style, or scope the test selector to exclude `.buffer-item`. Found during buffer location badge work (4/15/2026).
 
 # **Active Backlog (Organized by Feature Area)**
 
 ## 🎨 UI & Theming
 * Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird.
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
+* Audit `text-pop` class usage across all card types and UI elements. There are spots not currently using it that would benefit from the shadow (discovered when moving the archive badge to Row 3 — it looked flat without inheriting `text-pop` from its old parent). Not a global apply, but a targeted pass to find and add where it makes sense.
 * Theres a little animation and modal that appears when you add a new Slicer Profile in the Add/edit enventory wizzard. Its so nifty I want this used in other places. (I'm not sure if this is a sweetalert2 thing, or if we implemented ourselves.)
 
 
@@ -125,6 +148,11 @@ I think we've inadvertently created 3 levels of logic/complexity here:
 2. A UI layer, for debugging, but should only really need to be looked at to confirm things
 3. A full on interface that is easier to move spools around than having to use Spoolman's lackluster interface.
 All 3 of these things are important and have value. We should table for now, and come back to once we've gotten more of the functionality in place.
+
+## Stuff to watch ##
+
+# ** Filabridge Error Recovery **
+* Keep an eye on filabridge errors and note the type of recovery method used to fill in the missing weight data. (Fast-Fetch or RAM-Fetch) To see if Fast-Fetch (Based on a HTTP Range request of a file.) works.
 
 # **New related project to be integrated **
 
