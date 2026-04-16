@@ -50,6 +50,14 @@
 
 * Possible issues with >1kg spools and tracking weights?
 
+* Text Cacing is being changed on some manufactures (CC3D being Cc3D) and should just show the actual name without trying to correct it.
+
+* Hitting escape when trying to exit adding tags to filament attributes causes the unsaved window to close, loosing data currently entered. Should add varification that unsaved changes will be lost to the Add/Edit modal.
+
+
+* `test_structural_qr_codes` is failing — the test looks for an `<img>` inside `#qr-audit` and checks its bounding box, but it returns `None`. The QR code may be rendering as a `<canvas>` rather than an `<img>` at the time the test runs. Found during buffer location badge work (4/15/2026).
+
+* `test_structural_spool_cards` is failing — its `.fcc-spool-card` selector picks up buffer cards as well as search results. Non-ghost buffer cards have a gradient but no `box-shadow` in their `customInnerBg` CSS (`ui_builder.js`), while the test expects all gradient cards to have a box-shadow. Fix: either add `box-shadow` to the non-ghost buffer card style, or scope the test selector to exclude `.buffer-item`. Found during buffer location badge work (4/15/2026).
 
 # **Active Backlog (Organized by Feature Area)**
 

@@ -265,3 +265,21 @@ def test_structural_archived_badges(page: Page):
     # Archived badge must not appear on the color name line (text-line-3 or fcc-card-title)
     name_line_badges = page.locator('.text-line-3 .fcc-archived-badge, .fcc-card-title .fcc-archived-badge')
     assert name_line_badges.count() == 0, "Archived badge found on color name line — should only appear in Row 3!"
+
+
+def test_structural_buffer_location_badge(page: Page):
+    """Verifies that every spool card in the main buffer displays a location badge (Row 1.5)."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector('.fcc-spool-card, nav', state='visible')
+    page.wait_for_timeout(1000)
+
+    buffer_cards = page.locator('.fcc-spool-card.buffer-item')
+    count = buffer_cards.count()
+    if count == 0:
+        pytest.skip("No buffer cards rendered to verify.")
+
+    for i in range(count):
+        card = buffer_cards.nth(i)
+        # Row 1.5 badge: bg-info (located), bg-warning (deployed/ghost), or bg-secondary (unassigned)
+        loc_badge = card.locator('.badge.bg-info, .badge.bg-warning, .badge.bg-secondary')
+        assert loc_badge.count() > 0, f"Buffer card #{i} is missing a location badge in Row 1.5!"

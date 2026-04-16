@@ -244,6 +244,18 @@ const SpoolCardBuilder = {
                     <div class="fcc-btn-buffer-del" onclick="event.stopPropagation(); typeof removeBufferItem !== 'undefined' && removeBufferItem(${item.id})" title="Drop from Buffer">❌</div>
                 </div>
             `;
+
+            // Location badge — mirrors search mode, no SearchEngine offcanvas needed
+            if (item.location) {
+                const badgeClick = `event.stopPropagation(); if(window.openManage) window.openManage('${item.location}')`;
+                if (item.is_ghost) {
+                    locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 Deployed: ${item.location}${item.slot ? ` (Slot ${item.slot})` : ''}</span>`;
+                } else {
+                    locBadgeHTML = `<span class="badge bg-info text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 ${item.location}</span>`;
+                }
+            } else {
+                locBadgeHTML = `<span class="badge bg-secondary"><i class="bi bi-question-circle"></i> Unassigned</span>`;
+            }
             // Simplified Buffer Row Layout (mostly standard 3-row but compressed)
         }
         else if (mode === 'buffer_nav') {
