@@ -59,7 +59,7 @@
 
 * `test_api_endpoint` is failing — the `search_inventory` function now accepts a `min_weight` parameter, but the test mock doesn't expect it. Test needs updating to include `min_weight=''`. Found during structural test fix work (4/15/2026).
 
-* Server reboots seem to be resetting dryerbox slot numbers. Need to look into the code and confirm if this is the case of if it's something else.
+* Server reboots seem to be resetting dryerbox slot numbers. Need to look into the code and confirm if this is the case of if it's something else. This might be related to the core one + ejcect system not properly slotting items back into there locations when a smart swap/change engages?
 
 # **Active Backlog (Organized by Feature Area)**
 
