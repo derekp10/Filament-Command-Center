@@ -442,11 +442,84 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                 background: '#1e1e1e',
                 color: '#fff',
                 confirmButtonText: 'Force Move',
+                allowEscapeKey: false,
+                allowOutsideClick: false,
                 didOpen: () => {
                     const popup = Swal.getPopup();
                     const searchInput = popup.querySelector('#swal-override-search');
                     const hiddenInput = popup.querySelector('#swal-override-loc');
                     const items = popup.querySelectorAll('.swal-loc-item');
+
+                    // Auto-focus the search input
+                    searchInput.focus();
+
+                    // Inject kb-active style (scoped to popup, removed on close)
+                    const styleTag = document.createElement('style');
+                    styleTag.textContent = '.swal-loc-item.kb-active { background: #444 !important; }';
+                    popup.appendChild(styleTag);
+
+                    // Keyboard navigation helpers
+                    let kbIndex = -1;
+                    const getVisibleItems = () => Array.from(items).filter(i => i.style.display !== 'none');
+                    const clearKbHighlight = () => {
+                        items.forEach(i => i.classList.remove('kb-active'));
+                        kbIndex = -1;
+                    };
+                    const applyKbHighlight = (visibleItems, index) => {
+                        items.forEach(i => i.classList.remove('kb-active'));
+                        if (index >= 0 && index < visibleItems.length) {
+                            visibleItems[index].classList.add('kb-active');
+                            const container = popup.querySelector('#swal-loc-list-container');
+                            const itemRect = visibleItems[index].getBoundingClientRect();
+                            const contRect = container.getBoundingClientRect();
+                            if (itemRect.bottom > contRect.bottom) {
+                                container.scrollTop += (itemRect.bottom - contRect.bottom);
+                            } else if (itemRect.top < contRect.top) {
+                                container.scrollTop -= (contRect.top - itemRect.top);
+                            }
+                        }
+                    };
+
+                    // Escape confirmation overlay (inline, avoids nested Swal z-index issues)
+                    const overlay = document.createElement('div');
+                    overlay.id = 'fcc-escape-confirm-overlay';
+                    overlay.style.cssText = 'display:none; position:absolute; inset:0; z-index:10; background:rgba(0,0,0,0.85); border-radius:inherit; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:24px; text-align:center;';
+                    overlay.innerHTML = `
+                        <div style="font-size:1.2em; font-weight:bold; color:#fff;">Cancel Override?</div>
+                        <div style="color:#ccc; font-size:0.9em;">Are you sure you want to close without saving?</div>
+                        <div style="display:flex; gap:10px; margin-top:8px;">
+                            <button id="fcc-escape-yes" class="btn btn-danger btn-sm" style="min-width:100px;">Yes, close</button>
+                            <button id="fcc-escape-no" class="btn btn-secondary btn-sm" style="min-width:100px;">No, go back</button>
+                        </div>
+                    `;
+                    popup.style.position = 'relative';
+                    popup.appendChild(overlay);
+
+                    let confirmShowing = false;
+                    const showConfirmOverlay = () => {
+                        confirmShowing = true;
+                        overlay.style.display = 'flex';
+                        popup.querySelector('#fcc-escape-no').focus();
+                    };
+                    const hideConfirmOverlay = () => {
+                        confirmShowing = false;
+                        overlay.style.display = 'none';
+                        searchInput.focus();
+                    };
+
+                    const escYes = popup.querySelector('#fcc-escape-yes');
+                    const escNo = popup.querySelector('#fcc-escape-no');
+                    escYes.addEventListener('click', () => Swal.close());
+                    escNo.addEventListener('click', () => hideConfirmOverlay());
+
+                    // Arrow keys and Tab switch focus between Yes/No buttons
+                    overlay.addEventListener('keydown', (e) => {
+                        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Tab') {
+                            e.preventDefault();
+                            const target = document.activeElement === escYes ? escNo : escYes;
+                            target.focus();
+                        }
+                    });
 
                     searchInput.addEventListener('input', (e) => {
                         const term = e.target.value.toLowerCase();
@@ -454,17 +527,74 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                             if (item.innerText.toLowerCase().includes(term)) item.style.display = 'block';
                             else item.style.display = 'none';
                         });
+                        clearKbHighlight();
                     });
 
                     items.forEach(item => {
                         item.addEventListener('click', () => {
+                            clearKbHighlight();
                             items.forEach(i => i.style.background = 'transparent');
                             item.style.background = '#444';
                             hiddenInput.value = item.getAttribute('data-id');
                         });
-                        item.addEventListener('mouseenter', () => { if(hiddenInput.value !== item.getAttribute('data-id')) item.style.background = '#222'; });
+                        item.addEventListener('mouseenter', () => {
+                            clearKbHighlight();
+                            if(hiddenInput.value !== item.getAttribute('data-id')) item.style.background = '#222';
+                        });
                         item.addEventListener('mouseleave', () => { if(hiddenInput.value !== item.getAttribute('data-id')) item.style.background = 'transparent'; });
                     });
+
+                    // Keyboard navigation on search input
+                    searchInput.addEventListener('keydown', (e) => {
+                        if (confirmShowing) return;
+                        const visible = getVisibleItems();
+
+                        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                            if (!visible.length) return;
+                            e.preventDefault();
+                            if (e.key === 'ArrowDown') {
+                                kbIndex = kbIndex + 1 >= visible.length ? 0 : kbIndex + 1;
+                            } else {
+                                kbIndex = kbIndex - 1 < 0 ? visible.length - 1 : kbIndex - 1;
+                            }
+                            applyKbHighlight(visible, kbIndex);
+                            return;
+                        }
+
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (kbIndex >= 0 && kbIndex < visible.length) {
+                                const target = visible[kbIndex];
+                                items.forEach(i => i.style.background = 'transparent');
+                                target.style.background = '#444';
+                                hiddenInput.value = target.getAttribute('data-id');
+                                clearKbHighlight();
+                            }
+                            return;
+                        }
+                    });
+
+                    // Escape key — listen on the popup so it works regardless of focus
+                    popup.addEventListener('keydown', (e) => {
+                        if (e.key !== 'Escape') return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (confirmShowing) {
+                            hideConfirmOverlay();
+                        } else {
+                            showConfirmOverlay();
+                        }
+                    });
+
+                    // Guard the Cancel button with the same confirmation
+                    const cancelBtn = popup.querySelector('.swal2-cancel');
+                    if (cancelBtn) {
+                        cancelBtn.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                            showConfirmOverlay();
+                        }, true);
+                    }
                 },
                 preConfirm: () => {
                     const popup = Swal.getPopup();

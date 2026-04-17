@@ -20,7 +20,7 @@
 
 * Filabridge status light is still blinking on and of, just more eraticly now. Need to look into this further.
 
-* Force location modal needs to be able to work with keyboard inputs, in that Up/down arrow move up and down the list. Enter selects the item, and Escape closes the modal. Focus should also start in the text box, so user doesn't have to click it to begin typing.
+* ~~Force location modal needs to be able to work with keyboard inputs~~ — DONE (feature/force-location-keyboard-nav). Arrow keys, Enter to select, Escape with confirmation, auto-focus on search input.
 
 * Check to make sure that when a new filament barcode is scanned, that the proper database fields are updated to mark the filament as labeled, so it doesn't appear in the Backlog queue. I scanned on e but didn't see a message in the Live Activity log. Needs label print for (FIL:58) lists as null, don't know if this was because it was blank in the spoolman UI, because this is an old filament physical swatch.
 
@@ -69,6 +69,9 @@
 * Theres a little animation and modal that appears when you add a new Slicer Profile in the Add/edit enventory wizzard. Its so nifty I want this used in other places. (I'm not sure if this is a sweetalert2 thing, or if we implemented ourselves.)
 
 
+## ⌨️ Keyboard Navigation
+* Audit and implement consistent keyboard navigation across the entire UI. Currently only the force location modal and wizard material/multiselect dropdowns support arrow keys, Enter, and Escape. Every modal, dropdown, list, and interactive element should have a unified keyboard interaction pattern: arrow keys to navigate, Enter to select/confirm, Escape to dismiss/go back, Tab to move between controls, and auto-focus on the primary input when a modal opens.
+
 ## 🗂️ Modals & Add Inventory Wizard
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
 * For existing filaments, advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
@@ -80,6 +83,7 @@
 * Vendor should be searchable with keyboard shortcuts and a list that doesn't take up the full screen.
 * Adding a new slicer profile should automatically add that profile to the current filament being edited.
 * Spoolmans field ordering bug causing fields in the Add/Edit enventory window to move if a custom field is modified or has new items added to it. Need to look at locking down the order of things.
+* SweetAlert2 does not support nested modals — calling `Swal.fire()` while one is already open replaces the first one. Any future confirmation dialogs inside SweetAlert modals must use inline overlay divs (see force location modal's `#fcc-escape-confirm-overlay` pattern) instead of nested `Swal.fire()` calls. Audit existing code for any other nested Swal usage.
 
 ## 🔍 Search, Display & Filtering
 * Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.
@@ -113,6 +117,9 @@
 
 * Some values in Print Queue are being set to yes, most are null. What is the process for setting them to true?
 * Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
+
+## 🧪 Testing
+* Refactor E2E tests to use a shared `conftest.py` with common fixtures (e.g. "open spool details modal", "open force location modal"). Multiple test files duplicate the same 5-step setup sequence. Also audit for other duplicated test code that could be consolidated.
 
 ## ⚙️ App Flow, Architecture & Database
 * **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements.
