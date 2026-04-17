@@ -1,4 +1,5 @@
 # **Done**
+* Force location modal keyboard navigation — Arrow keys to navigate, Enter to select, Escape with inline confirmation overlay, auto-focus on search input. Added Playwright E2E tests. (feature/force-location-keyboard-nav, a76455a, 4/16/2026)
 
 * **Escape Key Unsaved Warning** — Added dirty-state tracking and a SweetAlert2 confirmation dialog to the Add/Edit Inventory wizard. Pressing Escape (or clicking X/Cancel) with unsaved form data now prompts "Discard & Close" vs "Keep Editing" instead of silently discarding. Covers text inputs, selects, checkboxes, and chip tag additions/removals. Dirty flag resets on successful save so rapid-add workflow is unaffected. Two new Playwright tests added to `test_ui_structural.py`.
 * **Double archive Badge** — Removed duplicate "📦 ARCHIVED" badge from the color name line. Kept the Row 3 (weight area) badge and updated its style to match the preferred look (`px-1` + `text-pop` shadow). Extended `test_structural_archived_badges` in `test_ui_structural.py` to assert the badge never appears inside `.text-line-3` or `.fcc-card-title`.

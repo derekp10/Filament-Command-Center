@@ -20,7 +20,6 @@
 
 * Filabridge status light is still blinking on and of, just more eraticly now. Need to look into this further.
 
-* ~~Force location modal needs to be able to work with keyboard inputs~~ — DONE (feature/force-location-keyboard-nav). Arrow keys, Enter to select, Escape with confirmation, auto-focus on search input.
 
 * Check to make sure that when a new filament barcode is scanned, that the proper database fields are updated to mark the filament as labeled, so it doesn't appear in the Backlog queue. I scanned on e but didn't see a message in the Live Activity log. Needs label print for (FIL:58) lists as null, don't know if this was because it was blank in the spoolman UI, because this is an old filament physical swatch.
 
