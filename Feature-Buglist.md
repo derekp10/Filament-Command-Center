@@ -94,10 +94,11 @@
 
 ## 📍 Location Management & Scanning
 * Refactor the entire location managment system from the ground up. It's currently being a bit too complicated, and I think it can be cleaned up a bit if we just rethink the flow of this process. We've bolted a lot of stuff onto this system, and the has caused it to become a bit too cumbersome to both code and work with. I think we need to build in a better system for linking locations and device/boxes/storage things. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
-
-
 * The ability to configure a box to change the slot order to go from left to right, or right to left.
-* Ability to assign a box slot to a printhead/MMU, so that a scan to that box slot will auto load the spool.
+* **[Master Feature] Dryer Box ↔ Machine Assignment & Quick-Swap UI** — Three-phase feature, must be implemented in order:
+  1. **Assign box slot → printhead/MMU**: Scanning a box slot auto-loads the spool into that toolhead.
+  2. **Assign dryer box → machine**: The system knows which dryer box belongs to which printer, so it can surface the right box when working with that machine.
+  3. **Quick-swap UI on toolhead view**: When a dryer box is assigned to a machine, the toolhead view shows the slots in that box. The user can tap the slot they just physically swapped to (e.g. swapping PTFE tubes on a Core One+ in non-MMU mode) to update the active filament — no barcode scanner required. Without this, the process of reflecting a material change in the UI is cumbersome.
 * CR-MDB-1:SLOT:4 is treated as a location not a slot in a box. (I believe this was fixed, we need to check on it.)
 
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
