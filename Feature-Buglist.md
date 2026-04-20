@@ -61,6 +61,8 @@
 
 * Server reboots seem to be resetting dryerbox slot numbers. Need to look into the code and confirm if this is the case of if it's something else. This might be related to the core one + ejcect system not properly slotting items back into there locations when a smart swap/change engages?
 
+* FCC Main Main screen buffer cards still don't always update after several backend changes. Setting filament to 0, doesn't seem to update to unassinged or it's deployed status.
+
 # **Active Backlog (Organized by Feature Area)**
 
 ## 🎨 UI & Theming
