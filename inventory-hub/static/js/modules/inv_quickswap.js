@@ -202,6 +202,12 @@
         });
     };
 
+    // Keeps a reference to the current overlay's teardown so external
+    // callers (e.g. the manage modal's hidden.bs.modal handler) can
+    // dismiss it cleanly — including removing the keydown listener —
+    // instead of just hiding the element and leaking the listener.
+    let _activeConfirmClose = null;
+
     const showConfirmOverlay = (opts) => {
         const ov = document.getElementById('fcc-quickswap-confirm-overlay');
         const title = document.getElementById('fcc-quickswap-confirm-title');
@@ -209,6 +215,11 @@
         const yes = document.getElementById('fcc-quickswap-yes');
         const no = document.getElementById('fcc-quickswap-no');
         if (!ov || !yes || !no) return;
+        // If there's a previous overlay still active (paranoia), tear it
+        // down before replacing its handlers.
+        if (_activeConfirmClose) {
+            try { _activeConfirmClose(); } catch (e) { /* noop */ }
+        }
         title.innerText = opts.title || `Swap ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`;
         body.innerHTML = opts.body || ('This moves the spool currently in that slot into the active toolhead. ' +
                         'Any spool already on the toolhead will be auto-ejected back to its source.');
@@ -217,7 +228,9 @@
             ov.style.display = 'none';
             yes.onclick = null; no.onclick = null;
             document.removeEventListener('keydown', keyHandler, true);
+            if (_activeConfirmClose === close) _activeConfirmClose = null;
         };
+        _activeConfirmClose = close;
         const keyHandler = (e) => {
             if (e.key === 'Escape') { e.stopPropagation(); close(); }
             else if (e.key === 'Enter') { e.stopPropagation(); opts.onConfirm && opts.onConfirm(); close(); }
@@ -226,6 +239,16 @@
         no.onclick = close;
         document.addEventListener('keydown', keyHandler, true);
         yes.focus();
+    };
+
+    // Public teardown for the manage modal to call on hide.
+    window.closeQuickswapConfirm = () => {
+        if (_activeConfirmClose) {
+            try { _activeConfirmClose(); } catch (e) { /* noop */ }
+        } else {
+            const ov = document.getElementById('fcc-quickswap-confirm-overlay');
+            if (ov) ov.style.display = 'none';
+        }
     };
 
     // Re-render every moving part of the manage modal after a move so the
@@ -363,28 +386,99 @@
         return Promise.resolve(check(0));
     };
 
+    // Resolve the exact (box, slot) the return WILL target so the user
+    // isn't asked to confirm an abstract "physical_source." Mirrors the
+    // backend's /api/quickswap/return priority: spool.extra.physical_source
+    // first, first bound slot of the toolhead second.
+    const _resolveReturnDestination = (toolheadId) => {
+        const th = String(toolheadId || '').toUpperCase();
+        if (!th) return Promise.resolve(null);
+        return fetch(`/api/get_contents?id=${encodeURIComponent(th)}`)
+            .then(r => r.ok ? r.json() : [])
+            .then(items => {
+                const resident = (items || [])[0] || null;
+                // Preferred: the spool's own recorded source.
+                const preferred = resident && resident.location
+                    ? {
+                        box: String(resident.location).toUpperCase(),
+                        slot: String(resident.slot || '').replace(/"/g, '').trim() || null,
+                        source: 'physical_source',
+                        spoolId: resident.id,
+                        display: resident.display,
+                    }
+                    : null;
+                if (preferred && preferred.box && preferred.box !== th) {
+                    // location on a ghost entry points back at its source
+                    // box; that's what we want here.
+                    return preferred;
+                }
+                // Fallback: first bound slot of this toolhead.
+                return fetch('/api/dryer_boxes/slots').then(r => r.json()).then(body => {
+                    for (const s of body.slots || []) {
+                        if (s.target && String(s.target).toUpperCase() === th) {
+                            return {
+                                box: s.box, slot: s.slot,
+                                source: 'first_binding',
+                                spoolId: resident && resident.id,
+                                display: resident && resident.display,
+                            };
+                        }
+                    }
+                    return null;
+                });
+            })
+            .catch(() => null);
+    };
+
     window.returnToolheadToSlot = () => {
         if (!currentLoc) return;
         const vth = String(currentLoc.LocationID).toUpperCase();
         _resolveReturnTarget(currentLoc).then(resolvedTh => {
             const th = resolvedTh || vth;
             const isVirtual = currentLoc.Type === PRINTER_TYPE;
-            const resolvedNote = (isVirtual && resolvedTh)
-                ? `<div class="text-warning small mb-2" style="font-size:0.95rem;">(Resolved from the <b>${vth}</b> virtual printer — first toolhead with a loaded spool.)</div>`
-                : '';
-            const emptyNote = (isVirtual && !resolvedTh)
-                ? `<div class="text-warning fw-bold" style="font-size:1.05rem;">No toolhead on <b>${vth}</b> is currently loaded — nothing to return.</div>`
-                : '';
-            showConfirmOverlay({
-                toolhead: th,
-                title: `Return the spool on ${th} to its dryer box slot?`,
-                body:
-                    resolvedNote
-                    + (emptyNote || `This sends whatever is currently in <b>${th}</b> back to its origin dryer box slot
-                        (the one recorded as <code>physical_source</code> on the spool). If no origin is recorded,
-                        falls back to the first dryer box slot bound to this toolhead.
-                        If the toolhead is empty or has no candidate slot, nothing happens.`),
-                onConfirm: () => performReturn({ toolhead: th }),
+
+            if (isVirtual && !resolvedTh) {
+                // No toolhead of this printer has a loaded spool — don't
+                // pretend there's anything to confirm.
+                showConfirmOverlay({
+                    toolhead: vth,
+                    title: `Nothing to return on ${vth}`,
+                    body: `<div class="text-warning fw-bold" style="font-size:1.05rem;">`
+                        + `No toolhead on <b>${vth}</b> is currently loaded — nothing to return.</div>`,
+                    onConfirm: () => { /* no-op */ },
+                });
+                return;
+            }
+
+            _resolveReturnDestination(th).then(dest => {
+                const resolvedNote = (isVirtual && resolvedTh)
+                    ? `<div class="text-warning small mb-2" style="font-size:0.95rem;">`
+                      + `(Resolved from the <b>${vth}</b> virtual printer — first toolhead with a loaded spool.)</div>`
+                    : '';
+
+                let destLine;
+                if (!dest) {
+                    destLine = `<div class="text-warning fw-bold mb-2" style="font-size:1.05rem;">`
+                        + `<b>${th}</b> has no recorded source and no bound dryer box slot — nothing to return to.</div>`;
+                } else {
+                    const slotPart = dest.slot ? ` slot ${dest.slot}` : '';
+                    const spoolLine = dest.spoolId
+                        ? `<div class="text-light mb-2" style="font-size:1rem;">Spool: <b>${dest.display || ('#' + dest.spoolId)}</b></div>`
+                        : '';
+                    const sourceTag = dest.source === 'physical_source'
+                        ? `<span class="text-success fw-bold">(original source)</span>`
+                        : `<span class="text-warning fw-bold">(first bound slot — the spool has no recorded origin)</span>`;
+                    destLine = spoolLine
+                        + `<div class="text-light" style="font-size:1.05rem;">`
+                        + `Sending back to: <span class="text-info fw-bold">${dest.box}${slotPart}</span> ${sourceTag}</div>`;
+                }
+
+                showConfirmOverlay({
+                    toolhead: th,
+                    title: `Return the spool on ${th}?`,
+                    body: resolvedNote + destLine,
+                    onConfirm: dest ? (() => performReturn({ toolhead: th })) : (() => { /* no-op */ }),
+                });
             });
         });
     };

@@ -190,13 +190,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalEl = document.getElementById('manageModal');
     if (!modalEl) return;
     modalEl.addEventListener('hidden.bs.modal', () => {
-        // If we've got a breadcrumb to pop, Bootstrap's hide just finished
-        // and we should NOT try to re-open — the user's closeManage click
-        // would have handled navigation before this event fired. At hidden
-        // time we always want a clean state for the next fresh open.
+        // Clear breadcrumb state so the next fresh open doesn't inherit
+        // stale context.
         window.manageNavStack = [];
         const prev = document.getElementById('manage-loc-id');
         if (prev) prev.value = '';
+        // Dismiss any inline overlays that live inside the manage modal.
+        // Leaving them visible would cause them to pop right back up on
+        // the NEXT open — potentially against a different location than
+        // the one they were originally opened against.
+        if (window.closeQuickswapConfirm) {
+            try { window.closeQuickswapConfirm(); } catch (e) { /* noop */ }
+        }
+        if (window.closeBindSlotPicker) {
+            try { window.closeBindSlotPicker(); } catch (e) { /* noop */ }
+        }
     });
 });
 
