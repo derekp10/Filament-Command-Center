@@ -507,11 +507,28 @@
             el.innerHTML = '<div class="text-warning py-3 fw-bold" style="font-size:1rem;">No matching slots.</div>';
             return;
         }
+        const th = String(_pickerState.targetToolhead || '').toUpperCase();
         const rows = _pickerState.filtered.map((s, i) => {
-            const bound = s.target
-                ? `<span class="text-warning ms-2">→ ${s.target}</span>`
-                : '<span class="text-success fw-bold ms-2">◦ unbound</span>';
+            const targetUp = String(s.target || '').toUpperCase();
+            const alreadyHere = targetUp === th;
+            let statusHtml;
+            if (!s.target) {
+                statusHtml = '<span class="text-success fw-bold ms-2">◦ unbound</span>';
+            } else if (alreadyHere) {
+                statusHtml = '<span class="text-success fw-bold ms-2">✓ already feeds this toolhead</span>';
+            } else {
+                statusHtml = `<span class="text-warning ms-2">→ ${s.target}</span>`;
+            }
             const active = i === _pickerState.activeIdx ? ' kb-active bg-info text-dark' : '';
+            // Show an inline Unbind button whenever the slot is currently
+            // bound to ANY toolhead — that way users don't have to go into
+            // the full Feeds editor just to clear a slot.
+            const unbindBtn = s.target
+                ? `<button type="button" class="fcc-bind-picker-unbind btn btn-sm btn-outline-warning fw-bold ms-2"
+                        data-idx="${i}" title="Clear this slot's binding without rebinding it">
+                        🔗✖ Unbind
+                    </button>`
+                : '';
             return `
                 <div class="fcc-bind-picker-item d-flex align-items-center justify-content-between py-2 px-3 border-bottom border-secondary${active}"
                      data-idx="${i}" style="cursor:pointer; font-size:1.05rem;">
@@ -519,14 +536,28 @@
                         <span class="fw-bold">${s.box}</span>
                         <span class="text-muted ms-2">slot ${s.slot}</span>
                     </div>
-                    <div class="small">${bound}</div>
+                    <div class="d-flex align-items-center small">
+                        ${statusHtml}
+                        ${unbindBtn}
+                    </div>
                 </div>`;
         }).join('');
         el.innerHTML = rows;
         Array.from(el.querySelectorAll('.fcc-bind-picker-item')).forEach(row => {
-            row.addEventListener('click', () => {
+            row.addEventListener('click', (e) => {
+                // Clicks on the Unbind button handle themselves — don't
+                // also trigger the row's bind action.
+                if (e.target && e.target.closest('.fcc-bind-picker-unbind')) return;
                 _pickerState.activeIdx = parseInt(row.dataset.idx, 10);
                 _pickerCommit();
+            });
+        });
+        Array.from(el.querySelectorAll('.fcc-bind-picker-unbind')).forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const idx = parseInt(btn.dataset.idx, 10);
+                _pickerState.activeIdx = idx;
+                _pickerUnbind();
             });
         });
     };
@@ -547,10 +578,29 @@
         _renderPickerList();
     };
 
+    const _refreshPickerListing = () => {
+        // Re-fetch the slot list so bound→unbound (or vice versa) changes
+        // land immediately in the open picker.
+        const search = document.getElementById('fcc-bind-picker-search');
+        return fetch('/api/dryer_boxes/slots')
+            .then(r => r.json())
+            .then(body => {
+                _pickerState.slots = body.slots || [];
+                _pickerFilter(search ? search.value : '');
+            })
+            .catch(() => { /* best-effort */ });
+    };
+
     const _pickerCommit = () => {
         const pick = _pickerState.filtered[_pickerState.activeIdx];
         const th = _pickerState.targetToolhead;
         if (!pick || !th) return;
+        // If this slot already feeds the target toolhead, don't bother
+        // round-tripping — tell the user it's a no-op.
+        if (String(pick.target || '').toUpperCase() === String(th).toUpperCase()) {
+            showToast(`✓ ${pick.box} slot ${pick.slot} already feeds ${th}`, 'info', 5000);
+            return;
+        }
         fetch(
             `/api/dryer_box/${encodeURIComponent(pick.box)}/bindings/${encodeURIComponent(pick.slot)}`,
             {
@@ -563,11 +613,13 @@
             .then(({ ok, body }) => {
                 if (ok) {
                     const warn = (body.warnings || []).length;
+                    const overwriteNote = pick.target
+                        ? ` (was → ${pick.target})`
+                        : '';
                     const warnTxt = warn ? ` ⚠️ ${warn} warning(s) — see log` : '';
-                    showToast(`🔗 ${pick.box} slot ${pick.slot} → ${th}${warnTxt}`,
+                    showToast(`🔗 ${pick.box} slot ${pick.slot} → ${th}${overwriteNote}${warnTxt}`,
                         warn ? 'warning' : 'success', warn ? 8000 : 4000);
                     window.closeBindSlotPicker();
-                    // Re-render Quick-Swap with the new binding visible.
                     if (window.refreshManageView && currentLoc) {
                         window.refreshManageView(currentLoc.LocationID);
                     }
@@ -582,6 +634,43 @@
             .catch(e => {
                 console.error(e);
                 showToast('Bind — network error', 'error', 7000);
+            });
+    };
+
+    // Clear a single slot's binding without closing the picker — the user
+    // often wants to unbind and then pick a different slot in one visit.
+    const _pickerUnbind = () => {
+        const pick = _pickerState.filtered[_pickerState.activeIdx];
+        if (!pick || !pick.target) return;
+        fetch(
+            `/api/dryer_box/${encodeURIComponent(pick.box)}/bindings/${encodeURIComponent(pick.slot)}`,
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target: null }),
+            }
+        )
+            .then(async r => ({ ok: r.ok, body: await r.json() }))
+            .then(({ ok, body }) => {
+                if (ok) {
+                    showToast(`🔗✖ ${pick.box} slot ${pick.slot} unbound (was → ${pick.target})`,
+                        'success', 4000);
+                    // Keep the picker open and refresh its listing so the
+                    // now-unbound slot jumps to the top.
+                    _refreshPickerListing();
+                    // Also refresh the Quick-Swap grid behind us since that
+                    // slot no longer appears there.
+                    if (window.renderQuickSwapSection && currentLoc) {
+                        window.renderQuickSwapSection(currentLoc);
+                    }
+                } else {
+                    const errs = (body.errors || []).map(e => `${e.slot}: ${e.reason}`).join('; ');
+                    showToast(`❌ ${errs || body.error || 'Unbind failed'}`, 'error', 8000);
+                }
+            })
+            .catch(e => {
+                console.error(e);
+                showToast('Unbind — network error', 'error', 7000);
             });
     };
 
@@ -712,8 +801,10 @@
         };
 
         if (targetBox) {
-            // openManage on the same modal re-renders cleanly; no need to
-            // close first.
+            // Tell renderFeedsSection to auto-expand + scroll the Feeds
+            // body on the next render so the user lands where they want
+            // to be without having to click Show.
+            window._fccAutoExpandFeeds = true;
             if (window.openManage) window.openManage(targetBox);
             return;
         }

@@ -391,6 +391,25 @@ const renderFeedsSection = (loc) => {
         for (let slot = 1; slot <= maxSlots; slot++) {
             _comboHydrate(slot, printers);
         }
+
+        // One-shot: if the user came here via "Edit Full Bindings" from a
+        // toolhead, auto-expand the Feeds body and scroll it into view so
+        // they don't have to click Show and hunt for it.
+        if (window._fccAutoExpandFeeds) {
+            window._fccAutoExpandFeeds = false;
+            const body = document.getElementById('feeds-body');
+            const btn = document.getElementById('feeds-toggle-btn');
+            if (body) body.style.display = 'block';
+            if (btn) btn.innerText = 'Hide';
+            // Let the layout settle before scrolling so the target has its
+            // final height.
+            requestAnimationFrame(() => {
+                const anchor = document.getElementById('manage-feeds-section');
+                if (anchor && anchor.scrollIntoView) {
+                    anchor.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                }
+            });
+        }
     });
 };
 
