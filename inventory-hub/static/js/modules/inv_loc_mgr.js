@@ -104,6 +104,8 @@ window.openManage = (id) => {
             }
 
             renderManagerNav();
+            // Phase 2: render the Slot → Toolhead Feeds section if applicable.
+            if (window.renderFeedsSection) window.renderFeedsSection(loc);
             // Generate QR for specific location
             const safeId = String(id).replace(/['"]/g, '');
             generateSafeQR('manage-loc-qr-mini', 'LOC:' + safeId, 45);
@@ -124,6 +126,134 @@ window.openManage = (id) => {
 };
 
 window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
+
+// ---------------------------------------------------------------------------
+// Phase 2: Slot → Toolhead Feeds (Dryer Box only)
+// ---------------------------------------------------------------------------
+
+// Cached printer_map fetched from /api/printer_map. Shape:
+//   { printers: { "🦝 XL": [{location_id, position}, ...] } }
+state.printerMap = state.printerMap || null;
+
+const fetchPrinterMap = () => {
+    if (state.printerMap) return Promise.resolve(state.printerMap);
+    return fetch('/api/printer_map')
+        .then(r => r.json())
+        .then(data => { state.printerMap = data.printers || {}; return state.printerMap; })
+        .catch(e => { console.warn("printer_map fetch failed", e); return {}; });
+};
+
+const renderFeedsSection = (loc) => {
+    const section = document.getElementById('manage-feeds-section');
+    if (!section) return;
+
+    if (loc.Type !== 'Dryer Box') {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = 'block';
+
+    // Start collapsed; user toggles open when they want to edit.
+    document.getElementById('feeds-body').style.display = 'none';
+    document.getElementById('feeds-toggle-btn').innerText = 'Show';
+    document.getElementById('feeds-status').innerText = '';
+
+    const maxSlots = parseInt(loc['Max Spools']) || 0;
+    if (maxSlots <= 0) {
+        document.getElementById('feeds-rows').innerHTML =
+            '<div class="text-warning small">This location has Max Spools of 0 — no slots to bind.</div>';
+        return;
+    }
+
+    Promise.all([
+        fetchPrinterMap(),
+        fetch(`/api/dryer_box/${encodeURIComponent(loc.LocationID)}/bindings`)
+            .then(r => r.ok ? r.json() : { slot_targets: {} }),
+    ]).then(([printers, bindingsResp]) => {
+        const targets = bindingsResp.slot_targets || {};
+        const rows = document.getElementById('feeds-rows');
+        rows.innerHTML = '';
+        for (let slot = 1; slot <= maxSlots; slot++) {
+            const slotKey = String(slot);
+            const currentTarget = (targets[slotKey] || '').toUpperCase();
+
+            // Build dropdown: None + <optgroup per printer>
+            let optsHtml = '<option value="">— None (staging / drying)</option>';
+            Object.keys(printers).sort().forEach(printerName => {
+                const entries = printers[printerName] || [];
+                const optionLines = entries.map(e => {
+                    const isSel = e.location_id.toUpperCase() === currentTarget;
+                    return `<option value="${e.location_id}"${isSel ? ' selected' : ''}>${e.location_id} (pos ${e.position})</option>`;
+                }).join('');
+                if (optionLines) {
+                    optsHtml += `<optgroup label="${printerName}">${optionLines}</optgroup>`;
+                }
+            });
+
+            const rowHtml = `
+                <div class="d-flex align-items-center gap-2 feeds-row" data-slot="${slot}">
+                    <span class="badge bg-secondary" style="min-width: 60px;">Slot ${slot}</span>
+                    <select class="form-select form-select-sm bg-black text-white border-secondary feeds-select"
+                            data-slot="${slot}">${optsHtml}</select>
+                </div>
+            `;
+            rows.insertAdjacentHTML('beforeend', rowHtml);
+        }
+    });
+};
+
+window.toggleFeedsSection = () => {
+    const body = document.getElementById('feeds-body');
+    const btn = document.getElementById('feeds-toggle-btn');
+    if (!body || !btn) return;
+    const hidden = body.style.display === 'none' || !body.style.display;
+    body.style.display = hidden ? 'block' : 'none';
+    btn.innerText = hidden ? 'Hide' : 'Show';
+};
+
+window.saveFeedsSection = () => {
+    const locId = document.getElementById('manage-loc-id').value;
+    if (!locId) return;
+    const status = document.getElementById('feeds-status');
+    status.className = 'small flex-grow-1 text-info';
+    status.innerText = 'Saving…';
+
+    // Collect slot_targets from all selects. Empty-string values map to None.
+    const selects = document.querySelectorAll('#feeds-rows select.feeds-select');
+    const slot_targets = {};
+    selects.forEach(sel => {
+        const slot = sel.dataset.slot;
+        const val = sel.value;
+        slot_targets[slot] = val || null;
+    });
+
+    fetch(`/api/dryer_box/${encodeURIComponent(locId)}/bindings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot_targets }),
+    })
+        .then(async r => ({ ok: r.ok, body: await r.json() }))
+        .then(({ ok, body }) => {
+            if (ok) {
+                status.className = 'small flex-grow-1 text-success';
+                status.innerText = `✅ Saved ${Object.keys(body.slot_targets || {}).length} binding(s)`;
+                showToast(`🔗 Saved feeds for ${locId}`, 'success', 4000);
+            } else {
+                status.className = 'small flex-grow-1 text-danger';
+                const errs = (body.errors || []).map(e => `Slot ${e.slot}: ${e.reason}`).join('; ');
+                status.innerText = errs || body.error || 'Save failed';
+                showToast(`❌ Feeds save rejected: ${errs || body.error}`, 'error', 8000);
+            }
+        })
+        .catch(e => {
+            console.error(e);
+            status.className = 'small flex-grow-1 text-danger';
+            status.innerText = 'Network error';
+            showToast('Feeds save — network error', 'error', 7000);
+        });
+};
+
+window.renderFeedsSection = renderFeedsSection;
 
 window.refreshManageView = (id) => {
     const loc = state.allLocations.find(l => l.LocationID == id);

@@ -1098,6 +1098,31 @@ def api_dryer_box_bindings_put(loc_id):
     })
 
 
+@app.route('/api/printer_map', methods=['GET'])
+def api_printer_map():
+    """Read-only view of config.json's printer_map, grouped for UI use:
+    {
+      "printers": {
+        "🦝 XL": [{"location_id": "XL-1", "position": 0}, ...],
+        "🦝 Core One": [...]
+      }
+    }
+    """
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    grouped = {}
+    for loc_id, info in printer_map.items():
+        name = info.get('printer_name', 'Unknown')
+        grouped.setdefault(name, []).append({
+            "location_id": loc_id.upper(),
+            "position": info.get('position', 0),
+        })
+    # Stable sort within each printer by position.
+    for entries in grouped.values():
+        entries.sort(key=lambda e: (e['position'], e['location_id']))
+    return jsonify({"printers": grouped})
+
+
 @app.route('/api/machine/<path:printer_name>/toolhead_slots', methods=['GET'])
 def api_machine_toolhead_slots(printer_name):
     """Reverse lookup: for a printer, return every (box, slot) pair that

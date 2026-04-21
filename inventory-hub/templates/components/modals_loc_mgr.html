@@ -123,6 +123,31 @@
                     <div id="manage-contents-list" class="mb-4"></div>
                 </div>
 
+                <!-- Phase 2: Dryer Box ↔ Toolhead bindings. Hidden unless this
+                     location's Type is 'Dryer Box'. -->
+                <div id="manage-feeds-section" class="mt-4" style="display:none;">
+                    <hr class="border-secondary">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="text-info mb-0">🔗 Slot → Toolhead Feeds</h6>
+                        <button type="button" id="feeds-toggle-btn"
+                            class="btn btn-sm btn-outline-secondary"
+                            onclick="window.toggleFeedsSection()">Show</button>
+                    </div>
+                    <div id="feeds-body" class="bg-dark p-3 rounded border border-secondary" style="display:none;">
+                        <div class="small text-muted mb-3">
+                            Bind each slot in this dryer box to a specific toolhead — or leave a slot as
+                            <em>None</em> for staging/drying. Slots can feed any printer; multiple dryer boxes
+                            can feed the same machine.
+                        </div>
+                        <div id="feeds-rows" class="d-flex flex-column gap-2"></div>
+                        <div class="d-flex align-items-center gap-3 mt-3">
+                            <button type="button" class="btn btn-sm btn-primary fw-bold"
+                                onclick="window.saveFeedsSection()">💾 Save Feeds</button>
+                            <div id="feeds-status" class="small flex-grow-1"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <hr class="border-secondary mt-4">
 
                 <div class="input-group mb-3">
