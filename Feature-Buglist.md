@@ -51,17 +51,13 @@
 
 * Text Cacing is being changed on some manufactures (CC3D being Cc3D) and should just show the actual name without trying to correct it.
 
-* `test_manual_loc_override_e2e` is failing — the search offcanvas stays open and intercepts pointer events on the spool card's "View Details" button, causing a 30s timeout. The test needs to close the offcanvas before clicking the card. Found during structural test fix work (4/15/2026).
-
-* `test_loc_grid_layout_data_presence` is failing — expects 4 action buttons (Pick, Details, Edit, Eject) per grid slot but finds 5. A new button was added to the grid card layout without updating this test. Found during structural test fix work (4/15/2026).
-
-* `test_weigh_out_modal_e2e` is failing — expects the save button to show a checkmark emoji after weight entry, but the button shows a floppy disk emoji instead. Likely a UI change to the save button's state progression. Found during structural test fix work (4/15/2026).
-
-* `test_api_endpoint` is failing — the `search_inventory` function now accepts a `min_weight` parameter, but the test mock doesn't expect it. Test needs updating to include `min_weight=''`. Found during structural test fix work (4/15/2026).
+* `test_manual_loc_override_e2e` — offcanvas-intercept bug fixed in M0. Currently xfailed because the Force Location modal was refactored from `<select>` to a searchable list; step 6 still drives the old select. Rewrite test against the new search+list UI.
 
 * Server reboots seem to be resetting dryerbox slot numbers. Need to look into the code and confirm if this is the case of if it's something else. This might be related to the core one + ejcect system not properly slotting items back into there locations when a smart swap/change engages?
 
 * FCC Main Main screen buffer cards still don't always update after several backend changes. Setting filament to 0, doesn't seem to update to unassinged or it's deployed status.
+
+* Adding spool weight (Empty Spool Weight) Do the manufacturer, doesn't seem to pull down to the filament/spool if those fields are blank. This should be fixed so that It uses what ever one is available based on a priority system. (Manufacturer > Filament > Spool)
 
 # **Active Backlog (Organized by Feature Area)**
 
@@ -97,16 +93,11 @@
 ## 📍 Location Management & Scanning
 * Refactor the entire location managment system from the ground up. It's currently being a bit too complicated, and I think it can be cleaned up a bit if we just rethink the flow of this process. We've bolted a lot of stuff onto this system, and the has caused it to become a bit too cumbersome to both code and work with. I think we need to build in a better system for linking locations and device/boxes/storage things. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
 * The ability to configure a box to change the slot order to go from left to right, or right to left.
-* **[Master Feature] Dryer Box ↔ Machine Assignment & Quick-Swap UI** — Three-phase feature, must be implemented in order:
-  1. **Assign box slot → printhead/MMU**: Scanning a box slot auto-loads the spool into that toolhead.
-  2. **Assign dryer box → machine**: The system knows which dryer box belongs to which printer, so it can surface the right box when working with that machine.
-  3. **Quick-swap UI on toolhead view**: When a dryer box is assigned to a machine, the toolhead view shows the slots in that box. The user can tap the slot they just physically swapped to (e.g. swapping PTFE tubes on a Core One+ in non-MMU mode) to update the active filament — no barcode scanner required. Without this, the process of reflecting a material change in the UI is cumbersome.
 * CR-MDB-1:SLOT:4 is treated as a location not a slot in a box. (I believe this was fixed, we need to check on it.)
 
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
 
-* Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to.
 * Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assign all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
 * Location Manager not syncing status across browser instances?
 * Refactor Locations Database to support true DB-driven Parent/Child hierarchies. Currently, location hierarchy (Room -> Box -> Slot) is handled via string prefix parsing (`LR-MDB-1` means `LR`). This breaks portable/transient containers like `PJ` or `PM` boxes when they move rooms, because moving them implies renaming them, which destroys their printed barcode (`LOC:LR-PM-1`). Need to add a `ParentLocation` column to the locations database and detach the barcode ID string from the physical hierarchy tree.
@@ -123,7 +114,7 @@
 * Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
 
 ## 🧪 Testing
-* Refactor E2E tests to use a shared `conftest.py` with common fixtures (e.g. "open spool details modal", "open force location modal"). Multiple test files duplicate the same 5-step setup sequence. Also audit for other duplicated test code that could be consolidated.
+* conftest.py groundwork landed in M0 (`inventory-hub/tests/conftest.py` with page, api_base_url, snapshot, scan, seed_dryer_box, with_held_spool, require_server). Remaining work: migrate existing test files to use these shared fixtures instead of their duplicated setup sequences.
 
 ## ⚙️ App Flow, Architecture & Database
 * **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements.
@@ -150,7 +141,7 @@
 # **On Hold**
 * Amazon Parser: Multi-pack spools with different colors (e.g. 4x1kg) currently calculate as a single 4000g spool instead of 4 individual 1000g spools.
 * `test_amazon_parser_matching` is failing — BeautifulSoup4 is not installed in the Docker container. Parser returns empty results because the import fails silently. Blocked until `pip install beautifulsoup4` is added to the Docker image. Found during structural test fix work (4/15/2026).
-* Continue to support Spoolman's "Import from External" feature... Purchase emails, or Amazon/Vendor product pages.
+* Continue to support Spoolman's "Import from External" feature... Purchase emails, or Amazon/Vendor product pages, Onlyspoolz.com.
 * Standardize the size of all QR codes to match that of the sizes used on the command center. (Audit, eject, drop, etc).
 * If legacy barcode has no spools attached to it, UI should warn about this, perhaps give option to add new spool?
 * Spoolman ExternalID is not a visible field in Spoolman UI. Very low priority.

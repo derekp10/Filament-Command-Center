@@ -13,18 +13,21 @@ import logging
 VERSION = "v154.26 (Scale Weights Update)"
 app = Flask(__name__)
 
-# One-time feeder_map → slot_targets migration on process startup.
-# Idempotent: skips boxes that already have slot_targets. Keeps the legacy
-# config.json feeder_map key readable for one release (M7 removes it).
+# One-time feeder_map → slot_targets migration. Kept behind an explicit
+# `feeder_map` key check so old installs that still have it get upgraded
+# automatically the first time they boot the new code. No-op on modern
+# installs where the key has been removed. See M3 commit for details.
 try:
     _startup_cfg = config_loader.load_config()
-    _startup_locs = locations_db.load_locations_list()
-    _migrated, _changed = locations_db.migrate_feeder_map_if_needed(
-        _startup_locs, _startup_cfg.get('feeder_map', {}) or {}
-    )
-    if _changed:
-        locations_db.save_locations_list(_migrated)
-        state.logger.info("💾 feeder_map migration persisted to locations.json")
+    _legacy_feeder_map = _startup_cfg.get('feeder_map') or {}
+    if _legacy_feeder_map:
+        _startup_locs = locations_db.load_locations_list()
+        _migrated, _changed = locations_db.migrate_feeder_map_if_needed(
+            _startup_locs, _legacy_feeder_map
+        )
+        if _changed:
+            locations_db.save_locations_list(_migrated)
+            state.logger.info("💾 Legacy feeder_map migrated into locations.json — you can safely delete feeder_map from config.json now.")
 except Exception as _mig_err:
     state.logger.error(f"feeder_map migration skipped due to error: {_mig_err}")
 
