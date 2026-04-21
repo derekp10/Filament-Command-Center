@@ -29,12 +29,20 @@
     };
 
     const resolvePrinterNameForPrinterLoc = (loc, printerMap) => {
-        // A Printer-type location surfaces ALL of its toolheads. Match by
-        // Device Identifier / Name against printer_map keys.
+        // Backend synthesizes virtual Printer locations keyed by the
+        // toolhead prefix (e.g. LocationID="XL" aggregates XL-1, XL-2…).
+        // Match by: any printer whose toolhead IDs start with <LocationID>-.
+        const prefix = String(loc.LocationID || '').trim().toUpperCase() + '-';
+        for (const [printerName, entries] of Object.entries(printerMap || {})) {
+            if ((entries || []).some(e => String(e.location_id).toUpperCase().startsWith(prefix))) {
+                return printerName;
+            }
+        }
+        // Fallback: loose name match.
         const candidates = [loc.Name, loc.LocationID, loc['Device Type'], loc['Device Identifier']]
             .filter(Boolean).map(s => String(s).trim());
         for (const printerName of Object.keys(printerMap || {})) {
-            if (candidates.some(c => printerName.includes(c) || c.includes(printerName))) {
+            if (candidates.some(c => c && (printerName.includes(c) || c.includes(printerName)))) {
                 return printerName;
             }
         }
@@ -89,8 +97,10 @@
             grid.innerHTML = '';
             if (!printerName) {
                 empty.style.display = 'block';
-                empty.innerHTML = '⚠️ This location is not registered in <code class="text-info">printer_map</code>. ' +
-                    'Add it in config.json to enable Quick-Swap.';
+                empty.innerHTML = '⚠️ This location is not registered in ' +
+                    '<span class="text-info fw-bold">printer_map</span>. ' +
+                    'Add an entry for its toolhead LocationID(s) in ' +
+                    '<span class="text-info fw-bold">config.json</span> to enable Quick-Swap.';
                 return;
             }
 
@@ -250,18 +260,43 @@
     };
 
     window.editBindingsFromToolhead = () => {
-        // Pick the first bound box that feeds this toolhead, or prompt for a
-        // dryer-box-to-link. For now we just open Location Manager on the
-        // first source box if one exists — otherwise open the full list.
+        // Pick the first bound box that feeds this toolhead and jump into
+        // its Feeds editor. If nothing is bound yet, close the current
+        // manage modal and open the Locations modal so the user can pick
+        // any dryer box to edit. Without the close step, Bootstrap stacks
+        // the new modal behind the current one and it looks like a dead
+        // click.
         const grid = document.getElementById('quickswap-grid');
         const firstBtn = grid && grid.querySelector('.fcc-qs-slot');
-        if (firstBtn && firstBtn.dataset.box) {
-            if (window.openManage) window.openManage(firstBtn.dataset.box);
+        const targetBox = firstBtn && firstBtn.dataset.box;
+
+        const closeCurrent = () => {
+            try {
+                if (window.modals && window.modals.manageModal) {
+                    window.modals.manageModal.hide();
+                } else if (window.closeManage) {
+                    window.closeManage();
+                }
+            } catch (e) { /* best effort */ }
+        };
+
+        if (targetBox) {
+            // openManage on the same modal re-renders cleanly; no need to
+            // close first.
+            if (window.openManage) window.openManage(targetBox);
             return;
         }
-        // No binding yet — fall back to opening the master Locations modal so
-        // the user can pick any dryer box.
-        if (window.openLocationsModal) window.openLocationsModal();
+
+        closeCurrent();
+        // Small delay so Bootstrap's backdrop finishes animating out
+        // before the next modal opens.
+        setTimeout(() => {
+            if (window.openLocationsModal) {
+                window.openLocationsModal();
+                showToast('Pick a Dryer Box → "Manage/View" → Slot → Toolhead Feeds to bind this toolhead.',
+                    'info', 8000);
+            }
+        }, 250);
     };
 
     window.quickSwapTap = (btn) => {

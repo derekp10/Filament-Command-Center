@@ -1178,24 +1178,59 @@ def api_printer_map():
 def api_quickswap_return():
     """Reverse quick-swap: take whatever spool is currently on `toolhead`
     and send it back to the first dryer-box slot bound to that toolhead.
-    No-ops cleanly when the toolhead is empty or has no binding.
+
+    Accepts either a specific toolhead location ID (e.g. "XL-1") or a
+    virtual-printer prefix (e.g. "XL") — in the latter case we fan out
+    across every toolhead of that printer and return the first one that
+    has a spool loaded.
     """
     data = request.get_json(silent=True) or {}
     toolhead = str(data.get('toolhead', '')).strip().upper()
     if not toolhead:
         return jsonify({"action": "return_bad_request", "error": "toolhead required"}), 400
 
-    # 1) What spool is on the toolhead right now?
-    residents = spoolman_api.get_spools_at_location(toolhead)
-    if not residents:
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+
+    # Build the list of toolhead IDs we should check. For a virtual
+    # printer prefix, this is every toolhead in printer_map that starts
+    # with "<prefix>-". For a specific toolhead, it's just that ID.
+    pm_keys_up = {k.upper() for k in printer_map.keys()}
+    candidate_toolheads = []
+    if toolhead in pm_keys_up:
+        candidate_toolheads = [toolhead]
+    else:
+        prefix = toolhead + '-'
+        candidate_toolheads = sorted(k for k in pm_keys_up if k.startswith(prefix))
+
+    if not candidate_toolheads:
         state.add_log_entry(
-            f"⚠️ Return: {toolhead} is empty — nothing to return",
+            f"⚠️ Return: {toolhead} is not a registered toolhead or printer",
             "WARNING", "ffaa00"
         )
-        return jsonify({"action": "return_no_spool", "toolhead": toolhead}), 404
-    spool_id = int(residents[0])
+        return jsonify({"action": "return_bad_toolhead", "toolhead": toolhead}), 404
 
-    # 2) Find the first dryer-box slot bound to this toolhead.
+    # 1) Find the first candidate toolhead that has a loaded spool.
+    active_toolhead, spool_id = None, None
+    for th in candidate_toolheads:
+        residents = spoolman_api.get_spools_at_location(th)
+        if residents:
+            active_toolhead = th
+            spool_id = int(residents[0])
+            break
+    if not active_toolhead:
+        names = ", ".join(candidate_toolheads) if len(candidate_toolheads) > 1 else candidate_toolheads[0]
+        state.add_log_entry(
+            f"⚠️ Return: {names} is empty — nothing to return",
+            "WARNING", "ffaa00"
+        )
+        return jsonify({
+            "action": "return_no_spool",
+            "toolhead": toolhead,
+            "candidates": candidate_toolheads,
+        }), 404
+
+    # 2) Find the first dryer-box slot bound to that specific toolhead.
     loc_list = locations_db.load_locations_list()
     found_box, found_slot = None, None
     for row in loc_list:
@@ -1203,7 +1238,7 @@ def api_quickswap_return():
             continue
         targets = (row.get('extra') or {}).get('slot_targets') or {}
         for slot, target in targets.items():
-            if target and str(target).upper() == toolhead:
+            if target and str(target).upper() == active_toolhead:
                 found_box = row['LocationID']
                 found_slot = slot
                 break
@@ -1211,10 +1246,16 @@ def api_quickswap_return():
             break
     if not found_box:
         state.add_log_entry(
-            f"⚠️ Return: {toolhead} has no bound dryer box slot",
+            f"⚠️ Return: {active_toolhead} has no bound dryer box slot",
             "WARNING", "ffaa00"
         )
-        return jsonify({"action": "return_no_binding", "toolhead": toolhead}), 404
+        return jsonify({
+            "action": "return_no_binding",
+            "toolhead": active_toolhead,
+            "requested": toolhead,
+        }), 404
+    # Re-tag toolhead in the response to the actual one we acted on.
+    toolhead = active_toolhead
 
     # 3) Send the spool back. perform_smart_move handles Filabridge + extras.
     move_result = logic.perform_smart_move(
