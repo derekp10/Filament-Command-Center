@@ -114,7 +114,6 @@
                     if (isToolhead) {
                         entries = toolheadMap[currentUp] || [];
                     } else {
-                        // Printer view: flatten ALL toolheads, tag each entry with its toolhead id.
                         Object.keys(toolheadMap).forEach(thId => {
                             (toolheadMap[thId] || []).forEach(e => {
                                 entries.push({ ...e, toolhead: thId });
@@ -128,31 +127,77 @@
                     }
                     empty.style.display = 'none';
 
-                    // Group by source box for readability.
-                    const byBox = {};
-                    entries.forEach(e => {
-                        if (!byBox[e.box]) byBox[e.box] = [];
-                        byBox[e.box].push(e);
-                    });
-                    let html = '';
-                    Object.keys(byBox).sort().forEach(boxId => {
-                        html += `<div class="w-100 fw-bold mt-2 mb-1" style="font-size:1.05rem;">` +
-                                `📦 <span class="text-info">${boxId}</span></div>`;
-                        byBox[boxId].sort((a, b) => Number(a.slot) - Number(b.slot)).forEach(e => {
-                            const th = e.toolhead || loc.LocationID;
-                            const thHint = isPrinter ? `<br><span class="text-warning">→ ${th}</span>` : '';
-                            html += `
-                                <button type="button" class="fcc-qs-slot btn btn-outline-info fw-bold"
-                                    data-box="${e.box}" data-slot="${e.slot}"
-                                    data-toolhead="${th}"
-                                    style="min-width:110px; font-size:1.1rem; padding:10px 14px;"
-                                    onclick="window.quickSwapTap(this)"
-                                    title="Load ${e.box} slot ${e.slot} into ${th}">
-                                    <span>Slot ${e.slot}</span>${thHint}
-                                </button>`;
+                    // Fetch live contents for each unique source box so the
+                    // button can show WHAT spool is currently sitting in that
+                    // slot. Without this, tapping "Slot 4" is a leap of faith.
+                    const uniqueBoxes = [...new Set(entries.map(e => e.box))];
+                    Promise.all(uniqueBoxes.map(b =>
+                        fetch(`/api/get_contents?id=${encodeURIComponent(b)}`)
+                            .then(r => r.ok ? r.json() : [])
+                            .then(items => [b, items])
+                            .catch(() => [b, []])
+                    )).then(boxContents => {
+                        const slotMap = {};
+                        boxContents.forEach(([b, items]) => {
+                            (items || []).forEach(it => {
+                                const slotStr = String(it.slot || '').replace(/"/g, '').trim();
+                                if (slotStr) slotMap[`${b}|${slotStr}`] = it;
+                            });
                         });
+
+                        const byBox = {};
+                        entries.forEach(e => {
+                            if (!byBox[e.box]) byBox[e.box] = [];
+                            byBox[e.box].push(e);
+                        });
+                        let html = '';
+                        Object.keys(byBox).sort().forEach(boxId => {
+                            html += `<div class="w-100 fw-bold mt-3 mb-1" style="font-size:1.1rem;">` +
+                                    `📦 <span class="text-info">${boxId}</span></div>`;
+                            byBox[boxId].sort((a, b) => Number(a.slot) - Number(b.slot)).forEach(e => {
+                                const th = e.toolhead || loc.LocationID;
+                                const item = slotMap[`${e.box}|${e.slot}`];
+                                const borderCls = item ? 'btn-outline-info' : 'btn-outline-secondary';
+                                const thLine = isPrinter
+                                    ? `<div class="text-warning small" style="font-size:0.85rem;">→ ${th}</div>`
+                                    : '';
+                                let contentLines;
+                                if (item) {
+                                    const short = String(item.display || `#${item.id}`).replace(/"/g, '&quot;');
+                                    const weight = item.remaining_weight != null
+                                        ? `<div class="text-light small" style="font-size:0.9rem;">⚖️ ${Math.round(item.remaining_weight)}g</div>`
+                                        : '';
+                                    const swatch = item.color
+                                        ? `<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#${String(item.color).split(',')[0]};border:1px solid #fff;vertical-align:middle;margin-right:6px;"></span>`
+                                        : '';
+                                    contentLines = `
+                                        <div class="fw-bold" style="font-size:0.95rem; max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                            ${swatch}${short}
+                                        </div>
+                                        ${weight}`;
+                                } else {
+                                    contentLines = `<div class="text-muted small fw-bold" style="font-size:0.9rem;">◦ empty slot</div>`;
+                                }
+                                const disabledAttr = item ? '' : 'disabled';
+                                const titleAttr = item
+                                    ? `Load ${item.display || `#${item.id}`} from ${e.box} slot ${e.slot} into ${th}`
+                                    : `${e.box} slot ${e.slot} is empty — nothing to load`;
+                                html += `
+                                    <button type="button" class="fcc-qs-slot btn ${borderCls} fw-bold d-flex flex-column align-items-start"
+                                        data-box="${e.box}" data-slot="${e.slot}"
+                                        data-toolhead="${th}"
+                                        style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
+                                        onclick="window.quickSwapTap(this)"
+                                        ${disabledAttr}
+                                        title="${titleAttr}">
+                                        <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${e.slot}</div>
+                                        ${contentLines}
+                                        ${thLine}
+                                    </button>`;
+                            });
+                        });
+                        grid.innerHTML = html;
                     });
-                    grid.innerHTML = html;
                 });
         });
     };
@@ -237,13 +282,30 @@
 
     window.quickSwapTap = (btn) => {
         if (!btn) return;
+        // Disabled buttons (empty slot) should be a no-op.
+        if (btn.hasAttribute('disabled')) {
+            showToast(`⚠️ ${btn.dataset.box} slot ${btn.dataset.slot} is empty — nothing to swap`, 'warning', 6000);
+            return;
+        }
         const opts = {
             toolhead: btn.dataset.toolhead,
             box: btn.dataset.box,
             slot: btn.dataset.slot,
         };
+        // Pull the display label from the button so the confirm overlay names
+        // the specific spool. Ask-before-you-commit matters more when the
+        // button text tells you what you're committing to.
+        const labelEl = btn.querySelector('.fw-bold + .fw-bold, div.fw-bold:nth-child(2)');
+        const spoolLabel = labelEl ? labelEl.innerText.trim() : '';
         showConfirmOverlay({
             ...opts,
+            title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
+            body: (spoolLabel
+                ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
+                : '')
+                + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
+                + 'Any spool currently on the toolhead gets auto-returned to <em>its own</em> origin box — '
+                + 'never re-routed into a different dryer box.',
             onConfirm: () => performSwap(opts),
         });
     };

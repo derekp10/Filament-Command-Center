@@ -36,6 +36,23 @@ def bound_slot(api_base_url):
     )
 
 
+def _find_loaded_bound_slot(api_base_url):
+    """Return (box, slot, toolhead) for a slot that has a spool AND is
+    already bound. Used to exercise the enabled button path without
+    depending on a specific fixture box being pre-loaded."""
+    payload = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json()
+    for entry in payload.get("slots", []):
+        if not entry.get("target"):
+            continue
+        contents = requests.get(
+            f"{api_base_url}/api/get_contents?id={entry['box']}", timeout=5
+        ).json()
+        for it in contents or []:
+            if str(it.get("slot", "")).replace('"', '').strip() == str(entry["slot"]):
+                return entry["box"], str(entry["slot"]), entry["target"]
+    return None
+
+
 def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
@@ -73,18 +90,20 @@ def test_quickswap_keyboard_q_focuses_first_slot(page: Page, base_url: str):
     expect(first).to_have_class(re.compile(r'fcc-qs-slot(?=.*\bkb-active\b)'))
 
 
-@pytest.mark.usefixtures("require_server", "bound_slot")
-def test_quickswap_tap_opens_confirm_overlay(page: Page, base_url: str):
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+@pytest.mark.usefixtures("require_server")
+def test_quickswap_tap_opens_confirm_overlay(page: Page, base_url: str, api_base_url):
+    hit = _find_loaded_bound_slot(api_base_url)
+    if not hit:
+        pytest.skip("No bound-and-loaded slot available in dev state.")
+    box, slot, toolhead = hit
+    _open_manage(page, base_url, toolhead)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()
-    # Specifically target the slot button that came from our fixture's binding,
-    # not whatever happens to be first in the grid.
-    test_btn = page.locator(f".fcc-qs-slot[data-box='{TEST_BOX}'][data-toolhead='{TEST_TOOLHEAD}']").first
+    test_btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     expect(test_btn).to_be_visible(timeout=3000)
     test_btn.click()
     expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=2000)
-    expect(page.locator("#fcc-quickswap-confirm-title")).to_contain_text(TEST_BOX)
-    expect(page.locator("#fcc-quickswap-confirm-title")).to_contain_text(TEST_TOOLHEAD)
+    expect(page.locator("#fcc-quickswap-confirm-title")).to_contain_text(box)
+    expect(page.locator("#fcc-quickswap-confirm-title")).to_contain_text(toolhead)
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
@@ -97,29 +116,32 @@ def test_quickswap_confirm_overlay_cancel_dismisses(page: Page, base_url: str):
     expect(overlay).to_be_hidden(timeout=2000)
 
 
-@pytest.mark.usefixtures("require_server", "bound_slot")
-def test_quickswap_confirm_yes_actually_performs_swap(page: Page, base_url: str):
+@pytest.mark.usefixtures("require_server")
+def test_quickswap_confirm_yes_actually_performs_swap(page: Page, base_url: str, api_base_url):
     """Regression guard: a duplicate window.quickSwapTap definition was
     overriding the real handler, so clicking Yes did nothing. This test
     catches that class of bug by watching the /api/quickswap request
     fire in response to the Yes click."""
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+    hit = _find_loaded_bound_slot(api_base_url)
+    if not hit:
+        pytest.skip("No bound-and-loaded slot available in dev state.")
+    box, slot, toolhead = hit
+    _open_manage(page, base_url, toolhead)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()
-    test_btn = page.locator(f".fcc-qs-slot[data-box='{TEST_BOX}'][data-toolhead='{TEST_TOOLHEAD}']").first
+    test_btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     expect(test_btn).to_be_visible(timeout=3000)
     test_btn.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
     expect(overlay).to_be_visible(timeout=2000)
-    # Listen for the quickswap POST fired by the Yes button.
     with page.expect_request(
         lambda req: req.url.endswith("/api/quickswap") and req.method == "POST",
         timeout=3000,
     ) as req_info:
         page.locator("#fcc-quickswap-yes").click()
     body = req_info.value.post_data_json
-    assert body["toolhead"] == TEST_TOOLHEAD
-    assert body["box"] == TEST_BOX
-    assert body["slot"] == "1"
+    assert body["toolhead"] == toolhead
+    assert body["box"] == box
+    assert body["slot"] == slot
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")

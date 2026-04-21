@@ -196,9 +196,21 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
         # PRINTER MOVE
         if target in printer_map:
             src_info = loc_info_map.get(current_loc)
-            # [Universal Fallback] Save origin anytime we move to a printer
-            new_extra['physical_source'] = current_loc
-            new_extra['physical_source_slot'] = current_extra.get('container_slot')
+            # Preserve ghost trail when the spool is already deployed to
+            # this exact toolhead. Without this guard, re-scanning a spool
+            # that's already on the toolhead would set physical_source to
+            # the toolhead itself — physical_source == location means "not
+            # a ghost," so the deployed indicator disappears and Return-
+            # to-Slot loses its home. Only overwrite physical_source when
+            # the spool is genuinely arriving from somewhere else.
+            existing_source = str(current_extra.get('physical_source', '') or '').strip().strip('"')
+            is_already_here = (current_loc == target) and bool(existing_source)
+            if is_already_here:
+                new_extra['physical_source'] = existing_source
+                new_extra['physical_source_slot'] = current_extra.get('physical_source_slot')
+            else:
+                new_extra['physical_source'] = current_loc
+                new_extra['physical_source_slot'] = current_extra.get('container_slot')
             
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 p = printer_map[target]

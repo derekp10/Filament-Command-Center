@@ -152,7 +152,14 @@
                         </div>
                     </div>
                     <div class="text-light mb-2" style="font-size:1rem;">
-                        Tap a slot below to load it into this toolhead — no scan needed.
+                        <strong class="text-info">What this does:</strong>
+                        Each button below represents one dryer-box slot that's been bound to feed this toolhead.
+                        Tap it to load that slot's spool into the toolhead (the spool you had loaded before
+                        gets auto-returned to whichever box it came from). No barcode scan required.
+                        <br>
+                        <strong class="text-warning">Note:</strong>
+                        swaps only ever move spools between their origin box and this toolhead — they
+                        <em>never</em> shuffle a spool between different dryer boxes.
                     </div>
                     <div id="quickswap-body" class="bg-dark p-3 rounded border border-secondary">
                         <div id="quickswap-empty" class="text-warning fw-bold" style="display:none; font-size:1.05rem;">
