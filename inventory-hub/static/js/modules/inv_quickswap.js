@@ -361,31 +361,66 @@
             });
     };
 
+    const _updatePickerToolheadLabel = (value) => {
+        _pickerState.targetToolhead = String(value || '').toUpperCase();
+        const thSpan = document.getElementById('fcc-bind-picker-toolhead');
+        if (thSpan) thSpan.innerText = _pickerState.targetToolhead;
+    };
+
     window.openBindSlotPicker = () => {
         if (!currentLoc) {
             showToast('Open a toolhead first, then bind a slot.', 'warning', 5000);
             return;
         }
-        // Figure out the target toolhead. If currentLoc is a virtual printer,
-        // offer the first toolhead of that printer; user can still refine later.
-        let targetToolhead = currentLoc.LocationID;
+        const ov = document.getElementById('fcc-bind-picker-overlay');
+        const search = document.getElementById('fcc-bind-picker-search');
+        const close = document.getElementById('fcc-bind-picker-close');
+        const thRow = document.getElementById('fcc-bind-picker-toolhead-row');
+        const thSelect = document.getElementById('fcc-bind-picker-toolhead-select');
+        if (!ov || !search) return;
+
+        // Figure out the target toolhead(s). Toolhead view: one option.
+        // Virtual printer view: offer every toolhead of the printer so the
+        // user picks explicitly rather than silently defaulting to the first.
+        let toolheadOptions = [];
         if (currentLoc.Type === PRINTER_TYPE) {
             const pm = state.printerMap || {};
             const prefix = String(currentLoc.LocationID).toUpperCase() + '-';
-            for (const entries of Object.values(pm)) {
-                const hit = (entries || []).find(e => String(e.location_id).toUpperCase().startsWith(prefix));
-                if (hit) { targetToolhead = hit.location_id; break; }
+            for (const [printerName, entries] of Object.entries(pm)) {
+                (entries || []).forEach(e => {
+                    if (String(e.location_id).toUpperCase().startsWith(prefix)) {
+                        toolheadOptions.push({
+                            value: String(e.location_id).toUpperCase(),
+                            label: `${e.location_id} — Toolhead ${e.position + 1} on ${printerName}`,
+                        });
+                    }
+                });
+            }
+            toolheadOptions.sort((a, b) => a.value.localeCompare(b.value));
+        } else {
+            toolheadOptions = [{
+                value: String(currentLoc.LocationID).toUpperCase(),
+                label: String(currentLoc.LocationID).toUpperCase(),
+            }];
+        }
+
+        if (thRow && thSelect) {
+            if (toolheadOptions.length > 1) {
+                thSelect.innerHTML = toolheadOptions.map(o =>
+                    `<option value="${o.value}">${o.label}</option>`).join('');
+                thSelect.value = toolheadOptions[0].value;
+                thRow.style.display = 'block';
+                thSelect.onchange = () => {
+                    _updatePickerToolheadLabel(thSelect.value);
+                    // Re-filter so "unbound" ordering is still respected for
+                    // the freshly chosen toolhead.
+                    _pickerFilter(search.value);
+                };
+            } else {
+                thRow.style.display = 'none';
             }
         }
-        _pickerState.targetToolhead = String(targetToolhead).toUpperCase();
-
-        const ov = document.getElementById('fcc-bind-picker-overlay');
-        const thSpan = document.getElementById('fcc-bind-picker-toolhead');
-        const search = document.getElementById('fcc-bind-picker-search');
-        const close = document.getElementById('fcc-bind-picker-close');
-        if (!ov || !thSpan || !search) return;
-
-        thSpan.innerText = _pickerState.targetToolhead;
+        _updatePickerToolheadLabel(toolheadOptions[0].value);
         search.value = '';
 
         fetch('/api/dryer_boxes/slots')

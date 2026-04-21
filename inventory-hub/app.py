@@ -1308,23 +1308,53 @@ def api_quickswap_return():
             "candidates": candidate_toolheads,
         }), 404
 
-    # 2) Find the first dryer-box slot bound to that specific toolhead.
+    # 2) Figure out where to send the spool back.
+    #    Preferred: the spool's recorded physical_source (where it came
+    #    from when it was deployed to this toolhead). That's what the
+    #    user's mental model of "return" maps to, and it handles the
+    #    multi-box-per-toolhead case correctly.
+    #    Fallback: the first dryer-box slot bound to this toolhead.
+    spool_data = spoolman_api.get_spool(spool_id) or {}
+    extra = spool_data.get('extra') or {}
+    src_loc = str(extra.get('physical_source', '') or '').strip().strip('"').upper()
+    src_slot = str(extra.get('physical_source_slot', '') or '').strip().strip('"')
+
     loc_list = locations_db.load_locations_list()
-    found_box, found_slot = None, None
-    for row in loc_list:
-        if row.get('Type') != locations_db.DRYER_BOX_TYPE:
-            continue
-        targets = (row.get('extra') or {}).get('slot_targets') or {}
-        for slot, target in targets.items():
-            if target and str(target).upper() == active_toolhead:
-                found_box = row['LocationID']
-                found_slot = slot
+    found_box, found_slot, found_source = None, None, None
+
+    # Preferred path: physical_source points at a Dryer Box and that slot
+    # is currently bound to `active_toolhead`. If the slot has drifted
+    # (e.g. user reassigned it elsewhere), we still honor physical_source
+    # as long as the box exists — it's where the user pulled the spool from.
+    if src_loc:
+        for row in loc_list:
+            if str(row.get('LocationID', '')).strip().upper() != src_loc:
+                continue
+            if row.get('Type') != locations_db.DRYER_BOX_TYPE:
                 break
-        if found_box:
+            found_box = row['LocationID']
+            found_slot = src_slot or None
+            found_source = 'physical_source'
             break
+
+    # Fallback: scan bindings for the first dryer-box slot bound to this toolhead.
+    if not found_box:
+        for row in loc_list:
+            if row.get('Type') != locations_db.DRYER_BOX_TYPE:
+                continue
+            targets = (row.get('extra') or {}).get('slot_targets') or {}
+            for slot, target in targets.items():
+                if target and str(target).upper() == active_toolhead:
+                    found_box = row['LocationID']
+                    found_slot = slot
+                    found_source = 'first_binding'
+                    break
+            if found_box:
+                break
+
     if not found_box:
         state.add_log_entry(
-            f"⚠️ Return: {active_toolhead} has no bound dryer box slot",
+            f"⚠️ Return: {active_toolhead} has no bound dryer box slot and no physical_source — can't return",
             "WARNING", "ffaa00"
         )
         return jsonify({
@@ -1339,8 +1369,10 @@ def api_quickswap_return():
     move_result = logic.perform_smart_move(
         found_box, [spool_id], target_slot=found_slot, origin='quickswap_return'
     )
+    src_note = " (original source)" if found_source == 'physical_source' else " (first bound slot)"
+    slot_part = f":SLOT:{found_slot}" if found_slot else ""
     state.add_log_entry(
-        f"↩️ Return: Spool #{spool_id} from <b>{toolhead}</b> → <b>{found_box}:SLOT:{found_slot}</b>",
+        f"↩️ Return: Spool #{spool_id} from <b>{toolhead}</b> → <b>{found_box}{slot_part}</b>{src_note}",
         "SUCCESS", "00ff00"
     )
     return jsonify({
@@ -1349,6 +1381,7 @@ def api_quickswap_return():
         "toolhead": toolhead,
         "box": found_box,
         "slot": found_slot,
+        "source": found_source,
         "smart_move": move_result,
     }), 200
 

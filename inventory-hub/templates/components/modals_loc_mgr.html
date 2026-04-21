@@ -172,11 +172,21 @@
                            "Link a slot…" -->
                     <div id="fcc-bind-picker-overlay"
                         class="position-fixed top-50 start-50 translate-middle bg-dark border border-info rounded p-4 shadow-lg"
-                        style="display:none; z-index:10000; min-width:520px; max-width:90vw; max-height:80vh; overflow-y:auto;">
+                        style="display:none; z-index:10000; min-width:560px; max-width:90vw; max-height:85vh; overflow-y:auto;">
                         <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom border-secondary">
                             <h5 class="text-info mb-0 fw-bold">🔗 Bind a Slot to <span id="fcc-bind-picker-toolhead" class="text-warning"></span></h5>
                             <button type="button" class="btn-close btn-close-white"
                                     id="fcc-bind-picker-close"></button>
+                        </div>
+                        <!-- Toolhead selector: hidden for specific toolheads (you're already in one),
+                             surfaced for virtual-printer views so you can pick which toolhead to bind to. -->
+                        <div id="fcc-bind-picker-toolhead-row" class="mb-3" style="display:none;">
+                            <label class="text-light fw-bold d-block mb-1" style="font-size:1rem;">
+                                Pick which toolhead to bind to:
+                            </label>
+                            <select id="fcc-bind-picker-toolhead-select"
+                                class="form-select bg-black text-white border-info fw-bold"
+                                style="font-size:1.05rem;"></select>
                         </div>
                         <input type="text" id="fcc-bind-picker-search"
                             class="form-control bg-black text-white border-info fw-bold mb-2"

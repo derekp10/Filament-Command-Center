@@ -127,7 +127,45 @@ window.openManage = (id) => {
         });
 };
 
-window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
+// Breadcrumb for chained manage views. When the user clicks e.g. "Edit Full
+// Bindings" from a toolhead, openManage re-renders onto the dryer box but the
+// user's mental model is "I went deeper into a flow" — closeManage should
+// pop back to the toolhead, not drop to the locations list.
+window.manageNavStack = window.manageNavStack || [];
+window._fccPoppingBreadcrumb = false;
+
+(function _installManageBreadcrumb() {
+    const original = window.openManage;
+    if (!original || original._fcc_wrapped) return;
+    const wrapped = (id) => {
+        // Skip push when we're popping back — otherwise we'd re-push the
+        // location we're leaving and the stack would never drain.
+        if (!window._fccPoppingBreadcrumb) {
+            const prev = document.getElementById('manage-loc-id');
+            const prevId = prev ? prev.value : '';
+            if (prevId && String(prevId) !== String(id)) {
+                window.manageNavStack.push(prevId);
+            }
+        }
+        return original(id);
+    };
+    wrapped._fcc_wrapped = true;
+    window.openManage = wrapped;
+})();
+
+window.closeManage = () => {
+    if (window.manageNavStack && window.manageNavStack.length > 0) {
+        const back = window.manageNavStack.pop();
+        if (back) {
+            window._fccPoppingBreadcrumb = true;
+            try { window.openManage(back); }
+            finally { window._fccPoppingBreadcrumb = false; }
+            return;
+        }
+    }
+    modals.manageModal.hide();
+    fetchLocations();
+};
 
 // ---------------------------------------------------------------------------
 // Phase 2: Slot → Toolhead Feeds (Dryer Box only)
