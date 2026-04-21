@@ -198,6 +198,29 @@ def test_close_manage_from_top_of_stack_closes_modal(page: Page, base_url: str):
     expect(page.locator("#manageModal")).to_be_hidden()
 
 
+@pytest.mark.usefixtures("require_server")
+def test_close_then_open_unrelated_then_close_does_not_resurrect(page: Page, base_url: str):
+    """Regression: user reported that opening the XL virtual printer, closing
+    it with X, opening a toolhead, then closing THAT with X was popping the
+    virtual printer back up. Breadcrumb state must not leak between
+    independent sessions."""
+    # First session: open XL, close.
+    _open_manage(page, base_url, VIRTUAL_PRINTER)
+    page.locator("#manageModal .modal-header .btn-close").click()
+    page.wait_for_timeout(600)
+    expect(page.locator("#manageModal")).to_be_hidden()
+
+    # Second, unrelated session: open the toolhead, close it.
+    page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
+    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+    page.wait_for_timeout(600)
+    expect(page.locator("#manage-loc-id")).to_have_value(TEST_TOOLHEAD)
+    page.locator("#manageModal .modal-header .btn-close").click()
+    page.wait_for_timeout(600)
+    # Modal must stay closed. Before the fix it was popping XL back up.
+    expect(page.locator("#manageModal")).to_be_hidden()
+
+
 # ---------------------------------------------------------------------------
 # Bind-slot picker — virtual printer toolhead selector
 # ---------------------------------------------------------------------------

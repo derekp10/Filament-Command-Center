@@ -228,6 +228,28 @@
         yes.focus();
     };
 
+    // Re-render every moving part of the manage modal after a move so the
+    // user sees the new state without closing+reopening. Spoolman writes
+    // can lag a few hundred ms after perform_smart_move returns, so we
+    // also fire a delayed second refresh to catch the settled state.
+    //
+    // refreshManageView has a content-hash cache for anti-wiggle polling;
+    // we bust it explicitly here because we *know* the contents changed.
+    const _refreshAfterMove = () => {
+        if (!currentLoc) return;
+        const id = currentLoc.LocationID;
+        const doRefresh = () => {
+            try { if (typeof state !== 'undefined') state.lastLocRenderHash = null; } catch (e) { /* noop */ }
+            if (window.refreshManageView) window.refreshManageView(id);
+            if (window.renderQuickSwapSection && currentLoc) {
+                window.renderQuickSwapSection(currentLoc);
+            }
+            document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+        };
+        doRefresh();
+        setTimeout(doRefresh, 450);
+    };
+
     const performSwap = (opts) => {
         fetch('/api/quickswap', {
             method: 'POST',
@@ -238,8 +260,7 @@
             .then(({ ok, body }) => {
                 if (ok && body.action === 'quickswap_done') {
                     showToast(`⚡ Spool #${body.moved} → ${opts.toolhead}`, 'success', 4000);
-                    if (window.refreshManageView && currentLoc) window.refreshManageView(currentLoc.LocationID);
-                    document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+                    _refreshAfterMove();
                 } else if (body.action === 'quickswap_empty_slot') {
                     showToast(`⚠️ ${opts.box} slot ${opts.slot} is empty — nothing to swap`, 'warning', 7000);
                 } else if (body.action === 'quickswap_not_bound') {
@@ -264,8 +285,7 @@
             .then(({ ok, body }) => {
                 if (ok && body.action === 'return_done') {
                     showToast(`↩️ Spool #${body.moved} → ${body.box}:SLOT:${body.slot}`, 'success', 4000);
-                    if (window.refreshManageView && currentLoc) window.refreshManageView(currentLoc.LocationID);
-                    document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+                    _refreshAfterMove();
                 } else if (body.action === 'return_no_spool') {
                     showToast(`⚠️ ${opts.toolhead} is empty — nothing to return`, 'warning', 7000);
                 } else if (body.action === 'return_no_binding') {
@@ -310,14 +330,62 @@
         });
     };
 
+    // Resolve which concrete toolhead a Return-to-Slot click is actually
+    // going to act on. For a specific toolhead loc (e.g. XL-3) it's that
+    // loc. For a virtual-printer loc (e.g. XL / CORE1) we check each
+    // candidate toolhead's contents and return the first one that's
+    // loaded — which mirrors the backend's own selection logic.
+    const _resolveReturnTarget = (loc) => {
+        if (!loc) return Promise.resolve(null);
+        const up = String(loc.LocationID).toUpperCase();
+        if (loc.Type !== PRINTER_TYPE) {
+            return Promise.resolve(up);
+        }
+        const pm = state.printerMap || {};
+        const prefix = up + '-';
+        const candidates = [];
+        for (const entries of Object.values(pm)) {
+            (entries || []).forEach(e => {
+                const v = String(e.location_id).toUpperCase();
+                if (v.startsWith(prefix)) candidates.push(v);
+            });
+        }
+        if (!candidates.length) return Promise.resolve(null);
+        // Check each candidate in printer_map order; first one with
+        // contents wins.
+        const check = (i) => {
+            if (i >= candidates.length) return null;
+            return fetch(`/api/get_contents?id=${encodeURIComponent(candidates[i])}`)
+                .then(r => r.ok ? r.json() : [])
+                .then(items => (items && items.length) ? candidates[i] : check(i + 1))
+                .catch(() => check(i + 1));
+        };
+        return Promise.resolve(check(0));
+    };
+
     window.returnToolheadToSlot = () => {
         if (!currentLoc) return;
-        const th = currentLoc.LocationID;
-        showConfirmOverlay({
-            toolhead: th,
-            title: `Return the spool on ${th} to its dryer box slot?`,
-            body: `This sends whatever is currently in <b>${th}</b> back to the first dryer box slot that's bound to this toolhead. If the toolhead is empty, or has no bound slot, nothing happens.`,
-            onConfirm: () => performReturn({ toolhead: th }),
+        const vth = String(currentLoc.LocationID).toUpperCase();
+        _resolveReturnTarget(currentLoc).then(resolvedTh => {
+            const th = resolvedTh || vth;
+            const isVirtual = currentLoc.Type === PRINTER_TYPE;
+            const resolvedNote = (isVirtual && resolvedTh)
+                ? `<div class="text-warning small mb-2" style="font-size:0.95rem;">(Resolved from the <b>${vth}</b> virtual printer — first toolhead with a loaded spool.)</div>`
+                : '';
+            const emptyNote = (isVirtual && !resolvedTh)
+                ? `<div class="text-warning fw-bold" style="font-size:1.05rem;">No toolhead on <b>${vth}</b> is currently loaded — nothing to return.</div>`
+                : '';
+            showConfirmOverlay({
+                toolhead: th,
+                title: `Return the spool on ${th} to its dryer box slot?`,
+                body:
+                    resolvedNote
+                    + (emptyNote || `This sends whatever is currently in <b>${th}</b> back to its origin dryer box slot
+                        (the one recorded as <code>physical_source</code> on the spool). If no origin is recorded,
+                        falls back to the first dryer box slot bound to this toolhead.
+                        If the toolhead is empty or has no candidate slot, nothing happens.`),
+                onConfirm: () => performReturn({ toolhead: th }),
+            });
         });
     };
 

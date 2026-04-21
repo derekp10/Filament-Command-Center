@@ -131,6 +131,13 @@ window.openManage = (id) => {
 // Bindings" from a toolhead, openManage re-renders onto the dryer box but the
 // user's mental model is "I went deeper into a flow" — closeManage should
 // pop back to the toolhead, not drop to the locations list.
+//
+// Stack discipline:
+// - Push only when we're navigating inside an already-open manage modal.
+//   Pushing on a fresh open from the locations list would mistakenly
+//   resurrect whatever location the user was looking at last session.
+// - On a real close (empty stack), clear the manage-loc-id value so the
+//   NEXT fresh open has no stale previous to push onto the stack.
 window.manageNavStack = window.manageNavStack || [];
 window._fccPoppingBreadcrumb = false;
 
@@ -138,12 +145,16 @@ window._fccPoppingBreadcrumb = false;
     const original = window.openManage;
     if (!original || original._fcc_wrapped) return;
     const wrapped = (id) => {
-        // Skip push when we're popping back — otherwise we'd re-push the
-        // location we're leaving and the stack would never drain.
         if (!window._fccPoppingBreadcrumb) {
+            const modalEl = document.getElementById('manageModal');
+            const modalOpen = !!(modalEl && modalEl.classList.contains('show'));
             const prev = document.getElementById('manage-loc-id');
             const prevId = prev ? prev.value : '';
-            if (prevId && String(prevId) !== String(id)) {
+            // Only push when we're *already inside* the manage modal and
+            // navigating to a different location. First-opens from the
+            // locations list must NOT push — otherwise closing the modal
+            // after the next unrelated open would re-surface a stale view.
+            if (modalOpen && prevId && String(prevId) !== String(id)) {
                 window.manageNavStack.push(prevId);
             }
         }
@@ -163,9 +174,31 @@ window.closeManage = () => {
             return;
         }
     }
+    // Real close: reset breadcrumb state so the NEXT fresh open doesn't
+    // inherit a stale previous id.
+    window.manageNavStack = [];
+    const prev = document.getElementById('manage-loc-id');
+    if (prev) prev.value = '';
     modals.manageModal.hide();
     fetchLocations();
 };
+
+// Bootstrap's own dismiss paths (backdrop click, Escape key) bypass
+// closeManage entirely. Listen for the hidden.bs.modal event so those
+// also clear breadcrumb state and the stale manage-loc-id.
+document.addEventListener('DOMContentLoaded', () => {
+    const modalEl = document.getElementById('manageModal');
+    if (!modalEl) return;
+    modalEl.addEventListener('hidden.bs.modal', () => {
+        // If we've got a breadcrumb to pop, Bootstrap's hide just finished
+        // and we should NOT try to re-open — the user's closeManage click
+        // would have handled navigation before this event fired. At hidden
+        // time we always want a clean state for the next fresh open.
+        window.manageNavStack = [];
+        const prev = document.getElementById('manage-loc-id');
+        if (prev) prev.value = '';
+    });
+});
 
 // ---------------------------------------------------------------------------
 // Phase 2: Slot → Toolhead Feeds (Dryer Box only)
