@@ -945,7 +945,102 @@ def api_identify_scan():
             name = data.get('name', 'Unknown Filament')
             return jsonify({"type": "filament", "id": int(fid), "display": name})
 
+    # --- SLOT ASSIGNMENT (Phase 1) ---
+    # LOC:X:SLOT:Y scans mean "drop the buffered spool into slot Y of location X".
+    # perform_smart_move already handles auto-eject, container_slot, physical_source,
+    # and the Filabridge map_toolhead notification when the target is a printer.
+    if res.get('type') == 'assignment':
+        target = str(res.get('location', '')).strip().upper()
+        slot = str(res.get('slot', '')).strip()
+        loc_list = locations_db.load_locations_list()
+        loc_info_map = {row['LocationID'].upper(): row for row in loc_list}
+        tgt_info = loc_info_map.get(target)
+
+        # Validate target exists and is a container type.
+        container_types = {'Dryer Box', 'MMU Slot', 'Tool Head', 'No MMU Direct Load'}
+        if not tgt_info or tgt_info.get('Type') not in container_types:
+            found_type = tgt_info.get('Type') if tgt_info else 'missing'
+            state.add_log_entry(
+                f"❌ Slot scan target <b>{target}</b> invalid (type={found_type}) — scan dropped",
+                "ERROR", "ff0000"
+            )
+            return jsonify({
+                "type": "assignment",
+                "action": "assignment_bad_target",
+                "location": target, "slot": slot,
+                "found_type": found_type,
+            }), 400
+
+        # Validate slot is within Max Spools range.
+        try:
+            max_slots = int(str(tgt_info.get('Max Spools', '0')).strip() or '0')
+        except ValueError:
+            max_slots = 0
+        try:
+            slot_num = int(slot)
+        except ValueError:
+            slot_num = 0
+        if max_slots > 0 and (slot_num < 1 or slot_num > max_slots):
+            state.add_log_entry(
+                f"❌ Slot <b>{slot}</b> out of range for {target} (has {max_slots} slots) — scan dropped",
+                "ERROR", "ff0000"
+            )
+            return jsonify({
+                "type": "assignment",
+                "action": "assignment_bad_slot",
+                "location": target, "slot": slot,
+                "max_slots": max_slots,
+            }), 400
+
+        # Pull the first spool off the buffer.
+        buffer = getattr(state, 'GLOBAL_BUFFER', []) or []
+        first_spool = next((item for item in buffer if isinstance(item, dict) and item.get('id')), None)
+        if not first_spool:
+            state.add_log_entry(
+                f"⚠️ Slot scan {target}:SLOT:{slot} dropped — buffer is empty",
+                "WARNING", "ffaa00"
+            )
+            return jsonify({
+                "type": "assignment",
+                "action": "assignment_no_buffer",
+                "location": target, "slot": slot,
+            }), 200
+
+        spool_id = int(first_spool['id'])
+        move_result = logic.perform_smart_move(
+            target, [spool_id], target_slot=slot, origin='slot_qr_scan'
+        )
+
+        # Remove the spool from the backend's buffer replica.
+        state.GLOBAL_BUFFER = [
+            item for item in buffer
+            if not (isinstance(item, dict) and int(item.get('id') or 0) == spool_id)
+        ]
+        remaining = len(state.GLOBAL_BUFFER)
+        action = 'assignment_partial' if remaining > 0 else 'assignment_done'
+
+        suffix = f" ({remaining} still in buffer)" if remaining else ""
+        state.add_log_entry(
+            f"✅ Spool #{spool_id} → <b>{target}:SLOT:{slot}</b>{suffix}",
+            "SUCCESS", "00ff00"
+        )
+        return jsonify({
+            "type": "assignment",
+            "action": action,
+            "location": target, "slot": slot,
+            "moved": spool_id,
+            "remaining_buffer": remaining,
+            "smart_move": move_result,
+        }), 200
+
     return jsonify(res)
+
+
+@app.route('/api/buffer/clear', methods=['POST'])
+def api_buffer_clear():
+    """Wipe the backend's buffer replica. Used by tests + frontend reset."""
+    state.GLOBAL_BUFFER = []
+    return jsonify({"success": True, "buffer": []})
 
 @app.route('/api/print_queue/pending', methods=['GET'])
 def api_print_queue_pending():

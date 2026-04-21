@@ -148,7 +148,8 @@ def test_api_endpoint(client):
         assert len(data['results']) == 1
         assert data['results'][0]['id'] == 99
         
-        # Verify the arguments were passed to the logic layer correctly
+        # Verify the arguments were passed to the logic layer correctly.
+        # min_weight was added to search_inventory; tests must include it.
         mock_search.assert_called_once_with(
             query="test",
             material="PLA",
@@ -156,5 +157,6 @@ def test_api_endpoint(client):
             color_hex="",
             only_in_stock=True,
             empty=False,
-            target_type="filament"
+            target_type="filament",
+            min_weight=""
         )
