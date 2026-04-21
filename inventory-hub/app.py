@@ -13,6 +13,21 @@ import logging
 VERSION = "v154.26 (Scale Weights Update)"
 app = Flask(__name__)
 
+# One-time feeder_map → slot_targets migration on process startup.
+# Idempotent: skips boxes that already have slot_targets. Keeps the legacy
+# config.json feeder_map key readable for one release (M7 removes it).
+try:
+    _startup_cfg = config_loader.load_config()
+    _startup_locs = locations_db.load_locations_list()
+    _migrated, _changed = locations_db.migrate_feeder_map_if_needed(
+        _startup_locs, _startup_cfg.get('feeder_map', {}) or {}
+    )
+    if _changed:
+        locations_db.save_locations_list(_migrated)
+        state.logger.info("💾 feeder_map migration persisted to locations.json")
+except Exception as _mig_err:
+    state.logger.error(f"feeder_map migration skipped due to error: {_mig_err}")
+
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
@@ -1041,6 +1056,64 @@ def api_buffer_clear():
     """Wipe the backend's buffer replica. Used by tests + frontend reset."""
     state.GLOBAL_BUFFER = []
     return jsonify({"success": True, "buffer": []})
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Dryer Box ↔ Toolhead bindings
+# ---------------------------------------------------------------------------
+
+@app.route('/api/dryer_box/<loc_id>/bindings', methods=['GET'])
+def api_dryer_box_bindings_get(loc_id):
+    bindings = locations_db.get_dryer_box_bindings(loc_id)
+    if bindings is None:
+        return jsonify({"error": "not_a_dryer_box", "location": loc_id}), 404
+    return jsonify({"location": loc_id, "slot_targets": bindings})
+
+
+@app.route('/api/dryer_box/<loc_id>/bindings', methods=['PUT'])
+def api_dryer_box_bindings_put(loc_id):
+    data = request.get_json(silent=True) or {}
+    slot_targets = data.get('slot_targets')
+    if slot_targets is None:
+        return jsonify({"error": "missing_slot_targets"}), 400
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    ok, errors = locations_db.set_dryer_box_bindings(loc_id, slot_targets, printer_map)
+    if not ok:
+        # Errors are tuples (slot, target, reason) — return a structured payload.
+        return jsonify({
+            "error": "validation_failed",
+            "location": loc_id,
+            "errors": [
+                {"slot": e[0], "target": e[1], "reason": e[2]} for e in errors
+            ],
+        }), 400
+    state.add_log_entry(
+        f"🔗 Bindings updated for <b>{loc_id}</b>",
+        "INFO", "00d4ff"
+    )
+    return jsonify({
+        "location": loc_id,
+        "slot_targets": locations_db.get_dryer_box_bindings(loc_id) or {},
+    })
+
+
+@app.route('/api/machine/<path:printer_name>/toolhead_slots', methods=['GET'])
+def api_machine_toolhead_slots(printer_name):
+    """Reverse lookup: for a printer, return every (box, slot) pair that
+    feeds each of its toolheads. `printer_name` may contain emoji and
+    spaces — the <path:> converter keeps them intact across the URL."""
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    result = locations_db.get_bindings_for_machine(printer_name, printer_map)
+    # 404 when the printer_name matches zero printer_map entries.
+    if not result['toolheads']:
+        return jsonify({
+            "printer_name": printer_name,
+            "toolheads": {},
+            "error": "printer_not_found",
+        }), 404
+    return jsonify(result)
 
 @app.route('/api/print_queue/pending', methods=['GET'])
 def api_print_queue_pending():
