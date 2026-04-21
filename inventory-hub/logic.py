@@ -179,9 +179,15 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
                 # [ALEX FIX] Improved comparison to catch string vs int mismatches
                 if str(existing.get('slot', '')).strip('"') == str(target_slot) and existing['id'] != int(sid):
                     state.logger.info(f"🪑 Unseating Spool {existing['id']} from Slot {target_slot}")
-                    # [ALEX FIX] Explicitly set to empty string to ensure DB update
-                    spoolman_api.update_spool(existing['id'], {'extra': {'container_slot': ''}})
-            
+                    # Load the existing spool's full extra and MERGE — Spoolman's
+                    # PATCH replaces the entire `extra` object, so passing only
+                    # {container_slot: ''} would wipe physical_source, spool_type,
+                    # temps, etc. Read → clear just the slot → write whole extra.
+                    _existing_full = spoolman_api.get_spool(existing['id']) or {}
+                    _merged_extra = dict(_existing_full.get('extra') or {})
+                    _merged_extra['container_slot'] = ''
+                    spoolman_api.update_spool(existing['id'], {'extra': _merged_extra})
+
             new_extra['container_slot'] = str(target_slot)
         else:
             # If moving to a non-slotted location, clear the slot

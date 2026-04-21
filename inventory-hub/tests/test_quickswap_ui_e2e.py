@@ -63,19 +63,25 @@ def test_quickswap_grid_hidden_on_dryer_box(page: Page, base_url: str):
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
 def test_quickswap_keyboard_q_focuses_first_slot(page: Page, base_url: str):
+    import re
     _open_manage(page, base_url, TEST_TOOLHEAD)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()
     page.keyboard.press("q")
     page.wait_for_timeout(200)
     first = page.locator(".fcc-qs-slot").first
-    expect(first).to_have_class("fcc-qs-slot btn btn-outline-info kb-active")
+    # Match any class list that contains both fcc-qs-slot and kb-active.
+    expect(first).to_have_class(re.compile(r'fcc-qs-slot(?=.*\bkb-active\b)'))
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
 def test_quickswap_tap_opens_confirm_overlay(page: Page, base_url: str):
     _open_manage(page, base_url, TEST_TOOLHEAD)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()
-    page.locator(".fcc-qs-slot").first.click()
+    # Specifically target the slot button that came from our fixture's binding,
+    # not whatever happens to be first in the grid.
+    test_btn = page.locator(f".fcc-qs-slot[data-box='{TEST_BOX}'][data-toolhead='{TEST_TOOLHEAD}']").first
+    expect(test_btn).to_be_visible(timeout=3000)
+    test_btn.click()
     expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=2000)
     expect(page.locator("#fcc-quickswap-confirm-title")).to_contain_text(TEST_BOX)
     expect(page.locator("#fcc-quickswap-confirm-title")).to_contain_text(TEST_TOOLHEAD)

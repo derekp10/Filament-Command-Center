@@ -145,6 +145,137 @@ const fetchPrinterMap = () => {
         .catch(e => { console.warn("printer_map fetch failed", e); return {}; });
 };
 
+// Render a searchable combobox backed by a native <select> so existing
+// save logic (reading .feeds-select.value) keeps working. The text input
+// filters a dropdown list; Arrow/Enter/Escape drive selection; clicking
+// outside closes the list. Options are labeled "XL-1 — Toolhead 1 on 🦝 XL"
+// (no more cryptic "pos #").
+const buildFeedsCombobox = (slot, printers, currentTarget) => {
+    const comboId = `feeds-combo-${slot}`;
+    const optionList = [
+        { value: '', label: '— None (staging / drying)', search: 'none staging drying' }
+    ];
+    Object.keys(printers).sort().forEach(printerName => {
+        (printers[printerName] || []).forEach(e => {
+            const human = `${e.location_id} — Toolhead ${e.position + 1} on ${printerName}`;
+            optionList.push({
+                value: e.location_id,
+                label: human,
+                search: `${e.location_id} ${printerName} toolhead ${e.position + 1}`.toLowerCase(),
+                printer: printerName,
+            });
+        });
+    });
+
+    // Preserve a hidden <select> so window.saveFeedsSection keeps working.
+    const selOpts = optionList.map(o => {
+        const sel = o.value.toUpperCase() === currentTarget ? ' selected' : '';
+        return `<option value="${o.value}"${sel}>${o.label}</option>`;
+    }).join('');
+
+    const currentLabel = (optionList.find(o => o.value.toUpperCase() === currentTarget)
+        || optionList[0]).label;
+
+    return `
+        <div class="d-flex align-items-center gap-2 feeds-row" data-slot="${slot}">
+            <span class="badge bg-info text-dark fw-bold px-2 py-2"
+                  style="min-width:72px; font-size:1rem;">Slot ${slot}</span>
+            <div class="feeds-combo position-relative flex-grow-1" data-slot="${slot}" id="${comboId}">
+                <input type="text" class="form-control bg-black text-white border-info fw-bold feeds-combo-input"
+                    data-slot="${slot}"
+                    value="${currentLabel.replace(/"/g, '&quot;')}"
+                    style="font-size:1.05rem;"
+                    placeholder="Search toolheads…" autocomplete="off">
+                <div class="feeds-combo-list position-absolute w-100 bg-dark border border-info rounded mt-1 shadow"
+                     data-slot="${slot}"
+                     style="display:none; z-index:1050; max-height:260px; overflow-y:auto;">
+                </div>
+                <select class="feeds-select d-none" data-slot="${slot}">${selOpts}</select>
+            </div>
+        </div>`;
+};
+
+const _comboHydrate = (slot, printers) => {
+    const host = document.getElementById(`feeds-combo-${slot}`);
+    if (!host) return;
+    const input = host.querySelector('.feeds-combo-input');
+    const list = host.querySelector('.feeds-combo-list');
+    const sel = host.querySelector('.feeds-select');
+
+    const _options = () => {
+        const opts = [
+            { value: '', label: '— None (staging / drying)', search: 'none staging drying' }
+        ];
+        Object.keys(printers).sort().forEach(printerName => {
+            (printers[printerName] || []).forEach(e => {
+                opts.push({
+                    value: e.location_id,
+                    label: `${e.location_id} — Toolhead ${e.position + 1} on ${printerName}`,
+                    search: `${e.location_id} ${printerName} toolhead ${e.position + 1}`.toLowerCase(),
+                });
+            });
+        });
+        return opts;
+    };
+
+    const options = _options();
+
+    const open = () => { list.style.display = 'block'; };
+    const close = () => { list.style.display = 'none'; clearKb(); };
+    const clearKb = () => list.querySelectorAll('.kb-active').forEach(el => el.classList.remove('kb-active'));
+
+    const filter = (q) => {
+        const needle = (q || '').trim().toLowerCase();
+        const matches = !needle ? options : options.filter(o => o.search.includes(needle));
+        list.innerHTML = matches.map(o => `
+            <div class="feeds-combo-item px-3 py-2 text-light fw-bold" data-value="${o.value}"
+                 style="cursor:pointer; font-size:1rem;">${o.label}</div>`).join('');
+        Array.from(list.querySelectorAll('.feeds-combo-item')).forEach(el => {
+            el.addEventListener('click', () => pick(el.dataset.value, el.innerText));
+            el.addEventListener('mouseenter', () => { clearKb(); el.classList.add('kb-active'); });
+        });
+        if (!matches.length) {
+            list.innerHTML = '<div class="text-warning px-3 py-2 small">No matches</div>';
+        }
+    };
+
+    const pick = (value, label) => {
+        sel.value = value;
+        input.value = label;
+        close();
+    };
+
+    input.addEventListener('focus', () => { filter(''); open(); });
+    input.addEventListener('input', () => { filter(input.value); open(); });
+    input.addEventListener('keydown', (e) => {
+        if (list.style.display === 'none') return;
+        const items = Array.from(list.querySelectorAll('.feeds-combo-item'));
+        if (!items.length) return;
+        const idx = items.findIndex(el => el.classList.contains('kb-active'));
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            clearKb();
+            items[(idx + 1) % items.length].classList.add('kb-active');
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            clearKb();
+            items[(idx - 1 + items.length) % items.length].classList.add('kb-active');
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const target = idx >= 0 ? items[idx] : items[0];
+            pick(target.dataset.value, target.innerText);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            close();
+            input.blur();
+        }
+    });
+    // Click outside closes.
+    document.addEventListener('click', (e) => {
+        if (!host.contains(e.target)) close();
+    });
+};
+
 const renderFeedsSection = (loc) => {
     const section = document.getElementById('manage-feeds-section');
     if (!section) return;
@@ -155,7 +286,6 @@ const renderFeedsSection = (loc) => {
     }
     section.style.display = 'block';
 
-    // Start collapsed; user toggles open when they want to edit.
     document.getElementById('feeds-body').style.display = 'none';
     document.getElementById('feeds-toggle-btn').innerText = 'Show';
     document.getElementById('feeds-status').innerText = '';
@@ -163,7 +293,7 @@ const renderFeedsSection = (loc) => {
     const maxSlots = parseInt(loc['Max Spools']) || 0;
     if (maxSlots <= 0) {
         document.getElementById('feeds-rows').innerHTML =
-            '<div class="text-warning small">This location has Max Spools of 0 — no slots to bind.</div>';
+            '<div class="text-warning fw-bold" style="font-size:1rem;">This location has Max Spools of 0 — no slots to bind.</div>';
         return;
     }
 
@@ -176,30 +306,11 @@ const renderFeedsSection = (loc) => {
         const rows = document.getElementById('feeds-rows');
         rows.innerHTML = '';
         for (let slot = 1; slot <= maxSlots; slot++) {
-            const slotKey = String(slot);
-            const currentTarget = (targets[slotKey] || '').toUpperCase();
-
-            // Build dropdown: None + <optgroup per printer>
-            let optsHtml = '<option value="">— None (staging / drying)</option>';
-            Object.keys(printers).sort().forEach(printerName => {
-                const entries = printers[printerName] || [];
-                const optionLines = entries.map(e => {
-                    const isSel = e.location_id.toUpperCase() === currentTarget;
-                    return `<option value="${e.location_id}"${isSel ? ' selected' : ''}>${e.location_id} (pos ${e.position})</option>`;
-                }).join('');
-                if (optionLines) {
-                    optsHtml += `<optgroup label="${printerName}">${optionLines}</optgroup>`;
-                }
-            });
-
-            const rowHtml = `
-                <div class="d-flex align-items-center gap-2 feeds-row" data-slot="${slot}">
-                    <span class="badge bg-secondary" style="min-width: 60px;">Slot ${slot}</span>
-                    <select class="form-select form-select-sm bg-black text-white border-secondary feeds-select"
-                            data-slot="${slot}">${optsHtml}</select>
-                </div>
-            `;
-            rows.insertAdjacentHTML('beforeend', rowHtml);
+            const currentTarget = (targets[String(slot)] || '').toUpperCase();
+            rows.insertAdjacentHTML('beforeend', buildFeedsCombobox(slot, printers, currentTarget));
+        }
+        for (let slot = 1; slot <= maxSlots; slot++) {
+            _comboHydrate(slot, printers);
         }
     });
 };
@@ -217,10 +328,12 @@ window.saveFeedsSection = () => {
     const locId = document.getElementById('manage-loc-id').value;
     if (!locId) return;
     const status = document.getElementById('feeds-status');
-    status.className = 'small flex-grow-1 text-info';
+    status.className = 'flex-grow-1 fw-bold text-info';
+    status.style.fontSize = '1rem';
     status.innerText = 'Saving…';
 
-    // Collect slot_targets from all selects. Empty-string values map to None.
+    // Collect slot_targets from all hidden <select> elements inside the
+    // combobox wrappers. Empty-string values map to None.
     const selects = document.querySelectorAll('#feeds-rows select.feeds-select');
     const slot_targets = {};
     selects.forEach(sel => {
@@ -237,11 +350,20 @@ window.saveFeedsSection = () => {
         .then(async r => ({ ok: r.ok, body: await r.json() }))
         .then(({ ok, body }) => {
             if (ok) {
-                status.className = 'small flex-grow-1 text-success';
-                status.innerText = `✅ Saved ${Object.keys(body.slot_targets || {}).length} binding(s)`;
-                showToast(`🔗 Saved feeds for ${locId}`, 'success', 4000);
+                const count = Object.keys(body.slot_targets || {}).length;
+                const warnings = body.warnings || [];
+                if (warnings.length) {
+                    status.className = 'flex-grow-1 fw-bold text-warning';
+                    const wTxt = warnings.map(w => `⚠️ Slot ${w.slot} → ${w.target}: ${w.reason}`).join('\n');
+                    status.innerText = `Saved ${count} binding(s) — ${warnings.length} warning(s)\n${wTxt}`;
+                    showToast(`⚠️ Feeds saved with ${warnings.length} warning(s) — see log`, 'warning', 8000);
+                } else {
+                    status.className = 'flex-grow-1 fw-bold text-success';
+                    status.innerText = `✅ Saved ${count} binding(s)`;
+                    showToast(`🔗 Saved feeds for ${locId}`, 'success', 4000);
+                }
             } else {
-                status.className = 'small flex-grow-1 text-danger';
+                status.className = 'flex-grow-1 fw-bold text-danger';
                 const errs = (body.errors || []).map(e => `Slot ${e.slot}: ${e.reason}`).join('; ');
                 status.innerText = errs || body.error || 'Save failed';
                 showToast(`❌ Feeds save rejected: ${errs || body.error}`, 'error', 8000);
@@ -249,7 +371,7 @@ window.saveFeedsSection = () => {
         })
         .catch(e => {
             console.error(e);
-            status.className = 'small flex-grow-1 text-danger';
+            status.className = 'flex-grow-1 fw-bold text-danger';
             status.innerText = 'Network error';
             showToast('Feeds save — network error', 'error', 7000);
         });

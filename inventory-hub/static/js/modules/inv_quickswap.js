@@ -10,13 +10,31 @@
 // ---------------------------------------------------------------------------
 
 (function () {
+    // Toolhead types get the grid directly. Printer-type locations (e.g. the
+    // "🦝 XL" virtual printer) also get it so binding edits / Quick-Swap work
+    // from either view — the grid aggregates every toolhead that belongs to
+    // that printer.
     const TOOLHEAD_TYPES = new Set(['Tool Head', 'MMU Slot', 'No MMU Direct Load']);
+    const PRINTER_TYPE = 'Printer';
 
     const resolvePrinterNameForToolhead = (toolheadId, printerMap) => {
         // printerMap shape: { "🦝 XL": [{location_id, position}, ...], ... }
         const up = String(toolheadId || '').toUpperCase();
         for (const [printerName, entries] of Object.entries(printerMap || {})) {
             if (entries.some(e => String(e.location_id).toUpperCase() === up)) {
+                return printerName;
+            }
+        }
+        return null;
+    };
+
+    const resolvePrinterNameForPrinterLoc = (loc, printerMap) => {
+        // A Printer-type location surfaces ALL of its toolheads. Match by
+        // Device Identifier / Name against printer_map keys.
+        const candidates = [loc.Name, loc.LocationID, loc['Device Type'], loc['Device Identifier']]
+            .filter(Boolean).map(s => String(s).trim());
+        for (const printerName of Object.keys(printerMap || {})) {
+            if (candidates.some(c => printerName.includes(c) || c.includes(printerName))) {
                 return printerName;
             }
         }
@@ -35,14 +53,23 @@
         btn.focus({ preventScroll: true });
     };
 
+    // Track the currently-viewed location so bindings edit / return-to-slot
+    // know what to act on.
+    let currentLoc = null;
+
     const renderQuickSwapSection = (loc) => {
         const section = document.getElementById('manage-quickswap-section');
         if (!section) return;
 
-        if (!TOOLHEAD_TYPES.has(loc.Type)) {
+        const isToolhead = TOOLHEAD_TYPES.has(loc.Type);
+        const isPrinter = loc.Type === PRINTER_TYPE;
+
+        if (!isToolhead && !isPrinter) {
             section.style.display = 'none';
+            currentLoc = null;
             return;
         }
+        currentLoc = loc;
         section.style.display = 'block';
 
         // Need the printer_map (cached in state.printerMap by inv_loc_mgr.fetchPrinterMap).
@@ -54,27 +81,43 @@
             });
 
         ensurePM.then(printerMap => {
-            const printerName = resolvePrinterNameForToolhead(loc.LocationID, printerMap);
+            const printerName = isPrinter
+                ? resolvePrinterNameForPrinterLoc(loc, printerMap)
+                : resolvePrinterNameForToolhead(loc.LocationID, printerMap);
             const grid = document.getElementById('quickswap-grid');
             const empty = document.getElementById('quickswap-empty');
             grid.innerHTML = '';
             if (!printerName) {
                 empty.style.display = 'block';
-                empty.innerHTML = '⚠️ This toolhead is not registered in <code>printer_map</code>. Link slots in Location Manager.';
+                empty.innerHTML = '⚠️ This location is not registered in <code class="text-info">printer_map</code>. ' +
+                    'Add it in config.json to enable Quick-Swap.';
                 return;
             }
 
             fetch(`/api/machine/${encodeURIComponent(printerName)}/toolhead_slots`)
                 .then(r => r.ok ? r.json() : { toolheads: {} })
                 .then(body => {
-                    const entries = (body.toolheads || {})[String(loc.LocationID).toUpperCase()] || [];
+                    const toolheadMap = body.toolheads || {};
+                    const currentUp = String(loc.LocationID).toUpperCase();
+
+                    let entries = [];
+                    if (isToolhead) {
+                        entries = toolheadMap[currentUp] || [];
+                    } else {
+                        // Printer view: flatten ALL toolheads, tag each entry with its toolhead id.
+                        Object.keys(toolheadMap).forEach(thId => {
+                            (toolheadMap[thId] || []).forEach(e => {
+                                entries.push({ ...e, toolhead: thId });
+                            });
+                        });
+                    }
+
                     if (!entries.length) {
                         empty.style.display = 'block';
-                        empty.innerHTML = 'No dryer box slots are bound to this toolhead yet. ' +
-                            '<a href="#" onclick="window.openLocationsModal(); return false;" class="text-info">Link a slot…</a>';
                         return;
                     }
                     empty.style.display = 'none';
+
                     // Group by source box for readability.
                     const byBox = {};
                     entries.forEach(e => {
@@ -83,23 +126,23 @@
                     });
                     let html = '';
                     Object.keys(byBox).sort().forEach(boxId => {
-                        html += `<div class="w-100 small text-muted mt-1">📦 <span class="text-info">${boxId}</span></div>`;
+                        html += `<div class="w-100 fw-bold mt-2 mb-1" style="font-size:1.05rem;">` +
+                                `📦 <span class="text-info">${boxId}</span></div>`;
                         byBox[boxId].sort((a, b) => Number(a.slot) - Number(b.slot)).forEach(e => {
+                            const th = e.toolhead || loc.LocationID;
+                            const thHint = isPrinter ? `<br><span class="text-warning">→ ${th}</span>` : '';
                             html += `
-                                <button type="button" class="fcc-qs-slot btn btn-outline-info"
+                                <button type="button" class="fcc-qs-slot btn btn-outline-info fw-bold"
                                     data-box="${e.box}" data-slot="${e.slot}"
-                                    data-toolhead="${loc.LocationID}"
-                                    style="min-width:88px; font-size:1.0rem;"
+                                    data-toolhead="${th}"
+                                    style="min-width:110px; font-size:1.1rem; padding:10px 14px;"
                                     onclick="window.quickSwapTap(this)"
-                                    title="Load ${e.box} slot ${e.slot} into ${loc.LocationID}">
-                                    <span class="fw-bold">Slot ${e.slot}</span>
+                                    title="Load ${e.box} slot ${e.slot} into ${th}">
+                                    <span>Slot ${e.slot}</span>${thHint}
                                 </button>`;
                         });
                     });
                     grid.innerHTML = html;
-
-                    // Focus first slot only when the user opted in via the Q shortcut;
-                    // don't steal focus from the default list view.
                 });
         });
     };
@@ -111,9 +154,9 @@
         const yes = document.getElementById('fcc-quickswap-yes');
         const no = document.getElementById('fcc-quickswap-no');
         if (!ov || !yes || !no) return;
-        title.innerText = `Swap ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`;
-        body.innerHTML = 'This moves the spool currently in that slot into the active toolhead. ' +
-                        'Any spool already on the toolhead will be auto-ejected back to its source.';
+        title.innerText = opts.title || `Swap ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`;
+        body.innerHTML = opts.body || ('This moves the spool currently in that slot into the active toolhead. ' +
+                        'Any spool already on the toolhead will be auto-ejected back to its source.');
         ov.style.display = 'block';
         const close = () => {
             ov.style.display = 'none';
@@ -122,9 +165,9 @@
         };
         const keyHandler = (e) => {
             if (e.key === 'Escape') { e.stopPropagation(); close(); }
-            else if (e.key === 'Enter') { e.stopPropagation(); performSwap(opts); close(); }
+            else if (e.key === 'Enter') { e.stopPropagation(); opts.onConfirm && opts.onConfirm(); close(); }
         };
-        yes.onclick = () => { performSwap(opts); close(); };
+        yes.onclick = () => { opts.onConfirm && opts.onConfirm(); close(); };
         no.onclick = close;
         document.addEventListener('keydown', keyHandler, true);
         yes.focus();
@@ -140,8 +183,7 @@
             .then(({ ok, body }) => {
                 if (ok && body.action === 'quickswap_done') {
                     showToast(`⚡ Spool #${body.moved} → ${opts.toolhead}`, 'success', 4000);
-                    // Refresh the manage view so the active filament updates.
-                    if (window.refreshManageView) window.refreshManageView(opts.toolhead);
+                    if (window.refreshManageView && currentLoc) window.refreshManageView(currentLoc.LocationID);
                     document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
                 } else if (body.action === 'quickswap_empty_slot') {
                     showToast(`⚠️ ${opts.box} slot ${opts.slot} is empty — nothing to swap`, 'warning', 7000);
@@ -155,6 +197,71 @@
                 console.error(e);
                 showToast('Quick-swap — network error', 'error', 7000);
             });
+    };
+
+    const performReturn = (opts) => {
+        fetch('/api/quickswap/return', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(opts),
+        })
+            .then(async r => ({ ok: r.ok, body: await r.json() }))
+            .then(({ ok, body }) => {
+                if (ok && body.action === 'return_done') {
+                    showToast(`↩️ Spool #${body.moved} → ${body.box}:SLOT:${body.slot}`, 'success', 4000);
+                    if (window.refreshManageView && currentLoc) window.refreshManageView(currentLoc.LocationID);
+                    document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+                } else if (body.action === 'return_no_spool') {
+                    showToast(`⚠️ ${opts.toolhead} is empty — nothing to return`, 'warning', 7000);
+                } else if (body.action === 'return_no_binding') {
+                    showToast(`⚠️ ${opts.toolhead} has no bound slot to return to`, 'warning', 7000);
+                } else {
+                    showToast(`❌ Return failed: ${body.error || body.action || 'unknown'}`, 'error', 8000);
+                }
+            })
+            .catch(e => {
+                console.error(e);
+                showToast('Return — network error', 'error', 7000);
+            });
+    };
+
+    window.quickSwapTap = (btn) => {
+        if (!btn) return;
+        const opts = {
+            toolhead: btn.dataset.toolhead,
+            box: btn.dataset.box,
+            slot: btn.dataset.slot,
+        };
+        showConfirmOverlay({
+            ...opts,
+            onConfirm: () => performSwap(opts),
+        });
+    };
+
+    window.returnToolheadToSlot = () => {
+        if (!currentLoc) return;
+        const th = currentLoc.LocationID;
+        showConfirmOverlay({
+            toolhead: th,
+            title: `Return the spool on ${th} to its dryer box slot?`,
+            body: `This sends whatever is currently in <b>${th}</b> back to the first dryer box slot that's bound to this toolhead. If the toolhead is empty, or has no bound slot, nothing happens.`,
+            onConfirm: () => performReturn({ toolhead: th }),
+        });
+    };
+
+    window.editBindingsFromToolhead = () => {
+        // Pick the first bound box that feeds this toolhead, or prompt for a
+        // dryer-box-to-link. For now we just open Location Manager on the
+        // first source box if one exists — otherwise open the full list.
+        const grid = document.getElementById('quickswap-grid');
+        const firstBtn = grid && grid.querySelector('.fcc-qs-slot');
+        if (firstBtn && firstBtn.dataset.box) {
+            if (window.openManage) window.openManage(firstBtn.dataset.box);
+            return;
+        }
+        // No binding yet — fall back to opening the master Locations modal so
+        // the user can pick any dryer box.
+        if (window.openLocationsModal) window.openLocationsModal();
     };
 
     window.quickSwapTap = (btn) => {

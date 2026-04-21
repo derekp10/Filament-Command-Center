@@ -124,32 +124,51 @@
                 </div>
 
                 <!-- Phase 3: Quick-Swap grid. Hidden unless this location is a
-                     toolhead (Tool Head / MMU Slot / No MMU Direct Load). -->
+                     toolhead (Tool Head / MMU Slot / No MMU Direct Load) or a
+                     Printer (so virtual-printer views get the same controls). -->
                 <div id="manage-quickswap-section" class="mt-4" style="display:none;">
                     <hr class="border-secondary">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <h6 class="text-info mb-0">⚡ Quick-Swap Slots</h6>
-                        <span class="small text-muted">Tap a slot to load it into this toolhead. No scan needed.</span>
+                    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                        <h5 class="text-info mb-0 fw-bold">⚡ Quick-Swap Slots</h5>
+                        <div class="d-flex gap-2">
+                            <button type="button" id="quickswap-edit-bindings-btn"
+                                class="btn btn-sm btn-outline-info fw-bold"
+                                onclick="window.editBindingsFromToolhead()">
+                                🔗 Edit Bindings
+                            </button>
+                            <button type="button" id="quickswap-return-btn"
+                                class="btn btn-sm btn-outline-warning fw-bold"
+                                onclick="window.returnToolheadToSlot()">
+                                ↩️ Return to Slot
+                            </button>
+                        </div>
+                    </div>
+                    <div class="text-light mb-2" style="font-size:1rem;">
+                        Tap a slot below to load it into this toolhead — no scan needed.
                     </div>
                     <div id="quickswap-body" class="bg-dark p-3 rounded border border-secondary">
-                        <div id="quickswap-empty" class="small text-warning" style="display:none;">
+                        <div id="quickswap-empty" class="text-warning fw-bold" style="display:none; font-size:1.05rem;">
                             No dryer box slots are bound to this toolhead yet.
-                            <a href="#" onclick="window.openLocationsModal(); return false;"
-                               class="text-info">Link a slot…</a>
+                            <button type="button" class="btn btn-sm btn-info fw-bold ms-2"
+                                    onclick="window.editBindingsFromToolhead()">
+                                🔗 Link a slot…
+                            </button>
                         </div>
                         <div id="quickswap-grid" class="d-flex flex-wrap gap-2"></div>
                     </div>
                     <!-- Inline confirmation overlay — follows the force-location pattern. No nested Swal. -->
                     <div id="fcc-quickswap-confirm-overlay"
                         class="position-fixed top-50 start-50 translate-middle bg-dark border border-info rounded p-4 shadow-lg"
-                        style="display:none; z-index:10000; min-width:340px;">
-                        <div class="text-info fw-bold mb-2" id="fcc-quickswap-confirm-title">Confirm swap?</div>
-                        <div class="small text-light mb-3" id="fcc-quickswap-confirm-body"></div>
+                        style="display:none; z-index:10000; min-width:420px;">
+                        <div class="text-info fw-bold mb-3" style="font-size:1.25rem;"
+                             id="fcc-quickswap-confirm-title">Confirm swap?</div>
+                        <div class="text-light mb-3" style="font-size:1.05rem;"
+                             id="fcc-quickswap-confirm-body"></div>
                         <div class="d-flex gap-2 justify-content-end">
                             <button type="button" id="fcc-quickswap-no"
-                                class="btn btn-sm btn-outline-light">No, cancel</button>
+                                class="btn btn-outline-light fw-bold px-3">No, cancel</button>
                             <button type="button" id="fcc-quickswap-yes"
-                                class="btn btn-sm btn-info fw-bold">Yes, swap</button>
+                                class="btn btn-info fw-bold px-3">Yes, swap</button>
                         </div>
                     </div>
                 </div>
@@ -159,22 +178,22 @@
                 <div id="manage-feeds-section" class="mt-4" style="display:none;">
                     <hr class="border-secondary">
                     <div class="d-flex justify-content-between align-items-center mb-2">
-                        <h6 class="text-info mb-0">🔗 Slot → Toolhead Feeds</h6>
+                        <h5 class="text-info mb-0 fw-bold">🔗 Slot → Toolhead Feeds</h5>
                         <button type="button" id="feeds-toggle-btn"
-                            class="btn btn-sm btn-outline-secondary"
+                            class="btn btn-outline-info fw-bold"
                             onclick="window.toggleFeedsSection()">Show</button>
                     </div>
                     <div id="feeds-body" class="bg-dark p-3 rounded border border-secondary" style="display:none;">
-                        <div class="small text-muted mb-3">
+                        <div class="text-light mb-3" style="font-size:1rem;">
                             Bind each slot in this dryer box to a specific toolhead — or leave a slot as
-                            <em>None</em> for staging/drying. Slots can feed any printer; multiple dryer boxes
-                            can feed the same machine.
+                            <span class="text-warning fw-bold">None</span> for staging/drying. Slots can feed any
+                            printer; multiple dryer boxes can feed the same machine.
                         </div>
                         <div id="feeds-rows" class="d-flex flex-column gap-2"></div>
                         <div class="d-flex align-items-center gap-3 mt-3">
-                            <button type="button" class="btn btn-sm btn-primary fw-bold"
+                            <button type="button" class="btn btn-primary fw-bold"
                                 onclick="window.saveFeedsSection()">💾 Save Feeds</button>
-                            <div id="feeds-status" class="small flex-grow-1"></div>
+                            <div id="feeds-status" class="flex-grow-1 fw-bold" style="font-size:1rem;"></div>
                         </div>
                     </div>
                 </div>

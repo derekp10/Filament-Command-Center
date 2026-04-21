@@ -156,7 +156,7 @@ def test_validate_allows_mix_of_null_and_real_targets(sample_locs, printer_map):
 
 def test_set_then_get_bindings_round_trip(sample_locs, printer_map, tmp_locations_file):
     locations_db.save_locations_list(sample_locs)
-    ok, errors = locations_db.set_dryer_box_bindings(
+    ok, errors, _warnings = locations_db.set_dryer_box_bindings(
         "PM-DB-XL-L", {"1": "XL-1", "2": "XL-2", "3": "XL-3", "4": None}, printer_map
     )
     assert ok and errors == []
@@ -166,7 +166,7 @@ def test_set_then_get_bindings_round_trip(sample_locs, printer_map, tmp_location
 
 def test_set_bindings_rejects_bad_target_without_writing(sample_locs, printer_map, tmp_locations_file):
     locations_db.save_locations_list(sample_locs)
-    ok, errors = locations_db.set_dryer_box_bindings(
+    ok, errors, _warnings = locations_db.set_dryer_box_bindings(
         "PM-DB-XL-L", {"1": "BOGUS"}, printer_map
     )
     assert ok is False
@@ -177,7 +177,7 @@ def test_set_bindings_rejects_bad_target_without_writing(sample_locs, printer_ma
 
 def test_set_bindings_rejects_non_dryer_box(sample_locs, printer_map, tmp_locations_file):
     locations_db.save_locations_list(sample_locs)
-    ok, errors = locations_db.set_dryer_box_bindings(
+    ok, errors, _warnings = locations_db.set_dryer_box_bindings(
         "XL-1", {"1": "XL-2"}, printer_map
     )
     assert ok is False

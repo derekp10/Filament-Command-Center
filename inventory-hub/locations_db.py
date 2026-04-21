@@ -171,33 +171,66 @@ def get_dryer_box_bindings(loc_id):
 def set_dryer_box_bindings(loc_id, slot_targets, printer_map):
     """Validate + persist per-slot bindings for a dryer box.
 
-    Returns (ok_bool, errors_list). On success, errors_list is empty and
-    the location's extra.slot_targets is written to disk.
+    Returns (ok_bool, errors_list, warnings_list). Warnings don't block the
+    save — they surface conditions the user should know about:
+      - the same toolhead appearing on >1 slot within this box
+      - the same toolhead already bound by a different dryer box (conflict)
+
+    On success, errors_list is empty and extra.slot_targets is written.
     """
     loc_list = load_locations_list()
     idx, row = _find_location(loc_list, loc_id)
     if idx is None:
-        return False, [("*", loc_id, "location not found")]
+        return False, [("*", loc_id, "location not found")], []
     if row.get('Type') != DRYER_BOX_TYPE:
-        return False, [("*", loc_id, f"type '{row.get('Type')}' is not a Dryer Box")]
+        return False, [("*", loc_id, f"type '{row.get('Type')}' is not a Dryer Box")], []
 
     errors = validate_slot_targets(slot_targets, loc_list, printer_map)
     if errors:
-        return False, errors
+        return False, errors, []
 
-    extra = dict(row.get('extra') or {})
-    # Normalise: upper-case targets, drop null entries so the file stays
-    # tidy. Absence of a slot key means "unassigned" in the UI.
+    # Build the cleaned map up front so we can analyse it for warnings.
     clean = {}
     for slot, target in slot_targets.items():
         if target in (None, '', 'null', 'None'):
             continue
         clean[str(slot)] = str(target).strip().upper()
+
+    warnings = []
+
+    # 1) Same toolhead appearing on multiple slots within this box.
+    reverse = {}
+    for slot, target in clean.items():
+        reverse.setdefault(target, []).append(slot)
+    for target, slots in reverse.items():
+        if len(slots) > 1:
+            warnings.append((
+                ",".join(sorted(slots)), target,
+                f"multiple slots in this box bind to {target} (possible duplicate)"
+            ))
+
+    # 2) Same toolhead already bound by a different dryer box.
+    my_id_up = str(loc_id).strip().upper()
+    for other in loc_list:
+        if other.get('Type') != DRYER_BOX_TYPE:
+            continue
+        if str(other.get('LocationID', '')).strip().upper() == my_id_up:
+            continue
+        other_targets = (other.get('extra') or {}).get('slot_targets') or {}
+        for other_slot, other_target in other_targets.items():
+            other_up = str(other_target or '').strip().upper()
+            if other_up and other_up in reverse:
+                warnings.append((
+                    reverse[other_up][0], other_up,
+                    f"already bound by {other['LocationID']} slot {other_slot}"
+                ))
+
+    extra = dict(row.get('extra') or {})
     extra['slot_targets'] = clean
     row['extra'] = extra
     loc_list[idx] = row
     save_locations_list(loc_list)
-    return True, []
+    return True, [], warnings
 
 
 def get_bindings_for_machine(printer_name, printer_map):
