@@ -1123,6 +1123,69 @@ def api_printer_map():
     return jsonify({"printers": grouped})
 
 
+@app.route('/api/quickswap', methods=['POST'])
+def api_quickswap():
+    """Tap-to-swap: move the spool currently in (box, slot) into the given
+    toolhead. Reuses perform_smart_move for the actual move — that
+    function already handles auto-eject of any occupant, container_slot
+    cleanup, physical_source tracking, and the Filabridge map_toolhead
+    notification.
+    """
+    data = request.get_json(silent=True) or {}
+    toolhead = str(data.get('toolhead', '')).strip().upper()
+    box = str(data.get('box', '')).strip().upper()
+    slot = str(data.get('slot', '')).strip()
+
+    if not toolhead or not box or not slot:
+        return jsonify({
+            "action": "quickswap_bad_request",
+            "error": "toolhead, box, and slot are all required",
+        }), 400
+
+    # Verify the binding actually exists. Guards against stale UI state
+    # racing against a concurrent binding edit elsewhere.
+    bindings = locations_db.get_dryer_box_bindings(box)
+    if bindings is None:
+        return jsonify({
+            "action": "quickswap_bad_box",
+            "box": box,
+            "error": "not a dryer box",
+        }), 404
+    bound_target = bindings.get(slot)
+    if not bound_target or str(bound_target).upper() != toolhead:
+        return jsonify({
+            "action": "quickswap_not_bound",
+            "box": box, "slot": slot, "toolhead": toolhead,
+            "bound_to": bound_target,
+            "error": "slot is not bound to this toolhead",
+        }), 400
+
+    spool_id = logic.find_spool_in_slot(box, slot)
+    if not spool_id:
+        state.add_log_entry(
+            f"⚠️ Quick-swap: slot {box}:SLOT:{slot} is empty — no spool to move to {toolhead}",
+            "WARNING", "ffaa00"
+        )
+        return jsonify({
+            "action": "quickswap_empty_slot",
+            "box": box, "slot": slot, "toolhead": toolhead,
+        }), 404
+
+    move_result = logic.perform_smart_move(
+        toolhead, [spool_id], target_slot=None, origin='quickswap'
+    )
+    state.add_log_entry(
+        f"⚡ Quick-swap: Spool #{spool_id} from <b>{box}:SLOT:{slot}</b> → <b>{toolhead}</b>",
+        "SUCCESS", "00ff00"
+    )
+    return jsonify({
+        "action": "quickswap_done",
+        "moved": spool_id,
+        "toolhead": toolhead, "box": box, "slot": slot,
+        "smart_move": move_result,
+    }), 200
+
+
 @app.route('/api/machine/<path:printer_name>/toolhead_slots', methods=['GET'])
 def api_machine_toolhead_slots(printer_name):
     """Reverse lookup: for a printer, return every (box, slot) pair that

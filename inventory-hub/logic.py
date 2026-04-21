@@ -513,5 +513,24 @@ def get_live_spools_data(spool_ids):
                 }
         except Exception as e:
             state.logger.error(f"Failed to live-refresh spool {sid}: {e}")
-            
+
     return results
+
+
+def find_spool_in_slot(box_loc_id, slot):
+    """Return the spool id sitting in (box_loc_id, slot), or None.
+
+    Scans items at the location (including ghost items whose
+    physical_source points back to this box) and matches the slot
+    string loosely (Spoolman stores container_slot with JSON-string
+    quoting — see spoolman_api.parse_inbound_data).
+    """
+    if not box_loc_id or not str(slot).strip():
+        return None
+    wanted = str(slot).strip().strip('"')
+    items = spoolman_api.get_spools_at_location_detailed(box_loc_id)
+    for item in items:
+        item_slot = str(item.get('slot', '')).strip().strip('"')
+        if item_slot == wanted:
+            return int(item['id'])
+    return None
