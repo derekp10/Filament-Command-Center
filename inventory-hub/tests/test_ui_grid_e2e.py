@@ -45,7 +45,7 @@ def test_loc_grid_layout_data_presence(page: Page):
     
     # Action Button Arrays
     btn_container = card.locator('.fcc-card-action-btn')
-    expect(btn_container).to_have_count(4) # Pick, Details, Edit, Eject
+    expect(btn_container).to_have_count(5) # Return/Pick, Details, Edit, Print, Eject
     
     # Clean up
     page.evaluate('''() => { document.getElementById('test-grid-container').remove(); }''')
