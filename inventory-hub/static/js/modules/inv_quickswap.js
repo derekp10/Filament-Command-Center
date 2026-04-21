@@ -259,6 +259,178 @@
         });
     };
 
+    // --- Bind-a-Slot quick picker ---
+    // Lightweight searchable list of every dryer box slot. Tapping a slot
+    // writes one binding: slot → currentLoc.LocationID. For virtual printers,
+    // the first toolhead of the printer is used as the bind target (user can
+    // always refine via the full Feeds editor afterward).
+    const _pickerState = { slots: [], filtered: [], activeIdx: -1, targetToolhead: null };
+
+    const _pickerCloseOnOutside = (e) => {
+        const ov = document.getElementById('fcc-bind-picker-overlay');
+        if (!ov || ov.style.display === 'none') return;
+        if (!ov.contains(e.target)) {
+            const btn = e.target && e.target.closest && e.target.closest('[onclick*="openBindSlotPicker"]');
+            if (btn) return;
+            window.closeBindSlotPicker();
+        }
+    };
+
+    const _renderPickerList = () => {
+        const el = document.getElementById('fcc-bind-picker-list');
+        if (!el) return;
+        if (!_pickerState.filtered.length) {
+            el.innerHTML = '<div class="text-warning py-3 fw-bold" style="font-size:1rem;">No matching slots.</div>';
+            return;
+        }
+        const rows = _pickerState.filtered.map((s, i) => {
+            const bound = s.target
+                ? `<span class="text-warning ms-2">→ ${s.target}</span>`
+                : '<span class="text-success fw-bold ms-2">◦ unbound</span>';
+            const active = i === _pickerState.activeIdx ? ' kb-active bg-info text-dark' : '';
+            return `
+                <div class="fcc-bind-picker-item d-flex align-items-center justify-content-between py-2 px-3 border-bottom border-secondary${active}"
+                     data-idx="${i}" style="cursor:pointer; font-size:1.05rem;">
+                    <div>
+                        <span class="fw-bold">${s.box}</span>
+                        <span class="text-muted ms-2">slot ${s.slot}</span>
+                    </div>
+                    <div class="small">${bound}</div>
+                </div>`;
+        }).join('');
+        el.innerHTML = rows;
+        Array.from(el.querySelectorAll('.fcc-bind-picker-item')).forEach(row => {
+            row.addEventListener('click', () => {
+                _pickerState.activeIdx = parseInt(row.dataset.idx, 10);
+                _pickerCommit();
+            });
+        });
+    };
+
+    const _pickerFilter = (q) => {
+        const needle = (q || '').trim().toLowerCase();
+        if (!needle) {
+            _pickerState.filtered = _pickerState.slots.slice();
+        } else {
+            _pickerState.filtered = _pickerState.slots.filter(s =>
+                s.box.toLowerCase().includes(needle)
+                || s.slot.toString().includes(needle)
+                || (s.box_name && s.box_name.toLowerCase().includes(needle))
+                || (s.target && s.target.toLowerCase().includes(needle))
+            );
+        }
+        _pickerState.activeIdx = _pickerState.filtered.length ? 0 : -1;
+        _renderPickerList();
+    };
+
+    const _pickerCommit = () => {
+        const pick = _pickerState.filtered[_pickerState.activeIdx];
+        const th = _pickerState.targetToolhead;
+        if (!pick || !th) return;
+        fetch(
+            `/api/dryer_box/${encodeURIComponent(pick.box)}/bindings/${encodeURIComponent(pick.slot)}`,
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target: th }),
+            }
+        )
+            .then(async r => ({ ok: r.ok, body: await r.json() }))
+            .then(({ ok, body }) => {
+                if (ok) {
+                    const warn = (body.warnings || []).length;
+                    const warnTxt = warn ? ` ⚠️ ${warn} warning(s) — see log` : '';
+                    showToast(`🔗 ${pick.box} slot ${pick.slot} → ${th}${warnTxt}`,
+                        warn ? 'warning' : 'success', warn ? 8000 : 4000);
+                    window.closeBindSlotPicker();
+                    // Re-render Quick-Swap with the new binding visible.
+                    if (window.refreshManageView && currentLoc) {
+                        window.refreshManageView(currentLoc.LocationID);
+                    }
+                    if (window.renderQuickSwapSection && currentLoc) {
+                        window.renderQuickSwapSection(currentLoc);
+                    }
+                } else {
+                    const errs = (body.errors || []).map(e => `${e.slot}: ${e.reason}`).join('; ');
+                    showToast(`❌ ${errs || body.error || 'Binding failed'}`, 'error', 8000);
+                }
+            })
+            .catch(e => {
+                console.error(e);
+                showToast('Bind — network error', 'error', 7000);
+            });
+    };
+
+    window.openBindSlotPicker = () => {
+        if (!currentLoc) {
+            showToast('Open a toolhead first, then bind a slot.', 'warning', 5000);
+            return;
+        }
+        // Figure out the target toolhead. If currentLoc is a virtual printer,
+        // offer the first toolhead of that printer; user can still refine later.
+        let targetToolhead = currentLoc.LocationID;
+        if (currentLoc.Type === PRINTER_TYPE) {
+            const pm = state.printerMap || {};
+            const prefix = String(currentLoc.LocationID).toUpperCase() + '-';
+            for (const entries of Object.values(pm)) {
+                const hit = (entries || []).find(e => String(e.location_id).toUpperCase().startsWith(prefix));
+                if (hit) { targetToolhead = hit.location_id; break; }
+            }
+        }
+        _pickerState.targetToolhead = String(targetToolhead).toUpperCase();
+
+        const ov = document.getElementById('fcc-bind-picker-overlay');
+        const thSpan = document.getElementById('fcc-bind-picker-toolhead');
+        const search = document.getElementById('fcc-bind-picker-search');
+        const close = document.getElementById('fcc-bind-picker-close');
+        if (!ov || !thSpan || !search) return;
+
+        thSpan.innerText = _pickerState.targetToolhead;
+        search.value = '';
+
+        fetch('/api/dryer_boxes/slots')
+            .then(r => r.json())
+            .then(body => {
+                _pickerState.slots = body.slots || [];
+                _pickerFilter('');
+                ov.style.display = 'block';
+                search.focus();
+                document.addEventListener('click', _pickerCloseOnOutside, true);
+            })
+            .catch(e => {
+                console.error(e);
+                showToast('Could not load dryer box slots', 'error', 7000);
+            });
+
+        search.oninput = () => _pickerFilter(search.value);
+        search.onkeydown = (e) => {
+            const items = _pickerState.filtered;
+            if (!items.length) return;
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                _pickerState.activeIdx = (_pickerState.activeIdx + 1) % items.length;
+                _renderPickerList();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                _pickerState.activeIdx = (_pickerState.activeIdx - 1 + items.length) % items.length;
+                _renderPickerList();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                _pickerCommit();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                window.closeBindSlotPicker();
+            }
+        };
+        close.onclick = window.closeBindSlotPicker;
+    };
+
+    window.closeBindSlotPicker = () => {
+        const ov = document.getElementById('fcc-bind-picker-overlay');
+        if (ov) ov.style.display = 'none';
+        document.removeEventListener('click', _pickerCloseOnOutside, true);
+    };
+
     window.editBindingsFromToolhead = () => {
         // Pick the first bound box that feeds this toolhead and jump into
         // its Feeds editor. If nothing is bound yet, close the current
@@ -297,15 +469,6 @@
                     'info', 8000);
             }
         }, 250);
-    };
-
-    window.quickSwapTap = (btn) => {
-        if (!btn) return;
-        showConfirmOverlay({
-            toolhead: btn.dataset.toolhead,
-            box: btn.dataset.box,
-            slot: btn.dataset.slot,
-        });
     };
 
     // --- Keyboard navigation inside the Quick-Swap grid ---

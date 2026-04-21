@@ -1174,6 +1174,84 @@ def api_printer_map():
     return jsonify({"printers": grouped})
 
 
+@app.route('/api/dryer_boxes/slots', methods=['GET'])
+def api_all_dryer_box_slots():
+    """Enumerate every slot across every Dryer Box, flat. Each entry carries
+    current binding (may be null). Powers the "bind a slot to this toolhead"
+    quick-picker. Cheap — single locations.json read, no Spoolman calls.
+    """
+    loc_list = locations_db.load_locations_list()
+    out = []
+    for row in loc_list:
+        if row.get('Type') != locations_db.DRYER_BOX_TYPE:
+            continue
+        box_id = str(row.get('LocationID', '')).strip()
+        try:
+            max_slots = int(str(row.get('Max Spools', '0')).strip() or '0')
+        except ValueError:
+            max_slots = 0
+        targets = (row.get('extra') or {}).get('slot_targets') or {}
+        for n in range(1, max_slots + 1):
+            slot = str(n)
+            target = targets.get(slot)
+            out.append({
+                "box": box_id,
+                "box_name": row.get('Name', box_id),
+                "slot": slot,
+                "target": target,  # None => unbound
+            })
+    # Sort: unbound first (so the picker can promote quickly), then by box id.
+    out.sort(key=lambda e: (e['target'] is not None, e['box'], int(e['slot'])))
+    return jsonify({"slots": out})
+
+
+@app.route('/api/dryer_box/<loc_id>/bindings/<slot>', methods=['PUT'])
+def api_single_slot_binding_put(loc_id, slot):
+    """Patch a single slot's binding without needing to send the whole
+    slot_targets map. Used by the quick-bind picker on the toolhead view.
+    """
+    data = request.get_json(silent=True) or {}
+    target = data.get('target')
+
+    # Load current bindings, update just this slot, persist through the
+    # full validator so the same rules apply.
+    current = locations_db.get_dryer_box_bindings(loc_id)
+    if current is None:
+        return jsonify({"error": "not_a_dryer_box", "location": loc_id}), 404
+    next_targets = dict(current)
+    if target in (None, '', 'null', 'None'):
+        next_targets.pop(str(slot), None)
+    else:
+        next_targets[str(slot)] = str(target)
+
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    ok, errors, warnings = locations_db.set_dryer_box_bindings(loc_id, next_targets, printer_map)
+    if not ok:
+        return jsonify({
+            "error": "validation_failed",
+            "location": loc_id, "slot": slot,
+            "errors": [{"slot": e[0], "target": e[1], "reason": e[2]} for e in errors],
+        }), 400
+    suffix = f" → {target}" if target else " → (none)"
+    state.add_log_entry(
+        f"🔗 {loc_id} slot {slot}{suffix}"
+        + (f" ⚠️ {len(warnings)} warning(s)" if warnings else ""),
+        "INFO", "00d4ff"
+    )
+    for w_slot, w_target, w_reason in warnings:
+        state.add_log_entry(
+            f"⚠️ Binding warning on <b>{loc_id}</b> slot {w_slot} → {w_target}: {w_reason}",
+            "WARNING", "ffaa00"
+        )
+    return jsonify({
+        "location": loc_id,
+        "slot": slot,
+        "slot_targets": locations_db.get_dryer_box_bindings(loc_id) or {},
+        "warnings": [{"slot": w[0], "target": w[1], "reason": w[2]} for w in warnings],
+    })
+
+
 @app.route('/api/quickswap/return', methods=['POST'])
 def api_quickswap_return():
     """Reverse quick-swap: take whatever spool is currently on `toolhead`

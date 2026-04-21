@@ -130,15 +130,23 @@
                     <hr class="border-secondary">
                     <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
                         <h5 class="text-info mb-0 fw-bold">⚡ Quick-Swap Slots</h5>
-                        <div class="d-flex gap-2">
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button type="button" id="quickswap-bind-slot-btn"
+                                class="btn btn-sm btn-info fw-bold"
+                                onclick="window.openBindSlotPicker()"
+                                title="Quickly bind a dryer box slot to this toolhead (with search)">
+                                🔗 Bind a Slot…
+                            </button>
                             <button type="button" id="quickswap-edit-bindings-btn"
                                 class="btn btn-sm btn-outline-info fw-bold"
-                                onclick="window.editBindingsFromToolhead()">
-                                🔗 Edit Bindings
+                                onclick="window.editBindingsFromToolhead()"
+                                title="Open the dryer box's full Feeds editor">
+                                🛠️ Edit Full Bindings
                             </button>
                             <button type="button" id="quickswap-return-btn"
                                 class="btn btn-sm btn-outline-warning fw-bold"
-                                onclick="window.returnToolheadToSlot()">
+                                onclick="window.returnToolheadToSlot()"
+                                title="Send the currently-loaded spool back to its bound slot">
                                 ↩️ Return to Slot
                             </button>
                         </div>
@@ -150,12 +158,38 @@
                         <div id="quickswap-empty" class="text-warning fw-bold" style="display:none; font-size:1.05rem;">
                             No dryer box slots are bound to this toolhead yet.
                             <button type="button" class="btn btn-sm btn-info fw-bold ms-2"
-                                    onclick="window.editBindingsFromToolhead()">
+                                    onclick="window.openBindSlotPicker()">
                                 🔗 Link a slot…
                             </button>
                         </div>
                         <div id="quickswap-grid" class="d-flex flex-wrap gap-2"></div>
                     </div>
+                    <!-- Inline "bind a slot to this toolhead" overlay.
+                         Separate from the tap-to-swap flow. Used when:
+                         - User wants to quickly bind an unbound box slot
+                           without leaving the toolhead view
+                         - Toolhead has zero bindings and the user clicks
+                           "Link a slot…" -->
+                    <div id="fcc-bind-picker-overlay"
+                        class="position-fixed top-50 start-50 translate-middle bg-dark border border-info rounded p-4 shadow-lg"
+                        style="display:none; z-index:10000; min-width:520px; max-width:90vw; max-height:80vh; overflow-y:auto;">
+                        <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom border-secondary">
+                            <h5 class="text-info mb-0 fw-bold">🔗 Bind a Slot to <span id="fcc-bind-picker-toolhead" class="text-warning"></span></h5>
+                            <button type="button" class="btn-close btn-close-white"
+                                    id="fcc-bind-picker-close"></button>
+                        </div>
+                        <input type="text" id="fcc-bind-picker-search"
+                            class="form-control bg-black text-white border-info fw-bold mb-2"
+                            placeholder="Search dryer box slots…" autocomplete="off"
+                            style="font-size:1.05rem;">
+                        <div class="text-light mb-2" style="font-size:0.95rem;">
+                            Arrow keys navigate. Enter selects. Esc cancels.
+                            Unbound slots appear first so you can promote them in one tap.
+                        </div>
+                        <div id="fcc-bind-picker-list" class="d-flex flex-column"
+                             style="max-height:50vh; overflow-y:auto;"></div>
+                    </div>
+
                     <!-- Inline confirmation overlay — follows the force-location pattern. No nested Swal. -->
                     <div id="fcc-quickswap-confirm-overlay"
                         class="position-fixed top-50 start-50 translate-middle bg-dark border border-info rounded p-4 shadow-lg"

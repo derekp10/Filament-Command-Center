@@ -206,15 +206,66 @@ def snapshot(pytestconfig, request):
             f"See {actual_path} and {diff_path}"
         )
 
+    def _capture_locator(locator) -> bytes:
+        """Screenshot a locator, expanding the viewport first if the
+        element is taller/wider than the current window so content
+        that would normally require scrolling inside the modal actually
+        lands in the image.
+        """
+        page = locator.page
+        # Measure the full scrollable dimensions of the locator (not just
+        # the visible portion).
+        size = locator.evaluate(
+            "el => ({w: Math.max(el.scrollWidth, el.getBoundingClientRect().width),"
+            "       h: Math.max(el.scrollHeight, el.getBoundingClientRect().height)})"
+        )
+        w, h = int(size.get("w", 0)) or BASELINE_VIEWPORT["width"], \
+               int(size.get("h", 0)) or BASELINE_VIEWPORT["height"]
+        # Pad a little so borders/shadows survive the crop.
+        desired = {"width": max(w + 40, BASELINE_VIEWPORT["width"]),
+                   "height": max(h + 80, BASELINE_VIEWPORT["height"])}
+        try:
+            page.set_viewport_size(desired)
+            # Scroll the element into view so fixed-position overlays render
+            # with their full body visible.
+            locator.scroll_into_view_if_needed()
+            return locator.screenshot()
+        finally:
+            page.set_viewport_size(BASELINE_VIEWPORT)
+
+    def _capture_page(page) -> bytes:
+        """Full-page screenshot with the viewport expanded to the document
+        height so Bootstrap fixed-position elements (navbar, modals) and
+        tall scrollable content both end up captured.
+        """
+        doc_h = page.evaluate(
+            "() => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)"
+        )
+        desired = {"width": BASELINE_VIEWPORT["width"],
+                   "height": max(int(doc_h or 0), BASELINE_VIEWPORT["height"])}
+        try:
+            page.set_viewport_size(desired)
+            return page.screenshot(full_page=True)
+        finally:
+            page.set_viewport_size(BASELINE_VIEWPORT)
+
     def _snap(page_or_locator, name: str, *, max_diff_pixel_ratio: float = 0.01, full_page: bool = True, **kwargs) -> None:
         filename = name if name.endswith(".png") else f"{name}.png"
         baseline_path = os.path.join(BASELINE_DIR, filename)
 
         # Capture current screenshot as bytes (don't write yet).
         if isinstance(page_or_locator, Locator):
-            actual = page_or_locator.screenshot(**kwargs)
+            try:
+                actual = _capture_locator(page_or_locator)
+            except Exception:
+                # Fallback: plain locator screenshot if viewport resize
+                # isn't supported (e.g. headless context quirk).
+                actual = page_or_locator.screenshot(**kwargs)
         else:
-            actual = page_or_locator.screenshot(full_page=full_page, **kwargs)
+            try:
+                actual = _capture_page(page_or_locator)
+            except Exception:
+                actual = page_or_locator.screenshot(full_page=full_page, **kwargs)
 
         baseline_exists = os.path.isfile(baseline_path)
         if _UPDATE_BASELINES or not baseline_exists:

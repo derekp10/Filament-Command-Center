@@ -98,6 +98,31 @@ def test_quickswap_confirm_overlay_cancel_dismisses(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
+def test_quickswap_confirm_yes_actually_performs_swap(page: Page, base_url: str):
+    """Regression guard: a duplicate window.quickSwapTap definition was
+    overriding the real handler, so clicking Yes did nothing. This test
+    catches that class of bug by watching the /api/quickswap request
+    fire in response to the Yes click."""
+    _open_manage(page, base_url, TEST_TOOLHEAD)
+    expect(page.locator(".fcc-qs-slot").first).to_be_visible()
+    test_btn = page.locator(f".fcc-qs-slot[data-box='{TEST_BOX}'][data-toolhead='{TEST_TOOLHEAD}']").first
+    expect(test_btn).to_be_visible(timeout=3000)
+    test_btn.click()
+    overlay = page.locator("#fcc-quickswap-confirm-overlay")
+    expect(overlay).to_be_visible(timeout=2000)
+    # Listen for the quickswap POST fired by the Yes button.
+    with page.expect_request(
+        lambda req: req.url.endswith("/api/quickswap") and req.method == "POST",
+        timeout=3000,
+    ) as req_info:
+        page.locator("#fcc-quickswap-yes").click()
+    body = req_info.value.post_data_json
+    assert body["toolhead"] == TEST_TOOLHEAD
+    assert body["box"] == TEST_BOX
+    assert body["slot"] == "1"
+
+
+@pytest.mark.usefixtures("require_server", "bound_slot")
 def test_quickswap_escape_in_overlay_closes_overlay_only(page: Page, base_url: str):
     _open_manage(page, base_url, TEST_TOOLHEAD)
     page.locator(".fcc-qs-slot").first.click()

@@ -35,15 +35,13 @@
         });
         let html = '';
         Object.keys(groups).sort().forEach(scope => {
-            html += `<div class="text-info fw-bold mt-3 mb-1" style="font-size:1.1rem;">${_esc(scope)}</div>`;
-            html += '<table class="table table-sm table-dark mb-0" style="font-size:0.95rem;"><tbody>';
+            html += `<div class="text-info fw-bold mt-3 mb-2" style="font-size:1.25rem;">${_esc(scope)}</div>`;
+            html += '<table class="table table-dark mb-0" style="font-size:1.05rem;"><tbody>';
             groups[scope].forEach(s => {
-                // HTML-escape the key text so things like LOC:<id> don't get parsed
-                // as an <id> tag (swallowed by the browser and rendered invisibly).
                 const keys = (s.keys || [])
-                    .map(k => `<kbd style="background:#111; color:#0ff; font-weight:bold; padding:2px 6px;">${_esc(k)}</kbd>`)
+                    .map(k => `<kbd style="background:#111; color:#0ff; font-weight:bold; padding:3px 8px; font-size:1rem;">${_esc(k)}</kbd>`)
                     .join(' ');
-                html += `<tr><td style="width:38%;" class="text-light fw-bold">${keys}</td><td class="text-light">${_esc(s.description)}</td></tr>`;
+                html += `<tr><td style="width:38%;" class="text-light fw-bold align-middle">${keys}</td><td class="text-light align-middle">${_esc(s.description)}</td></tr>`;
             });
             html += '</tbody></table>';
         });

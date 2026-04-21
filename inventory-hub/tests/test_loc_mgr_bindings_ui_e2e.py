@@ -70,8 +70,14 @@ def test_feeds_section_save_round_trip(page: Page, base_url: str, api_base_url):
     _open_manage(page, base_url, TEST_BOX)
     page.locator("#feeds-toggle-btn").click()
     page.wait_for_timeout(300)
-    # Set slot 1 → XL-2 via the dropdown.
-    page.locator("select.feeds-select[data-slot='1']").select_option("XL-2")
+    # The Feeds editor is now a searchable combobox — write directly to the
+    # hidden <select> the save logic reads, then submit. Emulates the
+    # end-user picking from the dropdown without relying on the combobox's
+    # visual list staying pixel-stable.
+    page.evaluate(
+        "() => { const s = document.querySelector('select.feeds-select[data-slot=\"1\"]'); "
+        "s.value = 'XL-2'; }"
+    )
     page.locator("#feeds-body button:has-text('Save Feeds')").click()
     expect(page.locator("#feeds-status")).to_contain_text("Saved", timeout=5000)
 
@@ -89,9 +95,13 @@ def test_feeds_section_save_with_some_slots_none(page: Page, base_url: str, api_
     selects = page.locator("select.feeds-select")
     if selects.count() < 2:
         pytest.skip("Test box needs at least 2 slots for this scenario.")
-    # Slot 1 → XL-1, slot 2 → None (explicit empty value).
-    page.locator("select.feeds-select[data-slot='1']").select_option("XL-1")
-    page.locator("select.feeds-select[data-slot='2']").select_option("")
+    # Slot 1 → XL-1, slot 2 → None (empty string value).
+    page.evaluate(
+        "() => { "
+        "const a = document.querySelector('select.feeds-select[data-slot=\"1\"]'); a.value = 'XL-1'; "
+        "const b = document.querySelector('select.feeds-select[data-slot=\"2\"]'); b.value = ''; "
+        "}"
+    )
     page.locator("#feeds-body button:has-text('Save Feeds')").click()
     expect(page.locator("#feeds-status")).to_contain_text("Saved", timeout=5000)
 

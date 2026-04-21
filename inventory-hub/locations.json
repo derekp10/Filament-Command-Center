@@ -531,7 +531,10 @@
         "Row": "",
         "Max Spools": "1",
         "Name": "PolyMaker Dryer Box 5",
-        "Label Printed": "Yes"
+        "Label Printed": "Yes",
+        "extra": {
+            "slot_targets": {}
+        }
     },
     {
         "LocationID": "PM-DB-6",
