@@ -78,8 +78,13 @@ const requestWakeLock = async () => {
 const showToast = (msg, type = 'info', duration = 2000) => {
     let c = document.getElementById('toast-container');
     if (!c) { c = document.createElement('div'); c.id = 'toast-container'; document.body.appendChild(c); }
-    const el = document.createElement('div'); el.className = 'toast-msg'; el.innerText = msg; el.style.borderColor = type === 'error' ? '#f44' : (type === 'warning' ? '#fc0' : '#00d4ff');
-    c.appendChild(el); setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, duration);
+    const el = document.createElement('div');
+    el.className = 'toast-msg toast-' + type;
+    el.innerText = msg;
+    const borderByType = { error: '#f44', warning: '#fc0', success: '#0f0', info: '#00d4ff' };
+    el.style.borderColor = borderByType[type] || borderByType.info;
+    c.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, duration);
 };
 
 const setProcessing = (s) => {

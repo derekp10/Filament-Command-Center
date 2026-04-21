@@ -993,13 +993,13 @@ def api_identify_scan():
             }), 400
 
         # Pull the first spool off the buffer.
+        # Note: if the buffer is empty, the frontend treats the scan as a
+        # "pickup" request (read slot contents and put them in the buffer).
+        # That path emits its own log entry on success, so we don't add one
+        # here — otherwise every pickup would generate a misleading warning.
         buffer = getattr(state, 'GLOBAL_BUFFER', []) or []
         first_spool = next((item for item in buffer if isinstance(item, dict) and item.get('id')), None)
         if not first_spool:
-            state.add_log_entry(
-                f"⚠️ Slot scan {target}:SLOT:{slot} dropped — buffer is empty",
-                "WARNING", "ffaa00"
-            )
             return jsonify({
                 "type": "assignment",
                 "action": "assignment_no_buffer",

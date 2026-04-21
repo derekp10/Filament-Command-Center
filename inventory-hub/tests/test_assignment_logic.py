@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -116,8 +116,11 @@ def test_assignment_partial_keeps_remaining_buffer(client, fake_locations):
 # Error paths
 # ---------------------------------------------------------------------------
 
-def test_assignment_no_buffer_yields_warning(client, fake_locations):
+def test_assignment_no_buffer_returns_action_code(client, fake_locations):
+    """No backend log is emitted — the frontend treats this as a pickup
+    request and emits its own log entry on success."""
     state.GLOBAL_BUFFER = []
+    log_count_before = len(state.RECENT_LOGS)
     with patch.object(app_module.locations_db, "load_locations_list", return_value=fake_locations), \
          patch.object(app_module.logic, "perform_smart_move") as mv:
         resp = client.post("/api/identify_scan", json={"text": "LOC:LR-MDB-1:SLOT:2", "source": "barcode"})
@@ -128,10 +131,8 @@ def test_assignment_no_buffer_yields_warning(client, fake_locations):
     assert body["location"] == "LR-MDB-1"
     assert body["slot"] == "2"
     mv.assert_not_called()
-    # Warning log fired.
-    logs = _last_log_entries()
-    assert any("buffer is empty" in e["msg"].lower() or "buffer" in e["msg"].lower() for e in logs)
-    assert any(e["type"] == "WARNING" for e in logs)
+    # No backend log emitted for this case.
+    assert len(state.RECENT_LOGS) == log_count_before
 
 
 def test_assignment_bad_target_type_rejects(client, fake_locations):
