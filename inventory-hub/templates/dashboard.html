@@ -44,9 +44,27 @@
                 <button class="btn btn-warning ms-2" id="btn-queue-count" onclick="openQueueModal()">
                     🛒 Queue (0)
                 </button>
+                <!-- Phase 3: keyboard shortcut reference (?). Click or press `?` to open. -->
+                <button class="btn btn-outline-light ms-2" id="btn-shortcuts-help"
+                    onclick="window.toggleShortcutsOverlay()"
+                    title="Keyboard shortcuts (?)"
+                    style="font-weight:bold; width:38px;">?</button>
             </div>
         </div>
     </nav>
+
+    <!-- Shortcuts overlay — populated by shortcuts_registry.js at runtime. -->
+    <div id="fcc-shortcuts-overlay"
+        class="position-fixed top-50 start-50 translate-middle bg-dark border border-info rounded p-3 shadow-lg"
+        style="display:none; z-index:10001; min-width:440px; max-width:90vw; max-height:80vh; overflow-y:auto;">
+        <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom border-secondary">
+            <h5 class="text-info mb-0">⌨️ Keyboard Shortcuts</h5>
+            <button type="button" class="btn-close btn-close-white"
+                onclick="window.toggleShortcutsOverlay()"></button>
+        </div>
+        <div id="fcc-shortcuts-list" class="small"></div>
+        <div class="text-muted small mt-3">Press <kbd>?</kbd> or <kbd>Esc</kbd> to close.</div>
+    </div>
 
     <div class="main-container">
         <div class="content-row">

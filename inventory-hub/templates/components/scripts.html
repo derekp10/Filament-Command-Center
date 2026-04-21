@@ -18,6 +18,11 @@
 <script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=1.2"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_weigh_out.js') }}?v=1.0"></script>
 
+<!-- Phase 3: Quick-Swap + keyboard shortcuts registry. Must load after
+     inv_loc_mgr.js since it hooks into state.printerMap. -->
+<script src="{{ url_for('static', filename='js/modules/inv_quickswap.js') }}?v=1.0"></script>
+<script src="{{ url_for('static', filename='js/modules/shortcuts_registry.js') }}?v=1.0"></script>
+
 <script>
     // Module Initialization
     document.addEventListener('DOMContentLoaded', () => {

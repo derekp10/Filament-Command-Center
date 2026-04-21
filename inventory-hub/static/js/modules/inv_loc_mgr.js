@@ -106,6 +106,8 @@ window.openManage = (id) => {
             renderManagerNav();
             // Phase 2: render the Slot → Toolhead Feeds section if applicable.
             if (window.renderFeedsSection) window.renderFeedsSection(loc);
+            // Phase 3: render the Quick-Swap grid if this is a toolhead.
+            if (window.renderQuickSwapSection) window.renderQuickSwapSection(loc);
             // Generate QR for specific location
             const safeId = String(id).replace(/['"]/g, '');
             generateSafeQR('manage-loc-qr-mini', 'LOC:' + safeId, 45);
