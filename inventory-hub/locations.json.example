@@ -1,0 +1,80 @@
+[
+    {
+        "LocationID": "CORE1-M0",
+        "Location": "Computer Room",
+        "Device Identifier": "🦝",
+        "Device Type": "Core One Upgraded",
+        "Type": "No MMU Direct Load",
+        "Order": "0",
+        "Row": "",
+        "Max Spools": "1",
+        "Name": "🦝 Core One Upgraded No MMU Direct Load",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "CORE1-M1",
+        "Location": "Computer Room",
+        "Device Identifier": "🦝",
+        "Device Type": "Core One Upgraded",
+        "Type": "MMU Slot",
+        "Order": "1",
+        "Row": "",
+        "Max Spools": "1",
+        "Name": "🦝 Core One Upgraded MMU Slot 1",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "CR",
+        "Name": "Computer Room",
+        "Type": "Room",
+        "Max Spools": "0"
+    },
+    {
+        "LocationID": "CR-CT-1",
+        "Location": "Computer Room",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Type": "Cart",
+        "Order": "1",
+        "Row": "",
+        "Max Spools": "",
+        "Name": "Computer Room Cart 1",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "CR-MDB-1",
+        "Location": "Computer Room",
+        "Device Identifier": "",
+        "Device Type": "Multi",
+        "Type": "Dryer Box",
+        "Order": "1",
+        "Row": "",
+        "Max Spools": "4",
+        "Name": "Computer Room Multi-Dryer Box",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "LR-SD-1",
+        "Location": "Living Room",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Type": "Sliding Drawer",
+        "Order": "1",
+        "Row": "",
+        "Max Spools": "",
+        "Name": "Living Room Sliding Drawer 1",
+        "Label Printed": "No"
+    },
+    {
+        "LocationID": "XL-1",
+        "Location": "Living Room",
+        "Device Identifier": "🦝",
+        "Device Type": "XL",
+        "Type": "Tool Head",
+        "Order": "1",
+        "Row": "",
+        "Max Spools": "1",
+        "Name": "🦝 XL Tool Head 1",
+        "Label Printed": "Yes"
+    }
+]
