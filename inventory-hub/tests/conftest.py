@@ -321,3 +321,125 @@ def require_server(api_base_url: str):
     except requests.RequestException as exc:
         pytest.skip(f"Dev server unreachable at {api_base_url}: {exc}")
     return api_base_url
+
+
+# ---------------------------------------------------------------------------
+# Contrast guard
+# ---------------------------------------------------------------------------
+#
+# Gray-on-gray text has been a recurring whack-a-mole: every round of UI
+# work has at some point dropped a Bootstrap `text-muted` onto a dark
+# surface and produced an unreadable element. A visual snapshot only
+# catches the specific placements it happens to capture; this fixture
+# catches ANY low-contrast text inside a given root element.
+#
+# Usage:
+#     def test_something(page, assert_contrast):
+#         page.goto(...)
+#         assert_contrast(page.locator("#fcc-bind-picker-overlay"))
+
+@pytest.fixture
+def assert_contrast():
+    """Playwright-driven contrast check against WCAG AA thresholds.
+
+    Walks every text-bearing element under `root_locator`, reads its
+    resolved foreground color, finds the first non-transparent
+    background color by climbing ancestors, computes the WCAG relative-
+    luminance contrast ratio, and asserts every visible piece of text
+    meets `min_ratio` (default 4.5:1, AA for normal text).
+
+    Returns the list of offenders when pytest fails so the error message
+    names exactly which selectors violated and by how much.
+    """
+    _JS_CONTRAST = """
+        (root, opts) => {
+            const { minRatio, skipEmpty } = opts;
+            if (!root) return { error: 'root_not_found' };
+
+            const relLum = (r, g, b) => {
+                const srgb = [r, g, b].map(v => {
+                    v = v / 255;
+                    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+                });
+                return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
+            };
+            const ratio = (l1, l2) => {
+                const a = Math.max(l1, l2), b = Math.min(l1, l2);
+                return (a + 0.05) / (b + 0.05);
+            };
+            const parseColor = (str) => {
+                const m = String(str).match(/rgba?\\(([^)]+)\\)/);
+                if (!m) return null;
+                const parts = m[1].split(',').map(s => parseFloat(s.trim()));
+                return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+            };
+            const firstOpaqueBg = (el) => {
+                let cur = el;
+                while (cur && cur !== document.documentElement) {
+                    const bg = parseColor(getComputedStyle(cur).backgroundColor);
+                    if (bg && bg.a > 0.01) return bg;
+                    cur = cur.parentElement;
+                }
+                const bodyBg = parseColor(getComputedStyle(document.body).backgroundColor);
+                return bodyBg || { r: 18, g: 18, b: 18, a: 1 };
+            };
+
+            const offenders = [];
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+            let el;
+            while ((el = walker.nextNode())) {
+                const cs = getComputedStyle(el);
+                if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+                const opacity = parseFloat(cs.opacity || '1');
+                if (opacity < 0.05) continue;
+                const hasDirectText = Array.from(el.childNodes).some(n =>
+                    n.nodeType === Node.TEXT_NODE && n.textContent.trim().length > 0
+                );
+                if (!hasDirectText) continue;
+                if (skipEmpty && !el.innerText.trim()) continue;
+
+                const fg = parseColor(cs.color);
+                if (!fg) continue;
+                const bg = firstOpaqueBg(el);
+                const r = ratio(relLum(fg.r, fg.g, fg.b), relLum(bg.r, bg.g, bg.b));
+                if (r < minRatio) {
+                    offenders.push({
+                        tag: el.tagName.toLowerCase(),
+                        id: el.id || null,
+                        className: el.className || null,
+                        text: (el.innerText || '').trim().slice(0, 80),
+                        fg: `rgb(${Math.round(fg.r)}, ${Math.round(fg.g)}, ${Math.round(fg.b)})`,
+                        bg: `rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)})`,
+                        ratio: Number(r.toFixed(2)),
+                    });
+                }
+            }
+            return { offenders };
+        }
+        """
+
+    def _check(root_locator, min_ratio: float = 4.5, skip_empty: bool = True):
+        # Use locator.evaluate so Playwright hands the real element to the
+        # JS — no fragile selector-string extraction needed.
+        result = root_locator.evaluate(
+            _JS_CONTRAST,
+            {"minRatio": min_ratio, "skipEmpty": skip_empty},
+        )
+        if not isinstance(result, dict) or result.get('error') == 'root_not_found':
+            raise AssertionError(f"assert_contrast: could not evaluate on locator {root_locator!r}")
+        offenders = result.get('offenders') or []
+        if offenders:
+            msg_lines = [f"Contrast < {min_ratio}:1 for {len(offenders)} element(s):"]
+            for o in offenders:
+                label = f"<{o['tag']}"
+                if o.get('id'):
+                    label += f" id={o['id']!r}"
+                if o.get('className'):
+                    label += f" class={o['className']!r}"
+                label += ">"
+                msg_lines.append(
+                    f"  {label} ratio={o['ratio']}:1  fg={o['fg']}  bg={o['bg']}  text={o['text']!r}"
+                )
+            raise AssertionError("\n".join(msg_lines))
+
+    return _check
