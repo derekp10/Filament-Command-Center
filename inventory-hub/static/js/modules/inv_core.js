@@ -75,11 +75,43 @@ const requestWakeLock = async () => {
 };
 
 // --- UI HELPERS ---
+// Fire-and-forget client-side Activity Log write. Use this for toasts
+// raised by paths that DIDN'T go through a backend endpoint that already
+// logs — e.g. network errors, frontend-only validation, fallback flows.
+// The Activity Log is now the authoritative record of what happened; if
+// a toast isn't mirrored there, shortening toast durations would actively
+// hide information from the user.
+const logClientEvent = (msg, level = 'INFO') => {
+    try {
+        fetch('/api/log_event', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ msg, level }),
+        }).catch(() => { /* best effort */ });
+    } catch (e) { /* best effort */ }
+};
+window.logClientEvent = logClientEvent;
+
 const showToast = (msg, type = 'info', duration = 2000) => {
     let c = document.getElementById('toast-container');
     if (!c) { c = document.createElement('div'); c.id = 'toast-container'; document.body.appendChild(c); }
-    const el = document.createElement('div'); el.className = 'toast-msg'; el.innerText = msg; el.style.borderColor = type === 'error' ? '#f44' : (type === 'warning' ? '#fc0' : '#00d4ff');
-    c.appendChild(el); setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, duration);
+    const el = document.createElement('div');
+    el.className = 'toast-msg toast-' + type;
+    el.innerText = msg;
+    const borderByType = { error: '#f44', warning: '#fc0', success: '#0f0', info: '#00d4ff' };
+    el.style.borderColor = borderByType[type] || borderByType.info;
+    el.style.cursor = 'pointer';
+    el.title = 'Click to dismiss';
+    // Click anywhere on the toast dismisses it immediately. The Activity
+    // Log is the durable record — toasts are just "here, now" feedback,
+    // so getting them out of the way on a click is a clean UX.
+    const dismiss = () => {
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 300);
+    };
+    el.addEventListener('click', dismiss, { once: true });
+    c.appendChild(el);
+    setTimeout(dismiss, duration);
 };
 
 const setProcessing = (s) => {

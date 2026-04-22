@@ -279,7 +279,15 @@
         "Row": "",
         "Max Spools": "4",
         "Name": "Computer Room Multi-Dryer Box",
-        "Label Printed": "Yes"
+        "Label Printed": "Yes",
+        "extra": {
+            "slot_targets": {
+                "1": "CORE1-M0",
+                "2": "CORE1-M0",
+                "3": "CORE1-M0",
+                "4": "CORE1-M0"
+            }
+        }
     },
     {
         "LocationID": "DR",
@@ -399,7 +407,14 @@
         "Row": "",
         "Max Spools": "4",
         "Name": "Living Room Multi-Dryer Box",
-        "Label Printed": "Yes"
+        "Label Printed": "Yes",
+        "extra": {
+            "slot_targets": {
+                "2": "XL-4",
+                "3": "XL-3",
+                "4": "XL-1"
+            }
+        }
     },
     {
         "LocationID": "LR-MDB-2",
@@ -411,7 +426,13 @@
         "Row": "",
         "Max Spools": "2",
         "Name": "Sunlu Filament Dryer E2",
-        "Label Printed": "No"
+        "Label Printed": "No",
+        "extra": {
+            "slot_targets": {
+                "1": "XL-4",
+                "2": "XL-5"
+            }
+        }
     },
     {
         "LocationID": "LR-SD-1",
@@ -453,7 +474,10 @@
         "Row": "",
         "Max Spools": "1",
         "Name": "PolyMaker Dryer Box 1",
-        "Label Printed": "Yes"
+        "Label Printed": "Yes",
+        "extra": {
+            "slot_targets": {}
+        }
     },
     {
         "LocationID": "PM-DB-2",
@@ -465,7 +489,10 @@
         "Row": "",
         "Max Spools": "1",
         "Name": "PolyMaker Dryer Box 2",
-        "Label Printed": "Yes"
+        "Label Printed": "Yes",
+        "extra": {
+            "slot_targets": {}
+        }
     },
     {
         "LocationID": "PM-DB-3",
@@ -477,7 +504,10 @@
         "Row": "",
         "Max Spools": "1",
         "Name": "PolyMaker Dryer Box 3",
-        "Label Printed": "Yes"
+        "Label Printed": "Yes",
+        "extra": {
+            "slot_targets": {}
+        }
     },
     {
         "LocationID": "PM-DB-4",
@@ -489,7 +519,10 @@
         "Row": "",
         "Max Spools": "1",
         "Name": "PolyMaker Dryer Box 4",
-        "Label Printed": "Yes"
+        "Label Printed": "Yes",
+        "extra": {
+            "slot_targets": {}
+        }
     },
     {
         "LocationID": "PM-DB-5",
@@ -501,7 +534,10 @@
         "Row": "",
         "Max Spools": "1",
         "Name": "PolyMaker Dryer Box 5",
-        "Label Printed": "Yes"
+        "Label Printed": "Yes",
+        "extra": {
+            "slot_targets": {}
+        }
     },
     {
         "LocationID": "PM-DB-6",

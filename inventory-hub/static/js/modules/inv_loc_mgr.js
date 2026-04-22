@@ -104,6 +104,10 @@ window.openManage = (id) => {
             }
 
             renderManagerNav();
+            // Phase 2: render the Slot → Toolhead Feeds section if applicable.
+            if (window.renderFeedsSection) window.renderFeedsSection(loc);
+            // Phase 3: render the Quick-Swap grid if this is a toolhead.
+            if (window.renderQuickSwapSection) window.renderQuickSwapSection(loc);
             // Generate QR for specific location
             const safeId = String(id).replace(/['"]/g, '');
             generateSafeQR('manage-loc-qr-mini', 'LOC:' + safeId, 45);
@@ -123,7 +127,431 @@ window.openManage = (id) => {
         });
 };
 
-window.closeManage = () => { modals.manageModal.hide(); fetchLocations(); };
+// Breadcrumb for chained manage views. When the user clicks e.g. "Edit Full
+// Bindings" from a toolhead, openManage re-renders onto the dryer box but the
+// user's mental model is "I went deeper into a flow" — closeManage should
+// pop back to the toolhead, not drop to the locations list.
+//
+// Stack discipline:
+// - Push only when we're navigating inside an already-open manage modal.
+//   Pushing on a fresh open from the locations list would mistakenly
+//   resurrect whatever location the user was looking at last session.
+// - On a real close (empty stack), clear the manage-loc-id value so the
+//   NEXT fresh open has no stale previous to push onto the stack.
+window.manageNavStack = window.manageNavStack || [];
+window._fccPoppingBreadcrumb = false;
+
+(function _installManageBreadcrumb() {
+    const original = window.openManage;
+    if (!original || original._fcc_wrapped) return;
+    const wrapped = (id) => {
+        if (!window._fccPoppingBreadcrumb) {
+            const modalEl = document.getElementById('manageModal');
+            const modalOpen = !!(modalEl && modalEl.classList.contains('show'));
+            const prev = document.getElementById('manage-loc-id');
+            const prevId = prev ? prev.value : '';
+            // Only push when we're *already inside* the manage modal and
+            // navigating to a different location. First-opens from the
+            // locations list must NOT push — otherwise closing the modal
+            // after the next unrelated open would re-surface a stale view.
+            if (modalOpen && prevId && String(prevId) !== String(id)) {
+                window.manageNavStack.push(prevId);
+            }
+        }
+        return original(id);
+    };
+    wrapped._fcc_wrapped = true;
+    window.openManage = wrapped;
+})();
+
+window.closeManage = () => {
+    if (window.manageNavStack && window.manageNavStack.length > 0) {
+        const back = window.manageNavStack.pop();
+        if (back) {
+            window._fccPoppingBreadcrumb = true;
+            try { window.openManage(back); }
+            finally { window._fccPoppingBreadcrumb = false; }
+            return;
+        }
+    }
+    // Real close: reset breadcrumb state so the NEXT fresh open doesn't
+    // inherit a stale previous id.
+    window.manageNavStack = [];
+    const prev = document.getElementById('manage-loc-id');
+    if (prev) prev.value = '';
+    modals.manageModal.hide();
+    fetchLocations();
+};
+
+// Bootstrap's own dismiss paths bypass closeManage entirely, which is
+// a problem when we're mid-breadcrumb: a naive close wipes the stack
+// and drops the user out to the locations list instead of popping back
+// to the previous view.
+//
+// Strategy:
+// - For Escape specifically, intercept at the modal element (capture
+//   phase, before Bootstrap's handler) and route through closeManage so
+//   the breadcrumb pops exactly like the X button would.
+// - For ANY other hide path (backdrop click if enabled, programmatic
+//   .hide(), the final .hide() inside closeManage itself), listen for
+//   hidden.bs.modal and do the state cleanup. Respect the pop flag so
+//   we don't wipe state mid-pop.
+document.addEventListener('DOMContentLoaded', () => {
+    const modalEl = document.getElementById('manageModal');
+    if (!modalEl) return;
+
+    // Document-level Escape handler for the manage-modal flow and a
+    // fallback dismisser for other visible Bootstrap modals.
+    //
+    // Why this exists: Bootstrap 5 attaches its own keyboard-dismiss
+    // handler to each modal element, but when modals are stacked (user
+    // opens Location List → clicks into a Toolhead/manage modal on top),
+    // closing the top one doesn't always restore focus cleanly to the
+    // modal beneath. Subsequent Escape presses fire on <body> and
+    // Bootstrap's per-modal handler never sees them, so the user gets
+    // stuck on the locations list with no keyboard way out.
+    //
+    // Strategy:
+    //   - If manageModal is showing, preempt Bootstrap and route through
+    //     closeManage so the breadcrumb pops instead of wiping.
+    //   - Otherwise, dismiss the topmost visible Bootstrap modal as a
+    //     fallback. This keeps Escape working across the whole stack.
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+
+        // Overlays carve-out: if an inline overlay is visible anywhere,
+        // let its own listener handle Escape first.
+        const confirmOv = document.getElementById('fcc-quickswap-confirm-overlay');
+        if (confirmOv && confirmOv.style.display === 'block') return;
+        const pickerOv = document.getElementById('fcc-bind-picker-overlay');
+        if (pickerOv && pickerOv.style.display === 'block') return;
+        const shortcutsOv = document.getElementById('fcc-shortcuts-overlay');
+        if (shortcutsOv && shortcutsOv.style.display === 'block') return;
+        // Input carve-out: native clear/blur wins inside editable fields.
+        const tag = (e.target && e.target.tagName) || '';
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+
+        // Manage-modal priority path: breadcrumb pop or close.
+        if (modalEl.classList.contains('show')) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            window.closeManage();
+            return;
+        }
+
+        // Fallback: dismiss the topmost visible Bootstrap modal. This
+        // covers locMgrModal / locModal / any other stacked modal whose
+        // own keyboard handler may have lost focus tracking.
+        const shown = Array.from(document.querySelectorAll('.modal.show'));
+        if (shown.length === 0) return;
+        const topmost = shown.reduce((a, b) => {
+            const za = parseInt(getComputedStyle(a).zIndex || '0', 10) || 0;
+            const zb = parseInt(getComputedStyle(b).zIndex || '0', 10) || 0;
+            return zb > za ? b : a;
+        });
+        // Respect any modal that has opted out of keyboard dismissal.
+        if (topmost.getAttribute('data-bs-keyboard') === 'false') return;
+        const inst = (window.bootstrap && window.bootstrap.Modal)
+            ? window.bootstrap.Modal.getInstance(topmost)
+            : null;
+        if (!inst) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        inst.hide();
+    }, true);
+
+    modalEl.addEventListener('hidden.bs.modal', () => {
+        // If we're mid-breadcrumb-pop, openManage is about to re-render
+        // the previous view. Don't wipe state — the pop flow manages it.
+        if (window._fccPoppingBreadcrumb) return;
+
+        // Clear breadcrumb state so the next fresh open doesn't inherit
+        // stale context.
+        window.manageNavStack = [];
+        const prev = document.getElementById('manage-loc-id');
+        if (prev) prev.value = '';
+        // Dismiss any inline overlays that live inside the manage modal.
+        if (window.closeQuickswapConfirm) {
+            try { window.closeQuickswapConfirm(); } catch (e) { /* noop */ }
+        }
+        if (window.closeBindSlotPicker) {
+            try { window.closeBindSlotPicker(); } catch (e) { /* noop */ }
+        }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2: Slot → Toolhead Feeds (Dryer Box only)
+// ---------------------------------------------------------------------------
+
+// Cached printer_map fetched from /api/printer_map. Shape:
+//   { printers: { "🦝 XL": [{location_id, position}, ...] } }
+state.printerMap = state.printerMap || null;
+
+const fetchPrinterMap = () => {
+    if (state.printerMap) return Promise.resolve(state.printerMap);
+    return fetch('/api/printer_map')
+        .then(r => r.json())
+        .then(data => { state.printerMap = data.printers || {}; return state.printerMap; })
+        .catch(e => { console.warn("printer_map fetch failed", e); return {}; });
+};
+
+// Render a searchable combobox backed by a native <select> so existing
+// save logic (reading .feeds-select.value) keeps working. The text input
+// filters a dropdown list; Arrow/Enter/Escape drive selection; clicking
+// outside closes the list. Options are labeled "XL-1 — Toolhead 1 on 🦝 XL"
+// (no more cryptic "pos #").
+const buildFeedsCombobox = (slot, printers, currentTarget) => {
+    const comboId = `feeds-combo-${slot}`;
+    const optionList = [
+        { value: '', label: '— None (staging / drying)', search: 'none staging drying' }
+    ];
+    Object.keys(printers).sort().forEach(printerName => {
+        (printers[printerName] || []).forEach(e => {
+            const human = `${e.location_id} — Toolhead ${e.position + 1} on ${printerName}`;
+            optionList.push({
+                value: e.location_id,
+                label: human,
+                search: `${e.location_id} ${printerName} toolhead ${e.position + 1}`.toLowerCase(),
+                printer: printerName,
+            });
+        });
+    });
+
+    // Preserve a hidden <select> so window.saveFeedsSection keeps working.
+    const selOpts = optionList.map(o => {
+        const sel = o.value.toUpperCase() === currentTarget ? ' selected' : '';
+        return `<option value="${o.value}"${sel}>${o.label}</option>`;
+    }).join('');
+
+    const currentLabel = (optionList.find(o => o.value.toUpperCase() === currentTarget)
+        || optionList[0]).label;
+
+    return `
+        <div class="d-flex align-items-center gap-2 feeds-row" data-slot="${slot}">
+            <span class="badge bg-info text-dark fw-bold px-2 py-2"
+                  style="min-width:72px; font-size:1rem;">Slot ${slot}</span>
+            <div class="feeds-combo position-relative flex-grow-1" data-slot="${slot}" id="${comboId}">
+                <input type="text" class="form-control bg-black text-white border-info fw-bold feeds-combo-input"
+                    data-slot="${slot}"
+                    value="${currentLabel.replace(/"/g, '&quot;')}"
+                    style="font-size:1.05rem;"
+                    placeholder="Search toolheads…" autocomplete="off">
+                <div class="feeds-combo-list position-absolute w-100 bg-dark border border-info rounded mt-1 shadow"
+                     data-slot="${slot}"
+                     style="display:none; z-index:1050; max-height:260px; overflow-y:auto;">
+                </div>
+                <select class="feeds-select d-none" data-slot="${slot}">${selOpts}</select>
+            </div>
+        </div>`;
+};
+
+const _comboHydrate = (slot, printers) => {
+    const host = document.getElementById(`feeds-combo-${slot}`);
+    if (!host) return;
+    const input = host.querySelector('.feeds-combo-input');
+    const list = host.querySelector('.feeds-combo-list');
+    const sel = host.querySelector('.feeds-select');
+
+    const _options = () => {
+        const opts = [
+            { value: '', label: '— None (staging / drying)', search: 'none staging drying' }
+        ];
+        Object.keys(printers).sort().forEach(printerName => {
+            (printers[printerName] || []).forEach(e => {
+                opts.push({
+                    value: e.location_id,
+                    label: `${e.location_id} — Toolhead ${e.position + 1} on ${printerName}`,
+                    search: `${e.location_id} ${printerName} toolhead ${e.position + 1}`.toLowerCase(),
+                });
+            });
+        });
+        return opts;
+    };
+
+    const options = _options();
+
+    const open = () => { list.style.display = 'block'; };
+    const close = () => { list.style.display = 'none'; clearKb(); };
+    const clearKb = () => list.querySelectorAll('.kb-active').forEach(el => el.classList.remove('kb-active'));
+
+    const filter = (q) => {
+        const needle = (q || '').trim().toLowerCase();
+        const matches = !needle ? options : options.filter(o => o.search.includes(needle));
+        list.innerHTML = matches.map(o => `
+            <div class="feeds-combo-item px-3 py-2 text-light fw-bold" data-value="${o.value}"
+                 style="cursor:pointer; font-size:1rem;">${o.label}</div>`).join('');
+        Array.from(list.querySelectorAll('.feeds-combo-item')).forEach(el => {
+            el.addEventListener('click', () => pick(el.dataset.value, el.innerText));
+            el.addEventListener('mouseenter', () => { clearKb(); el.classList.add('kb-active'); });
+        });
+        if (!matches.length) {
+            list.innerHTML = '<div class="text-warning px-3 py-2 small">No matches</div>';
+        }
+    };
+
+    const pick = (value, label) => {
+        sel.value = value;
+        input.value = label;
+        close();
+    };
+
+    input.addEventListener('focus', () => { filter(''); open(); });
+    input.addEventListener('input', () => { filter(input.value); open(); });
+    input.addEventListener('keydown', (e) => {
+        if (list.style.display === 'none') return;
+        const items = Array.from(list.querySelectorAll('.feeds-combo-item'));
+        if (!items.length) return;
+        const idx = items.findIndex(el => el.classList.contains('kb-active'));
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            clearKb();
+            items[(idx + 1) % items.length].classList.add('kb-active');
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            clearKb();
+            items[(idx - 1 + items.length) % items.length].classList.add('kb-active');
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const target = idx >= 0 ? items[idx] : items[0];
+            pick(target.dataset.value, target.innerText);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            close();
+            input.blur();
+        }
+    });
+    // Click outside closes.
+    document.addEventListener('click', (e) => {
+        if (!host.contains(e.target)) close();
+    });
+};
+
+const renderFeedsSection = (loc) => {
+    const section = document.getElementById('manage-feeds-section');
+    if (!section) return;
+
+    if (loc.Type !== 'Dryer Box') {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = 'block';
+
+    document.getElementById('feeds-body').style.display = 'none';
+    document.getElementById('feeds-toggle-btn').innerText = 'Show';
+    document.getElementById('feeds-status').innerText = '';
+
+    const maxSlots = parseInt(loc['Max Spools']) || 0;
+    if (maxSlots <= 0) {
+        document.getElementById('feeds-rows').innerHTML =
+            '<div class="text-warning fw-bold" style="font-size:1rem;">This location has Max Spools of 0 — no slots to bind.</div>';
+        return;
+    }
+
+    Promise.all([
+        fetchPrinterMap(),
+        fetch(`/api/dryer_box/${encodeURIComponent(loc.LocationID)}/bindings`)
+            .then(r => r.ok ? r.json() : { slot_targets: {} }),
+    ]).then(([printers, bindingsResp]) => {
+        const targets = bindingsResp.slot_targets || {};
+        const rows = document.getElementById('feeds-rows');
+        rows.innerHTML = '';
+        for (let slot = 1; slot <= maxSlots; slot++) {
+            const currentTarget = (targets[String(slot)] || '').toUpperCase();
+            rows.insertAdjacentHTML('beforeend', buildFeedsCombobox(slot, printers, currentTarget));
+        }
+        for (let slot = 1; slot <= maxSlots; slot++) {
+            _comboHydrate(slot, printers);
+        }
+
+        // One-shot: if the user came here via "Edit Full Bindings" from a
+        // toolhead, auto-expand the Feeds body and scroll it into view so
+        // they don't have to click Show and hunt for it.
+        if (window._fccAutoExpandFeeds) {
+            window._fccAutoExpandFeeds = false;
+            const body = document.getElementById('feeds-body');
+            const btn = document.getElementById('feeds-toggle-btn');
+            if (body) body.style.display = 'block';
+            if (btn) btn.innerText = 'Hide';
+            // Let the layout settle before scrolling so the target has its
+            // final height.
+            requestAnimationFrame(() => {
+                const anchor = document.getElementById('manage-feeds-section');
+                if (anchor && anchor.scrollIntoView) {
+                    anchor.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                }
+            });
+        }
+    });
+};
+
+window.toggleFeedsSection = () => {
+    const body = document.getElementById('feeds-body');
+    const btn = document.getElementById('feeds-toggle-btn');
+    if (!body || !btn) return;
+    const hidden = body.style.display === 'none' || !body.style.display;
+    body.style.display = hidden ? 'block' : 'none';
+    btn.innerText = hidden ? 'Hide' : 'Show';
+};
+
+window.saveFeedsSection = () => {
+    const locId = document.getElementById('manage-loc-id').value;
+    if (!locId) return;
+    const status = document.getElementById('feeds-status');
+    status.className = 'flex-grow-1 fw-bold text-info';
+    status.style.fontSize = '1rem';
+    status.innerText = 'Saving…';
+
+    // Collect slot_targets from all hidden <select> elements inside the
+    // combobox wrappers. Empty-string values map to None.
+    const selects = document.querySelectorAll('#feeds-rows select.feeds-select');
+    const slot_targets = {};
+    selects.forEach(sel => {
+        const slot = sel.dataset.slot;
+        const val = sel.value;
+        slot_targets[slot] = val || null;
+    });
+
+    fetch(`/api/dryer_box/${encodeURIComponent(locId)}/bindings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot_targets }),
+    })
+        .then(async r => ({ ok: r.ok, body: await r.json() }))
+        .then(({ ok, body }) => {
+            if (ok) {
+                const count = Object.keys(body.slot_targets || {}).length;
+                const warnings = body.warnings || [];
+                if (warnings.length) {
+                    status.className = 'flex-grow-1 fw-bold text-warning';
+                    const wTxt = warnings.map(w => `⚠️ Slot ${w.slot} → ${w.target}: ${w.reason}`).join('\n');
+                    status.innerText = `Saved ${count} binding(s) — ${warnings.length} warning(s)\n${wTxt}`;
+                    showToast(`⚠️ Feeds saved with ${warnings.length} warning(s) — see log`, 'warning', 5000);
+                } else {
+                    status.className = 'flex-grow-1 fw-bold text-success';
+                    status.innerText = `✅ Saved ${count} binding(s)`;
+                    showToast(`🔗 Saved feeds for ${locId}`, 'success', 2500);
+                }
+            } else {
+                status.className = 'flex-grow-1 fw-bold text-danger';
+                const errs = (body.errors || []).map(e => `Slot ${e.slot}: ${e.reason}`).join('; ');
+                status.innerText = errs || body.error || 'Save failed';
+                showToast(`❌ Feeds save rejected: ${errs || body.error}`, 'error', 5000);
+            }
+        })
+        .catch(e => {
+            console.error(e);
+            status.className = 'flex-grow-1 fw-bold text-danger';
+            status.innerText = 'Network error';
+            showToast('Feeds save — network error', 'error', 5000);
+            if (window.logClientEvent) window.logClientEvent(
+                `❌ Feeds save network error for ${locId}: ${e && e.message ? e.message : 'connection failed'}`,
+                'ERROR'
+            );
+        });
+};
+
+window.renderFeedsSection = renderFeedsSection;
 
 window.refreshManageView = (id) => {
     const loc = state.allLocations.find(l => l.LocationID == id);

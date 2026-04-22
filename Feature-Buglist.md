@@ -20,7 +20,6 @@
 
 * Filabridge status light is still blinking on and of, just more eraticly now. Need to look into this further.
 
-* ~~Force location modal needs to be able to work with keyboard inputs~~ — DONE (feature/force-location-keyboard-nav). Arrow keys, Enter to select, Escape with confirmation, auto-focus on search input.
 
 * Check to make sure that when a new filament barcode is scanned, that the proper database fields are updated to mark the filament as labeled, so it doesn't appear in the Backlog queue. I scanned on e but didn't see a message in the Live Activity log. Needs label print for (FIL:58) lists as null, don't know if this was because it was blank in the spoolman UI, because this is an old filament physical swatch.
 
@@ -36,7 +35,10 @@
 
 * Smart eject doesn't seem to be called when a new spool is assigned to a toolhead that already has a spool assigned to it. (CoreOne+ Noticed issue)
 
-* Clicking on the edit button with a spool in a location (not slotted), dismissing the edit spool modal causes the details modal to pop up. Details should only pop up when the edit button was used from the details window. We need to work on this better to make the windows work right. A recent change is causing this bug. Adding the re-opening of the details modal after exiting edit i believe, is not considering the sorce of the edit click. We should probably look over the whole modal system because i thought we were using a better system than this that was more dynamic.
+* Clicking on the edit button with a spool in a location (not slotted), dismissing the edit spool modal causes the details modal to pop up. Details should only pop up when the edit button was used from the details window. We need to work on this better to make the windows work right.
+    - **Diagnosed 2026-04-21**: the wizard's `hidden.bs.modal` listener in [inv_wizard.js:21-34](inventory-hub/static/js/modules/inv_wizard.js#L21-L34) unconditionally calls `openFilamentDetails(fid)` / `openSpoolDetails(sid)` when it closes, regardless of where the Edit click originated. It needs an edit-launch-source flag (set by whoever calls `openEditWizard`) so it only re-opens Details when Details was the source. The manage-modal overlay pattern in [inv_loc_mgr.js](inventory-hub/static/js/modules/inv_loc_mgr.js) and [inv_quickswap.js](inventory-hub/static/js/modules/inv_quickswap.js) (named `window.close*` teardowns + `hidden.bs.modal` cleanup that resets state) is the reference for how this kind of cross-modal flow should be structured.
+    - Separate sub-bug: "sometimes just Display modal on display modal" — suspect this is the filament→spool chain at [inv_details.js:304](inventory-hub/static/js/modules/inv_details.js#L304) interacting with the silent-refresh paths at lines 386/395. Needs its own reproduction trace before fixing.
+    - **NOT fixed by the round-7 overlay-dismiss work** — that was scoped to inline overlays inside `#manageModal`, not cross-modal Bootstrap stacks.
 
 * Eject button on unslotted location items doesn't actully remove from list, and pops up a modal/window for a second to confirm setting it to unassinged, but dissipears. The item should just be removed from the list, and set to it's last location. if it's last location is unknow, set to unassinged, or propt user about it, or warn in live activity.
 
@@ -52,15 +54,22 @@
 
 * Text Cacing is being changed on some manufactures (CC3D being Cc3D) and should just show the actual name without trying to correct it.
 
-* `test_manual_loc_override_e2e` is failing — the search offcanvas stays open and intercepts pointer events on the spool card's "View Details" button, causing a 30s timeout. The test needs to close the offcanvas before clicking the card. Found during structural test fix work (4/15/2026).
+* `test_manual_loc_override_e2e` — offcanvas-intercept bug fixed in M0. Currently xfailed because the Force Location modal was refactored from `<select>` to a searchable list; step 6 still drives the old select. Rewrite test against the new search+list UI.
 
-* `test_loc_grid_layout_data_presence` is failing — expects 4 action buttons (Pick, Details, Edit, Eject) per grid slot but finds 5. A new button was added to the grid card layout without updating this test. Found during structural test fix work (4/15/2026).
+* Server reboots seem to be resetting dryerbox slot numbers. Need to look into the code and confirm if this is the case of if it's something else. This might be related to the core one + ejcect system not properly slotting items back into there locations when a smart swap/change engages?
 
-* `test_weigh_out_modal_e2e` is failing — expects the save button to show a checkmark emoji after weight entry, but the button shows a floppy disk emoji instead. Likely a UI change to the save button's state progression. Found during structural test fix work (4/15/2026).
+* FCC Main Main screen buffer cards still don't always update after several backend changes. Setting filament to 0, doesn't seem to update to unassinged or it's deployed status.
 
-* `test_api_endpoint` is failing — the `search_inventory` function now accepts a `min_weight` parameter, but the test mock doesn't expect it. Test needs updating to include `min_weight=''`. Found during structural test fix work (4/15/2026).
+* Adding spool weight (Empty Spool Weight) Do the manufacturer, doesn't seem to pull down to the filament/spool if those fields are blank. This should be fixed so that It uses what ever one is available based on a priority system. (Manufacturer > Filament > Spool)
 
 # **Active Backlog (Organized by Feature Area)**
+
+## 📋 Activity Log
+* Make the Activity Log more ubiquitous so it can be the authoritative feedback channel instead of toasts. Currently the log pane sits on the dashboard only — modal-heavy workflows (Location Manager, Wizard, Details) hide it, so the toast has to carry the full message + display time for the blind-scanner case. Candidate approaches (pick one, or stack them):
+    - **Persistent mini-log widget**: a small scrollable strip that survives at the bottom/corner of the screen even when modals are open. Z-index above `.modal-backdrop` so it never gets covered. Shows the last N entries with category icons.
+    - **"N new events" pill** in a corner that flashes when the log ticks. Click opens a compact log overlay. Same discipline as the `?` shortcuts overlay.
+    - **Modal-aware docking**: while any modal is open, a condensed log bar docks to the modal itself (top or bottom of the modal body). Hides when no entries have arrived recently.
+  Once the log is always visible, toast durations can drop further and we can rely on the log for the full narrative — toasts become purely "happened now" flashes.
 
 ## 🎨 UI & Theming
 * Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird.
@@ -91,18 +100,17 @@
 
 
 
+## ⚡ Quick-Swap Enhancements
+* **Denser spool/filament cards inside the Quick-Swap grid**: reuse the existing `SpoolCardBuilder` system (the one that renders cards in the dashboard, Location Manager, etc.) so each bound slot shows a real filament card instead of the current custom button. That would unlock integrating more actions — Eject, Details, Edit, Print Queue — directly from the Quick-Swap view without extra trips through other modals. Needs a new card variant (e.g. `'quickswap'` mode) that omits some details to keep the grid compact while retaining the shared styling and interaction code. Reference: [inv_quickswap.js](inventory-hub/static/js/modules/inv_quickswap.js) grid render + [ui_builder.js](inventory-hub/static/js/modules/ui_builder.js) `SpoolCardBuilder.buildCard()`.
+
 ## 📍 Location Management & Scanning
 * Refactor the entire location managment system from the ground up. It's currently being a bit too complicated, and I think it can be cleaned up a bit if we just rethink the flow of this process. We've bolted a lot of stuff onto this system, and the has caused it to become a bit too cumbersome to both code and work with. I think we need to build in a better system for linking locations and device/boxes/storage things. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
-
-
 * The ability to configure a box to change the slot order to go from left to right, or right to left.
-* Ability to assign a box slot to a printhead/MMU, so that a scan to that box slot will auto load the spool.
 * CR-MDB-1:SLOT:4 is treated as a location not a slot in a box. (I believe this was fixed, we need to check on it.)
 
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
 
-* Slot Based QR codes are not sending the scanned item to the slot in the location it's attached to.
 * Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assign all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it.
 * Location Manager not syncing status across browser instances?
 * Refactor Locations Database to support true DB-driven Parent/Child hierarchies. Currently, location hierarchy (Room -> Box -> Slot) is handled via string prefix parsing (`LR-MDB-1` means `LR`). This breaks portable/transient containers like `PJ` or `PM` boxes when they move rooms, because moving them implies renaming them, which destroys their printed barcode (`LOC:LR-PM-1`). Need to add a `ParentLocation` column to the locations database and detach the barcode ID string from the physical hierarchy tree.
@@ -119,7 +127,7 @@
 * Refresh ticks seem to be clearing the print queue? that or refreshes? Search button also broke for some reason.
 
 ## 🧪 Testing
-* Refactor E2E tests to use a shared `conftest.py` with common fixtures (e.g. "open spool details modal", "open force location modal"). Multiple test files duplicate the same 5-step setup sequence. Also audit for other duplicated test code that could be consolidated.
+* conftest.py groundwork landed in M0 (`inventory-hub/tests/conftest.py` with page, api_base_url, snapshot, scan, seed_dryer_box, with_held_spool, require_server). Remaining work: migrate existing test files to use these shared fixtures instead of their duplicated setup sequences.
 
 ## ⚙️ App Flow, Architecture & Database
 * **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements.
@@ -146,7 +154,7 @@
 # **On Hold**
 * Amazon Parser: Multi-pack spools with different colors (e.g. 4x1kg) currently calculate as a single 4000g spool instead of 4 individual 1000g spools.
 * `test_amazon_parser_matching` is failing — BeautifulSoup4 is not installed in the Docker container. Parser returns empty results because the import fails silently. Blocked until `pip install beautifulsoup4` is added to the Docker image. Found during structural test fix work (4/15/2026).
-* Continue to support Spoolman's "Import from External" feature... Purchase emails, or Amazon/Vendor product pages.
+* Continue to support Spoolman's "Import from External" feature... Purchase emails, or Amazon/Vendor product pages, Onlyspoolz.com.
 * Standardize the size of all QR codes to match that of the sizes used on the command center. (Audit, eject, drop, etc).
 * If legacy barcode has no spools attached to it, UI should warn about this, perhaps give option to add new spool?
 * Spoolman ExternalID is not a visible field in Spoolman UI. Very low priority.

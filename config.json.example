@@ -23,7 +23,7 @@
     "printer_map": {
         "PRINTER_1": {"printer_name": "My Printer", "position": 0}
     },
-    "feeder_map": {},
+    "comment_bindings": "Dryer-box-to-toolhead bindings are stored per-slot on each Dryer Box location in locations.json under extra.slot_targets — edit via Location Manager UI.",
     "dryer_slots": [],
     "auto_recover_filabridge_errors": true
 }
