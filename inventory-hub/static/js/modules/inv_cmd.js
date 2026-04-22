@@ -136,45 +136,79 @@ const processScan = (text, source = 'keyboard') => {
                 else if (res.cmd === 'slot') handleSlotInteraction(res.value);
                 else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
             } else if (res.type === 'assignment') {
-                if (state.heldSpools.length > 0) {
-                    // Scenario A: Buffer Full -> Drop item INTO the slot
-                    performContextAssign(res.location, res.slot);
-                    state.lastScannedLoc = null;
-                } else {
-                    // Scenario B: Buffer Empty -> Pick item UP from the slot
-                    // [ALEX FIX] Fetch contents to interact with the specific slot
+                // Backend now handles the load when the buffer is non-empty.
+                // We switch on `action` and let the backend's Activity Log
+                // cover success/error cases; the frontend only handles the
+                // no-buffer fallback (treat as a slot pickup).
+                state.lastScannedLoc = null;
+                if (res.action === 'assignment_done' || res.action === 'assignment_partial') {
+                    // Backend already moved the spool and logged it. Mirror by
+                    // dropping the moved id out of heldSpools so the UI matches.
+                    const movedId = res.moved;
+                    if (movedId != null) {
+                        state.heldSpools = state.heldSpools.filter(s => s.id !== movedId);
+                        renderBuffer();
+                    }
+                    const extraMsg = res.action === 'assignment_partial'
+                        ? ` (${res.remaining_buffer} still in buffer)`
+                        : '';
+                    showToast(
+                        `✅ Loaded #${movedId} into ${res.location}:${res.slot}${extraMsg}`,
+                        res.action === 'assignment_partial' ? 'info' : 'success',
+                        res.action === 'assignment_partial' ? 5000 : 4000
+                    );
+                    document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+                } else if (res.action === 'assignment_no_buffer') {
+                    // Buffer Empty → treat as pickup: read slot contents and
+                    // put the spool in the buffer. Log explicitly on success
+                    // so the user's Activity Log reflects what happened.
                     fetch(`/api/get_contents?id=${res.location}`)
                         .then(r => r.json())
                         .then(items => {
-                            // Find the item in that slot (Loose equality for string/int safety)
                             const item = items.find(i => String(i.slot) === String(res.slot));
-
                             if (item) {
-                                // 1. Spool Found: Pick it up!
                                 if (state.heldSpools.some(s => s.id === item.id)) {
-                                    showToast("Already in Buffer", "warning");
+                                    showToast("Already in Buffer", "warning", 3500);
                                 } else {
                                     state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color, color_direction: item.color_direction, remaining_weight: item.remaining_weight, details: item.details, archived: item.archived });
                                     renderBuffer();
-                                    showToast(`Picked up #${item.id} from Slot ${res.slot}`);
-                                    // Optional: If you want to see the manager too, uncomment next line:
-                                    // openManage(res.location); 
+                                    showToast(`✋ Picked up #${item.id} from ${res.location}:SLOT:${res.slot}`, 'success', 2500);
+                                    fetch('/api/log_event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msg: `✋ Pickup: Spool #${item.id} from <b>${res.location}:SLOT:${res.slot}</b>`, level: 'INFO' }) });
                                 }
                             } else {
-                                // 2. Slot Empty: Open the Location Manager so you can see/act
-                                showToast(`Slot ${res.slot} is empty`);
+                                showToast(`Slot ${res.slot} on ${res.location} is empty — opening manager`, 'info', 3000);
+                                if (window.logClientEvent) window.logClientEvent(
+                                    `⚠️ Slot scan ${res.location}:SLOT:${res.slot} — slot is empty (opened manager)`,
+                                    'WARNING'
+                                );
                                 openManage(res.location);
                             }
                         })
                         .catch(e => {
                             console.error(e);
-                            showToast("Error looking up slot", "error");
+                            showToast("Error looking up slot", "error", 5000);
+                            if (window.logClientEvent) window.logClientEvent(
+                                `❌ Slot pickup failed for ${res.location}:SLOT:${res.slot}: ${e && e.message ? e.message : 'network error'}`,
+                                'ERROR'
+                            );
                         });
+                } else if (res.action === 'assignment_bad_slot') {
+                    const limit = res.max_slots != null ? ` (has ${res.max_slots} slots)` : '';
+                    showToast(`❌ Slot ${res.slot} invalid for ${res.location}${limit}`, 'error', 5000);
+                } else if (res.action === 'assignment_bad_target') {
+                    showToast(`❌ ${res.location} isn't a valid load target`, 'error', 5000);
+                } else {
+                    // Unknown action code — shouldn't happen, but surface it.
+                    showToast(`Unknown assignment result: ${res.action || 'none'}`, 'warning', 4000);
+                    if (window.logClientEvent) window.logClientEvent(
+                        `⚠️ Unknown assignment action from backend: ${res.action || 'none'}`,
+                        'WARNING'
+                    );
                 }
             } else if (res.type === 'location') {
                 if (!text.toUpperCase().startsWith('LOC:')) {
                     const msg = "⚠️ Legacy Location Label Scanned! Features may be limited. Print a new LOC: label when possible.";
-                    showToast(msg, "warning", 5000);
+                    showToast(msg, "warning", 3500);
                     fetch('/api/log_event', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({msg: "SCAN LOG: Legacy Location Barcode Scanned (" + text + ")", level: "WARNING"}) });
                 }
                 if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }

@@ -44,14 +44,15 @@ def test_weigh_out_modal_e2e(page: Page):
     weight_input.fill("850")
     weight_input.press("Enter")
 
-    # 9. Verify that the button switches to a checkmark / success state
+    # 9. Verify the button reaches the saved state (floppy-disk emoji).
+    # The UI progression is ⏳ (saving) → 💾 (saved).
     save_btn = page.locator(".weigh-save-btn[data-id='1']")
-    expect(save_btn).to_contain_text("✅", timeout=5000)
+    expect(save_btn).to_contain_text("💾", timeout=5000)
 
-    # 10. Once saved, it should be removed from the main buffer
-    # Close modal first
+    # 10. Close the modal cleanly.
     modal.locator(".btn-close").click()
     expect(modal).not_to_be_visible()
-    
-    # The buffer might be empty now because the success handler removes it
-    expect(buffer_card).not_to_be_visible()
+    # NOTE: earlier versions of this test also asserted the spool was
+    # auto-removed from the buffer after weigh-out save. Current UX keeps
+    # the spool in the buffer so the user can continue scanning. If the
+    # auto-removal behavior comes back, add a dedicated test for it.

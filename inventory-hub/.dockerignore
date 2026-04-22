@@ -1,0 +1,35 @@
+# Keep tests and dev artifacts OUT of the production image.
+# Build context is inventory-hub/; everything here is relative to that.
+
+# Test harness
+tests/
+conftest.py
+pytest.ini
+.pytest_cache/
+__screenshots__/
+
+# Stray test files at the inventory-hub root
+test_*.py
+
+# Python bytecode / caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs
+*.log
+*.log.*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Backups
+*_BACKUP.csv
+*.bak
+
+# Docs / dev scripts that don't need to ship
+debug_*.py

@@ -179,9 +179,15 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
                 # [ALEX FIX] Improved comparison to catch string vs int mismatches
                 if str(existing.get('slot', '')).strip('"') == str(target_slot) and existing['id'] != int(sid):
                     state.logger.info(f"🪑 Unseating Spool {existing['id']} from Slot {target_slot}")
-                    # [ALEX FIX] Explicitly set to empty string to ensure DB update
-                    spoolman_api.update_spool(existing['id'], {'extra': {'container_slot': ''}})
-            
+                    # Load the existing spool's full extra and MERGE — Spoolman's
+                    # PATCH replaces the entire `extra` object, so passing only
+                    # {container_slot: ''} would wipe physical_source, spool_type,
+                    # temps, etc. Read → clear just the slot → write whole extra.
+                    _existing_full = spoolman_api.get_spool(existing['id']) or {}
+                    _merged_extra = dict(_existing_full.get('extra') or {})
+                    _merged_extra['container_slot'] = ''
+                    spoolman_api.update_spool(existing['id'], {'extra': _merged_extra})
+
             new_extra['container_slot'] = str(target_slot)
         else:
             # If moving to a non-slotted location, clear the slot
@@ -190,9 +196,21 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
         # PRINTER MOVE
         if target in printer_map:
             src_info = loc_info_map.get(current_loc)
-            # [Universal Fallback] Save origin anytime we move to a printer
-            new_extra['physical_source'] = current_loc
-            new_extra['physical_source_slot'] = current_extra.get('container_slot')
+            # Preserve ghost trail when the spool is already deployed to
+            # this exact toolhead. Without this guard, re-scanning a spool
+            # that's already on the toolhead would set physical_source to
+            # the toolhead itself — physical_source == location means "not
+            # a ghost," so the deployed indicator disappears and Return-
+            # to-Slot loses its home. Only overwrite physical_source when
+            # the spool is genuinely arriving from somewhere else.
+            existing_source = str(current_extra.get('physical_source', '') or '').strip().strip('"')
+            is_already_here = (current_loc == target) and bool(existing_source)
+            if is_already_here:
+                new_extra['physical_source'] = existing_source
+                new_extra['physical_source_slot'] = current_extra.get('physical_source_slot')
+            else:
+                new_extra['physical_source'] = current_loc
+                new_extra['physical_source_slot'] = current_extra.get('container_slot')
             
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 p = printer_map[target]
@@ -513,5 +531,24 @@ def get_live_spools_data(spool_ids):
                 }
         except Exception as e:
             state.logger.error(f"Failed to live-refresh spool {sid}: {e}")
-            
+
     return results
+
+
+def find_spool_in_slot(box_loc_id, slot):
+    """Return the spool id sitting in (box_loc_id, slot), or None.
+
+    Scans items at the location (including ghost items whose
+    physical_source points back to this box) and matches the slot
+    string loosely (Spoolman stores container_slot with JSON-string
+    quoting — see spoolman_api.parse_inbound_data).
+    """
+    if not box_loc_id or not str(slot).strip():
+        return None
+    wanted = str(slot).strip().strip('"')
+    items = spoolman_api.get_spools_at_location_detailed(box_loc_id)
+    for item in items:
+        item_slot = str(item.get('slot', '')).strip().strip('"')
+        if item_slot == wanted:
+            return int(item['id'])
+    return None

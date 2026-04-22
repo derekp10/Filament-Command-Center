@@ -44,16 +44,37 @@
                 <button class="btn btn-warning ms-2" id="btn-queue-count" onclick="openQueueModal()">
                     🛒 Queue (0)
                 </button>
+                <!-- Phase 3: keyboard shortcut reference (?). Click or press `?` to open. -->
+                <button class="btn btn-outline-light ms-2" id="btn-shortcuts-help"
+                    onclick="window.toggleShortcutsOverlay()"
+                    title="Keyboard shortcuts (?)"
+                    style="font-weight:bold; width:38px;">?</button>
             </div>
         </div>
     </nav>
+
+    <!-- Shortcuts overlay — populated by shortcuts_registry.js at runtime. -->
+    <div id="fcc-shortcuts-overlay"
+        class="position-fixed top-50 start-50 translate-middle bg-dark border border-info rounded p-4 shadow-lg"
+        style="display:none; z-index:10001; min-width:640px; max-width:95vw; max-height:85vh; overflow-y:auto;">
+        <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom border-secondary">
+            <h4 class="text-info mb-0 fw-bold">⌨️ Keyboard & Scan Shortcuts</h4>
+            <button type="button" class="btn-close btn-close-white"
+                onclick="window.toggleShortcutsOverlay()"></button>
+        </div>
+        <div id="fcc-shortcuts-list"></div>
+        <div class="text-light fw-bold mt-3 pt-2 border-top border-secondary" style="font-size:1rem;">
+            Press <kbd style="background:#111; color:#0ff; font-weight:bold; padding:2px 6px;">?</kbd>
+            or <kbd style="background:#111; color:#0ff; font-weight:bold; padding:2px 6px;">Esc</kbd> to close.
+        </div>
+    </div>
 
     <div class="main-container">
         <div class="content-row">
             <div class="col-logs">
                 <div
                     class="p-2 border-bottom border-secondary text-info fw-bold d-flex justify-content-between align-items-center">
-                    <span>Live Activity 📡</span><span id="log-status" class="small text-muted">Auto-Refresh ON</span>
+                    <span>Live Activity 📡</span><span id="log-status" class="small fw-bold" style="color:#0f0;">Auto-Refresh ON</span>
                 </div>
                 <div id="live-logs" class="log-box" onmouseenter="pauseLogs(true)" onmouseleave="pauseLogs(false)">
                 </div>

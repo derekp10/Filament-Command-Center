@@ -21,15 +21,19 @@ def get_config_path():
 
 def load_config():
     defaults = {
-        "server_ip": "127.0.0.1", 
-        "spoolman_port": 7912, 
+        "server_ip": "127.0.0.1",
+        "spoolman_port": 7912,
         "filabridge_port": 5000,
-        "sync_delay": 0.5, 
-        "printer_map": {}, 
-        "feeder_map": {}, 
+        "sync_delay": 0.5,
+        "printer_map": {},
         "dryer_slots": [],
         "auto_recover_filabridge_errors": True
     }
+    # Note: the legacy `feeder_map` key is no longer read here. Its values
+    # were imported into per-Dryer-Box `extra.slot_targets` entries in
+    # locations.json on first startup after M3. If it still exists in a
+    # config.json, it's harmless — json.load simply doesn't care about
+    # unknown keys — and can be removed manually.
     
     final_config = defaults.copy()
     config_file, mode = get_config_path()

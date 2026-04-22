@@ -13,6 +13,39 @@ import logging
 VERSION = "v154.26 (Scale Weights Update)"
 app = Flask(__name__)
 
+# One-time feeder_map → slot_targets migration. Kept behind an explicit
+# `feeder_map` key check so old installs that still have it get upgraded
+# automatically the first time they boot the new code. No-op on modern
+# installs where the key has been removed.
+#
+# Safety: the migration is purely additive (only sets extra.slot_targets
+# on Dryer Box records; never removes keys). Spool data lives in
+# Spoolman's DB and is untouched. Before the first successful migration
+# we still write a timestamped backup of locations.json so there's a
+# recovery path if anything ever goes wrong on a production restart.
+try:
+    _startup_cfg = config_loader.load_config()
+    _legacy_feeder_map = _startup_cfg.get('feeder_map') or {}
+    if _legacy_feeder_map:
+        _startup_locs = locations_db.load_locations_list()
+        _migrated, _changed = locations_db.migrate_feeder_map_if_needed(
+            _startup_locs, _legacy_feeder_map
+        )
+        if _changed:
+            # Backup before persisting — cheap insurance.
+            try:
+                import shutil, time as _t
+                _stamp = _t.strftime('%Y%m%d-%H%M%S')
+                _backup = f"{locations_db.JSON_FILE}.pre-feedermap-migration-{_stamp}.bak"
+                shutil.copy2(locations_db.JSON_FILE, _backup)
+                state.logger.info(f"📦 Backed up locations.json → {_backup}")
+            except Exception as _bk_err:
+                state.logger.warning(f"Could not write pre-migration backup: {_bk_err}")
+            locations_db.save_locations_list(_migrated)
+            state.logger.info("💾 Legacy feeder_map migrated into locations.json — you can safely delete feeder_map from config.json now.")
+except Exception as _mig_err:
+    state.logger.error(f"feeder_map migration skipped due to error: {_mig_err}")
+
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
@@ -945,7 +978,529 @@ def api_identify_scan():
             name = data.get('name', 'Unknown Filament')
             return jsonify({"type": "filament", "id": int(fid), "display": name})
 
+    # --- SLOT ASSIGNMENT (Phase 1) ---
+    # LOC:X:SLOT:Y scans mean "drop the buffered spool into slot Y of location X".
+    # perform_smart_move already handles auto-eject, container_slot, physical_source,
+    # and the Filabridge map_toolhead notification when the target is a printer.
+    if res.get('type') == 'assignment':
+        target = str(res.get('location', '')).strip().upper()
+        slot = str(res.get('slot', '')).strip()
+        loc_list = locations_db.load_locations_list()
+        loc_info_map = {row['LocationID'].upper(): row for row in loc_list}
+        tgt_info = loc_info_map.get(target)
+
+        # Validate target exists and is a container type.
+        container_types = {'Dryer Box', 'MMU Slot', 'Tool Head', 'No MMU Direct Load'}
+        if not tgt_info or tgt_info.get('Type') not in container_types:
+            found_type = tgt_info.get('Type') if tgt_info else 'missing'
+            state.add_log_entry(
+                f"❌ Slot scan target <b>{target}</b> invalid (type={found_type}) — scan dropped",
+                "ERROR", "ff0000"
+            )
+            return jsonify({
+                "type": "assignment",
+                "action": "assignment_bad_target",
+                "location": target, "slot": slot,
+                "found_type": found_type,
+            }), 400
+
+        # Validate slot is within Max Spools range.
+        try:
+            max_slots = int(str(tgt_info.get('Max Spools', '0')).strip() or '0')
+        except ValueError:
+            max_slots = 0
+        try:
+            slot_num = int(slot)
+        except ValueError:
+            slot_num = 0
+        if max_slots > 0 and (slot_num < 1 or slot_num > max_slots):
+            state.add_log_entry(
+                f"❌ Slot <b>{slot}</b> out of range for {target} (has {max_slots} slots) — scan dropped",
+                "ERROR", "ff0000"
+            )
+            return jsonify({
+                "type": "assignment",
+                "action": "assignment_bad_slot",
+                "location": target, "slot": slot,
+                "max_slots": max_slots,
+            }), 400
+
+        # Pull the first spool off the buffer.
+        # Note: if the buffer is empty, the frontend treats the scan as a
+        # "pickup" request (read slot contents and put them in the buffer).
+        # That path emits its own log entry on success, so we don't add one
+        # here — otherwise every pickup would generate a misleading warning.
+        buffer = getattr(state, 'GLOBAL_BUFFER', []) or []
+        first_spool = next((item for item in buffer if isinstance(item, dict) and item.get('id')), None)
+        if not first_spool:
+            return jsonify({
+                "type": "assignment",
+                "action": "assignment_no_buffer",
+                "location": target, "slot": slot,
+            }), 200
+
+        spool_id = int(first_spool['id'])
+        move_result = logic.perform_smart_move(
+            target, [spool_id], target_slot=slot, origin='slot_qr_scan'
+        )
+
+        # Auto-deploy: if the target is a Dryer Box AND this slot is bound
+        # to a toolhead, follow up with a second move that puts the spool
+        # onto the toolhead as a ghost — physical_source is automatically
+        # set to the dryer box by perform_smart_move's printer branch.
+        auto_deployed_to = None
+        if tgt_info.get('Type') == 'Dryer Box':
+            bindings = locations_db.get_dryer_box_bindings(target) or {}
+            bound_toolhead = bindings.get(str(slot)) if bindings else None
+            if bound_toolhead:
+                logic.perform_smart_move(
+                    bound_toolhead.upper(), [spool_id],
+                    target_slot=None, origin='slot_qr_auto_deploy'
+                )
+                auto_deployed_to = bound_toolhead.upper()
+                state.add_log_entry(
+                    f"⚡ Auto-deployed Spool #{spool_id} → <b>{auto_deployed_to}</b> "
+                    f"(source: {target}:SLOT:{slot})",
+                    "SUCCESS", "00ff00"
+                )
+
+        # Remove the spool from the backend's buffer replica.
+        state.GLOBAL_BUFFER = [
+            item for item in buffer
+            if not (isinstance(item, dict) and int(item.get('id') or 0) == spool_id)
+        ]
+        remaining = len(state.GLOBAL_BUFFER)
+        action = 'assignment_partial' if remaining > 0 else 'assignment_done'
+
+        suffix = f" ({remaining} still in buffer)" if remaining else ""
+        if auto_deployed_to:
+            log_msg = (
+                f"✅ Spool #{spool_id} → <b>{target}:SLOT:{slot}</b> "
+                f"→ <b>{auto_deployed_to}</b>{suffix}"
+            )
+        else:
+            log_msg = f"✅ Spool #{spool_id} → <b>{target}:SLOT:{slot}</b>{suffix}"
+        state.add_log_entry(log_msg, "SUCCESS", "00ff00")
+        return jsonify({
+            "type": "assignment",
+            "action": action,
+            "location": target, "slot": slot,
+            "moved": spool_id,
+            "auto_deployed_to": auto_deployed_to,
+            "remaining_buffer": remaining,
+            "smart_move": move_result,
+        }), 200
+
     return jsonify(res)
+
+
+@app.route('/api/buffer/clear', methods=['POST'])
+def api_buffer_clear():
+    """Wipe the backend's buffer replica. Used by tests + frontend reset."""
+    state.GLOBAL_BUFFER = []
+    return jsonify({"success": True, "buffer": []})
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Dryer Box ↔ Toolhead bindings
+# ---------------------------------------------------------------------------
+
+@app.route('/api/dryer_box/<loc_id>/bindings', methods=['GET'])
+def api_dryer_box_bindings_get(loc_id):
+    bindings = locations_db.get_dryer_box_bindings(loc_id)
+    if bindings is None:
+        return jsonify({"error": "not_a_dryer_box", "location": loc_id}), 404
+    return jsonify({"location": loc_id, "slot_targets": bindings})
+
+
+@app.route('/api/dryer_box/<loc_id>/bindings', methods=['PUT'])
+def api_dryer_box_bindings_put(loc_id):
+    data = request.get_json(silent=True) or {}
+    slot_targets = data.get('slot_targets')
+    if slot_targets is None:
+        state.add_log_entry(
+            f"❌ Feeds save rejected on <b>{loc_id}</b>: missing slot_targets",
+            "ERROR", "ff0000"
+        )
+        return jsonify({"error": "missing_slot_targets"}), 400
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    ok, errors, warnings = locations_db.set_dryer_box_bindings(loc_id, slot_targets, printer_map)
+    if not ok:
+        reasons = "; ".join(f"slot {e[0]} → {e[1]}: {e[2]}" for e in errors) or "validation failed"
+        state.add_log_entry(
+            f"❌ Feeds save rejected on <b>{loc_id}</b>: {reasons}",
+            "ERROR", "ff0000"
+        )
+        return jsonify({
+            "error": "validation_failed",
+            "location": loc_id,
+            "errors": [
+                {"slot": e[0], "target": e[1], "reason": e[2]} for e in errors
+            ],
+        }), 400
+    state.add_log_entry(
+        f"🔗 Bindings updated for <b>{loc_id}</b>"
+        + (f" ⚠️ {len(warnings)} warning(s)" if warnings else ""),
+        "INFO", "00d4ff"
+    )
+    for w_slot, w_target, w_reason in warnings:
+        state.add_log_entry(
+            f"⚠️ Binding warning on <b>{loc_id}</b> slot {w_slot} → {w_target}: {w_reason}",
+            "WARNING", "ffaa00"
+        )
+    return jsonify({
+        "location": loc_id,
+        "slot_targets": locations_db.get_dryer_box_bindings(loc_id) or {},
+        "warnings": [
+            {"slot": w[0], "target": w[1], "reason": w[2]} for w in warnings
+        ],
+    })
+
+
+@app.route('/api/printer_map', methods=['GET'])
+def api_printer_map():
+    """Read-only view of config.json's printer_map, grouped for UI use:
+    {
+      "printers": {
+        "🦝 XL": [{"location_id": "XL-1", "position": 0}, ...],
+        "🦝 Core One": [...]
+      }
+    }
+    """
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    grouped = {}
+    for loc_id, info in printer_map.items():
+        name = info.get('printer_name', 'Unknown')
+        grouped.setdefault(name, []).append({
+            "location_id": loc_id.upper(),
+            "position": info.get('position', 0),
+        })
+    # Stable sort within each printer by position.
+    for entries in grouped.values():
+        entries.sort(key=lambda e: (e['position'], e['location_id']))
+    return jsonify({"printers": grouped})
+
+
+@app.route('/api/dryer_boxes/slots', methods=['GET'])
+def api_all_dryer_box_slots():
+    """Enumerate every slot across every Dryer Box, flat. Each entry carries
+    current binding (may be null). Powers the "bind a slot to this toolhead"
+    quick-picker. Cheap — single locations.json read, no Spoolman calls.
+    """
+    loc_list = locations_db.load_locations_list()
+    out = []
+    for row in loc_list:
+        if row.get('Type') != locations_db.DRYER_BOX_TYPE:
+            continue
+        box_id = str(row.get('LocationID', '')).strip()
+        try:
+            max_slots = int(str(row.get('Max Spools', '0')).strip() or '0')
+        except ValueError:
+            max_slots = 0
+        targets = (row.get('extra') or {}).get('slot_targets') or {}
+        for n in range(1, max_slots + 1):
+            slot = str(n)
+            target = targets.get(slot)
+            out.append({
+                "box": box_id,
+                "box_name": row.get('Name', box_id),
+                "slot": slot,
+                "target": target,  # None => unbound
+            })
+    # Sort: unbound first (so the picker can promote quickly), then by box id.
+    out.sort(key=lambda e: (e['target'] is not None, e['box'], int(e['slot'])))
+    return jsonify({"slots": out})
+
+
+@app.route('/api/dryer_box/<loc_id>/bindings/<slot>', methods=['PUT'])
+def api_single_slot_binding_put(loc_id, slot):
+    """Patch a single slot's binding without needing to send the whole
+    slot_targets map. Used by the quick-bind picker on the toolhead view.
+    """
+    data = request.get_json(silent=True) or {}
+    target = data.get('target')
+
+    # Load current bindings, update just this slot, persist through the
+    # full validator so the same rules apply.
+    current = locations_db.get_dryer_box_bindings(loc_id)
+    if current is None:
+        state.add_log_entry(
+            f"❌ Binding rejected: <b>{loc_id}</b> is not a dryer box",
+            "ERROR", "ff0000"
+        )
+        return jsonify({"error": "not_a_dryer_box", "location": loc_id}), 404
+    next_targets = dict(current)
+    if target in (None, '', 'null', 'None'):
+        next_targets.pop(str(slot), None)
+    else:
+        next_targets[str(slot)] = str(target)
+
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    ok, errors, warnings = locations_db.set_dryer_box_bindings(loc_id, next_targets, printer_map)
+    if not ok:
+        reasons = "; ".join(f"slot {e[0]} → {e[1]}: {e[2]}" for e in errors) or "validation failed"
+        state.add_log_entry(
+            f"❌ Binding rejected on <b>{loc_id}</b>: {reasons}",
+            "ERROR", "ff0000"
+        )
+        return jsonify({
+            "error": "validation_failed",
+            "location": loc_id, "slot": slot,
+            "errors": [{"slot": e[0], "target": e[1], "reason": e[2]} for e in errors],
+        }), 400
+    suffix = f" → {target}" if target else " → (none)"
+    state.add_log_entry(
+        f"🔗 {loc_id} slot {slot}{suffix}"
+        + (f" ⚠️ {len(warnings)} warning(s)" if warnings else ""),
+        "INFO", "00d4ff"
+    )
+    for w_slot, w_target, w_reason in warnings:
+        state.add_log_entry(
+            f"⚠️ Binding warning on <b>{loc_id}</b> slot {w_slot} → {w_target}: {w_reason}",
+            "WARNING", "ffaa00"
+        )
+    return jsonify({
+        "location": loc_id,
+        "slot": slot,
+        "slot_targets": locations_db.get_dryer_box_bindings(loc_id) or {},
+        "warnings": [{"slot": w[0], "target": w[1], "reason": w[2]} for w in warnings],
+    })
+
+
+@app.route('/api/quickswap/return', methods=['POST'])
+def api_quickswap_return():
+    """Reverse quick-swap: take whatever spool is currently on `toolhead`
+    and send it back to the first dryer-box slot bound to that toolhead.
+
+    Accepts either a specific toolhead location ID (e.g. "XL-1") or a
+    virtual-printer prefix (e.g. "XL") — in the latter case we fan out
+    across every toolhead of that printer and return the first one that
+    has a spool loaded.
+    """
+    data = request.get_json(silent=True) or {}
+    toolhead = str(data.get('toolhead', '')).strip().upper()
+    if not toolhead:
+        state.add_log_entry(
+            "❌ Return rejected: missing toolhead in request",
+            "ERROR", "ff0000"
+        )
+        return jsonify({"action": "return_bad_request", "error": "toolhead required"}), 400
+
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+
+    # Build the list of toolhead IDs we should check. For a virtual
+    # printer prefix, this is every toolhead in printer_map that starts
+    # with "<prefix>-". For a specific toolhead, it's just that ID.
+    pm_keys_up = {k.upper() for k in printer_map.keys()}
+    candidate_toolheads = []
+    if toolhead in pm_keys_up:
+        candidate_toolheads = [toolhead]
+    else:
+        prefix = toolhead + '-'
+        candidate_toolheads = sorted(k for k in pm_keys_up if k.startswith(prefix))
+
+    if not candidate_toolheads:
+        state.add_log_entry(
+            f"⚠️ Return: {toolhead} is not a registered toolhead or printer",
+            "WARNING", "ffaa00"
+        )
+        return jsonify({"action": "return_bad_toolhead", "toolhead": toolhead}), 404
+
+    # 1) Find the first candidate toolhead that has a loaded spool.
+    active_toolhead, spool_id = None, None
+    for th in candidate_toolheads:
+        residents = spoolman_api.get_spools_at_location(th)
+        if residents:
+            active_toolhead = th
+            spool_id = int(residents[0])
+            break
+    if not active_toolhead:
+        names = ", ".join(candidate_toolheads) if len(candidate_toolheads) > 1 else candidate_toolheads[0]
+        state.add_log_entry(
+            f"⚠️ Return: {names} is empty — nothing to return",
+            "WARNING", "ffaa00"
+        )
+        return jsonify({
+            "action": "return_no_spool",
+            "toolhead": toolhead,
+            "candidates": candidate_toolheads,
+        }), 404
+
+    # 2) Figure out where to send the spool back.
+    #    Preferred: the spool's recorded physical_source (where it came
+    #    from when it was deployed to this toolhead). That's what the
+    #    user's mental model of "return" maps to, and it handles the
+    #    multi-box-per-toolhead case correctly.
+    #    Fallback: the first dryer-box slot bound to this toolhead.
+    spool_data = spoolman_api.get_spool(spool_id) or {}
+    extra = spool_data.get('extra') or {}
+    src_loc = str(extra.get('physical_source', '') or '').strip().strip('"').upper()
+    src_slot = str(extra.get('physical_source_slot', '') or '').strip().strip('"')
+
+    loc_list = locations_db.load_locations_list()
+    found_box, found_slot, found_source = None, None, None
+
+    # Preferred path: physical_source points at a Dryer Box and that slot
+    # is currently bound to `active_toolhead`. If the slot has drifted
+    # (e.g. user reassigned it elsewhere), we still honor physical_source
+    # as long as the box exists — it's where the user pulled the spool from.
+    if src_loc:
+        for row in loc_list:
+            if str(row.get('LocationID', '')).strip().upper() != src_loc:
+                continue
+            if row.get('Type') != locations_db.DRYER_BOX_TYPE:
+                break
+            found_box = row['LocationID']
+            found_slot = src_slot or None
+            found_source = 'physical_source'
+            break
+
+    # Fallback: scan bindings for the first dryer-box slot bound to this toolhead.
+    if not found_box:
+        for row in loc_list:
+            if row.get('Type') != locations_db.DRYER_BOX_TYPE:
+                continue
+            targets = (row.get('extra') or {}).get('slot_targets') or {}
+            for slot, target in targets.items():
+                if target and str(target).upper() == active_toolhead:
+                    found_box = row['LocationID']
+                    found_slot = slot
+                    found_source = 'first_binding'
+                    break
+            if found_box:
+                break
+
+    if not found_box:
+        state.add_log_entry(
+            f"⚠️ Return: {active_toolhead} has no bound dryer box slot and no physical_source — can't return",
+            "WARNING", "ffaa00"
+        )
+        return jsonify({
+            "action": "return_no_binding",
+            "toolhead": active_toolhead,
+            "requested": toolhead,
+        }), 404
+    # Re-tag toolhead in the response to the actual one we acted on.
+    toolhead = active_toolhead
+
+    # 3) Send the spool back. perform_smart_move handles Filabridge + extras.
+    move_result = logic.perform_smart_move(
+        found_box, [spool_id], target_slot=found_slot, origin='quickswap_return'
+    )
+    src_note = " (original source)" if found_source == 'physical_source' else " (first bound slot)"
+    slot_part = f":SLOT:{found_slot}" if found_slot else ""
+    state.add_log_entry(
+        f"↩️ Return: Spool #{spool_id} from <b>{toolhead}</b> → <b>{found_box}{slot_part}</b>{src_note}",
+        "SUCCESS", "00ff00"
+    )
+    return jsonify({
+        "action": "return_done",
+        "moved": spool_id,
+        "toolhead": toolhead,
+        "box": found_box,
+        "slot": found_slot,
+        "source": found_source,
+        "smart_move": move_result,
+    }), 200
+
+
+@app.route('/api/quickswap', methods=['POST'])
+def api_quickswap():
+    """Tap-to-swap: move the spool currently in (box, slot) into the given
+    toolhead. Reuses perform_smart_move for the actual move — that
+    function already handles auto-eject of any occupant, container_slot
+    cleanup, physical_source tracking, and the Filabridge map_toolhead
+    notification.
+    """
+    data = request.get_json(silent=True) or {}
+    toolhead = str(data.get('toolhead', '')).strip().upper()
+    box = str(data.get('box', '')).strip().upper()
+    slot = str(data.get('slot', '')).strip()
+
+    if not toolhead or not box or not slot:
+        state.add_log_entry(
+            f"❌ Quick-swap rejected: missing required field "
+            f"(toolhead={toolhead or '—'}, box={box or '—'}, slot={slot or '—'})",
+            "ERROR", "ff0000"
+        )
+        return jsonify({
+            "action": "quickswap_bad_request",
+            "error": "toolhead, box, and slot are all required",
+        }), 400
+
+    # Verify the binding actually exists. Guards against stale UI state
+    # racing against a concurrent binding edit elsewhere.
+    bindings = locations_db.get_dryer_box_bindings(box)
+    if bindings is None:
+        state.add_log_entry(
+            f"❌ Quick-swap rejected: <b>{box}</b> is not a dryer box",
+            "ERROR", "ff0000"
+        )
+        return jsonify({
+            "action": "quickswap_bad_box",
+            "box": box,
+            "error": "not a dryer box",
+        }), 404
+    bound_target = bindings.get(slot)
+    if not bound_target or str(bound_target).upper() != toolhead:
+        state.add_log_entry(
+            f"⚠️ Quick-swap: stale binding — <b>{box}:SLOT:{slot}</b> is "
+            f"bound to <b>{bound_target or '(nothing)'}</b>, not {toolhead}",
+            "WARNING", "ffaa00"
+        )
+        return jsonify({
+            "action": "quickswap_not_bound",
+            "box": box, "slot": slot, "toolhead": toolhead,
+            "bound_to": bound_target,
+            "error": "slot is not bound to this toolhead",
+        }), 400
+
+    spool_id = logic.find_spool_in_slot(box, slot)
+    if not spool_id:
+        state.add_log_entry(
+            f"⚠️ Quick-swap: slot {box}:SLOT:{slot} is empty — no spool to move to {toolhead}",
+            "WARNING", "ffaa00"
+        )
+        return jsonify({
+            "action": "quickswap_empty_slot",
+            "box": box, "slot": slot, "toolhead": toolhead,
+        }), 404
+
+    move_result = logic.perform_smart_move(
+        toolhead, [spool_id], target_slot=None, origin='quickswap'
+    )
+    state.add_log_entry(
+        f"⚡ Quick-swap: Spool #{spool_id} from <b>{box}:SLOT:{slot}</b> → <b>{toolhead}</b>",
+        "SUCCESS", "00ff00"
+    )
+    return jsonify({
+        "action": "quickswap_done",
+        "moved": spool_id,
+        "toolhead": toolhead, "box": box, "slot": slot,
+        "smart_move": move_result,
+    }), 200
+
+
+@app.route('/api/machine/<path:printer_name>/toolhead_slots', methods=['GET'])
+def api_machine_toolhead_slots(printer_name):
+    """Reverse lookup: for a printer, return every (box, slot) pair that
+    feeds each of its toolheads. `printer_name` may contain emoji and
+    spaces — the <path:> converter keeps them intact across the URL."""
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    result = locations_db.get_bindings_for_machine(printer_name, printer_map)
+    # 404 when the printer_name matches zero printer_map entries.
+    if not result['toolheads']:
+        return jsonify({
+            "printer_name": printer_name,
+            "toolheads": {},
+            "error": "printer_not_found",
+        }), 404
+    return jsonify(result)
 
 @app.route('/api/print_queue/pending', methods=['GET'])
 def api_print_queue_pending():
