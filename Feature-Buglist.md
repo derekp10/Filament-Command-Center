@@ -1,8 +1,6 @@
 # **New and Unsorted Features/Bugs**
 
-* A help window that contains at the very least the a cheat sheet for the different XXX: codes and what they mean. (FIL: for filament, LOC: for location, etc.) Will need to hunt through the code for this one.
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
-* Scanning a new spool into a dryer box slot doesn't imidiately unload the currently existing spool. We may want to entirely re think the way the eject process works when replacing one spool out for another. This is mostly a dryer box thing.
 * Loading a dryer box, at the very least, slots load with an initial data set, and then i think the 5 second tick goes off, and fills them in completely. Seems to be a difference between what the initial card load does, and the data provided from the 5 second tick. We should probably make the initial card load load the same data as the 5 second tick.
 * Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
 * If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
@@ -14,37 +12,23 @@
 * In location manager, if an item is added to a loction that has slots, and there is a free slot, auto assign the item into that free slot. (If there are multiple free slots, fill the first empty one.)
 
 * I know we fixed it for scanning items, but hand typed id's into the command center's main page can sometimes add an item, that then gets imidiately removed on backend refresh. We need to fix this from happening when loading items without the use of a barcode. (Basically bring the protections we recently added to barcode scans reguarding this issue, to also preserve manual entries too.)
-* Fix getting lagacy location scann errors with barcodes generated as part of the UI. All barcodes should use there proper prefex and be displayed using the current standards defined. I shouldn't see a lagacy barcode error when using the deploy QR code on a Manage Location window.
 * Review and unify update logic across the program, we have to many versions of update that keep getting orphined, or cause problems later on when they aren't included in a recent design change. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
 * Figure out why playright can't be run or is not installed on the local docker if that is the issue, otherwise find out if we need to add it to dev, and if needed add it to live/prod if it makes sense.
 
 * Filabridge status light is still blinking on and of, just more eraticly now. Need to look into this further.
 
 
-* Check to make sure that when a new filament barcode is scanned, that the proper database fields are updated to mark the filament as labeled, so it doesn't appear in the Backlog queue. I scanned on e but didn't see a message in the Live Activity log. Needs label print for (FIL:58) lists as null, don't know if this was because it was blank in the spoolman UI, because this is an old filament physical swatch.
+* Check why FIL:58 wasn't marked as labeled when scanned. The `label_printed` field was retired in M7 and replaced with `needs_label_print` (boolean) — barcode-scan path now updates this field at `app.py:921-922, 968-969`. The FIL:58 case specifically needs manual repro to see whether the update fires and why Activity Log was silent. Could be because FIL:58 is an old physical swatch with no prior spoolman state.
 
 * Check to see if changes to spool card gradint/coextredud color modificaitons were also applied to the Filament cards. (They should have been, this is supposed to be a unified code set for this type of item.)
 
 * Adding filament to an archived filament should automatically unarchive the filament.
 
-* Add a cleaner easier way to see what filaments are on a printer, with out having to drill down into location list, and location manager to see them.
-
-* Ejecting a fillament while in the command center main menu buffer, doesn't clear the deployed status of the spool.
-
 * We either need a way to detect if MMU mode is one. Or change how M0 & M1 work for weight deductions. I did a test with a filament in both M0 and M1, and it deducted value from both I think. I'm not sure on this as I didn't mark down how much was in M1 before the test. But we shouldn't have seen any deduction from M0. Perhaps we just bind the two together, where no matter what mode M1 is alwasy either the first MMU slot or for when the mmu is disabled and the filamentjust direct feeds into the toolhead.
 
-* Smart eject doesn't seem to be called when a new spool is assigned to a toolhead that already has a spool assigned to it. (CoreOne+ Noticed issue)
-
-* Clicking on the edit button with a spool in a location (not slotted), dismissing the edit spool modal causes the details modal to pop up. Details should only pop up when the edit button was used from the details window. We need to work on this better to make the windows work right.
-    - **Diagnosed 2026-04-21**: the wizard's `hidden.bs.modal` listener in [inv_wizard.js:21-34](inventory-hub/static/js/modules/inv_wizard.js#L21-L34) unconditionally calls `openFilamentDetails(fid)` / `openSpoolDetails(sid)` when it closes, regardless of where the Edit click originated. It needs an edit-launch-source flag (set by whoever calls `openEditWizard`) so it only re-opens Details when Details was the source. The manage-modal overlay pattern in [inv_loc_mgr.js](inventory-hub/static/js/modules/inv_loc_mgr.js) and [inv_quickswap.js](inventory-hub/static/js/modules/inv_quickswap.js) (named `window.close*` teardowns + `hidden.bs.modal` cleanup that resets state) is the reference for how this kind of cross-modal flow should be structured.
-    - Separate sub-bug: "sometimes just Display modal on display modal" — suspect this is the filament→spool chain at [inv_details.js:304](inventory-hub/static/js/modules/inv_details.js#L304) interacting with the silent-refresh paths at lines 386/395. Needs its own reproduction trace before fixing.
-    - **NOT fixed by the round-7 overlay-dismiss work** — that was scoped to inline overlays inside `#manageModal`, not cross-modal Bootstrap stacks.
-
-* Eject button on unslotted location items doesn't actully remove from list, and pops up a modal/window for a second to confirm setting it to unassinged, but dissipears. The item should just be removed from the list, and set to it's last location. if it's last location is unknow, set to unassinged, or propt user about it, or warn in live activity.
+* Sub-bug: "Display modal on Display modal" — suspect this is the filament→spool chain at [inv_details.js:304](inventory-hub/static/js/modules/inv_details.js#L304) interacting with the silent-refresh paths at lines 386/395. Needs its own reproduction trace before fixing.
 
 * An unknow issue caused the frontend to lock up, causing it to no longer update to take barcodes. A hard refresh (Control shift R and Control F5) fixed it. We need to figure out what caused this, and fix it so it doesn't happen again. This could be related to the eject button issue above. Also seemed to have cause updates to filabridge to stop until the front end was refreshed.
-
-* Spool cards displayed on the filament command center's main menu buffer, do not display there locations. This needs to be added so the user doesn't need to bring up the display modal to see it's current location.
 
 * It appears that while I was editing a spool's filament data that was sloted into a print head, saving caused it to be removed. We need to check to see why that is. Or the filament's location was listed the correct location, but it the location was regestring as empty 0/1 on location list modal, and nothing assigned inside the location manager modal.
 
@@ -55,8 +39,6 @@
 * Text Cacing is being changed on some manufactures (CC3D being Cc3D) and should just show the actual name without trying to correct it.
 
 * `test_manual_loc_override_e2e` — offcanvas-intercept bug fixed in M0. Currently xfailed because the Force Location modal was refactored from `<select>` to a searchable list; step 6 still drives the old select. Rewrite test against the new search+list UI.
-
-* Server reboots seem to be resetting dryerbox slot numbers. Need to look into the code and confirm if this is the case of if it's something else. This might be related to the core one + ejcect system not properly slotting items back into there locations when a smart swap/change engages?
 
 * FCC Main Main screen buffer cards still don't always update after several backend changes. Setting filament to 0, doesn't seem to update to unassinged or it's deployed status.
 
@@ -83,7 +65,6 @@
 
 ## 🗂️ Modals & Add Inventory Wizard
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
-* For existing filaments, advanced search should also be able to accept a Filament from the search function. Seemed to be some sort of bug.
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
 * For the add/edit inventory wizzard modal, make the location searchable like in the filament/spool display modal's version.
@@ -93,6 +74,7 @@
 * Adding a new slicer profile should automatically add that profile to the current filament being edited.
 * Spoolmans field ordering bug causing fields in the Add/Edit enventory window to move if a custom field is modified or has new items added to it. Need to look at locking down the order of things.
 * SweetAlert2 does not support nested modals — calling `Swal.fire()` while one is already open replaces the first one. Any future confirmation dialogs inside SweetAlert modals must use inline overlay divs (see force location modal's `#fcc-escape-confirm-overlay` pattern) instead of nested `Swal.fire()` calls. Audit existing code for any other nested Swal usage.
+    - **2026-04-21 audit**: one remaining nested call at [inv_wizard.js:895](inventory-hub/static/js/modules/inv_wizard.js#L895) — the "Added!" success confirmation inside the add-new-custom-field `.then()` chain. Addressed in the wizard-ux-polish bundle.
 
 ## 🔍 Search, Display & Filtering
 * Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.
@@ -106,7 +88,6 @@
 ## 📍 Location Management & Scanning
 * Refactor the entire location managment system from the ground up. It's currently being a bit too complicated, and I think it can be cleaned up a bit if we just rethink the flow of this process. We've bolted a lot of stuff onto this system, and the has caused it to become a bit too cumbersome to both code and work with. I think we need to build in a better system for linking locations and device/boxes/storage things. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
 * The ability to configure a box to change the slot order to go from left to right, or right to left.
-* CR-MDB-1:SLOT:4 is treated as a location not a slot in a box. (I believe this was fixed, we need to check on it.)
 
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
