@@ -201,7 +201,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!modalEl) return;
 
     // Escape → closeManage (which pops the breadcrumb if one exists).
-    modalEl.addEventListener('keydown', (e) => {
+    // Listen on document (capture phase) rather than on the modal element
+    // itself, because Bootstrap triggers its own dismiss from a
+    // document-level handler and initial focus often isn't inside the
+    // modal content (the user clicked a button to open it). Capture
+    // phase + stopImmediatePropagation preempts Bootstrap's handler.
+    document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         if (!modalEl.classList.contains('show')) return;
         // Don't hijack Escape when an inline overlay inside the modal is

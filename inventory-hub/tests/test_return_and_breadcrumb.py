@@ -222,8 +222,11 @@ def test_escape_key_pops_breadcrumb_instead_of_closing(page: Page, base_url: str
     assert away and away != TEST_TOOLHEAD, (
         f"Edit Full Bindings should have navigated away; still on {away!r}"
     )
-    # Press Escape — should pop back to the toolhead, not dismiss the modal.
-    page.locator("#manageModal").press("Escape")
+    # Press Escape WITHOUT first clicking into the modal. Initial focus
+    # after openManage is usually the triggering element, not the modal
+    # body — so a listener that lived on #manageModal wouldn't see it.
+    # Our handler is on document (capture phase), so this works.
+    page.locator("body").press("Escape")
     page.wait_for_timeout(700)
     expect(page.locator("#manageModal")).to_be_visible()
     expect(page.locator("#manage-loc-id")).to_have_value(TEST_TOOLHEAD)
@@ -232,10 +235,10 @@ def test_escape_key_pops_breadcrumb_instead_of_closing(page: Page, base_url: str
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
 def test_escape_key_from_top_of_stack_closes_modal(page: Page, base_url: str):
     """Escape with no breadcrumb to pop should still close the modal
-    (same as the X button's behavior on an empty stack)."""
+    (same as the X button's behavior on an empty stack). Press from
+    <body> to verify the handler fires regardless of focus location."""
     _open_manage(page, base_url, TEST_TOOLHEAD)
-    # Stack is empty — Escape should close.
-    page.locator("#manageModal").press("Escape")
+    page.locator("body").press("Escape")
     page.wait_for_timeout(700)
     expect(page.locator("#manageModal")).to_be_hidden()
 
