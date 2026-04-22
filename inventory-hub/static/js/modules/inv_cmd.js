@@ -168,35 +168,47 @@ const processScan = (text, source = 'keyboard') => {
                             const item = items.find(i => String(i.slot) === String(res.slot));
                             if (item) {
                                 if (state.heldSpools.some(s => s.id === item.id)) {
-                                    showToast("Already in Buffer", "warning", 5000);
+                                    showToast("Already in Buffer", "warning", 3500);
                                 } else {
                                     state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color, color_direction: item.color_direction, remaining_weight: item.remaining_weight, details: item.details, archived: item.archived });
                                     renderBuffer();
-                                    showToast(`✋ Picked up #${item.id} from ${res.location}:SLOT:${res.slot}`, 'success', 4000);
+                                    showToast(`✋ Picked up #${item.id} from ${res.location}:SLOT:${res.slot}`, 'success', 2500);
                                     fetch('/api/log_event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msg: `✋ Pickup: Spool #${item.id} from <b>${res.location}:SLOT:${res.slot}</b>`, level: 'INFO' }) });
                                 }
                             } else {
-                                showToast(`Slot ${res.slot} on ${res.location} is empty — opening manager`, 'info', 5000);
+                                showToast(`Slot ${res.slot} on ${res.location} is empty — opening manager`, 'info', 3000);
+                                if (window.logClientEvent) window.logClientEvent(
+                                    `⚠️ Slot scan ${res.location}:SLOT:${res.slot} — slot is empty (opened manager)`,
+                                    'WARNING'
+                                );
                                 openManage(res.location);
                             }
                         })
                         .catch(e => {
                             console.error(e);
-                            showToast("Error looking up slot", "error", 7000);
+                            showToast("Error looking up slot", "error", 5000);
+                            if (window.logClientEvent) window.logClientEvent(
+                                `❌ Slot pickup failed for ${res.location}:SLOT:${res.slot}: ${e && e.message ? e.message : 'network error'}`,
+                                'ERROR'
+                            );
                         });
                 } else if (res.action === 'assignment_bad_slot') {
                     const limit = res.max_slots != null ? ` (has ${res.max_slots} slots)` : '';
-                    showToast(`❌ Slot ${res.slot} invalid for ${res.location}${limit}`, 'error', 8000);
+                    showToast(`❌ Slot ${res.slot} invalid for ${res.location}${limit}`, 'error', 5000);
                 } else if (res.action === 'assignment_bad_target') {
-                    showToast(`❌ ${res.location} isn't a valid load target`, 'error', 8000);
+                    showToast(`❌ ${res.location} isn't a valid load target`, 'error', 5000);
                 } else {
                     // Unknown action code — shouldn't happen, but surface it.
-                    showToast(`Unknown assignment result: ${res.action || 'none'}`, 'warning', 7000);
+                    showToast(`Unknown assignment result: ${res.action || 'none'}`, 'warning', 4000);
+                    if (window.logClientEvent) window.logClientEvent(
+                        `⚠️ Unknown assignment action from backend: ${res.action || 'none'}`,
+                        'WARNING'
+                    );
                 }
             } else if (res.type === 'location') {
                 if (!text.toUpperCase().startsWith('LOC:')) {
                     const msg = "⚠️ Legacy Location Label Scanned! Features may be limited. Print a new LOC: label when possible.";
-                    showToast(msg, "warning", 5000);
+                    showToast(msg, "warning", 3500);
                     fetch('/api/log_event', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({msg: "SCAN LOG: Legacy Location Barcode Scanned (" + text + ")", level: "WARNING"}) });
                 }
                 if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }

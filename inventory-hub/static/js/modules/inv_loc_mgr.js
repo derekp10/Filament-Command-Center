@@ -454,24 +454,28 @@ window.saveFeedsSection = () => {
                     status.className = 'flex-grow-1 fw-bold text-warning';
                     const wTxt = warnings.map(w => `⚠️ Slot ${w.slot} → ${w.target}: ${w.reason}`).join('\n');
                     status.innerText = `Saved ${count} binding(s) — ${warnings.length} warning(s)\n${wTxt}`;
-                    showToast(`⚠️ Feeds saved with ${warnings.length} warning(s) — see log`, 'warning', 8000);
+                    showToast(`⚠️ Feeds saved with ${warnings.length} warning(s) — see log`, 'warning', 5000);
                 } else {
                     status.className = 'flex-grow-1 fw-bold text-success';
                     status.innerText = `✅ Saved ${count} binding(s)`;
-                    showToast(`🔗 Saved feeds for ${locId}`, 'success', 4000);
+                    showToast(`🔗 Saved feeds for ${locId}`, 'success', 2500);
                 }
             } else {
                 status.className = 'flex-grow-1 fw-bold text-danger';
                 const errs = (body.errors || []).map(e => `Slot ${e.slot}: ${e.reason}`).join('; ');
                 status.innerText = errs || body.error || 'Save failed';
-                showToast(`❌ Feeds save rejected: ${errs || body.error}`, 'error', 8000);
+                showToast(`❌ Feeds save rejected: ${errs || body.error}`, 'error', 5000);
             }
         })
         .catch(e => {
             console.error(e);
             status.className = 'flex-grow-1 fw-bold text-danger';
             status.innerText = 'Network error';
-            showToast('Feeds save — network error', 'error', 7000);
+            showToast('Feeds save — network error', 'error', 5000);
+            if (window.logClientEvent) window.logClientEvent(
+                `❌ Feeds save network error for ${locId}: ${e && e.message ? e.message : 'connection failed'}`,
+                'ERROR'
+            );
         });
 };
 

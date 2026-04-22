@@ -476,9 +476,7 @@
         "Name": "PolyMaker Dryer Box 1",
         "Label Printed": "Yes",
         "extra": {
-            "slot_targets": {
-                "1": "XL-1"
-            }
+            "slot_targets": {}
         }
     },
     {

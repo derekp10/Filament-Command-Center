@@ -71,13 +71,34 @@ def test_ui_slot_scan_no_buffer_triggers_pickup_flow(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("clean_buffer", "require_server")
-def test_ui_slot_scan_toast_error_duration_is_long_enough(page: Page, base_url: str):
-    """Error toasts should stick around for at least 7 seconds — blind
-    scanners miss short toasts."""
+def test_ui_slot_scan_toast_error_is_long_enough_to_read(page: Page, base_url: str):
+    """Error toasts should stick around long enough to read (>= 3 s) but
+    not so long they get in the way — since round-8 the Activity Log is
+    the authoritative record so we dropped errors from 8 s to 5 s."""
     _goto_and_wait(page, base_url)
     _fire_scan(page, "LOC:NOT-A-REAL-PLACE:SLOT:1")
     toast = page.locator(".toast-msg.toast-error").first
     expect(toast).to_be_visible(timeout=3000)
-    # Still visible after 5 seconds — shorter than the 8 s duration.
-    page.wait_for_timeout(5000)
+    # Still visible 3 s in (comfortable read time). Error duration is 5 s.
+    page.wait_for_timeout(3000)
     expect(toast).to_be_visible()
+
+
+@pytest.mark.usefixtures("clean_buffer", "require_server")
+def test_ui_toast_click_dismisses_immediately(page: Page, base_url: str):
+    """Clicking a toast should dismiss it on the spot — zero-cost escape
+    hatch when the user has already absorbed the message."""
+    _goto_and_wait(page, base_url)
+    _fire_scan(page, "LOC:NOT-A-REAL-PLACE:SLOT:1")
+    toast = page.locator(".toast-msg.toast-error").first
+    expect(toast).to_be_visible(timeout=3000)
+    # Use JS click to bypass pointer-event hit testing (Bootstrap layout
+    # sometimes has non-toast ancestors intercept positioned-overlay
+    # clicks in headless mode). The user-visible click handler is the
+    # same listener wired by showToast, so this exercises the same code
+    # path.
+    toast.evaluate("el => el.click()")
+    page.wait_for_timeout(600)
+    assert page.locator(".toast-msg.toast-error").count() == 0, (
+        "Clicking a toast should remove it from the DOM"
+    )

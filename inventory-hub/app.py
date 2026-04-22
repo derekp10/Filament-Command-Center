@@ -1118,11 +1118,20 @@ def api_dryer_box_bindings_put(loc_id):
     data = request.get_json(silent=True) or {}
     slot_targets = data.get('slot_targets')
     if slot_targets is None:
+        state.add_log_entry(
+            f"❌ Feeds save rejected on <b>{loc_id}</b>: missing slot_targets",
+            "ERROR", "ff0000"
+        )
         return jsonify({"error": "missing_slot_targets"}), 400
     cfg = config_loader.load_config()
     printer_map = cfg.get('printer_map', {}) or {}
     ok, errors, warnings = locations_db.set_dryer_box_bindings(loc_id, slot_targets, printer_map)
     if not ok:
+        reasons = "; ".join(f"slot {e[0]} → {e[1]}: {e[2]}" for e in errors) or "validation failed"
+        state.add_log_entry(
+            f"❌ Feeds save rejected on <b>{loc_id}</b>: {reasons}",
+            "ERROR", "ff0000"
+        )
         return jsonify({
             "error": "validation_failed",
             "location": loc_id,
@@ -1217,6 +1226,10 @@ def api_single_slot_binding_put(loc_id, slot):
     # full validator so the same rules apply.
     current = locations_db.get_dryer_box_bindings(loc_id)
     if current is None:
+        state.add_log_entry(
+            f"❌ Binding rejected: <b>{loc_id}</b> is not a dryer box",
+            "ERROR", "ff0000"
+        )
         return jsonify({"error": "not_a_dryer_box", "location": loc_id}), 404
     next_targets = dict(current)
     if target in (None, '', 'null', 'None'):
@@ -1228,6 +1241,11 @@ def api_single_slot_binding_put(loc_id, slot):
     printer_map = cfg.get('printer_map', {}) or {}
     ok, errors, warnings = locations_db.set_dryer_box_bindings(loc_id, next_targets, printer_map)
     if not ok:
+        reasons = "; ".join(f"slot {e[0]} → {e[1]}: {e[2]}" for e in errors) or "validation failed"
+        state.add_log_entry(
+            f"❌ Binding rejected on <b>{loc_id}</b>: {reasons}",
+            "ERROR", "ff0000"
+        )
         return jsonify({
             "error": "validation_failed",
             "location": loc_id, "slot": slot,
@@ -1265,6 +1283,10 @@ def api_quickswap_return():
     data = request.get_json(silent=True) or {}
     toolhead = str(data.get('toolhead', '')).strip().upper()
     if not toolhead:
+        state.add_log_entry(
+            "❌ Return rejected: missing toolhead in request",
+            "ERROR", "ff0000"
+        )
         return jsonify({"action": "return_bad_request", "error": "toolhead required"}), 400
 
     cfg = config_loader.load_config()
@@ -1400,6 +1422,11 @@ def api_quickswap():
     slot = str(data.get('slot', '')).strip()
 
     if not toolhead or not box or not slot:
+        state.add_log_entry(
+            f"❌ Quick-swap rejected: missing required field "
+            f"(toolhead={toolhead or '—'}, box={box or '—'}, slot={slot or '—'})",
+            "ERROR", "ff0000"
+        )
         return jsonify({
             "action": "quickswap_bad_request",
             "error": "toolhead, box, and slot are all required",
@@ -1409,6 +1436,10 @@ def api_quickswap():
     # racing against a concurrent binding edit elsewhere.
     bindings = locations_db.get_dryer_box_bindings(box)
     if bindings is None:
+        state.add_log_entry(
+            f"❌ Quick-swap rejected: <b>{box}</b> is not a dryer box",
+            "ERROR", "ff0000"
+        )
         return jsonify({
             "action": "quickswap_bad_box",
             "box": box,
@@ -1416,6 +1447,11 @@ def api_quickswap():
         }), 404
     bound_target = bindings.get(slot)
     if not bound_target or str(bound_target).upper() != toolhead:
+        state.add_log_entry(
+            f"⚠️ Quick-swap: stale binding — <b>{box}:SLOT:{slot}</b> is "
+            f"bound to <b>{bound_target or '(nothing)'}</b>, not {toolhead}",
+            "WARNING", "ffaa00"
+        )
         return jsonify({
             "action": "quickswap_not_bound",
             "box": box, "slot": slot, "toolhead": toolhead,

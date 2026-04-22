@@ -282,19 +282,23 @@
             .then(async r => ({ ok: r.ok, body: await r.json() }))
             .then(({ ok, body }) => {
                 if (ok && body.action === 'quickswap_done') {
-                    showToast(`⚡ Spool #${body.moved} → ${opts.toolhead}`, 'success', 4000);
+                    showToast(`⚡ Spool #${body.moved} → ${opts.toolhead}`, 'success', 2500);
                     _refreshAfterMove();
                 } else if (body.action === 'quickswap_empty_slot') {
-                    showToast(`⚠️ ${opts.box} slot ${opts.slot} is empty — nothing to swap`, 'warning', 7000);
+                    showToast(`⚠️ ${opts.box} slot ${opts.slot} is empty — nothing to swap`, 'warning', 4000);
                 } else if (body.action === 'quickswap_not_bound') {
-                    showToast(`❌ Binding is stale — refresh and try again`, 'error', 8000);
+                    showToast(`❌ Binding is stale — refresh and try again`, 'error', 5000);
                 } else {
-                    showToast(`❌ Quick-swap failed: ${body.error || body.action || 'unknown'}`, 'error', 8000);
+                    showToast(`❌ Quick-swap failed: ${body.error || body.action || 'unknown'}`, 'error', 5000);
                 }
             })
             .catch(e => {
                 console.error(e);
-                showToast('Quick-swap — network error', 'error', 7000);
+                showToast('Quick-swap — network error', 'error', 5000);
+                if (window.logClientEvent) window.logClientEvent(
+                    `❌ Quick-swap network error: ${e && e.message ? e.message : 'connection failed'}`,
+                    'ERROR'
+                );
             });
     };
 
@@ -307,19 +311,23 @@
             .then(async r => ({ ok: r.ok, body: await r.json() }))
             .then(({ ok, body }) => {
                 if (ok && body.action === 'return_done') {
-                    showToast(`↩️ Spool #${body.moved} → ${body.box}:SLOT:${body.slot}`, 'success', 4000);
+                    showToast(`↩️ Spool #${body.moved} → ${body.box}:SLOT:${body.slot}`, 'success', 2500);
                     _refreshAfterMove();
                 } else if (body.action === 'return_no_spool') {
-                    showToast(`⚠️ ${opts.toolhead} is empty — nothing to return`, 'warning', 7000);
+                    showToast(`⚠️ ${opts.toolhead} is empty — nothing to return`, 'warning', 4000);
                 } else if (body.action === 'return_no_binding') {
-                    showToast(`⚠️ ${opts.toolhead} has no bound slot to return to`, 'warning', 7000);
+                    showToast(`⚠️ ${opts.toolhead} has no bound slot to return to`, 'warning', 4000);
                 } else {
-                    showToast(`❌ Return failed: ${body.error || body.action || 'unknown'}`, 'error', 8000);
+                    showToast(`❌ Return failed: ${body.error || body.action || 'unknown'}`, 'error', 5000);
                 }
             })
             .catch(e => {
                 console.error(e);
-                showToast('Return — network error', 'error', 7000);
+                showToast('Return — network error', 'error', 5000);
+                if (window.logClientEvent) window.logClientEvent(
+                    `❌ Return network error: ${e && e.message ? e.message : 'connection failed'}`,
+                    'ERROR'
+                );
             });
     };
 
@@ -327,7 +335,7 @@
         if (!btn) return;
         // Disabled buttons (empty slot) should be a no-op.
         if (btn.hasAttribute('disabled')) {
-            showToast(`⚠️ ${btn.dataset.box} slot ${btn.dataset.slot} is empty — nothing to swap`, 'warning', 6000);
+            showToast(`⚠️ ${btn.dataset.box} slot ${btn.dataset.slot} is empty — nothing to swap`, 'warning', 4000);
             return;
         }
         const opts = {
@@ -598,7 +606,7 @@
         // If this slot already feeds the target toolhead, don't bother
         // round-tripping — tell the user it's a no-op.
         if (String(pick.target || '').toUpperCase() === String(th).toUpperCase()) {
-            showToast(`✓ ${pick.box} slot ${pick.slot} already feeds ${th}`, 'info', 5000);
+            showToast(`✓ ${pick.box} slot ${pick.slot} already feeds ${th}`, 'info', 3000);
             return;
         }
         fetch(
@@ -628,12 +636,16 @@
                     }
                 } else {
                     const errs = (body.errors || []).map(e => `${e.slot}: ${e.reason}`).join('; ');
-                    showToast(`❌ ${errs || body.error || 'Binding failed'}`, 'error', 8000);
+                    showToast(`❌ ${errs || body.error || 'Binding failed'}`, 'error', 5000);
                 }
             })
             .catch(e => {
                 console.error(e);
-                showToast('Bind — network error', 'error', 7000);
+                showToast('Bind — network error', 'error', 5000);
+                if (window.logClientEvent) window.logClientEvent(
+                    `❌ Bind network error: ${e && e.message ? e.message : 'connection failed'}`,
+                    'ERROR'
+                );
             });
     };
 
@@ -654,7 +666,7 @@
             .then(({ ok, body }) => {
                 if (ok) {
                     showToast(`🔗✖ ${pick.box} slot ${pick.slot} unbound (was → ${pick.target})`,
-                        'success', 4000);
+                        'success', 2500);
                     // Keep the picker open and refresh its listing so the
                     // now-unbound slot jumps to the top.
                     _refreshPickerListing();
@@ -665,12 +677,16 @@
                     }
                 } else {
                     const errs = (body.errors || []).map(e => `${e.slot}: ${e.reason}`).join('; ');
-                    showToast(`❌ ${errs || body.error || 'Unbind failed'}`, 'error', 8000);
+                    showToast(`❌ ${errs || body.error || 'Unbind failed'}`, 'error', 5000);
                 }
             })
             .catch(e => {
                 console.error(e);
-                showToast('Unbind — network error', 'error', 7000);
+                showToast('Unbind — network error', 'error', 5000);
+                if (window.logClientEvent) window.logClientEvent(
+                    `❌ Unbind network error: ${e && e.message ? e.message : 'connection failed'}`,
+                    'ERROR'
+                );
             });
     };
 
@@ -682,7 +698,7 @@
 
     window.openBindSlotPicker = () => {
         if (!currentLoc) {
-            showToast('Open a toolhead first, then bind a slot.', 'warning', 5000);
+            showToast('Open a toolhead first, then bind a slot.', 'warning', 3500);
             return;
         }
         const ov = document.getElementById('fcc-bind-picker-overlay');
@@ -747,7 +763,11 @@
             })
             .catch(e => {
                 console.error(e);
-                showToast('Could not load dryer box slots', 'error', 7000);
+                showToast('Could not load dryer box slots', 'error', 5000);
+                if (window.logClientEvent) window.logClientEvent(
+                    `❌ Bind picker failed to load dryer box slots: ${e && e.message ? e.message : 'fetch failed'}`,
+                    'ERROR'
+                );
             });
 
         search.oninput = () => _pickerFilter(search.value);
