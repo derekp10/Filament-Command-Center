@@ -1,0 +1,46 @@
+#!/bin/sh
+# Pre-commit hook: reject any staged runtime-state files that slipped
+# past .gitignore. Backstop for the "dev testing committed locations.json
+# and clobbered prod on pull" class of bug.
+#
+# Enable per-clone with:
+#   git config core.hooksPath .githooks
+#
+# To force-commit one of these files intentionally (rare, not recommended):
+#   git commit --no-verify ...
+
+set -e
+
+# Patterns that should NEVER appear in a commit. Anything under
+# inventory-hub/data/ except the tracked docs + seed; plus the
+# legacy root-level locations.json path in case someone recreates it.
+FORBIDDEN_PATTERNS='^(
+    inventory-hub/locations\.json$
+  | inventory-hub/locations\.json\.[^/]*\.bak$
+  | inventory-hub/data/(?!README\.md$|locations\.json\.example$).+
+)'
+
+# Collapse whitespace/newlines for grep -E.
+PATTERN=$(printf '%s' "$FORBIDDEN_PATTERNS" | tr -d ' \n')
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+OFFENDERS=$(printf '%s\n' "$STAGED" | grep -E -- "$PATTERN" || true)
+
+if [ -n "$OFFENDERS" ]; then
+    echo ""
+    echo "❌ Refusing to commit runtime-state files:"
+    echo ""
+    printf '   %s\n' $OFFENDERS
+    echo ""
+    echo "These files are written by the running app and must not be"
+    echo "committed — on pull they overwrite prod's real state. See"
+    echo "inventory-hub/data/README.md for context."
+    echo ""
+    echo "If you truly need to commit this (e.g. editing the seed or"
+    echo "README), bypass with --no-verify. Otherwise unstage first:"
+    echo "   git reset HEAD -- <path>"
+    echo ""
+    exit 1
+fi
+
+exit 0

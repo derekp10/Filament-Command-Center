@@ -31,5 +31,12 @@ Thumbs.db
 *_BACKUP.csv
 *.bak
 
+# Runtime state — belongs on the mounted volume, not in the image.
+# Fresh images come up empty; the CSV-to-JSON migration seeds
+# data/locations.json on first run if a legacy CSV is present.
+data/*
+!data/README.md
+!data/locations.json.example
+
 # Docs / dev scripts that don't need to ship
 debug_*.py

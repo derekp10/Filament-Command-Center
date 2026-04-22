@@ -1043,26 +1043,10 @@ def api_identify_scan():
         move_result = logic.perform_smart_move(
             target, [spool_id], target_slot=slot, origin='slot_qr_scan'
         )
-
-        # Auto-deploy: if the target is a Dryer Box AND this slot is bound
-        # to a toolhead, follow up with a second move that puts the spool
-        # onto the toolhead as a ghost — physical_source is automatically
-        # set to the dryer box by perform_smart_move's printer branch.
-        auto_deployed_to = None
-        if tgt_info.get('Type') == 'Dryer Box':
-            bindings = locations_db.get_dryer_box_bindings(target) or {}
-            bound_toolhead = bindings.get(str(slot)) if bindings else None
-            if bound_toolhead:
-                logic.perform_smart_move(
-                    bound_toolhead.upper(), [spool_id],
-                    target_slot=None, origin='slot_qr_auto_deploy'
-                )
-                auto_deployed_to = bound_toolhead.upper()
-                state.add_log_entry(
-                    f"⚡ Auto-deployed Spool #{spool_id} → <b>{auto_deployed_to}</b> "
-                    f"(source: {target}:SLOT:{slot})",
-                    "SUCCESS", "00ff00"
-                )
+        # perform_smart_move now handles auto-deploy internally when the
+        # target slot is bound to a toolhead. Pick up the deployed-to
+        # hint from its response so we can surface it in the toast.
+        auto_deployed_to = (move_result or {}).get('auto_deployed_to')
 
         # Remove the spool from the backend's buffer replica.
         state.GLOBAL_BUFFER = [

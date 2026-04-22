@@ -16,9 +16,13 @@ hub.log
 .config_mtime
 
 # Runtime state — NEVER track these. Committed versions will clobber
-# a live install's real data on every `git pull`. Seed files live
-# alongside as `<name>.example` or equivalent.
+# a live install's real data on every `git pull`. All runtime state
+# now lives under inventory-hub/data/. We broadly gitignore the whole
+# subtree and explicitly track only documentation + seed files.
+inventory-hub/data/*
+!inventory-hub/data/README.md
+!inventory-hub/data/locations.json.example
+# Belt-and-suspenders: legacy paths + backup files from any migration.
 inventory-hub/locations.json
-inventory-hub/data/filabridge_error_snapshots.json
-inventory-hub/locations.json.pre-feedermap-migration-*.bak
 inventory-hub/locations.json.*.bak
+inventory-hub/data/locations.json.*.bak

@@ -1,15 +1,54 @@
 import os
 import json
 import csv
+import shutil
 import state  # type: ignore
 
-# Updated Configuration
-JSON_FILE = 'locations.json'
+# Runtime state lives under `data/` so a broad .gitignore rule keeps it
+# out of source control. See data/README.md for the rationale — in short:
+# dev testing kept accidentally committing locations.json and pull on prod
+# would clobber live bindings. Moving to a dedicated subtree lets us
+# blanket-ignore everything that isn't tracked documentation.
+_DATA_DIR = 'data'
+JSON_FILE = os.path.join(_DATA_DIR, 'locations.json')
+_LEGACY_JSON_FILE = 'locations.json'  # former root-level path, auto-migrated below
 CSV_FILE = '3D Print Supplies - Locations.csv'
 
 # Location Type constants used for Dryer Box / Toolhead logic.
 DRYER_BOX_TYPE = 'Dryer Box'
 TOOLHEAD_TYPES = {'Tool Head', 'MMU Slot', 'No MMU Direct Load'}
+
+
+def _ensure_data_dir():
+    """Make sure the parent directory of JSON_FILE exists before any
+    read/write. Reads JSON_FILE at call time so tests that monkeypatch it
+    to a tmp location create the right directory there. Idempotent."""
+    parent = os.path.dirname(JSON_FILE)
+    if parent and not os.path.isdir(parent):
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception as e:
+            state.logger.error(f"Could not create data directory {parent!r}: {e}")
+
+
+def _ensure_runtime_migration():
+    """One-time move: if prod still has locations.json at the repo root (the
+    legacy location) but not under data/, move it. Silent no-op once
+    the new path exists. Logged once so the operator can confirm.
+    """
+    if os.path.exists(JSON_FILE):
+        return  # already migrated
+    if not os.path.exists(_LEGACY_JSON_FILE):
+        return  # nothing to move (fresh install or already-migrated host)
+    _ensure_data_dir()
+    try:
+        shutil.move(_LEGACY_JSON_FILE, JSON_FILE)
+        state.logger.info(
+            f"📦 Migrated runtime state: {_LEGACY_JSON_FILE} → {JSON_FILE} "
+            "(runtime files now live under data/ so git pull can't clobber them)"
+        )
+    except Exception as e:
+        state.logger.error(f"Could not migrate {_LEGACY_JSON_FILE} → {JSON_FILE}: {e}")
 
 def _ensure_json_migration():
     """
@@ -44,9 +83,11 @@ def _ensure_json_migration():
 
 def load_locations_list():
     """Loads location configurations from the JSON file."""
+    _ensure_data_dir()
+    _ensure_runtime_migration()
     _ensure_json_migration()
-    
-    if not os.path.exists(JSON_FILE): 
+
+    if not os.path.exists(JSON_FILE):
         return []
         
     try:
@@ -64,6 +105,7 @@ def save_locations_list(new_list):
     """Saves location configurations to the JSON file."""
     if not new_list: return
     try:
+        _ensure_data_dir()
         with open(JSON_FILE, 'w', encoding='utf-8') as f:
             json.dump(new_list, f, indent=4)
         state.logger.info("💾 Locations JSON updated")
