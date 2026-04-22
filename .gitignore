@@ -14,3 +14,11 @@ inventory-hub/hub.log.1
 inventory-hub/out.json
 hub.log
 .config_mtime
+
+# Runtime state — NEVER track these. Committed versions will clobber
+# a live install's real data on every `git pull`. Seed files live
+# alongside as `<name>.example` or equivalent.
+inventory-hub/locations.json
+inventory-hub/data/filabridge_error_snapshots.json
+inventory-hub/locations.json.pre-feedermap-migration-*.bak
+inventory-hub/locations.json.*.bak
