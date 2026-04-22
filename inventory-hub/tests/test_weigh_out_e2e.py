@@ -1,12 +1,14 @@
 import re
 from playwright.sync_api import Page, expect
 
-def test_weigh_out_modal_e2e(page: Page):
+def test_weigh_out_modal_e2e(page: Page, clean_buffer):
     """
     E2E test verifying that the "Weigh Out" modal opens rapidly handles scanned
     spools, and submits weight successfully.
     """
-    # 1. Navigate to the app and wait for scripts to load
+    # 1. Navigate to the app and wait for scripts to load. The clean_buffer
+    # fixture wipes stale spools left by earlier tests so the "1 Spools"
+    # is deterministic.
     page.goto("http://localhost:8000")
     
     # 2. Wait for the DOM and initialization

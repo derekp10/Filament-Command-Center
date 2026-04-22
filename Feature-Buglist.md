@@ -1,5 +1,21 @@
 # **New and Unsorted Features/Bugs**
 
+* **[IMPORTANT]** `#offcanvasSearch` backdrop/select intercepts clicks on spool cards after the Search offcanvas is opened — the `<select id="global-search-material">` inside the offcanvas subtree keeps grabbing pointer events even when the click target is a card rendered behind/below it. Breaks `test_ui_details_modal_e2e::test_details_modal_interactions` and every test in `test_force_location_keyboard_e2e.py` (autofocus, arrow nav, Enter, Escape-toggles-overlay, escape-confirm yes/no). Repro: open Search offcanvas → click View Details on any `.fcc-spool-card` → click is intercepted. Likely a z-index / pointer-events regression from recent Search-offcanvas CSS work; tests on `main` before the merge-in were green.
+
+* **[IMPORTANT]** `DIV#.navbar-brand-group` has a 3-pixel vertical overflow — scroll W/H `519/39` vs client W/H `519/36`. Trips `test_structural_global_dashboard` and `test_structural_global_modals`. Pre-existing (the merge-in to dev carried it forward). Likely a too-tight container height vs. the current content; probably fixable with a small padding/line-height tweak or `overflow: hidden` on the brand group.
+
+* **[IMPORTANT]** Spoolman filament archiving is broken on the installed version — `PATCH /api/v1/filament/<id>` with `{"archived": true}` returns 200 but the flag is silently dropped; subsequent GETs never include the `archived` key on filaments (only spools). Dev and prod point at the same Spoolman. Impact: the wizard's auto-unarchive code (`inventory-hub/app.py` in `api_create_inventory_wizard`, added 2026-04-22) correctly calls `spoolman_api.update_filament(fid, {'archived': False})` whenever the parent filament looks archived — but that branch is effectively unreachable today because Spoolman never reports `archived: true` on a filament. `test_wizard_ux_polish.py::test_create_spool_auto_unarchives_parent_filament` skips on this basis. Next steps: (a) check whether Spoolman supports filament archival on a newer version and upgrade, or (b) track archive state on the filament via a custom `extra` field instead of the native flag. Related active-backlog entry: "Adding filament to an archived filament should automatically unarchive the filament" — code is in place, blocked on Spoolman support.
+
+* [IMPORTANT] System failed to properly update filabrige. Didn't sent Core1-m0 to none, and didn't set XL-2 to 240. Logs below.
+[15:04:46] ✅ Spool #240 → LR-MDB-1:SLOT:3 → XL-2
+[15:04:46] ⚡ Auto-deployed Spool #240 → XL-2 (source: LR-MDB-1:SLOT:3)
+[15:04:46] 🖨️ #240 Jessie Premium PETG (Transition Spool) -> XL-2
+[15:04:46] ↩️ Returned #226 -> LR-MDB-1
+[15:04:46] ⚠️ Smart Load: Ejecting #226 from XL-2...
+[15:04:46] 📦 #240 Jessie Premium PETG (Transition Spool) -> Dryer LR-MDB-1 [Slot 3]
+
+
+
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
 * Loading a dryer box, at the very least, slots load with an initial data set, and then i think the 5 second tick goes off, and fills them in completely. Seems to be a difference between what the initial card load does, and the data provided from the 5 second tick. We should probably make the initial card load load the same data as the 5 second tick.
 * Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
@@ -42,7 +58,13 @@
 
 * FCC Main Main screen buffer cards still don't always update after several backend changes. Setting filament to 0, doesn't seem to update to unassinged or it's deployed status.
 
-* Adding spool weight (Empty Spool Weight) Do the manufacturer, doesn't seem to pull down to the filament/spool if those fields are blank. This should be fixed so that It uses what ever one is available based on a priority system. (Manufacturer > Filament > Spool)
+* Adding spool weight (Empty Spool Weight) on the manufacturer, doesn't seem to pull down to the filament/spool if those fields are blank. This should be fixed so that It uses what ever one is available based on a priority system. (Manufacturer > Filament > Spool)
+
+* For Auto Detect, the activity log should also include the manufacture and the spool color in there as well as the data already included.
+
+* The default action for an unslotted item in the Manage Location Modal should be changed to pick up.
+
+* When a Spool gets archived, and the filamen attached to it doesn't have an empty spool weight, propmt the user of the missing spool weight and offer to assist in updating that data after they way the empty spool. 
 
 # **Active Backlog (Organized by Feature Area)**
 
@@ -67,14 +89,10 @@
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
 * Maintain the ability to add multiple spools of the same type at the same time.
 * Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
-* For the add/edit inventory wizzard modal, make the location searchable like in the filament/spool display modal's version.
 * We now have 2 purchase links for spools, one that virtually links to the filament value, the other is on it's own but part of the spool. We need to look into the code here and pair down to only one fied if possible, but retain functionality. Linked field enharrenting the value possibly. Or we just fix the code so it looks at what is available and takes the one that exists, with a preference for the spool specific one, which may be more uptodate, or specific for the pricing. One of them, the first one on the page, seems to not clear between usanges.
-* Filament ID and Spool ID should be visible on the edit version of the add inventory wizzard, so that a user can easily see what one they are working on.
-* Vendor should be searchable with keyboard shortcuts and a list that doesn't take up the full screen.
 * Adding a new slicer profile should automatically add that profile to the current filament being edited.
 * Spoolmans field ordering bug causing fields in the Add/Edit enventory window to move if a custom field is modified or has new items added to it. Need to look at locking down the order of things.
 * SweetAlert2 does not support nested modals — calling `Swal.fire()` while one is already open replaces the first one. Any future confirmation dialogs inside SweetAlert modals must use inline overlay divs (see force location modal's `#fcc-escape-confirm-overlay` pattern) instead of nested `Swal.fire()` calls. Audit existing code for any other nested Swal usage.
-    - **2026-04-21 audit**: one remaining nested call at [inv_wizard.js:895](inventory-hub/static/js/modules/inv_wizard.js#L895) — the "Added!" success confirmation inside the add-new-custom-field `.then()` chain. Addressed in the wizard-ux-polish bundle.
 
 ## 🔍 Search, Display & Filtering
 * Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.
