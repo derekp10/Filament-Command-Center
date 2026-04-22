@@ -124,7 +124,20 @@ def resolve_scan(text):
         
     return {'type': 'error', 'msg': 'Unknown Code'}
 
-def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
+def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True):
+    """Move spool(s) to `target`, optionally into `target_slot` of that location.
+
+    `auto_deploy` (default True): when the target is a Dryer Box AND the
+    target_slot is bound to a toolhead in that box's extra.slot_targets,
+    chain a second move that ghost-deploys the spool onto that toolhead.
+    This centralizes the behavior so every caller (scan, /api/manage_contents
+    action=add, Feeds-editor post-save triggers, future callers) gets it
+    consistently — not just the slot-QR scan path.
+
+    Internal recursive calls set auto_deploy=False to prevent infinite
+    chains (the toolhead deploy itself would otherwise try to auto-deploy
+    onto its own printer binding).
+    """
     target = target.strip().upper()
     cfg = config_loader.load_config()
     printer_map = cfg.get("printer_map", {})
@@ -241,7 +254,43 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin=''):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
 
     state.UNDO_STACK.append(undo_record)
+
+    # --- AUTO-DEPLOY CHAIN ---
+    # If this move placed spool(s) into a Dryer Box slot that's bound to a
+    # toolhead (extra.slot_targets[slot]), chain a second move so the spool
+    # ends up ghost-deployed onto the toolhead. Filabridge gets notified
+    # via the printer branch of that second call. Previously this logic
+    # lived only in api_identify_scan's assignment branch, so only scans
+    # triggered it; callers like /api/manage_contents action='add' (assign
+    # from buffer, deposit cards, etc.) silently skipped it. Centralizing
+    # here gives every caller the same behavior for free.
+    #
+    # auto_deploy=False on the chained call prevents infinite recursion
+    # (the toolhead move would try to auto-deploy onto its own printer).
+    auto_deploy_result = None
+    if auto_deploy and target_slot and tgt_info and tgt_info.get('Type') == 'Dryer Box':
+        bindings = (tgt_info.get('extra') or {}).get('slot_targets') or {}
+        bound_toolhead = bindings.get(str(target_slot))
+        if bound_toolhead:
+            try:
+                auto_deploy_result = perform_smart_move(
+                    bound_toolhead, list(spools),
+                    target_slot=None, origin=f'auto_deploy_from_{origin or "smart_move"}',
+                    auto_deploy=False,
+                )
+                for sid in spools:
+                    state.add_log_entry(
+                        f"⚡ Auto-deployed Spool #{sid} → <b>{str(bound_toolhead).upper()}</b> "
+                        f"(source: {target}:SLOT:{target_slot})",
+                        "SUCCESS", "00ff00"
+                    )
+            except Exception as _ad_err:
+                state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")
+
+    if auto_deploy_result is not None:
+        return {"status": "success", "auto_deployed_to": str(bound_toolhead).upper()}
     return {"status": "success"}
+
 
 def get_room_from_location(loc_id):
     if not loc_id:

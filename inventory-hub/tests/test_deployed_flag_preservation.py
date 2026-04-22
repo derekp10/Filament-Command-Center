@@ -44,6 +44,99 @@ def _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured):
     return mocks
 
 
+def test_perform_smart_move_auto_deploys_when_slot_is_bound():
+    """Regression + centralization guard: when perform_smart_move drops a
+    spool into a Dryer Box slot that's bound to a toolhead, the function
+    itself must chain a second move to ghost-deploy onto the toolhead.
+    Previously this logic lived only in api_identify_scan's assignment
+    branch, so non-scan callers (manage_contents, feeds editor, etc.)
+    silently skipped the deploy. This test covers any direct perform_smart_move
+    caller, proving the behavior is now universal."""
+    printer_map = {"XL-1": {"printer_name": "🦝 XL", "position": 0}}
+    loc_list = [
+        {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "1",
+         "extra": {"slot_targets": {"1": "XL-1"}}},
+        {"LocationID": "XL-1", "Type": "Tool Head", "Max Spools": "1"},
+    ]
+    spool_data = {"id": 42, "location": "", "extra": {}}
+    update_calls = []
+
+    def fake_update(sid, data):
+        update_calls.append((sid, data))
+        return {"id": sid, **data}
+
+    ctx = [
+        patch.object(logic.config_loader, "load_config",
+                     return_value={"printer_map": printer_map}),
+        patch.object(logic.config_loader, "get_api_urls",
+                     return_value=("http://spoolman", "http://filabridge")),
+        patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
+        patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
+        patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
+        patch.object(logic.spoolman_api, "format_spool_display",
+                     return_value={"text": "Test", "color": "ff0000"}),
+        patch.object(logic.spoolman_api, "update_spool", side_effect=fake_update),
+        patch.object(logic.requests, "post", return_value=MagicMock(ok=True)),
+    ]
+    for m in ctx: m.start()
+    try:
+        result = logic.perform_smart_move("PM-DB-1", [42], target_slot="1", origin="test")
+    finally:
+        for m in reversed(ctx): m.stop()
+
+    assert result.get("status") == "success"
+    # Auto-deploy hint should surface the toolhead target.
+    assert result.get("auto_deployed_to") == "XL-1", f"expected auto-deploy hint, got {result!r}"
+    # Two update_spool calls happened: one for the slot placement (PM-DB-1)
+    # and one for the chained toolhead deploy (XL-1).
+    locations = [data.get("location") for sid, data in update_calls]
+    assert "PM-DB-1" in locations, f"missing slot placement call; got {update_calls!r}"
+    assert "XL-1" in locations, f"missing toolhead deploy call; got {update_calls!r}"
+
+
+def test_perform_smart_move_skips_auto_deploy_when_slot_unbound():
+    """Complementary: if the slot has no binding, no chained move."""
+    printer_map = {"XL-1": {"printer_name": "🦝 XL", "position": 0}}
+    loc_list = [
+        {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "1",
+         "extra": {"slot_targets": {}}},
+        {"LocationID": "XL-1", "Type": "Tool Head", "Max Spools": "1"},
+    ]
+    spool_data = {"id": 42, "location": "", "extra": {}}
+    update_calls = []
+
+    def fake_update(sid, data):
+        update_calls.append((sid, data))
+        return {"id": sid, **data}
+
+    ctx = [
+        patch.object(logic.config_loader, "load_config",
+                     return_value={"printer_map": printer_map}),
+        patch.object(logic.config_loader, "get_api_urls",
+                     return_value=("http://spoolman", "http://filabridge")),
+        patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
+        patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
+        patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
+        patch.object(logic.spoolman_api, "format_spool_display",
+                     return_value={"text": "Test", "color": "ff0000"}),
+        patch.object(logic.spoolman_api, "update_spool", side_effect=fake_update),
+        patch.object(logic.requests, "post", return_value=MagicMock(ok=True)),
+    ]
+    for m in ctx: m.start()
+    try:
+        result = logic.perform_smart_move("PM-DB-1", [42], target_slot="1", origin="test")
+    finally:
+        for m in reversed(ctx): m.stop()
+
+    assert result.get("status") == "success"
+    assert "auto_deployed_to" not in result
+    # Only the slot placement happened.
+    assert len(update_calls) == 1, f"expected one update, got {update_calls!r}"
+    assert update_calls[0][1].get("location") == "PM-DB-1"
+
+
 def test_perform_smart_move_preserves_physical_source_when_already_deployed():
     """Spool is already at XL-4 with physical_source=LR-MDB-1:2. Moving to
     XL-4 again (e.g. user scanned toolhead to 'confirm') must NOT overwrite
