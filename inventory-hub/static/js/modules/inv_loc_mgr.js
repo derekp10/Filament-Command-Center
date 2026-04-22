@@ -200,33 +200,64 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalEl = document.getElementById('manageModal');
     if (!modalEl) return;
 
-    // Escape → closeManage (which pops the breadcrumb if one exists).
-    // Listen on document (capture phase) rather than on the modal element
-    // itself, because Bootstrap triggers its own dismiss from a
-    // document-level handler and initial focus often isn't inside the
-    // modal content (the user clicked a button to open it). Capture
-    // phase + stopImmediatePropagation preempts Bootstrap's handler.
+    // Document-level Escape handler for the manage-modal flow and a
+    // fallback dismisser for other visible Bootstrap modals.
+    //
+    // Why this exists: Bootstrap 5 attaches its own keyboard-dismiss
+    // handler to each modal element, but when modals are stacked (user
+    // opens Location List → clicks into a Toolhead/manage modal on top),
+    // closing the top one doesn't always restore focus cleanly to the
+    // modal beneath. Subsequent Escape presses fire on <body> and
+    // Bootstrap's per-modal handler never sees them, so the user gets
+    // stuck on the locations list with no keyboard way out.
+    //
+    // Strategy:
+    //   - If manageModal is showing, preempt Bootstrap and route through
+    //     closeManage so the breadcrumb pops instead of wiping.
+    //   - Otherwise, dismiss the topmost visible Bootstrap modal as a
+    //     fallback. This keeps Escape working across the whole stack.
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
-        if (!modalEl.classList.contains('show')) return;
-        // Don't hijack Escape when an inline overlay inside the modal is
-        // currently handling it (confirm overlay, bind picker, shortcuts
-        // registry). Those overlays own their own keydown listeners and
-        // should process Escape first to dismiss themselves.
+
+        // Overlays carve-out: if an inline overlay is visible anywhere,
+        // let its own listener handle Escape first.
         const confirmOv = document.getElementById('fcc-quickswap-confirm-overlay');
         if (confirmOv && confirmOv.style.display === 'block') return;
         const pickerOv = document.getElementById('fcc-bind-picker-overlay');
         if (pickerOv && pickerOv.style.display === 'block') return;
         const shortcutsOv = document.getElementById('fcc-shortcuts-overlay');
         if (shortcutsOv && shortcutsOv.style.display === 'block') return;
-        // Don't hijack Escape inside text inputs (users expect native
-        // behavior — clear/blur — not modal dismissal).
+        // Input carve-out: native clear/blur wins inside editable fields.
         const tag = (e.target && e.target.tagName) || '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
 
+        // Manage-modal priority path: breadcrumb pop or close.
+        if (modalEl.classList.contains('show')) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            window.closeManage();
+            return;
+        }
+
+        // Fallback: dismiss the topmost visible Bootstrap modal. This
+        // covers locMgrModal / locModal / any other stacked modal whose
+        // own keyboard handler may have lost focus tracking.
+        const shown = Array.from(document.querySelectorAll('.modal.show'));
+        if (shown.length === 0) return;
+        const topmost = shown.reduce((a, b) => {
+            const za = parseInt(getComputedStyle(a).zIndex || '0', 10) || 0;
+            const zb = parseInt(getComputedStyle(b).zIndex || '0', 10) || 0;
+            return zb > za ? b : a;
+        });
+        // Respect any modal that has opted out of keyboard dismissal.
+        if (topmost.getAttribute('data-bs-keyboard') === 'false') return;
+        const inst = (window.bootstrap && window.bootstrap.Modal)
+            ? window.bootstrap.Modal.getInstance(topmost)
+            : null;
+        if (!inst) return;
         e.preventDefault();
         e.stopImmediatePropagation();
-        window.closeManage();
+        inst.hide();
     }, true);
 
     modalEl.addEventListener('hidden.bs.modal', () => {

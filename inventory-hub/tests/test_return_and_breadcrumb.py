@@ -233,6 +233,62 @@ def test_escape_key_pops_breadcrumb_instead_of_closing(page: Page, base_url: str
 
 
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
+def test_escape_key_walks_out_of_three_level_stack(page: Page, base_url: str):
+    """Regression: user reported going Location List → Toolhead → Dryer Box
+    (via Edit Full Bindings) and then Escaping; 3 escapes would get them
+    back to the location list but no further — locMgrModal wouldn't
+    close because Bootstrap's per-modal keyboard handler lost focus
+    tracking across the stack. Our document-level handler now falls
+    back to dismissing the topmost visible modal when manageModal is
+    already hidden."""
+    page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    page.wait_for_function("() => typeof window.openManage === 'function'", timeout=5000)
+    page.wait_for_timeout(500)
+
+    # Level 1: open the Locations manager.
+    page.evaluate("window.openLocationsModal && window.openLocationsModal()")
+    expect(page.locator("#locMgrModal")).to_be_visible(timeout=5000)
+    page.wait_for_timeout(400)
+
+    # Level 2: open a specific toolhead on top.
+    page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
+    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+    page.wait_for_timeout(600)
+
+    # Level 3: jump into the bound box via Edit Full Bindings.
+    try:
+        expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=3000)
+    except AssertionError:
+        pytest.skip("No QuickSwap button rendered on XL-1 in current dev state.")
+    page.locator("#quickswap-edit-bindings-btn").click()
+    page.wait_for_timeout(700)
+    away = page.locator("#manage-loc-id").input_value()
+    assert away and away != TEST_TOOLHEAD, (
+        f"Edit Full Bindings should have navigated away; still on {away!r}"
+    )
+
+    # Escape 1: pops the breadcrumb → back on the toolhead.
+    page.locator("body").press("Escape")
+    page.wait_for_timeout(500)
+    expect(page.locator("#manageModal")).to_be_visible()
+    expect(page.locator("#manage-loc-id")).to_have_value(TEST_TOOLHEAD)
+
+    # Escape 2: closes the manage modal → only locMgrModal remains.
+    page.locator("body").press("Escape")
+    page.wait_for_timeout(700)
+    expect(page.locator("#manageModal")).to_be_hidden()
+    expect(page.locator("#locMgrModal")).to_be_visible()
+
+    # Escape 3: fallback dismisses the locations modal too. This is the
+    # exact step that was broken before — Bootstrap's own handler
+    # didn't fire, leaving the user stuck.
+    page.locator("body").press("Escape")
+    page.wait_for_timeout(700)
+    expect(page.locator("#locMgrModal")).to_be_hidden()
+
+
+@pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
 def test_escape_key_from_top_of_stack_closes_modal(page: Page, base_url: str):
     """Escape with no breadcrumb to pop should still close the modal
     (same as the X button's behavior on an empty stack). Press from
