@@ -205,6 +205,42 @@ def test_close_manage_from_top_of_stack_closes_modal(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
+def test_escape_key_pops_breadcrumb_instead_of_closing(page: Page, base_url: str):
+    """Regression guard: pressing Escape while inside a chained manage view
+    (e.g. Edit Full Bindings jumped you from XL-1 to PM-DB-1) must pop the
+    breadcrumb back to XL-1, NOT let Bootstrap dismiss the modal entirely.
+    Before this fix, Escape routed straight to Bootstrap's hide handler
+    and the hidden.bs.modal listener wiped the stack."""
+    _open_manage(page, base_url, TEST_TOOLHEAD)
+    try:
+        expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=3000)
+    except AssertionError:
+        pytest.skip("No QuickSwap button rendered on XL-1 in current dev state.")
+    page.locator("#quickswap-edit-bindings-btn").click()
+    page.wait_for_timeout(700)
+    away = page.locator("#manage-loc-id").input_value()
+    assert away and away != TEST_TOOLHEAD, (
+        f"Edit Full Bindings should have navigated away; still on {away!r}"
+    )
+    # Press Escape — should pop back to the toolhead, not dismiss the modal.
+    page.locator("#manageModal").press("Escape")
+    page.wait_for_timeout(700)
+    expect(page.locator("#manageModal")).to_be_visible()
+    expect(page.locator("#manage-loc-id")).to_have_value(TEST_TOOLHEAD)
+
+
+@pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
+def test_escape_key_from_top_of_stack_closes_modal(page: Page, base_url: str):
+    """Escape with no breadcrumb to pop should still close the modal
+    (same as the X button's behavior on an empty stack)."""
+    _open_manage(page, base_url, TEST_TOOLHEAD)
+    # Stack is empty — Escape should close.
+    page.locator("#manageModal").press("Escape")
+    page.wait_for_timeout(700)
+    expect(page.locator("#manageModal")).to_be_hidden()
+
+
+@pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
 def test_edit_full_bindings_auto_expands_feeds_section(page: Page, base_url: str):
     """When the user clicks Edit Full Bindings from a toolhead view, the
     destination Feeds section should come up already expanded — otherwise

@@ -183,22 +183,58 @@ window.closeManage = () => {
     fetchLocations();
 };
 
-// Bootstrap's own dismiss paths (backdrop click, Escape key) bypass
-// closeManage entirely. Listen for the hidden.bs.modal event so those
-// also clear breadcrumb state and the stale manage-loc-id.
+// Bootstrap's own dismiss paths bypass closeManage entirely, which is
+// a problem when we're mid-breadcrumb: a naive close wipes the stack
+// and drops the user out to the locations list instead of popping back
+// to the previous view.
+//
+// Strategy:
+// - For Escape specifically, intercept at the modal element (capture
+//   phase, before Bootstrap's handler) and route through closeManage so
+//   the breadcrumb pops exactly like the X button would.
+// - For ANY other hide path (backdrop click if enabled, programmatic
+//   .hide(), the final .hide() inside closeManage itself), listen for
+//   hidden.bs.modal and do the state cleanup. Respect the pop flag so
+//   we don't wipe state mid-pop.
 document.addEventListener('DOMContentLoaded', () => {
     const modalEl = document.getElementById('manageModal');
     if (!modalEl) return;
+
+    // Escape → closeManage (which pops the breadcrumb if one exists).
+    modalEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (!modalEl.classList.contains('show')) return;
+        // Don't hijack Escape when an inline overlay inside the modal is
+        // currently handling it (confirm overlay, bind picker, shortcuts
+        // registry). Those overlays own their own keydown listeners and
+        // should process Escape first to dismiss themselves.
+        const confirmOv = document.getElementById('fcc-quickswap-confirm-overlay');
+        if (confirmOv && confirmOv.style.display === 'block') return;
+        const pickerOv = document.getElementById('fcc-bind-picker-overlay');
+        if (pickerOv && pickerOv.style.display === 'block') return;
+        const shortcutsOv = document.getElementById('fcc-shortcuts-overlay');
+        if (shortcutsOv && shortcutsOv.style.display === 'block') return;
+        // Don't hijack Escape inside text inputs (users expect native
+        // behavior — clear/blur — not modal dismissal).
+        const tag = (e.target && e.target.tagName) || '';
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        window.closeManage();
+    }, true);
+
     modalEl.addEventListener('hidden.bs.modal', () => {
+        // If we're mid-breadcrumb-pop, openManage is about to re-render
+        // the previous view. Don't wipe state — the pop flow manages it.
+        if (window._fccPoppingBreadcrumb) return;
+
         // Clear breadcrumb state so the next fresh open doesn't inherit
         // stale context.
         window.manageNavStack = [];
         const prev = document.getElementById('manage-loc-id');
         if (prev) prev.value = '';
         // Dismiss any inline overlays that live inside the manage modal.
-        // Leaving them visible would cause them to pop right back up on
-        // the NEXT open — potentially against a different location than
-        // the one they were originally opened against.
         if (window.closeQuickswapConfirm) {
             try { window.closeQuickswapConfirm(); } catch (e) { /* noop */ }
         }
