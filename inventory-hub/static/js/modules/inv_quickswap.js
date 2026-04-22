@@ -643,7 +643,7 @@
                      data-idx="${i}" style="cursor:pointer; font-size:1.05rem;">
                     <div>
                         <span class="fw-bold">${s.box}</span>
-                        <span class="text-muted ms-2">slot ${s.slot}</span>
+                        <span class="text-light ms-2" style="opacity:0.8;">slot ${s.slot}</span>
                     </div>
                     <div class="d-flex align-items-center small">
                         ${statusHtml}

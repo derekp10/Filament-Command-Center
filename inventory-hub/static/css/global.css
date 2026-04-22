@@ -179,6 +179,48 @@ body {
     color: #aaa !important;
 }
 
+/* Contrast guard: several Bootstrap utility colors drop below WCAG AA
+   (4.5:1) on our dark surfaces (bg-dark #212529, modal-content ~#1f1f1f):
+     text-muted     (#6c757d) → ~2.8:1  ❌
+     text-secondary (#6c757d) → ~2.8:1  ❌
+     text-success   (#198754) → ~3.4:1  ❌
+     text-primary   (#0d6efd) → ~4.1:1  ❌
+   Promote each to a brighter shade inside any dark container so
+   accidental utility-class usage stops being a readability trap.
+   Mirrors the .cham-card override above. */
+.bg-dark .text-muted,
+.bg-dark .text-secondary,
+.modal-content .text-muted,
+.modal-content .text-secondary,
+.modal-body .text-muted,
+.modal-body .text-secondary,
+[class*="bg-black"] .text-muted,
+[class*="bg-black"] .text-secondary {
+    color: #aaa !important; /* ~6.6:1 on #212529 */
+}
+.bg-dark .text-success,
+.modal-content .text-success,
+.modal-body .text-success,
+[class*="bg-black"] .text-success {
+    color: #4ade80 !important; /* ~8:1 on #212529, still clearly green */
+}
+.bg-dark .text-primary,
+.modal-content .text-primary,
+.modal-body .text-primary,
+[class*="bg-black"] .text-primary {
+    color: #60a5fa !important; /* ~7:1 on #212529, still clearly blue */
+}
+
+/* When a bind-picker row becomes kb-active (bg-info cyan + text-dark),
+   its inner spans carry their own text-light / text-success / text-warning
+   classes meant for the default dark row. Those classes fight with the
+   row's dark text and drop contrast to ~1–2:1 against cyan. Force
+   children to inherit the row's color so the active state reads as
+   dark-on-cyan consistently. */
+.fcc-bind-picker-item.kb-active [class*="text-"] {
+    color: inherit !important;
+}
+
 .cham-body {
     background: #1a1a1a;
     border-radius: 9px;
