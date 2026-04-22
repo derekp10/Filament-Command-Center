@@ -273,6 +273,17 @@ def api_create_inventory_wizard():
         if not filament_id:
             return jsonify({"success": False, "msg": "Missing Filament ID or valid Filament Data."})
 
+        # If user is adding spool(s) to a pre-existing (possibly archived) filament,
+        # auto-unarchive it so the filament reappears in normal views. Skip when the
+        # filament was just created in Step 1 — new filaments start un-archived.
+        if data.get('filament_id') and spool_data:
+            existing_fil = spoolman_api.get_filament(filament_id)
+            if existing_fil and existing_fil.get('archived'):
+                if spoolman_api.update_filament(filament_id, {'archived': False}):
+                    state.add_log_entry(f"📤 Auto-unarchived Filament #{filament_id} (new spool added)", "INFO")
+                else:
+                    state.logger.warning(f"Failed to auto-unarchive Filament #{filament_id}")
+
         # Step 2: Create Spool(s)
         if spool_data:
             spool_data['filament_id'] = filament_id

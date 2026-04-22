@@ -2,8 +2,9 @@
     <div class="modal-dialog modal-xl modal-dialog-centered fcc-modal-wizard-dialog">
         <div class="modal-content fcc-modal-details">
             <div class="modal-header border-secondary fcc-modal-header">
-                <h4 class="modal-title font-monospace fw-bold text-white d-flex align-items-center">
-                    <span class="text-primary me-2">📦</span> ADD INVENTORY WIZARD
+                <h4 class="modal-title font-monospace fw-bold text-white d-flex align-items-center flex-wrap gap-3">
+                    <span class="d-inline-flex align-items-center"><span class="text-primary me-2">📦</span> ADD INVENTORY WIZARD</span>
+                    <span id="wiz-context-label" class="d-inline-flex flex-wrap align-items-center gap-2"></span>
                 </h4>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
@@ -81,15 +82,29 @@
 
                 <!-- STEP 2: FILAMENT PROPERTIES (Hidden if Existing is used) -->
                 <div class="wizard-step mb-5" id="step-2-filament" style="display: none;">
-                    <h5 class="text-info border-bottom border-dark pb-2 mb-3">STEP 2: FILAMENT CONFIGURATION</h5>
+                    <h5 class="text-info border-bottom border-dark pb-2 mb-3 d-flex align-items-center flex-wrap gap-3">
+                        <span>STEP 2: FILAMENT CONFIGURATION</span>
+                        <span id="wiz-step2-fil-context" class="d-none align-items-center gap-2">
+                            <span class="text-secondary fw-normal" style="font-size: 0.85rem;">— Working on</span>
+                            <span id="wiz-step2-fil-badge" class="badge text-bg-warning text-dark" style="font-size: 0.85rem;"></span>
+                        </span>
+                    </h5>
                     <div class="row g-3">
                         <div class="col-md-4">
                             <label class="form-label small text-secondary mb-1">Vendor*</label>
-                            <!-- Switchable input for Vendor -->
-                            <div class="input-group">
-                                <select class="form-select bg-dark text-white border-secondary" id="wiz-fil-vendor-sel">
-                                    <option value="">-- Generic --</option>
-                                </select>
+                            <!-- Switchable input for Vendor. `wiz-fil-vendor-sel` stays the
+                                 vendor_id holder so existing readers/writers keep working;
+                                 the visible search box is `wiz-fil-vendor-search`. -->
+                            <div class="input-group" id="wiz-fil-vendor-group">
+                                <div class="position-relative flex-grow-1 wizard-single-autocomplete" id="wizard-autocomplete-vendor">
+                                    <input type="text" class="form-control bg-dark text-white border-secondary"
+                                        id="wiz-fil-vendor-search" placeholder="-- Generic --" autocomplete="off">
+                                    <input type="hidden" id="wiz-fil-vendor-sel" value="">
+                                    <div class="autocomplete-dropdown position-absolute w-100 bg-dark border border-secondary rounded shadow-lg"
+                                        id="dropdown-vendor"
+                                        style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">
+                                    </div>
+                                </div>
                                 <button class="btn btn-outline-secondary" type="button"
                                     onclick="wizardToggleVendorMode()">✏️</button>
                             </div>
@@ -184,7 +199,13 @@
                 <!-- STEP 3: SPOOL PROPERTIES -->
                 <div class="wizard-step mb-3" id="step-3-spool" style="display: none; opacity: 0.5;">
                     <div class="d-flex justify-content-between align-items-end border-bottom border-dark pb-2 mb-3">
-                        <h5 class="text-info mb-0">STEP 3: SPOOL INSTANCES</h5>
+                        <h5 class="text-info mb-0 d-flex align-items-center flex-wrap gap-3">
+                            <span>STEP 3: SPOOL INSTANCES</span>
+                            <span id="wiz-step3-spl-context" class="d-none align-items-center gap-2">
+                                <span class="text-secondary fw-normal" style="font-size: 0.85rem;">— Working on</span>
+                                <span id="wiz-step3-spl-badge" class="badge text-bg-info" style="font-size: 0.85rem;"></span>
+                            </span>
+                        </h5>
                         <div class="d-flex align-items-center bg-dark p-2 rounded border border-warning shadow-sm">
                             <label class="text-warning me-2 mb-0 fw-bold fs-5">BULK QUANTITY TO CREATE:</label>
                             <input type="number"
@@ -196,10 +217,18 @@
                     <div class="row g-3">
                         <div class="col-md-4">
                             <label class="form-label small text-secondary mb-1">Location</label>
-                            <select class="form-select bg-dark text-white border-secondary" id="wiz-spool-location">
-                                <option value="">-- Unassigned --</option>
-                                <!-- Populated dynamically -->
-                            </select>
+                            <!-- `wiz-spool-location` stays as the hidden LocationID holder so
+                                 existing readers keep working; the visible search box is
+                                 `wiz-spool-location-search`. -->
+                            <div class="position-relative wizard-single-autocomplete" id="wizard-autocomplete-location">
+                                <input type="text" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-spool-location-search" placeholder="-- Unassigned --" autocomplete="off">
+                                <input type="hidden" id="wiz-spool-location" value="">
+                                <div class="autocomplete-dropdown position-absolute w-100 bg-dark border border-secondary rounded shadow-lg"
+                                    id="dropdown-location"
+                                    style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">
+                                </div>
+                            </div>
                         </div>
                         <div class="col-md-4">
                             <label class="form-label small text-secondary mb-1">

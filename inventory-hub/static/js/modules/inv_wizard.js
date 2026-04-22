@@ -137,9 +137,184 @@ const wizardReset = () => {
     // Reset View
     wizardSelectType('manual');
     document.getElementById('wiz-status-msg').innerText = "";
-    document.getElementById('wiz-fil-vendor-sel').style.display = 'block';
+    // Reset vendor combobox (visible search field + hidden id + wrapper visibility).
+    const vGrp = document.getElementById('wiz-fil-vendor-group');
+    if (vGrp) vGrp.style.display = 'flex';
+    const vSearch = document.getElementById('wiz-fil-vendor-search');
+    if (vSearch) vSearch.value = '';
+    const vSel = document.getElementById('wiz-fil-vendor-sel');
+    if (vSel) vSel.value = '';
     document.getElementById('wiz-fil-vendor-new').style.display = 'none';
+    // Reset location combobox too — its hidden id field is cleared by the select
+    // loop above but the visible search text needs its own clear.
+    const lSearch = document.getElementById('wiz-spool-location-search');
+    if (lSearch) lSearch.value = '';
+    wizardSetContextLabel();
     wizardState.isDirty = false;
+};
+
+// Paints three coordinated chips: an action word next to the wizard title plus
+// bootstrap-badge Spool / Filament chips (also mirrored into the Step 2 and
+// Step 3 section headers). Call with `{}` or no arg to clear.
+//   wizardSetContextLabel({ action: 'Editing', spoolId: 42, filamentId: 7 })
+//   wizardSetContextLabel({ action: 'New Spool for', filamentId: 7 })
+//   wizardSetContextLabel()  // clears everything
+window.wizardSetContextLabel = (ctx) => {
+    ctx = ctx || {};
+    const { action, spoolId, filamentId } = ctx;
+    const title = document.getElementById('wiz-context-label');
+    const step2Ctx = document.getElementById('wiz-step2-fil-context');
+    const step2Badge = document.getElementById('wiz-step2-fil-badge');
+    const step3Ctx = document.getElementById('wiz-step3-spl-context');
+    const step3Badge = document.getElementById('wiz-step3-spl-badge');
+
+    if (title) {
+        const parts = [];
+        if (action) {
+            parts.push(`<span class="fw-semibold text-light" style="font-size: 0.9rem;">${action}</span>`);
+        }
+        if (spoolId != null && spoolId !== '') {
+            parts.push(`<span class="badge text-bg-info" style="font-size: 0.85rem;">🧵 Spool #${spoolId}</span>`);
+        }
+        if (filamentId != null && filamentId !== '') {
+            parts.push(`<span class="badge text-bg-warning text-dark" style="font-size: 0.85rem;">🧬 Filament #${filamentId}</span>`);
+        }
+        title.innerHTML = parts.join('');
+    }
+
+    // Bootstrap's `d-inline-flex` carries `!important`, so inline display:none
+    // would lose to it. Toggle between `d-none` and `d-inline-flex` classes.
+    if (step2Ctx && step2Badge) {
+        if (filamentId != null && filamentId !== '') {
+            step2Badge.textContent = `🧬 Filament #${filamentId}`;
+            step2Ctx.classList.remove('d-none');
+            step2Ctx.classList.add('d-inline-flex');
+        } else {
+            step2Badge.textContent = '';
+            step2Ctx.classList.remove('d-inline-flex');
+            step2Ctx.classList.add('d-none');
+        }
+    }
+
+    if (step3Ctx && step3Badge) {
+        if (spoolId != null && spoolId !== '') {
+            step3Badge.textContent = `🧵 Spool #${spoolId}`;
+            step3Ctx.classList.remove('d-none');
+            step3Ctx.classList.add('d-inline-flex');
+        } else {
+            step3Badge.textContent = '';
+            step3Ctx.classList.remove('d-inline-flex');
+            step3Ctx.classList.add('d-none');
+        }
+    }
+};
+
+// Wires a text-input + hidden-value + dropdown triple into a keyboard-searchable
+// combobox. Mirrors the material-autocomplete pattern (focus/blur/filter/keydown)
+// so users get a compact, type-to-filter list with arrow + Enter nav instead of a
+// native <select> that takes over the screen. `items` is [{value, label}].
+// Re-binding an already-bound input replaces prior listeners via a reset flag.
+window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholder }) => {
+    const search = document.getElementById(searchId);
+    const hidden = document.getElementById(hiddenId);
+    const dropdown = document.getElementById(dropdownId);
+    if (!search || !hidden || !dropdown) return;
+
+    // Replace the node with a clone to drop any previously-attached listeners,
+    // then re-grab the fresh reference. This lets wizardBindCombobox be called
+    // again (e.g. after wizardFetchVendors refreshes the list).
+    const freshSearch = search.cloneNode(true);
+    search.parentNode.replaceChild(freshSearch, search);
+
+    if (placeholder) freshSearch.placeholder = placeholder;
+
+    const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+
+    const render = () => {
+        const qs = freshSearch.value.toLowerCase();
+        const filtered = qs
+            ? items.filter(it => (it.label || '').toLowerCase().includes(qs))
+            : items;
+        dropdown.innerHTML = filtered.map(it =>
+            `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option"
+                  data-value="${escape(it.value)}"
+                  data-label="${escape(it.label)}">${escape(it.label)}</div>`
+        ).join('');
+        dropdown.querySelectorAll('.autocomplete-option').forEach(opt => {
+            opt.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                freshSearch.value = opt.dataset.label;
+                hidden.value = opt.dataset.value;
+                dropdown.style.display = 'none';
+                // Mirror native change so the wizard's dirty flag listener fires.
+                hidden.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+        });
+    };
+
+    freshSearch.addEventListener('focus', () => { render(); dropdown.style.display = 'block'; });
+    freshSearch.addEventListener('blur', () => {
+        // Short delay so mousedown on a list item can fire before we tear it down.
+        setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+    });
+    freshSearch.addEventListener('input', () => {
+        render();
+        // If typed text exactly matches a label, capture its value; otherwise clear
+        // so partial typing doesn't leak a stale id into the form payload.
+        const typed = freshSearch.value.trim().toLowerCase();
+        const exact = items.find(it => (it.label || '').toLowerCase() === typed);
+        hidden.value = exact ? exact.value : '';
+        hidden.dispatchEvent(new Event('change', { bubbles: true }));
+        dropdown.style.display = 'block';
+    });
+    freshSearch.addEventListener('keydown', (e) => {
+        if (dropdown.style.display === 'none') {
+            if (e.key === 'ArrowDown') { render(); dropdown.style.display = 'block'; }
+            return;
+        }
+        const visible = Array.from(dropdown.children);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            if (!visible.length) return;
+            e.preventDefault();
+            let idx = visible.findIndex(el => el.classList.contains('active'));
+            visible.forEach(el => el.classList.remove('active', 'bg-primary'));
+            idx = e.key === 'ArrowDown'
+                ? (idx + 1 >= visible.length ? 0 : idx + 1)
+                : (idx - 1 < 0 ? visible.length - 1 : idx - 1);
+            const next = visible[idx];
+            next.classList.add('active', 'bg-primary');
+            const dr = dropdown.getBoundingClientRect();
+            const ir = next.getBoundingClientRect();
+            if (ir.bottom > dr.bottom) dropdown.scrollTop += (ir.bottom - dr.bottom);
+            else if (ir.top < dr.top) dropdown.scrollTop -= (dr.top - ir.top);
+            return;
+        }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const pick = visible.find(el => el.classList.contains('active')) || visible[0];
+            if (pick) {
+                freshSearch.value = pick.dataset.label;
+                hidden.value = pick.dataset.value;
+                dropdown.style.display = 'none';
+                hidden.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            return;
+        }
+        if (e.key === 'Escape') {
+            dropdown.style.display = 'none';
+        }
+    });
+};
+
+// Sets the combobox's visible text + hidden id from a {value, label} pair.
+// Pass null/undefined to clear. Used by edit/clone auto-fill paths.
+window.wizardComboboxSet = (searchId, hiddenId, value, label) => {
+    const s = document.getElementById(searchId);
+    const h = document.getElementById(hiddenId);
+    if (s) s.value = label || '';
+    if (h) h.value = value == null ? '' : value;
 };
 
 window.wizardAutoUpdateDensity = () => {
@@ -401,10 +576,15 @@ const wizardFetchVendors = () => {
         .then(d => {
             if (d.success) {
                 wizardState.vendors = d.vendors;
-                const sel = document.getElementById('wiz-fil-vendor-sel');
-                sel.innerHTML = '<option value="">-- Generic --</option>';
-                d.vendors.forEach(v => {
-                    sel.innerHTML += `<option value="${v.id}">${v.name}</option>`;
+                const items = [{ value: '', label: '-- Generic --' }].concat(
+                    d.vendors.map(v => ({ value: String(v.id), label: v.name }))
+                );
+                window.wizardBindCombobox({
+                    searchId: 'wiz-fil-vendor-search',
+                    hiddenId: 'wiz-fil-vendor-sel',
+                    dropdownId: 'dropdown-vendor',
+                    items,
+                    placeholder: '-- Generic --'
                 });
             }
         });
@@ -414,16 +594,26 @@ const wizardFetchLocations = () => {
     return fetch('/api/locations')
         .then(r => r.json())
         .then(d => {
-            if (Array.isArray(d)) {
-                const sel = document.getElementById('wiz-spool-location');
-                sel.innerHTML = '<option value="">-- Unassigned --</option>';
-                d.forEach(loc => {
-                    const type = (loc.Type || '').toLowerCase();
-                    if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return;
-                    if (loc.LocationID === 'Unassigned') return;
-                    sel.innerHTML += `<option value="${loc.LocationID}">${loc.Name}</option>`;
-                });
-            }
+            if (!Array.isArray(d)) return;
+            // Same filter the select used to apply: hide MMU/toolhead/direct-load
+            // targets and the virtual "Unassigned" row (that's the empty-string default).
+            const valid = d.filter(loc => {
+                const type = (loc.Type || '').toLowerCase();
+                if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return false;
+                if (loc.LocationID === 'Unassigned') return false;
+                return true;
+            });
+            wizardState.locations = valid;
+            const items = [{ value: '', label: '-- Unassigned --' }].concat(
+                valid.map(loc => ({ value: loc.LocationID, label: loc.Name }))
+            );
+            window.wizardBindCombobox({
+                searchId: 'wiz-spool-location-search',
+                hiddenId: 'wiz-spool-location',
+                dropdownId: 'dropdown-location',
+                items,
+                placeholder: '-- Unassigned --'
+            });
         });
 };
 
@@ -892,15 +1082,11 @@ window.wizardPromptNewChoice = (entityType, key) => {
         allowOutsideClick: () => !Swal.isLoading()
     }).then((result) => {
         if (result.isConfirmed) {
-            Swal.fire({
-                icon: 'success',
-                title: 'Added!',
-                text: `"${result.value}" has been added to the database.`,
-                timer: 1500,
-                showConfirmButton: false,
-                background: '#1e1e1e',
-                color: '#fff'
-            });
+            // Toast instead of nested Swal.fire() — SweetAlert2 can't stack modals,
+            // and the wizard itself may still need a Swal for later validation.
+            if (typeof showToast === 'function') {
+                showToast(`"${result.value}" added to the database.`, 'success', 3000);
+            }
             // Instantly refresh the schema arrays to pull down the newly added entry into the UI!
             wizardFetchExtraFields();
         }
@@ -1168,20 +1354,14 @@ window.wizardExternalSelected = () => {
             // Map Vendor
             const vName = temp.manufacturer || temp.vendor?.name;
             if (vName) {
-                // Try to find in existing options
-                const vSel = document.getElementById('wiz-fil-vendor-sel');
-                let found = false;
-                for (let i = 0; i < vSel.options.length; i++) {
-                    if (vSel.options[i].text.toLowerCase() === vName.toLowerCase()) {
-                        vSel.selectedIndex = i;
-                        document.getElementById('wiz-fil-vendor-sel').style.display = 'block';
-                        document.getElementById('wiz-fil-vendor-new').style.display = 'none';
-                        found = true; break;
-                    }
-                }
-                if (!found) {
-                    // Force the new vendor text field
-                    document.getElementById('wiz-fil-vendor-sel').style.display = 'none';
+                const match = (wizardState.vendors || []).find(v => (v.name || '').toLowerCase() === vName.toLowerCase());
+                if (match) {
+                    window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', String(match.id), match.name);
+                    document.getElementById('wiz-fil-vendor-group').style.display = 'flex';
+                    document.getElementById('wiz-fil-vendor-new').style.display = 'none';
+                } else {
+                    // Unknown vendor — drop into "add new vendor" text field.
+                    document.getElementById('wiz-fil-vendor-group').style.display = 'none';
                     document.getElementById('wiz-fil-vendor-new').style.display = 'block';
                     document.getElementById('wiz-fil-vendor-new').value = vName;
                 }
@@ -1195,15 +1375,16 @@ window.wizardExternalSelected = () => {
 };
 
 window.wizardToggleVendorMode = () => {
-    const sel = document.getElementById('wiz-fil-vendor-sel');
+    // Toggle the search-combobox wrapper against the "new vendor" text field.
+    const grp = document.getElementById('wiz-fil-vendor-group');
     const txt = document.getElementById('wiz-fil-vendor-new');
-    if (sel.style.display !== 'none') {
-        sel.style.display = 'none';
+    if (grp.style.display !== 'none') {
+        grp.style.display = 'none';
         txt.style.display = 'block';
         txt.focus();
     } else {
         txt.style.display = 'none';
-        sel.style.display = 'block';
+        grp.style.display = 'flex';
     }
 };
 
@@ -1312,7 +1493,9 @@ window.wizardSubmit = async () => {
                 f_payload.extra[key].push(val);
             });
 
-            const isNewVendor = document.getElementById('wiz-fil-vendor-sel').style.display === 'none';
+            // "New vendor" mode is indicated by the combobox wrapper being hidden
+            // (wizardToggleVendorMode flips the group's display, not the hidden id input).
+            const isNewVendor = document.getElementById('wiz-fil-vendor-group').style.display === 'none';
             if (!isNewVendor && getVal('wiz-fil-vendor-sel')) {
                 f_payload.vendor_id = parseInt(getVal('wiz-fil-vendor-sel'));
             } else if (isNewVendor && getVal('wiz-fil-vendor-new')) {
@@ -1409,6 +1592,7 @@ window.openCloneWizard = async (spoolId) => {
 
     // Reset and Open Wizard (Wait for Extrad fields DOM injection!)
     await openWizardModal();
+    wizardSetContextLabel({ action: 'Cloning', spoolId });
 
     // Temporarily disable submit while fetching clone data
     document.getElementById('btn-wiz-submit').disabled = true;
@@ -1428,13 +1612,18 @@ window.openCloneWizard = async (spoolId) => {
 
             // Inject Filament into Dropdown & Auto-Select
             const f = d.filament;
+            wizardSetContextLabel({ action: 'Cloning from', spoolId, filamentId: f.id });
             const name = `${f.vendor?.name || 'Generic'} ${f.material} - ${f.name || 'Unknown'}`;
             const sel = document.getElementById('wiz-existing-results');
             sel.innerHTML = `<option value="${f.id}" selected>${name} (ID: ${f.id})</option>`;
             wizardExistingSelected();
 
             // Pre-fill Spool parameters that usually carry over when cloning
-            document.getElementById('wiz-spool-location').value = d.location || "";
+            {
+                const locId = d.location || "";
+                const locRec = (wizardState.locations || []).find(l => l.LocationID === locId);
+                window.wizardComboboxSet('wiz-spool-location-search', 'wiz-spool-location', locId, locRec ? locRec.Name : locId);
+            }
             // Spool Weight: prefer spool-level, fall back to filament-level
             const cloneSpoolWt = d.spool_weight !== null ? d.spool_weight : (d.filament?.spool_weight ?? "");
             document.getElementById('wiz-spool-empty_weight').value = cloneSpoolWt;
@@ -1469,6 +1658,7 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
 
     // Reset and Open Wizard (Wait for Extra fields DOM injection!)
     await openWizardModal();
+    wizardSetContextLabel({ action: 'New Spool for', filamentId });
 
     // Temporarily disable submit while fetching data
     document.getElementById('btn-wiz-submit').disabled = true;
@@ -1524,6 +1714,7 @@ window.openEditWizard = async (spoolId) => {
 
     // Reset and Open Wizard (Wait for dynamically mapped DOM structures first!)
     await openWizardModal();
+    wizardSetContextLabel({ action: 'Editing', spoolId });
 
     // Temporarily disable submit while fetching edit data
     document.getElementById('btn-wiz-submit').disabled = true;
@@ -1547,6 +1738,7 @@ window.openEditWizard = async (spoolId) => {
             wizardState.mode = 'edit_spool';
             wizardState.editSpoolId = spoolId;
             wizardState.selectedFilamentId = d.filament.id;
+            wizardSetContextLabel({ action: 'Editing', spoolId, filamentId: d.filament.id });
 
             // Hide Step 1 completely
             const step1 = document.getElementById('step-1-material');
@@ -1564,23 +1756,18 @@ window.openEditWizard = async (spoolId) => {
             const f = d.filament;
             // Pre-fill Filament
             if (f.vendor) {
-                const vSel = document.getElementById('wiz-fil-vendor-sel');
-                let found = false;
-                for (let i = 0; i < vSel.options.length; i++) {
-                    if (vSel.options[i].text.toLowerCase() === f.vendor.name.toLowerCase()) {
-                        vSel.selectedIndex = i;
-                        document.getElementById('wiz-fil-vendor-sel').style.display = 'block';
-                        document.getElementById('wiz-fil-vendor-new').style.display = 'none';
-                        found = true; break;
-                    }
-                }
-                if (!found) {
-                    document.getElementById('wiz-fil-vendor-sel').style.display = 'none';
+                const match = (wizardState.vendors || []).find(v => (v.name || '').toLowerCase() === (f.vendor.name || '').toLowerCase());
+                if (match) {
+                    window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', String(match.id), match.name);
+                    document.getElementById('wiz-fil-vendor-group').style.display = 'flex';
+                    document.getElementById('wiz-fil-vendor-new').style.display = 'none';
+                } else {
+                    document.getElementById('wiz-fil-vendor-group').style.display = 'none';
                     document.getElementById('wiz-fil-vendor-new').style.display = 'block';
                     document.getElementById('wiz-fil-vendor-new').value = f.vendor.name;
                 }
             } else {
-                document.getElementById('wiz-fil-vendor-sel').selectedIndex = 0;
+                window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', '', '');
             }
 
             document.getElementById('wiz-fil-material').value = f.material || '';
@@ -1640,7 +1827,11 @@ window.openEditWizard = async (spoolId) => {
             }
 
             // Pre-fill Spool
-            document.getElementById('wiz-spool-location').value = d.location || "";
+            {
+                const locId = d.location || "";
+                const locRec = (wizardState.locations || []).find(l => l.LocationID === locId);
+                window.wizardComboboxSet('wiz-spool-location-search', 'wiz-spool-location', locId, locRec ? locRec.Name : locId);
+            }
             document.getElementById('wiz-spool-empty_weight').value = d.spool_weight !== null ? d.spool_weight : "";
             document.getElementById('wiz-spool-initial_weight').value = d.initial_weight !== null ? d.initial_weight : "";
             document.getElementById('wiz-spool-used').value = d.used_weight || 0;
