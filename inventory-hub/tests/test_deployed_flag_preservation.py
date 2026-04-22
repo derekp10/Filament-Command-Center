@@ -189,10 +189,12 @@ def test_quickswap_button_shows_spool_info_when_slot_loaded(page: Page, base_url
     )
 
 
-@pytest.mark.usefixtures("require_server")
+@pytest.mark.usefixtures("require_server", "clean_buffer")
 def test_quickswap_button_disabled_when_slot_empty(page: Page, base_url: str, api_base_url):
     # Bind a slot that's known to be empty, verify the rendered button is
-    # disabled and no-ops on click.
+    # disabled and no-ops on click. Note: the button is only disabled when
+    # BOTH the slot AND the user's buffer are empty — a buffered spool
+    # flips the same button into a Deposit target.
     victim_box, victim_slot = "PM-DB-2", "1"
     contents = requests.get(f"{api_base_url}/api/get_contents?id={victim_box}", timeout=5).json()
     has_spool = any(str(it.get("slot", "")).replace('"', '').strip() == victim_slot
@@ -212,6 +214,9 @@ def test_quickswap_button_disabled_when_slot_empty(page: Page, base_url: str, ap
         page.wait_for_timeout(500)
         page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
         expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+        # Force an empty buffer before asserting disabled — otherwise a
+        # buffered spool would enable the same button as a Deposit target.
+        page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")
         page.wait_for_timeout(1200)
         btn = page.locator(f".fcc-qs-slot[data-box='{victim_box}'][data-slot='{victim_slot}']").first
         expect(btn).to_be_visible(timeout=3000)

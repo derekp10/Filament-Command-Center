@@ -150,19 +150,31 @@
                             if (!byBox[e.box]) byBox[e.box] = [];
                             byBox[e.box].push(e);
                         });
+                        // State of the user's scan buffer determines whether
+                        // empty slots are interactive (deposit target) or
+                        // inert (nothing to do).
+                        const bufferTopSpool = (state.heldSpools && state.heldSpools[0]) || null;
+
                         let html = '';
                         Object.keys(byBox).sort().forEach(boxId => {
+                            // Clickable box header so users can jump straight
+                            // into the source box without hunting for it in
+                            // the Locations list. closeManage's breadcrumb
+                            // returns them here on X-close.
                             html += `<div class="w-100 fw-bold mt-3 mb-1" style="font-size:1.1rem;">` +
-                                    `📦 <span class="text-info">${boxId}</span></div>`;
+                                    `📦 <a href="#" onclick="event.preventDefault(); window.openManage('${boxId}');"
+                                        class="text-info"
+                                        style="text-decoration: underline dotted;"
+                                        title="Open ${boxId} — Close returns here">${boxId}</a></div>`;
                             byBox[boxId].sort((a, b) => Number(a.slot) - Number(b.slot)).forEach(e => {
                                 const th = e.toolhead || loc.LocationID;
                                 const item = slotMap[`${e.box}|${e.slot}`];
-                                const borderCls = item ? 'btn-outline-info' : 'btn-outline-secondary';
                                 const thLine = isPrinter
                                     ? `<div class="text-warning small" style="font-size:0.85rem;">→ ${th}</div>`
                                     : '';
-                                let contentLines;
+                                let contentLines, borderCls, handler, titleAttr, disabledAttr;
                                 if (item) {
+                                    // Slot has a spool — tap loads it into the toolhead.
                                     const short = String(item.display || `#${item.id}`).replace(/"/g, '&quot;');
                                     const weight = item.remaining_weight != null
                                         ? `<div class="text-light small" style="font-size:0.9rem;">⚖️ ${Math.round(item.remaining_weight)}g</div>`
@@ -171,23 +183,46 @@
                                         ? `<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#${String(item.color).split(',')[0]};border:1px solid #fff;vertical-align:middle;margin-right:6px;"></span>`
                                         : '';
                                     contentLines = `
-                                        <div class="fw-bold" style="font-size:0.95rem; max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                        <div class="fw-bold" style="font-size:0.95rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                             ${swatch}${short}
                                         </div>
                                         ${weight}`;
+                                    borderCls = 'btn-outline-info';
+                                    handler = 'window.quickSwapTap(this)';
+                                    titleAttr = `Load ${item.display || `#${item.id}`} from ${e.box} slot ${e.slot} into ${th}`;
+                                    disabledAttr = '';
+                                } else if (bufferTopSpool) {
+                                    // Empty slot + buffered spool — tap DEPOSITS
+                                    // the buffered spool into the slot. Reuses
+                                    // the scan-flow backend so auto-deploy to
+                                    // the bound toolhead kicks in too.
+                                    const bsDisplay = String(bufferTopSpool.display || `#${bufferTopSpool.id}`).replace(/"/g, '&quot;');
+                                    const bsSwatch = bufferTopSpool.color
+                                        ? `<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#${String(bufferTopSpool.color).split(',')[0]};border:1px solid #fff;vertical-align:middle;margin-right:6px;"></span>`
+                                        : '';
+                                    contentLines = `
+                                        <div class="text-success fw-bold" style="font-size:0.9rem;">⬇️ Deposit from buffer:</div>
+                                        <div class="text-light" style="font-size:0.9rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                            ${bsSwatch}${bsDisplay}
+                                        </div>`;
+                                    borderCls = 'btn-outline-success';
+                                    handler = 'window.quickSwapDeposit(this)';
+                                    titleAttr = `Drop the buffered spool into ${e.box} slot ${e.slot} (auto-deploys to ${th})`;
+                                    disabledAttr = '';
                                 } else {
+                                    // Empty slot + empty buffer — nothing to do.
                                     contentLines = `<div class="text-muted small fw-bold" style="font-size:0.9rem;">◦ empty slot</div>`;
+                                    borderCls = 'btn-outline-secondary';
+                                    handler = 'window.quickSwapTap(this)';
+                                    titleAttr = `${e.box} slot ${e.slot} is empty — scan a spool into the buffer to deposit here`;
+                                    disabledAttr = 'disabled';
                                 }
-                                const disabledAttr = item ? '' : 'disabled';
-                                const titleAttr = item
-                                    ? `Load ${item.display || `#${item.id}`} from ${e.box} slot ${e.slot} into ${th}`
-                                    : `${e.box} slot ${e.slot} is empty — nothing to load`;
                                 html += `
                                     <button type="button" class="fcc-qs-slot btn ${borderCls} fw-bold d-flex flex-column align-items-start"
                                         data-box="${e.box}" data-slot="${e.slot}"
                                         data-toolhead="${th}"
                                         style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
-                                        onclick="window.quickSwapTap(this)"
+                                        onclick="${handler}"
                                         ${disabledAttr}
                                         title="${titleAttr}">
                                         <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${e.slot}</div>
@@ -329,6 +364,72 @@
                     'ERROR'
                 );
             });
+    };
+
+    // Deposit the top buffered spool into an empty slot. Reuses the
+    // LOC:BOX:SLOT:N scan path on the backend so everything that flow
+    // already does — auto-deploy if the slot is bound, Activity Log
+    // entry, Filabridge map_toolhead notification — runs exactly once
+    // per deposit without duplication.
+    window.quickSwapDeposit = (btn) => {
+        if (!btn) return;
+        const held = (state.heldSpools || []);
+        const buffered = held[0];
+        if (!buffered) {
+            showToast('Buffer is empty — scan a spool first', 'warning', 3500);
+            return;
+        }
+        const box = btn.dataset.box;
+        const slot = btn.dataset.slot;
+        const toolhead = btn.dataset.toolhead;
+        const bsDisplay = buffered.display || `#${buffered.id}`;
+        showConfirmOverlay({
+            toolhead, box, slot,
+            title: `Deposit ${bsDisplay} into ${box} slot ${slot}?`,
+            body: `<div class="text-warning fw-bold mb-2" style="font-size:1rem;">Spool: ${bsDisplay}</div>` +
+                `<div class="text-light" style="font-size:1.05rem;">` +
+                `Drops it into <b>${box}:SLOT:${slot}</b>. Because this slot is bound to ` +
+                `<b>${toolhead}</b>, it auto-deploys to the toolhead once placed. ` +
+                `If ${toolhead} currently has another spool, that one returns to its own origin box first.</div>`,
+            onConfirm: () => {
+                fetch('/api/identify_scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text: `LOC:${box}:SLOT:${slot}`,
+                        source: 'quickswap_deposit',
+                    }),
+                })
+                    .then(async r => ({ ok: r.ok, body: await r.json() }))
+                    .then(({ ok, body }) => {
+                        if (ok && (body.action === 'assignment_done' || body.action === 'assignment_partial')) {
+                            const destNote = body.auto_deployed_to
+                                ? ` → ${body.auto_deployed_to}`
+                                : '';
+                            showToast(`⬇️ ${bsDisplay} → ${box}:SLOT:${slot}${destNote}`, 'success', 2500);
+                            // Mirror backend's buffer mutation on the frontend
+                            // so the user doesn't briefly see the old spool.
+                            if (body.moved != null) {
+                                state.heldSpools = (state.heldSpools || []).filter(s => s.id !== body.moved);
+                                if (window.renderBuffer) window.renderBuffer();
+                            }
+                            _refreshAfterMove();
+                        } else if (body.action === 'assignment_no_buffer') {
+                            showToast('Buffer is empty — scan a spool first', 'warning', 3500);
+                        } else {
+                            showToast(`❌ Deposit failed: ${body.action || body.error || 'unknown'}`, 'error', 5000);
+                        }
+                    })
+                    .catch(e => {
+                        console.error(e);
+                        showToast('Deposit — network error', 'error', 5000);
+                        if (window.logClientEvent) window.logClientEvent(
+                            `❌ Deposit network error: ${e && e.message ? e.message : 'connection failed'}`,
+                            'ERROR'
+                        );
+                    });
+            },
+        });
     };
 
     window.quickSwapTap = (btn) => {
@@ -878,4 +979,12 @@
     });
 
     window.renderQuickSwapSection = renderQuickSwapSection;
+
+    // Keep empty-slot buttons in sync with buffer state — the "Deposit
+    // from buffer" affordance only makes sense while a spool is held.
+    document.addEventListener('inventory:buffer-updated', () => {
+        if (currentLoc && window.renderQuickSwapSection) {
+            window.renderQuickSwapSection(currentLoc);
+        }
+    });
 })();
