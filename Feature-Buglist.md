@@ -60,7 +60,6 @@
 ## 🎨 UI & Theming
 * Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird.
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
-* Audit `text-pop` class usage across all card types and UI elements. There are spots not currently using it that would benefit from the shadow (discovered when moving the archive badge to Row 3 — it looked flat without inheriting `text-pop` from its old parent). Not a global apply, but a targeted pass to find and add where it makes sense.
 * Theres a little animation and modal that appears when you add a new Slicer Profile in the Add/edit enventory wizzard. Its so nifty I want this used in other places. (I'm not sure if this is a sweetalert2 thing, or if we implemented ourselves.)
 
 

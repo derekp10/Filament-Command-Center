@@ -629,7 +629,7 @@ const renderManagerNav = () => {
                 <div class="nav-label">READY TO SLOT</div>
                 ${(curItem.archived === true || String(curItem.archived).toLowerCase() === 'true') ? `<div class="badge text-bg-danger mb-2" style="font-size: 0.9rem;">📦 ARCHIVED</div>` : ''}
                 <div class="id-badge-gold shadow-sm mb-2" style="font-size:1.4rem;">#${curItem.id}</div>
-                <div class="nav-text-main" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
+                <div class="nav-text-main text-pop" style="font-size:1.3rem; margin-bottom:5px;">${curInfo.line3}</div>
                 <div class="text-pop" style="font-size:1.0rem; color:#fff; font-weight:bold;">${curInfo.line2}</div>
             </div>
         </div>`;
