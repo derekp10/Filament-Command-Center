@@ -235,6 +235,73 @@ def test_filament_search_result_passes_full_multicolor_string():
     assert fil_card["color_direction"] == "coaxial"
 
 
+# ---------------------------------------------------------------------------
+# Auto-archive on weight-0 (_auto_archive_on_empty)
+# ---------------------------------------------------------------------------
+# The user's 2026-04-22 answer on the backlog item "If a spool's remaining
+# weight is 0, suggest / auto set archived" was "Auto" — so update_spool now
+# injects archived=True + location='' whenever a weight-touching payload
+# leaves remaining_weight <= 0.
+
+
+def test_auto_archive_injects_archived_and_location_when_used_equals_initial():
+    data = {"used_weight": 1000}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=200)
+    assert data["archived"] is True
+    assert data["location"] == ""
+
+
+def test_auto_archive_does_not_fire_above_zero():
+    data = {"used_weight": 999}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=200)
+    assert "archived" not in data
+    assert "location" not in data
+
+
+def test_auto_archive_respects_caller_archived_flag():
+    """If the caller sets archived=False explicitly, don't clobber it."""
+    data = {"used_weight": 1000, "archived": False}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=0)
+    assert data["archived"] is False  # caller intent preserved
+    assert data["location"] == ""     # but location still auto-set
+
+
+def test_auto_archive_respects_caller_location():
+    """If the caller sets location explicitly, don't overwrite it."""
+    data = {"used_weight": 1000, "location": "LR-SHELF-1"}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=0)
+    assert data["archived"] is True
+    assert data["location"] == "LR-SHELF-1"
+
+
+def test_auto_archive_uses_payload_initial_weight_over_existing():
+    """If the caller ships a new initial_weight, use it over the existing value."""
+    data = {"used_weight": 500, "initial_weight": 500}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=100)
+    assert data["archived"] is True
+
+
+def test_auto_archive_noop_when_no_weight_fields_in_payload():
+    data = {"location": "LR-CART-2", "comment": "foo"}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=1000)
+    assert "archived" not in data
+
+
+def test_auto_archive_handles_missing_existing_values():
+    """A spool with no stored used/initial still shouldn't crash the helper."""
+    data = {"used_weight": 500}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=None, existing_used=None)
+    assert "archived" not in data
+
+
+def test_auto_archive_handles_overweight_as_empty():
+    """used_weight > initial still means the spool is empty (remaining <= 0)."""
+    data = {"used_weight": 1100}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=500)
+    assert data["archived"] is True
+    assert data["location"] == ""
+
+
 def test_filament_search_result_direction_defaults_to_longitudinal():
     """When no direction is stored, filament cards should mirror the spool default."""
     fil = _fake_filament_multi()

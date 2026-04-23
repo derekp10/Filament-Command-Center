@@ -83,6 +83,37 @@ def sanitize_outbound_data(data):
     data['extra'] = clean_extra
     return data
 
+def _auto_archive_on_empty(data, existing_initial, existing_used):
+    """Mutates `data` in-place to add {archived: True, location: ''} when the
+    post-update state would leave remaining_weight at 0 (or below).
+
+    Called from update_spool and create_spool so any path that empties a spool
+    (weigh-out, wizard edit, slurp-in from CSV, etc.) automatically archives
+    and unassigns it — per the user's 2026-04-22 answer of "Auto" on the
+    archive-on-zero backlog item.
+
+    The caller's explicit intent always wins: if the payload already sets
+    `archived` or `location`, we leave those keys alone.
+    """
+    if 'used_weight' not in data and 'initial_weight' not in data:
+        return  # nothing weight-related in this update
+    new_used = data.get('used_weight', existing_used)
+    new_initial = data.get('initial_weight', existing_initial)
+    if new_used is None or new_initial is None:
+        return
+    try:
+        remaining = float(new_initial) - float(new_used)
+    except (TypeError, ValueError):
+        return
+    if remaining > 0:
+        return
+    # Only inject the auto-settings if the caller didn't provide them.
+    if 'archived' not in data:
+        data['archived'] = True
+    if 'location' not in data:
+        data['location'] = ''
+
+
 def update_spool(sid, data):
     sm_url, _ = config_loader.get_api_urls()
     try:
@@ -90,20 +121,30 @@ def update_spool(sid, data):
         if 'location' in data and isinstance(data['location'], str):
             if data['location'].strip().upper() == 'UNASSIGNED':
                 data['location'] = ''
-                
+
+        # Fetch the existing spool once — used for the used_weight cap AND the
+        # auto-archive-on-empty check below. Cheaper than two round-trips.
+        existing = get_spool(sid) or {}
+
         # [ALEX FIX] Ensure used_weight never crashes SQLAlchemy due to constraint by artificially capping to initial_weight
         if 'used_weight' in data:
-            current_initial = data.get('initial_weight')
-            if current_initial is None:
-                # Need to lookup current initial_weight if it's missing from dirty payload
-                existing = get_spool(sid)
-                if existing and 'initial_weight' in existing:
-                    current_initial = existing['initial_weight']
-                    
+            current_initial = data.get('initial_weight', existing.get('initial_weight'))
             if current_initial is not None and data['used_weight'] > current_initial:
                 state.logger.warning(f"Capping used_weight {data['used_weight']} to initial_weight {current_initial} for Spool {sid}")
                 data['used_weight'] = current_initial
-                
+
+        # Auto-archive + unassign when remaining weight hits 0.
+        pre_archived = existing.get('archived', False)
+        _auto_archive_on_empty(data, existing.get('initial_weight'), existing.get('used_weight'))
+        if data.get('archived') and not pre_archived:
+            try:
+                state.add_log_entry(
+                    f"📦 Auto-archived Spool #{sid} (remaining weight hit 0) — moved to UNASSIGNED",
+                    "INFO", "00ccff",
+                )
+            except Exception:
+                pass
+
         clean_data = sanitize_outbound_data(data)
         r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
         if r.ok: return r.json()

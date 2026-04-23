@@ -7,8 +7,6 @@
 * Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
   * ✅ **MVP landed 2026-04-22**: "✏️ Edit Filament" button on the Filament Details modal footer opens a Swal form (name, material, empty spool weight, density, nozzle/bed temps, notes) and saves via `/api/update_filament`. The empty-weight field also shows the vendor's empty_spool_weight as a placeholder hint. Other entry points (card action button, card list, etc.) can copy `window.openEditFilamentForm(fil)` — it's reusable.
   * ⏸ **Remaining**: (1) backfill tool for historical spools stored with spool_weight=0 so they adopt the parent filament/vendor value. (2) Vendor and color_hex editing still need to go through the full wizard.
-* If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
-  * ⏸ **Needs UX decision**: "suggest" (prompt dialog) vs "auto" (silent). Also: should auto-archive also force location to UNASSIGNED, or leave it where it is and let the user move it explicitly? Hook likely lives near the weigh-out / update_spool path (`spoolman_api.update_spool`) or the weigh-out UI in `inv_weigh_out.js`.
 
 * Ability to edit filament specific data inside Filament command center. Currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool. Some sort of edit workflow for chaing data directly related to filaments.
 
