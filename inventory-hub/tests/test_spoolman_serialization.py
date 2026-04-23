@@ -71,9 +71,52 @@ def test_clamp_used_weight_rule():
     # Simulate a user submitting a form where they weighed an empty spool resulting in 'used_weight = 1200' on a 1000g initial spool.
     initial_weight = 1000.0
     used_weight = 1200.0
-    
-    # The API layer enforces min() clamp logic explicitly in create_spool / update_spool 
+
+    # The API layer enforces min() clamp logic explicitly in create_spool / update_spool
     clamped_used_weight = min(used_weight, initial_weight) if initial_weight is not None else used_weight
-    
+
     assert clamped_used_weight == 1000.0
+
+
+def _fake_spool(vendor_name="CC3D", color_name="Red", material="PLA"):
+    return {
+        "id": 42,
+        "external_id": "",
+        "remaining_weight": 500,
+        "extra": {},
+        "filament": {
+            "id": 7,
+            "vendor": {"name": vendor_name},
+            "material": material,
+            "name": color_name,
+            "color_hex": "ff0000",
+            "extra": {},
+        },
+    }
+
+
+@pytest.mark.parametrize("vendor_name", ["CC3D", "MatterHackers", "eSUN", "polymaker"])
+def test_format_spool_display_preserves_vendor_casing(vendor_name):
+    """Vendor/manufacturer names must be shown verbatim — not .title()-cased.
+
+    Regression guard for the 'CC3D' -> 'Cc3D' autocorrection bug. Brand strings
+    should be stripped of whitespace only; any other case-changing is out of scope.
+    """
+    spool = _fake_spool(vendor_name=vendor_name)
+    out = spoolman_api.format_spool_display(spool)
+
+    assert vendor_name in out["text"], (
+        f"Expected '{vendor_name}' in display text, got: {out['text']}"
+    )
+    assert vendor_name in out["text_short"], (
+        f"Expected '{vendor_name}' in short text, got: {out['text_short']}"
+    )
+
+
+def test_format_spool_display_preserves_vendor_with_surrounding_whitespace():
+    """Leading/trailing whitespace is still stripped, but internal casing survives."""
+    spool = _fake_spool(vendor_name="  CC3D  ")
+    out = spoolman_api.format_spool_display(spool)
+    assert "CC3D" in out["text"]
+    assert "  CC3D  " not in out["text"]
 

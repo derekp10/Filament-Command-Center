@@ -251,7 +251,7 @@ def format_spool_display(spool_data):
 
         vendor_obj = fil.get('vendor')
         brand = vendor_obj.get('name', 'Generic') if vendor_obj else 'Generic'
-        brand = str(brand).strip().title()
+        brand = str(brand).strip()
         
         mat = fil.get('material', 'PLA')
         mat = str(mat).strip().upper()
@@ -578,7 +578,7 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 locDisplay = p_source if is_ghost else sloc
             else:
                 # Formatting a raw Filament context
-                v_name = str(vid.get('name', 'Generic')).strip().title()
+                v_name = str(vid.get('name', 'Generic')).strip()
                 m_name = str(fil.get('material', 'PLA')).strip().upper()
                 
                 raw_attrs = fil.get('extra', {}).get('filament_attributes', '[]')
