@@ -376,19 +376,53 @@ def api_edit_spool_wizard():
 
 @app.route('/api/spool/update', methods=['POST'])
 def api_spool_update():
-    """Generic endpoint to partially update a spool from frontend modules"""
+    """Generic endpoint to partially update a spool from frontend modules.
+
+    Also surfaces two post-update flags so the frontend can respond to
+    user-visible state transitions:
+      - `auto_archived`: True when this call is the one that archived the
+        spool (weight-0 auto-archive logic in spoolman_api.update_spool).
+      - `needs_empty_weight_prompt`: True when the spool was just archived
+        AND its parent filament has no empty_spool_weight recorded. Triggers
+        the Archive Empty-Weight modal on the frontend.
+    """
     try:
         data = request.json
         spool_id = data.get('id')
         updates = data.get('updates')
-        
+
         if not spool_id or not updates:
             return jsonify({"status": "error", "msg": "Missing id or updates"})
-            
+
+        pre = spoolman_api.get_spool(spool_id) or {}
+        pre_archived = bool(pre.get('archived', False))
+
         res = spoolman_api.update_spool(spool_id, updates)
-        if res:
-            return jsonify({"status": "success"})
-        return jsonify({"status": "error", "msg": "Failed to update spool"})
+        if not res:
+            return jsonify({"status": "error", "msg": "Failed to update spool"})
+
+        post_archived = bool(res.get('archived', False))
+        auto_archived = (not pre_archived) and post_archived
+        needs_prompt = False
+        filament_id = None
+        if auto_archived:
+            fil = res.get('filament') or {}
+            filament_id = fil.get('id')
+            fil_weight = fil.get('spool_weight')
+            vendor_weight = (fil.get('vendor') or {}).get('empty_spool_weight')
+            # A filament is "missing empty spool weight" when both its own value
+            # and its vendor's fallback are null/0 — matches the frontend
+            # resolveEmptySpoolWeight chain so we don't prompt pointlessly.
+            def _missing(v):
+                return v is None or (isinstance(v, (int, float)) and v <= 0)
+            needs_prompt = _missing(fil_weight) and _missing(vendor_weight)
+
+        return jsonify({
+            "status": "success",
+            "auto_archived": auto_archived,
+            "needs_empty_weight_prompt": needs_prompt,
+            "filament_id": filament_id,
+        })
     except Exception as e:
         state.logger.error(f"Spool Update Error: {e}")
         return jsonify({"status": "error", "msg": str(e)})

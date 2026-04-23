@@ -44,9 +44,14 @@
 
 
 
-* When a Spool gets archived, and the filamen attached to it doesn't have an empty spool weight, propmt the user of the missing spool weight and offer to assist in updating that data after they way the empty spool.
-  * ⏸ **Needs UX decision**: inline overlay vs dedicated modal for the weigh-assist flow. Tightly coupled to the auto-archive-on-zero-weight item above — designing them together would avoid two separate prompt dialogs. With the Empty Spool Weight priority chain now in place, the "no empty weight" check must walk Spool → Filament → Vendor before deciding to prompt.
 
+* Need to do something about the fact that if a toolhead has multiple slots assigned to it for a dryer box, that new spool assignments don't automatically take over the current toolhead's assigned spool. 
+
+* Warn if a spool reassignment to a toolhead is happening during an active print.
+
+* If a spool isn't activly deployed to a toolhead during an update to the Filament Command Center, it looses it's current slot assignment, and has to be reassigned. (This might happen during other senerios, but this one is the first I've noticed.)
+
+* No way to assigne a slot to a printer without having a toolhead assigned to it. It would be nice if we could assign slots to a printer so they show up for possible easy swaping, but not actually being assigned to a toolhead. (in cases where the dryer box is basically ment for a printer, but we can't use a slot because of layout. Prusa XL and LR-MDB-1:SLOT:4 is a good example.)
 
 # **Active Backlog (Organized by Feature Area)**
 

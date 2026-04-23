@@ -672,6 +672,105 @@ window.refreshFilamentSpools = () => {
 };
 
 
+// --- Archive-Empty-Weight Prompt -------------------------------------------
+// Fires after a spool auto-archives (remaining weight hit 0) when the parent
+// filament has no empty_spool_weight recorded. Walks the user through weighing
+// the now-empty spool so all future spools of this filament inherit the value.
+//
+// Option-B from the backlog: a dedicated modal, bigger affordance than a
+// toast, with explicit "Save" / "Later" / "Cancel" paths.
+window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId) => {
+    if (!filamentId) return;
+    let fil;
+    try {
+        const r = await fetch(`/api/filament_details?id=${filamentId}`);
+        fil = await r.json();
+    } catch (e) {
+        console.warn("Could not fetch filament for empty-weight prompt", e);
+        return;
+    }
+    if (!fil || !fil.id) return;
+
+    const vendorName = (fil.vendor && fil.vendor.name) ? fil.vendor.name : 'Unknown';
+    const material = fil.material || 'Unknown';
+    const colorName = fil.name || 'Unknown';
+
+    const result = await Swal.fire({
+        target: document.body,
+        title: '📦 Spool archived — weigh the empty?',
+        html: `
+            <div class="text-start">
+                <p class="text-light mb-2">
+                    Spool <strong>#${spoolId}</strong> just hit 0g and was auto-archived.
+                    Its filament <strong>#${fil.id}</strong>
+                    (<em>${vendorName} ${material}, ${colorName}</em>)
+                    has no recorded <strong>empty spool weight</strong>.
+                </p>
+                <p class="text-light small mb-3">
+                    Put the now-empty spool on your scale and enter the measured weight below.
+                    The value will be saved to the filament, so every future spool of this filament
+                    inherits it automatically.
+                </p>
+                <label class="form-label text-warning small mb-1">Empty spool weight (g)</label>
+                <input type="number" step="0.1" min="0" id="fcc-archive-empty-wt"
+                    class="form-control bg-dark text-white border-warning" autocomplete="off"
+                    placeholder="e.g. 167">
+                <small class="text-secondary d-block mt-2">
+                    Tap <strong>Later</strong> to dismiss without saving — you can enter the weight
+                    any time from the Filament Details modal.
+                </small>
+            </div>
+        `,
+        background: '#1e1e1e',
+        color: '#fff',
+        showCancelButton: true,
+        showDenyButton: true,
+        confirmButtonText: 'Save weight',
+        denyButtonText: 'Later',
+        cancelButtonText: 'Cancel',
+        confirmButtonColor: '#ffc107',
+        denyButtonColor: '#6c757d',
+        allowEscapeKey: true,
+        focusConfirm: false,
+        didOpen: () => {
+            const wtEl = Swal.getPopup().querySelector('#fcc-archive-empty-wt');
+            if (wtEl) wtEl.focus();
+        },
+        preConfirm: () => {
+            const raw = Swal.getPopup().querySelector('#fcc-archive-empty-wt')?.value;
+            if (raw === '' || raw == null) {
+                Swal.showValidationMessage('Enter a weight or tap Later.');
+                return false;
+            }
+            const n = Number(raw);
+            if (!Number.isFinite(n) || n <= 0) {
+                Swal.showValidationMessage('Weight must be a positive number.');
+                return false;
+            }
+            return n;
+        },
+    });
+
+    if (!result.isConfirmed) return;  // Later / Cancel / Escape — all no-op
+
+    const weight = result.value;
+    try {
+        const r = await fetch('/api/update_filament', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: fil.id, data: { spool_weight: weight } }),
+        });
+        const d = await r.json();
+        if (d && d.success) {
+            showToast(`Saved ${weight}g as Filament #${fil.id} empty weight.`, 'success');
+        } else {
+            showToast(`Save failed: ${d && d.msg ? d.msg : 'unknown'}`, 'error', 7000);
+        }
+    } catch (e) {
+        showToast(`Save error: ${e.message || e}`, 'error', 7000);
+    }
+};
+
 // --- Edit Filament (direct, filament-only) ---
 // Opens a Swal form over the Filament Details modal (Bootstrap, not Swal, so
 // no nested-Swal footgun). Only the commonly-edited, filament-level fields
