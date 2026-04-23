@@ -343,7 +343,10 @@ def format_spool_display(spool_data):
                 "material": smart_mat,
                 "color_name": col_name,
                 "weight": rem,
-                "temp": f"{fil.get('settings_extruder_temp', '')}°C" if fil.get('settings_extruder_temp') else ""
+                "temp": f"{fil.get('settings_extruder_temp', '')}°C" if fil.get('settings_extruder_temp') else "",
+                # Spoolman stores needs_label_print loosely (bool, 'true'/'false' string, or missing).
+                # Normalize to a strict bool so the card can branch without re-checking types.
+                "needs_label_print": str(extra.get('needs_label_print', '')).lower() in ('true', '1'),
             }
         }
 
