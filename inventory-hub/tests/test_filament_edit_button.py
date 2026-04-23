@@ -38,6 +38,22 @@ def test_update_filament_rejects_non_dict_data(api_base_url: str):
     assert payload.get("success") is False
 
 
+def test_create_vendor_rejects_empty_name(api_base_url: str):
+    """POST /api/vendors with no name returns 400."""
+    r = requests.post(f"{api_base_url}/api/vendors", json={}, timeout=5)
+    assert r.status_code == 400
+    body = r.json()
+    assert body.get("success") is False
+    assert "name" in body.get("msg", "").lower()
+
+
+def test_create_vendor_rejects_blank_name(api_base_url: str):
+    """Whitespace-only name → same 400 as empty."""
+    r = requests.post(f"{api_base_url}/api/vendors", json={"name": "   "}, timeout=5)
+    assert r.status_code == 400
+    assert r.json().get("success") is False
+
+
 # --- Frontend wiring tests --------------------------------------------------
 
 
@@ -132,7 +148,9 @@ def test_openEditFilamentForm_shows_vendor_weight_hint(page: Page):
 
 
 def test_openEditFilamentForm_has_vendor_and_color_inputs(page: Page):
-    """Both Vendor dropdown and Color hex fields should be rendered."""
+    """Vendor (searchable input + hidden id + datalist) and Color hex fields
+    should be rendered. Wave 2 split the single <select> into the
+    `-name` / `-id` pair so users can type new vendors."""
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
@@ -147,9 +165,15 @@ def test_openEditFilamentForm_has_vendor_and_color_inputs(page: Page):
     page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
     page.wait_for_selector("#edit-fil-name", state="visible", timeout=3_000)
 
-    expect(page.locator("#edit-fil-vendor")).to_have_count(1)
+    # Wave 2: vendor is now a text input (searchable combobox via datalist)
+    # backed by a hidden id field. Both must exist.
+    expect(page.locator("#edit-fil-vendor-name")).to_have_count(1)
+    expect(page.locator("#edit-fil-vendor-id")).to_have_count(1)
     expect(page.locator("#edit-fil-color-picker")).to_have_count(1)
     expect(page.locator("#edit-fil-color-hex")).to_have_count(1)
+
+    # Vendor name pre-populated from fil.vendor.name.
+    assert page.locator("#edit-fil-vendor-name").input_value() == "TestVendor"
 
     # color_hex input should be pre-populated with #rrggbb from the raw hex.
     hex_val = page.locator("#edit-fil-color-hex").input_value()
@@ -189,17 +213,23 @@ def test_openEditFilamentForm_submits_vendor_and_color_changes(page: Page):
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
 
-    # Stub /api/vendors so we get a known set of options regardless of live data.
+    # Stub /api/vendors (GET), /api/materials, and /api/update_filament so we get
+    # known options regardless of live data. POST /api/vendors isn't needed here
+    # since the test selects an existing vendor (Beta) rather than creating one.
     page.evaluate(
         """
         window.__lastFetchPayload = null;
         const origFetch = window.fetch;
         window.fetch = async (url, opts) => {
-            if (url === '/api/vendors') {
+            if (url === '/api/vendors' && (!opts || !opts.method || opts.method === 'GET')) {
                 return new Response(JSON.stringify({
                     success: true,
                     vendors: [{id: 1, name: 'Alpha'}, {id: 2, name: 'Beta'}]
                 }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/materials') {
+                return new Response(JSON.stringify({success: true, materials: ['PLA', 'PETG']}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
             }
             if (url === '/api/update_filament') {
                 window.__lastFetchPayload = JSON.parse(opts.body);
@@ -220,15 +250,21 @@ def test_openEditFilamentForm_submits_vendor_and_color_changes(page: Page):
         "vendor": {"id": 1, "name": "Alpha"},
     }
     page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
-    page.wait_for_selector("#edit-fil-vendor", state="visible", timeout=3_000)
-    # <option> elements are never 'visible' in Playwright; wait for the DOM node via JS.
+    page.wait_for_selector("#edit-fil-vendor-name", state="visible", timeout=3_000)
+    # Wait for the datalist to be populated (Beta option must exist in DOM).
     page.wait_for_function(
-        "document.querySelector(\"#edit-fil-vendor option[value='2']\") !== null",
+        "document.querySelector(\"#edit-fil-vendors-dl option[value='Beta']\") !== null",
         timeout=3_000,
     )
 
-    # Change vendor to Beta (id=2) and color to #aabbcc.
-    page.locator("#edit-fil-vendor").select_option(value="2")
+    # Change vendor by typing "Beta" — the input handler resolves name → id
+    # against the fetched vendor cache and writes "2" into the hidden field.
+    page.locator("#edit-fil-vendor-name").fill("Beta")
+    # Blur so the change event definitely fires on older browsers.
+    page.locator("#edit-fil-name").click()
+    # Verify the hidden id got resolved.
+    assert page.locator("#edit-fil-vendor-id").input_value() == "2"
+
     page.locator("#edit-fil-color-hex").fill("#aabbcc")
 
     page.locator(".swal2-confirm").click()
@@ -268,15 +304,19 @@ def test_openEditFilamentForm_rejects_invalid_hex(page: Page):
 
 
 def _stub_vendors_and_update(page):
-    """Install fetch stubs for /api/vendors and /api/update_filament so the
-    Edit Filament tests don't mutate live Spoolman."""
+    """Install fetch stubs for /api/vendors, /api/materials, and
+    /api/update_filament so the Edit Filament tests don't mutate live Spoolman."""
     page.evaluate(
         """
         window.__lastFetchPayload = null;
         const origFetch = window.fetch;
         window.fetch = async (url, opts) => {
-            if (url === '/api/vendors') {
+            if (url === '/api/vendors' && (!opts || !opts.method || opts.method === 'GET')) {
                 return new Response(JSON.stringify({success: true, vendors: []}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/materials') {
+                return new Response(JSON.stringify({success: true, materials: ['PLA', 'PETG']}),
                     {status: 200, headers: {'Content-Type': 'application/json'}});
             }
             if (url === '/api/update_filament') {
@@ -336,6 +376,9 @@ def test_openEditFilamentForm_submits_diameter_weight_price_external_id(page: Pa
     page.locator("#edit-fil-diameter").fill("2.85")
     page.locator("#edit-fil-weight").fill("750")
     page.locator("#edit-fil-price").fill("15.50")
+    # external_id moved into the collapsed Advanced section in Wave 2 —
+    # expand <details> before filling.
+    page.evaluate("document.querySelector('details').setAttribute('open', '')")
     page.locator("#edit-fil-external-id").fill("NEW-ID")
 
     page.locator(".swal2-confirm").click()
@@ -423,6 +466,197 @@ def test_openEditFilamentForm_submits_multi_color_csv(page: Page):
     # CSV is lowercase, no-hash, in the order they appear.
     assert data["multi_color_hexes"] == "ff0000,00ff00"
     assert data["multi_color_direction"] == "coaxial"
+
+
+def test_openEditFilamentForm_has_advanced_section_with_extras(page: Page):
+    """Wave 2: collapsible <details> section contains URL/attr/legacy fields."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    fil = {
+        "id": 301,
+        "name": "Test",
+        "material": "PLA",
+        "extra": {
+            "product_url": '"https://vendor.example/product"',
+            "purchase_url": '"https://shop.example/buy"',
+            "sheet_link": '"https://docs.example/sheet"',
+            "original_color": '"Silk Gold"',
+            "filament_attributes": '["Silk","Shimmer"]',
+        },
+    }
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-name", state="visible", timeout=3_000)
+
+    # Expand the <details>.
+    page.evaluate("document.querySelector('details').setAttribute('open', '')")
+
+    assert page.locator("#edit-fil-product-url").input_value() == "https://vendor.example/product"
+    assert page.locator("#edit-fil-purchase-url").input_value() == "https://shop.example/buy"
+    assert page.locator("#edit-fil-sheet-link").input_value() == "https://docs.example/sheet"
+    assert page.locator("#edit-fil-original-color").input_value() == "Silk Gold"
+    # Attributes render as comma-separated.
+    assert page.locator("#edit-fil-attributes").input_value() == "Silk, Shimmer"
+
+
+def test_openEditFilamentForm_submits_merged_extras_preserving_unknown_keys(page: Page):
+    """Editing an extras field should merge with Spoolman's existing extras —
+    never drop keys we don't manage (price_total, custom fields, etc.)."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_vendors_and_update(page)
+
+    fil = {
+        "id": 302,
+        "name": "Test",
+        "material": "PLA",
+        "extra": {
+            "product_url": '"https://old.example"',
+            "price_total": '"$19.99"',
+            "some_custom_key": '"preserve-me"',
+        },
+    }
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-name", state="visible", timeout=3_000)
+
+    page.evaluate("document.querySelector('details').setAttribute('open', '')")
+    page.locator("#edit-fil-product-url").fill("https://new.example")
+
+    page.locator(".swal2-confirm").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+
+    payload = page.evaluate("() => window.__lastFetchPayload")
+    extra = payload["data"]["extra"]
+    # Only product_url changed — other keys must survive.
+    assert extra["product_url"] == '"https://new.example"'
+    assert extra["price_total"] == '"$19.99"'
+    assert extra["some_custom_key"] == '"preserve-me"'
+
+
+def test_openEditFilamentForm_filament_attributes_serialize_to_json_array(page: Page):
+    """Typing 'Silk, Matte' should land in extras as a JSON-encoded array."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_vendors_and_update(page)
+
+    fil = {"id": 303, "name": "T", "material": "PLA", "extra": {}}
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-name", state="visible", timeout=3_000)
+
+    page.evaluate("document.querySelector('details').setAttribute('open', '')")
+    page.locator("#edit-fil-attributes").fill("Silk, Matte")
+
+    page.locator(".swal2-confirm").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+
+    payload = page.evaluate("() => window.__lastFetchPayload")
+    attrs_raw = payload["data"]["extra"]["filament_attributes"]
+    # JSON round-trips to a Python list.
+    import json
+    assert json.loads(attrs_raw) == ["Silk", "Matte"]
+
+
+def test_openEditFilamentForm_typing_new_vendor_shows_badge(page: Page):
+    """Wave 2 vendor UI: typing a name that isn't in the cached vendors list
+    should show the '+ NEW' badge so the user knows we're creating a vendor."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    # Stub /api/vendors to a known set.
+    page.evaluate(
+        """
+        const orig = window.fetch;
+        window.fetch = async (url, opts) => {
+            if (url === '/api/vendors' && (!opts || !opts.method || opts.method === 'GET')) {
+                return new Response(JSON.stringify({success: true, vendors: [{id: 1, name: 'Alpha'}]}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            return orig(url, opts);
+        };
+        """
+    )
+
+    fil = {"id": 304, "name": "T", "material": "PLA", "vendor": {"id": 1, "name": "Alpha"}}
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-vendor-name", state="visible", timeout=3_000)
+    page.wait_for_function(
+        "document.querySelector(\"#edit-fil-vendors-dl option[value='Alpha']\") !== null",
+        timeout=3_000,
+    )
+
+    # Initially Alpha is selected → no badge.
+    assert not page.locator("#edit-fil-vendor-new-badge").is_visible()
+
+    # Type a brand new name — badge should appear and hidden id should clear.
+    page.locator("#edit-fil-vendor-name").fill("BrandNewCo")
+    # Give the input handler a tick.
+    page.wait_for_timeout(100)
+    assert page.locator("#edit-fil-vendor-new-badge").is_visible()
+    assert page.locator("#edit-fil-vendor-id").input_value() == ""
+
+
+def test_openEditFilamentForm_creates_new_vendor_then_patches(page: Page):
+    """When user saves with a new vendor name, frontend POSTs /api/vendors
+    first and feeds the returned id back into /api/update_filament."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    page.evaluate(
+        """
+        window.__createdVendor = null;
+        window.__lastFetchPayload = null;
+        const orig = window.fetch;
+        window.fetch = async (url, opts) => {
+            if (url === '/api/vendors' && (!opts || !opts.method || opts.method === 'GET')) {
+                return new Response(JSON.stringify({success: true, vendors: [{id: 1, name: 'Alpha'}]}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/vendors' && opts && opts.method === 'POST') {
+                window.__createdVendor = JSON.parse(opts.body);
+                return new Response(JSON.stringify({success: true, vendor: {id: 42, name: JSON.parse(opts.body).name}}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/materials') {
+                return new Response(JSON.stringify({success: true, materials: []}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/update_filament') {
+                window.__lastFetchPayload = JSON.parse(opts.body);
+                return new Response(JSON.stringify({success: true, filament: {id: 305}}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            return orig(url, opts);
+        };
+        """
+    )
+
+    fil = {"id": 305, "name": "T", "material": "PLA", "vendor": {"id": 1, "name": "Alpha"}}
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-vendor-name", state="visible", timeout=3_000)
+
+    # Replace vendor with a new name. Wait for datalist to populate first.
+    page.wait_for_function(
+        "document.querySelector(\"#edit-fil-vendors-dl option[value='Alpha']\") !== null",
+        timeout=3_000,
+    )
+    page.locator("#edit-fil-vendor-name").fill("FreshBrand")
+    page.wait_for_timeout(100)
+
+    page.locator(".swal2-confirm").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=5_000)
+
+    # The POST /api/vendors call fired with the new name.
+    created = page.evaluate("() => window.__createdVendor")
+    assert created == {"name": "FreshBrand"}
+
+    # The update_filament PATCH carries the newly-minted vendor_id.
+    payload = page.evaluate("() => window.__lastFetchPayload")
+    assert payload["data"]["vendor_id"] == 42
 
 
 def test_openEditFilamentForm_remove_extra_color_hides_direction(page: Page):

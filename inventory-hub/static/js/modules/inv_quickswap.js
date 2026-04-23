@@ -256,9 +256,32 @@
             try { _activeConfirmClose(); } catch (e) { /* noop */ }
         }
         title.innerText = opts.title || `Swap ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`;
-        body.innerHTML = opts.body || ('This moves the spool currently in that slot into the active toolhead. ' +
-                        'Any spool already on the toolhead will be auto-ejected back to its source.');
+        const defaultBody = 'This moves the spool currently in that slot into the active toolhead. ' +
+                            'Any spool already on the toolhead will be auto-ejected back to its source.';
+        body.innerHTML = opts.body || defaultBody;
         ov.style.display = 'block';
+
+        // Active-print pre-check: if opts.toolhead is set and PrusaLink reports
+        // the printer as PRINTING/PAUSED/BUSY, prepend a warning banner to the
+        // overlay body. Probe fires asynchronously so the overlay shows
+        // immediately (don't block user on a slow/unreachable printer) and the
+        // banner slots in once the response lands. Fails open on any error —
+        // null state = no banner.
+        if (opts.toolhead && window.fetchPrinterStateForToolhead) {
+            window.fetchPrinterStateForToolhead(opts.toolhead).then(stateInfo => {
+                // Overlay may have closed between probe start and response. Bail
+                // if so, and also bail if the user already fired another overlay
+                // (our close-handler would have been replaced).
+                if (ov.style.display === 'none') return;
+                if (!stateInfo) return;
+                const banner = `<div class="alert alert-warning py-2 px-3 mb-2" style="font-size:0.9em;">`
+                    + `⚠️ <b>${stateInfo.printer_name} is ${stateInfo.state}</b> — loading a new spool now will disrupt the print.`
+                    + `</div>`;
+                // If the caller provided their own body, prepend ours. If they
+                // didn't, replace the default body with banner + default.
+                body.innerHTML = banner + (opts.body || defaultBody);
+            });
+        }
         const close = () => {
             ov.style.display = 'none';
             yes.onclick = null; no.onclick = null;
@@ -451,30 +474,18 @@
         // button text tells you what you're committing to.
         const labelEl = btn.querySelector('.fw-bold + .fw-bold, div.fw-bold:nth-child(2)');
         const spoolLabel = labelEl ? labelEl.innerText.trim() : '';
-        // Pre-check PrusaLink state for the target toolhead so we can prepend
-        // a warning banner when the printer is actively printing/paused.
-        // Fails open — null means "unknown, proceed without warning."
-        const stateProbe = window.fetchPrinterStateForToolhead
-            ? window.fetchPrinterStateForToolhead(opts.toolhead)
-            : Promise.resolve(null);
-        stateProbe.then(stateInfo => {
-            const warnBanner = stateInfo
-                ? `<div class="alert alert-warning py-2 px-3 mb-2" style="font-size:0.9em;">
-                    ⚠️ <b>${stateInfo.printer_name} is ${stateInfo.state}</b> — loading a new spool now will disrupt the print.
-                   </div>`
-                : '';
-            showConfirmOverlay({
-                ...opts,
-                title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
-                body: warnBanner
-                    + (spoolLabel
-                        ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
-                        : '')
-                    + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
-                    + 'Any spool currently on the toolhead gets auto-returned to <em>its own</em> origin box — '
-                    + 'never re-routed into a different dryer box.',
-                onConfirm: () => performSwap(opts),
-            });
+        // Active-print banner is handled inside showConfirmOverlay itself
+        // now (covers all 4 call sites). No pre-probe wrapper here.
+        showConfirmOverlay({
+            ...opts,
+            title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
+            body: (spoolLabel
+                    ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
+                    : '')
+                + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
+                + 'Any spool currently on the toolhead gets auto-returned to <em>its own</em> origin box — '
+                + 'never re-routed into a different dryer box.',
+            onConfirm: () => performSwap(opts),
         });
     };
 

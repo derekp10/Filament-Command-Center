@@ -793,6 +793,38 @@ window.openEditFilamentForm = (fil) => {
     const currentBed = fil.settings_bed_temp != null ? fil.settings_bed_temp : '';
     const currentComment = esc(fil.comment || '');
     const currentVendorId = fil.vendor && fil.vendor.id != null ? String(fil.vendor.id) : '';
+    const currentVendorName = esc(fil.vendor && fil.vendor.name ? fil.vendor.name : '');
+
+    // Spoolman stores extra-field string values wrapped in literal quotes
+    // (e.g. `"https://..."`). Strip them for display so the user edits the
+    // inner value directly.
+    const unquoteExtra = (v) => {
+        if (v == null) return '';
+        const s = String(v);
+        if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1);
+        return s;
+    };
+    const rawExtra = fil.extra || {};
+    const currentProductUrl = esc(unquoteExtra(rawExtra.product_url));
+    const currentPurchaseUrl = esc(unquoteExtra(rawExtra.purchase_url));
+    const currentSheetLink = esc(unquoteExtra(rawExtra.sheet_link));
+    const currentOriginalColor = esc(unquoteExtra(rawExtra.original_color));
+
+    // filament_attributes is a JSON-encoded list (e.g. '["Silk","Matte"]').
+    // Render as a comma-separated string for a simple freeform editor; on
+    // save we'll serialize back to a JSON array.
+    let currentAttributes = '';
+    const rawAttrs = rawExtra.filament_attributes;
+    if (rawAttrs != null && rawAttrs !== '') {
+        try {
+            const parsed = typeof rawAttrs === 'string' ? JSON.parse(rawAttrs) : rawAttrs;
+            if (Array.isArray(parsed)) currentAttributes = parsed.join(', ');
+            else currentAttributes = String(parsed);
+        } catch (_) {
+            currentAttributes = String(rawAttrs).replace(/^"|"$/g, '');
+        }
+    }
+    currentAttributes = esc(currentAttributes);
     // color_hex handling: Spoolman stores either a single 6-char hex, OR a comma-
     // separated list via `multi_color_hexes` extra. Parse both into a unified
     // array of normalized '#rrggbb' strings that the form can manage uniformly.
@@ -833,14 +865,18 @@ window.openEditFilamentForm = (fil) => {
                 </div>
                 <div class="mb-2">
                     <label class="form-label text-light small mb-1">Material</label>
-                    <input type="text" id="edit-fil-material" class="form-control bg-dark text-white border-secondary" value="${currentMaterial}" autocomplete="off">
+                    <input type="text" id="edit-fil-material" list="edit-fil-materials-dl" class="form-control bg-dark text-white border-secondary" value="${currentMaterial}" autocomplete="off" placeholder="PLA, PETG, ABS...">
+                    <datalist id="edit-fil-materials-dl"></datalist>
                 </div>
                 <div class="row g-2">
                     <div class="col-8">
-                        <label class="form-label text-light small mb-1">Vendor</label>
-                        <select id="edit-fil-vendor" class="form-control bg-dark text-white border-secondary">
-                            <option value="">-- loading… --</option>
-                        </select>
+                        <label class="form-label text-light small mb-1">
+                            Vendor
+                            <span id="edit-fil-vendor-new-badge" class="badge bg-success ms-1" style="display:none; font-size:0.7rem;">+ NEW</span>
+                        </label>
+                        <input type="text" id="edit-fil-vendor-name" list="edit-fil-vendors-dl" class="form-control bg-dark text-white border-secondary" value="${currentVendorName}" autocomplete="off" placeholder="-- Generic --">
+                        <datalist id="edit-fil-vendors-dl"></datalist>
+                        <input type="hidden" id="edit-fil-vendor-id" value="${currentVendorId}">
                     </div>
                     <div class="col-4">
                         <label class="form-label text-light small mb-1">
@@ -892,14 +928,47 @@ window.openEditFilamentForm = (fil) => {
                         <input type="number" step="0.01" id="edit-fil-price" class="form-control bg-dark text-white border-secondary" value="${currentPrice}" placeholder="0.00" autocomplete="off">
                     </div>
                 </div>
-                <div class="mt-1">
-                    <label class="form-label text-light small mb-1">Legacy / External ID</label>
-                    <input type="text" id="edit-fil-external-id" class="form-control bg-dark text-white border-secondary" value="${currentExternalId}" placeholder="(optional)" autocomplete="off">
-                </div>
                 <div class="mt-2">
                     <label class="form-label text-light small mb-1">Notes</label>
                     <textarea id="edit-fil-comment" rows="2" class="form-control bg-dark text-white border-secondary">${currentComment}</textarea>
                 </div>
+
+                <!-- Advanced: URLs, tags, legacy ID. Collapsed by default to
+                     keep the form scannable; the user expands only when editing
+                     these less-common fields. Uses native <details> so no JS
+                     wiring is required for the open/close behavior. -->
+                <details class="mt-3 border-top border-secondary pt-2">
+                    <summary class="text-info fw-bold" style="cursor:pointer; user-select:none;">
+                        ⚙️ Advanced (URLs, tags, legacy ID)
+                    </summary>
+                    <div class="mt-2">
+                        <div class="mb-2">
+                            <label class="form-label text-light small mb-1">Original Color Name</label>
+                            <input type="text" id="edit-fil-original-color" class="form-control bg-dark text-white border-secondary" value="${currentOriginalColor}" placeholder="e.g. Silk Gold" autocomplete="off">
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label text-light small mb-1">Filament Attributes</label>
+                            <input type="text" id="edit-fil-attributes" class="form-control bg-dark text-white border-secondary" value="${currentAttributes}" placeholder="Silk, Matte, Carbon Fiber...  (comma-separated)" autocomplete="off">
+                            <div class="form-text text-muted" style="font-size:0.8rem;">Comma-separated tags. Stored in Spoolman as a JSON array.</div>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label text-light small mb-1">Product URL</label>
+                            <input type="url" id="edit-fil-product-url" class="form-control bg-dark text-white border-secondary" value="${currentProductUrl}" placeholder="https://..." autocomplete="off">
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label text-light small mb-1">Purchase URL</label>
+                            <input type="url" id="edit-fil-purchase-url" class="form-control bg-dark text-white border-secondary" value="${currentPurchaseUrl}" placeholder="https://..." autocomplete="off">
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label text-light small mb-1">Sheet / Reference Link</label>
+                            <input type="url" id="edit-fil-sheet-link" class="form-control bg-dark text-white border-secondary" value="${currentSheetLink}" placeholder="https://..." autocomplete="off">
+                        </div>
+                        <div class="mb-1">
+                            <label class="form-label text-light small mb-1">Legacy / External ID</label>
+                            <input type="text" id="edit-fil-external-id" class="form-control bg-dark text-white border-secondary" value="${currentExternalId}" placeholder="(optional)" autocomplete="off">
+                        </div>
+                    </div>
+                </details>
             </div>
         `,
         background: '#1e1e1e',
@@ -913,24 +982,59 @@ window.openEditFilamentForm = (fil) => {
             const nameEl = popup.querySelector('#edit-fil-name');
             if (nameEl) nameEl.focus();
 
-            // Populate vendor dropdown asynchronously — select current vendor on load.
+            // Populate vendor datalist and wire the searchable input. Typing a
+            // name that matches an existing vendor sets the hidden vendor-id;
+            // typing a name that doesn't match sets vendor-id='' and shows a
+            // "+ NEW" badge so the user knows we're about to create a vendor.
+            const vendorNameEl = popup.querySelector('#edit-fil-vendor-name');
+            const vendorIdEl = popup.querySelector('#edit-fil-vendor-id');
+            const vendorDl = popup.querySelector('#edit-fil-vendors-dl');
+            const vendorNewBadge = popup.querySelector('#edit-fil-vendor-new-badge');
+            // Cache the fetched vendors list so the input handler can look up IDs.
+            let vendorCache = [];
+            const refreshVendorBadge = () => {
+                const typed = (vendorNameEl.value || '').trim();
+                if (!typed) {
+                    vendorIdEl.value = '';
+                    vendorNewBadge.style.display = 'none';
+                    return;
+                }
+                const match = vendorCache.find(v => (v.name || '').toLowerCase() === typed.toLowerCase());
+                if (match) {
+                    vendorIdEl.value = String(match.id);
+                    vendorNewBadge.style.display = 'none';
+                } else {
+                    vendorIdEl.value = '';
+                    vendorNewBadge.style.display = 'inline-block';
+                }
+            };
             fetch('/api/vendors')
                 .then((r) => r.json())
                 .then((d) => {
-                    const sel = popup.querySelector('#edit-fil-vendor');
-                    if (!sel || !d || !d.success) return;
-                    const opts = ['<option value="">-- Generic --</option>'];
-                    (d.vendors || []).forEach((v) => {
-                        const sval = String(v.id);
-                        const selected = sval === currentVendorId ? ' selected' : '';
-                        opts.push(`<option value="${sval}"${selected}>${esc(v.name)}</option>`);
-                    });
-                    sel.innerHTML = opts.join('');
+                    if (!d || !d.success) return;
+                    vendorCache = d.vendors || [];
+                    vendorDl.innerHTML = vendorCache
+                        .map(v => `<option value="${esc(v.name)}"></option>`)
+                        .join('');
+                    refreshVendorBadge();
                 })
-                .catch(() => {
-                    const sel = popup.querySelector('#edit-fil-vendor');
-                    if (sel) sel.innerHTML = '<option value="">-- (failed to load) --</option>';
-                });
+                .catch(() => { /* fail open — user can still type a new name */ });
+            if (vendorNameEl) vendorNameEl.addEventListener('input', refreshVendorBadge);
+
+            // Populate material datalist. No hidden id needed — Spoolman's
+            // material is a free-text field, the datalist just offers known
+            // values as autocomplete hints.
+            fetch('/api/materials')
+                .then((r) => r.json())
+                .then((d) => {
+                    const dl = popup.querySelector('#edit-fil-materials-dl');
+                    if (!dl || !d || !d.success) return;
+                    const mats = Array.isArray(d.materials) ? d.materials : [];
+                    dl.innerHTML = mats
+                        .map(m => `<option value="${esc(m)}"></option>`)
+                        .join('');
+                })
+                .catch(() => { /* non-fatal */ });
 
             // --- Color pickers -------------------------------------------------
             // Helper: wire a (picker, hex) input pair so changes in one mirror the
@@ -1012,9 +1116,26 @@ window.openEditFilamentForm = (fil) => {
                 const n = numOrNull(id);
                 return n == null ? null : Math.round(n);
             };
-            // Vendor: empty string means "Generic" (null vendor_id).
-            const vendorRaw = val('#edit-fil-vendor');
-            const vendorId = vendorRaw === '' || vendorRaw == null ? null : Number(vendorRaw);
+            // Vendor handling:
+            //   - Hidden vendor_id is set when the typed name matches an existing
+            //     vendor (handled by refreshVendorBadge on input).
+            //   - Empty name → null vendor_id (generic).
+            //   - Typed name with no match → pendingNewVendorName, resolved to
+            //     a real vendor_id by the .then() handler BEFORE POSTing the
+            //     filament update.
+            const vendorTyped = (val('#edit-fil-vendor-name') || '').trim();
+            const vendorIdRaw = val('#edit-fil-vendor-id');
+            let vendorId;
+            let pendingNewVendorName = null;
+            if (!vendorTyped) {
+                vendorId = null;
+            } else if (vendorIdRaw) {
+                vendorId = Number(vendorIdRaw);
+            } else {
+                // New vendor — we'll create it in the .then() handler.
+                vendorId = undefined; // sentinel: "TBD, create then patch"
+                pendingNewVendorName = vendorTyped;
+            }
 
             // Colors: collect the primary + every extra row. Validate each hex;
             // any invalid input blocks the save with a validation message.
@@ -1054,6 +1175,42 @@ window.openEditFilamentForm = (fil) => {
                 multiDirection = (val('#edit-fil-color-direction') || 'longitudinal').toLowerCase();
             }
 
+            // Advanced-section extras. Spoolman PATCH replaces the entire
+            // `extra` object, so we must MERGE with the filament's existing
+            // extras before sending — writing just our keys would wipe
+            // physical_source, price_total, and anything else Spoolman set.
+            const newProductUrl = (val('#edit-fil-product-url') || '').trim();
+            const newPurchaseUrl = (val('#edit-fil-purchase-url') || '').trim();
+            const newSheetLink = (val('#edit-fil-sheet-link') || '').trim();
+            const newOriginalColor = (val('#edit-fil-original-color') || '').trim();
+            const rawAttrsText = (val('#edit-fil-attributes') || '').trim();
+            // Parse comma-separated tags into an array; empty string → empty array.
+            const attrsArr = rawAttrsText
+                ? rawAttrsText.split(',').map(t => t.trim()).filter(Boolean)
+                : [];
+
+            // Detect which extra fields changed so we know whether to include
+            // the merged extra object in the PATCH. If nothing extra changed,
+            // we skip `extra` entirely and leave everything else alone.
+            const extraChanges = {};
+            if (newProductUrl !== unquoteExtra(rawExtra.product_url)) extraChanges.product_url = newProductUrl;
+            if (newPurchaseUrl !== unquoteExtra(rawExtra.purchase_url)) extraChanges.purchase_url = newPurchaseUrl;
+            if (newSheetLink !== unquoteExtra(rawExtra.sheet_link)) extraChanges.sheet_link = newSheetLink;
+            if (newOriginalColor !== unquoteExtra(rawExtra.original_color)) extraChanges.original_color = newOriginalColor;
+            // filament_attributes: compare rendered arrays so order changes
+            // register but a trailing-space-only edit doesn't.
+            const prevAttrsArr = (() => {
+                try {
+                    const p = typeof rawExtra.filament_attributes === 'string'
+                        ? JSON.parse(rawExtra.filament_attributes)
+                        : rawExtra.filament_attributes;
+                    return Array.isArray(p) ? p.map(String).map(s => s.trim()).filter(Boolean) : [];
+                } catch (_) { return []; }
+            })();
+            if (JSON.stringify(attrsArr) !== JSON.stringify(prevAttrsArr)) {
+                extraChanges.filament_attributes = attrsArr;
+            }
+
             const data = {
                 name: (val('#edit-fil-name') || '').trim() || null,
                 material: (val('#edit-fil-material') || '').trim() || null,
@@ -1070,6 +1227,10 @@ window.openEditFilamentForm = (fil) => {
                 settings_extruder_temp: intOrNull('#edit-fil-nozzle'),
                 settings_bed_temp: intOrNull('#edit-fil-bed'),
                 comment: val('#edit-fil-comment') || '',
+                // These two ride along so the .then() handler can surface them
+                // as dirty-diff entries + resolve the pending-new-vendor case.
+                _extraChanges: extraChanges,
+                _pendingNewVendorName: pendingNewVendorName,
             };
             // Strip unchanged fields so we don't POST no-ops. This matches the
             // edit_spool_wizard dirty-diff convention and keeps Activity Log
@@ -1113,31 +1274,90 @@ window.openEditFilamentForm = (fil) => {
             if (!same(data.settings_bed_temp, fil.settings_bed_temp))
                 changed.settings_bed_temp = data.settings_bed_temp;
             if (!same(data.comment, fil.comment)) changed.comment = data.comment;
+
+            // Extra-fields merge. If any advanced field changed, build a NEW
+            // extra object that preserves every pre-existing key and only
+            // overrides the ones we touched. Spoolman replaces extra wholesale
+            // on PATCH, so skipping this merge would silently delete keys.
+            const dirtyExtras = data._extraChanges || {};
+            if (Object.keys(dirtyExtras).length > 0) {
+                const mergedExtra = { ...(fil.extra || {}) };
+                for (const [k, v] of Object.entries(dirtyExtras)) {
+                    if (k === 'filament_attributes') {
+                        // Spoolman's field schema stores this as a JSON-encoded string.
+                        mergedExtra[k] = JSON.stringify(v);
+                    } else if (v === '' || v == null) {
+                        // Clearing a URL/original_color etc. → remove the key entirely.
+                        delete mergedExtra[k];
+                    } else {
+                        // Spoolman's "string extras" convention is quote-wrapped.
+                        mergedExtra[k] = `"${String(v)}"`;
+                    }
+                }
+                changed.extra = mergedExtra;
+            }
+
+            // Carry the pending-new-vendor name forward for the .then() handler.
+            // It's not a field Spoolman cares about, just a hint for our caller.
+            if (data._pendingNewVendorName) {
+                changed.__pendingNewVendorName = data._pendingNewVendorName;
+            }
             return changed;
         },
-    }).then((res) => {
+    }).then(async (res) => {
         if (!res.isConfirmed) return;
         const dirty = res.value || {};
-        if (Object.keys(dirty).length === 0) {
+        // Pull the vendor-pending hint off before length-checking — it's internal,
+        // not a real dirty-diff entry.
+        const pendingNewVendor = dirty.__pendingNewVendorName;
+        delete dirty.__pendingNewVendorName;
+
+        if (Object.keys(dirty).length === 0 && !pendingNewVendor) {
             showToast('No changes to save.', 'info');
             return;
         }
-        fetch('/api/update_filament', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: fil.id, data: dirty }),
-        })
-            .then((r) => r.json())
-            .then((d) => {
-                if (d && d.success) {
-                    showToast(`Filament #${fil.id} updated.`, 'success');
-                    if (window.refreshFilamentSpools) window.refreshFilamentSpools();
+
+        // If the user typed a new vendor name, create it first so we have a real
+        // vendor_id to PATCH onto the filament. Failure here aborts the update
+        // entirely — rather than silently drop the vendor change.
+        if (pendingNewVendor) {
+            try {
+                const vr = await fetch('/api/vendors', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: pendingNewVendor }),
+                });
+                const vd = await vr.json();
+                if (vd && vd.success && vd.vendor && vd.vendor.id != null) {
+                    dirty.vendor_id = Number(vd.vendor.id);
                 } else {
-                    showToast(`Update failed: ${d && d.msg ? d.msg : 'unknown'}`, 'error', 7000);
+                    showToast(
+                        `Couldn't create vendor "${pendingNewVendor}": ${(vd && vd.msg) || 'unknown'}`,
+                        'error', 7000,
+                    );
+                    return;
                 }
-            })
-            .catch((e) => {
-                showToast(`Update error: ${e.message || e}`, 'error', 7000);
+            } catch (e) {
+                showToast(`Vendor create error: ${e.message || e}`, 'error', 7000);
+                return;
+            }
+        }
+
+        try {
+            const r = await fetch('/api/update_filament', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: fil.id, data: dirty }),
             });
+            const d = await r.json();
+            if (d && d.success) {
+                showToast(`Filament #${fil.id} updated.`, 'success');
+                if (window.refreshFilamentSpools) window.refreshFilamentSpools();
+            } else {
+                showToast(`Update failed: ${d && d.msg ? d.msg : 'unknown'}`, 'error', 7000);
+            }
+        } catch (e) {
+            showToast(`Update error: ${e.message || e}`, 'error', 7000);
+        }
     });
 };

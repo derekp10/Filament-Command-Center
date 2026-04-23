@@ -166,6 +166,29 @@ def api_vendors():
     except Exception as e:
         return jsonify({"success": False, "msg": str(e)}), 500
 
+
+@app.route('/api/vendors', methods=['POST'])
+def api_create_vendor():
+    """Create a vendor in Spoolman. Body: {"name": "<vendor name>"}.
+
+    Used by the Edit Filament form when the user types a vendor name that
+    doesn't match any existing vendor — the frontend POSTs here first, then
+    PATCHes the filament with the new vendor_id. Returns {success, vendor}.
+    """
+    payload = request.json or {}
+    name = str(payload.get('name') or '').strip()
+    if not name:
+        return jsonify({"success": False, "msg": "Vendor name required."}), 400
+    try:
+        created = spoolman_api.create_vendor({"name": name})
+        if created and created.get('id') is not None:
+            state.add_log_entry(f"➕ Vendor '{name}' created", "SUCCESS", "00ff00")
+            return jsonify({"success": True, "vendor": created})
+        return jsonify({"success": False, "msg": "Spoolman rejected the vendor create."}), 500
+    except Exception as e:
+        state.logger.error(f"Failed to create vendor '{name}': {e}")
+        return jsonify({"success": False, "msg": str(e)}), 500
+
 @app.route('/api/materials', methods=['GET'])
 def api_materials():
     """Returns a list of all unique materials in Spoolman."""
