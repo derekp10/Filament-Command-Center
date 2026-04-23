@@ -154,3 +154,113 @@ def test_brand_color_suffix_swallows_exceptions(monkeypatch):
     monkeypatch.setattr(logic.spoolman_api, "get_spool", boom)
     assert logic._spool_brand_color_suffix(42) == ""
 
+
+# ---------------------------------------------------------------------------
+# Spool / Filament color-card parity (search_inventory → frontend card render)
+# ---------------------------------------------------------------------------
+# The filament branch used to truncate multi-color strings to the first hex
+# only, and defaulted `color_direction` to '' (blank), which caused the card
+# gradient / coextruded rendering to diverge from the spool branch.
+# Regression guards below.
+
+
+def _fake_filament_multi():
+    return {
+        "id": 99,
+        "name": "Cosmic Swirl",
+        "material": "PLA",
+        "vendor": {"id": 1, "name": "Polymaker"},
+        "color_hex": "ff0000",
+        "multi_color_hexes": "ff0000,00ff00,0000ff",
+        "multi_color_direction": "coaxial",
+        "extra": {},
+    }
+
+
+def test_format_spool_display_passes_full_multicolor_string():
+    """Spool cards need the complete CSV of hex codes — not a truncation."""
+    spool = _fake_spool(vendor_name="Polymaker")
+    spool["filament"]["multi_color_hexes"] = "ff0000,00ff00,0000ff"
+    spool["filament"]["multi_color_direction"] = "coaxial"
+
+    out = spoolman_api.format_spool_display(spool)
+
+    assert out["color"] == "ff0000,00ff00,0000ff"
+    assert out["color_direction"] == "coaxial"
+
+
+def test_filament_search_result_passes_full_multicolor_string():
+    """Filament cards must render the same gradient/coextruded visuals as spools.
+
+    Previously the filament branch did `base_color.split(',')[0]`, so a 3-color
+    filament rendered solid red instead of the tri-color gradient a spool of
+    the same filament would show.
+    """
+    # We can't easily stand up a full search_inventory test without Spoolman,
+    # so exercise the formatting branch by stubbing requests.get and checking
+    # the returned payload.
+    import types, sys  # noqa: PLC0415
+    fake_filaments = [_fake_filament_multi()]
+    fake_spools: list = []
+
+    class _FakeResp:
+        def __init__(self, data):
+            self._data = data
+            self.ok = True
+
+        def json(self):
+            return self._data
+
+    def fake_get(url, **_kwargs):
+        if "/spool" in url:
+            return _FakeResp(fake_spools)
+        if "/filament" in url:
+            return _FakeResp(fake_filaments)
+        return _FakeResp([])
+
+    # Patch the module-level requests.get for this test
+    import spoolman_api as sm
+    original = sm.requests.get
+    sm.requests.get = fake_get
+    try:
+        results = sm.search_inventory(target_type="filament")
+    finally:
+        sm.requests.get = original
+
+    assert results, "Expected at least one filament result"
+    fil_card = results[0]
+    assert fil_card["color"] == "ff0000,00ff00,0000ff", (
+        f"Filament card color should be the full multi-color CSV, got {fil_card['color']!r}"
+    )
+    assert fil_card["color_direction"] == "coaxial"
+
+
+def test_filament_search_result_direction_defaults_to_longitudinal():
+    """When no direction is stored, filament cards should mirror the spool default."""
+    fil = _fake_filament_multi()
+    fil["multi_color_direction"] = ""
+    fil["extra"] = {}
+
+    class _FakeResp:
+        def __init__(self, data):
+            self._data = data
+            self.ok = True
+
+        def json(self):
+            return self._data
+
+    def fake_get(url, **_kwargs):
+        if "/filament" in url:
+            return _FakeResp([fil])
+        return _FakeResp([])
+
+    import spoolman_api as sm
+    original = sm.requests.get
+    sm.requests.get = fake_get
+    try:
+        results = sm.search_inventory(target_type="filament")
+    finally:
+        sm.requests.get = original
+
+    assert results[0]["color_direction"] == "longitudinal"
+

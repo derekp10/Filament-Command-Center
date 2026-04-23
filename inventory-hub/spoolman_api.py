@@ -595,7 +595,10 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 info = {
                     "text": f"#{fil.get('id', '?')} {base_text}",
                     "text_short": base_text,
-                    "color": base_color.split(',')[0] if base_color else "888888", # Grab first color for the card trim
+                    # Pass the full multi-color hex string through so filament cards
+                    # render the same gradient / coextruded visuals as spool cards.
+                    # getFilamentStyle() on the frontend handles CSV/JSON lists.
+                    "color": base_color if base_color else "888888",
                     "slot": "",
                     "details": {
                         "id": fil.get('id', '?'),
@@ -607,7 +610,7 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                     }
                 }
                 
-            direction = str(fil.get('multi_color_direction') or fil.get('extra', {}).get('multi_color_direction') or '')
+            direction = str(fil.get('multi_color_direction') or fil.get('extra', {}).get('multi_color_direction') or 'longitudinal')
             
             results.append({
                 'id': item['id'],
