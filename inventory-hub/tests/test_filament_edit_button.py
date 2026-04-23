@@ -920,6 +920,90 @@ def test_modal_multi_color_direction_is_native_top_level_field(page: Page):
         "multi_color_direction must not be in extras — it's a native field"
 
 
+def test_modal_direction_only_change_includes_hexes(page: Page):
+    """Regression: changing ONLY the color direction on a multi-color filament
+    used to PATCH `{multi_color_direction: 'longitudinal'}` alone, which made
+    Spoolman think it was a single-color filament and reject with HTTP 422
+    'Single-color filament must not have multi_color_direction set.'
+    Hexes must accompany direction so Spoolman has full context."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 510, "name": "Two", "material": "PLA",
+        "multi_color_hexes": "ff0000,00ff00",
+        "multi_color_direction": "longitudinal",
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-colors-btn").click()
+    # Flip just the direction. Hexes unchanged.
+    page.locator("#editfil-color-direction").select_option(value="coaxial")
+
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+    data = page.evaluate("() => window.__lastFetchPayload.data")
+    # Direction in body (changed).
+    assert data.get("multi_color_direction") == "coaxial"
+    # Hexes ALSO in body (re-stated for context, even though value unchanged).
+    assert data.get("multi_color_hexes") == "ff0000,00ff00"
+
+
+def test_modal_going_multi_to_single_clears_multi_fields(page: Page):
+    """Regression: removing all extra colors on a multi-color filament must
+    PATCH multi_color_hexes='' AND multi_color_direction=null so the next
+    edit doesn't fail with 'Single-color filament must not have direction
+    set.' Otherwise the stale direction lingers in Spoolman's row."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 511, "name": "Two", "material": "PLA",
+        "multi_color_hexes": "ff0000,00ff00",
+        "multi_color_direction": "longitudinal",
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-colors-btn").click()
+    # Remove the only extra row → drops back to single color.
+    page.locator("#editfil-color-extras .editfil-color-row [data-role='remove']").first.click()
+
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+    data = page.evaluate("() => window.__lastFetchPayload.data")
+    # multi_color_hexes cleared.
+    assert data.get("multi_color_hexes") == ""
+    # multi_color_direction cleared (null) so Spoolman's merged state is valid.
+    assert "multi_color_direction" in data and data.get("multi_color_direction") is None
+    # color_hex emitted with the remaining single hex.
+    assert data.get("color_hex") == "ff0000"
+
+
+def test_modal_single_color_direction_never_in_body(page: Page):
+    """A single-color filament must never PATCH multi_color_direction.
+    Even if a direction value was lingering in the form's hidden state,
+    we should drop it on save because Spoolman rejects it."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 512, "name": "Mono", "material": "PLA", "color_hex": "ff0000"}
+    _open_modal_with(page, fil)
+    # Touch a non-color field so the dirty-diff has something to send.
+    page.locator("#editfil-name").fill("Mono Edited")
+
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+    data = page.evaluate("() => window.__lastFetchPayload.data")
+    assert data.get("name") == "Mono Edited"
+    assert "multi_color_direction" not in data, (
+        "Single-color filament must not include multi_color_direction in PATCH body"
+    )
+
+
 def test_modal_multi_color_save_always_includes_direction(page: Page):
     """When emitting multi_color_hexes, multi_color_direction MUST be in the
     same PATCH body — Spoolman validates the body and rejects 422

@@ -1509,36 +1509,50 @@ const _editfilOpenModal = (fil) => {
             if (pendingNewVendorName == null && !same(data.vendor_id, oldVendorId)) {
                 changed.vendor_id = data.vendor_id;
             }
+            // Color-field tri-state (Spoolman's invariants, verified 2026-04-23
+            // against live 0.23.1 schema):
+            //   - color_hex SET, multi_color_hexes EMPTY, multi_color_direction EMPTY → single
+            //   - color_hex EMPTY, multi_color_hexes SET, multi_color_direction SET → multi
+            //   - mixing the two columns triggers HTTP 422 ("Cannot specify both…",
+            //     "Single-color filament must not have direction set",
+            //     "Multi-color filament must have direction set").
+            //
+            // Strategy: figure out which mode we're emitting, then send a body
+            // that's internally consistent. When transitioning out of multi
+            // mode we also have to actively CLEAR the dangling multi fields
+            // (Spoolman keeps stale values otherwise, which makes the next
+            // single-color save fail validation on the merged state).
             const oldHex = (fil.color_hex || '').replace(/^#/, '').toLowerCase();
             const newHex = (data.color_hex || '').toLowerCase();
             const oldMulti = String(fil.multi_color_hexes || '')
                 .split(',').map(h => h.replace(/^#/, '').trim().toLowerCase())
                 .filter(Boolean).join(',');
             const newMulti = String(data.multi_color_hexes || '').toLowerCase();
-            // Spoolman REJECTS (HTTP 422) any PATCH body containing both
-            // color_hex and multi_color_hexes (even empty), so skip the one
-            // we're not setting. When emitting multi, we MUST also include
-            // multi_color_direction at top-level — Spoolman raises
-            // "Multi-color filament must have multi_color_direction set."
-            // when hexes is in the body without direction. multi_color_direction
-            // IS a native Spoolman field (not an extra) — verified against
-            // the live filament schema 2026-04-23.
+            const oldDir = String(fil.multi_color_direction || '').toLowerCase();
+            const newDir = data.multi_color_direction || 'longitudinal';
             const emittingMulti = newMulti.length > 0;
-            if (!emittingMulti && oldHex !== newHex) changed.color_hex = data.color_hex;
-            if (oldMulti !== newMulti) {
-                changed.multi_color_hexes = data.multi_color_hexes;
-                if (emittingMulti) {
-                    // Always include direction when emitting hexes — Spoolman's
-                    // "must be set" check looks at the PATCH body, not the
-                    // merged final state.
-                    changed.multi_color_direction = data.multi_color_direction || 'longitudinal';
+            const wasMulti = oldMulti.length > 0;
+
+            if (emittingMulti) {
+                // Multi mode. Hexes + direction always travel together (any
+                // change to either forces both into the body, since Spoolman
+                // validates: "Multi-color filament must have direction set").
+                // Never send color_hex in this branch — Spoolman: "Cannot
+                // specify both color_hex and multi_color_hexes".
+                if (oldMulti !== newMulti || oldDir !== newDir) {
+                    changed.multi_color_hexes = data.multi_color_hexes;
+                    changed.multi_color_direction = newDir;
                 }
-            } else if (data.multi_color_direction != null) {
-                // Hexes unchanged but direction changed — emit just direction.
-                const oldDir = String(fil.multi_color_direction || '').toLowerCase();
-                if (oldDir !== data.multi_color_direction) {
-                    changed.multi_color_direction = data.multi_color_direction;
-                }
+            } else {
+                // Single-color (or no-color) mode. Emit color_hex if changed.
+                if (oldHex !== newHex) changed.color_hex = data.color_hex;
+                // Going multi → single: clear the dangling multi fields so
+                // Spoolman's merged state becomes a valid single-color row.
+                // Without this clear, the NEXT save would hit "Single-color
+                // filament must not have multi_color_direction set" because
+                // the stale direction value still lives in the DB.
+                if (wasMulti) changed.multi_color_hexes = '';
+                if (oldDir) changed.multi_color_direction = null;
             }
             if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
             if (!same(data.density, fil.density)) changed.density = data.density;
