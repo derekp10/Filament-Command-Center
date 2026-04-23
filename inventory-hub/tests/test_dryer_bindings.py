@@ -247,7 +247,10 @@ def test_api_get_bindings_empty(client, sample_locs, tmp_locations_file):
     locations_db.save_locations_list(sample_locs)
     r = client.get("/api/dryer_box/PM-DB-XL-L/bindings")
     assert r.status_code == 200
-    assert r.get_json() == {"location": "PM-DB-XL-L", "slot_targets": {}}
+    body = r.get_json()
+    # slot_order was added 2026-04-23 alongside the slot-order toggle feature.
+    # Default is 'ltr' when unset.
+    assert body == {"location": "PM-DB-XL-L", "slot_targets": {}, "slot_order": "ltr"}
 
 
 def test_api_get_bindings_404_on_non_dryer_box(client, sample_locs, tmp_locations_file):
