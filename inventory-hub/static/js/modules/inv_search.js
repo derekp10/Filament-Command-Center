@@ -27,6 +27,10 @@ const SearchEngine = {
                 radio.addEventListener('change', () => this.debounceTrigger());
             });
 
+            // Deployment filter (select) — re-run search on change.
+            const deployedSel = document.getElementById('global-search-deployed');
+            if (deployedSel) deployedSel.addEventListener('change', () => this.debounceTrigger());
+
             // Color picker sets the hex field implicitly
             const picker = document.getElementById('global-search-color-picker');
             const hexInput = document.getElementById('global-search-color-hex');
@@ -187,11 +191,14 @@ const SearchEngine = {
         const inStock = document.getElementById('global-search-in-stock').checked;
         const tgtTypeNode = document.querySelector('input[name="global-search-type"]:checked');
         const targetType = tgtTypeNode ? tgtTypeNode.value : 'spool';
+        // Deployment filter. Empty string = no filter (default).
+        const deployedEl = document.getElementById('global-search-deployed');
+        const deployed = deployedEl ? deployedEl.value : '';
 
         const resBox = document.getElementById('global-search-results');
 
         // If nothing is typed, don't execute a massive search, just show empty state
-        if (!query && !material && !colorHex && !minWeight) {
+        if (!query && !material && !colorHex && !minWeight && !deployed) {
             resBox.innerHTML = `
                 <div class="text-center text-light mt-5">
                     <h1 class="opacity-25 mb-3">💬</h1>
@@ -210,7 +217,8 @@ const SearchEngine = {
                 hex: colorHex,
                 min_weight: minWeight,
                 in_stock: inStock,
-                type: targetType
+                type: targetType,
+                deployed: deployed,
             });
 
             const response = await fetch(`/api/search?${params.toString()}`);

@@ -500,13 +500,29 @@ def get_best_color_distance(target_hex, compare_hex_csv):
         return float('inf')
     return min(distances)
 
-def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight=""):
+def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", deployed_state=""):
     """
     Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
     Returns a sorted list of dictionaries matching the criteria.
+
+    `deployed_state` (spool-only): '' or 'any' = no filter, 'deployed' = only
+    spools currently on a toolhead (location ∈ printer_map) OR with a ghost
+    physical_source set, 'undeployed' = the inverse. Filaments ignore this.
     """
     sm_url, _ = config_loader.get_api_urls()
     results = []
+
+    # Load printer_map once so deployed_state filtering can check whether a
+    # spool's location maps to a toolhead without touching the filesystem
+    # per item. Cheap: config_loader caches internally.
+    deployed_targets = set()
+    if deployed_state and deployed_state.lower() in ('deployed', 'undeployed'):
+        try:
+            cfg = config_loader.load_config()
+            pm = cfg.get('printer_map', {}) or {}
+            deployed_targets = {str(k).strip().upper() for k in pm.keys()}
+        except Exception:
+            deployed_targets = set()
     
     try:
         # If the user toggles 'In Stock' off (meaning they want to see everything), we must explicitly tell Spoolman API to return archived items
@@ -570,6 +586,22 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                     try:
                         if rem < float(min_weight): continue
                     except: pass
+
+                # 2b. Deployment filter (spool-only). A spool counts as
+                # deployed if its Spoolman location is a known toolhead OR
+                # it carries a ghost physical_source hint (meaning it's
+                # currently visually on a toolhead elsewhere).
+                if deployed_state and deployed_state.lower() in ('deployed', 'undeployed'):
+                    sloc_up = str(spool.get('location') or '').strip().upper()
+                    extra_map = spool.get('extra') or {}
+                    ghost_src = str(extra_map.get('physical_source') or '').strip().replace('"', '').upper()
+                    is_deployed = (sloc_up in deployed_targets) or (
+                        ghost_src and ghost_src in deployed_targets
+                    )
+                    if deployed_state.lower() == 'deployed' and not is_deployed:
+                        continue
+                    if deployed_state.lower() == 'undeployed' and is_deployed:
+                        continue
             
             # 3. Fuzzy Keyword Match (Tokenized)
             # Support `color_hexes` for multi-color gradients

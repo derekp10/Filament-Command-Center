@@ -463,17 +463,21 @@ def api_search_inventory():
     empty = request.args.get('empty', 'false').lower() == 'true'
     min_weight = request.args.get('min_weight', '')
     target_type = request.args.get('type', 'spool')
-    
+    # Deployment status filter: '' | 'any' = no filter, 'deployed' = toolhead/ghost only,
+    # 'undeployed' = not on a toolhead. Filaments ignore this.
+    deployed_state = request.args.get('deployed', '').strip().lower()
+
     try:
         results = spoolman_api.search_inventory(
-            query=query, 
-            material=material, 
-            vendor=vendor, 
-            color_hex=color_hex, 
-            only_in_stock=only_in_stock, 
+            query=query,
+            material=material,
+            vendor=vendor,
+            color_hex=color_hex,
+            only_in_stock=only_in_stock,
             empty=empty,
             target_type=target_type,
-            min_weight=min_weight
+            min_weight=min_weight,
+            deployed_state=deployed_state,
         )
         return jsonify({"success": True, "results": results})
     except Exception as e:

@@ -81,7 +81,7 @@
 * SweetAlert2 does not support nested modals — calling `Swal.fire()` while one is already open replaces the first one. Any future confirmation dialogs inside SweetAlert modals must use inline overlay divs (see force location modal's `#fcc-escape-confirm-overlay` pattern) instead of nested `Swal.fire()` calls. Audit existing code for any other nested Swal usage.
 
 ## 🔍 Search, Display & Filtering
-* Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.
+* ~~Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.~~ **DONE 2026-04-23** — `/api/search` accepts a new `deployed` query param ('deployed'|'undeployed'|'' or 'any'). A spool counts as deployed when its Spoolman location is in `printer_map` OR it carries a ghost `extra.physical_source` pointing at a toolhead. Filter is silently skipped for filaments. Frontend: small select dropdown added to the search offcanvas next to Min Weight. Covered by `test_search_deployed_filter.py`. _Note: we didn't hide this behind "advanced filters" since the select only adds ~140px of width; revisit if more filters accumulate._
 * Search by and filter by remaining weight.
 
 
@@ -90,8 +90,8 @@
 * **Denser spool/filament cards inside the Quick-Swap grid**: reuse the existing `SpoolCardBuilder` system (the one that renders cards in the dashboard, Location Manager, etc.) so each bound slot shows a real filament card instead of the current custom button. That would unlock integrating more actions — Eject, Details, Edit, Print Queue — directly from the Quick-Swap view without extra trips through other modals. Needs a new card variant (e.g. `'quickswap'` mode) that omits some details to keep the grid compact while retaining the shared styling and interaction code. Reference: [inv_quickswap.js](inventory-hub/static/js/modules/inv_quickswap.js) grid render + [ui_builder.js](inventory-hub/static/js/modules/ui_builder.js) `SpoolCardBuilder.buildCard()`.
 
 ## 📍 Location Management & Scanning
-* Refactor the entire location managment system from the ground up. It's currently being a bit too complicated, and I think it can be cleaned up a bit if we just rethink the flow of this process. We've bolted a lot of stuff onto this system, and the has caused it to become a bit too cumbersome to both code and work with. I think we need to build in a better system for linking locations and device/boxes/storage things. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
-* The ability to configure a box to change the slot order to go from left to right, or right to left.
+* Refactor the entire location managment system from the ground up. It's currently being a bit too complicated, and I think it can be cleaned up a bit if we just rethink the flow of this process. We've bolted a lot of stuff onto this system, and the has caused it to become a bit too cumbersome to both code and work with. I think we need to build in a better system for linking locations and device/boxes/storage things. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of. _[ON HOLD — needs design session. Large refactor, bundles with the DB-driven parent/child hierarchy item below since they'd share a schema change. When we sit down: first define the hierarchy model (ParentLocation FK vs prefix parsing), then draft a migration plan, then split the location-manager UI work into vertical slices.]_
+* ~~The ability to configure a box to change the slot order to go from left to right, or right to left.~~ **DONE 2026-04-23** — per-dryer-box `extra.slot_order` ('ltr'|'rtl'), new `/api/dryer_box/<id>/slot_order` GET/PUT endpoints, radio toggle in the Location Manager feeds editor. `renderGrid` reverses iteration when rtl. Covered by `test_slot_order_api.py` + `test_slot_order_ui_e2e.py`.
 
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
@@ -105,7 +105,7 @@
     - Label Printed in Spoolman Spool data can be used to determine if a new Label has been printed.
     - Filaments: Spoolman Reprint field is set to Yes for items that need to have a label reprinted. Null or No mean that it already has a label with the Spoolman ID.
 * It's too easy to have multiple legacy spools with no exact ID, where we could be assigning the wrong item... perhaps a pop-up when there could be more than 1 spool attached to the legacy ID, asking the user if they want to see the list of spools, or just reprint a new label.
-* Confirmed label print should be displayed somewhere on the card. Perhaps changing the printer icon to a checkmark for confirmed spools.
+* ~~Confirmed label print should be displayed somewhere on the card. Perhaps changing the printer icon to a checkmark for confirmed spools.~~ **DONE 2026-04-23** — `format_spool_display` now emits a normalized `needs_label_print` bool in its details dict. `SpoolCardBuilder.buildCard` renders a small green ✅ next to the 🖨️ Add-to-Queue button when the flag is explicitly `false`. Kept the 🖨️ button untouched so the "add to queue" affordance is preserved; the ✅ is purely a status indicator. Missing details stays quiet. Covered by `test_label_confirmed_indicator.py`.
 * Add label print button to filament sample cards.
 
 * Some values in Print Queue are being set to yes, most are null. What is the process for setting them to true?

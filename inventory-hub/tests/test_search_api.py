@@ -158,5 +158,6 @@ def test_api_endpoint(client):
             only_in_stock=True,
             empty=False,
             target_type="filament",
-            min_weight=""
+            min_weight="",
+            deployed_state="",
         )
