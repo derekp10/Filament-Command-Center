@@ -14,10 +14,10 @@
     - Collapsible Advanced section (`<details>`) now holds: Original Color, Filament Attributes (comma-separated → JSON array round-trip), Product URL, Purchase URL, Sheet Link, Legacy/External ID.
     - Extras merge is safe: preConfirm clones the filament's existing `extra` and only overrides the fields the user touched, so Spoolman's wholesale-replace PATCH no longer drops untouched keys (`price_total`, `sample_printed`, `flush_multiplier`, etc.).
     - 24 tests in `test_filament_edit_button.py` cover the new fields + merge behavior.
-  * **Edit Filament Wave 3 (DEFERRED)** — smaller remaining gaps:
-    1. External-metadata import panel (the wizard's `wiz-fil-external-metadata` pulls from Prusament / open-filament-database). Nice-to-have, not blocking.
-    2. Richer `filament_attributes` UI — today it's freeform comma-separated text. A chip-picker with known attributes (Silk, Matte, Carbon Fiber, Glow, etc.) would be safer.
-    3. Still a SweetAlert; if the form grows more, promote to a Bootstrap modal with tabs.
+  * ~~**Edit Filament Wave 3 (DEFERRED)**~~ **PARTIALLY DONE 2026-04-23** — promoted from SweetAlert to a Bootstrap tabbed modal (`#editFilamentModal` in `modals_details.html`). Four tabs (Basic / Colors / Specs / Advanced) keep each pane short even for filaments with many colors. The modal body is scrollable, so overflow is handled at the viewport level. Covered by `test_filament_edit_button.py` (22 tests).
+    - Remaining Wave 3 gaps (deferred again):
+      1. External-metadata import panel (Prusament / open-filament-database).
+      2. Richer `filament_attributes` UI — still a freeform comma-separated text input. A chip-picker with known attributes (Silk, Matte, Carbon Fiber, Glow, etc.) would be safer.
 
 * ~~Ability to edit filament specific data inside Filament command center. Currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool. Some sort of edit workflow for chaing data directly related to filaments.~~ **DONE** — covered by the Edit Filament MVP (2026-04-22) + vendor/color follow-up (2026-04-23).
 

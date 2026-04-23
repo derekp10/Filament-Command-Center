@@ -771,63 +771,28 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId) => {
     }
 };
 
-// --- Edit Filament (direct, filament-only) ---
-// Opens a Swal form over the Filament Details modal (Bootstrap, not Swal, so
-// no nested-Swal footgun). Only the commonly-edited, filament-level fields
-// are exposed here.
+
+// --- Edit Filament (Bootstrap modal) ---
+// Promoted from SweetAlert to a real Bootstrap modal on 2026-04-23 so multi-
+// color filaments and the advanced-extras section no longer overflow the
+// viewport. Uses tabs to keep each pane at a reasonable height, and the
+// modal's scrollable body handles overflow at the viewport level.
+//
+// Same public API as the old Swal version: window.openEditFilamentForm(fil)
+// opens the modal populated from the filament. Save fires a dirty-diff POST
+// to /api/update_filament (plus a POST /api/vendors if a new vendor name
+// was typed first).
 window.openEditFilamentForm = (fil) => {
     if (!fil || !fil.id) { showToast('Missing filament data', 'error'); return; }
 
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-    const currentName = esc(fil.name || '');
-    const currentMaterial = esc(fil.material || 'PLA');
-    const currentSpoolWt = fil.spool_weight != null ? fil.spool_weight : '';
-    const currentDensity = fil.density != null ? fil.density : '';
-    const currentDiameter = fil.diameter != null ? fil.diameter : '';
-    const currentWeight = fil.weight != null ? fil.weight : '';
-    const currentPrice = fil.price != null ? fil.price : '';
-    const currentExternalId = esc(fil.external_id || '');
-    const currentNozzle = fil.settings_extruder_temp != null ? fil.settings_extruder_temp : '';
-    const currentBed = fil.settings_bed_temp != null ? fil.settings_bed_temp : '';
-    const currentComment = esc(fil.comment || '');
-    const currentVendorId = fil.vendor && fil.vendor.id != null ? String(fil.vendor.id) : '';
-    const currentVendorName = esc(fil.vendor && fil.vendor.name ? fil.vendor.name : '');
-
-    // Spoolman stores extra-field string values wrapped in literal quotes
-    // (e.g. `"https://..."`). Strip them for display so the user edits the
-    // inner value directly.
     const unquoteExtra = (v) => {
         if (v == null) return '';
         const s = String(v);
         if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1);
         return s;
     };
-    const rawExtra = fil.extra || {};
-    const currentProductUrl = esc(unquoteExtra(rawExtra.product_url));
-    const currentPurchaseUrl = esc(unquoteExtra(rawExtra.purchase_url));
-    const currentSheetLink = esc(unquoteExtra(rawExtra.sheet_link));
-    const currentOriginalColor = esc(unquoteExtra(rawExtra.original_color));
-
-    // filament_attributes is a JSON-encoded list (e.g. '["Silk","Matte"]').
-    // Render as a comma-separated string for a simple freeform editor; on
-    // save we'll serialize back to a JSON array.
-    let currentAttributes = '';
-    const rawAttrs = rawExtra.filament_attributes;
-    if (rawAttrs != null && rawAttrs !== '') {
-        try {
-            const parsed = typeof rawAttrs === 'string' ? JSON.parse(rawAttrs) : rawAttrs;
-            if (Array.isArray(parsed)) currentAttributes = parsed.join(', ');
-            else currentAttributes = String(parsed);
-        } catch (_) {
-            currentAttributes = String(rawAttrs).replace(/^"|"$/g, '');
-        }
-    }
-    currentAttributes = esc(currentAttributes);
-    // color_hex handling: Spoolman stores either a single 6-char hex, OR a comma-
-    // separated list via `multi_color_hexes` extra. Parse both into a unified
-    // array of normalized '#rrggbb' strings that the form can manage uniformly.
     const parseHexList = (val) => {
         if (!val) return [];
         return String(val)
@@ -836,528 +801,407 @@ window.openEditFilamentForm = (fil) => {
             .filter(h => /^[0-9a-fA-F]{6}$/.test(h))
             .map(h => `#${h}`);
     };
+
+    // --- Snapshot original values for the dirty-diff ---
     const multiHexList = parseHexList(fil.multi_color_hexes);
     const singleHexList = parseHexList(fil.color_hex);
     const currentColors = multiHexList.length > 0 ? multiHexList : singleHexList;
-    const currentDirection = String(fil.multi_color_direction || (fil.extra && fil.extra.multi_color_direction) || 'longitudinal').toLowerCase();
-    // Primary color for backwards-compat with the existing first-slot UI.
-    const currentColorHex = currentColors[0] || '#000000';
-    const hasColorHex = currentColors.length > 0;
+    const currentDirection = String(fil.multi_color_direction
+        || (fil.extra && fil.extra.multi_color_direction)
+        || 'longitudinal').toLowerCase();
+    const currentVendorId = fil.vendor && fil.vendor.id != null ? String(fil.vendor.id) : '';
+    const currentVendorName = fil.vendor && fil.vendor.name ? fil.vendor.name : '';
+    const rawExtra = fil.extra || {};
+    const currentProductUrl = unquoteExtra(rawExtra.product_url);
+    const currentPurchaseUrl = unquoteExtra(rawExtra.purchase_url);
+    const currentSheetLink = unquoteExtra(rawExtra.sheet_link);
+    const currentOriginalColor = unquoteExtra(rawExtra.original_color);
+    let currentAttributes = '';
+    const rawAttrs = rawExtra.filament_attributes;
+    if (rawAttrs != null && rawAttrs !== '') {
+        try {
+            const parsed = typeof rawAttrs === 'string' ? JSON.parse(rawAttrs) : rawAttrs;
+            currentAttributes = Array.isArray(parsed) ? parsed.join(', ') : String(parsed);
+        } catch (_) {
+            currentAttributes = String(rawAttrs).replace(/^"|"$/g, '');
+        }
+    }
 
-    // Vendor's inherited empty_spool_weight surfaces as placeholder text so the
-    // user sees the fallback value that would apply if this field is left blank.
+    const modalEl = document.getElementById('editFilamentModal');
+    if (!modalEl) { showToast('Edit Filament modal missing', 'error'); return; }
+    const bsModal = bootstrap.Modal.getOrCreateInstance(modalEl);
+
+    // --- Populate fields ---
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val == null ? '' : val; };
+    modalEl.querySelector('#editFilamentModalLabel').innerText = `✏️ Edit Filament #${fil.id}`;
+    setVal('editfil-name', fil.name || '');
+    setVal('editfil-material', fil.material || 'PLA');
+    setVal('editfil-spool-weight', fil.spool_weight != null ? fil.spool_weight : '');
+    setVal('editfil-density', fil.density != null ? fil.density : '');
+    setVal('editfil-diameter', fil.diameter != null ? fil.diameter : '');
+    setVal('editfil-weight', fil.weight != null ? fil.weight : '');
+    setVal('editfil-price', fil.price != null ? fil.price : '');
+    setVal('editfil-nozzle', fil.settings_extruder_temp != null ? fil.settings_extruder_temp : '');
+    setVal('editfil-bed', fil.settings_bed_temp != null ? fil.settings_bed_temp : '');
+    setVal('editfil-comment', fil.comment || '');
+    setVal('editfil-external-id', fil.external_id || '');
+    setVal('editfil-vendor-name', currentVendorName);
+    setVal('editfil-vendor-id', currentVendorId);
+    setVal('editfil-product-url', currentProductUrl);
+    setVal('editfil-purchase-url', currentPurchaseUrl);
+    setVal('editfil-sheet-link', currentSheetLink);
+    setVal('editfil-original-color', currentOriginalColor);
+    setVal('editfil-attributes', currentAttributes);
+
+    // Vendor empty_spool_weight hint (shown as small muted text next to the label).
     const vendorWt = fil.vendor && fil.vendor.empty_spool_weight
         ? Number(fil.vendor.empty_spool_weight) : null;
-    const vendorWtHint = vendorWt ? ` (vendor: ${vendorWt}g)` : '';
+    const vendorWtHint = document.getElementById('editfil-vendor-wt-hint');
+    if (vendorWtHint) vendorWtHint.innerText = vendorWt ? `(vendor: ${vendorWt}g)` : '';
+    const spoolWtEl = document.getElementById('editfil-spool-weight');
+    if (spoolWtEl) spoolWtEl.placeholder = vendorWt ? String(vendorWt) : '';
 
-    // Target the filament modal when it's actually shown so the Swal sits over it;
-    // otherwise fall back to body (hidden modal keeps Swal from laying out).
-    const filModalEl = document.getElementById('filamentModal');
-    const filModalShown = filModalEl && filModalEl.classList.contains('show');
-    Swal.fire({
-        target: filModalShown ? filModalEl : document.body,
-        title: `✏️ Edit Filament #${fil.id}`,
-        html: `
-            <div class="text-start">
-                <div class="mb-2">
-                    <label class="form-label text-light small mb-1">Color Name</label>
-                    <input type="text" id="edit-fil-name" class="form-control bg-dark text-white border-secondary" value="${currentName}" autocomplete="off">
-                </div>
-                <div class="mb-2">
-                    <label class="form-label text-light small mb-1">Material</label>
-                    <input type="text" id="edit-fil-material" list="edit-fil-materials-dl" class="form-control bg-dark text-white border-secondary" value="${currentMaterial}" autocomplete="off" placeholder="PLA, PETG, ABS...">
-                    <datalist id="edit-fil-materials-dl"></datalist>
-                </div>
-                <div class="row g-2">
-                    <div class="col-8">
-                        <label class="form-label text-light small mb-1">
-                            Vendor
-                            <span id="edit-fil-vendor-new-badge" class="badge bg-success ms-1" style="display:none; font-size:0.7rem;">+ NEW</span>
-                        </label>
-                        <input type="text" id="edit-fil-vendor-name" list="edit-fil-vendors-dl" class="form-control bg-dark text-white border-secondary" value="${currentVendorName}" autocomplete="off" placeholder="-- Generic --">
-                        <datalist id="edit-fil-vendors-dl"></datalist>
-                        <input type="hidden" id="edit-fil-vendor-id" value="${currentVendorId}">
-                    </div>
-                    <div class="col-4">
-                        <label class="form-label text-light small mb-1">
-                            Color(s)
-                            <button type="button" id="edit-fil-add-color" class="btn btn-sm btn-outline-info ms-1 py-0 px-1" style="font-size:0.75rem;" title="Add another color">+</button>
-                        </label>
-                        <div class="d-flex align-items-center gap-1 mb-1">
-                            <input type="color" id="edit-fil-color-picker" value="${currentColorHex}" class="form-control form-control-color bg-dark border-secondary" style="width:40px;padding:2px;">
-                            <input type="text" id="edit-fil-color-hex" class="form-control bg-dark text-white border-secondary" value="${hasColorHex ? currentColorHex : ''}" placeholder="#rrggbb" maxlength="7" style="flex:1;">
-                        </div>
-                        <div id="edit-fil-color-extras"></div>
-                        <select id="edit-fil-color-direction" class="form-select form-select-sm bg-dark text-white border-secondary mt-1" style="display:${currentColors.length > 1 ? 'block' : 'none'};">
-                            <option value="longitudinal"${currentDirection === 'longitudinal' ? ' selected' : ''}>Longitudinal (length-wise)</option>
-                            <option value="coaxial"${currentDirection === 'coaxial' ? ' selected' : ''}>Coaxial (radial)</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="row g-2 mt-1">
-                    <div class="col-6">
-                        <label class="form-label text-light small mb-1">Empty Spool Wt (g)${vendorWtHint}</label>
-                        <input type="number" step="0.1" id="edit-fil-spool-weight" class="form-control bg-dark text-white border-secondary" value="${currentSpoolWt}" placeholder="${vendorWt || ''}" autocomplete="off">
-                    </div>
-                    <div class="col-6">
-                        <label class="form-label text-light small mb-1">Density (g/cm³)</label>
-                        <input type="number" step="0.01" id="edit-fil-density" class="form-control bg-dark text-white border-secondary" value="${currentDensity}" autocomplete="off">
-                    </div>
-                </div>
-                <div class="row g-2 mt-1">
-                    <div class="col-6">
-                        <label class="form-label text-light small mb-1">🔥 Nozzle (°C)</label>
-                        <input type="number" id="edit-fil-nozzle" class="form-control bg-dark text-white border-secondary" value="${currentNozzle}" autocomplete="off">
-                    </div>
-                    <div class="col-6">
-                        <label class="form-label text-light small mb-1">🛏️ Bed (°C)</label>
-                        <input type="number" id="edit-fil-bed" class="form-control bg-dark text-white border-secondary" value="${currentBed}" autocomplete="off">
-                    </div>
-                </div>
-                <div class="row g-2 mt-1">
-                    <div class="col-4">
-                        <label class="form-label text-light small mb-1">Diameter (mm)</label>
-                        <input type="number" step="0.01" id="edit-fil-diameter" class="form-control bg-dark text-white border-secondary" value="${currentDiameter}" placeholder="1.75" autocomplete="off">
-                    </div>
-                    <div class="col-4">
-                        <label class="form-label text-light small mb-1">Net Weight (g)</label>
-                        <input type="number" step="1" id="edit-fil-weight" class="form-control bg-dark text-white border-secondary" value="${currentWeight}" placeholder="1000" autocomplete="off">
-                    </div>
-                    <div class="col-4">
-                        <label class="form-label text-light small mb-1">Price ($)</label>
-                        <input type="number" step="0.01" id="edit-fil-price" class="form-control bg-dark text-white border-secondary" value="${currentPrice}" placeholder="0.00" autocomplete="off">
-                    </div>
-                </div>
-                <div class="mt-2">
-                    <label class="form-label text-light small mb-1">Notes</label>
-                    <textarea id="edit-fil-comment" rows="2" class="form-control bg-dark text-white border-secondary">${currentComment}</textarea>
-                </div>
+    // Reset any prior error banner + default-tab selection.
+    const errEl = document.getElementById('editfil-error');
+    if (errEl) { errEl.classList.add('d-none'); errEl.innerText = ''; }
+    const basicTabBtn = document.getElementById('editfil-tab-basic-btn');
+    if (basicTabBtn) bootstrap.Tab.getOrCreateInstance(basicTabBtn).show();
 
-                <!-- Advanced: URLs, tags, legacy ID. Collapsed by default to
-                     keep the form scannable; the user expands only when editing
-                     these less-common fields. Uses native <details> so no JS
-                     wiring is required for the open/close behavior. -->
-                <details class="mt-3 border-top border-secondary pt-2">
-                    <summary class="text-info fw-bold" style="cursor:pointer; user-select:none;">
-                        ⚙️ Advanced (URLs, tags, legacy ID)
-                    </summary>
-                    <div class="mt-2">
-                        <div class="mb-2">
-                            <label class="form-label text-light small mb-1">Original Color Name</label>
-                            <input type="text" id="edit-fil-original-color" class="form-control bg-dark text-white border-secondary" value="${currentOriginalColor}" placeholder="e.g. Silk Gold" autocomplete="off">
-                        </div>
-                        <div class="mb-2">
-                            <label class="form-label text-light small mb-1">Filament Attributes</label>
-                            <input type="text" id="edit-fil-attributes" class="form-control bg-dark text-white border-secondary" value="${currentAttributes}" placeholder="Silk, Matte, Carbon Fiber...  (comma-separated)" autocomplete="off">
-                            <div class="form-text text-muted" style="font-size:0.8rem;">Comma-separated tags. Stored in Spoolman as a JSON array.</div>
-                        </div>
-                        <div class="mb-2">
-                            <label class="form-label text-light small mb-1">Product URL</label>
-                            <input type="url" id="edit-fil-product-url" class="form-control bg-dark text-white border-secondary" value="${currentProductUrl}" placeholder="https://..." autocomplete="off">
-                        </div>
-                        <div class="mb-2">
-                            <label class="form-label text-light small mb-1">Purchase URL</label>
-                            <input type="url" id="edit-fil-purchase-url" class="form-control bg-dark text-white border-secondary" value="${currentPurchaseUrl}" placeholder="https://..." autocomplete="off">
-                        </div>
-                        <div class="mb-2">
-                            <label class="form-label text-light small mb-1">Sheet / Reference Link</label>
-                            <input type="url" id="edit-fil-sheet-link" class="form-control bg-dark text-white border-secondary" value="${currentSheetLink}" placeholder="https://..." autocomplete="off">
-                        </div>
-                        <div class="mb-1">
-                            <label class="form-label text-light small mb-1">Legacy / External ID</label>
-                            <input type="text" id="edit-fil-external-id" class="form-control bg-dark text-white border-secondary" value="${currentExternalId}" placeholder="(optional)" autocomplete="off">
-                        </div>
-                    </div>
-                </details>
-            </div>
-        `,
-        background: '#1e1e1e',
-        color: '#fff',
-        showCancelButton: true,
-        confirmButtonColor: '#ffc107',
-        confirmButtonText: 'Save',
-        focusConfirm: false,
-        didOpen: () => {
-            const popup = Swal.getPopup();
-            const nameEl = popup.querySelector('#edit-fil-name');
-            if (nameEl) nameEl.focus();
+    // --- Colors tab: primary picker + dynamic extras ---
+    const picker = document.getElementById('editfil-color-picker');
+    const hex = document.getElementById('editfil-color-hex');
+    const primaryHex = currentColors[0] || '#000000';
+    if (picker) picker.value = primaryHex;
+    if (hex) hex.value = currentColors.length > 0 ? primaryHex : '';
 
-            // Populate vendor datalist and wire the searchable input. Typing a
-            // name that matches an existing vendor sets the hidden vendor-id;
-            // typing a name that doesn't match sets vendor-id='' and shows a
-            // "+ NEW" badge so the user knows we're about to create a vendor.
-            const vendorNameEl = popup.querySelector('#edit-fil-vendor-name');
-            const vendorIdEl = popup.querySelector('#edit-fil-vendor-id');
-            const vendorDl = popup.querySelector('#edit-fil-vendors-dl');
-            const vendorNewBadge = popup.querySelector('#edit-fil-vendor-new-badge');
-            // Cache the fetched vendors list so the input handler can look up IDs.
-            let vendorCache = [];
-            const refreshVendorBadge = () => {
-                const typed = (vendorNameEl.value || '').trim();
-                if (!typed) {
-                    vendorIdEl.value = '';
-                    vendorNewBadge.style.display = 'none';
-                    return;
-                }
-                const match = vendorCache.find(v => (v.name || '').toLowerCase() === typed.toLowerCase());
-                if (match) {
-                    vendorIdEl.value = String(match.id);
-                    vendorNewBadge.style.display = 'none';
-                } else {
-                    vendorIdEl.value = '';
-                    vendorNewBadge.style.display = 'inline-block';
-                }
-            };
-            fetch('/api/vendors')
-                .then((r) => r.json())
-                .then((d) => {
-                    if (!d || !d.success) return;
-                    vendorCache = d.vendors || [];
-                    vendorDl.innerHTML = vendorCache
-                        .map(v => `<option value="${esc(v.name)}"></option>`)
-                        .join('');
-                    refreshVendorBadge();
-                })
-                .catch(() => { /* fail open — user can still type a new name */ });
-            if (vendorNameEl) vendorNameEl.addEventListener('input', refreshVendorBadge);
-
-            // Populate material datalist. No hidden id needed — Spoolman's
-            // material is a free-text field, the datalist just offers known
-            // values as autocomplete hints.
-            fetch('/api/materials')
-                .then((r) => r.json())
-                .then((d) => {
-                    const dl = popup.querySelector('#edit-fil-materials-dl');
-                    if (!dl || !d || !d.success) return;
-                    const mats = Array.isArray(d.materials) ? d.materials : [];
-                    dl.innerHTML = mats
-                        .map(m => `<option value="${esc(m)}"></option>`)
-                        .join('');
-                })
-                .catch(() => { /* non-fatal */ });
-
-            // --- Color pickers -------------------------------------------------
-            // Helper: wire a (picker, hex) input pair so changes in one mirror the
-            // other, with hex-format validation on blur. Used for the primary
-            // color and every extra-color row added via the + button.
-            const wirePickerHexPair = (pickerEl, hexEl) => {
-                if (!pickerEl || !hexEl) return;
-                pickerEl.addEventListener('input', () => { hexEl.value = pickerEl.value; });
-                hexEl.addEventListener('input', () => {
-                    const v = hexEl.value.trim();
-                    if (/^#[0-9a-fA-F]{6}$/.test(v)) pickerEl.value = v.toLowerCase();
-                });
-                hexEl.addEventListener('blur', () => {
-                    const raw = hexEl.value.trim().replace(/^#/, '');
-                    if (raw === '') return;
-                    if (/^[0-9a-fA-F]{6}$/.test(raw)) {
-                        hexEl.value = `#${raw.toLowerCase()}`;
-                        pickerEl.value = `#${raw.toLowerCase()}`;
-                    }
-                });
-            };
-
-            wirePickerHexPair(
-                popup.querySelector('#edit-fil-color-picker'),
-                popup.querySelector('#edit-fil-color-hex'),
-            );
-
-            // Multi-color: add-row button appends (picker, hex, remove) triples.
-            // We count rows so each row gets a unique id. Color-direction select
-            // shows up only when >=2 colors exist.
-            const extrasHost = popup.querySelector('#edit-fil-color-extras');
-            const directionSel = popup.querySelector('#edit-fil-color-direction');
-            let colorRowSeq = 0;
-
-            const refreshDirectionVisibility = () => {
-                const extraRows = extrasHost ? extrasHost.querySelectorAll('.edit-fil-color-row').length : 0;
-                if (directionSel) directionSel.style.display = extraRows > 0 ? 'block' : 'none';
-            };
-
-            const addColorRow = (hexInit = '#000000') => {
-                colorRowSeq += 1;
-                const idx = colorRowSeq;
-                const row = document.createElement('div');
-                row.className = 'd-flex align-items-center gap-1 mb-1 edit-fil-color-row';
-                row.dataset.idx = String(idx);
-                row.innerHTML = `
-                    <input type="color" id="edit-fil-color-picker-${idx}" value="${hexInit}" class="form-control form-control-color bg-dark border-secondary" style="width:40px;padding:2px;">
-                    <input type="text" id="edit-fil-color-hex-${idx}" class="form-control bg-dark text-white border-secondary" value="${hexInit}" placeholder="#rrggbb" maxlength="7" style="flex:1;">
-                    <button type="button" class="btn btn-outline-danger btn-sm py-0 px-2" style="font-size:0.85rem;" title="Remove">🗑️</button>
-                `;
-                extrasHost.appendChild(row);
-                wirePickerHexPair(
-                    row.querySelector(`#edit-fil-color-picker-${idx}`),
-                    row.querySelector(`#edit-fil-color-hex-${idx}`),
-                );
-                row.querySelector('button').addEventListener('click', () => {
-                    row.remove();
-                    refreshDirectionVisibility();
-                });
-                refreshDirectionVisibility();
-            };
-
-            // Seed extras with the filament's existing additional colors (idx 1+).
-            // currentColors is captured from the enclosing function scope.
-            currentColors.slice(1).forEach(hx => addColorRow(hx));
-
-            const addBtn = popup.querySelector('#edit-fil-add-color');
-            if (addBtn) addBtn.addEventListener('click', () => addColorRow('#000000'));
-        },
-        preConfirm: () => {
-            const val = (id) => Swal.getPopup().querySelector(id)?.value;
-            const numOrNull = (id) => {
-                const v = val(id);
-                if (v === '' || v == null) return null;
-                const n = Number(v);
-                return Number.isFinite(n) ? n : null;
-            };
-            const intOrNull = (id) => {
-                const n = numOrNull(id);
-                return n == null ? null : Math.round(n);
-            };
-            // Vendor handling:
-            //   - Hidden vendor_id is set when the typed name matches an existing
-            //     vendor (handled by refreshVendorBadge on input).
-            //   - Empty name → null vendor_id (generic).
-            //   - Typed name with no match → pendingNewVendorName, resolved to
-            //     a real vendor_id by the .then() handler BEFORE POSTing the
-            //     filament update.
-            const vendorTyped = (val('#edit-fil-vendor-name') || '').trim();
-            const vendorIdRaw = val('#edit-fil-vendor-id');
-            let vendorId;
-            let pendingNewVendorName = null;
-            if (!vendorTyped) {
-                vendorId = null;
-            } else if (vendorIdRaw) {
-                vendorId = Number(vendorIdRaw);
-            } else {
-                // New vendor — we'll create it in the .then() handler.
-                vendorId = undefined; // sentinel: "TBD, create then patch"
-                pendingNewVendorName = vendorTyped;
+    const wirePickerHexPair = (pickerEl, hexEl) => {
+        if (!pickerEl || !hexEl) return;
+        pickerEl.oninput = () => { hexEl.value = pickerEl.value; };
+        hexEl.oninput = () => {
+            const v = hexEl.value.trim();
+            if (/^#[0-9a-fA-F]{6}$/.test(v)) pickerEl.value = v.toLowerCase();
+        };
+        hexEl.onblur = () => {
+            const raw = hexEl.value.trim().replace(/^#/, '');
+            if (raw === '') return;
+            if (/^[0-9a-fA-F]{6}$/.test(raw)) {
+                hexEl.value = `#${raw.toLowerCase()}`;
+                pickerEl.value = `#${raw.toLowerCase()}`;
             }
+        };
+    };
+    wirePickerHexPair(picker, hex);
 
-            // Colors: collect the primary + every extra row. Validate each hex;
-            // any invalid input blocks the save with a validation message.
-            const popup = Swal.getPopup();
-            const primaryRaw = (val('#edit-fil-color-hex') || '').trim().replace(/^#/, '');
-            const extraEls = popup.querySelectorAll('#edit-fil-color-extras input[id^="edit-fil-color-hex-"]');
-            const rawColors = [];
-            if (primaryRaw !== '') rawColors.push(primaryRaw);
-            extraEls.forEach(el => {
-                const v = (el.value || '').trim().replace(/^#/, '');
-                if (v !== '') rawColors.push(v);
-            });
-            for (const c of rawColors) {
-                if (!/^[0-9a-fA-F]{6}$/.test(c)) {
-                    Swal.showValidationMessage(`Color must be a 6-digit hex (got "${c}").`);
-                    return false;
-                }
-            }
-            const normalizedColors = rawColors.map(c => c.toLowerCase());
-            // Spoolman stores single color in `color_hex` and multi-color gradients
-            // in `multi_color_hexes` (comma-separated). Match that layout:
-            //   - 0 colors  → clear both
-            //   - 1 color   → set color_hex, clear multi
-            //   - 2+ colors → set multi_color_hexes + direction, leave color_hex as first
-            let colorHex = null;
-            let multiColorHexes = null;
-            let multiDirection = null;
-            if (normalizedColors.length === 0) {
-                colorHex = '';
-                multiColorHexes = '';
-            } else if (normalizedColors.length === 1) {
-                colorHex = normalizedColors[0];
-                multiColorHexes = '';
-            } else {
-                colorHex = normalizedColors[0];
-                multiColorHexes = normalizedColors.join(',');
-                multiDirection = (val('#edit-fil-color-direction') || 'longitudinal').toLowerCase();
-            }
+    const extrasHost = document.getElementById('editfil-color-extras');
+    const directionSel = document.getElementById('editfil-color-direction');
+    const directionWrap = document.getElementById('editfil-direction-wrap');
+    if (extrasHost) extrasHost.innerHTML = '';
+    if (directionSel) directionSel.value = currentDirection;
+    const refreshDirectionVisibility = () => {
+        const extraCount = extrasHost ? extrasHost.querySelectorAll('.editfil-color-row').length : 0;
+        if (directionWrap) directionWrap.style.display = extraCount > 0 ? 'block' : 'none';
+    };
+    const renumberRows = () => {
+        // Primary is always slot 1. Extras get 2, 3, 4, ... in DOM order.
+        const rows = extrasHost ? extrasHost.querySelectorAll('.editfil-color-row') : [];
+        rows.forEach((r, i) => {
+            const badge = r.querySelector('[data-role="num"]');
+            if (badge) badge.innerText = String(i + 2);
+        });
+    };
+    let colorRowSeq = 0;
+    const addColorRow = (hexInit) => {
+        const safeInit = hexInit || '#000000';
+        colorRowSeq += 1;
+        const idx = colorRowSeq;
+        const row = document.createElement('div');
+        row.className = 'd-flex align-items-center gap-2 mb-2 editfil-color-row';
+        row.dataset.idx = String(idx);
+        row.innerHTML = `
+            <span class="badge bg-info text-dark" style="min-width:36px;" data-role="num">2</span>
+            <input type="color" id="editfil-color-picker-${idx}" value="${safeInit}" class="form-control form-control-color bg-black border-secondary" style="width:50px; padding:2px;">
+            <input type="text" id="editfil-color-hex-${idx}" class="form-control bg-black text-white border-secondary" value="${safeInit}" placeholder="#rrggbb" maxlength="7" style="flex:1;">
+            <button type="button" class="btn btn-outline-danger btn-sm" title="Remove">🗑️</button>
+        `;
+        extrasHost.appendChild(row);
+        wirePickerHexPair(
+            row.querySelector(`#editfil-color-picker-${idx}`),
+            row.querySelector(`#editfil-color-hex-${idx}`),
+        );
+        row.querySelector('button').onclick = () => {
+            row.remove();
+            renumberRows();
+            refreshDirectionVisibility();
+        };
+        renumberRows();
+        refreshDirectionVisibility();
+    };
+    currentColors.slice(1).forEach(hx => addColorRow(hx));
+    const addBtn = document.getElementById('editfil-add-color');
+    if (addBtn) addBtn.onclick = () => addColorRow('#000000');
 
-            // Advanced-section extras. Spoolman PATCH replaces the entire
-            // `extra` object, so we must MERGE with the filament's existing
-            // extras before sending — writing just our keys would wipe
-            // physical_source, price_total, and anything else Spoolman set.
-            const newProductUrl = (val('#edit-fil-product-url') || '').trim();
-            const newPurchaseUrl = (val('#edit-fil-purchase-url') || '').trim();
-            const newSheetLink = (val('#edit-fil-sheet-link') || '').trim();
-            const newOriginalColor = (val('#edit-fil-original-color') || '').trim();
-            const rawAttrsText = (val('#edit-fil-attributes') || '').trim();
-            // Parse comma-separated tags into an array; empty string → empty array.
-            const attrsArr = rawAttrsText
-                ? rawAttrsText.split(',').map(t => t.trim()).filter(Boolean)
-                : [];
+    // --- Material + Vendor datalists ---
+    // Material: browser-native autocomplete from known materials.
+    fetch('/api/materials').then(r => r.json()).then(d => {
+        const dl = document.getElementById('editfil-mat-dl');
+        if (!dl || !d || !d.success) return;
+        const mats = Array.isArray(d.materials) ? d.materials : [];
+        dl.innerHTML = mats.map(m => `<option value="${esc(m)}"></option>`).join('');
+    }).catch(() => {});
 
-            // Detect which extra fields changed so we know whether to include
-            // the merged extra object in the PATCH. If nothing extra changed,
-            // we skip `extra` entirely and leave everything else alone.
-            const extraChanges = {};
-            if (newProductUrl !== unquoteExtra(rawExtra.product_url)) extraChanges.product_url = newProductUrl;
-            if (newPurchaseUrl !== unquoteExtra(rawExtra.purchase_url)) extraChanges.purchase_url = newPurchaseUrl;
-            if (newSheetLink !== unquoteExtra(rawExtra.sheet_link)) extraChanges.sheet_link = newSheetLink;
-            if (newOriginalColor !== unquoteExtra(rawExtra.original_color)) extraChanges.original_color = newOriginalColor;
-            // filament_attributes: compare rendered arrays so order changes
-            // register but a trailing-space-only edit doesn't.
-            const prevAttrsArr = (() => {
-                try {
-                    const p = typeof rawExtra.filament_attributes === 'string'
-                        ? JSON.parse(rawExtra.filament_attributes)
-                        : rawExtra.filament_attributes;
-                    return Array.isArray(p) ? p.map(String).map(s => s.trim()).filter(Boolean) : [];
-                } catch (_) { return []; }
-            })();
-            if (JSON.stringify(attrsArr) !== JSON.stringify(prevAttrsArr)) {
-                extraChanges.filament_attributes = attrsArr;
-            }
-
-            const data = {
-                name: (val('#edit-fil-name') || '').trim() || null,
-                material: (val('#edit-fil-material') || '').trim() || null,
-                vendor_id: vendorId,
-                color_hex: colorHex,
-                multi_color_hexes: multiColorHexes,
-                multi_color_direction: multiDirection,
-                spool_weight: numOrNull('#edit-fil-spool-weight'),
-                density: numOrNull('#edit-fil-density'),
-                diameter: numOrNull('#edit-fil-diameter'),
-                weight: numOrNull('#edit-fil-weight'),
-                price: numOrNull('#edit-fil-price'),
-                external_id: (val('#edit-fil-external-id') || '').trim(),
-                settings_extruder_temp: intOrNull('#edit-fil-nozzle'),
-                settings_bed_temp: intOrNull('#edit-fil-bed'),
-                comment: val('#edit-fil-comment') || '',
-                // These two ride along so the .then() handler can surface them
-                // as dirty-diff entries + resolve the pending-new-vendor case.
-                _extraChanges: extraChanges,
-                _pendingNewVendorName: pendingNewVendorName,
-            };
-            // Strip unchanged fields so we don't POST no-ops. This matches the
-            // edit_spool_wizard dirty-diff convention and keeps Activity Log
-            // messages accurate ("edited: spool_weight" vs "edited: 7 fields").
-            const changed = {};
-            const same = (a, b) => {
-                if (a == null && (b == null || b === '')) return true;
-                if (b == null && (a == null || a === '')) return true;
-                return String(a) === String(b);
-            };
-            if (!same(data.name, fil.name)) changed.name = data.name;
-            if (!same(data.material, fil.material)) changed.material = data.material;
-            // vendor_id: compare numeric ID against the nested vendor object's id.
-            const oldVendorId = fil.vendor && fil.vendor.id != null ? fil.vendor.id : null;
-            if (!same(data.vendor_id, oldVendorId)) changed.vendor_id = data.vendor_id;
-            // color_hex: normalize both sides to lowercase-no-hash for comparison.
-            const oldHex = (fil.color_hex || '').replace(/^#/, '').toLowerCase();
-            const newHex = (data.color_hex || '').toLowerCase();
-            if (oldHex !== newHex) changed.color_hex = data.color_hex;
-            // Multi-color fields: compare normalized lowercase CSVs. Only include
-            // direction in the diff when the CSV actually has 2+ entries.
-            const oldMulti = String(fil.multi_color_hexes || '')
-                .split(',').map(h => h.replace(/^#/, '').trim().toLowerCase())
-                .filter(Boolean).join(',');
-            const newMulti = String(data.multi_color_hexes || '').toLowerCase();
-            if (oldMulti !== newMulti) changed.multi_color_hexes = data.multi_color_hexes;
-            if (data.multi_color_direction != null) {
-                const oldDir = String(fil.multi_color_direction || (fil.extra && fil.extra.multi_color_direction) || '').toLowerCase();
-                if (oldDir !== data.multi_color_direction) {
-                    changed.multi_color_direction = data.multi_color_direction;
-                }
-            }
-            if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
-            if (!same(data.density, fil.density)) changed.density = data.density;
-            if (!same(data.diameter, fil.diameter)) changed.diameter = data.diameter;
-            if (!same(data.weight, fil.weight)) changed.weight = data.weight;
-            if (!same(data.price, fil.price)) changed.price = data.price;
-            if (!same(data.external_id, fil.external_id)) changed.external_id = data.external_id;
-            if (!same(data.settings_extruder_temp, fil.settings_extruder_temp))
-                changed.settings_extruder_temp = data.settings_extruder_temp;
-            if (!same(data.settings_bed_temp, fil.settings_bed_temp))
-                changed.settings_bed_temp = data.settings_bed_temp;
-            if (!same(data.comment, fil.comment)) changed.comment = data.comment;
-
-            // Extra-fields merge. If any advanced field changed, build a NEW
-            // extra object that preserves every pre-existing key and only
-            // overrides the ones we touched. Spoolman replaces extra wholesale
-            // on PATCH, so skipping this merge would silently delete keys.
-            const dirtyExtras = data._extraChanges || {};
-            if (Object.keys(dirtyExtras).length > 0) {
-                const mergedExtra = { ...(fil.extra || {}) };
-                for (const [k, v] of Object.entries(dirtyExtras)) {
-                    if (k === 'filament_attributes') {
-                        // Spoolman's field schema stores this as a JSON-encoded string.
-                        mergedExtra[k] = JSON.stringify(v);
-                    } else if (v === '' || v == null) {
-                        // Clearing a URL/original_color etc. → remove the key entirely.
-                        delete mergedExtra[k];
-                    } else {
-                        // Spoolman's "string extras" convention is quote-wrapped.
-                        mergedExtra[k] = `"${String(v)}"`;
-                    }
-                }
-                changed.extra = mergedExtra;
-            }
-
-            // Carry the pending-new-vendor name forward for the .then() handler.
-            // It's not a field Spoolman cares about, just a hint for our caller.
-            if (data._pendingNewVendorName) {
-                changed.__pendingNewVendorName = data._pendingNewVendorName;
-            }
-            return changed;
-        },
-    }).then(async (res) => {
-        if (!res.isConfirmed) return;
-        const dirty = res.value || {};
-        // Pull the vendor-pending hint off before length-checking — it's internal,
-        // not a real dirty-diff entry.
-        const pendingNewVendor = dirty.__pendingNewVendorName;
-        delete dirty.__pendingNewVendorName;
-
-        if (Object.keys(dirty).length === 0 && !pendingNewVendor) {
-            showToast('No changes to save.', 'info');
+    // Vendor: datalist + hidden id + "+ NEW" badge when typed name is unknown.
+    let vendorCache = [];
+    const vendorNameEl = document.getElementById('editfil-vendor-name');
+    const vendorIdEl = document.getElementById('editfil-vendor-id');
+    const vendorDl = document.getElementById('editfil-vendor-dl');
+    const vendorNewBadge = document.getElementById('editfil-vendor-new-badge');
+    const refreshVendorBadge = () => {
+        const typed = (vendorNameEl.value || '').trim();
+        if (!typed) {
+            vendorIdEl.value = '';
+            vendorNewBadge.style.display = 'none';
             return;
         }
+        const match = vendorCache.find(v => (v.name || '').toLowerCase() === typed.toLowerCase());
+        if (match) {
+            vendorIdEl.value = String(match.id);
+            vendorNewBadge.style.display = 'none';
+        } else {
+            vendorIdEl.value = '';
+            vendorNewBadge.style.display = 'inline-block';
+        }
+    };
+    if (vendorNameEl) vendorNameEl.oninput = refreshVendorBadge;
+    fetch('/api/vendors').then(r => r.json()).then(d => {
+        if (!d || !d.success) return;
+        vendorCache = d.vendors || [];
+        if (vendorDl) {
+            vendorDl.innerHTML = vendorCache.map(v => `<option value="${esc(v.name)}"></option>`).join('');
+        }
+        refreshVendorBadge();
+    }).catch(() => {});
 
-        // If the user typed a new vendor name, create it first so we have a real
-        // vendor_id to PATCH onto the filament. Failure here aborts the update
-        // entirely — rather than silently drop the vendor change.
-        if (pendingNewVendor) {
-            try {
-                const vr = await fetch('/api/vendors', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: pendingNewVendor }),
-                });
-                const vd = await vr.json();
-                if (vd && vd.success && vd.vendor && vd.vendor.id != null) {
-                    dirty.vendor_id = Number(vd.vendor.id);
-                } else {
-                    showToast(
-                        `Couldn't create vendor "${pendingNewVendor}": ${(vd && vd.msg) || 'unknown'}`,
-                        'error', 7000,
-                    );
-                    return;
-                }
-            } catch (e) {
-                showToast(`Vendor create error: ${e.message || e}`, 'error', 7000);
+    // --- Save button handler ---
+    // Replace the button to detach any prior click handler so repeated
+    // openings don't stack. (The modal element is reused across calls.)
+    const oldSaveBtn = document.getElementById('editfil-save');
+    if (!oldSaveBtn) { showToast('Save button missing', 'error'); return; }
+    const saveBtn = oldSaveBtn.cloneNode(true);
+    oldSaveBtn.parentNode.replaceChild(saveBtn, oldSaveBtn);
+
+    saveBtn.onclick = async () => {
+        const val = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
+        const numOrNull = (id) => {
+            const v = val(id);
+            if (v === '' || v == null) return null;
+            const n = Number(v);
+            return Number.isFinite(n) ? n : null;
+        };
+        const intOrNull = (id) => {
+            const n = numOrNull(id);
+            return n == null ? null : Math.round(n);
+        };
+        const showErr = (msg) => {
+            const e = document.getElementById('editfil-error');
+            if (e) { e.classList.remove('d-none'); e.innerText = msg; }
+        };
+        const clearErr = () => {
+            const e = document.getElementById('editfil-error');
+            if (e) { e.classList.add('d-none'); e.innerText = ''; }
+        };
+        clearErr();
+
+        // Collect colors — primary + every extra.
+        const primaryRaw = (val('editfil-color-hex') || '').trim().replace(/^#/, '');
+        const extraEls = modalEl.querySelectorAll('#editfil-color-extras input[id^="editfil-color-hex-"]');
+        const rawColors = [];
+        if (primaryRaw !== '') rawColors.push(primaryRaw);
+        extraEls.forEach(el => {
+            const v = (el.value || '').trim().replace(/^#/, '');
+            if (v !== '') rawColors.push(v);
+        });
+        for (const c of rawColors) {
+            if (!/^[0-9a-fA-F]{6}$/.test(c)) {
+                showErr(`Color must be a 6-digit hex (got "${c}").`);
+                const colorsTabBtn = document.getElementById('editfil-tab-colors-btn');
+                if (colorsTabBtn) bootstrap.Tab.getOrCreateInstance(colorsTabBtn).show();
                 return;
             }
         }
+        const normalizedColors = rawColors.map(c => c.toLowerCase());
+        let colorHex = null;
+        let multiColorHexes = null;
+        let multiDirection = null;
+        if (normalizedColors.length === 0) {
+            colorHex = '';
+            multiColorHexes = '';
+        } else if (normalizedColors.length === 1) {
+            colorHex = normalizedColors[0];
+            multiColorHexes = '';
+        } else {
+            colorHex = normalizedColors[0];
+            multiColorHexes = normalizedColors.join(',');
+            multiDirection = (val('editfil-color-direction') || 'longitudinal').toLowerCase();
+        }
 
+        // Vendor resolution: known-name → hidden id; new-name → POST /api/vendors.
+        const vendorTyped = (val('editfil-vendor-name') || '').trim();
+        const vendorIdRaw = val('editfil-vendor-id');
+        let vendorId;
+        let pendingNewVendorName = null;
+        if (!vendorTyped) {
+            vendorId = null;
+        } else if (vendorIdRaw) {
+            vendorId = Number(vendorIdRaw);
+        } else {
+            vendorId = undefined;
+            pendingNewVendorName = vendorTyped;
+        }
+
+        // Advanced-section extras. Spoolman PATCH replaces the entire `extra`
+        // object, so MERGE with fil.extra — writing just our keys would wipe
+        // physical_source, price_total, and anything else Spoolman set.
+        const newProductUrl = (val('editfil-product-url') || '').trim();
+        const newPurchaseUrl = (val('editfil-purchase-url') || '').trim();
+        const newSheetLink = (val('editfil-sheet-link') || '').trim();
+        const newOriginalColor = (val('editfil-original-color') || '').trim();
+        const rawAttrsText = (val('editfil-attributes') || '').trim();
+        const attrsArr = rawAttrsText
+            ? rawAttrsText.split(',').map(t => t.trim()).filter(Boolean)
+            : [];
+        const dirtyExtras = {};
+        if (newProductUrl !== unquoteExtra(rawExtra.product_url)) dirtyExtras.product_url = newProductUrl;
+        if (newPurchaseUrl !== unquoteExtra(rawExtra.purchase_url)) dirtyExtras.purchase_url = newPurchaseUrl;
+        if (newSheetLink !== unquoteExtra(rawExtra.sheet_link)) dirtyExtras.sheet_link = newSheetLink;
+        if (newOriginalColor !== unquoteExtra(rawExtra.original_color)) dirtyExtras.original_color = newOriginalColor;
+        const prevAttrsArr = (() => {
+            try {
+                const p = typeof rawExtra.filament_attributes === 'string'
+                    ? JSON.parse(rawExtra.filament_attributes)
+                    : rawExtra.filament_attributes;
+                return Array.isArray(p) ? p.map(String).map(s => s.trim()).filter(Boolean) : [];
+            } catch (_) { return []; }
+        })();
+        if (JSON.stringify(attrsArr) !== JSON.stringify(prevAttrsArr)) {
+            dirtyExtras.filament_attributes = attrsArr;
+        }
+
+        // Assemble the full edit payload, then prune to a dirty-diff.
+        const data = {
+            name: (val('editfil-name') || '').trim() || null,
+            material: (val('editfil-material') || '').trim() || null,
+            vendor_id: vendorId,
+            color_hex: colorHex,
+            multi_color_hexes: multiColorHexes,
+            multi_color_direction: multiDirection,
+            spool_weight: numOrNull('editfil-spool-weight'),
+            density: numOrNull('editfil-density'),
+            diameter: numOrNull('editfil-diameter'),
+            weight: numOrNull('editfil-weight'),
+            price: numOrNull('editfil-price'),
+            external_id: (val('editfil-external-id') || '').trim(),
+            settings_extruder_temp: intOrNull('editfil-nozzle'),
+            settings_bed_temp: intOrNull('editfil-bed'),
+            comment: val('editfil-comment') || '',
+        };
+
+        const same = (a, b) => {
+            if (a == null && (b == null || b === '')) return true;
+            if (b == null && (a == null || a === '')) return true;
+            return String(a) === String(b);
+        };
+        const changed = {};
+        if (!same(data.name, fil.name)) changed.name = data.name;
+        if (!same(data.material, fil.material)) changed.material = data.material;
+        const oldVendorId = fil.vendor && fil.vendor.id != null ? fil.vendor.id : null;
+        if (pendingNewVendorName == null && !same(data.vendor_id, oldVendorId)) {
+            changed.vendor_id = data.vendor_id;
+        }
+        const oldHex = (fil.color_hex || '').replace(/^#/, '').toLowerCase();
+        const newHex = (data.color_hex || '').toLowerCase();
+        if (oldHex !== newHex) changed.color_hex = data.color_hex;
+        const oldMulti = String(fil.multi_color_hexes || '')
+            .split(',').map(h => h.replace(/^#/, '').trim().toLowerCase())
+            .filter(Boolean).join(',');
+        const newMulti = String(data.multi_color_hexes || '').toLowerCase();
+        if (oldMulti !== newMulti) changed.multi_color_hexes = data.multi_color_hexes;
+        if (data.multi_color_direction != null) {
+            const oldDir = String(fil.multi_color_direction
+                || (fil.extra && fil.extra.multi_color_direction)
+                || '').toLowerCase();
+            if (oldDir !== data.multi_color_direction) {
+                changed.multi_color_direction = data.multi_color_direction;
+            }
+        }
+        if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
+        if (!same(data.density, fil.density)) changed.density = data.density;
+        if (!same(data.diameter, fil.diameter)) changed.diameter = data.diameter;
+        if (!same(data.weight, fil.weight)) changed.weight = data.weight;
+        if (!same(data.price, fil.price)) changed.price = data.price;
+        if (!same(data.external_id, fil.external_id)) changed.external_id = data.external_id;
+        if (!same(data.settings_extruder_temp, fil.settings_extruder_temp))
+            changed.settings_extruder_temp = data.settings_extruder_temp;
+        if (!same(data.settings_bed_temp, fil.settings_bed_temp))
+            changed.settings_bed_temp = data.settings_bed_temp;
+        if (!same(data.comment, fil.comment)) changed.comment = data.comment;
+
+        if (Object.keys(dirtyExtras).length > 0) {
+            const mergedExtra = { ...(fil.extra || {}) };
+            for (const [k, v] of Object.entries(dirtyExtras)) {
+                if (k === 'filament_attributes') {
+                    mergedExtra[k] = JSON.stringify(v);
+                } else if (v === '' || v == null) {
+                    delete mergedExtra[k];
+                } else {
+                    mergedExtra[k] = `"${String(v)}"`;
+                }
+            }
+            changed.extra = mergedExtra;
+        }
+
+        if (Object.keys(changed).length === 0 && !pendingNewVendorName) {
+            showToast('No changes to save.', 'info');
+            bsModal.hide();
+            return;
+        }
+
+        // Disable the button while the request is in flight so double-clicks
+        // don't fire two PATCHes.
+        saveBtn.disabled = true;
         try {
+            if (pendingNewVendorName) {
+                const vr = await fetch('/api/vendors', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: pendingNewVendorName }),
+                });
+                const vd = await vr.json();
+                if (vd && vd.success && vd.vendor && vd.vendor.id != null) {
+                    changed.vendor_id = Number(vd.vendor.id);
+                } else {
+                    showErr(`Couldn't create vendor "${pendingNewVendorName}": ${(vd && vd.msg) || 'unknown'}`);
+                    return;
+                }
+            }
             const r = await fetch('/api/update_filament', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: fil.id, data: dirty }),
+                body: JSON.stringify({ id: fil.id, data: changed }),
             });
             const d = await r.json();
             if (d && d.success) {
                 showToast(`Filament #${fil.id} updated.`, 'success');
                 if (window.refreshFilamentSpools) window.refreshFilamentSpools();
+                bsModal.hide();
             } else {
-                showToast(`Update failed: ${d && d.msg ? d.msg : 'unknown'}`, 'error', 7000);
+                showErr(`Update failed: ${d && d.msg ? d.msg : 'unknown'}`);
             }
         } catch (e) {
-            showToast(`Update error: ${e.message || e}`, 'error', 7000);
+            showErr(`Update error: ${e.message || e}`);
+        } finally {
+            saveBtn.disabled = false;
         }
-    });
+    };
+
+    bsModal.show();
 };
