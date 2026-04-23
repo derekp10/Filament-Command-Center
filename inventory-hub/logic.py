@@ -7,6 +7,57 @@ import config_loader
 import spoolman_api
 import locations_db
 
+
+def _toolhead_of(location_str, printer_map=None):
+    """Resolve a location string to its (printer_name, toolhead_id) tuple.
+
+    Returns None if the location is empty or not a registered toolhead.
+    Used so callers can decide whether a filabridge unmap is needed
+    before a move.
+    """
+    if not location_str:
+        return None
+    if printer_map is None:
+        cfg = config_loader.load_config()
+        printer_map = cfg.get("printer_map", {})
+    loc = str(location_str).strip().strip('"').upper()
+    if loc in printer_map:
+        p = printer_map[loc]
+        return (p.get('printer_name'), p.get('position'))
+    return None
+
+
+def _fb_write(printer_name, toolhead_id, spool_id, fb_url=None):
+    """POST a toolhead map/unmap to Filabridge. Never raises.
+
+    Returns (ok: bool, detail: str). spool_id=0 means unmap. Caller owns
+    the unmap-before-map sequencing and any Activity Log entry on failure.
+    This wraps the bare `except: pass` that previously hid every
+    filabridge rejection (which is how the 2026-04-22 desync went
+    invisible — filabridge was rejecting the "two toolheads" map on its
+    invariant, and nobody looked at the response).
+    """
+    if fb_url is None:
+        _, fb_url = config_loader.get_api_urls()
+    payload = {"printer_name": printer_name, "toolhead_id": toolhead_id, "spool_id": int(spool_id)}
+    try:
+        resp = requests.post(f"{fb_url}/map_toolhead", json=payload, timeout=3)
+        # Prefer the standard requests.Response `.ok` accessor (True when
+        # status_code is 2xx). Falls through to explicit status_code +
+        # body inspection for richer detail on failures.
+        if getattr(resp, 'ok', False):
+            return (True, f"{printer_name}-{toolhead_id} <- #{spool_id}")
+        code = getattr(resp, 'status_code', '?')
+        body = ""
+        try:
+            body = (getattr(resp, 'text', '') or "")[:200]
+        except Exception:
+            pass
+        return (False, f"HTTP {code}: {body}".strip())
+    except Exception as e:
+        return (False, f"transport error: {e}")
+
+
 def resolve_scan(text):
     text = text.strip().strip('"').strip("'")
     decoded = urllib.parse.unquote(text)
@@ -124,7 +175,7 @@ def resolve_scan(text):
         
     return {'type': 'error', 'msg': 'Unknown Code'}
 
-def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True):
+def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, origin_toolhead=None):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
@@ -137,6 +188,14 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     Internal recursive calls set auto_deploy=False to prevent infinite
     chains (the toolhead deploy itself would otherwise try to auto-deploy
     onto its own printer binding).
+
+    `origin_toolhead` (optional): location string naming the spool's
+    previous toolhead, used only for the filabridge unmap. The
+    auto-deploy recursive call passes this because by phase 2 the
+    spool's Spoolman location is the dryer box, not the toolhead it
+    came from — without this hint, phase 2 can't unmap the origin and
+    filabridge rejects the destination map on its one-spool-one-toolhead
+    invariant (the 2026-04-22 desync).
     """
     target = target.strip().upper()
     cfg = config_loader.load_config()
@@ -154,12 +213,32 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
     if not spools: return {"status": "error", "msg": "No spools found"}
 
+    # Snapshot each spool's origin toolhead BEFORE any Spoolman writes.
+    # Phase 2 of the auto-deploy chain uses this to unmap filabridge for
+    # the pre-phase-1 toolhead (e.g. Core1-M0) before mapping the
+    # destination (e.g. XL-3). If the caller passed an explicit
+    # origin_toolhead, it overrides the Spoolman snapshot — that's how
+    # phase 2 learns about the pre-phase-1 location.
+    origin_toolheads_by_spool: typing.Dict[str, typing.Optional[typing.Tuple[str, int]]] = {}
+    explicit_origin_th = _toolhead_of(origin_toolhead, printer_map) if origin_toolhead else None
+    for sid in spools:
+        if explicit_origin_th is not None:
+            origin_toolheads_by_spool[str(sid)] = explicit_origin_th
+        else:
+            snap = spoolman_api.get_spool(sid) or {}
+            cur = str(snap.get('location', '')).strip().upper()
+            origin_toolheads_by_spool[str(sid)] = _toolhead_of(cur, printer_map)
+
+    # Track filabridge outcomes so the endpoint layer can surface
+    # failures (warning toast + Activity Log) instead of swallowing them.
+    fb_outcomes: typing.List[typing.Tuple[bool, str]] = []
+
     # --- SMART LOAD LOGIC (Auto-Eject Resident) ---
     # Determine if this is a single-occupancy target (Printer/Toolhead)
     tgt_info = loc_info_map.get(target)
     is_printer = target in printer_map
     is_toolhead = tgt_info and tgt_info.get('Type') in ['Tool Head', 'MMU Slot', 'Printer']
-    
+
     undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "ejections": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
 
     if is_printer or is_toolhead:
@@ -169,7 +248,10 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             # Don't eject the spool we are currently trying to move (if it's already there)
             if str(rid) not in [str(s) for s in spools]:
                 state.add_log_entry(f"⚠️ <b>Smart Load:</b> Ejecting #{rid} from {target}...", "WARNING")
-                if perform_smart_eject(rid, suppress_fb_unmap=True):
+                # No suppress_fb_unmap: filabridge must see the target
+                # toolhead cleared before we map the incoming spool to
+                # it (filabridge invariant: one spool, one toolhead).
+                if perform_smart_eject(rid):
                     # Find out where it actually got sent to so we can bring it back!
                     ejected_data = spoolman_api.get_spool(rid)
                     if ejected_data:
@@ -208,7 +290,6 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
         # PRINTER MOVE
         if target in printer_map:
-            src_info = loc_info_map.get(current_loc)
             # Preserve ghost trail when the spool is already deployed to
             # this exact toolhead. Without this guard, re-scanning a spool
             # that's already on the toolhead would set physical_source to
@@ -224,14 +305,32 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             else:
                 new_extra['physical_source'] = current_loc
                 new_extra['physical_source_slot'] = current_extra.get('container_slot')
-            
+
+            p = printer_map[target]
+            dest_th = (p['printer_name'], p['position'])
+            origin_th = origin_toolheads_by_spool.get(str(sid))
+
+            # Unmap the spool's ORIGIN toolhead first so filabridge's
+            # one-spool-one-toolhead invariant is satisfied before we try
+            # to map the destination. Skip if origin == destination (the
+            # already-here re-scan case) because that unmap would just
+            # clear the toolhead we're about to remap.
+            if origin_th and origin_th != dest_th:
+                ok, detail = _fb_write(origin_th[0], origin_th[1], 0, fb_url)
+                fb_outcomes.append((ok, detail))
+                if not ok:
+                    state.add_log_entry(f"⚠️ Filabridge unmap {origin_th[0]}-{origin_th[1]} FAILED: {detail}", "ERROR", "ff4444")
+                    # Abort this spool's destination map to avoid layering
+                    # bad state on top of a known-bad filabridge response.
+                    continue
+
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
-                p = printer_map[target]
-                try:
-                    requests.post(f"{fb_url}/map_toolhead", 
-                                  json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)}, timeout=3)
-                except: pass
-                state.add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
+                ok, detail = _fb_write(dest_th[0], dest_th[1], int(sid), fb_url)
+                fb_outcomes.append((ok, detail))
+                if ok:
+                    state.add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
+                else:
+                    state.add_log_entry(f"⚠️ Filabridge map {target} <- #{sid} FAILED: {detail}", "ERROR", "ff4444")
         
         # DRYER MOVE
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
@@ -268,15 +367,36 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     # auto_deploy=False on the chained call prevents infinite recursion
     # (the toolhead move would try to auto-deploy onto its own printer).
     auto_deploy_result = None
+    bound_toolhead = None
     if auto_deploy and target_slot and tgt_info and tgt_info.get('Type') == 'Dryer Box':
         bindings = (tgt_info.get('extra') or {}).get('slot_targets') or {}
         bound_toolhead = bindings.get(str(target_slot))
         if bound_toolhead:
             try:
+                # Thread the spool's pre-phase-1 toolhead (snapshotted
+                # above, before Spoolman was written) into phase 2 so
+                # phase 2 can issue the filabridge unmap of that origin
+                # toolhead before it maps the destination. Without this,
+                # phase 2 would read the spool's current Spoolman location
+                # (the dryer box we just wrote) and find no origin
+                # toolhead, skipping the unmap — which was exactly the
+                # 2026-04-22 desync. Multi-spool auto-deploy flows don't
+                # exist today, so passing the first spool's origin is
+                # sufficient; per-spool override would be additive later.
+                first_sid = str(spools[0]) if spools else None
+                first_origin_th = origin_toolheads_by_spool.get(first_sid) if first_sid else None
+                origin_toolhead_loc = None
+                if first_origin_th:
+                    # Reverse-lookup a printer_map key for this toolhead.
+                    for loc_key, p_info in printer_map.items():
+                        if (p_info.get('printer_name'), p_info.get('position')) == first_origin_th:
+                            origin_toolhead_loc = loc_key
+                            break
                 auto_deploy_result = perform_smart_move(
                     bound_toolhead, list(spools),
                     target_slot=None, origin=f'auto_deploy_from_{origin or "smart_move"}',
                     auto_deploy=False,
+                    origin_toolhead=origin_toolhead_loc,
                 )
                 for sid in spools:
                     state.add_log_entry(
@@ -284,12 +404,25 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
                         f"(source: {target}:SLOT:{target_slot})",
                         "SUCCESS", "00ff00"
                     )
+                # Bubble filabridge outcomes from phase 2 up into this
+                # call's outcome list so the endpoint sees the full picture.
+                if isinstance(auto_deploy_result, dict):
+                    fb_outcomes.extend(auto_deploy_result.get('filabridge_outcomes', []))
             except Exception as _ad_err:
                 state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")
 
-    if auto_deploy_result is not None:
-        return {"status": "success", "auto_deployed_to": str(bound_toolhead).upper()}
-    return {"status": "success"}
+    filabridge_ok = all(ok for ok, _ in fb_outcomes) if fb_outcomes else True
+    filabridge_detail = "; ".join(d for ok, d in fb_outcomes if not ok) if not filabridge_ok else ""
+
+    result: typing.Dict[str, typing.Any] = {
+        "status": "success",
+        "filabridge_ok": filabridge_ok,
+        "filabridge_detail": filabridge_detail,
+        "filabridge_outcomes": fb_outcomes,
+    }
+    if auto_deploy_result is not None and bound_toolhead:
+        result["auto_deployed_to"] = str(bound_toolhead).upper()
+    return result
 
 
 def get_room_from_location(loc_id):
@@ -308,24 +441,32 @@ def get_room_from_location(loc_id):
             
     return prefix
 
-def perform_smart_eject(spool_id, confirmed_unassign=False, suppress_fb_unmap=False):
+def perform_smart_eject(spool_id, confirmed_unassign=False):
+    """Remove `spool_id` from its current location.
+
+    If it's on a toolhead, the filabridge unmap ALWAYS fires — there's no
+    opt-out (the old `suppress_fb_unmap` flag was a footgun that caused
+    filabridge desync). Callers needing "eject without filabridge" were
+    wrong to skip the unmap and have been corrected.
+    """
     spool_data = spoolman_api.get_spool(spool_id)
     if not spool_data: return False
-    
+
     current_location = spool_data.get('location', '').strip().upper()
     extra = spool_data.get('extra', {})
-    
+
     cfg = config_loader.load_config()
     printer_map = cfg.get("printer_map", {})
     sm_url, fb_url = config_loader.get_api_urls()
-    
-    # Ensure toolhead is cleared from Filabridge if we eject from an integrated printer
-    if current_location in printer_map and not suppress_fb_unmap:
+
+    # Ensure toolhead is cleared in filabridge BEFORE we rewrite Spoolman,
+    # so filabridge's one-spool-one-toolhead invariant is maintained if
+    # the caller immediately reuses this toolhead.
+    if current_location in printer_map:
         p = printer_map[current_location]
-        try:
-            requests.post(f"{fb_url}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}, timeout=3)
-        except: pass
+        ok, detail = _fb_write(p['printer_name'], p['position'], 0, fb_url)
+        if not ok:
+            state.add_log_entry(f"⚠️ Filabridge unmap {p['printer_name']}-{p['position']} FAILED: {detail}", "ERROR", "ff4444")
     
     # Save the original slot before we wipe it for processing
     orig_container_slot = extra.get('container_slot', '')
@@ -407,17 +548,16 @@ def perform_force_unassign(spool_id):
     
     if current_location in printer_map:
         p = printer_map[current_location]
-        try:
-            requests.post(f"{fb_url}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0}, timeout=3)
-        except: pass
-    
+        ok, detail = _fb_write(p['printer_name'], p['position'], 0, fb_url)
+        if not ok:
+            state.add_log_entry(f"⚠️ Filabridge unmap {p['printer_name']}-{p['position']} FAILED: {detail}", "ERROR", "ff4444")
+
     # [ALEX FIX] Explicitly overwrite slots and sources with empty strings
     # to guarantee Spoolman API removes them instead of ignoring dropped keys
     extra['container_slot'] = ""
     extra['physical_source'] = ""
     extra['physical_source_slot'] = ""
-    
+
     if spoolman_api.update_spool(spool_id, {"location": "", "extra": extra}):
         state.add_log_entry(f"🗑️ Force Unassigned #{spool_id}", "WARNING")
         return True
@@ -432,29 +572,31 @@ def perform_undo():
     cfg = config_loader.load_config(); printer_map = cfg.get("printer_map", {})
     sm_url, fb_url = config_loader.get_api_urls()
     
+    # UNDO ordering: unmap the target toolhead FIRST so filabridge sees it
+    # free, then reassign each moved spool back to its origin (which may
+    # itself be a toolhead — remap happens after the Spoolman write).
     if target in printer_map:
         p = printer_map[target]
-        try:
-            requests.post(f"{fb_url}/map_toolhead", 
-                          json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": 0})
-        except: pass
-        
+        ok, detail = _fb_write(p['printer_name'], p['position'], 0, fb_url)
+        if not ok:
+            state.add_log_entry(f"⚠️ Undo: Filabridge unmap {p['printer_name']}-{p['position']} FAILED: {detail}", "ERROR", "ff4444")
+
     for sid, loc in moves.items():
         requests.patch(f"{sm_url}/api/v1/spool/{sid}", json={"location": loc})
         if loc in printer_map:
             p = printer_map[loc]
-            try: requests.post(f"{fb_url}/map_toolhead", 
-                              json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(sid)})
-            except: pass
+            ok, detail = _fb_write(p['printer_name'], p['position'], int(sid), fb_url)
+            if not ok:
+                state.add_log_entry(f"⚠️ Undo: Filabridge map {loc} <- #{sid} FAILED: {detail}", "ERROR", "ff4444")
     # [ALEX FIX] Revert Smart Ejections
     ejections = last.get('ejections', {})
     for ejected_sid, original_loc in ejections.items():
         requests.patch(f"{sm_url}/api/v1/spool/{ejected_sid}", json={"location": original_loc})
         if original_loc in printer_map:
             p = printer_map[original_loc]
-            try: requests.post(f"{fb_url}/map_toolhead", 
-                               json={"printer_name": p['printer_name'], "toolhead_id": p['position'], "spool_id": int(ejected_sid)})
-            except: pass
+            ok, detail = _fb_write(p['printer_name'], p['position'], int(ejected_sid), fb_url)
+            if not ok:
+                state.add_log_entry(f"⚠️ Undo: Filabridge remap {original_loc} <- #{ejected_sid} FAILED: {detail}", "ERROR", "ff4444")
             
             
     # [ALEX FIX] Restore to Buffer Memory
