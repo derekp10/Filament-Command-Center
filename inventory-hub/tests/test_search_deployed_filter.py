@@ -140,3 +140,32 @@ def test_live_search_endpoint_accepts_deployed_param():
     assert body.get("success") is True
     # Shape: results is a list (possibly empty — we don't depend on live data).
     assert isinstance(body.get("results"), list)
+
+
+# ---------------------------------------------------------------------------
+# Frontend: Reset button clears the deployment filter.
+# ---------------------------------------------------------------------------
+
+def test_reset_button_clears_deployed_filter(page):
+    """The search offcanvas Reset 🗑️ button should also zero out the
+    deployment select — without this, a stale filter lingers and keeps
+    filtering subsequent searches after the user explicitly asked to
+    start fresh."""
+    from playwright.sync_api import Page
+    assert isinstance(page, Page)
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+
+    # Open the search offcanvas.
+    page.locator('nav button:has-text("SEARCH")').click()
+    page.wait_for_selector('#global-search-deployed', state='attached', timeout=5_000)
+
+    # Set the deployment filter to a non-default value.
+    page.locator('#global-search-deployed').select_option(value='deployed')
+    assert page.locator('#global-search-deployed').input_value() == 'deployed'
+
+    # Click Reset. The deployment select should return to '' (the Any option).
+    page.locator('#global-search-clear-all').click()
+    # Debounce gives the re-search a moment to fire.
+    page.wait_for_timeout(200)
+    assert page.locator('#global-search-deployed').input_value() == ''

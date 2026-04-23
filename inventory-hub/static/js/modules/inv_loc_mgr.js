@@ -560,6 +560,12 @@ window.saveFeedsSection = () => {
             locRow.extra = locRow.extra || {};
             locRow.extra.slot_order = order;
         }
+        // Bust the anti-wiggle content-hash cache so refreshManageView actually
+        // rerenders — the location's contents haven't changed, only its render
+        // order, so the cache would otherwise early-exit and leave the stale
+        // LTR/RTL layout on screen until the user closed and reopened the modal.
+        state.lastLocRenderHash = null;
+        if (window.refreshManageView) window.refreshManageView(locId);
     }).catch(() => { /* non-fatal */ });
 
     fetch(`/api/dryer_box/${encodeURIComponent(locId)}/bindings`, {

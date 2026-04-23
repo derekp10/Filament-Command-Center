@@ -260,3 +260,190 @@ def test_openEditFilamentForm_rejects_invalid_hex(page: Page):
     page.wait_for_selector(".swal2-validation-message", timeout=3_000)
     msg = page.locator(".swal2-validation-message").text_content() or ""
     assert "hex" in msg.lower() or "color" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# Wave 1 expansion: diameter/weight/price/external_id + multi-color.
+# ---------------------------------------------------------------------------
+
+
+def _stub_vendors_and_update(page):
+    """Install fetch stubs for /api/vendors and /api/update_filament so the
+    Edit Filament tests don't mutate live Spoolman."""
+    page.evaluate(
+        """
+        window.__lastFetchPayload = null;
+        const origFetch = window.fetch;
+        window.fetch = async (url, opts) => {
+            if (url === '/api/vendors') {
+                return new Response(JSON.stringify({success: true, vendors: []}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/update_filament') {
+                window.__lastFetchPayload = JSON.parse(opts.body);
+                return new Response(JSON.stringify({success: true, filament: {id: 1}}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            return origFetch(url, opts);
+        };
+        """
+    )
+
+
+def test_openEditFilamentForm_has_diameter_weight_price_external_id(page: Page):
+    """Wave 1 added four new top-level Spoolman default fields."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    fil = {
+        "id": 201,
+        "name": "Test",
+        "material": "PLA",
+        "diameter": 1.75,
+        "weight": 1000,
+        "price": 24.99,
+        "external_id": "LEGACY-42",
+    }
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-diameter", state="visible", timeout=3_000)
+
+    assert page.locator("#edit-fil-diameter").input_value() == "1.75"
+    assert page.locator("#edit-fil-weight").input_value() == "1000"
+    assert page.locator("#edit-fil-price").input_value() == "24.99"
+    assert page.locator("#edit-fil-external-id").input_value() == "LEGACY-42"
+
+
+def test_openEditFilamentForm_submits_diameter_weight_price_external_id(page: Page):
+    """Changing the new fields should include them in the dirty-diff POST body."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_vendors_and_update(page)
+
+    fil = {
+        "id": 202,
+        "name": "Test",
+        "material": "PLA",
+        "diameter": 1.75,
+        "weight": 1000,
+        "price": 10.00,
+        "external_id": "OLD",
+    }
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-diameter", state="visible", timeout=3_000)
+
+    page.locator("#edit-fil-diameter").fill("2.85")
+    page.locator("#edit-fil-weight").fill("750")
+    page.locator("#edit-fil-price").fill("15.50")
+    page.locator("#edit-fil-external-id").fill("NEW-ID")
+
+    page.locator(".swal2-confirm").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+
+    payload = page.evaluate("() => window.__lastFetchPayload")
+    data = payload["data"]
+    assert data["diameter"] == 2.85
+    assert data["weight"] == 750
+    assert data["price"] == 15.5
+    assert data["external_id"] == "NEW-ID"
+
+
+def test_openEditFilamentForm_seeds_multi_color_from_multi_color_hexes(page: Page):
+    """A filament with multi_color_hexes should render as primary + extras."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    fil = {
+        "id": 203,
+        "name": "Rainbow",
+        "material": "PLA",
+        "multi_color_hexes": "ff0000,00ff00,0000ff",
+        "multi_color_direction": "coaxial",
+    }
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-color-hex", state="visible", timeout=3_000)
+
+    # Primary shows first hex.
+    assert page.locator("#edit-fil-color-hex").input_value().lower() == "#ff0000"
+
+    # Two extra rows for the remaining two hexes.
+    extras = page.locator("#edit-fil-color-extras .edit-fil-color-row")
+    assert extras.count() == 2
+
+    # Direction select should be visible with coaxial selected.
+    direction = page.locator("#edit-fil-color-direction")
+    assert direction.is_visible()
+    assert direction.input_value() == "coaxial"
+
+
+def test_openEditFilamentForm_add_color_button_appends_row(page: Page):
+    """The + button should add a new color row and reveal the direction select."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    fil = {"id": 204, "name": "Mono", "material": "PLA", "color_hex": "ff00ff"}
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-add-color", state="visible", timeout=3_000)
+
+    # Direction starts hidden (only 1 color).
+    assert not page.locator("#edit-fil-color-direction").is_visible()
+
+    # Click +. One extra row appears, direction becomes visible.
+    page.locator("#edit-fil-add-color").click()
+    assert page.locator("#edit-fil-color-extras .edit-fil-color-row").count() == 1
+    assert page.locator("#edit-fil-color-direction").is_visible()
+
+
+def test_openEditFilamentForm_submits_multi_color_csv(page: Page):
+    """Adding a second color should emit multi_color_hexes + direction in the POST."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_vendors_and_update(page)
+
+    fil = {"id": 205, "name": "Mono", "material": "PLA", "color_hex": "ff0000"}
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-add-color", state="visible", timeout=3_000)
+
+    page.locator("#edit-fil-add-color").click()
+    # Fill the new extra's hex input (id depends on counter — query by class).
+    extra_hex = page.locator("#edit-fil-color-extras input[id^='edit-fil-color-hex-']").first
+    extra_hex.fill("#00ff00")
+    # Pick direction.
+    page.locator("#edit-fil-color-direction").select_option(value="coaxial")
+
+    page.locator(".swal2-confirm").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+
+    payload = page.evaluate("() => window.__lastFetchPayload")
+    data = payload["data"]
+    # CSV is lowercase, no-hash, in the order they appear.
+    assert data["multi_color_hexes"] == "ff0000,00ff00"
+    assert data["multi_color_direction"] == "coaxial"
+
+
+def test_openEditFilamentForm_remove_extra_color_hides_direction(page: Page):
+    """Removing the last extra color row should hide the direction select again."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    fil = {
+        "id": 206,
+        "name": "Two",
+        "material": "PLA",
+        "multi_color_hexes": "ff0000,00ff00",
+        "multi_color_direction": "longitudinal",
+    }
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-color-extras .edit-fil-color-row", timeout=3_000)
+
+    assert page.locator("#edit-fil-color-direction").is_visible()
+    # Click the remove button on the one extra row.
+    page.locator("#edit-fil-color-extras .edit-fil-color-row button").click()
+    # Row is gone, direction select hidden.
+    assert page.locator("#edit-fil-color-extras .edit-fil-color-row").count() == 0
+    assert not page.locator("#edit-fil-color-direction").is_visible()

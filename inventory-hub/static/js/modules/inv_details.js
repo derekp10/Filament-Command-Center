@@ -785,14 +785,32 @@ window.openEditFilamentForm = (fil) => {
     const currentMaterial = esc(fil.material || 'PLA');
     const currentSpoolWt = fil.spool_weight != null ? fil.spool_weight : '';
     const currentDensity = fil.density != null ? fil.density : '';
+    const currentDiameter = fil.diameter != null ? fil.diameter : '';
+    const currentWeight = fil.weight != null ? fil.weight : '';
+    const currentPrice = fil.price != null ? fil.price : '';
+    const currentExternalId = esc(fil.external_id || '');
     const currentNozzle = fil.settings_extruder_temp != null ? fil.settings_extruder_temp : '';
     const currentBed = fil.settings_bed_temp != null ? fil.settings_bed_temp : '';
     const currentComment = esc(fil.comment || '');
     const currentVendorId = fil.vendor && fil.vendor.id != null ? String(fil.vendor.id) : '';
-    // Normalize color_hex — Spoolman stores 6-char no-hash (e.g. "ff0000"); <input type="color"> needs "#ff0000".
-    const rawHex = (fil.color_hex || '').replace(/^#/, '').trim();
-    const currentColorHex = /^[0-9a-fA-F]{6}$/.test(rawHex) ? `#${rawHex.toLowerCase()}` : '#000000';
-    const hasColorHex = /^[0-9a-fA-F]{6}$/.test(rawHex);
+    // color_hex handling: Spoolman stores either a single 6-char hex, OR a comma-
+    // separated list via `multi_color_hexes` extra. Parse both into a unified
+    // array of normalized '#rrggbb' strings that the form can manage uniformly.
+    const parseHexList = (val) => {
+        if (!val) return [];
+        return String(val)
+            .split(',')
+            .map(h => h.replace(/^#/, '').trim().toLowerCase())
+            .filter(h => /^[0-9a-fA-F]{6}$/.test(h))
+            .map(h => `#${h}`);
+    };
+    const multiHexList = parseHexList(fil.multi_color_hexes);
+    const singleHexList = parseHexList(fil.color_hex);
+    const currentColors = multiHexList.length > 0 ? multiHexList : singleHexList;
+    const currentDirection = String(fil.multi_color_direction || (fil.extra && fil.extra.multi_color_direction) || 'longitudinal').toLowerCase();
+    // Primary color for backwards-compat with the existing first-slot UI.
+    const currentColorHex = currentColors[0] || '#000000';
+    const hasColorHex = currentColors.length > 0;
 
     // Vendor's inherited empty_spool_weight surfaces as placeholder text so the
     // user sees the fallback value that would apply if this field is left blank.
@@ -825,11 +843,19 @@ window.openEditFilamentForm = (fil) => {
                         </select>
                     </div>
                     <div class="col-4">
-                        <label class="form-label text-light small mb-1">Color</label>
-                        <div class="d-flex align-items-center gap-1">
+                        <label class="form-label text-light small mb-1">
+                            Color(s)
+                            <button type="button" id="edit-fil-add-color" class="btn btn-sm btn-outline-info ms-1 py-0 px-1" style="font-size:0.75rem;" title="Add another color">+</button>
+                        </label>
+                        <div class="d-flex align-items-center gap-1 mb-1">
                             <input type="color" id="edit-fil-color-picker" value="${currentColorHex}" class="form-control form-control-color bg-dark border-secondary" style="width:40px;padding:2px;">
                             <input type="text" id="edit-fil-color-hex" class="form-control bg-dark text-white border-secondary" value="${hasColorHex ? currentColorHex : ''}" placeholder="#rrggbb" maxlength="7" style="flex:1;">
                         </div>
+                        <div id="edit-fil-color-extras"></div>
+                        <select id="edit-fil-color-direction" class="form-select form-select-sm bg-dark text-white border-secondary mt-1" style="display:${currentColors.length > 1 ? 'block' : 'none'};">
+                            <option value="longitudinal"${currentDirection === 'longitudinal' ? ' selected' : ''}>Longitudinal (length-wise)</option>
+                            <option value="coaxial"${currentDirection === 'coaxial' ? ' selected' : ''}>Coaxial (radial)</option>
+                        </select>
                     </div>
                 </div>
                 <div class="row g-2 mt-1">
@@ -851,6 +877,24 @@ window.openEditFilamentForm = (fil) => {
                         <label class="form-label text-light small mb-1">🛏️ Bed (°C)</label>
                         <input type="number" id="edit-fil-bed" class="form-control bg-dark text-white border-secondary" value="${currentBed}" autocomplete="off">
                     </div>
+                </div>
+                <div class="row g-2 mt-1">
+                    <div class="col-4">
+                        <label class="form-label text-light small mb-1">Diameter (mm)</label>
+                        <input type="number" step="0.01" id="edit-fil-diameter" class="form-control bg-dark text-white border-secondary" value="${currentDiameter}" placeholder="1.75" autocomplete="off">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label text-light small mb-1">Net Weight (g)</label>
+                        <input type="number" step="1" id="edit-fil-weight" class="form-control bg-dark text-white border-secondary" value="${currentWeight}" placeholder="1000" autocomplete="off">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label text-light small mb-1">Price ($)</label>
+                        <input type="number" step="0.01" id="edit-fil-price" class="form-control bg-dark text-white border-secondary" value="${currentPrice}" placeholder="0.00" autocomplete="off">
+                    </div>
+                </div>
+                <div class="mt-1">
+                    <label class="form-label text-light small mb-1">Legacy / External ID</label>
+                    <input type="text" id="edit-fil-external-id" class="form-control bg-dark text-white border-secondary" value="${currentExternalId}" placeholder="(optional)" autocomplete="off">
                 </div>
                 <div class="mt-2">
                     <label class="form-label text-light small mb-1">Notes</label>
@@ -888,24 +932,73 @@ window.openEditFilamentForm = (fil) => {
                     if (sel) sel.innerHTML = '<option value="">-- (failed to load) --</option>';
                 });
 
-            // Keep color picker and hex text input in sync; normalize text input on blur.
-            const picker = popup.querySelector('#edit-fil-color-picker');
-            const hex = popup.querySelector('#edit-fil-color-hex');
-            if (picker && hex) {
-                picker.addEventListener('input', () => { hex.value = picker.value; });
-                hex.addEventListener('input', () => {
-                    const v = hex.value.trim();
-                    if (/^#[0-9a-fA-F]{6}$/.test(v)) picker.value = v.toLowerCase();
+            // --- Color pickers -------------------------------------------------
+            // Helper: wire a (picker, hex) input pair so changes in one mirror the
+            // other, with hex-format validation on blur. Used for the primary
+            // color and every extra-color row added via the + button.
+            const wirePickerHexPair = (pickerEl, hexEl) => {
+                if (!pickerEl || !hexEl) return;
+                pickerEl.addEventListener('input', () => { hexEl.value = pickerEl.value; });
+                hexEl.addEventListener('input', () => {
+                    const v = hexEl.value.trim();
+                    if (/^#[0-9a-fA-F]{6}$/.test(v)) pickerEl.value = v.toLowerCase();
                 });
-                hex.addEventListener('blur', () => {
-                    const raw = hex.value.trim().replace(/^#/, '');
+                hexEl.addEventListener('blur', () => {
+                    const raw = hexEl.value.trim().replace(/^#/, '');
                     if (raw === '') return;
                     if (/^[0-9a-fA-F]{6}$/.test(raw)) {
-                        hex.value = `#${raw.toLowerCase()}`;
-                        picker.value = `#${raw.toLowerCase()}`;
+                        hexEl.value = `#${raw.toLowerCase()}`;
+                        pickerEl.value = `#${raw.toLowerCase()}`;
                     }
                 });
-            }
+            };
+
+            wirePickerHexPair(
+                popup.querySelector('#edit-fil-color-picker'),
+                popup.querySelector('#edit-fil-color-hex'),
+            );
+
+            // Multi-color: add-row button appends (picker, hex, remove) triples.
+            // We count rows so each row gets a unique id. Color-direction select
+            // shows up only when >=2 colors exist.
+            const extrasHost = popup.querySelector('#edit-fil-color-extras');
+            const directionSel = popup.querySelector('#edit-fil-color-direction');
+            let colorRowSeq = 0;
+
+            const refreshDirectionVisibility = () => {
+                const extraRows = extrasHost ? extrasHost.querySelectorAll('.edit-fil-color-row').length : 0;
+                if (directionSel) directionSel.style.display = extraRows > 0 ? 'block' : 'none';
+            };
+
+            const addColorRow = (hexInit = '#000000') => {
+                colorRowSeq += 1;
+                const idx = colorRowSeq;
+                const row = document.createElement('div');
+                row.className = 'd-flex align-items-center gap-1 mb-1 edit-fil-color-row';
+                row.dataset.idx = String(idx);
+                row.innerHTML = `
+                    <input type="color" id="edit-fil-color-picker-${idx}" value="${hexInit}" class="form-control form-control-color bg-dark border-secondary" style="width:40px;padding:2px;">
+                    <input type="text" id="edit-fil-color-hex-${idx}" class="form-control bg-dark text-white border-secondary" value="${hexInit}" placeholder="#rrggbb" maxlength="7" style="flex:1;">
+                    <button type="button" class="btn btn-outline-danger btn-sm py-0 px-2" style="font-size:0.85rem;" title="Remove">🗑️</button>
+                `;
+                extrasHost.appendChild(row);
+                wirePickerHexPair(
+                    row.querySelector(`#edit-fil-color-picker-${idx}`),
+                    row.querySelector(`#edit-fil-color-hex-${idx}`),
+                );
+                row.querySelector('button').addEventListener('click', () => {
+                    row.remove();
+                    refreshDirectionVisibility();
+                });
+                refreshDirectionVisibility();
+            };
+
+            // Seed extras with the filament's existing additional colors (idx 1+).
+            // currentColors is captured from the enclosing function scope.
+            currentColors.slice(1).forEach(hx => addColorRow(hx));
+
+            const addBtn = popup.querySelector('#edit-fil-add-color');
+            if (addBtn) addBtn.addEventListener('click', () => addColorRow('#000000'));
         },
         preConfirm: () => {
             const val = (id) => Swal.getPopup().querySelector(id)?.value;
@@ -922,24 +1015,58 @@ window.openEditFilamentForm = (fil) => {
             // Vendor: empty string means "Generic" (null vendor_id).
             const vendorRaw = val('#edit-fil-vendor');
             const vendorId = vendorRaw === '' || vendorRaw == null ? null : Number(vendorRaw);
-            // color_hex: Spoolman stores as 6-char no-hash. Empty means clear.
-            const hexRaw = (val('#edit-fil-color-hex') || '').trim().replace(/^#/, '');
-            let colorHex = null; // null sentinel = user cleared the field
-            if (hexRaw === '') {
-                colorHex = '';
-            } else if (/^[0-9a-fA-F]{6}$/.test(hexRaw)) {
-                colorHex = hexRaw.toLowerCase();
-            } else {
-                Swal.showValidationMessage('Color must be a 6-digit hex (e.g. #ff0000) or empty.');
-                return false;
+
+            // Colors: collect the primary + every extra row. Validate each hex;
+            // any invalid input blocks the save with a validation message.
+            const popup = Swal.getPopup();
+            const primaryRaw = (val('#edit-fil-color-hex') || '').trim().replace(/^#/, '');
+            const extraEls = popup.querySelectorAll('#edit-fil-color-extras input[id^="edit-fil-color-hex-"]');
+            const rawColors = [];
+            if (primaryRaw !== '') rawColors.push(primaryRaw);
+            extraEls.forEach(el => {
+                const v = (el.value || '').trim().replace(/^#/, '');
+                if (v !== '') rawColors.push(v);
+            });
+            for (const c of rawColors) {
+                if (!/^[0-9a-fA-F]{6}$/.test(c)) {
+                    Swal.showValidationMessage(`Color must be a 6-digit hex (got "${c}").`);
+                    return false;
+                }
             }
+            const normalizedColors = rawColors.map(c => c.toLowerCase());
+            // Spoolman stores single color in `color_hex` and multi-color gradients
+            // in `multi_color_hexes` (comma-separated). Match that layout:
+            //   - 0 colors  → clear both
+            //   - 1 color   → set color_hex, clear multi
+            //   - 2+ colors → set multi_color_hexes + direction, leave color_hex as first
+            let colorHex = null;
+            let multiColorHexes = null;
+            let multiDirection = null;
+            if (normalizedColors.length === 0) {
+                colorHex = '';
+                multiColorHexes = '';
+            } else if (normalizedColors.length === 1) {
+                colorHex = normalizedColors[0];
+                multiColorHexes = '';
+            } else {
+                colorHex = normalizedColors[0];
+                multiColorHexes = normalizedColors.join(',');
+                multiDirection = (val('#edit-fil-color-direction') || 'longitudinal').toLowerCase();
+            }
+
             const data = {
                 name: (val('#edit-fil-name') || '').trim() || null,
                 material: (val('#edit-fil-material') || '').trim() || null,
                 vendor_id: vendorId,
                 color_hex: colorHex,
+                multi_color_hexes: multiColorHexes,
+                multi_color_direction: multiDirection,
                 spool_weight: numOrNull('#edit-fil-spool-weight'),
                 density: numOrNull('#edit-fil-density'),
+                diameter: numOrNull('#edit-fil-diameter'),
+                weight: numOrNull('#edit-fil-weight'),
+                price: numOrNull('#edit-fil-price'),
+                external_id: (val('#edit-fil-external-id') || '').trim(),
                 settings_extruder_temp: intOrNull('#edit-fil-nozzle'),
                 settings_bed_temp: intOrNull('#edit-fil-bed'),
                 comment: val('#edit-fil-comment') || '',
@@ -962,8 +1089,25 @@ window.openEditFilamentForm = (fil) => {
             const oldHex = (fil.color_hex || '').replace(/^#/, '').toLowerCase();
             const newHex = (data.color_hex || '').toLowerCase();
             if (oldHex !== newHex) changed.color_hex = data.color_hex;
+            // Multi-color fields: compare normalized lowercase CSVs. Only include
+            // direction in the diff when the CSV actually has 2+ entries.
+            const oldMulti = String(fil.multi_color_hexes || '')
+                .split(',').map(h => h.replace(/^#/, '').trim().toLowerCase())
+                .filter(Boolean).join(',');
+            const newMulti = String(data.multi_color_hexes || '').toLowerCase();
+            if (oldMulti !== newMulti) changed.multi_color_hexes = data.multi_color_hexes;
+            if (data.multi_color_direction != null) {
+                const oldDir = String(fil.multi_color_direction || (fil.extra && fil.extra.multi_color_direction) || '').toLowerCase();
+                if (oldDir !== data.multi_color_direction) {
+                    changed.multi_color_direction = data.multi_color_direction;
+                }
+            }
             if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
             if (!same(data.density, fil.density)) changed.density = data.density;
+            if (!same(data.diameter, fil.diameter)) changed.diameter = data.diameter;
+            if (!same(data.weight, fil.weight)) changed.weight = data.weight;
+            if (!same(data.price, fil.price)) changed.price = data.price;
+            if (!same(data.external_id, fil.external_id)) changed.external_id = data.external_id;
             if (!same(data.settings_extruder_temp, fil.settings_extruder_temp))
                 changed.settings_extruder_temp = data.settings_extruder_temp;
             if (!same(data.settings_bed_temp, fil.settings_bed_temp))

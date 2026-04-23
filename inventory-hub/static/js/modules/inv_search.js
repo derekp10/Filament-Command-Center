@@ -64,6 +64,7 @@ const SearchEngine = {
                     const c = document.getElementById('global-search-color-picker');
                     const mw = document.getElementById('global-search-min-weight');
                     const s = document.getElementById('global-search-in-stock');
+                    const dep = document.getElementById('global-search-deployed');
 
                     if (q) q.value = '';
                     if (h) h.value = '';
@@ -71,6 +72,7 @@ const SearchEngine = {
                     if (c) c.value = '#000000';
                     if (mw) mw.value = '';
                     if (s) s.checked = true;
+                    if (dep) dep.value = '';
 
                     this.debounceTrigger();
                 });
