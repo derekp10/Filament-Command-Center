@@ -246,12 +246,20 @@
     // Helper: race the printer-state probe against a short timeout so a slow
     // or unreachable PrusaLink can't stall the confirm UI. Returns stateInfo
     // (truthy → active) or null (unknown → no banner).
-    const _probeWithTimeout = (toolheadId, timeoutMs = 1000) => {
-        if (!toolheadId || !window.fetchPrinterStateForToolhead) return Promise.resolve(null);
+    //
+    // Timeout is 3s by default — earlier 1s was too tight; some networks take
+    // longer to round-trip through backend → filabridge credential lookup →
+    // PrusaLink. Backend itself has a 2s per-endpoint timeout inside
+    // `get_printer_state`, so 3s gives headroom plus network overhead.
+    const _probeWithTimeout = (toolheadId, timeoutMs = 3000) => {
+        const dbg = (...args) => { if (window.FCC_DEBUG_ACTIVE_PRINT) console.log('[active-print overlay]', ...args); };
+        if (!toolheadId) { dbg('no toolhead id, skipping probe'); return Promise.resolve(null); }
+        if (!window.fetchPrinterStateForToolhead) { dbg('helper missing — stale cached JS?'); return Promise.resolve(null); }
+        dbg('probing', toolheadId, 'with timeout', timeoutMs + 'ms');
         return Promise.race([
             window.fetchPrinterStateForToolhead(toolheadId),
-            new Promise(resolve => setTimeout(() => resolve(null), timeoutMs)),
-        ]).catch(() => null);
+            new Promise(resolve => setTimeout(() => { dbg('probe timeout for', toolheadId); resolve(null); }, timeoutMs)),
+        ]).catch((e) => { dbg('probe error', e); return null; });
     };
 
     const showConfirmOverlay = async (opts) => {

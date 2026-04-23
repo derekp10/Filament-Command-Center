@@ -136,9 +136,65 @@
 
 <!-- Edit Filament modal (promoted from a SweetAlert to a Bootstrap modal
      2026-04-23 so we can use tabs and not run out of vertical space when a
-     filament has many colors or extras. openEditFilamentForm() populates the
-     tabs from the fil object and wires the color-row + vendor-datalist
-     handlers. -->
+     filament has many colors or extras. openEditFilamentForm(fil) populates
+     the tabs for editing; openAddFilamentForm() opens in create mode. -->
+<style>
+/* Edit Filament modal: scope all tweaks under #editFilamentModal so we
+   don't bleed into other modals. Goals:
+     1. Stable tab-content height so the modal doesn't resize on tab switch
+        (prevents the Save/Cancel buttons from jumping around the viewport).
+     2. Active-tab background that matches the dark theme instead of the
+        stark white Bootstrap default — active gets a muted gold tint on
+        the warning side, muted teal on the info side.
+*/
+#editFilamentModal .tab-content { min-height: 420px; }
+#editFilamentModal .nav-tabs { border-bottom-color: #444; }
+#editFilamentModal .nav-tabs .nav-link {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #9ec5d4;
+}
+#editFilamentModal .nav-tabs .nav-link:hover {
+    border-color: #555 #555 transparent;
+    background: #252525;
+}
+#editFilamentModal .nav-tabs .nav-link.active {
+    background: #2b2622;
+    border-color: #755 #755 transparent;
+    color: #ffd27f;
+    font-weight: 600;
+}
+#editFilamentModal .editfil-chip {
+    background: #2a4c5c;
+    border: 1px solid #4fa2c9;
+    color: #fff;
+    padding: 2px 8px 2px 10px;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: default;
+}
+#editFilamentModal .editfil-chip .chip-x {
+    cursor: pointer;
+    opacity: 0.7;
+    margin-left: 2px;
+}
+#editFilamentModal .editfil-chip .chip-x:hover { opacity: 1; }
+#editFilamentModal .editfil-attr-dropdown {
+    display: none; position: absolute; z-index: 1060;
+    background: #1a1a1a; border: 1px solid #555; border-radius: 4px;
+    max-height: 200px; overflow-y: auto; width: 100%;
+}
+#editFilamentModal .editfil-attr-dropdown .dropdown-item {
+    color: #fff; cursor: pointer; padding: 4px 8px;
+}
+#editFilamentModal .editfil-attr-dropdown .dropdown-item:hover,
+#editFilamentModal .editfil-attr-dropdown .dropdown-item.active {
+    background: #2a4c5c;
+}
+</style>
 <div class="modal fade" id="editFilamentModal" tabindex="-1" aria-labelledby="editFilamentModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content border-warning bg-dark text-white">
@@ -153,19 +209,19 @@
 
                 <ul class="nav nav-tabs mb-3" role="tablist">
                     <li class="nav-item" role="presentation">
-                        <button class="nav-link active fw-bold text-warning" id="editfil-tab-basic-btn"
+                        <button class="nav-link active" id="editfil-tab-basic-btn"
                             data-bs-toggle="tab" data-bs-target="#editfil-tab-basic" type="button" role="tab">Basic</button>
                     </li>
                     <li class="nav-item" role="presentation">
-                        <button class="nav-link fw-bold text-info" id="editfil-tab-colors-btn"
+                        <button class="nav-link" id="editfil-tab-colors-btn"
                             data-bs-toggle="tab" data-bs-target="#editfil-tab-colors" type="button" role="tab">Colors</button>
                     </li>
                     <li class="nav-item" role="presentation">
-                        <button class="nav-link fw-bold text-info" id="editfil-tab-specs-btn"
+                        <button class="nav-link" id="editfil-tab-specs-btn"
                             data-bs-toggle="tab" data-bs-target="#editfil-tab-specs" type="button" role="tab">Specs</button>
                     </li>
                     <li class="nav-item" role="presentation">
-                        <button class="nav-link fw-bold text-info" id="editfil-tab-advanced-btn"
+                        <button class="nav-link" id="editfil-tab-advanced-btn"
                             data-bs-toggle="tab" data-bs-target="#editfil-tab-advanced" type="button" role="tab">Advanced</button>
                     </li>
                 </ul>
@@ -179,7 +235,10 @@
                         </div>
                         <div class="row g-2">
                             <div class="col-6">
-                                <label class="form-label text-light small mb-1">Material</label>
+                                <label class="form-label text-light small mb-1">
+                                    Material
+                                    <span id="editfil-material-new-badge" class="badge bg-success ms-1" style="display:none; font-size:0.7rem;">+ NEW</span>
+                                </label>
                                 <input type="text" id="editfil-material" list="editfil-mat-dl" class="form-control bg-black text-white border-secondary" autocomplete="off" placeholder="PLA, PETG, ABS...">
                             </div>
                             <div class="col-6">
@@ -191,19 +250,9 @@
                                 <input type="hidden" id="editfil-vendor-id" value="">
                             </div>
                         </div>
-                        <div class="row g-2 mt-1">
-                            <div class="col-6">
-                                <label class="form-label text-light small mb-1">🔥 Nozzle (°C)</label>
-                                <input type="number" id="editfil-nozzle" class="form-control bg-black text-white border-secondary" autocomplete="off">
-                            </div>
-                            <div class="col-6">
-                                <label class="form-label text-light small mb-1">🛏️ Bed (°C)</label>
-                                <input type="number" id="editfil-bed" class="form-control bg-black text-white border-secondary" autocomplete="off">
-                            </div>
-                        </div>
                         <div class="mt-2">
                             <label class="form-label text-light small mb-1">Notes</label>
-                            <textarea id="editfil-comment" rows="2" class="form-control bg-black text-white border-secondary"></textarea>
+                            <textarea id="editfil-comment" rows="3" class="form-control bg-black text-white border-secondary"></textarea>
                         </div>
                     </div>
 
@@ -213,10 +262,15 @@
                             <label class="form-label text-light mb-0">Filament Color(s)</label>
                             <button type="button" id="editfil-add-color" class="btn btn-sm btn-outline-info" title="Add another color">+ Add Color</button>
                         </div>
-                        <div class="d-flex align-items-center gap-2 mb-2">
-                            <span class="badge bg-warning text-dark" style="min-width:36px;">1</span>
+                        <!-- Primary row. The reorder buttons on the primary row shift it
+                             against the extras list; extras use the same control style so
+                             the UI reads as a single reorderable list of N color rows. -->
+                        <div class="d-flex align-items-center gap-2 mb-2" id="editfil-color-row-primary">
+                            <span class="badge bg-warning text-dark" style="min-width:36px;" data-role="num">1</span>
                             <input type="color" id="editfil-color-picker" class="form-control form-control-color bg-black border-secondary" style="width:50px; padding:2px;">
                             <input type="text" id="editfil-color-hex" class="form-control bg-black text-white border-secondary" placeholder="#rrggbb" maxlength="7" style="flex:1;">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" data-role="up" title="Move up" disabled>▲</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" data-role="down" title="Move down">▼</button>
                         </div>
                         <div id="editfil-color-extras" style="max-height:320px; overflow-y:auto;"></div>
                         <div class="mt-3" id="editfil-direction-wrap" style="display:none;">
@@ -254,6 +308,33 @@
                                 <input type="number" step="0.01" id="editfil-price" class="form-control bg-black text-white border-secondary" placeholder="0.00" autocomplete="off">
                             </div>
                         </div>
+                        <!-- Temp ranges. Spoolman natively stores one nozzle + one bed
+                             value, which we treat as the low / recommended setting.
+                             The high/max values ride in extras so we don't need
+                             Spoolman schema changes. -->
+                        <hr class="border-secondary mt-3 mb-2">
+                        <div class="text-info small fw-bold mb-1">🔥 Nozzle (°C)</div>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label text-light small mb-1">Min / Recommended</label>
+                                <input type="number" id="editfil-nozzle" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label text-light small mb-1">Max (stored in extras)</label>
+                                <input type="number" id="editfil-nozzle-max" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                            </div>
+                        </div>
+                        <div class="text-info small fw-bold mb-1 mt-2">🛏️ Bed (°C)</div>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label text-light small mb-1">Min / Recommended</label>
+                                <input type="number" id="editfil-bed" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label text-light small mb-1">Max (stored in extras)</label>
+                                <input type="number" id="editfil-bed-max" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                            </div>
+                        </div>
                     </div>
 
                     <!-- ADVANCED -->
@@ -262,10 +343,27 @@
                             <label class="form-label text-light small mb-1">Original Color Name</label>
                             <input type="text" id="editfil-original-color" class="form-control bg-black text-white border-secondary" placeholder="e.g. Silk Gold" autocomplete="off">
                         </div>
+                        <!-- Filament Attributes chip picker. Matches the wizard's
+                             multi-choice chip input: search existing tags from
+                             Spoolman's field schema, click/Enter to add a chip, ×
+                             on a chip to remove. Typing a brand-new name and
+                             confirming adds it locally + silently registers it
+                             with Spoolman via /api/external/fields/add_choice. -->
                         <div class="mb-2">
                             <label class="form-label text-light small mb-1">Filament Attributes</label>
-                            <input type="text" id="editfil-attributes" class="form-control bg-black text-white border-secondary" placeholder="Silk, Matte, Carbon Fiber...  (comma-separated)" autocomplete="off">
-                            <div class="form-text text-muted" style="font-size:0.8rem;">Comma-separated tags. Stored in Spoolman as a JSON array.</div>
+                            <div class="position-relative">
+                                <div class="form-control bg-black text-white border-secondary d-flex flex-wrap align-items-center gap-1 p-1"
+                                     style="min-height: 38px; cursor: text;"
+                                     onclick="document.getElementById('editfil-attr-input').focus()">
+                                    <div id="editfil-attr-chips" class="d-flex flex-wrap gap-1"></div>
+                                    <input type="text" id="editfil-attr-input"
+                                           class="border-0 bg-transparent text-white flex-grow-1"
+                                           placeholder="Search or type new..." autocomplete="off"
+                                           style="outline: none; min-width: 120px;">
+                                </div>
+                                <div id="editfil-attr-dropdown" class="editfil-attr-dropdown"></div>
+                            </div>
+                            <div class="form-text text-muted" style="font-size:0.8rem;">Matches the Add/Edit wizard's chip picker. Typing a new tag and pressing Enter adds it + registers it in Spoolman.</div>
                         </div>
                         <div class="mb-2">
                             <label class="form-label text-light small mb-1">Product URL</label>

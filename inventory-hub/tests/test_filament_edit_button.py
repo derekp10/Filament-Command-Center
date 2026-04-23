@@ -81,7 +81,9 @@ def _stub_editfil_fetches(page: Page):
     page.evaluate(
         """
         window.__lastFetchPayload = null;
+        window.__lastFetchUrl = null;
         window.__createdVendor = null;
+        window.__addedChoices = [];
         const origFetch = window.fetch;
         window.fetch = async (url, opts) => {
             const method = (opts && opts.method) || 'GET';
@@ -102,9 +104,21 @@ def _stub_editfil_fetches(page: Page):
                 return new Response(JSON.stringify({success: true, materials: ['PLA', 'PETG', 'ABS']}),
                     {status: 200, headers: {'Content-Type': 'application/json'}});
             }
-            if (url === '/api/update_filament') {
+            if (url === '/api/external/fields') {
+                return new Response(JSON.stringify({success: true, fields: {filament: [
+                    {key: 'filament_attributes', field_type: 'choice', multi_choice: true,
+                     choices: ['Silk', 'Matte', 'Carbon Fiber', 'Glow']}
+                ], spool: []}}), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/external/fields/add_choice') {
+                window.__addedChoices.push(JSON.parse(opts.body));
+                return new Response(JSON.stringify({success: true}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/update_filament' || url === '/api/create_filament') {
+                window.__lastFetchUrl = url;
                 window.__lastFetchPayload = JSON.parse(opts.body);
-                return new Response(JSON.stringify({success: true, filament: {id: 1}}),
+                return new Response(JSON.stringify({success: true, filament: {id: 999}}),
                     {status: 200, headers: {'Content-Type': 'application/json'}});
             }
             return origFetch(url, opts);
@@ -193,7 +207,12 @@ def test_modal_advanced_tab_populates_extras(page: Page):
     _open_modal_with(page, fil)
     page.locator("#editfil-tab-advanced-btn").click()
     assert page.locator("#editfil-original-color").input_value() == "Silk Gold"
-    assert page.locator("#editfil-attributes").input_value() == "Silk, Shimmer"
+    # Attributes now render as chips (wizard-style), not a comma string.
+    chip_values = page.evaluate(
+        "() => Array.from(document.querySelectorAll('#editfil-attr-chips .editfil-chip'))"
+        ".map(c => c.getAttribute('data-value'))"
+    )
+    assert chip_values == ["Silk", "Shimmer"]
     assert page.locator("#editfil-product-url").input_value() == "https://vendor.example/product"
     assert page.locator("#editfil-purchase-url").input_value() == "https://shop.example/buy"
     assert page.locator("#editfil-sheet-link").input_value() == "https://docs.example/sheet"
@@ -252,7 +271,8 @@ def test_modal_remove_last_extra_hides_direction(page: Page):
     page.locator("#editfil-tab-colors-btn").click()
 
     expect(page.locator("#editfil-direction-wrap")).to_be_visible()
-    page.locator("#editfil-color-extras .editfil-color-row button").first.click()
+    # Rows now have Up/Down/Remove buttons — click the explicit remove (trash).
+    page.locator("#editfil-color-extras .editfil-color-row [data-role='remove']").first.click()
     assert page.locator("#editfil-color-extras .editfil-color-row").count() == 0
     assert not page.locator("#editfil-direction-wrap").is_visible()
 
@@ -346,6 +366,8 @@ def test_modal_save_merged_extras_preserve_unknown_keys(page: Page):
 
 
 def test_modal_filament_attributes_serialize_to_json_array(page: Page):
+    """Typing tags into the chip-picker and pressing Enter should add chips
+    and serialize to a JSON array in the extras payload on Save."""
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
@@ -354,7 +376,21 @@ def test_modal_filament_attributes_serialize_to_json_array(page: Page):
     fil = {"id": 204, "name": "T", "material": "PLA", "extra": {}}
     _open_modal_with(page, fil)
     page.locator("#editfil-tab-advanced-btn").click()
-    page.locator("#editfil-attributes").fill("Silk, Matte")
+
+    # Type + Enter twice to commit two chips.
+    attr_input = page.locator("#editfil-attr-input")
+    attr_input.fill("Silk")
+    attr_input.press("Enter")
+    attr_input.fill("Matte")
+    attr_input.press("Enter")
+
+    # Verify chips rendered.
+    chip_values = page.evaluate(
+        "() => Array.from(document.querySelectorAll('#editfil-attr-chips .editfil-chip'))"
+        ".map(c => c.getAttribute('data-value'))"
+    )
+    assert chip_values == ["Silk", "Matte"]
+
     page.locator("#editfil-save").click()
     page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
     attrs_raw = page.evaluate("() => window.__lastFetchPayload.data.extra.filament_attributes")
@@ -437,3 +473,289 @@ def test_modal_no_changes_saves_nothing(page: Page):
     page.wait_for_timeout(500)
     payload = page.evaluate("() => window.__lastFetchPayload")
     assert payload is None
+
+
+# ---------------------------------------------------------------------------
+# 2nd iteration (2026-04-23 pm): max-temp fields, color reorder, Add mode,
+# chip-picker with known choices, material + NEW badge.
+# ---------------------------------------------------------------------------
+
+
+def test_modal_populates_max_temps_from_extras(page: Page):
+    """Specs tab now has nozzle_max and bed_max inputs reading from extras."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 401, "name": "Red", "material": "PLA",
+        "settings_extruder_temp": 210, "settings_bed_temp": 60,
+        "extra": {
+            "nozzle_temp_max": '"230"',
+            "bed_temp_max": '"70"',
+        },
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-specs-btn").click()
+    assert page.locator("#editfil-nozzle").input_value() == "210"
+    assert page.locator("#editfil-bed").input_value() == "60"
+    assert page.locator("#editfil-nozzle-max").input_value() == "230"
+    assert page.locator("#editfil-bed-max").input_value() == "70"
+
+
+def test_modal_saves_max_temps_into_extras(page: Page):
+    """Changing max temps should land them in the extras merge payload."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 402, "name": "Red", "material": "PLA",
+        "settings_extruder_temp": 210, "settings_bed_temp": 60,
+        "extra": {},
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-specs-btn").click()
+    page.locator("#editfil-nozzle-max").fill("240")
+    page.locator("#editfil-bed-max").fill("75")
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+    extra = page.evaluate("() => window.__lastFetchPayload.data.extra")
+    assert extra["nozzle_temp_max"] == '"240"'
+    assert extra["bed_temp_max"] == '"75"'
+
+
+def test_modal_color_down_button_reorders_primary(page: Page):
+    """Clicking ▼ on the primary row should swap it with the first extra."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 403, "name": "Two", "material": "PLA",
+        "multi_color_hexes": "aa0000,00aa00",
+        "multi_color_direction": "longitudinal",
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-colors-btn").click()
+
+    assert page.locator("#editfil-color-hex").input_value().lower() == "#aa0000"
+    page.locator("#editfil-color-row-primary [data-role='down']").click()
+    assert page.locator("#editfil-color-hex").input_value().lower() == "#00aa00"
+
+
+def test_modal_color_up_button_reorders_extras(page: Page):
+    """Clicking ▲ on an extra row swaps it with the row above."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 404, "name": "Three", "material": "PLA",
+        "multi_color_hexes": "aa0000,00aa00,0000aa",
+        "multi_color_direction": "longitudinal",
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-colors-btn").click()
+
+    # Click ▲ on the third row (the second extra) — it should swap with the
+    # first extra, landing in the "position 1" extra slot.
+    rows = page.locator("#editfil-color-extras .editfil-color-row")
+    expect(rows).to_have_count(2)
+    rows.nth(1).locator("[data-role='up']").click()
+    # Re-query rows (DOM was re-rendered) and check the first extra's hex.
+    rows = page.locator("#editfil-color-extras .editfil-color-row")
+    first_extra_hex = rows.nth(0).locator("input[id^='editfil-color-hex-']").input_value().lower()
+    assert first_extra_hex == "#0000aa"
+
+
+def test_modal_color_reorder_submits_in_new_order(page: Page):
+    """After reordering, Save should POST the hexes in the new order."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 405, "name": "Two", "material": "PLA",
+        "multi_color_hexes": "aa0000,00aa00",
+        "multi_color_direction": "longitudinal",
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-colors-btn").click()
+    page.locator("#editfil-color-row-primary [data-role='down']").click()
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+    data = page.evaluate("() => window.__lastFetchPayload.data")
+    assert data["multi_color_hexes"] == "00aa00,aa0000"
+
+
+def test_modal_material_new_badge_hides_for_known(page: Page):
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 406, "name": "T", "material": "PLA"}
+    _open_modal_with(page, fil)
+    # Wait for /api/materials to populate the datalist.
+    page.wait_for_function(
+        "document.querySelector(\"#editfil-mat-dl option[value='PLA']\") !== null",
+        timeout=3_000,
+    )
+    # PLA is known → no badge. Typing "PolyCarbonate" (not in stub list) → badge.
+    assert not page.locator("#editfil-material-new-badge").is_visible()
+    page.locator("#editfil-material").fill("PolyCarbonate")
+    page.wait_for_timeout(100)
+    expect(page.locator("#editfil-material-new-badge")).to_be_visible()
+
+
+def test_modal_add_mode_title_and_create_post(page: Page):
+    """openAddFilamentForm() opens modal in Add mode and POSTs /api/create_filament."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openAddFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    page.evaluate("() => window.openAddFilamentForm()")
+    expect(page.locator("#editFilamentModal.show")).to_have_count(1)
+
+    # Title starts with the plus icon when in create mode.
+    title_text = page.locator("#editFilamentModalLabel").text_content() or ""
+    assert "Add" in title_text
+    # Save button shows "Create" in Add mode.
+    assert page.locator("#editfil-save").get_attribute("data-mode") == "create"
+
+    # Fill the required fields + save.
+    page.locator("#editfil-name").fill("New Filament")
+    page.locator("#editfil-material").fill("PLA")
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+
+    url = page.evaluate("() => window.__lastFetchUrl")
+    payload = page.evaluate("() => window.__lastFetchPayload")
+    assert url == "/api/create_filament"
+    assert payload["data"]["name"] == "New Filament"
+    assert payload["data"]["material"] == "PLA"
+
+
+def test_modal_add_mode_requires_material(page: Page):
+    """Add-mode Save with empty material should surface an inline error."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openAddFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    page.evaluate("() => window.openAddFilamentForm()")
+    expect(page.locator("#editFilamentModal.show")).to_have_count(1)
+    # Leave material empty.
+    page.locator("#editfil-material").fill("")
+    page.locator("#editfil-save").click()
+    expect(page.locator("#editfil-error")).to_be_visible()
+    text = page.locator("#editfil-error").text_content() or ""
+    assert "material" in text.lower()
+
+
+def test_modal_attr_chip_picker_clicking_known_choice(page: Page):
+    """Clicking a known-choice row in the dropdown should add the chip
+    WITHOUT firing a POST /api/external/fields/add_choice."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 407, "name": "T", "material": "PLA", "extra": {}}
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-advanced-btn").click()
+
+    # Focus the chip input to pop the dropdown, then click a known choice.
+    page.locator("#editfil-attr-input").click()
+    page.wait_for_selector("#editfil-attr-dropdown .dropdown-item", timeout=3_000)
+    page.locator("#editfil-attr-dropdown .dropdown-item[data-value='Silk']").click()
+
+    chip_values = page.evaluate(
+        "() => Array.from(document.querySelectorAll('#editfil-attr-chips .editfil-chip'))"
+        ".map(c => c.getAttribute('data-value'))"
+    )
+    assert chip_values == ["Silk"]
+
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+    # No new-choice POST should have fired for a known tag.
+    added = page.evaluate("() => window.__addedChoices")
+    assert added == []
+
+
+def test_modal_attr_chip_picker_adds_new_tag_and_registers_it(page: Page):
+    """Typing a brand-new tag and pressing Enter should chip it, POST /api/
+    external/fields/add_choice on save, and include the tag in extras."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 408, "name": "T", "material": "PLA", "extra": {}}
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-advanced-btn").click()
+
+    # Wait for known choices to load so our typed tag is distinguishable.
+    page.wait_for_function("() => document.querySelectorAll('#editfil-attr-dropdown').length > 0")
+    page.locator("#editfil-attr-input").click()
+    page.locator("#editfil-attr-input").fill("Glossy")
+    page.locator("#editfil-attr-input").press("Enter")
+
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+
+    # Chip present in the payload.
+    attrs_raw = page.evaluate("() => window.__lastFetchPayload.data.extra.filament_attributes")
+    import json
+    assert json.loads(attrs_raw) == ["Glossy"]
+
+    # New-choice registration fired once for the new tag.
+    added = page.evaluate("() => window.__addedChoices")
+    assert added == [{"entity_type": "filament", "key": "filament_attributes", "new_choice": "Glossy"}]
+
+
+def test_modal_chip_picker_remove_chip(page: Page):
+    """Clicking the × on a chip should remove it from the selected list."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 409, "name": "T", "material": "PLA",
+        "extra": {"filament_attributes": '["Silk","Matte"]'},
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-advanced-btn").click()
+
+    # Verify both chips present, then remove the first one.
+    page.wait_for_selector("#editfil-attr-chips .editfil-chip")
+    page.locator("#editfil-attr-chips .editfil-chip .chip-x").first.click()
+
+    remaining = page.evaluate(
+        "() => Array.from(document.querySelectorAll('#editfil-attr-chips .editfil-chip'))"
+        ".map(c => c.getAttribute('data-value'))"
+    )
+    assert remaining == ["Matte"]
+
+
+def test_create_filament_rejects_missing_material(api_base_url: str):
+    r = requests.post(f"{api_base_url}/api/create_filament", json={"data": {"name": "X"}}, timeout=5)
+    assert r.status_code == 400
+    body = r.json()
+    assert body.get("success") is False
+    assert "material" in body.get("msg", "").lower()
+
+
+def test_create_filament_rejects_empty_data(api_base_url: str):
+    r = requests.post(f"{api_base_url}/api/create_filament", json={"data": {}}, timeout=5)
+    assert r.status_code == 400
+    body = r.json()
+    assert body.get("success") is False

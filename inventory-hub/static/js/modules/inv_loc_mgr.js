@@ -300,18 +300,30 @@ const fetchPrinterMap = () => {
 // "CORE1-M0"). Resolves to null on any failure (fail-open — UI should
 // proceed normally). Used by the "warn before reassigning during an
 // active print" pre-check in doAssign and the Quick-Swap confirm overlay.
+//
+// Diagnostic logging is deliberately on a conditional so users chasing
+// "why is the banner not showing?" can flip it with:
+//   window.FCC_DEBUG_ACTIVE_PRINT = true
+// in the DevTools console and rerun the swap. Leaves production quiet.
+window.FCC_DEBUG_ACTIVE_PRINT = window.FCC_DEBUG_ACTIVE_PRINT || false;
 window.fetchPrinterStateForToolhead = (toolheadLocId) => {
-    if (!toolheadLocId) return Promise.resolve(null);
+    const dbg = (...args) => { if (window.FCC_DEBUG_ACTIVE_PRINT) console.log('[active-print probe]', ...args); };
+    if (!toolheadLocId) { dbg('no toolhead id, skipping'); return Promise.resolve(null); }
+    dbg('querying', toolheadLocId);
     return fetch(`/api/printer_state/${encodeURIComponent(toolheadLocId)}`)
         .then(r => r.ok ? r.json() : null)
         .then(d => {
-            if (!d || !d.known || !d.is_active) return null;
+            dbg('response for', toolheadLocId, d);
+            if (!d) return null;
+            if (!d.known) { dbg('backend says unknown:', d.reason); return null; }
+            if (!d.is_active) { dbg('printer is idle:', d.state); return null; }
+            dbg('ACTIVE:', d.printer_name, d.state);
             return {
                 state: d.state || 'ACTIVE',
                 printer_name: d.printer_name || toolheadLocId,
             };
         })
-        .catch(() => null);
+        .catch((e) => { dbg('probe failed', e); return null; });
 };
 
 // Render a searchable combobox backed by a native <select> so existing

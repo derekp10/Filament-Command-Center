@@ -167,6 +167,35 @@ def api_vendors():
         return jsonify({"success": False, "msg": str(e)}), 500
 
 
+@app.route('/api/create_filament', methods=['POST'])
+def api_create_filament():
+    """Create a new filament in Spoolman. Body: {"data": {...filament fields...}}.
+
+    Used by the Edit Filament modal's "Add" mode (when openAddFilamentForm is
+    called with no existing filament). Returns {success, filament|msg}.
+    Mirrors api_update_filament's shape so the frontend can share response
+    handling.
+    """
+    payload = request.json or {}
+    data = payload.get('data') or {}
+    if not isinstance(data, dict) or not data:
+        return jsonify({"success": False, "msg": "No fields to create with."}), 400
+    if not data.get('material'):
+        return jsonify({"success": False, "msg": "Material is required."}), 400
+    try:
+        created = spoolman_api.create_filament(data)
+        if created and created.get('id') is not None:
+            state.add_log_entry(
+                f"➕ Filament #{created['id']} created ({data.get('material', '')}: {data.get('name', '')})",
+                "SUCCESS", "00ff00",
+            )
+            return jsonify({"success": True, "filament": created})
+        return jsonify({"success": False, "msg": "Spoolman rejected the filament create."}), 500
+    except Exception as e:
+        state.logger.error(f"Failed to create filament: {e}")
+        return jsonify({"success": False, "msg": str(e)}), 500
+
+
 @app.route('/api/vendors', methods=['POST'])
 def api_create_vendor():
     """Create a vendor in Spoolman. Body: {"name": "<vendor name>"}.

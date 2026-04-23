@@ -771,19 +771,18 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId) => {
     }
 };
 
-
-// --- Edit Filament (Bootstrap modal) ---
-// Promoted from SweetAlert to a real Bootstrap modal on 2026-04-23 so multi-
-// color filaments and the advanced-extras section no longer overflow the
-// viewport. Uses tabs to keep each pane at a reasonable height, and the
-// modal's scrollable body handles overflow at the viewport level.
+// --- Edit Filament / Add Filament (Bootstrap modal) ---
+// openEditFilamentForm(fil) opens the modal in edit mode. openAddFilamentForm()
+// opens the same modal in create mode (no pre-filled fil, Save POSTs
+// /api/create_filament instead of /api/update_filament).
 //
-// Same public API as the old Swal version: window.openEditFilamentForm(fil)
-// opens the modal populated from the filament. Save fires a dirty-diff POST
-// to /api/update_filament (plus a POST /api/vendors if a new vendor name
-// was typed first).
-window.openEditFilamentForm = (fil) => {
-    if (!fil || !fil.id) { showToast('Missing filament data', 'error'); return; }
+// 2026-04-23 iteration on the Bootstrap-modal rewrite: added max-temp
+// fields (nozzle/bed high, stored in extras), up/down sort buttons for
+// color rows, chip-picker for filament_attributes matching the wizard,
+// "+ NEW" badge on material, and Add-mode entry point.
+const _editfilOpenModal = (fil) => {
+    const isCreate = !fil || !fil.id;
+    fil = fil || {};
 
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -816,14 +815,21 @@ window.openEditFilamentForm = (fil) => {
     const currentPurchaseUrl = unquoteExtra(rawExtra.purchase_url);
     const currentSheetLink = unquoteExtra(rawExtra.sheet_link);
     const currentOriginalColor = unquoteExtra(rawExtra.original_color);
-    let currentAttributes = '';
+    const currentNozzleMax = unquoteExtra(rawExtra.nozzle_temp_max);
+    const currentBedMax = unquoteExtra(rawExtra.bed_temp_max);
+    let currentAttributes = [];
     const rawAttrs = rawExtra.filament_attributes;
     if (rawAttrs != null && rawAttrs !== '') {
         try {
             const parsed = typeof rawAttrs === 'string' ? JSON.parse(rawAttrs) : rawAttrs;
-            currentAttributes = Array.isArray(parsed) ? parsed.join(', ') : String(parsed);
+            if (Array.isArray(parsed)) {
+                currentAttributes = parsed.map(String).map(s => s.trim()).filter(Boolean);
+            } else if (parsed) {
+                currentAttributes = [String(parsed)];
+            }
         } catch (_) {
-            currentAttributes = String(rawAttrs).replace(/^"|"$/g, '');
+            const fallback = String(rawAttrs).replace(/^"|"$/g, '').trim();
+            if (fallback) currentAttributes = [fallback];
         }
     }
 
@@ -833,9 +839,10 @@ window.openEditFilamentForm = (fil) => {
 
     // --- Populate fields ---
     const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val == null ? '' : val; };
-    modalEl.querySelector('#editFilamentModalLabel').innerText = `✏️ Edit Filament #${fil.id}`;
+    const title = isCreate ? '➕ Add Filament' : `✏️ Edit Filament #${fil.id}`;
+    modalEl.querySelector('#editFilamentModalLabel').innerText = title;
     setVal('editfil-name', fil.name || '');
-    setVal('editfil-material', fil.material || 'PLA');
+    setVal('editfil-material', fil.material || (isCreate ? '' : 'PLA'));
     setVal('editfil-spool-weight', fil.spool_weight != null ? fil.spool_weight : '');
     setVal('editfil-density', fil.density != null ? fil.density : '');
     setVal('editfil-diameter', fil.diameter != null ? fil.diameter : '');
@@ -843,6 +850,8 @@ window.openEditFilamentForm = (fil) => {
     setVal('editfil-price', fil.price != null ? fil.price : '');
     setVal('editfil-nozzle', fil.settings_extruder_temp != null ? fil.settings_extruder_temp : '');
     setVal('editfil-bed', fil.settings_bed_temp != null ? fil.settings_bed_temp : '');
+    setVal('editfil-nozzle-max', currentNozzleMax);
+    setVal('editfil-bed-max', currentBedMax);
     setVal('editfil-comment', fil.comment || '');
     setVal('editfil-external-id', fil.external_id || '');
     setVal('editfil-vendor-name', currentVendorName);
@@ -851,7 +860,13 @@ window.openEditFilamentForm = (fil) => {
     setVal('editfil-purchase-url', currentPurchaseUrl);
     setVal('editfil-sheet-link', currentSheetLink);
     setVal('editfil-original-color', currentOriginalColor);
-    setVal('editfil-attributes', currentAttributes);
+
+    // Update Save button label + data attribute (consumed by the save handler below).
+    const rawSaveBtn = document.getElementById('editfil-save');
+    if (rawSaveBtn) {
+        rawSaveBtn.innerHTML = isCreate ? '➕ Create' : '💾 Save';
+        rawSaveBtn.dataset.mode = isCreate ? 'create' : 'edit';
+    }
 
     // Vendor empty_spool_weight hint (shown as small muted text next to the label).
     const vendorWt = fil.vendor && fil.vendor.empty_spool_weight
@@ -867,7 +882,7 @@ window.openEditFilamentForm = (fil) => {
     const basicTabBtn = document.getElementById('editfil-tab-basic-btn');
     if (basicTabBtn) bootstrap.Tab.getOrCreateInstance(basicTabBtn).show();
 
-    // --- Colors tab: primary picker + dynamic extras ---
+    // --- Colors tab: primary picker + dynamic extras w/ reorder ---
     const picker = document.getElementById('editfil-color-picker');
     const hex = document.getElementById('editfil-color-hex');
     const primaryHex = currentColors[0] || '#000000';
@@ -895,61 +910,146 @@ window.openEditFilamentForm = (fil) => {
     const extrasHost = document.getElementById('editfil-color-extras');
     const directionSel = document.getElementById('editfil-color-direction');
     const directionWrap = document.getElementById('editfil-direction-wrap');
+    const primaryRow = document.getElementById('editfil-color-row-primary');
     if (extrasHost) extrasHost.innerHTML = '';
     if (directionSel) directionSel.value = currentDirection;
+
+    // All rows (primary + extras) live in this array so reorder is just
+    // index arithmetic over the array and a re-render.
+    const colorRowsState = [{ isPrimary: true, hex: primaryHex, hasValue: currentColors.length > 0 }];
+    currentColors.slice(1).forEach(hx => colorRowsState.push({ isPrimary: false, hex: hx, hasValue: true }));
+
     const refreshDirectionVisibility = () => {
-        const extraCount = extrasHost ? extrasHost.querySelectorAll('.editfil-color-row').length : 0;
-        if (directionWrap) directionWrap.style.display = extraCount > 0 ? 'block' : 'none';
+        if (directionWrap) directionWrap.style.display = colorRowsState.length >= 2 ? 'block' : 'none';
     };
-    const renumberRows = () => {
-        // Primary is always slot 1. Extras get 2, 3, 4, ... in DOM order.
-        const rows = extrasHost ? extrasHost.querySelectorAll('.editfil-color-row') : [];
-        rows.forEach((r, i) => {
-            const badge = r.querySelector('[data-role="num"]');
-            if (badge) badge.innerText = String(i + 2);
+
+    // Extras-row HTML template. Primary row stays in the static template and
+    // is rebuilt in-place (preserving its id for backward compatibility with
+    // callers that reference #editfil-color-hex directly).
+    let extraRowSeq = 0;
+    const renderExtras = () => {
+        extrasHost.innerHTML = '';
+        for (let i = 1; i < colorRowsState.length; i++) {
+            const idx = ++extraRowSeq;
+            const hexInit = colorRowsState[i].hex || '#000000';
+            const row = document.createElement('div');
+            row.className = 'd-flex align-items-center gap-2 mb-2 editfil-color-row';
+            row.dataset.position = String(i);
+            row.innerHTML = `
+                <span class="badge bg-info text-dark" style="min-width:36px;" data-role="num">${i + 1}</span>
+                <input type="color" id="editfil-color-picker-${idx}" value="${hexInit}" class="form-control form-control-color bg-black border-secondary" style="width:50px; padding:2px;">
+                <input type="text" id="editfil-color-hex-${idx}" class="form-control bg-black text-white border-secondary" value="${hexInit}" placeholder="#rrggbb" maxlength="7" style="flex:1;">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-role="up" title="Move up">▲</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-role="down" title="Move down">▼</button>
+                <button type="button" class="btn btn-outline-danger btn-sm" data-role="remove" title="Remove">🗑️</button>
+            `;
+            extrasHost.appendChild(row);
+            wirePickerHexPair(
+                row.querySelector(`#editfil-color-picker-${idx}`),
+                row.querySelector(`#editfil-color-hex-${idx}`),
+            );
+            // Keep state synced so reorder operates on up-to-date values.
+            const hexInput = row.querySelector(`#editfil-color-hex-${idx}`);
+            hexInput.addEventListener('input', () => { colorRowsState[i].hex = hexInput.value; });
+            row.querySelector('[data-role="remove"]').onclick = () => {
+                captureCurrentValues();
+                colorRowsState.splice(i, 1);
+                renderExtras();
+                refreshDirectionVisibility();
+            };
+            row.querySelector('[data-role="up"]').onclick = () => {
+                if (i <= 1) return; // Can't move above primary via this button.
+                captureCurrentValues();
+                const tmp = colorRowsState[i];
+                colorRowsState[i] = colorRowsState[i - 1];
+                colorRowsState[i - 1] = tmp;
+                // If we swapped an extra into the primary slot, the primary
+                // row's value must update too.
+                syncPrimaryToState();
+                renderExtras();
+                refreshDirectionVisibility();
+            };
+            row.querySelector('[data-role="down"]').onclick = () => {
+                if (i >= colorRowsState.length - 1) return;
+                captureCurrentValues();
+                const tmp = colorRowsState[i];
+                colorRowsState[i] = colorRowsState[i + 1];
+                colorRowsState[i + 1] = tmp;
+                renderExtras();
+                refreshDirectionVisibility();
+            };
+            // Disable arrow buttons at array edges.
+            if (i === 1) row.querySelector('[data-role="up"]').disabled = false;
+            if (i === colorRowsState.length - 1) row.querySelector('[data-role="down"]').disabled = true;
+        }
+        // Wire primary row's down arrow (up is always disabled on row 0).
+        if (primaryRow) {
+            const down = primaryRow.querySelector('[data-role="down"]');
+            if (down) {
+                down.disabled = colorRowsState.length < 2;
+                down.onclick = () => {
+                    if (colorRowsState.length < 2) return;
+                    captureCurrentValues();
+                    const tmp = colorRowsState[0];
+                    colorRowsState[0] = colorRowsState[1];
+                    colorRowsState[1] = tmp;
+                    syncPrimaryToState();
+                    renderExtras();
+                    refreshDirectionVisibility();
+                };
+            }
+        }
+    };
+    const captureCurrentValues = () => {
+        // Pull the latest values from the DOM into colorRowsState so reorder
+        // preserves whatever the user has typed since the last render. Use
+        // the DOM value verbatim (including empty string) so clearing the
+        // primary hex lets the save handler pass color_hex='' through the
+        // dirty-diff. The earlier `|| fallback` clobbered empty values
+        // with the initial placeholder and caused no-op color_hex writes.
+        if (hex) colorRowsState[0].hex = hex.value;
+        const extraHexes = extrasHost.querySelectorAll('input[id^="editfil-color-hex-"]');
+        extraHexes.forEach((el, i) => {
+            if (colorRowsState[i + 1]) colorRowsState[i + 1].hex = el.value;
         });
     };
-    let colorRowSeq = 0;
-    const addColorRow = (hexInit) => {
-        const safeInit = hexInit || '#000000';
-        colorRowSeq += 1;
-        const idx = colorRowSeq;
-        const row = document.createElement('div');
-        row.className = 'd-flex align-items-center gap-2 mb-2 editfil-color-row';
-        row.dataset.idx = String(idx);
-        row.innerHTML = `
-            <span class="badge bg-info text-dark" style="min-width:36px;" data-role="num">2</span>
-            <input type="color" id="editfil-color-picker-${idx}" value="${safeInit}" class="form-control form-control-color bg-black border-secondary" style="width:50px; padding:2px;">
-            <input type="text" id="editfil-color-hex-${idx}" class="form-control bg-black text-white border-secondary" value="${safeInit}" placeholder="#rrggbb" maxlength="7" style="flex:1;">
-            <button type="button" class="btn btn-outline-danger btn-sm" title="Remove">🗑️</button>
-        `;
-        extrasHost.appendChild(row);
-        wirePickerHexPair(
-            row.querySelector(`#editfil-color-picker-${idx}`),
-            row.querySelector(`#editfil-color-hex-${idx}`),
-        );
-        row.querySelector('button').onclick = () => {
-            row.remove();
-            renumberRows();
-            refreshDirectionVisibility();
-        };
-        renumberRows();
+    const syncPrimaryToState = () => {
+        if (hex) hex.value = colorRowsState[0].hex || '';
+        if (picker && /^#[0-9a-fA-F]{6}$/.test(colorRowsState[0].hex || '')) {
+            picker.value = colorRowsState[0].hex.toLowerCase();
+        }
+    };
+    renderExtras();
+    refreshDirectionVisibility();
+
+    const addBtn = document.getElementById('editfil-add-color');
+    if (addBtn) addBtn.onclick = () => {
+        captureCurrentValues();
+        colorRowsState.push({ isPrimary: false, hex: '#000000', hasValue: true });
+        renderExtras();
         refreshDirectionVisibility();
     };
-    currentColors.slice(1).forEach(hx => addColorRow(hx));
-    const addBtn = document.getElementById('editfil-add-color');
-    if (addBtn) addBtn.onclick = () => addColorRow('#000000');
 
-    // --- Material + Vendor datalists ---
-    // Material: browser-native autocomplete from known materials.
+    // --- Material datalist + "+ NEW" badge ---
+    const materialEl = document.getElementById('editfil-material');
+    const materialNewBadge = document.getElementById('editfil-material-new-badge');
+    let materialCache = [];
+    const refreshMaterialBadge = () => {
+        const typed = (materialEl.value || '').trim();
+        if (!typed) { materialNewBadge.style.display = 'none'; return; }
+        const known = materialCache.some(m => m.toLowerCase() === typed.toLowerCase());
+        materialNewBadge.style.display = known ? 'none' : 'inline-block';
+    };
+    if (materialEl) materialEl.oninput = refreshMaterialBadge;
     fetch('/api/materials').then(r => r.json()).then(d => {
         const dl = document.getElementById('editfil-mat-dl');
         if (!dl || !d || !d.success) return;
-        const mats = Array.isArray(d.materials) ? d.materials : [];
-        dl.innerHTML = mats.map(m => `<option value="${esc(m)}"></option>`).join('');
+        materialCache = Array.isArray(d.materials) ? d.materials : [];
+        dl.innerHTML = materialCache.map(m => `<option value="${esc(m)}"></option>`).join('');
+        refreshMaterialBadge();
     }).catch(() => {});
 
-    // Vendor: datalist + hidden id + "+ NEW" badge when typed name is unknown.
+    // --- Vendor datalist + hidden id + "+ NEW" badge ---
     let vendorCache = [];
     const vendorNameEl = document.getElementById('editfil-vendor-name');
     const vendorIdEl = document.getElementById('editfil-vendor-id');
@@ -981,13 +1081,95 @@ window.openEditFilamentForm = (fil) => {
         refreshVendorBadge();
     }).catch(() => {});
 
+    // --- Filament Attributes chip picker (matches wizard UX) ---
+    const attrChipsHost = document.getElementById('editfil-attr-chips');
+    const attrInput = document.getElementById('editfil-attr-input');
+    const attrDropdown = document.getElementById('editfil-attr-dropdown');
+    let attrChoices = []; // Full list of known attributes from Spoolman's field schema.
+    let attrSelected = currentAttributes.slice(); // Current chips.
+    let attrPendingNew = []; // Locally-added names awaiting silent Spoolman-choice registration on save.
+
+    const renderAttrChips = () => {
+        if (!attrChipsHost) return;
+        attrChipsHost.innerHTML = attrSelected.map((v, i) => `
+            <span class="editfil-chip" data-value="${esc(v)}">
+                ${esc(v)}
+                <span class="chip-x" data-idx="${i}">×</span>
+            </span>
+        `).join('');
+        attrChipsHost.querySelectorAll('.chip-x').forEach(x => {
+            x.onclick = (e) => {
+                e.stopPropagation();
+                const idx = Number(x.dataset.idx);
+                attrSelected.splice(idx, 1);
+                renderAttrChips();
+            };
+        });
+    };
+    const renderAttrDropdown = () => {
+        if (!attrDropdown) return;
+        const qs = (attrInput.value || '').toLowerCase();
+        const filtered = attrChoices
+            .filter(c => !attrSelected.includes(c))
+            .filter(c => !qs || c.toLowerCase().includes(qs));
+        if (filtered.length === 0 && !qs) {
+            attrDropdown.style.display = 'none';
+            return;
+        }
+        attrDropdown.innerHTML = filtered.map(c =>
+            `<div class="dropdown-item" data-value="${esc(c)}">${esc(c)}</div>`
+        ).join('') || `<div class="dropdown-item text-muted">Press Enter to add "${esc(attrInput.value)}" as a new tag</div>`;
+        attrDropdown.style.display = 'block';
+        attrDropdown.querySelectorAll('[data-value]').forEach(item => {
+            item.onmousedown = (e) => {
+                e.preventDefault();
+                addAttrChip(item.dataset.value);
+            };
+        });
+    };
+    const addAttrChip = (val, { silent = false } = {}) => {
+        const v = String(val || '').trim();
+        if (!v) return;
+        if (attrSelected.includes(v)) return;
+        attrSelected.push(v);
+        const known = attrChoices.includes(v);
+        if (!known && !silent) attrPendingNew.push(v);
+        attrInput.value = '';
+        renderAttrChips();
+        renderAttrDropdown();
+    };
+    if (attrInput) {
+        attrInput.onfocus = () => renderAttrDropdown();
+        attrInput.oninput = () => renderAttrDropdown();
+        attrInput.onblur = () => setTimeout(() => { if (attrDropdown) attrDropdown.style.display = 'none'; }, 150);
+        attrInput.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (attrInput.value.trim()) addAttrChip(attrInput.value);
+            } else if (e.key === 'Backspace' && !attrInput.value && attrSelected.length > 0) {
+                attrSelected.pop();
+                renderAttrChips();
+            }
+        };
+    }
+    // Load known attribute choices from Spoolman's field schema.
+    fetch('/api/external/fields').then(r => r.json()).then(d => {
+        if (!d || !d.success) return;
+        const filamentFields = (d.fields && d.fields.filament) || [];
+        const attrField = filamentFields.find(f => f.key === 'filament_attributes');
+        if (attrField && Array.isArray(attrField.choices)) {
+            attrChoices = attrField.choices.slice();
+        }
+    }).catch(() => {});
+    renderAttrChips();
+
     // --- Save button handler ---
-    // Replace the button to detach any prior click handler so repeated
-    // openings don't stack. (The modal element is reused across calls.)
+    // Clone-replace to drop any prior handler (modal is reused across calls).
     const oldSaveBtn = document.getElementById('editfil-save');
     if (!oldSaveBtn) { showToast('Save button missing', 'error'); return; }
     const saveBtn = oldSaveBtn.cloneNode(true);
     oldSaveBtn.parentNode.replaceChild(saveBtn, oldSaveBtn);
+    saveBtn.dataset.mode = isCreate ? 'create' : 'edit';
 
     saveBtn.onclick = async () => {
         const val = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
@@ -1001,9 +1183,13 @@ window.openEditFilamentForm = (fil) => {
             const n = numOrNull(id);
             return n == null ? null : Math.round(n);
         };
-        const showErr = (msg) => {
+        const showErr = (msg, tabId = null) => {
             const e = document.getElementById('editfil-error');
             if (e) { e.classList.remove('d-none'); e.innerText = msg; }
+            if (tabId) {
+                const btn = document.getElementById(tabId);
+                if (btn) bootstrap.Tab.getOrCreateInstance(btn).show();
+            }
         };
         const clearErr = () => {
             const e = document.getElementById('editfil-error');
@@ -1011,36 +1197,30 @@ window.openEditFilamentForm = (fil) => {
         };
         clearErr();
 
-        // Collect colors — primary + every extra.
-        const primaryRaw = (val('editfil-color-hex') || '').trim().replace(/^#/, '');
-        const extraEls = modalEl.querySelectorAll('#editfil-color-extras input[id^="editfil-color-hex-"]');
+        // Colors: capture + validate.
+        captureCurrentValues();
         const rawColors = [];
-        if (primaryRaw !== '') rawColors.push(primaryRaw);
-        extraEls.forEach(el => {
-            const v = (el.value || '').trim().replace(/^#/, '');
-            if (v !== '') rawColors.push(v);
-        });
-        for (const c of rawColors) {
-            if (!/^[0-9a-fA-F]{6}$/.test(c)) {
-                showErr(`Color must be a 6-digit hex (got "${c}").`);
-                const colorsTabBtn = document.getElementById('editfil-tab-colors-btn');
-                if (colorsTabBtn) bootstrap.Tab.getOrCreateInstance(colorsTabBtn).show();
+        for (const row of colorRowsState) {
+            const rawHex = String(row.hex || '').trim().replace(/^#/, '');
+            if (rawHex === '') continue;
+            if (!/^[0-9a-fA-F]{6}$/.test(rawHex)) {
+                showErr(`Color must be a 6-digit hex (got "${rawHex}").`, 'editfil-tab-colors-btn');
                 return;
             }
+            rawColors.push(rawHex.toLowerCase());
         }
-        const normalizedColors = rawColors.map(c => c.toLowerCase());
         let colorHex = null;
         let multiColorHexes = null;
         let multiDirection = null;
-        if (normalizedColors.length === 0) {
+        if (rawColors.length === 0) {
             colorHex = '';
             multiColorHexes = '';
-        } else if (normalizedColors.length === 1) {
-            colorHex = normalizedColors[0];
+        } else if (rawColors.length === 1) {
+            colorHex = rawColors[0];
             multiColorHexes = '';
         } else {
-            colorHex = normalizedColors[0];
-            multiColorHexes = normalizedColors.join(',');
+            colorHex = rawColors[0];
+            multiColorHexes = rawColors.join(',');
             multiDirection = (val('editfil-color-direction') || 'longitudinal').toLowerCase();
         }
 
@@ -1058,22 +1238,27 @@ window.openEditFilamentForm = (fil) => {
             pendingNewVendorName = vendorTyped;
         }
 
-        // Advanced-section extras. Spoolman PATCH replaces the entire `extra`
-        // object, so MERGE with fil.extra — writing just our keys would wipe
-        // physical_source, price_total, and anything else Spoolman set.
+        // Advanced-section extras merge.
         const newProductUrl = (val('editfil-product-url') || '').trim();
         const newPurchaseUrl = (val('editfil-purchase-url') || '').trim();
         const newSheetLink = (val('editfil-sheet-link') || '').trim();
         const newOriginalColor = (val('editfil-original-color') || '').trim();
-        const rawAttrsText = (val('editfil-attributes') || '').trim();
-        const attrsArr = rawAttrsText
-            ? rawAttrsText.split(',').map(t => t.trim()).filter(Boolean)
-            : [];
+        // If the user had typed something in the attribute input without
+        // committing it as a chip, commit it now so it's not silently lost.
+        if (attrInput && attrInput.value && attrInput.value.trim()) {
+            addAttrChip(attrInput.value);
+        }
+        const attrsArr = attrSelected.slice();
+        const newNozzleMax = val('editfil-nozzle-max');
+        const newBedMax = val('editfil-bed-max');
+
         const dirtyExtras = {};
         if (newProductUrl !== unquoteExtra(rawExtra.product_url)) dirtyExtras.product_url = newProductUrl;
         if (newPurchaseUrl !== unquoteExtra(rawExtra.purchase_url)) dirtyExtras.purchase_url = newPurchaseUrl;
         if (newSheetLink !== unquoteExtra(rawExtra.sheet_link)) dirtyExtras.sheet_link = newSheetLink;
         if (newOriginalColor !== unquoteExtra(rawExtra.original_color)) dirtyExtras.original_color = newOriginalColor;
+        if (newNozzleMax !== unquoteExtra(rawExtra.nozzle_temp_max)) dirtyExtras.nozzle_temp_max = newNozzleMax;
+        if (newBedMax !== unquoteExtra(rawExtra.bed_temp_max)) dirtyExtras.bed_temp_max = newBedMax;
         const prevAttrsArr = (() => {
             try {
                 const p = typeof rawExtra.filament_attributes === 'string'
@@ -1086,7 +1271,12 @@ window.openEditFilamentForm = (fil) => {
             dirtyExtras.filament_attributes = attrsArr;
         }
 
-        // Assemble the full edit payload, then prune to a dirty-diff.
+        // Required-field guards in Add mode — Spoolman insists on material.
+        if (isCreate && !(val('editfil-material') || '').trim()) {
+            showErr('Material is required to create a filament.', 'editfil-tab-basic-btn');
+            return;
+        }
+
         const data = {
             name: (val('editfil-name') || '').trim() || null,
             material: (val('editfil-material') || '').trim() || null,
@@ -1105,70 +1295,92 @@ window.openEditFilamentForm = (fil) => {
             comment: val('editfil-comment') || '',
         };
 
-        const same = (a, b) => {
-            if (a == null && (b == null || b === '')) return true;
-            if (b == null && (a == null || a === '')) return true;
-            return String(a) === String(b);
-        };
-        const changed = {};
-        if (!same(data.name, fil.name)) changed.name = data.name;
-        if (!same(data.material, fil.material)) changed.material = data.material;
-        const oldVendorId = fil.vendor && fil.vendor.id != null ? fil.vendor.id : null;
-        if (pendingNewVendorName == null && !same(data.vendor_id, oldVendorId)) {
-            changed.vendor_id = data.vendor_id;
-        }
-        const oldHex = (fil.color_hex || '').replace(/^#/, '').toLowerCase();
-        const newHex = (data.color_hex || '').toLowerCase();
-        if (oldHex !== newHex) changed.color_hex = data.color_hex;
-        const oldMulti = String(fil.multi_color_hexes || '')
-            .split(',').map(h => h.replace(/^#/, '').trim().toLowerCase())
-            .filter(Boolean).join(',');
-        const newMulti = String(data.multi_color_hexes || '').toLowerCase();
-        if (oldMulti !== newMulti) changed.multi_color_hexes = data.multi_color_hexes;
-        if (data.multi_color_direction != null) {
-            const oldDir = String(fil.multi_color_direction
-                || (fil.extra && fil.extra.multi_color_direction)
-                || '').toLowerCase();
-            if (oldDir !== data.multi_color_direction) {
-                changed.multi_color_direction = data.multi_color_direction;
-            }
-        }
-        if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
-        if (!same(data.density, fil.density)) changed.density = data.density;
-        if (!same(data.diameter, fil.diameter)) changed.diameter = data.diameter;
-        if (!same(data.weight, fil.weight)) changed.weight = data.weight;
-        if (!same(data.price, fil.price)) changed.price = data.price;
-        if (!same(data.external_id, fil.external_id)) changed.external_id = data.external_id;
-        if (!same(data.settings_extruder_temp, fil.settings_extruder_temp))
-            changed.settings_extruder_temp = data.settings_extruder_temp;
-        if (!same(data.settings_bed_temp, fil.settings_bed_temp))
-            changed.settings_bed_temp = data.settings_bed_temp;
-        if (!same(data.comment, fil.comment)) changed.comment = data.comment;
-
-        if (Object.keys(dirtyExtras).length > 0) {
-            const mergedExtra = { ...(fil.extra || {}) };
+        let payload;
+        if (isCreate) {
+            // Full payload on create — no dirty-diff (there's nothing to diff against).
+            const cleanExtras = {};
             for (const [k, v] of Object.entries(dirtyExtras)) {
-                if (k === 'filament_attributes') {
-                    mergedExtra[k] = JSON.stringify(v);
-                } else if (v === '' || v == null) {
-                    delete mergedExtra[k];
-                } else {
-                    mergedExtra[k] = `"${String(v)}"`;
+                if (k === 'filament_attributes') cleanExtras[k] = JSON.stringify(v);
+                else if (v !== '' && v != null) cleanExtras[k] = `"${String(v)}"`;
+            }
+            payload = { ...data };
+            if (Object.keys(cleanExtras).length > 0) payload.extra = cleanExtras;
+        } else {
+            const same = (a, b) => {
+                if (a == null && (b == null || b === '')) return true;
+                if (b == null && (a == null || a === '')) return true;
+                return String(a) === String(b);
+            };
+            const changed = {};
+            if (!same(data.name, fil.name)) changed.name = data.name;
+            if (!same(data.material, fil.material)) changed.material = data.material;
+            const oldVendorId = fil.vendor && fil.vendor.id != null ? fil.vendor.id : null;
+            if (pendingNewVendorName == null && !same(data.vendor_id, oldVendorId)) {
+                changed.vendor_id = data.vendor_id;
+            }
+            const oldHex = (fil.color_hex || '').replace(/^#/, '').toLowerCase();
+            const newHex = (data.color_hex || '').toLowerCase();
+            if (oldHex !== newHex) changed.color_hex = data.color_hex;
+            const oldMulti = String(fil.multi_color_hexes || '')
+                .split(',').map(h => h.replace(/^#/, '').trim().toLowerCase())
+                .filter(Boolean).join(',');
+            const newMulti = String(data.multi_color_hexes || '').toLowerCase();
+            if (oldMulti !== newMulti) changed.multi_color_hexes = data.multi_color_hexes;
+            if (data.multi_color_direction != null) {
+                const oldDir = String(fil.multi_color_direction
+                    || (fil.extra && fil.extra.multi_color_direction)
+                    || '').toLowerCase();
+                if (oldDir !== data.multi_color_direction) {
+                    changed.multi_color_direction = data.multi_color_direction;
                 }
             }
-            changed.extra = mergedExtra;
+            if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
+            if (!same(data.density, fil.density)) changed.density = data.density;
+            if (!same(data.diameter, fil.diameter)) changed.diameter = data.diameter;
+            if (!same(data.weight, fil.weight)) changed.weight = data.weight;
+            if (!same(data.price, fil.price)) changed.price = data.price;
+            if (!same(data.external_id, fil.external_id)) changed.external_id = data.external_id;
+            if (!same(data.settings_extruder_temp, fil.settings_extruder_temp))
+                changed.settings_extruder_temp = data.settings_extruder_temp;
+            if (!same(data.settings_bed_temp, fil.settings_bed_temp))
+                changed.settings_bed_temp = data.settings_bed_temp;
+            if (!same(data.comment, fil.comment)) changed.comment = data.comment;
+
+            if (Object.keys(dirtyExtras).length > 0) {
+                const mergedExtra = { ...(fil.extra || {}) };
+                for (const [k, v] of Object.entries(dirtyExtras)) {
+                    if (k === 'filament_attributes') {
+                        mergedExtra[k] = JSON.stringify(v);
+                    } else if (v === '' || v == null) {
+                        delete mergedExtra[k];
+                    } else {
+                        mergedExtra[k] = `"${String(v)}"`;
+                    }
+                }
+                changed.extra = mergedExtra;
+            }
+            payload = changed;
+            if (Object.keys(payload).length === 0 && !pendingNewVendorName) {
+                showToast('No changes to save.', 'info');
+                bsModal.hide();
+                return;
+            }
         }
 
-        if (Object.keys(changed).length === 0 && !pendingNewVendorName) {
-            showToast('No changes to save.', 'info');
-            bsModal.hide();
-            return;
-        }
-
-        // Disable the button while the request is in flight so double-clicks
-        // don't fire two PATCHes.
         saveBtn.disabled = true;
         try {
+            // Register newly-typed filament_attribute tags with Spoolman's schema
+            // so future modals show them in the dropdown. Fire-and-forget;
+            // we don't want a schema-update failure to block the main save.
+            attrPendingNew.forEach(tag => {
+                fetch('/api/external/fields/add_choice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ entity_type: 'filament', key: 'filament_attributes', new_choice: tag }),
+                }).catch(() => {});
+            });
+            attrPendingNew = [];
+
             if (pendingNewVendorName) {
                 const vr = await fetch('/api/vendors', {
                     method: 'POST',
@@ -1177,31 +1389,45 @@ window.openEditFilamentForm = (fil) => {
                 });
                 const vd = await vr.json();
                 if (vd && vd.success && vd.vendor && vd.vendor.id != null) {
-                    changed.vendor_id = Number(vd.vendor.id);
+                    payload.vendor_id = Number(vd.vendor.id);
                 } else {
-                    showErr(`Couldn't create vendor "${pendingNewVendorName}": ${(vd && vd.msg) || 'unknown'}`);
+                    showErr(`Couldn't create vendor "${pendingNewVendorName}": ${(vd && vd.msg) || 'unknown'}`, 'editfil-tab-basic-btn');
                     return;
                 }
             }
-            const r = await fetch('/api/update_filament', {
+
+            const url = isCreate ? '/api/create_filament' : '/api/update_filament';
+            const body = isCreate ? { data: payload } : { id: fil.id, data: payload };
+            const r = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: fil.id, data: changed }),
+                body: JSON.stringify(body),
             });
             const d = await r.json();
             if (d && d.success) {
-                showToast(`Filament #${fil.id} updated.`, 'success');
+                const newId = (d.filament && d.filament.id) || (isCreate ? '?' : fil.id);
+                showToast(isCreate ? `Filament #${newId} created.` : `Filament #${fil.id} updated.`, 'success');
                 if (window.refreshFilamentSpools) window.refreshFilamentSpools();
+                if (isCreate && window.fetchLocations) window.fetchLocations();
                 bsModal.hide();
             } else {
-                showErr(`Update failed: ${d && d.msg ? d.msg : 'unknown'}`);
+                showErr(`${isCreate ? 'Create' : 'Update'} failed: ${d && d.msg ? d.msg : 'unknown'}`);
             }
         } catch (e) {
-            showErr(`Update error: ${e.message || e}`);
+            showErr(`${isCreate ? 'Create' : 'Update'} error: ${e.message || e}`);
         } finally {
             saveBtn.disabled = false;
         }
     };
 
     bsModal.show();
+};
+
+window.openEditFilamentForm = (fil) => {
+    if (!fil || !fil.id) { showToast('Missing filament data', 'error'); return; }
+    _editfilOpenModal(fil);
+};
+
+window.openAddFilamentForm = () => {
+    _editfilOpenModal(null);
 };
