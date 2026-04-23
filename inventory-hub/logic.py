@@ -27,6 +27,37 @@ def _toolhead_of(location_str, printer_map=None):
     return None
 
 
+def _fb_spool_location(spool_id, fb_url=None):
+    """Return (printer_name, toolhead_id) where filabridge currently has
+    `spool_id` mapped, or None.
+
+    This is the AUTHORITATIVE origin for any upcoming map call — Spoolman's
+    `location` field can lag behind filabridge (stale desyncs, manual DB
+    edits, prior failed moves), and filabridge will reject the map if its
+    own view shows the spool on a different toolhead. Querying the status
+    endpoint lets us clear the correct toolhead first.
+    """
+    if fb_url is None:
+        _, fb_url = config_loader.get_api_urls()
+    try:
+        resp = requests.get(f"{fb_url}/status", timeout=3)
+        if not getattr(resp, 'ok', False):
+            return None
+        data = resp.json() or {}
+        mappings = data.get('toolhead_mappings', {}) or {}
+        target = int(spool_id)
+        for _printer_key, toolheads in mappings.items():
+            for th_id, entry in (toolheads or {}).items():
+                try:
+                    if int(entry.get('spool_id') or 0) == target:
+                        return (entry.get('printer_name'), int(th_id))
+                except (TypeError, ValueError):
+                    continue
+    except Exception:
+        pass
+    return None
+
+
 def _fb_write(printer_name, toolhead_id, spool_id, fb_url=None):
     """POST a toolhead map/unmap to Filabridge. Never raises.
 
@@ -308,13 +339,22 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
             p = printer_map[target]
             dest_th = (p['printer_name'], p['position'])
-            origin_th = origin_toolheads_by_spool.get(str(sid))
+
+            # Determining the spool's ORIGIN toolhead for the pre-map
+            # unmap. Filabridge is authoritative here: Spoolman can lag
+            # (stale desyncs, manual edits, prior failed moves) and when
+            # they disagree filabridge wins because its view is what
+            # will accept or reject our map call. Fall back to the
+            # Spoolman-derived snapshot only if filabridge is unreachable
+            # or reports no mapping for this spool.
+            fb_origin = _fb_spool_location(int(sid), fb_url)
+            origin_th = fb_origin or origin_toolheads_by_spool.get(str(sid))
 
             # Unmap the spool's ORIGIN toolhead first so filabridge's
-            # one-spool-one-toolhead invariant is satisfied before we try
-            # to map the destination. Skip if origin == destination (the
-            # already-here re-scan case) because that unmap would just
-            # clear the toolhead we're about to remap.
+            # one-spool-one-toolhead invariant is satisfied before we
+            # map the destination. Skip if origin == destination (the
+            # already-here re-scan case) because that unmap would clear
+            # the toolhead we're about to remap.
             if origin_th and origin_th != dest_th:
                 ok, detail = _fb_write(origin_th[0], origin_th[1], 0, fb_url)
                 fb_outcomes.append((ok, detail))

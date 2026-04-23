@@ -63,6 +63,7 @@ def test_cross_toolhead_move_unmaps_origin_before_mapping_destination():
                      return_value={"text": "#240", "color": "ff0000"}),
         patch.object(logic.spoolman_api, "update_spool", side_effect=fake_update),
         patch.object(logic.requests, "post", return_value=MagicMock(ok=True)),
+        patch.object(logic.requests, "get", return_value=MagicMock(ok=False, status_code=404)),
     ]
     for m in ctx:
         m.start()
@@ -137,6 +138,7 @@ def test_bound_slot_move_preserves_two_step_semantics_and_orders_fb():
                      return_value={"text": "#240", "color": "ff0000"}),
         patch.object(logic.spoolman_api, "update_spool", side_effect=fake_update),
         patch.object(logic.requests, "post", return_value=MagicMock(ok=True)),
+        patch.object(logic.requests, "get", return_value=MagicMock(ok=False, status_code=404)),
     ]
     for m in ctx:
         m.start()
@@ -198,6 +200,7 @@ def test_filabridge_reject_on_unmap_aborts_destination_map():
                      return_value={"text": "#240", "color": "ff0000"}),
         patch.object(logic.spoolman_api, "update_spool", side_effect=fake_update),
         patch.object(logic.requests, "post", side_effect=[rejected, accepted]),
+        patch.object(logic.requests, "get", return_value=MagicMock(ok=False, status_code=404)),
     ]
     for m in ctx:
         m.start()
@@ -215,6 +218,88 @@ def test_filabridge_reject_on_unmap_aborts_destination_map():
 
     assert result["filabridge_ok"] is False
     assert "409" in result["filabridge_detail"], f"detail should include HTTP code: {result!r}"
+
+
+def test_filabridge_authoritative_origin_wins_over_spoolman_lag():
+    """If Spoolman thinks the spool is at CORE1-M0 but filabridge still
+    has it mapped to XL-3 (a latent desync), the pre-map query to
+    /api/status must identify XL-3 as the real origin and unmap it
+    before attempting the CORE1-M0 map. Otherwise filabridge rejects
+    the map on its one-spool-one-toolhead invariant.
+
+    This scenario actually happened 2026-04-22 after the first fix
+    landed: spool #213 was stuck on XL-3 in filabridge while Spoolman
+    had already been rewritten to CORE1-M0, so the Spoolman-only
+    origin check short-circuited as origin == destination."""
+    printer_map = {
+        "CORE1-M0": {"printer_name": "Core1", "position": 0},
+        "XL-3": {"printer_name": "XL", "position": 2},
+    }
+    loc_list = [
+        {"LocationID": "CORE1-M0", "Type": "Tool Head", "Max Spools": "1"},
+        {"LocationID": "XL-3", "Type": "Tool Head", "Max Spools": "1"},
+    ]
+    # Spoolman (wrongly) thinks #213 is already at CORE1-M0
+    spool_213 = {"id": 213, "location": "CORE1-M0", "extra": {}}
+
+    def fake_update(sid, data):
+        return {"id": sid, **data}
+
+    # Filabridge /api/status response: #213 is on XL toolhead 2.
+    fb_status_resp = MagicMock(
+        ok=True, status_code=200,
+        text='',
+    )
+    fb_status_resp.json.return_value = {
+        "toolhead_mappings": {
+            "printer_xl": {
+                "2": {"printer_name": "XL", "toolhead_id": 2, "spool_id": 213},
+                "0": {"printer_name": "XL", "toolhead_id": 0, "spool_id": 0},
+            },
+            "printer_core1": {
+                "0": {"printer_name": "Core1", "toolhead_id": 0, "spool_id": 0},
+            },
+        },
+    }
+
+    ok_resp = MagicMock(ok=True, status_code=200, text="")
+
+    ctx = [
+        patch.object(logic.config_loader, "load_config",
+                     return_value={"printer_map": printer_map}),
+        patch.object(logic.config_loader, "get_api_urls",
+                     return_value=("http://spoolman", "http://filabridge")),
+        patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
+        patch.object(logic.spoolman_api, "get_spool", return_value=spool_213),
+        patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
+        patch.object(logic.spoolman_api, "format_spool_display",
+                     return_value={"text": "#213", "color": "ff0000"}),
+        patch.object(logic.spoolman_api, "update_spool", side_effect=fake_update),
+        patch.object(logic.requests, "post", return_value=ok_resp),
+        patch.object(logic.requests, "get", return_value=fb_status_resp),
+    ]
+    for m in ctx:
+        m.start()
+    try:
+        result = logic.perform_smart_move("CORE1-M0", [213], target_slot=None, origin="test")
+        post_calls = list(logic.requests.post.call_args_list)
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+
+    # Two POSTs: unmap XL toolhead 2 (filabridge's real origin), then
+    # map CORE1-M0 <- 213. Spoolman's stale "CORE1-M0" origin would have
+    # said origin == destination → skip unmap → filabridge 409. We must
+    # instead trust filabridge and unmap XL-3.
+    assert len(post_calls) == 2, f"expected unmap+map, got {post_calls!r}"
+    unmap_call, map_call = post_calls
+    assert _call_toolhead(unmap_call) == ("XL", 2), \
+        f"unmap should target filabridge's actual origin (XL toolhead 2), got {_call_toolhead(unmap_call)!r}"
+    assert _call_spool_id(unmap_call) == 0
+    assert _call_toolhead(map_call) == ("Core1", 0)
+    assert _call_spool_id(map_call) == 213
+    assert result["filabridge_ok"] is True
 
 
 def test_move_to_same_toolhead_does_not_double_unmap():
@@ -246,6 +331,7 @@ def test_move_to_same_toolhead_does_not_double_unmap():
                      return_value={"text": "#240", "color": "ff0000"}),
         patch.object(logic.spoolman_api, "update_spool", side_effect=fake_update),
         patch.object(logic.requests, "post", return_value=MagicMock(ok=True)),
+        patch.object(logic.requests, "get", return_value=MagicMock(ok=False, status_code=404)),
     ]
     for m in ctx:
         m.start()
