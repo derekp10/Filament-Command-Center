@@ -945,21 +945,38 @@ def api_update_filament():
 @app.route('/api/manage_contents', methods=['POST'])
 def api_manage_contents():
     data = request.json
-    action = data.get('action') 
-    loc_id = data.get('location', '').strip().upper() 
-    spool_input = data.get('spool_id') 
-    slot_arg = data.get('slot') 
+    action = data.get('action')
+    loc_id = data.get('location', '').strip().upper()
+    spool_input = data.get('spool_id')
+    slot_arg = data.get('slot')
+    # Caller opts into the active-print-confirmed branch by passing this
+    # flag alongside the main payload. Added 2026-04-23 so ejects, force-
+    # unassigns, and clear-location ops all inherit the same safety net.
+    confirm_active_print = bool(data.get('confirm_active_print', False))
 
     if action == 'clear_location':
         contents = spoolman_api.get_spools_at_location_detailed(loc_id)
+        # Pre-flight: if the box being cleared is itself a toolhead that's
+        # actively printing, bail. Individual per-spool checks are bypassed
+        # (we don't want per-spool prompts during a bulk clear).
+        if not confirm_active_print:
+            ap = logic._active_print_info_for_location(loc_id)
+            if ap:
+                return jsonify({
+                    "success": False,
+                    "require_confirm": True,
+                    "confirm_type": "active_print",
+                    "active_print": ap,
+                    "msg": f"{ap['printer_name']} is {ap['state']} — clearing this location will disrupt the print.",
+                })
         for spool in contents:
             # [ALEX FIX] Protect "Ghost" items from being ejected when a box is cleared
             if spool.get('is_ghost'):
                 continue
-                
+
             slot_val = spool.get('slot', '')
             if not slot_val or slot_val == 'None' or slot_val == '':
-                logic.perform_smart_eject(spool['id'])
+                logic.perform_smart_eject(spool['id'], confirm_active_print=True)
         return jsonify({"success": True})
 
     spool_id = None
@@ -972,12 +989,24 @@ def api_manage_contents():
                  return jsonify({"success": False, "msg": resolution['msg']})
     elif action in ['remove', 'force_unassign']:
         if str(spool_input).isdigit(): spool_id = int(spool_input)
-        
+
     if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
 
     if action == 'remove':
         is_confirmed = data.get('confirmed', False)
-        result = logic.perform_smart_eject(spool_id, confirmed_unassign=is_confirmed)
+        result = logic.perform_smart_eject(
+            spool_id,
+            confirmed_unassign=is_confirmed,
+            confirm_active_print=confirm_active_print,
+        )
+        if isinstance(result, dict) and result.get('status') == 'requires_confirm':
+            return jsonify({
+                "success": False,
+                "require_confirm": True,
+                "confirm_type": result.get('confirm_type'),
+                "active_print": result.get('active_print'),
+                "msg": result.get('msg', 'Confirmation required.'),
+            })
         if result == "REQUIRE_CONFIRM":
             return jsonify({"success": False, "require_confirm": True, "msg": "Spool is already in a room. Confirm true unassign to nowhere?"})
         elif result is True:
@@ -985,11 +1014,25 @@ def api_manage_contents():
         else:
             return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'force_unassign':
-        if logic.perform_force_unassign(spool_id): return jsonify({"success": True})
-        else: return jsonify({"success": False, "msg": "DB Update Failed"})
+        result = logic.perform_force_unassign(spool_id, confirm_active_print=confirm_active_print)
+        if isinstance(result, dict) and result.get('status') == 'requires_confirm':
+            return jsonify({
+                "success": False,
+                "require_confirm": True,
+                "confirm_type": result.get('confirm_type'),
+                "active_print": result.get('active_print'),
+                "msg": result.get('msg', 'Confirmation required.'),
+            })
+        if result:
+            return jsonify({"success": True})
+        return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'add':
         origin = data.get('origin', '')
-        return jsonify(logic.perform_smart_move(loc_id, [spool_id], target_slot=slot_arg, origin=origin))
+        return jsonify(logic.perform_smart_move(
+            loc_id, [spool_id],
+            target_slot=slot_arg, origin=origin,
+            confirm_active_print=confirm_active_print,
+        ))
     return jsonify({"success": False})
 
 @app.route('/api/identify_scan', methods=['POST'])
@@ -1145,9 +1188,28 @@ def api_identify_scan():
             }), 200
 
         spool_id = int(first_spool['id'])
+        # Slot-QR scans pass the caller's confirm-active-print flag through
+        # transparently. Frontend slot-QR paths pre-probe too, but the
+        # backend check is the authoritative safety net — if the printer
+        # went active between the probe and the scan, we still bail.
+        confirm_active_print = bool(request.json.get('confirm_active_print', False))
         move_result = logic.perform_smart_move(
-            target, [spool_id], target_slot=slot, origin='slot_qr_scan'
+            target, [spool_id], target_slot=slot, origin='slot_qr_scan',
+            confirm_active_print=confirm_active_print,
         )
+        # If perform_smart_move bailed on an active-print check, surface the
+        # confirmation prompt to the client. Frontend slot-QR path (scan
+        # handler) renders this as a modal and retries on confirm.
+        if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
+            return jsonify({
+                "type": "assignment",
+                "action": "assignment_requires_confirm",
+                "location": target, "slot": slot,
+                "confirm_type": move_result.get('confirm_type'),
+                "active_print": move_result.get('active_print'),
+                "msg": move_result.get('msg'),
+                "moved": spool_id,
+            }), 200
         # perform_smart_move now handles auto-deploy internally when the
         # target slot is bound to a toolhead. Pick up the deployed-to
         # hint from its response so we can surface it in the toast.
@@ -1539,8 +1601,14 @@ def api_quickswap_return():
     toolhead = active_toolhead
 
     # 3) Send the spool back. perform_smart_move handles Filabridge + extras.
+    # The destination is a dryer box (not a toolhead), so the destination
+    # active-print check won't fire. The source-side disruption was already
+    # surfaced by the Quick-Swap confirm overlay's banner before this
+    # endpoint was called — backend just passes confirm_active_print=True
+    # unconditionally here because the user already saw the warning.
     move_result = logic.perform_smart_move(
-        found_box, [spool_id], target_slot=found_slot, origin='quickswap_return'
+        found_box, [spool_id], target_slot=found_slot, origin='quickswap_return',
+        confirm_active_print=True,
     )
     src_note = " (original source)" if found_source == 'physical_source' else " (first bound slot)"
     slot_part = f":SLOT:{found_slot}" if found_slot else ""
@@ -1621,8 +1689,13 @@ def api_quickswap():
             "box": box, "slot": slot, "toolhead": toolhead,
         }), 404
 
+    # Quick-Swap confirm overlay already probed the destination toolhead and
+    # surfaced the warning banner before this endpoint was called, so the
+    # user has already opted in. Pass confirm_active_print=True so the
+    # backend check doesn't re-prompt.
     move_result = logic.perform_smart_move(
-        toolhead, [spool_id], target_slot=None, origin='quickswap'
+        toolhead, [spool_id], target_slot=None, origin='quickswap',
+        confirm_active_print=True,
     )
     state.add_log_entry(
         f"⚡ Quick-swap: Spool #{spool_id} from <b>{box}:SLOT:{slot}</b> → <b>{toolhead}</b>",
@@ -1951,11 +2024,13 @@ def api_get_spools_by_filament():
 
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
+    payload = request.json or {}
     return jsonify(logic.perform_smart_move(
-        request.json.get('location'), 
-        request.json.get('spools'),
-        target_slot=request.json.get('slot'),
-        origin=request.json.get('origin', '')
+        payload.get('location'),
+        payload.get('spools'),
+        target_slot=payload.get('slot'),
+        origin=payload.get('origin', ''),
+        confirm_active_print=bool(payload.get('confirm_active_print', False)),
     ))
 
 # --- FILABRIDGE ERROR RECOVERY ROUTES ---

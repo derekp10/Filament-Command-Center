@@ -267,14 +267,49 @@ const processScan = (text, source = 'keyboard') => {
         .catch((e) => { setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
 };
 
-const performContextAssign = (tid, slot = null) => {
+// Inline confirm overlay for "bulk assign into an active toolhead" — same
+// visual pattern as Location Manager's _confirmActivePrintAssign (no nested
+// Swal). Mounts into body so it floats above the scan UI and any open modal.
+const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
+    let ov = document.getElementById('fcc-active-print-scan-overlay');
+    if (ov) ov.remove();
+    ov = document.createElement('div');
+    ov.id = 'fcc-active-print-scan-overlay';
+    ov.style.cssText = 'position:fixed; inset:0; z-index:20000; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center;';
+    const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    ov.innerHTML = `
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:460px; text-align:center;">
+            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${escapeHtml(stateInfo.printer_name)} is ${escapeHtml(stateInfo.state)}</div>
+            <div style="color:#ffc; margin-bottom:14px;">
+                Assigning the buffered spool(s) to <b>${escapeHtml(tid)}</b> will disrupt the active print. Continue anyway?
+            </div>
+            <div style="display:flex; gap:10px; justify-content:center;">
+                <button id="fcc-aps-yes" class="btn btn-warning btn-sm" style="min-width:120px;">Continue Anyway</button>
+                <button id="fcc-aps-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Cancel</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(ov);
+    const cleanup = () => { try { ov.remove(); } catch (_) { /* noop */ } document.removeEventListener('keydown', keyHandler, true); };
+    const keyHandler = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
+        else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); cleanup(); onConfirm(); }
+    };
+    document.getElementById('fcc-aps-no').onclick = cleanup;
+    document.getElementById('fcc-aps-yes').onclick = () => { cleanup(); onConfirm(); };
+    document.addEventListener('keydown', keyHandler, true);
+    document.getElementById('fcc-aps-no').focus();
+};
+
+const performContextAssign = (tid, slot = null, confirmActivePrint = false) => {
     setProcessing(true);
     // [ALEX FIX] Bulk Assign: Send ALL held spools, not just the first one
     const payload = {
         location: tid,
         spools: state.heldSpools.map(s => s.id),
         slot: slot,
-        origin: 'buffer'
+        origin: 'buffer',
+        confirm_active_print: confirmActivePrint,
     };
 
     fetch('/api/smart_move', {
@@ -286,6 +321,16 @@ const performContextAssign = (tid, slot = null) => {
         .then(res => {
             setProcessing(false);
             window.maybeWarnFilabridge(res);
+            // Backend safety net: target is an active toolhead. Prompt the
+            // user and retry with confirmActivePrint=true on approval.
+            if (res.status === 'requires_confirm' && res.confirm_type === 'active_print') {
+                _confirmActivePrintScan({
+                    tid, slot,
+                    stateInfo: res.active_print || { printer_name: tid, state: 'ACTIVE' },
+                    onConfirm: () => performContextAssign(tid, slot, true),
+                });
+                return;
+            }
             if (res.status === 'success') {
                 showToast("Assigned " + state.heldSpools.length + " items!", "success");
                 // [ALEX FIX] Clear entire buffer after bulk move

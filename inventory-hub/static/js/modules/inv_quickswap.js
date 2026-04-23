@@ -243,7 +243,18 @@
     // instead of just hiding the element and leaking the listener.
     let _activeConfirmClose = null;
 
-    const showConfirmOverlay = (opts) => {
+    // Helper: race the printer-state probe against a short timeout so a slow
+    // or unreachable PrusaLink can't stall the confirm UI. Returns stateInfo
+    // (truthy → active) or null (unknown → no banner).
+    const _probeWithTimeout = (toolheadId, timeoutMs = 1000) => {
+        if (!toolheadId || !window.fetchPrinterStateForToolhead) return Promise.resolve(null);
+        return Promise.race([
+            window.fetchPrinterStateForToolhead(toolheadId),
+            new Promise(resolve => setTimeout(() => resolve(null), timeoutMs)),
+        ]).catch(() => null);
+    };
+
+    const showConfirmOverlay = async (opts) => {
         const ov = document.getElementById('fcc-quickswap-confirm-overlay');
         const title = document.getElementById('fcc-quickswap-confirm-title');
         const body = document.getElementById('fcc-quickswap-confirm-body');
@@ -255,33 +266,25 @@
         if (_activeConfirmClose) {
             try { _activeConfirmClose(); } catch (e) { /* noop */ }
         }
+
+        // Active-print probe must complete BEFORE the overlay becomes visible —
+        // otherwise a fast-clicking user can confirm before the banner lands
+        // (the async-append pattern we tried first lost that race). 1s cap
+        // keeps the delay bounded when the printer is offline. The probe
+        // fails open — null means "unknown, show overlay normally."
+        const stateInfo = await _probeWithTimeout(opts.toolhead);
+        const warningBanner = stateInfo
+            ? `<div class="alert alert-warning py-2 px-3 mb-2" style="font-size:0.95em;">`
+                + `⚠️ <b>${stateInfo.printer_name} is ${stateInfo.state}</b> — loading a new spool now will disrupt the print.`
+                + `</div>`
+            : '';
+
         title.innerText = opts.title || `Swap ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`;
         const defaultBody = 'This moves the spool currently in that slot into the active toolhead. ' +
                             'Any spool already on the toolhead will be auto-ejected back to its source.';
-        body.innerHTML = opts.body || defaultBody;
+        body.innerHTML = warningBanner + (opts.body || defaultBody);
         ov.style.display = 'block';
 
-        // Active-print pre-check: if opts.toolhead is set and PrusaLink reports
-        // the printer as PRINTING/PAUSED/BUSY, prepend a warning banner to the
-        // overlay body. Probe fires asynchronously so the overlay shows
-        // immediately (don't block user on a slow/unreachable printer) and the
-        // banner slots in once the response lands. Fails open on any error —
-        // null state = no banner.
-        if (opts.toolhead && window.fetchPrinterStateForToolhead) {
-            window.fetchPrinterStateForToolhead(opts.toolhead).then(stateInfo => {
-                // Overlay may have closed between probe start and response. Bail
-                // if so, and also bail if the user already fired another overlay
-                // (our close-handler would have been replaced).
-                if (ov.style.display === 'none') return;
-                if (!stateInfo) return;
-                const banner = `<div class="alert alert-warning py-2 px-3 mb-2" style="font-size:0.9em;">`
-                    + `⚠️ <b>${stateInfo.printer_name} is ${stateInfo.state}</b> — loading a new spool now will disrupt the print.`
-                    + `</div>`;
-                // If the caller provided their own body, prepend ours. If they
-                // didn't, replace the default body with banner + default.
-                body.innerHTML = banner + (opts.body || defaultBody);
-            });
-        }
         const close = () => {
             ov.style.display = 'none';
             yes.onclick = null; no.onclick = null;

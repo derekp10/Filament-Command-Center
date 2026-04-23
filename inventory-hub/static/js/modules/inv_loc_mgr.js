@@ -1076,17 +1076,22 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     `;
     host.appendChild(ov);
     const cleanup = () => { try { ov.remove(); } catch (_) { /* noop */ } document.removeEventListener('keydown', keyHandler, true); };
+    // After user confirms, call _doAssignFinalize with confirmActivePrint=true
+    // so the backend's safety check doesn't re-prompt. Without this flag,
+    // the backend would see the POST has no confirm and return requires_confirm,
+    // creating an infinite loop.
+    const proceed = () => { cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true); };
     const keyHandler = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
-        else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag); }
+        else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); proceed(); }
     };
     document.getElementById('fcc-apc-no').onclick = cleanup;
-    document.getElementById('fcc-apc-yes').onclick = () => { cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag); };
+    document.getElementById('fcc-apc-yes').onclick = proceed;
     document.addEventListener('keydown', keyHandler, true);
     document.getElementById('fcc-apc-no').focus();
 };
 
-const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null) => {
+const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmActivePrint = false) => {
     // FIX: 0-based index correction for MMU/CORE slots
     let finalSlot = slot;
     if (slot !== null) {
@@ -1115,10 +1120,36 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null) => {
         }
     }
 
-    fetch('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'add', location: loc, spool_id: "ID:" + spool, slot: finalSlot, origin: isFromBuffer ? 'buffer' : '' }) })
+    fetch('/api/manage_contents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            action: 'add',
+            location: loc,
+            spool_id: "ID:" + spool,
+            slot: finalSlot,
+            origin: isFromBuffer ? 'buffer' : '',
+            // Pass the UI-probe's opt-in through so the backend's safety net
+            // doesn't re-prompt us. Without this, the backend active-print
+            // check would flag the move even after the user already confirmed.
+            confirm_active_print: confirmActivePrint,
+        }),
+    })
         .then(r => r.json())
         .then(res => {
             setProcessing(false);
+            // Backend safety net: if the printer flipped from IDLE to PRINTING
+            // in the race window between our UI probe and the POST, OR the
+            // user's browser skipped the UI probe for any reason (cache, older
+            // bundle), the backend returns requires_confirm. Show our confirm
+            // overlay and retry on user opt-in.
+            if (res.status === 'requires_confirm' && res.confirm_type === 'active_print') {
+                _confirmActivePrintAssign({
+                    loc, spool, slot, isFromBufferFlag,
+                    stateInfo: res.active_print || { printer_name: loc, state: 'ACTIVE' },
+                });
+                return;
+            }
             if (res.status === 'success') {
                 showToast("Assigned");
 
