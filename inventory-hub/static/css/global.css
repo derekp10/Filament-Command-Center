@@ -41,6 +41,13 @@ body {
     text-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
 }
 
+.navbar-brand-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    height: 100%;
+}
+
 /* Main Layout */
 .main-container {
     height: calc(100vh - 70px);
@@ -818,6 +825,9 @@ body {
     width: 500px !important;
     max-width: 100vw !important;
     z-index: 1090 !important;
+}
+.fcc-offcanvas-search:not(.show) {
+    pointer-events: none;
 }
 .max-h-150px {
     max-height: 150px !important;

@@ -574,17 +574,23 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                         }
                     });
 
-                    // Escape key — listen on the popup so it works regardless of focus
-                    popup.addEventListener('keydown', (e) => {
+                    // Escape key — listen on window in capture phase so we win against
+                    // SweetAlert2's focus-trap handler, which otherwise stops propagation
+                    // between window and document when focus lands on overlay buttons.
+                    // Bubble-phase listeners on the popup never see the second Escape in
+                    // that state.
+                    const escKeyHandler = (e) => {
                         if (e.key !== 'Escape') return;
                         e.preventDefault();
-                        e.stopPropagation();
+                        e.stopImmediatePropagation();
                         if (confirmShowing) {
                             hideConfirmOverlay();
                         } else {
                             showConfirmOverlay();
                         }
-                    });
+                    };
+                    window.addEventListener('keydown', escKeyHandler, true);
+                    popup.__fccEscCleanup = () => window.removeEventListener('keydown', escKeyHandler, true);
 
                     // Guard the Cancel button with the same confirmation
                     const cancelBtn = popup.querySelector('.swal2-cancel');
@@ -594,6 +600,13 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                             e.stopImmediatePropagation();
                             showConfirmOverlay();
                         }, true);
+                    }
+                },
+                willClose: () => {
+                    // Detach the document-level Escape capture handler installed in didOpen.
+                    const popup = Swal.getPopup();
+                    if (popup && typeof popup.__fccEscCleanup === 'function') {
+                        try { popup.__fccEscCleanup(); } catch (_) { /* noop */ }
                     }
                 },
                 preConfirm: () => {
