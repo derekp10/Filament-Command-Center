@@ -25,6 +25,13 @@ def parse_inbound_data(data):
 # [ALEX FIX] Added 'physical_source_slot', and 'product_url' to ensure strict JSON string formatting
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "physical_source_slot", "original_color", "spool_temp", "product_url", "purchase_url"]
 
+# Captures the last Spoolman non-ok response body so callers like
+# api_update_filament can surface the actual rejection reason to the UI
+# instead of returning a generic "rejected" message. Reset on each successful
+# call. Kept module-global rather than threaded through every return signature
+# so existing callers (which check `if result:`) keep working unchanged.
+LAST_SPOOLMAN_ERROR = None
+
 def get_spool(sid):
     sm_url, _ = config_loader.get_api_urls()
     try: return parse_inbound_data(requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3).json())
@@ -177,14 +184,24 @@ def create_spool(data):
     return None
 
 def update_filament(fid, data):
+    """Returns the updated filament dict on success, or None on failure.
+    The last Spoolman error message is stashed in module-global
+    LAST_SPOOLMAN_ERROR for callers that want to surface the actual
+    rejection reason to the UI (see api_update_filament)."""
+    global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
     sanitized = sanitize_outbound_data(data)
     try:
         r = requests.patch(f"{sm_url}/api/v1/filament/{fid}", json=sanitized, timeout=2)
-        if r.ok: return r.json()
-        state.logger.error(f"Failed to update filament {fid}: {r.status_code} - {r.text}")
+        if r.ok:
+            LAST_SPOOLMAN_ERROR = None
+            return r.json()
+        err_body = r.text
+        state.logger.error(f"Failed to update filament {fid}: {r.status_code} - {err_body}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {err_body[:400]}"
     except Exception as e:
         state.logger.error(f"API Error updating filament {fid}: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
     return None
 
 def create_filament(data):

@@ -147,23 +147,36 @@
         stark white Bootstrap default — active gets a muted gold tint on
         the warning side, muted teal on the info side.
 */
-#editFilamentModal .tab-content { min-height: 420px; }
-#editFilamentModal .nav-tabs { border-bottom-color: #444; }
+#editFilamentModal .tab-content { min-height: 460px; }
+/* Active tab: muted cyan (info tone) — pops against dark background
+   without going full white. Inactive tabs stay dim so the active one
+   reads as the clear "you are here" hint. */
+#editFilamentModal .nav-tabs { border-bottom: 2px solid #2a4c5c; }
 #editFilamentModal .nav-tabs .nav-link {
     background: transparent;
     border: 1px solid transparent;
-    color: #9ec5d4;
+    color: #8eb5c9;
+    padding: 0.4rem 0.9rem;
 }
 #editFilamentModal .nav-tabs .nav-link:hover {
-    border-color: #555 #555 transparent;
-    background: #252525;
+    border-color: #3c5a68 #3c5a68 transparent;
+    background: #1e2a30;
+    color: #c6dce6;
 }
 #editFilamentModal .nav-tabs .nav-link.active {
-    background: #2b2622;
-    border-color: #755 #755 transparent;
-    color: #ffd27f;
-    font-weight: 600;
+    background: #1a2e38;
+    border-color: #4fa2c9 #4fa2c9 transparent;
+    color: #7fd4ff;
+    font-weight: 700;
+    box-shadow: 0 -2px 0 #4fa2c9 inset;
 }
+
+/* Chip + combobox + dropdown styles (scoped to modal so they don't
+   bleed into the wizard). Also bumped text-muted inside the modal to
+   a lighter gray so the "comma-separated tags" hint and similar
+   helper text stay readable on darker monitors. */
+#editFilamentModal .form-text.text-muted { color: #adb5bd !important; }
+#editFilamentModal .text-muted { color: #adb5bd !important; }
 #editFilamentModal .editfil-chip {
     background: #2a4c5c;
     border: 1px solid #4fa2c9;
@@ -182,17 +195,30 @@
     margin-left: 2px;
 }
 #editFilamentModal .editfil-chip .chip-x:hover { opacity: 1; }
+/* Generic combobox dropdown used for Material, Vendor, and Filament
+   Attributes — matches the wizard's `.autocomplete-dropdown` styling
+   for visual parity. */
+#editFilamentModal .editfil-combo-dropdown,
 #editFilamentModal .editfil-attr-dropdown {
     display: none; position: absolute; z-index: 1060;
-    background: #1a1a1a; border: 1px solid #555; border-radius: 4px;
-    max-height: 200px; overflow-y: auto; width: 100%;
+    background: #1a1a1a; border: 1px solid #4fa2c9; border-radius: 4px;
+    max-height: 220px; overflow-y: auto; width: 100%;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+    margin-top: 2px;
 }
+#editFilamentModal .editfil-combo-dropdown .dropdown-item,
 #editFilamentModal .editfil-attr-dropdown .dropdown-item {
-    color: #fff; cursor: pointer; padding: 4px 8px;
+    color: #fff; cursor: pointer; padding: 6px 10px;
+    font-size: 0.92rem;
 }
+#editFilamentModal .editfil-combo-dropdown .dropdown-item:hover,
+#editFilamentModal .editfil-combo-dropdown .dropdown-item.active,
 #editFilamentModal .editfil-attr-dropdown .dropdown-item:hover,
 #editFilamentModal .editfil-attr-dropdown .dropdown-item.active {
-    background: #2a4c5c;
+    background: #2a4c5c; color: #fff;
+}
+#editFilamentModal .editfil-combo-dropdown .dropdown-item.new-hint {
+    background: #1d3a28; color: #87ffae; font-style: italic;
 }
 </style>
 <div class="modal fade" id="editFilamentModal" tabindex="-1" aria-labelledby="editFilamentModalLabel" aria-hidden="true">
@@ -203,10 +229,6 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body bg-dark text-white">
-                <!-- Global datalists so they're shared across all tabs. -->
-                <datalist id="editfil-mat-dl"></datalist>
-                <datalist id="editfil-vendor-dl"></datalist>
-
                 <ul class="nav nav-tabs mb-3" role="tablist">
                     <li class="nav-item" role="presentation">
                         <button class="nav-link active" id="editfil-tab-basic-btn"
@@ -239,15 +261,43 @@
                                     Material
                                     <span id="editfil-material-new-badge" class="badge bg-success ms-1" style="display:none; font-size:0.7rem;">+ NEW</span>
                                 </label>
-                                <input type="text" id="editfil-material" list="editfil-mat-dl" class="form-control bg-black text-white border-secondary" autocomplete="off" placeholder="PLA, PETG, ABS...">
+                                <!-- Wizard-style combobox: visible text input + hidden id
+                                     holder + absolute-positioned custom dropdown. Material
+                                     doesn't need the hidden id (free-text) but we keep the
+                                     wrapper structure identical to Vendor for consistent
+                                     styling/keyboard handling. -->
+                                <div class="position-relative">
+                                    <input type="text" id="editfil-material"
+                                        class="form-control bg-black text-white border-secondary"
+                                        autocomplete="off" placeholder="PLA, PETG, ABS...">
+                                    <div id="editfil-material-dropdown" class="editfil-combo-dropdown"></div>
+                                </div>
                             </div>
                             <div class="col-6">
                                 <label class="form-label text-light small mb-1">
                                     Vendor
                                     <span id="editfil-vendor-new-badge" class="badge bg-success ms-1" style="display:none; font-size:0.7rem;">+ NEW</span>
                                 </label>
-                                <input type="text" id="editfil-vendor-name" list="editfil-vendor-dl" class="form-control bg-black text-white border-secondary" autocomplete="off" placeholder="-- Generic --">
-                                <input type="hidden" id="editfil-vendor-id" value="">
+                                <div class="position-relative">
+                                    <input type="text" id="editfil-vendor-name"
+                                        class="form-control bg-black text-white border-secondary"
+                                        autocomplete="off" placeholder="-- Generic --">
+                                    <input type="hidden" id="editfil-vendor-id" value="">
+                                    <div id="editfil-vendor-dropdown" class="editfil-combo-dropdown"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Nozzle + bed live on Basic alongside material/vendor because
+                             they're the most-commonly-edited fields. Max temps and the
+                             rest of the spec numbers stay on the Specs tab. -->
+                        <div class="row g-2 mt-2">
+                            <div class="col-6">
+                                <label class="form-label text-light small mb-1">🔥 Nozzle (°C)</label>
+                                <input type="number" id="editfil-nozzle" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label text-light small mb-1">🛏️ Bed (°C)</label>
+                                <input type="number" id="editfil-bed" class="form-control bg-black text-white border-secondary" autocomplete="off">
                             </div>
                         </div>
                         <div class="mt-2">
@@ -286,8 +336,19 @@
                     <div class="tab-pane fade" id="editfil-tab-specs" role="tabpanel">
                         <div class="row g-2">
                             <div class="col-6">
-                                <label class="form-label text-light small mb-1">Empty Spool Wt (g) <span id="editfil-vendor-wt-hint" class="text-muted small"></span></label>
-                                <input type="number" step="0.1" id="editfil-spool-weight" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                                <label class="form-label text-light small mb-1">
+                                    Empty Spool Wt (g)
+                                    <span id="editfil-vendor-wt-hint" class="small" style="color:#ffc97a;"></span>
+                                </label>
+                                <div class="input-group">
+                                    <input type="number" step="0.1" id="editfil-spool-weight" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                                    <!-- Copy the vendor's default empty_spool_weight into the
+                                         input. Visible only when a vendor value is available;
+                                         openEditFilamentForm toggles `display:none` as needed. -->
+                                    <button type="button" id="editfil-copy-vendor-wt"
+                                        class="btn btn-outline-info" style="display:none;"
+                                        title="Copy empty-spool weight from vendor default">⇩</button>
+                                </div>
                             </div>
                             <div class="col-6">
                                 <label class="form-label text-light small mb-1">Density (g/cm³)</label>
@@ -308,33 +369,22 @@
                                 <input type="number" step="0.01" id="editfil-price" class="form-control bg-black text-white border-secondary" placeholder="0.00" autocomplete="off">
                             </div>
                         </div>
-                        <!-- Temp ranges. Spoolman natively stores one nozzle + one bed
-                             value, which we treat as the low / recommended setting.
-                             The high/max values ride in extras so we don't need
-                             Spoolman schema changes. -->
+                        <!-- Max-temp companions to Spoolman's native min/recommended
+                             nozzle+bed fields (those inputs live on the Basic tab).
+                             Stored in extras: nozzle_temp_max, bed_temp_max. -->
                         <hr class="border-secondary mt-3 mb-2">
-                        <div class="text-info small fw-bold mb-1">🔥 Nozzle (°C)</div>
+                        <div class="small fw-bold mb-1" style="color:#7fd4ff;">🌡️ Max Temperatures (optional)</div>
                         <div class="row g-2">
                             <div class="col-6">
-                                <label class="form-label text-light small mb-1">Min / Recommended</label>
-                                <input type="number" id="editfil-nozzle" class="form-control bg-black text-white border-secondary" autocomplete="off">
-                            </div>
-                            <div class="col-6">
-                                <label class="form-label text-light small mb-1">Max (stored in extras)</label>
+                                <label class="form-label text-light small mb-1">Nozzle Max (°C)</label>
                                 <input type="number" id="editfil-nozzle-max" class="form-control bg-black text-white border-secondary" autocomplete="off">
                             </div>
-                        </div>
-                        <div class="text-info small fw-bold mb-1 mt-2">🛏️ Bed (°C)</div>
-                        <div class="row g-2">
                             <div class="col-6">
-                                <label class="form-label text-light small mb-1">Min / Recommended</label>
-                                <input type="number" id="editfil-bed" class="form-control bg-black text-white border-secondary" autocomplete="off">
-                            </div>
-                            <div class="col-6">
-                                <label class="form-label text-light small mb-1">Max (stored in extras)</label>
+                                <label class="form-label text-light small mb-1">Bed Max (°C)</label>
                                 <input type="number" id="editfil-bed-max" class="form-control bg-black text-white border-secondary" autocomplete="off">
                             </div>
                         </div>
+                        <div class="form-text small mt-1" style="color:#adb5bd;">Native nozzle/bed (min/recommended) live on the Basic tab. Max values are stored in Spoolman as extras.</div>
                     </div>
 
                     <!-- ADVANCED -->

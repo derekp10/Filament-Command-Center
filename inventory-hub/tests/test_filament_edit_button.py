@@ -319,7 +319,10 @@ def test_modal_save_submits_multi_color_csv(page: Page):
     page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
     data = page.evaluate("() => window.__lastFetchPayload.data")
     assert data["multi_color_hexes"] == "ff0000,00ff00"
-    assert data["multi_color_direction"] == "coaxial"
+    # multi_color_direction lives in extras now (Spoolman schema doesn't accept
+    # it as a top-level filament field). Stored with surrounding quotes per
+    # Spoolman's extras convention.
+    assert data["extra"]["multi_color_direction"] == '"coaxial"'
 
 
 def test_modal_save_rejects_invalid_hex(page: Page):
@@ -408,7 +411,11 @@ def test_modal_typing_new_vendor_shows_badge(page: Page):
     _open_modal_with(page, fil)
     # Wait for vendor datalist to load.
     page.wait_for_function(
-        "document.querySelector(\"#editfil-vendor-dl option[value='Alpha']\") !== null",
+        # Wait for the vendor dropdown fetch to complete. The combobox populates
+        # the dropdown lazily on focus, but the vendorCache is filled by the
+        # /api/vendors fetch callback. We focus the input to render the
+        # dropdown, then check for the expected option's DOM presence.
+        "() => { const el = document.getElementById('editfil-vendor-name'); el && el.focus(); const dd = document.getElementById('editfil-vendor-dropdown'); return dd && dd.querySelector('[data-label=\\'Alpha\\']') !== null; }",
         timeout=3_000,
     )
     assert not page.locator("#editfil-vendor-new-badge").is_visible()
@@ -428,7 +435,11 @@ def test_modal_creates_new_vendor_then_patches(page: Page):
     fil = {"id": 206, "name": "T", "material": "PLA", "vendor": {"id": 1, "name": "Alpha"}}
     _open_modal_with(page, fil)
     page.wait_for_function(
-        "document.querySelector(\"#editfil-vendor-dl option[value='Alpha']\") !== null",
+        # Wait for the vendor dropdown fetch to complete. The combobox populates
+        # the dropdown lazily on focus, but the vendorCache is filled by the
+        # /api/vendors fetch callback. We focus the input to render the
+        # dropdown, then check for the expected option's DOM presence.
+        "() => { const el = document.getElementById('editfil-vendor-name'); el && el.focus(); const dd = document.getElementById('editfil-vendor-dropdown'); return dd && dd.querySelector('[data-label=\\'Alpha\\']') !== null; }",
         timeout=3_000,
     )
     page.locator("#editfil-vendor-name").fill("FreshBrand")
@@ -450,12 +461,14 @@ def test_modal_select_existing_vendor_sets_hidden_id(page: Page):
 
     fil = {"id": 207, "name": "T", "material": "PLA", "vendor": {"id": 1, "name": "Alpha"}}
     _open_modal_with(page, fil)
+    # Poll: type "Beta" into the vendor input, fire the input event, and
+    # check whether the hidden id resolved. This races the /api/vendors
+    # fetch — once the cache populates, refreshVendorBadge matches and
+    # writes "2" into the hidden field.
     page.wait_for_function(
-        "document.querySelector(\"#editfil-vendor-dl option[value='Beta']\") !== null",
+        "() => { const n = document.getElementById('editfil-vendor-name'); n.value = 'Beta'; n.dispatchEvent(new Event('input', {bubbles:true})); return document.getElementById('editfil-vendor-id').value === '2'; }",
         timeout=3_000,
     )
-    page.locator("#editfil-vendor-name").fill("Beta")
-    page.wait_for_timeout(100)
     assert page.locator("#editfil-vendor-id").input_value() == "2"
 
 
@@ -604,7 +617,7 @@ def test_modal_material_new_badge_hides_for_known(page: Page):
     _open_modal_with(page, fil)
     # Wait for /api/materials to populate the datalist.
     page.wait_for_function(
-        "document.querySelector(\"#editfil-mat-dl option[value='PLA']\") !== null",
+        "() => { const el = document.getElementById('editfil-material'); el && el.focus(); const dd = document.getElementById('editfil-material-dropdown'); return dd && dd.querySelector('[data-label=\\'PLA\\']') !== null; }",
         timeout=3_000,
     )
     # PLA is known → no badge. Typing "PolyCarbonate" (not in stub list) → badge.
@@ -759,3 +772,188 @@ def test_create_filament_rejects_empty_data(api_base_url: str):
     assert r.status_code == 400
     body = r.json()
     assert body.get("success") is False
+
+
+# ---------------------------------------------------------------------------
+# Wave 5 (2026-04-23 pm): combobox keyboard nav, Escape scoping, copy-from-
+# vendor button, multi_color_direction routed through extras, Spoolman error
+# surfacing.
+# ---------------------------------------------------------------------------
+
+
+def test_modal_vendor_combobox_escape_closes_dropdown_not_modal(page: Page):
+    """Escape while the vendor dropdown is open should close the dropdown
+    only — the Bootstrap modal must stay visible."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 501, "name": "T", "material": "PLA", "vendor": {"id": 1, "name": "Alpha"}}
+    _open_modal_with(page, fil)
+
+    # Focus vendor + clear text to force the full dropdown to render.
+    vendor_input = page.locator("#editfil-vendor-name")
+    vendor_input.click()
+    vendor_input.fill("")
+    page.wait_for_selector("#editfil-vendor-dropdown .dropdown-item", timeout=3_000)
+    # Dropdown visible, modal visible.
+    expect(page.locator("#editfil-vendor-dropdown")).to_be_visible()
+    expect(page.locator("#editFilamentModal.show")).to_have_count(1)
+
+    # Escape: dropdown closes, modal stays.
+    vendor_input.press("Escape")
+    expect(page.locator("#editfil-vendor-dropdown")).to_be_hidden()
+    expect(page.locator("#editFilamentModal.show")).to_have_count(1)
+
+
+def test_modal_attr_chip_escape_closes_dropdown_not_modal(page: Page):
+    """Same scoping for the filament-attributes chip picker."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 502, "name": "T", "material": "PLA", "extra": {}}
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-advanced-btn").click()
+
+    attr_input = page.locator("#editfil-attr-input")
+    attr_input.click()
+    page.wait_for_selector("#editfil-attr-dropdown .dropdown-item", timeout=3_000)
+    expect(page.locator("#editfil-attr-dropdown")).to_be_visible()
+
+    attr_input.press("Escape")
+    expect(page.locator("#editfil-attr-dropdown")).to_be_hidden()
+    expect(page.locator("#editFilamentModal.show")).to_have_count(1)
+
+
+def test_modal_vendor_combobox_keyboard_arrow_and_enter_selects(page: Page):
+    """ArrowDown highlights the first option, Enter commits it and sets
+    the hidden id — matches the wizard's combobox keyboard contract."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 503, "name": "T", "material": "PLA"}
+    _open_modal_with(page, fil)
+    vendor_input = page.locator("#editfil-vendor-name")
+    vendor_input.click()
+    # Wait for the vendors fetch + render.
+    page.wait_for_selector("#editfil-vendor-dropdown [data-label='Alpha']", timeout=3_000)
+
+    vendor_input.press("ArrowDown")
+    vendor_input.press("Enter")
+
+    # Hidden id should be 1 (Alpha).
+    assert page.locator("#editfil-vendor-id").input_value() == "1"
+    assert vendor_input.input_value() == "Alpha"
+
+
+def test_modal_copy_vendor_weight_button(page: Page):
+    """When the filament's vendor has an empty_spool_weight, clicking the ⇩
+    button on the Specs tab should copy it into the spool-weight input."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 504, "name": "T", "material": "PLA",
+        "vendor": {"id": 1, "name": "Alpha", "empty_spool_weight": 185},
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-specs-btn").click()
+    expect(page.locator("#editfil-copy-vendor-wt")).to_be_visible()
+
+    # Button should be clickable; clicking copies the value.
+    page.locator("#editfil-copy-vendor-wt").click()
+    assert page.locator("#editfil-spool-weight").input_value() == "185"
+
+
+def test_modal_copy_vendor_weight_button_hidden_when_no_vendor_wt(page: Page):
+    """No empty_spool_weight on the vendor → button stays hidden."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 505, "name": "T", "material": "PLA", "vendor": {"id": 1, "name": "Alpha"}}
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-specs-btn").click()
+    expect(page.locator("#editfil-copy-vendor-wt")).to_be_hidden()
+
+
+def test_modal_multi_color_direction_routes_through_extras(page: Page):
+    """multi_color_direction was a top-level field; Spoolman's schema rejects
+    it there (422). It now lives in extras, wrapped with Spoolman's string
+    convention. This test guards the fix."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 506, "name": "Two", "material": "PLA",
+        "multi_color_hexes": "ff0000,00ff00",
+        "multi_color_direction": "longitudinal",
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-colors-btn").click()
+    # Flip the direction.
+    page.locator("#editfil-color-direction").select_option(value="coaxial")
+
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+    data = page.evaluate("() => window.__lastFetchPayload.data")
+    # Must NOT be a top-level field.
+    assert "multi_color_direction" not in data, \
+        "multi_color_direction must not be sent as a top-level Spoolman field"
+    # Must be in extras with the Spoolman-quoted format.
+    assert data["extra"]["multi_color_direction"] == '"coaxial"'
+
+
+def test_modal_surfaces_spoolman_error_body(page: Page):
+    """When /api/update_filament returns a failure payload, the modal's
+    error banner should show the actual message (not a generic one)."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    # Stub /api/update_filament to return a specific failure.
+    page.evaluate(
+        """
+        const orig = window.fetch;
+        window.fetch = async (url, opts) => {
+            if (url === '/api/vendors') {
+                return new Response(JSON.stringify({success: true, vendors: []}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/materials') {
+                return new Response(JSON.stringify({success: true, materials: []}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/external/fields') {
+                return new Response(JSON.stringify({success: true, fields: {filament: [], spool: []}}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/update_filament') {
+                return new Response(JSON.stringify({
+                    success: false,
+                    msg: 'Spoolman rejected update: HTTP 422: multi_color_direction is not a valid field'
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            return orig(url, opts);
+        };
+        """
+    )
+
+    fil = {"id": 507, "name": "T", "material": "PLA"}
+    _open_modal_with(page, fil)
+    page.locator("#editfil-name").fill("Changed")
+    page.locator("#editfil-save").click()
+
+    expect(page.locator("#editfil-error")).to_be_visible()
+    text = page.locator("#editfil-error").text_content() or ""
+    assert "multi_color_direction" in text or "422" in text

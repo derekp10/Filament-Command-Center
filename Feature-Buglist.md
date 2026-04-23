@@ -14,10 +14,26 @@
     - Collapsible Advanced section (`<details>`) now holds: Original Color, Filament Attributes (comma-separated → JSON array round-trip), Product URL, Purchase URL, Sheet Link, Legacy/External ID.
     - Extras merge is safe: preConfirm clones the filament's existing `extra` and only overrides the fields the user touched, so Spoolman's wholesale-replace PATCH no longer drops untouched keys (`price_total`, `sample_printed`, `flush_multiplier`, etc.).
     - 24 tests in `test_filament_edit_button.py` cover the new fields + merge behavior.
-  * ~~**Edit Filament Wave 3 (DEFERRED)**~~ **PARTIALLY DONE 2026-04-23** — promoted from SweetAlert to a Bootstrap tabbed modal (`#editFilamentModal` in `modals_details.html`). Four tabs (Basic / Colors / Specs / Advanced) keep each pane short even for filaments with many colors. The modal body is scrollable, so overflow is handled at the viewport level. Covered by `test_filament_edit_button.py` (22 tests).
-    - Remaining Wave 3 gaps (deferred again):
-      1. External-metadata import panel (Prusament / open-filament-database).
-      2. Richer `filament_attributes` UI — still a freeform comma-separated text input. A chip-picker with known attributes (Silk, Matte, Carbon Fiber, Glow, etc.) would be safer.
+  * ~~**Edit Filament Wave 3**~~ **DONE 2026-04-23** — promoted from SweetAlert to a Bootstrap tabbed modal (`#editFilamentModal` in `modals_details.html`). Four tabs (Basic / Colors / Specs / Advanced). Covered by `test_filament_edit_button.py` (42 tests).
+  * ~~**Edit Filament Wave 4**~~ **DONE 2026-04-23** — feedback round on the Bootstrap modal:
+    - Stable modal size across tabs (min-height on tab-content).
+    - Max-temperature fields (native `settings_extruder_temp`/`settings_bed_temp` are min/recommended; new `extra.nozzle_temp_max`/`extra.bed_temp_max` hold the high side — closes the "track high temperatures" line item below).
+    - Color reorder with up/down buttons on every row.
+    - Filament Attributes chip-picker matching the wizard.
+    - "+ NEW" badge on Material.
+    - Add mode: `window.openAddFilamentForm()` + new `/api/create_filament` endpoint.
+  * ~~**Edit Filament Wave 5**~~ **DONE 2026-04-23** — another feedback round:
+    - **Fixed pre-existing SyntaxError** (dangling `};` in `modals_filabridge_recovery.html`) that was breaking ALL page JS and masking every Edit-Filament behavior. Unrelated to the Edit Filament work itself but surfaced while debugging it.
+    - **Softer active-tab styling** — muted cyan pop on dark background (was too-gold).
+    - **Custom combobox dropdowns** for Material and Vendor replacing the browser-native `<input list>` — keyboard-navigable (arrows + Enter), styled to match the dark theme, shows a "+ Create" hint row when the typed name doesn't exist. Matches the Add/Edit wizard pattern.
+    - **Escape scoped to dropdowns** — pressing Escape while a combobox or chip-picker dropdown is open closes the dropdown only (not the whole modal). Bubble-blocked via `e.stopPropagation()`.
+    - **Nozzle/Bed moved back to Basic tab** alongside Material/Vendor (user feedback — felt missing). Max-temps stay on Specs.
+    - **Copy-from-vendor button** (⇩) next to Empty Spool Wt — when the filament's vendor has a default `empty_spool_weight`, clicking drops that value into the input. Button hides when no vendor default exists.
+    - **Improved text contrast** — bumped `.text-muted` inside the modal to `#adb5bd` (lighter) so helper text is readable on dimmer monitors.
+    - **Spoolman error passthrough** — `update_filament` stashes the actual Spoolman response body in `spoolman_api.LAST_SPOOLMAN_ERROR`; `api_update_filament` surfaces it so the UI shows the real rejection reason (e.g. "HTTP 422: multi_color_direction is not a valid field") instead of a generic "rejected".
+    - **`multi_color_direction` routed through extras** — it isn't a native Spoolman filament field (caused "Spoolman rejected update" on color reorder). Now merged into `extra.multi_color_direction` with the standard quote-wrapped string convention.
+    - **`setup_fields.py` updated** — prod/new-install deploys now create `nozzle_temp_max`, `bed_temp_max`, and `multi_color_direction` as filament extras automatically.
+    - Remaining Wave 6 gap: external-metadata import panel (Prusament / open-filament-database).
 
 * ~~Ability to edit filament specific data inside Filament command center. Currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool. Some sort of edit workflow for chaing data directly related to filaments.~~ **DONE** — covered by the Edit Filament MVP (2026-04-22) + vendor/color follow-up (2026-04-23).
 
@@ -43,7 +59,7 @@
 
 * It appears that while I was editing a spool's filament data that was sloted into a print head, saving caused it to be removed. We need to check to see why that is. Or the filament's location was listed the correct location, but it the location was regestring as empty 0/1 on location list modal, and nothing assigned inside the location manager modal. _[NEEDS REPRO — unclear which path caused the removal. Candidates: wizard save that writes `location=''`, a filabridge unmap kicked off by a stray update, or an overwrite that cleared `container_slot`. Next time: reproduce with Spoolman DB dump before + after + browser Network tab so we can see the exact write payload.]_
 
-* Currently using temp (Bed, Nozzle/Toolhead) in spoolman to store the low tempratures, but I really think we need to track the high tempratures for those values. Will need to look into the code and see what we can do to fix this. Will need to add extra fields for this on the filament side, and treat them not as custom fields in the ui placement, but as actual fields. Will need to reinfource the location of those fieds in the UI as custom fields have a tendency to re-order themselves. I have a line item for hammering down the field locations so they don't move around eveythime a custom entry is added into an extra field, so we should probably include this in that as well. _[NEEDS DESIGN DISCUSSION — bundle with the "Spoolman field ordering bug" item in Modals & Wizard below. Proposed: add `nozzle_temp_high` and `bed_temp_high` extra fields, render them as first-class inputs (pinned ordering) in both the wizard and the Edit Filament form with side-by-side "min / max" pairs. The existing low-temp fields become the "min" side.]_
+* ~~Currently using temp (Bed, Nozzle/Toolhead) in spoolman to store the low tempratures, but I really think we need to track the high tempratures for those values.~~ **DONE 2026-04-23 Wave 4** in the Edit Filament modal — `extra.nozzle_temp_max` + `extra.bed_temp_max` land via the Specs tab (native settings stay as min/recommended on Basic). `setup_fields.py` creates the two new filament extras on deploy. Wizard-side parity is still TODO — when the Add Inventory Wizard is next touched, add matching max-temp fields there too.
 
 * Possible issues with >1kg spools and tracking weights? _[NEEDS REPRO — no known failure, just a lingering concern. Next time you work with a >1kg spool, compare the UI's remaining_weight across a print against the actual scale delta. If they match, close this out.]_
 

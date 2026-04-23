@@ -966,7 +966,11 @@ def api_update_filament():
                 "SUCCESS", "00ff00",
             )
             return jsonify({"success": True, "filament": updated})
-        return jsonify({"success": False, "msg": "Spoolman rejected the update."})
+        # Surface the stashed Spoolman error body so the UI can tell the user
+        # WHY the update was rejected (invalid field, bad vendor_id, etc.)
+        # instead of showing an opaque "rejected" message.
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "No response body"
+        return jsonify({"success": False, "msg": f"Spoolman rejected update: {err}"})
     except Exception as e:
         state.logger.error(f"Failed to update filament #{fid}: {e}")
         return jsonify({"success": False, "msg": str(e)})

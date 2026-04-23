@@ -1030,7 +1030,100 @@ const _editfilOpenModal = (fil) => {
         refreshDirectionVisibility();
     };
 
-    // --- Material datalist + "+ NEW" badge ---
+    // --- Generic custom-combobox helper ---
+    // Replaces the earlier <input list=""> datalist approach. Datalists can't
+    // be styled (the browser native dropdown ignored our dark theme) and
+    // different browsers show them inconsistently. This helper matches the
+    // Add/Edit wizard's custom dropdown pattern: input + absolute-positioned
+    // list + keyboard nav (ArrowUp/Down/Enter) + click-to-select.
+    //
+    //   opts: {
+    //     inputId: 'editfil-material',
+    //     dropdownId: 'editfil-material-dropdown',
+    //     getItems: () => [{value, label}],            // always-fresh item source
+    //     onSelect: ({value, label}) => void,          // called on click/Enter
+    //     onInput: () => void,                          // called on any keystroke
+    //     newHintText: (typed) => 'Press Enter to add "<typed>"' | null
+    //   }
+    const bindComboDropdown = (opts) => {
+        const input = document.getElementById(opts.inputId);
+        const dropdown = document.getElementById(opts.dropdownId);
+        if (!input || !dropdown) return;
+
+        const render = () => {
+            const qs = (input.value || '').toLowerCase();
+            const items = opts.getItems() || [];
+            const filtered = qs
+                ? items.filter(it => String(it.label).toLowerCase().includes(qs))
+                : items;
+            const rows = filtered.map(it =>
+                `<div class="dropdown-item" data-value="${esc(it.value)}" data-label="${esc(it.label)}">${esc(it.label)}</div>`
+            );
+            const hint = typeof opts.newHintText === 'function' ? opts.newHintText(input.value) : null;
+            if (hint) rows.push(`<div class="dropdown-item new-hint" data-new="1">${esc(hint)}</div>`);
+            if (rows.length === 0) {
+                dropdown.style.display = 'none';
+                return;
+            }
+            dropdown.innerHTML = rows.join('');
+            dropdown.style.display = 'block';
+            dropdown.querySelectorAll('[data-value]').forEach(el => {
+                el.onmousedown = (e) => {
+                    e.preventDefault();
+                    input.value = el.dataset.label;
+                    if (opts.onSelect) opts.onSelect({ value: el.dataset.value, label: el.dataset.label });
+                    dropdown.style.display = 'none';
+                };
+            });
+        };
+        input.addEventListener('focus', render);
+        input.addEventListener('input', () => {
+            render();
+            if (opts.onInput) opts.onInput();
+        });
+        input.addEventListener('blur', () => {
+            setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+        });
+        input.addEventListener('keydown', (e) => {
+            const visible = dropdown.style.display !== 'none';
+            if (e.key === 'Escape' && visible) {
+                // Swallow Escape when the dropdown is open so it closes the
+                // dropdown only (not the whole Bootstrap modal).
+                e.preventDefault();
+                e.stopPropagation();
+                dropdown.style.display = 'none';
+                return;
+            }
+            if (!visible) {
+                if (e.key === 'ArrowDown') render();
+                return;
+            }
+            const items = Array.from(dropdown.querySelectorAll('.dropdown-item'));
+            if (!items.length) return;
+            let idx = items.findIndex(el => el.classList.contains('active'));
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                items.forEach(el => el.classList.remove('active'));
+                if (e.key === 'ArrowDown') idx = idx + 1 >= items.length ? 0 : idx + 1;
+                else idx = idx - 1 < 0 ? items.length - 1 : idx - 1;
+                items[idx].classList.add('active');
+                items[idx].scrollIntoView({ block: 'nearest' });
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const target = items.find(el => el.classList.contains('active')) || items[0];
+                if (target && target.dataset.value !== undefined) {
+                    input.value = target.dataset.label;
+                    if (opts.onSelect) opts.onSelect({ value: target.dataset.value, label: target.dataset.label });
+                } else if (target && target.dataset.new) {
+                    // User wants to commit whatever they typed as a new value.
+                    if (opts.onSelect) opts.onSelect({ value: '', label: input.value, isNew: true });
+                }
+                dropdown.style.display = 'none';
+            }
+        });
+    };
+
+    // --- Material combobox + "+ NEW" badge ---
     const materialEl = document.getElementById('editfil-material');
     const materialNewBadge = document.getElementById('editfil-material-new-badge');
     let materialCache = [];
@@ -1040,20 +1133,29 @@ const _editfilOpenModal = (fil) => {
         const known = materialCache.some(m => m.toLowerCase() === typed.toLowerCase());
         materialNewBadge.style.display = known ? 'none' : 'inline-block';
     };
-    if (materialEl) materialEl.oninput = refreshMaterialBadge;
+    bindComboDropdown({
+        inputId: 'editfil-material',
+        dropdownId: 'editfil-material-dropdown',
+        getItems: () => materialCache.map(m => ({ value: m, label: m })),
+        onSelect: () => refreshMaterialBadge(),
+        onInput: () => refreshMaterialBadge(),
+        newHintText: (typed) => {
+            const t = (typed || '').trim();
+            if (!t) return null;
+            if (materialCache.some(m => m.toLowerCase() === t.toLowerCase())) return null;
+            return `+ Add "${t}" as a new material`;
+        },
+    });
     fetch('/api/materials').then(r => r.json()).then(d => {
-        const dl = document.getElementById('editfil-mat-dl');
-        if (!dl || !d || !d.success) return;
+        if (!d || !d.success) return;
         materialCache = Array.isArray(d.materials) ? d.materials : [];
-        dl.innerHTML = materialCache.map(m => `<option value="${esc(m)}"></option>`).join('');
         refreshMaterialBadge();
     }).catch(() => {});
 
-    // --- Vendor datalist + hidden id + "+ NEW" badge ---
+    // --- Vendor combobox + hidden id + "+ NEW" badge ---
     let vendorCache = [];
     const vendorNameEl = document.getElementById('editfil-vendor-name');
     const vendorIdEl = document.getElementById('editfil-vendor-id');
-    const vendorDl = document.getElementById('editfil-vendor-dl');
     const vendorNewBadge = document.getElementById('editfil-vendor-new-badge');
     const refreshVendorBadge = () => {
         const typed = (vendorNameEl.value || '').trim();
@@ -1071,15 +1173,49 @@ const _editfilOpenModal = (fil) => {
             vendorNewBadge.style.display = 'inline-block';
         }
     };
-    if (vendorNameEl) vendorNameEl.oninput = refreshVendorBadge;
+    bindComboDropdown({
+        inputId: 'editfil-vendor-name',
+        dropdownId: 'editfil-vendor-dropdown',
+        getItems: () => vendorCache.map(v => ({ value: String(v.id), label: v.name })),
+        onSelect: ({ value, label, isNew }) => {
+            if (isNew) {
+                vendorIdEl.value = '';
+            } else {
+                vendorIdEl.value = value;
+            }
+            refreshVendorBadge();
+        },
+        onInput: () => refreshVendorBadge(),
+        newHintText: (typed) => {
+            const t = (typed || '').trim();
+            if (!t) return null;
+            if (vendorCache.some(v => (v.name || '').toLowerCase() === t.toLowerCase())) return null;
+            return `+ Create vendor "${t}"`;
+        },
+    });
     fetch('/api/vendors').then(r => r.json()).then(d => {
         if (!d || !d.success) return;
         vendorCache = d.vendors || [];
-        if (vendorDl) {
-            vendorDl.innerHTML = vendorCache.map(v => `<option value="${esc(v.name)}"></option>`).join('');
-        }
         refreshVendorBadge();
     }).catch(() => {});
+
+    // --- Empty-Spool-Wt: copy-from-vendor button on Specs tab ---
+    // Show the ⇩ button when the vendor has a default empty_spool_weight
+    // worth copying over. Clicking it drops the vendor value into the
+    // spool-weight input.
+    const copyVendorWtBtn = document.getElementById('editfil-copy-vendor-wt');
+    if (copyVendorWtBtn) {
+        if (vendorWt) {
+            copyVendorWtBtn.style.display = 'inline-block';
+            copyVendorWtBtn.title = `Copy vendor default empty-spool weight (${vendorWt}g)`;
+            copyVendorWtBtn.onclick = () => {
+                if (spoolWtEl) spoolWtEl.value = String(vendorWt);
+            };
+        } else {
+            copyVendorWtBtn.style.display = 'none';
+            copyVendorWtBtn.onclick = null;
+        }
+    }
 
     // --- Filament Attributes chip picker (matches wizard UX) ---
     const attrChipsHost = document.getElementById('editfil-attr-chips');
@@ -1143,6 +1279,15 @@ const _editfilOpenModal = (fil) => {
         attrInput.oninput = () => renderAttrDropdown();
         attrInput.onblur = () => setTimeout(() => { if (attrDropdown) attrDropdown.style.display = 'none'; }, 150);
         attrInput.onkeydown = (e) => {
+            if (e.key === 'Escape' && attrDropdown && attrDropdown.style.display !== 'none') {
+                // Close the dropdown list only — don't let Bootstrap's
+                // modal-dismiss handler see the Escape and close the
+                // whole modal. Matches the wizard's attribute chip picker.
+                e.preventDefault();
+                e.stopPropagation();
+                attrDropdown.style.display = 'none';
+                return;
+            }
             if (e.key === 'Enter') {
                 e.preventDefault();
                 if (attrInput.value.trim()) addAttrChip(attrInput.value);
@@ -1326,12 +1471,16 @@ const _editfilOpenModal = (fil) => {
                 .filter(Boolean).join(',');
             const newMulti = String(data.multi_color_hexes || '').toLowerCase();
             if (oldMulti !== newMulti) changed.multi_color_hexes = data.multi_color_hexes;
+            // multi_color_direction is NOT a native Spoolman filament field —
+            // it lives in `extra.multi_color_direction`. PATCHing it as a
+            // top-level key fails Spoolman's schema validation (422). Merge
+            // it into dirtyExtras below so it goes through the extras path.
             if (data.multi_color_direction != null) {
                 const oldDir = String(fil.multi_color_direction
                     || (fil.extra && fil.extra.multi_color_direction)
                     || '').toLowerCase();
                 if (oldDir !== data.multi_color_direction) {
-                    changed.multi_color_direction = data.multi_color_direction;
+                    dirtyExtras.multi_color_direction = data.multi_color_direction;
                 }
             }
             if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
