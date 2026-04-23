@@ -57,8 +57,18 @@ const renderBuffer = () => {
     // 3. Dispatch Event for Location Manager
     document.dispatchEvent(new CustomEvent('inventory:buffer-updated', { detail: { spools: state.heldSpools } }));
 
-    // 4. Save state if not currently syncing from server
-    if (!window.isBufferSyncing) persistBuffer();
+    // 4. Save state if not currently syncing from server.
+    //    Track local-change timestamp so a concurrent loadBuffer can skip its overwrite,
+    //    and queue a retry persist if a sync is currently holding the lock.
+    if (window.suppressBufferDirty) {
+        // Server-driven render — neither dirty nor persist.
+    } else if (!window.isBufferSyncing) {
+        window.lastLocalBufferChange = Date.now();
+        persistBuffer();
+    } else {
+        window.lastLocalBufferChange = Date.now();
+        window.pendingPersist = true;
+    }
 };
 
 const removeBufferItem = (id) => {
@@ -361,18 +371,37 @@ const loadBuffer = () => {
                 const serverStr = JSON.stringify(data);
 
                 if (currentStr !== serverStr) {
-                    console.log("🔄 Syncing Buffer from Server...");
-                    state.heldSpools = data;
-                    if (window.renderBuffer) window.renderBuffer();
-                    // [ALEX FIX] Trigger a proactive backfill sync since old DB state didn't track remaining_weight
-                    setTimeout(liveRefreshBuffer, 500);
+                    // Grace window: a user-driven mutation in the last 3s wins over the server payload.
+                    // Without this, manual entries (and barcode scans) added during an in-flight sync
+                    // get wiped before persistBuffer lands.
+                    const localAge = Date.now() - (window.lastLocalBufferChange || 0);
+                    if (localAge < 3000) {
+                        console.log(`⏸️ Skipping server overwrite — local change ${localAge}ms ago`);
+                        window.pendingPersist = true;
+                    } else {
+                        console.log("🔄 Syncing Buffer from Server...");
+                        window.suppressBufferDirty = true;
+                        state.heldSpools = data;
+                        if (window.renderBuffer) window.renderBuffer();
+                        window.suppressBufferDirty = false;
+                        // [ALEX FIX] Trigger a proactive backfill sync since old DB state didn't track remaining_weight
+                        setTimeout(liveRefreshBuffer, 500);
+                    }
                 }
             }
             window.isBufferSyncing = false; // Unblock
+            if (window.pendingPersist) {
+                window.pendingPersist = false;
+                persistBuffer();
+            }
         })
         .catch(e => {
             console.warn("Buffer Load Failed", e);
             window.isBufferSyncing = false;
+            if (window.pendingPersist) {
+                window.pendingPersist = false;
+                persistBuffer();
+            }
         });
 };
 

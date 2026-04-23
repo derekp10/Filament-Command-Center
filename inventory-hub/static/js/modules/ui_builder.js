@@ -110,7 +110,8 @@ const SpoolCardBuilder = {
         else if (mode === 'loc_list') {
             outerClasses += 'manage-list-item js-spool-card'; // Add classes needed by Location Manager tests/logic
             wrapperStyle += ` margin-bottom: 10px;`;
-            actionTarget = `openSpoolDetails(${item.id})`;
+            // Unslotted items: primary card-body click = Pick Up (adds to buffer). Details stays on the 🔍 button.
+            actionTarget = `ejectSpool(${item.id}, '${locId}', true)`;
 
             const printHoverClick = window.addToQueue ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');` : '';
             

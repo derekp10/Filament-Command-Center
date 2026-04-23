@@ -13,7 +13,6 @@
 
 * In location manager, if an item is added to a loction that has slots, and there is a free slot, auto assign the item into that free slot. (If there are multiple free slots, fill the first empty one.)
 
-* I know we fixed it for scanning items, but hand typed id's into the command center's main page can sometimes add an item, that then gets imidiately removed on backend refresh. We need to fix this from happening when loading items without the use of a barcode. (Basically bring the protections we recently added to barcode scans reguarding this issue, to also preserve manual entries too.)
 * Review and unify update logic across the program, we have to many versions of update that keep getting orphined, or cause problems later on when they aren't included in a recent design change. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
 * Figure out why playright can't be run or is not installed on the local docker if that is the issue, otherwise find out if we need to add it to dev, and if needed add it to live/prod if it makes sense.
 
@@ -48,9 +47,9 @@
 
 * For Auto Detect, the activity log should also include the manufacture and the spool color in there as well as the data already included.
 
-* The default action for an unslotted item in the Manage Location Modal should be changed to pick up.
 
-* When a Spool gets archived, and the filamen attached to it doesn't have an empty spool weight, propmt the user of the missing spool weight and offer to assist in updating that data after they way the empty spool. 
+* When a Spool gets archived, and the filamen attached to it doesn't have an empty spool weight, propmt the user of the missing spool weight and offer to assist in updating that data after they way the empty spool.
+
 
 # **Active Backlog (Organized by Feature Area)**
 
