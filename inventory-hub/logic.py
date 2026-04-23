@@ -89,6 +89,22 @@ def _fb_write(printer_name, toolhead_id, spool_id, fb_url=None):
         return (False, f"transport error: {e}")
 
 
+def _spool_brand_color_suffix(sid):
+    """Return a ' — Brand MAT (Color)' suffix for a spool, or '' if unavailable.
+
+    Used by Activity Log entries (e.g. auto-deploy) so the line identifies the
+    physical spool, not just its numeric ID. Never raises — a missing spool,
+    network hiccup, or malformed payload collapses to an empty suffix.
+    """
+    try:
+        snap = spoolman_api.get_spool(sid) or {}
+        info = spoolman_api.format_spool_display(snap) or {}
+        short = str(info.get("text_short", "")).strip()
+        return f" — {short}" if short else ""
+    except Exception:
+        return ""
+
+
 def resolve_scan(text):
     text = text.strip().strip('"').strip("'")
     decoded = urllib.parse.unquote(text)
@@ -440,7 +456,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
                 )
                 for sid in spools:
                     state.add_log_entry(
-                        f"⚡ Auto-deployed Spool #{sid} → <b>{str(bound_toolhead).upper()}</b> "
+                        f"⚡ Auto-deployed Spool #{sid}{_spool_brand_color_suffix(sid)} → <b>{str(bound_toolhead).upper()}</b> "
                         f"(source: {target}:SLOT:{target_slot})",
                         "SUCCESS", "00ff00"
                     )

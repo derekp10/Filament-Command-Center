@@ -71,9 +71,263 @@ def test_clamp_used_weight_rule():
     # Simulate a user submitting a form where they weighed an empty spool resulting in 'used_weight = 1200' on a 1000g initial spool.
     initial_weight = 1000.0
     used_weight = 1200.0
-    
-    # The API layer enforces min() clamp logic explicitly in create_spool / update_spool 
+
+    # The API layer enforces min() clamp logic explicitly in create_spool / update_spool
     clamped_used_weight = min(used_weight, initial_weight) if initial_weight is not None else used_weight
-    
+
     assert clamped_used_weight == 1000.0
+
+
+def _fake_spool(vendor_name="CC3D", color_name="Red", material="PLA"):
+    return {
+        "id": 42,
+        "external_id": "",
+        "remaining_weight": 500,
+        "extra": {},
+        "filament": {
+            "id": 7,
+            "vendor": {"name": vendor_name},
+            "material": material,
+            "name": color_name,
+            "color_hex": "ff0000",
+            "extra": {},
+        },
+    }
+
+
+@pytest.mark.parametrize("vendor_name", ["CC3D", "MatterHackers", "eSUN", "polymaker"])
+def test_format_spool_display_preserves_vendor_casing(vendor_name):
+    """Vendor/manufacturer names must be shown verbatim — not .title()-cased.
+
+    Regression guard for the 'CC3D' -> 'Cc3D' autocorrection bug. Brand strings
+    should be stripped of whitespace only; any other case-changing is out of scope.
+    """
+    spool = _fake_spool(vendor_name=vendor_name)
+    out = spoolman_api.format_spool_display(spool)
+
+    assert vendor_name in out["text"], (
+        f"Expected '{vendor_name}' in display text, got: {out['text']}"
+    )
+    assert vendor_name in out["text_short"], (
+        f"Expected '{vendor_name}' in short text, got: {out['text_short']}"
+    )
+
+
+def test_format_spool_display_preserves_vendor_with_surrounding_whitespace():
+    """Leading/trailing whitespace is still stripped, but internal casing survives."""
+    spool = _fake_spool(vendor_name="  CC3D  ")
+    out = spoolman_api.format_spool_display(spool)
+    assert "CC3D" in out["text"]
+    assert "  CC3D  " not in out["text"]
+
+
+# ---------------------------------------------------------------------------
+# Activity-Log enrichment helper (logic._spool_brand_color_suffix)
+# ---------------------------------------------------------------------------
+
+import logic  # noqa: E402
+
+
+def test_brand_color_suffix_includes_manufacturer_and_color(monkeypatch):
+    """Auto-Detect / Auto-Deploy log lines must identify the spool, not just #ID."""
+    fake = _fake_spool(vendor_name="CC3D", color_name="Crimson Red", material="PLA")
+    monkeypatch.setattr(logic.spoolman_api, "get_spool", lambda sid: fake)
+
+    suffix = logic._spool_brand_color_suffix(42)
+
+    assert "CC3D" in suffix
+    assert "Crimson Red" in suffix
+    assert "PLA" in suffix
+    assert suffix.startswith(" — ")
+
+
+def test_brand_color_suffix_empty_when_spool_missing(monkeypatch):
+    """A missing spool should collapse to an empty suffix, not raise."""
+    monkeypatch.setattr(logic.spoolman_api, "get_spool", lambda sid: None)
+    assert logic._spool_brand_color_suffix(9999) == ""
+
+
+def test_brand_color_suffix_swallows_exceptions(monkeypatch):
+    """Network / API errors must never break the log write."""
+    def boom(sid):
+        raise RuntimeError("spoolman unreachable")
+    monkeypatch.setattr(logic.spoolman_api, "get_spool", boom)
+    assert logic._spool_brand_color_suffix(42) == ""
+
+
+# ---------------------------------------------------------------------------
+# Spool / Filament color-card parity (search_inventory → frontend card render)
+# ---------------------------------------------------------------------------
+# The filament branch used to truncate multi-color strings to the first hex
+# only, and defaulted `color_direction` to '' (blank), which caused the card
+# gradient / coextruded rendering to diverge from the spool branch.
+# Regression guards below.
+
+
+def _fake_filament_multi():
+    return {
+        "id": 99,
+        "name": "Cosmic Swirl",
+        "material": "PLA",
+        "vendor": {"id": 1, "name": "Polymaker"},
+        "color_hex": "ff0000",
+        "multi_color_hexes": "ff0000,00ff00,0000ff",
+        "multi_color_direction": "coaxial",
+        "extra": {},
+    }
+
+
+def test_format_spool_display_passes_full_multicolor_string():
+    """Spool cards need the complete CSV of hex codes — not a truncation."""
+    spool = _fake_spool(vendor_name="Polymaker")
+    spool["filament"]["multi_color_hexes"] = "ff0000,00ff00,0000ff"
+    spool["filament"]["multi_color_direction"] = "coaxial"
+
+    out = spoolman_api.format_spool_display(spool)
+
+    assert out["color"] == "ff0000,00ff00,0000ff"
+    assert out["color_direction"] == "coaxial"
+
+
+def test_filament_search_result_passes_full_multicolor_string():
+    """Filament cards must render the same gradient/coextruded visuals as spools.
+
+    Previously the filament branch did `base_color.split(',')[0]`, so a 3-color
+    filament rendered solid red instead of the tri-color gradient a spool of
+    the same filament would show.
+    """
+    # We can't easily stand up a full search_inventory test without Spoolman,
+    # so exercise the formatting branch by stubbing requests.get and checking
+    # the returned payload.
+    import types, sys  # noqa: PLC0415
+    fake_filaments = [_fake_filament_multi()]
+    fake_spools: list = []
+
+    class _FakeResp:
+        def __init__(self, data):
+            self._data = data
+            self.ok = True
+
+        def json(self):
+            return self._data
+
+    def fake_get(url, **_kwargs):
+        if "/spool" in url:
+            return _FakeResp(fake_spools)
+        if "/filament" in url:
+            return _FakeResp(fake_filaments)
+        return _FakeResp([])
+
+    # Patch the module-level requests.get for this test
+    import spoolman_api as sm
+    original = sm.requests.get
+    sm.requests.get = fake_get
+    try:
+        results = sm.search_inventory(target_type="filament")
+    finally:
+        sm.requests.get = original
+
+    assert results, "Expected at least one filament result"
+    fil_card = results[0]
+    assert fil_card["color"] == "ff0000,00ff00,0000ff", (
+        f"Filament card color should be the full multi-color CSV, got {fil_card['color']!r}"
+    )
+    assert fil_card["color_direction"] == "coaxial"
+
+
+# ---------------------------------------------------------------------------
+# Auto-archive on weight-0 (_auto_archive_on_empty)
+# ---------------------------------------------------------------------------
+# The user's 2026-04-22 answer on the backlog item "If a spool's remaining
+# weight is 0, suggest / auto set archived" was "Auto" — so update_spool now
+# injects archived=True + location='' whenever a weight-touching payload
+# leaves remaining_weight <= 0.
+
+
+def test_auto_archive_injects_archived_and_location_when_used_equals_initial():
+    data = {"used_weight": 1000}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=200)
+    assert data["archived"] is True
+    assert data["location"] == ""
+
+
+def test_auto_archive_does_not_fire_above_zero():
+    data = {"used_weight": 999}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=200)
+    assert "archived" not in data
+    assert "location" not in data
+
+
+def test_auto_archive_respects_caller_archived_flag():
+    """If the caller sets archived=False explicitly, don't clobber it."""
+    data = {"used_weight": 1000, "archived": False}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=0)
+    assert data["archived"] is False  # caller intent preserved
+    assert data["location"] == ""     # but location still auto-set
+
+
+def test_auto_archive_respects_caller_location():
+    """If the caller sets location explicitly, don't overwrite it."""
+    data = {"used_weight": 1000, "location": "LR-SHELF-1"}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=0)
+    assert data["archived"] is True
+    assert data["location"] == "LR-SHELF-1"
+
+
+def test_auto_archive_uses_payload_initial_weight_over_existing():
+    """If the caller ships a new initial_weight, use it over the existing value."""
+    data = {"used_weight": 500, "initial_weight": 500}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=100)
+    assert data["archived"] is True
+
+
+def test_auto_archive_noop_when_no_weight_fields_in_payload():
+    data = {"location": "LR-CART-2", "comment": "foo"}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=1000)
+    assert "archived" not in data
+
+
+def test_auto_archive_handles_missing_existing_values():
+    """A spool with no stored used/initial still shouldn't crash the helper."""
+    data = {"used_weight": 500}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=None, existing_used=None)
+    assert "archived" not in data
+
+
+def test_auto_archive_handles_overweight_as_empty():
+    """used_weight > initial still means the spool is empty (remaining <= 0)."""
+    data = {"used_weight": 1100}
+    spoolman_api._auto_archive_on_empty(data, existing_initial=1000, existing_used=500)
+    assert data["archived"] is True
+    assert data["location"] == ""
+
+
+def test_filament_search_result_direction_defaults_to_longitudinal():
+    """When no direction is stored, filament cards should mirror the spool default."""
+    fil = _fake_filament_multi()
+    fil["multi_color_direction"] = ""
+    fil["extra"] = {}
+
+    class _FakeResp:
+        def __init__(self, data):
+            self._data = data
+            self.ok = True
+
+        def json(self):
+            return self._data
+
+    def fake_get(url, **_kwargs):
+        if "/filament" in url:
+            return _FakeResp([fil])
+        return _FakeResp([])
+
+    import spoolman_api as sm
+    original = sm.requests.get
+    sm.requests.get = fake_get
+    try:
+        results = sm.search_inventory(target_type="filament")
+    finally:
+        sm.requests.get = original
+
+    assert results[0]["color_direction"] == "longitudinal"
 

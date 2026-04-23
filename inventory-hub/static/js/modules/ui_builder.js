@@ -188,7 +188,7 @@ const SpoolCardBuilder = {
                         <div class="slot-info-gold text-center w-100 mb-2 mt-1" style="background: rgba(0,0,0,0.7); border-radius: 5px; padding: 5px; border: 1px solid #444; cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
                             <div class="text-line-1" style="color: #aaa; font-size:0.9rem;">${info.line1} <span ${!isFil ? `style="float:right; color:#ddd; font-weight:bold; font-size:0.95rem; cursor:pointer;" onclick="event.stopPropagation(); if(window.openQuickWeigh) window.openQuickWeigh(${item.id})"` : `style="float:right; color:#ddd; font-weight:bold; font-size:0.95rem;"`}>${info.line4 ? '⚖️ ' + info.line4 : ''}</span></div>
                             <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold; font-size:1.0rem;">${info.line2}</div>
-                            <div class="text-line-3" style="font-weight:bold; color: #fff; font-size:0.95rem;">${info.line3}</div>
+                            <div class="text-line-3 text-pop" style="font-weight:bold; color: #fff; font-size:0.95rem;">${info.line3}</div>
                         </div>
                         
                         <div class="d-flex justify-content-around gap-1 mt-2 w-100 pt-2 border-top" style="border-color: rgba(255,255,255,0.2) !important;">

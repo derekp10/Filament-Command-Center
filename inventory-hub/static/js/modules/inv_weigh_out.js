@@ -140,6 +140,13 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
             const finalize = () => {
                 setProcessing(false);
                 showToast(`Updated Spool #${id}`, 'success');
+                // Spool just auto-archived (weight hit 0) AND its filament
+                // has no empty_spool_weight yet — prompt the user to weigh
+                // the now-empty spool. Fires after the toast so it doesn't
+                // stack on top of weigh-out success feedback.
+                if (res && res.needs_empty_weight_prompt && res.filament_id && window.showArchiveEmptyWeightPrompt) {
+                    setTimeout(() => window.showArchiveEmptyWeightPrompt(id, res.filament_id), 400);
+                }
                 
                 // Visual feedback that it's done
                 if (rowEl) {
