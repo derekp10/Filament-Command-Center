@@ -130,3 +130,48 @@ def test_wizard_advanced_search_integration(page: Page):
     # Verify it automatically switched to "Filaments" mode
     fil_radio = page.locator('#searchTypeFilaments')
     expect(fil_radio).to_be_checked()
+
+
+def test_search_offcanvas_does_not_intercept_clicks_after_close(page: Page):
+    """Regression: after opening and closing #offcanvasSearch, the hidden offcanvas subtree
+    (including #global-search-material) must not grab pointer events on content behind it.
+    Bootstrap uses `visibility: hidden` to hide the offcanvas, which does not block pointer
+    events by itself. Fix: `.fcc-offcanvas-search:not(.show) { pointer-events: none; }`."""
+    page.goto("http://localhost:8000")
+
+    # Open and immediately close the Search offcanvas
+    page.locator('nav button:has-text("SEARCH")').click()
+    offcanvas = page.locator('#offcanvasSearch')
+    expect(offcanvas).to_be_visible()
+    page.locator('#offcanvasSearch .btn-close').click()
+    page.wait_for_timeout(500)  # wait for slide-out animation
+    expect(offcanvas).not_to_be_visible()
+
+    # The closed offcanvas must have pointer-events: none
+    pe_off = offcanvas.evaluate("el => window.getComputedStyle(el).pointerEvents")
+    assert pe_off == "none", (
+        f"#offcanvasSearch should have pointer-events: none when closed, got {pe_off!r}. "
+        "Clicks on content behind the offcanvas will be intercepted."
+    )
+
+    # The material select inside the hidden offcanvas must not intercept clicks at its own
+    # geometric position (the ancestor's pointer-events:none should propagate to descendants).
+    mat_select = page.locator('#global-search-material')
+    box = mat_select.evaluate("el => { const r = el.getBoundingClientRect(); return {x: r.x, y: r.y, w: r.width, h: r.height}; }")
+    if box["w"] > 0 and box["h"] > 0:
+        hit_id = page.evaluate(
+            "([x, y]) => { const el = document.elementFromPoint(x, y); return el ? (el.id || el.closest('[id]')?.id || '') : ''; }",
+            [box["x"] + box["w"] / 2, box["y"] + box["h"] / 2],
+        )
+        assert hit_id != "global-search-material", (
+            f"Hidden offcanvas's #global-search-material still captures clicks (hit id={hit_id!r})"
+        )
+
+    # Reopen — pointer-events must NOT be "none" or the offcanvas is uninteractive
+    page.locator('nav button:has-text("SEARCH")').click()
+    expect(offcanvas).to_be_visible()
+    page.wait_for_timeout(500)  # let Bootstrap's .show class transition settle
+    pe_on = offcanvas.evaluate("el => window.getComputedStyle(el).pointerEvents")
+    assert pe_on != "none", (
+        f"#offcanvasSearch must not have pointer-events: none when open, got {pe_on!r}"
+    )
