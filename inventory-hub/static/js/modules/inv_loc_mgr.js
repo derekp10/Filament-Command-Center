@@ -1090,7 +1090,17 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
         </div>
     `;
     host.appendChild(ov);
-    const cleanup = () => { try { ov.remove(); } catch (_) { /* noop */ } document.removeEventListener('keydown', keyHandler, true); };
+    // Mount the QR-confirm pair inside the dialog box (under the buttons).
+    // qrSession.cleanup() unregisters the scan callbacks AND removes the
+    // QR row from the DOM — must run on every dialog dismissal so a late
+    // scan can't re-fire after the user already clicked.
+    const dialogBox = ov.querySelector('div');
+    let qrSession = null;
+    const cleanup = () => {
+        try { ov.remove(); } catch (_) { /* noop */ }
+        document.removeEventListener('keydown', keyHandler, true);
+        if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
+    };
     // After user confirms, call _doAssignFinalize with confirmActivePrint=true
     // so the backend's safety check doesn't re-prompt. Without this flag,
     // the backend would see the POST has no confirm and return requires_confirm,
@@ -1104,6 +1114,14 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     document.getElementById('fcc-apc-yes').onclick = proceed;
     document.addEventListener('keydown', keyHandler, true);
     document.getElementById('fcc-apc-no').focus();
+    if (window.attachConfirmQRs && dialogBox) {
+        qrSession = window.attachConfirmQRs({
+            host: dialogBox,
+            onConfirm: proceed,
+            onCancel: cleanup,
+            theme: 'warning',
+        });
+    }
 };
 
 const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmActivePrint = false, options = {}) => {

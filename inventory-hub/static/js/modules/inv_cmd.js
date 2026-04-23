@@ -135,6 +135,13 @@ window.updateAuditVisuals = () => {
 // --- SCAN ROUTER ---
 const processScan = (text, source = 'keyboard') => {
     const upper = text.toUpperCase();
+    // Active-dialog confirm-by-scan (registered via window.attachConfirmQRs).
+    // Must run BEFORE the regular CMD: branches so a CMD:CONFIRM:<sid> scan
+    // routes to the dialog's callback instead of hitting the backend or the
+    // generic CMD-routes below. Returns true on a matched session — fall
+    // through to the rest of the dispatch otherwise.
+    if (window.routeConfirmScan && window.routeConfirmScan(text)) return;
+
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
     if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
     if (upper === 'CMD:WEIGH') { window.openWeighOutModal(); return; }
@@ -290,15 +297,30 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
         </div>
     `;
     document.body.appendChild(ov);
-    const cleanup = () => { try { ov.remove(); } catch (_) { /* noop */ } document.removeEventListener('keydown', keyHandler, true); };
+    const dialogBox = ov.querySelector('div');
+    let qrSession = null;
+    const cleanup = () => {
+        try { ov.remove(); } catch (_) { /* noop */ }
+        document.removeEventListener('keydown', keyHandler, true);
+        if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
+    };
+    const proceed = () => { cleanup(); onConfirm(); };
     const keyHandler = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
-        else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); cleanup(); onConfirm(); }
+        else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); proceed(); }
     };
     document.getElementById('fcc-aps-no').onclick = cleanup;
-    document.getElementById('fcc-aps-yes').onclick = () => { cleanup(); onConfirm(); };
+    document.getElementById('fcc-aps-yes').onclick = proceed;
     document.addEventListener('keydown', keyHandler, true);
     document.getElementById('fcc-aps-no').focus();
+    if (window.attachConfirmQRs && dialogBox) {
+        qrSession = window.attachConfirmQRs({
+            host: dialogBox,
+            onConfirm: proceed,
+            onCancel: cleanup,
+            theme: 'warning',
+        });
+    }
 };
 
 const performContextAssign = (tid, slot = null, confirmActivePrint = false) => {

@@ -293,10 +293,27 @@
         body.innerHTML = warningBanner + (opts.body || defaultBody);
         ov.style.display = 'block';
 
+        // Mount QR-confirm pair only when the active-print warning is
+        // showing — Quick-Swap during a normal move doesn't need scan
+        // confirmation since the user already had a card to scan to
+        // initiate the swap. The active-print case is the safety-critical
+        // one that benefits from "scan to confirm I really meant to
+        // disrupt my print."
+        let qrSession = null;
+        if (stateInfo && warningBanner && window.attachConfirmQRs) {
+            qrSession = window.attachConfirmQRs({
+                host: body,
+                onConfirm: () => { opts.onConfirm && opts.onConfirm(); close(); },
+                onCancel: () => { close(); },
+                theme: 'warning',
+            });
+        }
+
         const close = () => {
             ov.style.display = 'none';
             yes.onclick = null; no.onclick = null;
             document.removeEventListener('keydown', keyHandler, true);
+            if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
             if (_activeConfirmClose === close) _activeConfirmClose = null;
         };
         _activeConfirmClose = close;
