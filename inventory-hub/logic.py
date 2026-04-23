@@ -260,6 +260,39 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
     if not spools: return {"status": "error", "msg": "No spools found"}
 
+    # Auto-slot-pick: if the caller didn't specify a slot and the target is a
+    # slotted container (Max Spools > 1) with at least one free slot, fill the
+    # lowest-numbered free slot. Only fires for single-spool moves — in a bulk
+    # move, a shared target_slot would make each spool unseat the previous
+    # one, so a bulk slotless move stays slotless (rooms/shelves handle that
+    # case correctly; slotted bulk moves should be explicit).
+    tgt_info_auto = loc_info_map.get(target)
+    if not target_slot and tgt_info_auto and len(spools) == 1:
+        try:
+            max_slots_auto = int(str(tgt_info_auto.get('Max Spools', '0')).strip() or '0')
+        except (TypeError, ValueError):
+            max_slots_auto = 0
+        if max_slots_auto > 1:
+            # Collect currently-occupied slot numbers at this target.
+            existing_at_target = spoolman_api.get_spools_at_location_detailed(target) or []
+            occupied_slots = set()
+            for existing in existing_at_target:
+                # Skip the spool we're about to move — otherwise its own current slot
+                # gets flagged as occupied and we miss the obvious re-slot case.
+                if str(existing.get('id')) in [str(s) for s in spools]:
+                    continue
+                raw = str(existing.get('slot', '') or '').strip().strip('"')
+                if raw and raw.isdigit():
+                    occupied_slots.add(int(raw))
+            # Pick lowest-numbered free slot.
+            for i in range(1, max_slots_auto + 1):
+                if i not in occupied_slots:
+                    target_slot = str(i)
+                    state.logger.info(
+                        f"🪑 Auto-slot: {target} has free slot {i} — assigning spool there"
+                    )
+                    break
+
     # Snapshot each spool's origin toolhead BEFORE any Spoolman writes.
     # Phase 2 of the auto-deploy chain uses this to unmap filabridge for
     # the pre-phase-1 toolhead (e.g. Core1-M0) before mapping the

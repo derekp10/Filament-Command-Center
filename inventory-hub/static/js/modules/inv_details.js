@@ -774,8 +774,7 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId) => {
 // --- Edit Filament (direct, filament-only) ---
 // Opens a Swal form over the Filament Details modal (Bootstrap, not Swal, so
 // no nested-Swal footgun). Only the commonly-edited, filament-level fields
-// are exposed here. Vendor + color hex are intentionally read-only for now;
-// use the full wizard edit flow for those.
+// are exposed here.
 window.openEditFilamentForm = (fil) => {
     if (!fil || !fil.id) { showToast('Missing filament data', 'error'); return; }
 
@@ -789,6 +788,11 @@ window.openEditFilamentForm = (fil) => {
     const currentNozzle = fil.settings_extruder_temp != null ? fil.settings_extruder_temp : '';
     const currentBed = fil.settings_bed_temp != null ? fil.settings_bed_temp : '';
     const currentComment = esc(fil.comment || '');
+    const currentVendorId = fil.vendor && fil.vendor.id != null ? String(fil.vendor.id) : '';
+    // Normalize color_hex — Spoolman stores 6-char no-hash (e.g. "ff0000"); <input type="color"> needs "#ff0000".
+    const rawHex = (fil.color_hex || '').replace(/^#/, '').trim();
+    const currentColorHex = /^[0-9a-fA-F]{6}$/.test(rawHex) ? `#${rawHex.toLowerCase()}` : '#000000';
+    const hasColorHex = /^[0-9a-fA-F]{6}$/.test(rawHex);
 
     // Vendor's inherited empty_spool_weight surfaces as placeholder text so the
     // user sees the fallback value that would apply if this field is left blank.
@@ -814,6 +818,21 @@ window.openEditFilamentForm = (fil) => {
                     <input type="text" id="edit-fil-material" class="form-control bg-dark text-white border-secondary" value="${currentMaterial}" autocomplete="off">
                 </div>
                 <div class="row g-2">
+                    <div class="col-8">
+                        <label class="form-label text-light small mb-1">Vendor</label>
+                        <select id="edit-fil-vendor" class="form-control bg-dark text-white border-secondary">
+                            <option value="">-- loading… --</option>
+                        </select>
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label text-light small mb-1">Color</label>
+                        <div class="d-flex align-items-center gap-1">
+                            <input type="color" id="edit-fil-color-picker" value="${currentColorHex}" class="form-control form-control-color bg-dark border-secondary" style="width:40px;padding:2px;">
+                            <input type="text" id="edit-fil-color-hex" class="form-control bg-dark text-white border-secondary" value="${hasColorHex ? currentColorHex : ''}" placeholder="#rrggbb" maxlength="7" style="flex:1;">
+                        </div>
+                    </div>
+                </div>
+                <div class="row g-2 mt-1">
                     <div class="col-6">
                         <label class="form-label text-light small mb-1">Empty Spool Wt (g)${vendorWtHint}</label>
                         <input type="number" step="0.1" id="edit-fil-spool-weight" class="form-control bg-dark text-white border-secondary" value="${currentSpoolWt}" placeholder="${vendorWt || ''}" autocomplete="off">
@@ -846,8 +865,47 @@ window.openEditFilamentForm = (fil) => {
         confirmButtonText: 'Save',
         focusConfirm: false,
         didOpen: () => {
-            const nameEl = Swal.getPopup().querySelector('#edit-fil-name');
+            const popup = Swal.getPopup();
+            const nameEl = popup.querySelector('#edit-fil-name');
             if (nameEl) nameEl.focus();
+
+            // Populate vendor dropdown asynchronously — select current vendor on load.
+            fetch('/api/vendors')
+                .then((r) => r.json())
+                .then((d) => {
+                    const sel = popup.querySelector('#edit-fil-vendor');
+                    if (!sel || !d || !d.success) return;
+                    const opts = ['<option value="">-- Generic --</option>'];
+                    (d.vendors || []).forEach((v) => {
+                        const sval = String(v.id);
+                        const selected = sval === currentVendorId ? ' selected' : '';
+                        opts.push(`<option value="${sval}"${selected}>${esc(v.name)}</option>`);
+                    });
+                    sel.innerHTML = opts.join('');
+                })
+                .catch(() => {
+                    const sel = popup.querySelector('#edit-fil-vendor');
+                    if (sel) sel.innerHTML = '<option value="">-- (failed to load) --</option>';
+                });
+
+            // Keep color picker and hex text input in sync; normalize text input on blur.
+            const picker = popup.querySelector('#edit-fil-color-picker');
+            const hex = popup.querySelector('#edit-fil-color-hex');
+            if (picker && hex) {
+                picker.addEventListener('input', () => { hex.value = picker.value; });
+                hex.addEventListener('input', () => {
+                    const v = hex.value.trim();
+                    if (/^#[0-9a-fA-F]{6}$/.test(v)) picker.value = v.toLowerCase();
+                });
+                hex.addEventListener('blur', () => {
+                    const raw = hex.value.trim().replace(/^#/, '');
+                    if (raw === '') return;
+                    if (/^[0-9a-fA-F]{6}$/.test(raw)) {
+                        hex.value = `#${raw.toLowerCase()}`;
+                        picker.value = `#${raw.toLowerCase()}`;
+                    }
+                });
+            }
         },
         preConfirm: () => {
             const val = (id) => Swal.getPopup().querySelector(id)?.value;
@@ -861,9 +919,25 @@ window.openEditFilamentForm = (fil) => {
                 const n = numOrNull(id);
                 return n == null ? null : Math.round(n);
             };
+            // Vendor: empty string means "Generic" (null vendor_id).
+            const vendorRaw = val('#edit-fil-vendor');
+            const vendorId = vendorRaw === '' || vendorRaw == null ? null : Number(vendorRaw);
+            // color_hex: Spoolman stores as 6-char no-hash. Empty means clear.
+            const hexRaw = (val('#edit-fil-color-hex') || '').trim().replace(/^#/, '');
+            let colorHex = null; // null sentinel = user cleared the field
+            if (hexRaw === '') {
+                colorHex = '';
+            } else if (/^[0-9a-fA-F]{6}$/.test(hexRaw)) {
+                colorHex = hexRaw.toLowerCase();
+            } else {
+                Swal.showValidationMessage('Color must be a 6-digit hex (e.g. #ff0000) or empty.');
+                return false;
+            }
             const data = {
                 name: (val('#edit-fil-name') || '').trim() || null,
                 material: (val('#edit-fil-material') || '').trim() || null,
+                vendor_id: vendorId,
+                color_hex: colorHex,
                 spool_weight: numOrNull('#edit-fil-spool-weight'),
                 density: numOrNull('#edit-fil-density'),
                 settings_extruder_temp: intOrNull('#edit-fil-nozzle'),
@@ -881,6 +955,13 @@ window.openEditFilamentForm = (fil) => {
             };
             if (!same(data.name, fil.name)) changed.name = data.name;
             if (!same(data.material, fil.material)) changed.material = data.material;
+            // vendor_id: compare numeric ID against the nested vendor object's id.
+            const oldVendorId = fil.vendor && fil.vendor.id != null ? fil.vendor.id : null;
+            if (!same(data.vendor_id, oldVendorId)) changed.vendor_id = data.vendor_id;
+            // color_hex: normalize both sides to lowercase-no-hash for comparison.
+            const oldHex = (fil.color_hex || '').replace(/^#/, '').toLowerCase();
+            const newHex = (data.color_hex || '').toLowerCase();
+            if (oldHex !== newHex) changed.color_hex = data.color_hex;
             if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
             if (!same(data.density, fil.density)) changed.density = data.density;
             if (!same(data.settings_extruder_temp, fil.settings_extruder_temp))

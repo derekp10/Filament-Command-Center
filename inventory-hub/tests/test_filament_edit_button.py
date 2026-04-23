@@ -129,3 +129,134 @@ def test_openEditFilamentForm_shows_vendor_weight_hint(page: Page):
     # Fall back to checking the placeholder attribute since labels aren't strictly bound.
     placeholder = page.locator("#edit-fil-spool-weight").get_attribute("placeholder")
     assert placeholder == "167", f"expected placeholder '167', got {placeholder!r}"
+
+
+def test_openEditFilamentForm_has_vendor_and_color_inputs(page: Page):
+    """Both Vendor dropdown and Color hex fields should be rendered."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    fil = {
+        "id": 101,
+        "name": "Green",
+        "material": "PLA",
+        "color_hex": "00ff00",
+        "vendor": {"id": 1, "name": "TestVendor"},
+    }
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-name", state="visible", timeout=3_000)
+
+    expect(page.locator("#edit-fil-vendor")).to_have_count(1)
+    expect(page.locator("#edit-fil-color-picker")).to_have_count(1)
+    expect(page.locator("#edit-fil-color-hex")).to_have_count(1)
+
+    # color_hex input should be pre-populated with #rrggbb from the raw hex.
+    hex_val = page.locator("#edit-fil-color-hex").input_value()
+    assert hex_val.lower() == "#00ff00", f"expected #00ff00, got {hex_val!r}"
+
+    # color picker should match.
+    picker_val = page.locator("#edit-fil-color-picker").input_value()
+    assert picker_val.lower() == "#00ff00"
+
+
+def test_openEditFilamentForm_color_picker_syncs_hex_field(page: Page):
+    """Changing the <input type=color> should update the hex text field."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    fil = {"id": 102, "name": "Test", "material": "PLA", "color_hex": "000000"}
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-color-picker", state="visible", timeout=3_000)
+
+    # Simulate the color picker changing value and dispatching the input event
+    # (page.locator.fill doesn't trigger color-picker 'input' cleanly in headless).
+    page.evaluate(
+        """
+        const p = document.querySelector('#edit-fil-color-picker');
+        p.value = '#ff00aa';
+        p.dispatchEvent(new Event('input', {bubbles: true}));
+        """
+    )
+    hex_val = page.locator("#edit-fil-color-hex").input_value()
+    assert hex_val.lower() == "#ff00aa"
+
+
+def test_openEditFilamentForm_submits_vendor_and_color_changes(page: Page):
+    """Changing vendor and color should include them in the dirty-diff POST body."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    # Stub /api/vendors so we get a known set of options regardless of live data.
+    page.evaluate(
+        """
+        window.__lastFetchPayload = null;
+        const origFetch = window.fetch;
+        window.fetch = async (url, opts) => {
+            if (url === '/api/vendors') {
+                return new Response(JSON.stringify({
+                    success: true,
+                    vendors: [{id: 1, name: 'Alpha'}, {id: 2, name: 'Beta'}]
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/update_filament') {
+                window.__lastFetchPayload = JSON.parse(opts.body);
+                return new Response(JSON.stringify({success: true, filament: {id: 55}}), {
+                    status: 200, headers: {'Content-Type': 'application/json'}
+                });
+            }
+            return origFetch(url, opts);
+        };
+        """
+    )
+
+    fil = {
+        "id": 55,
+        "name": "OldName",
+        "material": "PLA",
+        "color_hex": "112233",
+        "vendor": {"id": 1, "name": "Alpha"},
+    }
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-vendor", state="visible", timeout=3_000)
+    # <option> elements are never 'visible' in Playwright; wait for the DOM node via JS.
+    page.wait_for_function(
+        "document.querySelector(\"#edit-fil-vendor option[value='2']\") !== null",
+        timeout=3_000,
+    )
+
+    # Change vendor to Beta (id=2) and color to #aabbcc.
+    page.locator("#edit-fil-vendor").select_option(value="2")
+    page.locator("#edit-fil-color-hex").fill("#aabbcc")
+
+    page.locator(".swal2-confirm").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+
+    payload = page.evaluate("() => window.__lastFetchPayload")
+    assert payload["id"] == 55
+    data = payload["data"]
+    # Only vendor_id and color_hex should have changed.
+    assert set(data.keys()) == {"vendor_id", "color_hex"}, f"unexpected keys: {set(data.keys())}"
+    assert data["vendor_id"] == 2
+    assert data["color_hex"] == "aabbcc"
+
+
+def test_openEditFilamentForm_rejects_invalid_hex(page: Page):
+    """preConfirm should surface a validation message on bad hex input."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    fil = {"id": 99, "name": "Test", "material": "PLA", "color_hex": "112233"}
+    page.evaluate("(fil) => window.openEditFilamentForm(fil)", fil)
+    page.wait_for_selector("#edit-fil-color-hex", state="visible", timeout=3_000)
+
+    page.locator("#edit-fil-color-hex").fill("not-a-color")
+    page.locator(".swal2-confirm").click()
+
+    # Swal renders the validation message in .swal2-validation-message.
+    page.wait_for_selector(".swal2-validation-message", timeout=3_000)
+    msg = page.locator(".swal2-validation-message").text_content() or ""
+    assert "hex" in msg.lower() or "color" in msg.lower()
