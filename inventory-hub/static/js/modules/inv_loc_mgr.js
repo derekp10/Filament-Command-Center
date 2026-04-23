@@ -937,18 +937,12 @@ window.handleSlotInteraction = (slot) => {
             doAssign(locId, newId, slot, isFromBuf);
         }
     } else if (item) {
-        promptAction("Slot Action", `Manage ${item.display}`, [
-            {
-                label: "✋ Pick Up", action: () => {
-                    state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color });
-                    if (window.renderBuffer) window.renderBuffer();
-                    renderManagerNav();
-                    closeModal('actionModal');
-                }
-            },
-            { label: "🗑️ Eject", action: () => { doEject(item.id, locId, false); } },
-            { label: "🖨️ Details", action: () => { openSpoolDetails(item.id); } }
-        ]);
+        // Filled slot + empty buffer: direct Pick Up. Eject/Details/Edit/Queue
+        // remain on the slot card's explicit action buttons, so this modal is
+        // redundant — it used to be a 3-option chooser (Pick/Eject/Details).
+        state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color });
+        if (window.renderBuffer) window.renderBuffer();
+        renderManagerNav();
     }
 };
 
