@@ -5,7 +5,8 @@
 
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
 * Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
-  * ⏸ **Needs UX decision**: where to place the Filament Edit entry point (card action button? Details modal header?). Related to "Ability to edit filament specific data" below — these two items should be scoped together. Note: the Empty Spool Weight priority-inheritance resolver (`window.resolveEmptySpoolWeight` in inv_wizard.js, 2026-04-22) already unblocks the *display* side — blank spool fields now auto-inherit from filament/vendor. Remaining work is the backfill tool for historical spools stored as 0.
+  * ✅ **MVP landed 2026-04-22**: "✏️ Edit Filament" button on the Filament Details modal footer opens a Swal form (name, material, empty spool weight, density, nozzle/bed temps, notes) and saves via `/api/update_filament`. The empty-weight field also shows the vendor's empty_spool_weight as a placeholder hint. Other entry points (card action button, card list, etc.) can copy `window.openEditFilamentForm(fil)` — it's reusable.
+  * ⏸ **Remaining**: (1) backfill tool for historical spools stored with spool_weight=0 so they adopt the parent filament/vendor value. (2) Vendor and color_hex editing still need to go through the full wizard.
 * If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
   * ⏸ **Needs UX decision**: "suggest" (prompt dialog) vs "auto" (silent). Also: should auto-archive also force location to UNASSIGNED, or leave it where it is and let the user move it explicitly? Hook likely lives near the weigh-out / update_spool path (`spoolman_api.update_spool`) or the weigh-out UI in `inv_weigh_out.js`.
 
@@ -16,8 +17,6 @@
 * In location manager, if an item is added to a loction that has slots, and there is a free slot, auto assign the item into that free slot. (If there are multiple free slots, fill the first empty one.)
 
 * Review and unify update logic across the program, we have to many versions of update that keep getting orphined, or cause problems later on when they aren't included in a recent design change. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
-* Figure out why playright can't be run or is not installed on the local docker if that is the issue, otherwise find out if we need to add it to dev, and if needed add it to live/prod if it makes sense.
-  * ⏸ **Resolved-ish / needs user decision**: CLAUDE.md already documents that pytest+Playwright "run on the host, not inside the Docker image" (installed via `pip install -r requirements-dev.txt && playwright install chromium`). The Docker image intentionally excludes `tests/` and dev deps. Open question is whether that's the final stance — if so, this entry can be closed.
 
 * Filabridge status light is still blinking on and of, just more eraticly now. Need to look into this further.
 

@@ -848,6 +848,39 @@ def api_filament_details():
     if not fid: return jsonify({})
     return jsonify(spoolman_api.get_filament(fid))
 
+
+@app.route('/api/update_filament', methods=['POST'])
+def api_update_filament():
+    """Direct filament-level edit hook for the Edit Filament button on the
+    Filament Details modal. Accepts {id, data} where `data` is any subset of
+    Spoolman filament fields (name, material, vendor_id, spool_weight,
+    density, color_hex, settings_extruder_temp, settings_bed_temp, comment,
+    extra, archived, etc.). Returns {success, filament|msg}.
+
+    Deliberately thinner than /api/edit_spool_wizard — no spool coupling,
+    no cross-inherit logic — since this endpoint's sole caller is the
+    filament-only edit flow.
+    """
+    payload = request.json or {}
+    fid = payload.get('id')
+    data = payload.get('data') or {}
+    if not fid:
+        return jsonify({"success": False, "msg": "Missing filament id."})
+    if not isinstance(data, dict) or not data:
+        return jsonify({"success": False, "msg": "No fields to update."})
+    try:
+        updated = spoolman_api.update_filament(fid, data)
+        if updated:
+            state.add_log_entry(
+                f"✏️ Filament #{fid} edited ({', '.join(sorted(data.keys()))})",
+                "SUCCESS", "00ff00",
+            )
+            return jsonify({"success": True, "filament": updated})
+        return jsonify({"success": False, "msg": "Spoolman rejected the update."})
+    except Exception as e:
+        state.logger.error(f"Failed to update filament #{fid}: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+
 @app.route('/api/manage_contents', methods=['POST'])
 def api_manage_contents():
     data = request.json
