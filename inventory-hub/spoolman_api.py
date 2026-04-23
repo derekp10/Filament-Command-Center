@@ -256,6 +256,66 @@ def create_vendor(data):
         state.logger.error(f"API Error creating vendor: {e}")
     return None
 
+def ensure_extra_field(entity_type, key, name, field_type="text", choices=None, multi=False):
+    """Idempotent register-if-missing for a Spoolman extra field schema.
+
+    Spoolman validates extra-field keys at write time and rejects unknown
+    keys with HTTP 400 ("Unknown extra field..."). This helper checks the
+    current schema, POSTs the field definition only if it's missing, and
+    returns True on success/already-exists. Safe to call repeatedly.
+
+    Used by ensure_required_extras() at app startup to make sure the
+    Edit Filament modal's max-temp / direction extras are always
+    available, even on Spoolman instances that pre-date setup_fields.py
+    being updated.
+    """
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.get(f"{sm_url}/api/v1/field/{entity_type}", timeout=5)
+        if r.ok:
+            existing = r.json()
+            if any(f.get('key') == key for f in existing):
+                return True  # Already there.
+        payload = {"name": name, "field_type": field_type}
+        if field_type == "choice":
+            payload["multi_choice"] = bool(multi)
+            if choices:
+                payload["choices"] = sorted({c for c in choices if str(c).strip()})
+        post_r = requests.post(f"{sm_url}/api/v1/field/{entity_type}/{key}", json=payload, timeout=5)
+        if post_r.status_code in (200, 201):
+            state.logger.info(f"Spoolman extra field registered: {entity_type}/{key}")
+            return True
+        # 400 "already exists" is also fine — race with a parallel install.
+        if post_r.status_code == 400 and "already exists" in (post_r.text or ""):
+            return True
+        state.logger.warning(
+            f"Could not register Spoolman extra field {entity_type}/{key}: "
+            f"HTTP {post_r.status_code} — {post_r.text[:200]}"
+        )
+    except Exception as e:
+        state.logger.warning(f"ensure_extra_field({entity_type}/{key}) failed: {e}")
+    return False
+
+
+# Filament extras the Edit Filament / Add Filament modal writes. Kept here
+# (rather than in setup_fields.py only) so app startup can self-heal a
+# Spoolman that's missing them — otherwise users hit "Unknown extra field"
+# errors until they remember to re-run setup_fields.py against prod.
+REQUIRED_FILAMENT_EXTRAS = [
+    ("nozzle_temp_max", "Nozzle Temp Max", "text"),
+    ("bed_temp_max", "Bed Temp Max", "text"),
+]
+
+
+def ensure_required_extras():
+    """Register any missing Edit-Filament extras with Spoolman. Called once
+    at Flask startup. Failures log a warning but don't block the app —
+    the same fields will keep silently failing to write, but the app stays
+    up so the user can fix Spoolman directly."""
+    for key, name, ftype in REQUIRED_FILAMENT_EXTRAS:
+        ensure_extra_field("filament", key, name, ftype)
+
+
 def update_extra_field_choices(entity_type, key, new_choices):
     """Pulls existing field config, appends new choices, and PUTs back to Spoolman."""
     sm_url, _ = config_loader.get_api_urls()

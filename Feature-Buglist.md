@@ -22,6 +22,11 @@
     - Filament Attributes chip-picker matching the wizard.
     - "+ NEW" badge on Material.
     - Add mode: `window.openAddFilamentForm()` + new `/api/create_filament` endpoint.
+  * ~~**Edit Filament Wave 7**~~ **DONE 2026-04-23** — three real bugs surfaced after Wave 6:
+    - **Color save was still failing** — Spoolman now demanded `multi_color_direction` ("Multi-color filament must have multi_color_direction set."). Confirmed via live Spoolman 0.23.1 schema that `multi_color_direction` IS a native top-level filament field (verified via `GET /api/v1/filament/<id>` returning it at top-level), not an extra. Reverted my Wave 5 mistake — direction is now always sent at top-level alongside `multi_color_hexes`, defaulting to 'longitudinal' when the user hasn't set one.
+    - **Max-temp save was failing** with "Unknown extra field nozzle_temp_max." — Spoolman validates extras against its registered schema, so `setup_fields.py` updates only help if you actually run them. Added `spoolman_api.ensure_required_extras()` that runs at app startup and idempotently registers `nozzle_temp_max` + `bed_temp_max` (and any other Edit-Filament-mandated extras) so prod self-heals on next restart. No need to manually run `setup_fields.py`. Verified extras now exist in the live Spoolman.
+    - **Buffer item disappeared on cancel-swap-confirm flows** — `handleSlotInteraction` was eagerly shifting the held spool out of the buffer BEFORE `doAssign` POSTed. If the move was rejected (active-print confirm dismissed, network error, Spoolman 422, swap-cancel-swap-continue race), the spool was already gone. Fixed: buffer mutation moved into `_doAssignFinalize`'s success branch, with `options.swapDisplaced` threaded through `doAssign` → `_confirmActivePrintAssign` → `_doAssignFinalize` so the displaced spool also lands in the buffer only on success.
+
   * ~~**Edit Filament Wave 6**~~ **DONE 2026-04-23** — another feedback round:
     - **Color save was failing** (HTTP 422: "Cannot specify both color_hex and multi_color_hexes") — Spoolman rejects any PATCH body with both fields set. Fixed by emitting multi_color_hexes exclusively for 2+ colors and excluding color_hex from the dirty-diff in that case.
     - **Nozzle/Bed moved back to Specs** (user reversed earlier feedback — min + max entered together should stay together).

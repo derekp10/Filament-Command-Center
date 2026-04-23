@@ -988,35 +988,31 @@ window.handleSlotInteraction = (slot) => {
     const locId = document.getElementById('manage-loc-id').value, item = state.currentGrid[slot];
     if (state.heldSpools.length > 0) {
         const newId = state.heldSpools[0].id;
+        // IMPORTANT: don't shift the buffer here. _doAssignFinalize's success
+        // branch handles the removal once the move actually lands. The
+        // earlier eager shift caused the spool to disappear when the move
+        // was cancelled or rejected (e.g. backend requires_confirm flow,
+        // active-print bail, network error, swap-cancel-swap-continue race).
         if (item) {
             promptAction("Slot Occupied", `Swap/Overwrite Slot ${slot}?`, [
                 {
                     label: "Swap", action: () => {
-                        let isFromBuf = true;
-                        state.heldSpools.shift();
-                        state.heldSpools.push({ id: item.id, display: item.display, color: item.color });
-                        if (window.renderBuffer) window.renderBuffer();
-                        renderManagerNav();
-                        doAssign(locId, newId, slot, isFromBuf);
+                        // Pass the displaced item so doAssign can push it
+                        // into the buffer ONLY on success — never before.
+                        doAssign(locId, newId, slot, true, {
+                            swapDisplaced: { id: item.id, display: item.display, color: item.color },
+                        });
                     }
                 },
                 {
                     label: "Overwrite", action: () => {
-                        let isFromBuf = true;
-                        state.heldSpools.shift();
-                        if (window.renderBuffer) window.renderBuffer();
-                        renderManagerNav();
-                        doAssign(locId, newId, slot, isFromBuf);
+                        doAssign(locId, newId, slot, true);
                     }
                 },
                 { label: "Cancel", action: () => { closeModal('actionModal'); } }
             ]);
         } else {
-            let isFromBuf = true;
-            state.heldSpools.shift();
-            if (window.renderBuffer) window.renderBuffer();
-            renderManagerNav();
-            doAssign(locId, newId, slot, isFromBuf);
+            doAssign(locId, newId, slot, true);
         }
     } else if (item) {
         // Filled slot + empty buffer: direct Pick Up. Eject/Details/Edit/Queue
@@ -1028,8 +1024,14 @@ window.handleSlotInteraction = (slot) => {
     }
 };
 
-window.doAssign = (loc, spool, slot, isFromBufferFlag = null) => {
+window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
     setProcessing(true);
+
+    // options.swapDisplaced: spool item to push into the buffer ONLY on
+    // successful assign (used by the Swap branch of handleSlotInteraction).
+    // Threading this through doAssign instead of mutating the buffer up-
+    // front means the displaced item never gets stranded if the move
+    // fails / requires a confirmation that the user dismisses.
 
     // Pre-check: if the target is a toolhead in the printer_map, probe
     // PrusaLink for current print state and ask the user to confirm when
@@ -1046,7 +1048,7 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null) => {
         return window.fetchPrinterStateForToolhead(loc).then(stateInfo => {
             if (!stateInfo) {
                 // Unknown state → proceed normally.
-                return _doAssignFinalize(loc, spool, slot, isFromBufferFlag);
+                return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, false, options);
             }
             // Active print → inline confirm overlay (no nested Swal).
             setProcessing(false);
@@ -1056,17 +1058,18 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null) => {
                 slot,
                 isFromBufferFlag,
                 stateInfo,
+                options,
             });
         });
     }
 
-    return _doAssignFinalize(loc, spool, slot, isFromBufferFlag);
+    return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, false, options);
 };
 
 // Inline confirm overlay for "you're moving onto a printer that's actively
 // printing." Avoids nested Swal per project convention; mounts into the
 // manage modal body so it stacks correctly above the manage modal backdrop.
-const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo }) => {
+const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {} }) => {
     const host = document.getElementById('manageModal') || document.body;
     // Reuse a single overlay per page — tear down prior one if present.
     let ov = document.getElementById('fcc-active-print-confirm-overlay');
@@ -1092,7 +1095,7 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     // so the backend's safety check doesn't re-prompt. Without this flag,
     // the backend would see the POST has no confirm and return requires_confirm,
     // creating an infinite loop.
-    const proceed = () => { cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true); };
+    const proceed = () => { cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true, options); };
     const keyHandler = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
         else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); proceed(); }
@@ -1103,7 +1106,7 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     document.getElementById('fcc-apc-no').focus();
 };
 
-const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmActivePrint = false) => {
+const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmActivePrint = false, options = {}) => {
     // FIX: 0-based index correction for MMU/CORE slots
     let finalSlot = slot;
     if (slot !== null) {
@@ -1159,18 +1162,31 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
                 _confirmActivePrintAssign({
                     loc, spool, slot, isFromBufferFlag,
                     stateInfo: res.active_print || { printer_name: loc, state: 'ACTIVE' },
+                    options,
                 });
                 return;
             }
             if (res.status === 'success') {
                 showToast("Assigned");
 
-                // --- FIX: Remove the assigned spool from buffer ---
+                // --- Buffer mutation only on success ---
+                // Remove the assigned spool. handleSlotInteraction no longer
+                // pre-shifts (that caused the spool to vanish on cancel/
+                // reject), so we do it here once we know the move actually
+                // landed.
                 const bufIdx = state.heldSpools.findIndex(s => String(s.id) === spoolIdStr);
-                if (bufIdx > -1) {
-                    state.heldSpools.splice(bufIdx, 1);
-                    if (window.renderBuffer) window.renderBuffer();
+                if (bufIdx > -1) state.heldSpools.splice(bufIdx, 1);
+                // Swap path: push the displaced item into the buffer too.
+                // Skipped if the displaced item is somehow already there
+                // (e.g. user opened multiple manage modals).
+                if (options.swapDisplaced && options.swapDisplaced.id) {
+                    const dispId = String(options.swapDisplaced.id);
+                    if (!state.heldSpools.some(s => String(s.id) === dispId)) {
+                        state.heldSpools.push(options.swapDisplaced);
+                    }
                 }
+                if (window.renderBuffer) window.renderBuffer();
+                if (typeof renderManagerNav === 'function') renderManagerNav();
 
                 if (window.fetchLocations) window.fetchLocations();
                 refreshManageView(loc);

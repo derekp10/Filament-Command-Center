@@ -320,10 +320,11 @@ def test_modal_save_submits_multi_color_csv(page: Page):
     page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
     data = page.evaluate("() => window.__lastFetchPayload.data")
     assert data["multi_color_hexes"] == "ff0000,00ff00"
-    # multi_color_direction lives in extras now (Spoolman schema doesn't accept
-    # it as a top-level filament field). Stored with surrounding quotes per
-    # Spoolman's extras convention.
-    assert data["extra"]["multi_color_direction"] == '"coaxial"'
+    # multi_color_direction is a NATIVE Spoolman field (not an extra) and is
+    # REQUIRED whenever multi_color_hexes is in the body — Spoolman raises
+    # "Multi-color filament must have multi_color_direction set." otherwise.
+    # Verified against the live Spoolman 0.23.1 schema 2026-04-23.
+    assert data["multi_color_direction"] == "coaxial"
 
 
 def test_modal_save_rejects_invalid_hex(page: Page):
@@ -761,6 +762,17 @@ def test_create_filament_rejects_missing_material(api_base_url: str):
     assert "material" in body.get("msg", "").lower()
 
 
+def test_create_filament_endpoint_creates_required_extras_at_startup(api_base_url: str):
+    """ensure_required_extras() runs at app startup. The fields should exist
+    in Spoolman's schema after the container has booted."""
+    r = requests.get(f"{api_base_url}/api/external/fields", timeout=5)
+    assert r.status_code == 200
+    body = r.json()
+    keys = {f.get("key") for f in (body.get("fields", {}).get("filament") or [])}
+    assert "nozzle_temp_max" in keys, "nozzle_temp_max must be auto-registered at startup"
+    assert "bed_temp_max" in keys, "bed_temp_max must be auto-registered at startup"
+
+
 def test_create_filament_rejects_empty_data(api_base_url: str):
     r = requests.post(f"{api_base_url}/api/create_filament", json={"data": {}}, timeout=5)
     assert r.status_code == 400
@@ -878,10 +890,13 @@ def test_modal_copy_vendor_weight_button_hidden_when_no_vendor_wt(page: Page):
     expect(page.locator("#editfil-copy-vendor-wt")).to_be_hidden()
 
 
-def test_modal_multi_color_direction_routes_through_extras(page: Page):
-    """multi_color_direction was a top-level field; Spoolman's schema rejects
-    it there (422). It now lives in extras, wrapped with Spoolman's string
-    convention. This test guards the fix."""
+def test_modal_multi_color_direction_is_native_top_level_field(page: Page):
+    """multi_color_direction IS a native Spoolman field (verified against
+    live Spoolman 0.23.1 schema 2026-04-23 — Spoolman returns it at top-
+    level on GET and requires it at top-level on PATCH when
+    multi_color_hexes is set). Earlier code mis-routed it to extras and
+    triggered "Multi-color filament must have multi_color_direction set."
+    This test guards against that regression."""
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
@@ -894,17 +909,44 @@ def test_modal_multi_color_direction_routes_through_extras(page: Page):
     }
     _open_modal_with(page, fil)
     page.locator("#editfil-tab-colors-btn").click()
-    # Flip the direction.
     page.locator("#editfil-color-direction").select_option(value="coaxial")
 
     page.locator("#editfil-save").click()
     page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
     data = page.evaluate("() => window.__lastFetchPayload.data")
-    # Must NOT be a top-level field.
-    assert "multi_color_direction" not in data, \
-        "multi_color_direction must not be sent as a top-level Spoolman field"
-    # Must be in extras with the Spoolman-quoted format.
-    assert data["extra"]["multi_color_direction"] == '"coaxial"'
+    # Top-level, not in extras.
+    assert data.get("multi_color_direction") == "coaxial"
+    assert "multi_color_direction" not in (data.get("extra") or {}), \
+        "multi_color_direction must not be in extras — it's a native field"
+
+
+def test_modal_multi_color_save_always_includes_direction(page: Page):
+    """When emitting multi_color_hexes, multi_color_direction MUST be in the
+    same PATCH body — Spoolman validates the body and rejects 422
+    'Multi-color filament must have multi_color_direction set.'
+    Even if the direction value didn't change, it has to ride along."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    # Filament with no current direction set — adding a 2nd color should
+    # default direction to 'longitudinal' and include it.
+    fil = {"id": 507, "name": "Mono", "material": "PLA", "color_hex": "ff0000"}
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-colors-btn").click()
+    page.locator("#editfil-add-color").click()
+    extra_hex = page.locator("#editfil-color-extras input[id^='editfil-color-hex-']").first
+    extra_hex.fill("#00ff00")
+    # Don't touch direction — the default should be sent anyway.
+
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+    data = page.evaluate("() => window.__lastFetchPayload.data")
+    assert "multi_color_hexes" in data
+    # direction must be in the body even though the user didn't touch it.
+    assert "multi_color_direction" in data
+    assert data["multi_color_direction"] in ("longitudinal", "coaxial")
 
 
 def test_modal_multi_color_save_does_not_send_color_hex(page: Page):

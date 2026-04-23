@@ -2356,4 +2356,12 @@ def api_get_logs_route():
 
 if __name__ == '__main__':
     state.logger.info(f"🛠️ Server {VERSION} Started")
+    # Register required Spoolman extras (max-temps etc.) so saves from the
+    # Edit Filament modal don't hit "Unknown extra field" errors on prod
+    # instances that haven't run setup_fields.py since the new fields
+    # were added. Idempotent — skips fields that already exist.
+    try:
+        spoolman_api.ensure_required_extras()
+    except Exception as _e:
+        state.logger.warning(f"ensure_required_extras failed at startup: {_e}")
     app.run(host='0.0.0.0', port=8000)

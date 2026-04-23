@@ -1515,23 +1515,29 @@ const _editfilOpenModal = (fil) => {
                 .split(',').map(h => h.replace(/^#/, '').trim().toLowerCase())
                 .filter(Boolean).join(',');
             const newMulti = String(data.multi_color_hexes || '').toLowerCase();
-            // Spoolman REJECTS (HTTP 422) any PATCH that has both color_hex
-            // and multi_color_hexes "specified" (pydantic sees empty string
-            // as specified, so we must skip the field entirely when the
-            // other one is set). We emit at most one of the pair per PATCH.
+            // Spoolman REJECTS (HTTP 422) any PATCH body containing both
+            // color_hex and multi_color_hexes (even empty), so skip the one
+            // we're not setting. When emitting multi, we MUST also include
+            // multi_color_direction at top-level — Spoolman raises
+            // "Multi-color filament must have multi_color_direction set."
+            // when hexes is in the body without direction. multi_color_direction
+            // IS a native Spoolman field (not an extra) — verified against
+            // the live filament schema 2026-04-23.
             const emittingMulti = newMulti.length > 0;
             if (!emittingMulti && oldHex !== newHex) changed.color_hex = data.color_hex;
-            if (oldMulti !== newMulti) changed.multi_color_hexes = data.multi_color_hexes;
-            // multi_color_direction is NOT a native Spoolman filament field —
-            // it lives in `extra.multi_color_direction`. PATCHing it as a
-            // top-level key fails Spoolman's schema validation (422). Merge
-            // it into dirtyExtras below so it goes through the extras path.
-            if (data.multi_color_direction != null) {
-                const oldDir = String(fil.multi_color_direction
-                    || (fil.extra && fil.extra.multi_color_direction)
-                    || '').toLowerCase();
+            if (oldMulti !== newMulti) {
+                changed.multi_color_hexes = data.multi_color_hexes;
+                if (emittingMulti) {
+                    // Always include direction when emitting hexes — Spoolman's
+                    // "must be set" check looks at the PATCH body, not the
+                    // merged final state.
+                    changed.multi_color_direction = data.multi_color_direction || 'longitudinal';
+                }
+            } else if (data.multi_color_direction != null) {
+                // Hexes unchanged but direction changed — emit just direction.
+                const oldDir = String(fil.multi_color_direction || '').toLowerCase();
                 if (oldDir !== data.multi_color_direction) {
-                    dirtyExtras.multi_color_direction = data.multi_color_direction;
+                    changed.multi_color_direction = data.multi_color_direction;
                 }
             }
             if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
