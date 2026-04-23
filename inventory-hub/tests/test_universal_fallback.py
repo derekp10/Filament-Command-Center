@@ -89,8 +89,13 @@ def test_force_unassign_clears_filabridge():
                         mock_post.assert_called_once()
                         assert mock_post.call_args[1]['json']['spool_id'] == 0
 
-def test_smart_move_suppresses_unmap():
-    """Verify swapping a spool suppresses the 0 signal to protect active prints."""
+def test_smart_move_ejects_resident_without_suppress_flag():
+    """Verify Smart Load ejection of a resident no longer passes suppress_fb_unmap.
+
+    The old flag skipped the filabridge unmap of the target toolhead,
+    which left filabridge thinking the resident was still there and
+    caused it to reject the incoming spool's map. Fix was to delete
+    the flag entirely; this test asserts the eject call shape."""
     mock_printer_map = {
         "PRINTER-4": {"printer_name": "TestPrinter4", "position": 1}
     }
@@ -109,10 +114,21 @@ def test_smart_move_suppresses_unmap():
                             with patch('logic.perform_smart_eject') as mock_eject:
                                 with patch('requests.post') as mock_post:
                                     res = logic.perform_smart_move("PRINTER-4", [8])
-                                    
-                                    # Eject should be called on the resident with suppress flag
-                                    mock_eject.assert_called_once_with(9, suppress_fb_unmap=True)
-                                    
-                                    # Post should only be called ONCE to map Spool 8
+
+                                    # Eject is called on the resident without
+                                    # the old suppress_fb_unmap flag — the
+                                    # flag was a footgun that caused the
+                                    # 2026-04-22 filabridge desync and has
+                                    # been removed. Filabridge's one-spool-
+                                    # one-toolhead invariant demands the
+                                    # target be unmapped before remapping.
+                                    mock_eject.assert_called_once_with(9)
+
+                                    # With Spool 8 starting off-toolhead (no
+                                    # origin toolhead) and the resident
+                                    # ejected by the mocked helper, the only
+                                    # filabridge POST this function itself
+                                    # issues is the destination map of
+                                    # Spool 8 onto PRINTER-4.
                                     mock_post.assert_called_once()
                                     assert mock_post.call_args[1]['json']['spool_id'] == 8

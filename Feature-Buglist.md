@@ -6,13 +6,6 @@
 
 * **[IMPORTANT]** Spoolman filament archiving is broken on the installed version — `PATCH /api/v1/filament/<id>` with `{"archived": true}` returns 200 but the flag is silently dropped; subsequent GETs never include the `archived` key on filaments (only spools). Dev and prod point at the same Spoolman. Impact: the wizard's auto-unarchive code (`inventory-hub/app.py` in `api_create_inventory_wizard`, added 2026-04-22) correctly calls `spoolman_api.update_filament(fid, {'archived': False})` whenever the parent filament looks archived — but that branch is effectively unreachable today because Spoolman never reports `archived: true` on a filament. `test_wizard_ux_polish.py::test_create_spool_auto_unarchives_parent_filament` skips on this basis. Next steps: (a) check whether Spoolman supports filament archival on a newer version and upgrade, or (b) track archive state on the filament via a custom `extra` field instead of the native flag. Related active-backlog entry: "Adding filament to an archived filament should automatically unarchive the filament" — code is in place, blocked on Spoolman support.
 
-* [IMPORTANT] System failed to properly update filabrige. Didn't sent Core1-m0 to none, and didn't set XL-2 to 240. Logs below.
-[15:04:46] ✅ Spool #240 → LR-MDB-1:SLOT:3 → XL-2
-[15:04:46] ⚡ Auto-deployed Spool #240 → XL-2 (source: LR-MDB-1:SLOT:3)
-[15:04:46] 🖨️ #240 Jessie Premium PETG (Transition Spool) -> XL-2
-[15:04:46] ↩️ Returned #226 -> LR-MDB-1
-[15:04:46] ⚠️ Smart Load: Ejecting #226 from XL-2...
-[15:04:46] 📦 #240 Jessie Premium PETG (Transition Spool) -> Dryer LR-MDB-1 [Slot 3]
 
 
 
@@ -170,6 +163,7 @@ All 3 of these things are important and have value. We should table for now, and
 
 # ** Filabridge Error Recovery **
 * Keep an eye on filabridge errors and note the type of recovery method used to fill in the missing weight data. (Fast-Fetch or RAM-Fetch) To see if Fast-Fetch (Based on a HTTP Range request of a file.) works.
+* **Filabridge ↔ Spoolman reconcile utility.** Admin action (button in Config or a top-bar widget) that reads `/api/status` from filabridge and cross-checks every non-zero toolhead mapping against Spoolman's `location` field. For each mismatch, offer two choices: (a) "Trust Spoolman — unmap filabridge" (clears the stale entry) or (b) "Trust filabridge — update Spoolman" (writes the toolhead into Spoolman's `location`). Today this is fixable only via a manual Python one-liner (see `acf309c` / `efa15dd` discussion 2026-04-22). The new `_fb_spool_location()` pre-flight in `logic.py` prevents *new* desyncs, but doesn't heal ghost mappings created by earlier bugs, manual DB edits, or the retired `suppress_fb_unmap` code path — once a ghost exists, it persists until the affected spool gets moved through the fixed path.
 
 # **New related project to be integrated **
 

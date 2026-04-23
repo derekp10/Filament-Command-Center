@@ -1,6 +1,24 @@
 /* MODULE: COMMAND CENTER (Dashboard & Buffer) - Polished v2 */
 console.log("🚀 Loaded Module: COMMAND CENTER");
 
+// Surface filabridge write failures (desync risk) as a warning toast.
+// Works for both shapes returned by the backend: a bare move_result
+// (/api/smart_move) and a wrapper like { smart_move: move_result }
+// (/api/quickswap, /api/quickswap/return, identify_scan). A failed write
+// already writes an Activity Log entry on the backend; the toast is the
+// "happened now" flash so a blind-scanning user notices before scanning again.
+window.maybeWarnFilabridge = function (body) {
+    if (!body || typeof body !== 'object') return false;
+    const mv = body.smart_move || body;
+    if (!mv || typeof mv !== 'object') return false;
+    if (mv.filabridge_ok === false) {
+        const detail = mv.filabridge_detail || 'see Activity Log';
+        showToast(`⚠️ Filabridge desync: ${detail}`, 'warning', 7000);
+        return true;
+    }
+    return false;
+};
+
 // --- BUFFER UI ---
 const renderBuffer = () => {
     const z = document.getElementById('buffer-zone');
@@ -129,6 +147,7 @@ const processScan = (text, source = 'keyboard') => {
         .then(r => r.json())
         .then(res => {
             setProcessing(false);
+            window.maybeWarnFilabridge(res);
             if (res.type === 'command') {
                 const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'done': closeManage };
                 if (cmds[res.cmd]) cmds[res.cmd]();
@@ -256,6 +275,7 @@ const performContextAssign = (tid, slot = null) => {
         .then(r => r.json())
         .then(res => {
             setProcessing(false);
+            window.maybeWarnFilabridge(res);
             if (res.status === 'success') {
                 showToast("Assigned " + state.heldSpools.length + " items!", "success");
                 // [ALEX FIX] Clear entire buffer after bulk move

@@ -316,6 +316,7 @@
         })
             .then(async r => ({ ok: r.ok, body: await r.json() }))
             .then(({ ok, body }) => {
+                if (window.maybeWarnFilabridge) window.maybeWarnFilabridge(body);
                 if (ok && body.action === 'quickswap_done') {
                     showToast(`⚡ Spool #${body.moved} → ${opts.toolhead}`, 'success', 2500);
                     _refreshAfterMove();
@@ -345,6 +346,7 @@
         })
             .then(async r => ({ ok: r.ok, body: await r.json() }))
             .then(({ ok, body }) => {
+                if (window.maybeWarnFilabridge) window.maybeWarnFilabridge(body);
                 if (ok && body.action === 'return_done') {
                     showToast(`↩️ Spool #${body.moved} → ${body.box}:SLOT:${body.slot}`, 'success', 2500);
                     _refreshAfterMove();
