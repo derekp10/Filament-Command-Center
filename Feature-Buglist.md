@@ -44,7 +44,6 @@
 
 * Adding spool weight (Empty Spool Weight) on the manufacturer, doesn't seem to pull down to the filament/spool if those fields are blank. This should be fixed so that It uses what ever one is available based on a priority system. (Manufacturer > Filament > Spool)
 
-* For Auto Detect, the activity log should also include the manufacture and the spool color in there as well as the data already included.
 
 
 * When a Spool gets archived, and the filamen attached to it doesn't have an empty spool weight, propmt the user of the missing spool weight and offer to assist in updating that data after they way the empty spool.

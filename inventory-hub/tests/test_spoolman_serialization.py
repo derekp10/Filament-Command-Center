@@ -120,3 +120,37 @@ def test_format_spool_display_preserves_vendor_with_surrounding_whitespace():
     assert "CC3D" in out["text"]
     assert "  CC3D  " not in out["text"]
 
+
+# ---------------------------------------------------------------------------
+# Activity-Log enrichment helper (logic._spool_brand_color_suffix)
+# ---------------------------------------------------------------------------
+
+import logic  # noqa: E402
+
+
+def test_brand_color_suffix_includes_manufacturer_and_color(monkeypatch):
+    """Auto-Detect / Auto-Deploy log lines must identify the spool, not just #ID."""
+    fake = _fake_spool(vendor_name="CC3D", color_name="Crimson Red", material="PLA")
+    monkeypatch.setattr(logic.spoolman_api, "get_spool", lambda sid: fake)
+
+    suffix = logic._spool_brand_color_suffix(42)
+
+    assert "CC3D" in suffix
+    assert "Crimson Red" in suffix
+    assert "PLA" in suffix
+    assert suffix.startswith(" — ")
+
+
+def test_brand_color_suffix_empty_when_spool_missing(monkeypatch):
+    """A missing spool should collapse to an empty suffix, not raise."""
+    monkeypatch.setattr(logic.spoolman_api, "get_spool", lambda sid: None)
+    assert logic._spool_brand_color_suffix(9999) == ""
+
+
+def test_brand_color_suffix_swallows_exceptions(monkeypatch):
+    """Network / API errors must never break the log write."""
+    def boom(sid):
+        raise RuntimeError("spoolman unreachable")
+    monkeypatch.setattr(logic.spoolman_api, "get_spool", boom)
+    assert logic._spool_brand_color_suffix(42) == ""
+
