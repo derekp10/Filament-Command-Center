@@ -1220,6 +1220,39 @@ def api_dryer_box_bindings_put(loc_id):
     })
 
 
+@app.route('/api/printer_state/<path:toolhead_id>', methods=['GET'])
+def api_printer_state(toolhead_id):
+    """Return PrusaLink state for the printer that owns `toolhead_id`.
+
+    toolhead_id is a location ID like "CORE1-M0" or "XL-3". If the location
+    doesn't map to a printer or PrusaLink is unreachable, returns
+    {"known": false} — callers treat that as "don't block the user."
+    Successful response: {"known": true, "state": "PRINTING", "is_active": true}.
+
+    Deliberately fail-open so a UI pre-check never stalls on a cold/rebooting
+    printer, wrong API key, or missing filabridge entry.
+    """
+    import prusalink_api  # local import keeps the module optional at module load
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    info = printer_map.get((toolhead_id or '').strip().upper())
+    if not info:
+        return jsonify({"known": False, "reason": "not_in_printer_map"})
+    printer_name = info.get('printer_name')
+    if not printer_name:
+        return jsonify({"known": False, "reason": "no_printer_name"})
+    _, fb_url = config_loader.get_api_urls()
+    result = prusalink_api.get_printer_state(fb_url, printer_name)
+    if not result:
+        return jsonify({"known": False, "reason": "prusalink_unreachable"})
+    return jsonify({
+        "known": True,
+        "state": result.get('state'),
+        "is_active": bool(result.get('is_active')),
+        "printer_name": printer_name,
+    })
+
+
 @app.route('/api/printer_map', methods=['GET'])
 def api_printer_map():
     """Read-only view of config.json's printer_map, grouped for UI use:

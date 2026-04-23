@@ -296,6 +296,24 @@ const fetchPrinterMap = () => {
         .catch(e => { console.warn("printer_map fetch failed", e); return {}; });
 };
 
+// Best-effort PrusaLink state probe for a given toolhead location (e.g.
+// "CORE1-M0"). Resolves to null on any failure (fail-open — UI should
+// proceed normally). Used by the "warn before reassigning during an
+// active print" pre-check in doAssign and the Quick-Swap confirm overlay.
+window.fetchPrinterStateForToolhead = (toolheadLocId) => {
+    if (!toolheadLocId) return Promise.resolve(null);
+    return fetch(`/api/printer_state/${encodeURIComponent(toolheadLocId)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+            if (!d || !d.known || !d.is_active) return null;
+            return {
+                state: d.state || 'ACTIVE',
+                printer_name: d.printer_name || toolheadLocId,
+            };
+        })
+        .catch(() => null);
+};
+
 // Render a searchable combobox backed by a native <select> so existing
 // save logic (reading .feeds-select.value) keeps working. The text input
 // filters a dropdown list; Arrow/Enter/Escape drive selection; clicking
@@ -949,6 +967,74 @@ window.handleSlotInteraction = (slot) => {
 window.doAssign = (loc, spool, slot, isFromBufferFlag = null) => {
     setProcessing(true);
 
+    // Pre-check: if the target is a toolhead in the printer_map, probe
+    // PrusaLink for current print state and ask the user to confirm when
+    // it's actively printing/paused. Fails open on any network hiccup —
+    // we don't want to block moves on a cold printer.
+    const locObjCheck = state.allLocations.find(l => l.LocationID === loc);
+    const isToolheadTarget = locObjCheck && (
+        locObjCheck.Type === 'Tool Head' ||
+        locObjCheck.Type === 'MMU Slot' ||
+        locObjCheck.Type === 'No MMU Direct Load' ||
+        locObjCheck.Type === 'Printer'
+    );
+    if (isToolheadTarget && window.fetchPrinterStateForToolhead) {
+        return window.fetchPrinterStateForToolhead(loc).then(stateInfo => {
+            if (!stateInfo) {
+                // Unknown state → proceed normally.
+                return _doAssignFinalize(loc, spool, slot, isFromBufferFlag);
+            }
+            // Active print → inline confirm overlay (no nested Swal).
+            setProcessing(false);
+            return _confirmActivePrintAssign({
+                loc,
+                spool,
+                slot,
+                isFromBufferFlag,
+                stateInfo,
+            });
+        });
+    }
+
+    return _doAssignFinalize(loc, spool, slot, isFromBufferFlag);
+};
+
+// Inline confirm overlay for "you're moving onto a printer that's actively
+// printing." Avoids nested Swal per project convention; mounts into the
+// manage modal body so it stacks correctly above the manage modal backdrop.
+const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo }) => {
+    const host = document.getElementById('manageModal') || document.body;
+    // Reuse a single overlay per page — tear down prior one if present.
+    let ov = document.getElementById('fcc-active-print-confirm-overlay');
+    if (ov) ov.remove();
+    ov = document.createElement('div');
+    ov.id = 'fcc-active-print-confirm-overlay';
+    ov.style.cssText = 'position:fixed; inset:0; z-index:20000; background:rgba(0,0,0,0.8); display:flex; align-items:center; justify-content:center;';
+    ov.innerHTML = `
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:460px; text-align:center;">
+            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${stateInfo.printer_name} is ${stateInfo.state}</div>
+            <div style="color:#ffc; margin-bottom:14px;">
+                Reassigning a spool to <b>${loc}</b> during an active print will disrupt the print and may leave filabridge/Spoolman in a stale state. Continue anyway?
+            </div>
+            <div style="display:flex; gap:10px; justify-content:center;">
+                <button id="fcc-apc-yes" class="btn btn-warning btn-sm" style="min-width:120px;">Continue Anyway</button>
+                <button id="fcc-apc-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Cancel</button>
+            </div>
+        </div>
+    `;
+    host.appendChild(ov);
+    const cleanup = () => { try { ov.remove(); } catch (_) { /* noop */ } document.removeEventListener('keydown', keyHandler, true); };
+    const keyHandler = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
+        else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag); }
+    };
+    document.getElementById('fcc-apc-no').onclick = cleanup;
+    document.getElementById('fcc-apc-yes').onclick = () => { cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag); };
+    document.addEventListener('keydown', keyHandler, true);
+    document.getElementById('fcc-apc-no').focus();
+};
+
+const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null) => {
     // FIX: 0-based index correction for MMU/CORE slots
     let finalSlot = slot;
     if (slot !== null) {

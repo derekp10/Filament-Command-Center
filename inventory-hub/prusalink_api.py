@@ -109,6 +109,55 @@ def download_gcode_and_parse_usage(ip_address: str, api_key: str, filename: str)
 
     return None
 
+def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
+    """Best-effort PrusaLink state probe for a named printer. Returns a dict
+    {state: str, is_active: bool} or None on any failure (fail-open — the
+    caller treats None as "unknown" and does not block user actions).
+
+    Tries the v1 status endpoint first (newer PrusaLink firmware), then falls
+    back to the legacy /api/printer shape. Timeouts are deliberately short
+    so the assignment-flow warning doesn't stall the UI when the printer is
+    unreachable (offline, networked elsewhere, cold-rebooting, etc.).
+
+    `is_active` is true only when PrusaLink reports a state in which a spool
+    swap would physically disrupt the print. Finished/stopped/idle states do
+    not trigger the warning.
+    """
+    creds = fetch_printer_credentials(filabridge_url, printer_name)
+    if not creds or not creds.get("ip_address"):
+        return None
+    ip = creds["ip_address"]
+    api_key = creds.get("api_key")
+    headers = {"X-Api-Key": api_key} if api_key else {}
+
+    # v1 status — returns {"printer": {"state": "PRINTING", ...}, ...}
+    try:
+        r = requests.get(f"http://{ip}/api/v1/status", headers=headers, timeout=2)
+        if r.ok:
+            body = r.json() or {}
+            printer = body.get("printer") or {}
+            state_str = str(printer.get("state", "")).upper()
+            if state_str:
+                return {"state": state_str, "is_active": state_str in {"PRINTING", "PAUSED", "BUSY"}}
+    except Exception:
+        pass
+
+    # Legacy /api/printer — returns {"state": {"text": "Printing", "flags": {...}}, ...}
+    try:
+        r = requests.get(f"http://{ip}/api/printer", headers=headers, timeout=2)
+        if r.ok:
+            body = r.json() or {}
+            flags = (body.get("state") or {}).get("flags") or {}
+            state_text = str((body.get("state") or {}).get("text", "")).upper()
+            is_active = bool(flags.get("printing") or flags.get("paused"))
+            if state_text:
+                return {"state": state_text, "is_active": is_active}
+    except Exception:
+        pass
+
+    return None
+
+
 def acknowledge_filabridge_error(filabridge_url: str, error_id: str) -> bool:
     """
     Acknowledges the FilaBridge error to dismiss it from the server.

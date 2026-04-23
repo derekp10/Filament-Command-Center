@@ -451,16 +451,30 @@
         // button text tells you what you're committing to.
         const labelEl = btn.querySelector('.fw-bold + .fw-bold, div.fw-bold:nth-child(2)');
         const spoolLabel = labelEl ? labelEl.innerText.trim() : '';
-        showConfirmOverlay({
-            ...opts,
-            title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
-            body: (spoolLabel
-                ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
-                : '')
-                + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
-                + 'Any spool currently on the toolhead gets auto-returned to <em>its own</em> origin box — '
-                + 'never re-routed into a different dryer box.',
-            onConfirm: () => performSwap(opts),
+        // Pre-check PrusaLink state for the target toolhead so we can prepend
+        // a warning banner when the printer is actively printing/paused.
+        // Fails open — null means "unknown, proceed without warning."
+        const stateProbe = window.fetchPrinterStateForToolhead
+            ? window.fetchPrinterStateForToolhead(opts.toolhead)
+            : Promise.resolve(null);
+        stateProbe.then(stateInfo => {
+            const warnBanner = stateInfo
+                ? `<div class="alert alert-warning py-2 px-3 mb-2" style="font-size:0.9em;">
+                    ⚠️ <b>${stateInfo.printer_name} is ${stateInfo.state}</b> — loading a new spool now will disrupt the print.
+                   </div>`
+                : '';
+            showConfirmOverlay({
+                ...opts,
+                title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
+                body: warnBanner
+                    + (spoolLabel
+                        ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
+                        : '')
+                    + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
+                    + 'Any spool currently on the toolhead gets auto-returned to <em>its own</em> origin box — '
+                    + 'never re-routed into a different dryer box.',
+                onConfirm: () => performSwap(opts),
+            });
         });
     };
 
