@@ -891,17 +891,33 @@ const _editfilOpenModal = (fil) => {
 
     const wirePickerHexPair = (pickerEl, hexEl) => {
         if (!pickerEl || !hexEl) return;
-        pickerEl.oninput = () => { hexEl.value = pickerEl.value; };
-        hexEl.oninput = () => {
-            const v = hexEl.value.trim();
-            if (/^#[0-9a-fA-F]{6}$/.test(v)) pickerEl.value = v.toLowerCase();
-        };
-        hexEl.onblur = () => {
+        // Normalize the text-field to "#rrggbb" and push to picker.
+        // Called from blur + keydown-Enter + keydown-Tab so any of those
+        // exit-the-input actions commit the typed hex immediately.
+        const commitHex = () => {
             const raw = hexEl.value.trim().replace(/^#/, '');
             if (raw === '') return;
             if (/^[0-9a-fA-F]{6}$/.test(raw)) {
                 hexEl.value = `#${raw.toLowerCase()}`;
                 pickerEl.value = `#${raw.toLowerCase()}`;
+            }
+        };
+        pickerEl.oninput = () => { hexEl.value = pickerEl.value; };
+        hexEl.oninput = () => {
+            const v = hexEl.value.trim();
+            if (/^#[0-9a-fA-F]{6}$/.test(v)) pickerEl.value = v.toLowerCase();
+        };
+        hexEl.onblur = commitHex;
+        hexEl.onkeydown = (e) => {
+            // Enter + Tab both "leave" the input and should commit the hex
+            // to the picker. Enter also swallows (so the modal doesn't
+            // submit if some future Save-on-Enter handler is added).
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                commitHex();
+            } else if (e.key === 'Tab') {
+                commitHex();
+                // Let the Tab propagate so focus moves to the next field.
             }
         };
     };
@@ -1157,20 +1173,44 @@ const _editfilOpenModal = (fil) => {
     const vendorNameEl = document.getElementById('editfil-vendor-name');
     const vendorIdEl = document.getElementById('editfil-vendor-id');
     const vendorNewBadge = document.getElementById('editfil-vendor-new-badge');
+    const vendorInfoPill = document.getElementById('editfil-vendor-info');
     const refreshVendorBadge = () => {
         const typed = (vendorNameEl.value || '').trim();
         if (!typed) {
             vendorIdEl.value = '';
             vendorNewBadge.style.display = 'none';
+            if (vendorInfoPill) vendorInfoPill.style.display = 'none';
             return;
         }
         const match = vendorCache.find(v => (v.name || '').toLowerCase() === typed.toLowerCase());
         if (match) {
             vendorIdEl.value = String(match.id);
             vendorNewBadge.style.display = 'none';
+            // Surface the vendor's data so the user knows what Spoolman has on
+            // file. Empty-spool weight is the most useful; extras (if any)
+            // are shown in the tooltip.
+            if (vendorInfoPill) {
+                const wt = match.empty_spool_weight != null ? Number(match.empty_spool_weight) : null;
+                const bits = [];
+                if (wt) bits.push(`${wt}g empty`);
+                const extras = match.extra || {};
+                const extraKeys = Object.keys(extras).filter(k => extras[k] != null && extras[k] !== '');
+                if (extraKeys.length > 0) bits.push(`${extraKeys.length} extra${extraKeys.length === 1 ? '' : 's'}`);
+                const summary = bits.length > 0 ? `ⓘ ${bits.join(' · ')}` : 'ⓘ vendor';
+                vendorInfoPill.innerText = summary;
+                const tooltip = wt ? `Default empty-spool weight: ${wt}g` : 'Existing vendor';
+                const extraLines = extraKeys.map(k => {
+                    const v = extras[k];
+                    const str = typeof v === 'string' ? v.replace(/^"|"$/g, '') : JSON.stringify(v);
+                    return `${k}: ${str}`;
+                });
+                vendorInfoPill.title = [tooltip, ...extraLines].join('\n');
+                vendorInfoPill.style.display = 'inline-block';
+            }
         } else {
             vendorIdEl.value = '';
             vendorNewBadge.style.display = 'inline-block';
+            if (vendorInfoPill) vendorInfoPill.style.display = 'none';
         }
     };
     bindComboDropdown({
@@ -1358,13 +1398,19 @@ const _editfilOpenModal = (fil) => {
         let multiColorHexes = null;
         let multiDirection = null;
         if (rawColors.length === 0) {
+            // No colors at all — clear both fields.
             colorHex = '';
             multiColorHexes = '';
         } else if (rawColors.length === 1) {
+            // Single color — use color_hex, clear multi.
             colorHex = rawColors[0];
             multiColorHexes = '';
         } else {
-            colorHex = rawColors[0];
+            // 2+ colors — Spoolman REJECTS (HTTP 422) if both color_hex and
+            // multi_color_hexes are set ("Cannot specify both"). Use
+            // multi_color_hexes and force color_hex to empty. The first
+            // hex in the CSV is still the "primary" for display purposes.
+            colorHex = '';
             multiColorHexes = rawColors.join(',');
             multiDirection = (val('editfil-color-direction') || 'longitudinal').toLowerCase();
         }
@@ -1465,11 +1511,16 @@ const _editfilOpenModal = (fil) => {
             }
             const oldHex = (fil.color_hex || '').replace(/^#/, '').toLowerCase();
             const newHex = (data.color_hex || '').toLowerCase();
-            if (oldHex !== newHex) changed.color_hex = data.color_hex;
             const oldMulti = String(fil.multi_color_hexes || '')
                 .split(',').map(h => h.replace(/^#/, '').trim().toLowerCase())
                 .filter(Boolean).join(',');
             const newMulti = String(data.multi_color_hexes || '').toLowerCase();
+            // Spoolman REJECTS (HTTP 422) any PATCH that has both color_hex
+            // and multi_color_hexes "specified" (pydantic sees empty string
+            // as specified, so we must skip the field entirely when the
+            // other one is set). We emit at most one of the pair per PATCH.
+            const emittingMulti = newMulti.length > 0;
+            if (!emittingMulti && oldHex !== newHex) changed.color_hex = data.color_hex;
             if (oldMulti !== newMulti) changed.multi_color_hexes = data.multi_color_hexes;
             // multi_color_direction is NOT a native Spoolman filament field —
             // it lives in `extra.multi_color_direction`. PATCHing it as a
@@ -1569,7 +1620,82 @@ const _editfilOpenModal = (fil) => {
         }
     };
 
+    // --- Escape-with-unsaved-changes guard ---
+    // Tracks whether the user has modified ANY input since open. Compared to
+    // a DOM snapshot at show-time so arbitrary input changes (text + hex +
+    // chips + color rows) all mark the form dirty. Escape pops a small
+    // confirm overlay instead of dismissing the modal outright.
+    const snapshotFormState = () => {
+        // Hash every input/textarea/select value + the chip set + color rows.
+        const parts = [];
+        modalEl.querySelectorAll('input, textarea, select').forEach(el => {
+            parts.push(`${el.id || el.name}=${el.value}`);
+        });
+        parts.push('chips=' + attrSelected.join(','));
+        return parts.join('|');
+    };
+    let baselineState = '';
+    // Install a capture-phase keydown listener on the modal so we see Escape
+    // before Bootstrap's built-in dismiss handler. When the form is dirty,
+    // swallow the original Escape and show a confirm overlay.
+    const escGuardHandler = (e) => {
+        if (e.key !== 'Escape') return;
+        // If any combobox/chip dropdown has its own Escape handler active,
+        // let those fire first (they stopPropagation when visible).
+        // By the time this bubble-phase handler sees Escape, we know no
+        // dropdown was open.
+        if (snapshotFormState() === baselineState) return; // Clean — let Bootstrap close.
+        e.preventDefault();
+        e.stopPropagation();
+        _editfilShowEscapeConfirm(bsModal);
+    };
+    modalEl.addEventListener('keydown', escGuardHandler);
+    // Re-snapshot when the modal finishes opening (after we populate fields).
+    modalEl.addEventListener('shown.bs.modal', () => { baselineState = snapshotFormState(); }, { once: true });
+    modalEl.addEventListener('hidden.bs.modal', () => {
+        modalEl.removeEventListener('keydown', escGuardHandler);
+    }, { once: true });
+
     bsModal.show();
+};
+
+// Inline confirm overlay for "close without saving?" Mounts inside the
+// modal so it stacks above the modal's own backdrop and shares its z-index.
+// No nested Swal per project convention — just a dark-backdrop div with
+// Yes/No buttons that resolve to close-anyway or dismiss-the-overlay.
+const _editfilShowEscapeConfirm = (bsModal) => {
+    const modalEl = document.getElementById('editFilamentModal');
+    if (!modalEl) return;
+    // Avoid stacking multiples if the user mashes Escape.
+    let ov = document.getElementById('editfil-esc-confirm');
+    if (ov) ov.remove();
+    ov = document.createElement('div');
+    ov.id = 'editfil-esc-confirm';
+    ov.style.cssText = 'position:absolute; inset:0; z-index:20000; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center;';
+    ov.innerHTML = `
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:420px; text-align:center;">
+            <div style="font-size:1.1em; font-weight:bold; margin-bottom:8px;">Close without saving?</div>
+            <div style="color:#ffc; margin-bottom:14px;">You have unsaved changes to this filament. Leave anyway?</div>
+            <div style="display:flex; gap:10px; justify-content:center;">
+                <button id="editfil-esc-yes" class="btn btn-danger btn-sm" style="min-width:120px;">Close Anyway</button>
+                <button id="editfil-esc-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Keep Editing</button>
+            </div>
+        </div>
+    `;
+    // Use the modal dialog as the mount point so the overlay sits inside
+    // the modal's position:relative parent and inherits its stacking.
+    const dialog = modalEl.querySelector('.modal-content') || modalEl;
+    dialog.style.position = 'relative';
+    dialog.appendChild(ov);
+    const cleanup = () => { try { ov.remove(); } catch (_) { /* noop */ } document.removeEventListener('keydown', keyHandler, true); };
+    const keyHandler = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
+        else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); cleanup(); bsModal.hide(); }
+    };
+    document.getElementById('editfil-esc-no').onclick = cleanup;
+    document.getElementById('editfil-esc-yes').onclick = () => { cleanup(); bsModal.hide(); };
+    document.addEventListener('keydown', keyHandler, true);
+    document.getElementById('editfil-esc-no').focus();
 };
 
 window.openEditFilamentForm = (fil) => {

@@ -177,6 +177,14 @@
    helper text stay readable on darker monitors. */
 #editFilamentModal .form-text.text-muted { color: #adb5bd !important; }
 #editFilamentModal .text-muted { color: #adb5bd !important; }
+/* Number-input placeholders (like Price's "0.00") default to a very
+   dark gray on black, which reads as invisible. Bump to a muted
+   light-gray so the placeholder is a clear hint without competing
+   with real values. */
+#editFilamentModal input.form-control::placeholder {
+    color: #8a8a8a !important;
+    opacity: 1;
+}
 #editFilamentModal .editfil-chip {
     background: #2a4c5c;
     border: 1px solid #4fa2c9;
@@ -261,11 +269,6 @@
                                     Material
                                     <span id="editfil-material-new-badge" class="badge bg-success ms-1" style="display:none; font-size:0.7rem;">+ NEW</span>
                                 </label>
-                                <!-- Wizard-style combobox: visible text input + hidden id
-                                     holder + absolute-positioned custom dropdown. Material
-                                     doesn't need the hidden id (free-text) but we keep the
-                                     wrapper structure identical to Vendor for consistent
-                                     styling/keyboard handling. -->
                                 <div class="position-relative">
                                     <input type="text" id="editfil-material"
                                         class="form-control bg-black text-white border-secondary"
@@ -277,6 +280,10 @@
                                 <label class="form-label text-light small mb-1">
                                     Vendor
                                     <span id="editfil-vendor-new-badge" class="badge bg-success ms-1" style="display:none; font-size:0.7rem;">+ NEW</span>
+                                    <!-- Tiny info pill surfaces when an existing vendor is
+                                         selected — hover shows the vendor's default empty-
+                                         spool weight and any extras Spoolman has on it. -->
+                                    <span id="editfil-vendor-info" class="badge bg-info text-dark ms-1" style="display:none; font-size:0.7rem; cursor:help;" title=""></span>
                                 </label>
                                 <div class="position-relative">
                                     <input type="text" id="editfil-vendor-name"
@@ -287,18 +294,29 @@
                                 </div>
                             </div>
                         </div>
-                        <!-- Nozzle + bed live on Basic alongside material/vendor because
-                             they're the most-commonly-edited fields. Max temps and the
-                             rest of the spec numbers stay on the Specs tab. -->
-                        <div class="row g-2 mt-2">
-                            <div class="col-6">
-                                <label class="form-label text-light small mb-1">🔥 Nozzle (°C)</label>
-                                <input type="number" id="editfil-nozzle" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                        <!-- Original Color Name + Filament Attributes moved to Basic on
+                             user feedback — these are commonly edited alongside color,
+                             material, and vendor, so grouping them here saves the trip
+                             to Advanced for every edit. -->
+                        <div class="mt-2">
+                            <label class="form-label text-light small mb-1">Original Color Name</label>
+                            <input type="text" id="editfil-original-color" class="form-control bg-black text-white border-secondary" placeholder="e.g. Silk Gold" autocomplete="off">
+                        </div>
+                        <div class="mt-2">
+                            <label class="form-label text-light small mb-1">Filament Attributes</label>
+                            <div class="position-relative">
+                                <div class="form-control bg-black text-white border-secondary d-flex flex-wrap align-items-center gap-1 p-1"
+                                     style="min-height: 38px; cursor: text;"
+                                     onclick="document.getElementById('editfil-attr-input').focus()">
+                                    <div id="editfil-attr-chips" class="d-flex flex-wrap gap-1"></div>
+                                    <input type="text" id="editfil-attr-input"
+                                           class="border-0 bg-transparent text-white flex-grow-1"
+                                           placeholder="Search or type new..." autocomplete="off"
+                                           style="outline: none; min-width: 120px;">
+                                </div>
+                                <div id="editfil-attr-dropdown" class="editfil-attr-dropdown"></div>
                             </div>
-                            <div class="col-6">
-                                <label class="form-label text-light small mb-1">🛏️ Bed (°C)</label>
-                                <input type="number" id="editfil-bed" class="form-control bg-black text-white border-secondary" autocomplete="off">
-                            </div>
+                            <div class="form-text" style="font-size:0.8rem; color:#adb5bd;">Matches the Add/Edit wizard's chip picker. Typing a new tag + Enter adds it + registers in Spoolman.</div>
                         </div>
                         <div class="mt-2">
                             <label class="form-label text-light small mb-1">Notes</label>
@@ -342,12 +360,13 @@
                                 </label>
                                 <div class="input-group">
                                     <input type="number" step="0.1" id="editfil-spool-weight" class="form-control bg-black text-white border-secondary" autocomplete="off">
-                                    <!-- Copy the vendor's default empty_spool_weight into the
-                                         input. Visible only when a vendor value is available;
-                                         openEditFilamentForm toggles `display:none` as needed. -->
+                                    <!-- Button is hidden unless the filament's vendor has a
+                                         default empty_spool_weight. Uses visible text so
+                                         there's no chance of the icon failing to render
+                                         (user reported not seeing the earlier ⇩ glyph). -->
                                     <button type="button" id="editfil-copy-vendor-wt"
-                                        class="btn btn-outline-info" style="display:none;"
-                                        title="Copy empty-spool weight from vendor default">⇩</button>
+                                        class="btn btn-info fw-bold" style="display:none; color:#000;"
+                                        title="Copy empty-spool weight from vendor default">Use Vendor</button>
                                 </div>
                             </div>
                             <div class="col-6">
@@ -369,52 +388,37 @@
                                 <input type="number" step="0.01" id="editfil-price" class="form-control bg-black text-white border-secondary" placeholder="0.00" autocomplete="off">
                             </div>
                         </div>
-                        <!-- Max-temp companions to Spoolman's native min/recommended
-                             nozzle+bed fields (those inputs live on the Basic tab).
-                             Stored in extras: nozzle_temp_max, bed_temp_max. -->
+                        <!-- Temperatures. Min/recommended (Spoolman native) AND max
+                             (extras) live on the same tab because the user fills them
+                             together — splitting across tabs broke data-entry flow. -->
                         <hr class="border-secondary mt-3 mb-2">
-                        <div class="small fw-bold mb-1" style="color:#7fd4ff;">🌡️ Max Temperatures (optional)</div>
+                        <div class="small fw-bold mb-1" style="color:#7fd4ff;">🔥 Nozzle (°C)</div>
                         <div class="row g-2">
                             <div class="col-6">
-                                <label class="form-label text-light small mb-1">Nozzle Max (°C)</label>
-                                <input type="number" id="editfil-nozzle-max" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                                <label class="form-label text-light small mb-1">Min / Recommended</label>
+                                <input type="number" id="editfil-nozzle" class="form-control bg-black text-white border-secondary" autocomplete="off">
                             </div>
                             <div class="col-6">
-                                <label class="form-label text-light small mb-1">Bed Max (°C)</label>
+                                <label class="form-label text-light small mb-1">Max</label>
+                                <input type="number" id="editfil-nozzle-max" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                            </div>
+                        </div>
+                        <div class="small fw-bold mb-1 mt-2" style="color:#7fd4ff;">🛏️ Bed (°C)</div>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label text-light small mb-1">Min / Recommended</label>
+                                <input type="number" id="editfil-bed" class="form-control bg-black text-white border-secondary" autocomplete="off">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label text-light small mb-1">Max</label>
                                 <input type="number" id="editfil-bed-max" class="form-control bg-black text-white border-secondary" autocomplete="off">
                             </div>
                         </div>
-                        <div class="form-text small mt-1" style="color:#adb5bd;">Native nozzle/bed (min/recommended) live on the Basic tab. Max values are stored in Spoolman as extras.</div>
+                        <div class="form-text small mt-1" style="color:#adb5bd;">Min/recommended use Spoolman's native fields. Max values are stored as extras.</div>
                     </div>
 
                     <!-- ADVANCED -->
                     <div class="tab-pane fade" id="editfil-tab-advanced" role="tabpanel">
-                        <div class="mb-2">
-                            <label class="form-label text-light small mb-1">Original Color Name</label>
-                            <input type="text" id="editfil-original-color" class="form-control bg-black text-white border-secondary" placeholder="e.g. Silk Gold" autocomplete="off">
-                        </div>
-                        <!-- Filament Attributes chip picker. Matches the wizard's
-                             multi-choice chip input: search existing tags from
-                             Spoolman's field schema, click/Enter to add a chip, ×
-                             on a chip to remove. Typing a brand-new name and
-                             confirming adds it locally + silently registers it
-                             with Spoolman via /api/external/fields/add_choice. -->
-                        <div class="mb-2">
-                            <label class="form-label text-light small mb-1">Filament Attributes</label>
-                            <div class="position-relative">
-                                <div class="form-control bg-black text-white border-secondary d-flex flex-wrap align-items-center gap-1 p-1"
-                                     style="min-height: 38px; cursor: text;"
-                                     onclick="document.getElementById('editfil-attr-input').focus()">
-                                    <div id="editfil-attr-chips" class="d-flex flex-wrap gap-1"></div>
-                                    <input type="text" id="editfil-attr-input"
-                                           class="border-0 bg-transparent text-white flex-grow-1"
-                                           placeholder="Search or type new..." autocomplete="off"
-                                           style="outline: none; min-width: 120px;">
-                                </div>
-                                <div id="editfil-attr-dropdown" class="editfil-attr-dropdown"></div>
-                            </div>
-                            <div class="form-text text-muted" style="font-size:0.8rem;">Matches the Add/Edit wizard's chip picker. Typing a new tag and pressing Enter adds it + registers it in Spoolman.</div>
-                        </div>
                         <div class="mb-2">
                             <label class="form-label text-light small mb-1">Product URL</label>
                             <input type="url" id="editfil-product-url" class="form-control bg-black text-white border-secondary" placeholder="https://..." autocomplete="off">

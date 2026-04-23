@@ -304,8 +304,22 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     # printer that's currently PRINTING/PAUSED/BUSY, bail with a
     # requires_confirm response so the caller can show a dialog and retry
     # with confirm_active_print=True. Fail-open via None inside the helper.
+    #
+    # Walks slot-targets too: if target is a Dryer Box and target_slot is
+    # bound to a toolhead, that toolhead is the eventual destination (via
+    # the auto-deploy chain below). Checking it preemptively means the
+    # user gets prompted BEFORE any Spoolman writes happen, instead of
+    # having the recursive call swallow requires_confirm silently.
     if not confirm_active_print:
         ap = _active_print_info_for_location(target, printer_map)
+        if not ap:
+            # Check slot-binding's eventual toolhead.
+            tgt_row = loc_info_map.get(target)
+            if tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot:
+                bound = (tgt_row.get('extra') or {}).get('slot_targets', {}) or {}
+                bound_th = bound.get(str(target_slot)) or bound.get(str(int(target_slot))) if str(target_slot).isdigit() else bound.get(str(target_slot))
+                if bound_th:
+                    ap = _active_print_info_for_location(bound_th, printer_map)
         if ap:
             return {
                 "status": "requires_confirm",

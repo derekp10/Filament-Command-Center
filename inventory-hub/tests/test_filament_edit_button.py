@@ -205,14 +205,15 @@ def test_modal_advanced_tab_populates_extras(page: Page):
         },
     }
     _open_modal_with(page, fil)
-    page.locator("#editfil-tab-advanced-btn").click()
+    # Basic tab (default): original_color + attribute chips are here now.
     assert page.locator("#editfil-original-color").input_value() == "Silk Gold"
-    # Attributes now render as chips (wizard-style), not a comma string.
     chip_values = page.evaluate(
         "() => Array.from(document.querySelectorAll('#editfil-attr-chips .editfil-chip'))"
         ".map(c => c.getAttribute('data-value'))"
     )
     assert chip_values == ["Silk", "Shimmer"]
+    # Advanced tab: URLs + legacy ID.
+    page.locator("#editfil-tab-advanced-btn").click()
     assert page.locator("#editfil-product-url").input_value() == "https://vendor.example/product"
     assert page.locator("#editfil-purchase-url").input_value() == "https://shop.example/buy"
     assert page.locator("#editfil-sheet-link").input_value() == "https://docs.example/sheet"
@@ -378,9 +379,7 @@ def test_modal_filament_attributes_serialize_to_json_array(page: Page):
 
     fil = {"id": 204, "name": "T", "material": "PLA", "extra": {}}
     _open_modal_with(page, fil)
-    page.locator("#editfil-tab-advanced-btn").click()
-
-    # Type + Enter twice to commit two chips.
+    # Chip picker lives on Basic tab (default) now — no tab switch needed.
     attr_input = page.locator("#editfil-attr-input")
     attr_input.fill("Silk")
     attr_input.press("Enter")
@@ -683,9 +682,7 @@ def test_modal_attr_chip_picker_clicking_known_choice(page: Page):
 
     fil = {"id": 407, "name": "T", "material": "PLA", "extra": {}}
     _open_modal_with(page, fil)
-    page.locator("#editfil-tab-advanced-btn").click()
-
-    # Focus the chip input to pop the dropdown, then click a known choice.
+    # Chip picker lives on Basic (default) — no tab switch needed.
     page.locator("#editfil-attr-input").click()
     page.wait_for_selector("#editfil-attr-dropdown .dropdown-item", timeout=3_000)
     page.locator("#editfil-attr-dropdown .dropdown-item[data-value='Silk']").click()
@@ -713,9 +710,7 @@ def test_modal_attr_chip_picker_adds_new_tag_and_registers_it(page: Page):
 
     fil = {"id": 408, "name": "T", "material": "PLA", "extra": {}}
     _open_modal_with(page, fil)
-    page.locator("#editfil-tab-advanced-btn").click()
-
-    # Wait for known choices to load so our typed tag is distinguishable.
+    # Chip picker is on Basic (default). Wait for known choices to load.
     page.wait_for_function("() => document.querySelectorAll('#editfil-attr-dropdown').length > 0")
     page.locator("#editfil-attr-input").click()
     page.locator("#editfil-attr-input").fill("Glossy")
@@ -746,8 +741,7 @@ def test_modal_chip_picker_remove_chip(page: Page):
         "extra": {"filament_attributes": '["Silk","Matte"]'},
     }
     _open_modal_with(page, fil)
-    page.locator("#editfil-tab-advanced-btn").click()
-
+    # Chip picker is on Basic (default).
     # Verify both chips present, then remove the first one.
     page.wait_for_selector("#editfil-attr-chips .editfil-chip")
     page.locator("#editfil-attr-chips .editfil-chip .chip-x").first.click()
@@ -816,8 +810,7 @@ def test_modal_attr_chip_escape_closes_dropdown_not_modal(page: Page):
 
     fil = {"id": 502, "name": "T", "material": "PLA", "extra": {}}
     _open_modal_with(page, fil)
-    page.locator("#editfil-tab-advanced-btn").click()
-
+    # Chip picker lives on Basic (default) — no tab switch needed.
     attr_input = page.locator("#editfil-attr-input")
     attr_input.click()
     page.wait_for_selector("#editfil-attr-dropdown .dropdown-item", timeout=3_000)
@@ -912,6 +905,165 @@ def test_modal_multi_color_direction_routes_through_extras(page: Page):
         "multi_color_direction must not be sent as a top-level Spoolman field"
     # Must be in extras with the Spoolman-quoted format.
     assert data["extra"]["multi_color_direction"] == '"coaxial"'
+
+
+def test_modal_multi_color_save_does_not_send_color_hex(page: Page):
+    """Regression: Spoolman rejects (HTTP 422) any PATCH that has BOTH
+    color_hex and multi_color_hexes specified. When the user saves a
+    multi-color filament, we must send multi_color_hexes only."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 601, "name": "Mono", "material": "PLA", "color_hex": "ff0000"}
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-colors-btn").click()
+    # Add a second color — form goes multi.
+    page.locator("#editfil-add-color").click()
+    extra_hex = page.locator("#editfil-color-extras input[id^='editfil-color-hex-']").first
+    extra_hex.fill("#00ff00")
+
+    page.locator("#editfil-save").click()
+    page.wait_for_function("window.__lastFetchPayload !== null", timeout=3_000)
+    data = page.evaluate("() => window.__lastFetchPayload.data")
+    assert "multi_color_hexes" in data
+    assert data["multi_color_hexes"] == "ff0000,00ff00"
+    # color_hex must NOT be in the body — Spoolman would reject.
+    assert "color_hex" not in data, (
+        "color_hex and multi_color_hexes cannot both be in the PATCH body; "
+        "Spoolman rejects with HTTP 422"
+    )
+
+
+def test_modal_hex_enter_commits_color_to_picker(page: Page):
+    """Typing a hex and pressing Enter should normalize the input AND
+    update the color picker. Matches user expectation that Enter 'applies'
+    the color."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 602, "name": "T", "material": "PLA", "color_hex": "000000"}
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-colors-btn").click()
+
+    hex_input = page.locator("#editfil-color-hex")
+    hex_input.fill("aabbcc")
+    hex_input.press("Enter")
+    # Normalized to #rrggbb with hash.
+    assert hex_input.input_value() == "#aabbcc"
+    assert page.locator("#editfil-color-picker").input_value() == "#aabbcc"
+
+
+def test_modal_copy_vendor_wt_button_has_visible_text(page: Page):
+    """Regression: the Use-Vendor button must render visible text so the
+    user can see it (the earlier ⇩ glyph alone was missed)."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {
+        "id": 603, "name": "T", "material": "PLA",
+        "vendor": {"id": 1, "name": "Alpha", "empty_spool_weight": 185},
+    }
+    _open_modal_with(page, fil)
+    page.locator("#editfil-tab-specs-btn").click()
+    btn = page.locator("#editfil-copy-vendor-wt")
+    expect(btn).to_be_visible()
+    text = btn.text_content() or ""
+    assert text.strip() != "", "Button text must not be empty (visible label required)"
+
+
+def test_modal_vendor_info_pill_surfaces_empty_spool_weight(page: Page):
+    """Selecting an existing vendor with an empty_spool_weight should show
+    a small info pill next to the vendor label hinting at the vendor data."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+
+    # Stub vendors with an empty_spool_weight so we can assert the pill.
+    page.evaluate(
+        """
+        const orig = window.fetch;
+        window.fetch = async (url, opts) => {
+            if (url === '/api/vendors' && (!opts || !opts.method || opts.method === 'GET')) {
+                return new Response(JSON.stringify({
+                    success: true,
+                    vendors: [{id: 1, name: 'Overture', empty_spool_weight: 165}]
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/materials') {
+                return new Response(JSON.stringify({success: true, materials: []}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (url === '/api/external/fields') {
+                return new Response(JSON.stringify({success: true, fields: {filament: [], spool: []}}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            return orig(url, opts);
+        };
+        """
+    )
+
+    fil = {"id": 604, "name": "T", "material": "PLA", "vendor": {"id": 1, "name": "Overture"}}
+    _open_modal_with(page, fil)
+
+    # Wait for the fetch + refreshVendorBadge to run.
+    page.wait_for_function(
+        "() => { const el = document.getElementById('editfil-vendor-info'); return el && el.style.display !== 'none'; }",
+        timeout=3_000,
+    )
+    pill = page.locator("#editfil-vendor-info")
+    expect(pill).to_be_visible()
+    text = pill.text_content() or ""
+    # Contains empty-spool weight summary.
+    assert "165g" in text
+
+
+def test_modal_escape_with_unsaved_changes_prompts_confirm(page: Page):
+    """Pressing Escape after modifying a field should show a confirm
+    overlay asking the user if they want to close without saving."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 605, "name": "Old", "material": "PLA"}
+    _open_modal_with(page, fil)
+
+    # Modify a field.
+    page.locator("#editfil-name").fill("NewName")
+    # Press Escape. The confirm overlay should appear; the modal should
+    # still be visible behind it.
+    page.locator("#editfil-name").press("Escape")
+    page.wait_for_selector("#editfil-esc-confirm", state="visible", timeout=2_000)
+    expect(page.locator("#editFilamentModal.show")).to_have_count(1)
+
+    # Click "Keep Editing" → overlay closes, modal stays.
+    page.locator("#editfil-esc-no").click()
+    expect(page.locator("#editfil-esc-confirm")).to_have_count(0)
+    expect(page.locator("#editFilamentModal.show")).to_have_count(1)
+
+
+def test_modal_escape_with_no_changes_closes_modal(page: Page):
+    """Clean state + Escape = normal Bootstrap-dismiss behavior."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 606, "name": "Old", "material": "PLA"}
+    _open_modal_with(page, fil)
+    # Give the shown.bs.modal event a tick to snapshot the baseline.
+    page.wait_for_timeout(300)
+
+    # Press Escape without modifying anything.
+    page.locator("#editfil-name").press("Escape")
+    # Modal should be hidden (Bootstrap default behavior).
+    expect(page.locator("#editFilamentModal.show")).to_have_count(0)
 
 
 def test_modal_surfaces_spoolman_error_body(page: Page):

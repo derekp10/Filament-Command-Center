@@ -245,6 +245,77 @@ def test_smart_move_endpoint_threads_confirm_flag_through(client):
 # /api/identify_scan (slot-QR assignment branch).
 # ---------------------------------------------------------------------------
 
+def test_smart_move_checks_slot_binding_for_active_print(client):
+    """A move into a Dryer Box slot that's bound to an active toolhead
+    (via extra.slot_targets) should bail pre-move. The auto-deploy chain
+    silently swallows requires_confirm from its recursive call, so the
+    preflight check must walk the binding ITSELF to catch this path.
+
+    User-reported scenario: swap a spool between slots 1 and 2 of
+    LR-MDB-1 where slot 1 is bound to an active toolhead. Expected:
+    requires_confirm before the swap happens."""
+    # Fake dryer box with slot 1 bound to XL-1 (which we'll mark active).
+    box_row = {
+        "LocationID": "LR-MDB-1",
+        "Type": "Dryer Box",
+        "Max Spools": "4",
+        "Name": "LR MDB",
+        "extra": {"slot_targets": {"1": "XL-1"}},
+    }
+    locs_with_bound_slot = [box_row] + [
+        row for row in FAKE_LOCATIONS if row["LocationID"] != "LR-MDB-1"
+    ]
+    with patch.object(logic.locations_db, "load_locations_list", return_value=locs_with_bound_slot), \
+         patch.object(logic.config_loader, "load_config", return_value={"printer_map": FAKE_PRINTER_MAP}), \
+         patch.object(logic.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch("prusalink_api.get_printer_state", return_value={"state": "PRINTING", "is_active": True}), \
+         patch.object(logic, "resolve_scan", return_value={"type": "spool", "id": 42}), \
+         patch.object(app_module.spoolman_api, "update_spool") as upd:
+        r = client.post("/api/manage_contents", json={
+            "action": "add",
+            "location": "LR-MDB-1",
+            "slot": "1",
+            "spool_id": "ID:42",
+            "origin": "buffer",
+        })
+    body = r.get_json()
+    assert body.get("status") == "requires_confirm"
+    assert body.get("confirm_type") == "active_print"
+    assert body["active_print"]["toolhead"] == "XL-1"
+    upd.assert_not_called()
+
+
+def test_smart_move_slot_binding_preflight_allows_idle_target(client):
+    """Same slot-binding path, but the bound toolhead is IDLE — no bail."""
+    box_row = {
+        "LocationID": "LR-MDB-1",
+        "Type": "Dryer Box",
+        "Max Spools": "4",
+        "Name": "LR MDB",
+        "extra": {"slot_targets": {"1": "XL-1"}},
+    }
+    locs_with_bound_slot = [box_row] + [
+        row for row in FAKE_LOCATIONS if row["LocationID"] != "LR-MDB-1"
+    ]
+    with patch.object(logic.locations_db, "load_locations_list", return_value=locs_with_bound_slot), \
+         patch.object(logic.config_loader, "load_config", return_value={"printer_map": FAKE_PRINTER_MAP}), \
+         patch.object(logic.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch("prusalink_api.get_printer_state", return_value={"state": "IDLE", "is_active": False}), \
+         patch.object(logic, "resolve_scan", return_value={"type": "spool", "id": 42}), \
+         patch.object(logic, "perform_smart_move", return_value={"status": "success"}) as mv:
+        r = client.post("/api/manage_contents", json={
+            "action": "add",
+            "location": "LR-MDB-1",
+            "slot": "1",
+            "spool_id": "ID:42",
+            "origin": "buffer",
+        })
+    body = r.get_json()
+    # Request flowed through to perform_smart_move.
+    assert body == {"status": "success"}
+    mv.assert_called_once()
+
+
 def test_slot_qr_assignment_returns_requires_confirm_for_active_toolhead(client):
     """Scanning LOC:X:SLOT:Y to assign the buffered spool into a slot whose
     auto-deploy target is an active toolhead should bail. The target in the

@@ -22,6 +22,18 @@
     - Filament Attributes chip-picker matching the wizard.
     - "+ NEW" badge on Material.
     - Add mode: `window.openAddFilamentForm()` + new `/api/create_filament` endpoint.
+  * ~~**Edit Filament Wave 6**~~ **DONE 2026-04-23** — another feedback round:
+    - **Color save was failing** (HTTP 422: "Cannot specify both color_hex and multi_color_hexes") — Spoolman rejects any PATCH body with both fields set. Fixed by emitting multi_color_hexes exclusively for 2+ colors and excluding color_hex from the dirty-diff in that case.
+    - **Nozzle/Bed moved back to Specs** (user reversed earlier feedback — min + max entered together should stay together).
+    - **Original Color + Filament Attributes moved to Basic** for easier data entry alongside Name/Material/Vendor.
+    - **Hex input Enter/Tab commits** — typing a hex and pressing Enter or Tab now normalizes to `#rrggbb` and pushes the value into the color picker. Enter is swallowed (no modal submit).
+    - **Price placeholder visibility fixed** — CSS `::placeholder` was near-invisible on black; bumped to `#8a8a8a`.
+    - **Use-Vendor button has visible text** — the earlier `⇩` glyph wasn't rendering for the user. Now reads "Use Vendor" with a solid cyan background.
+    - **Vendor info pill** — selecting an existing vendor shows a small `ⓘ 165g empty · 2 extras` summary next to the vendor label, with a tooltip listing the vendor's extras.
+    - **Escape-with-unsaved-changes prompt** — pressing Escape after editing any field pops an inline confirm overlay ("Close without saving?") instead of dismissing the modal outright. Scoped per-modal via `keydown` capture.
+    - **Active-print pre-flight now walks slot bindings** — when the target is a Dryer Box slot that's bound to an active toolhead (via `extra.slot_targets`), `perform_smart_move` bails with requires_confirm BEFORE any Spoolman writes. Earlier the auto-deploy recursive call silently swallowed requires_confirm, so swapping slots 1↔2 on a box with slot 1 bound to an actively-printing toolhead showed no warning.
+    - **Visual regression tests** — new `test_edit_filament_visual.py` captures snapshots of all 4 tabs (Basic / Colors / Specs / Advanced) so future visual regressions are caught automatically.
+
   * ~~**Edit Filament Wave 5**~~ **DONE 2026-04-23** — another feedback round:
     - **Fixed pre-existing SyntaxError** (dangling `};` in `modals_filabridge_recovery.html`) that was breaking ALL page JS and masking every Edit-Filament behavior. Unrelated to the Edit Filament work itself but surfaced while debugging it.
     - **Softer active-tab styling** — muted cyan pop on dark background (was too-gold).
