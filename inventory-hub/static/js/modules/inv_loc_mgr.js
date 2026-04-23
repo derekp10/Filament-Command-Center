@@ -469,9 +469,10 @@ const renderFeedsSection = (loc) => {
     Promise.all([
         fetchPrinterMap(),
         fetch(`/api/dryer_box/${encodeURIComponent(loc.LocationID)}/bindings`)
-            .then(r => r.ok ? r.json() : { slot_targets: {} }),
+            .then(r => r.ok ? r.json() : { slot_targets: {}, slot_order: 'ltr' }),
     ]).then(([printers, bindingsResp]) => {
         const targets = bindingsResp.slot_targets || {};
+        const order = (bindingsResp.slot_order || 'ltr').toLowerCase();
         const rows = document.getElementById('feeds-rows');
         rows.innerHTML = '';
         for (let slot = 1; slot <= maxSlots; slot++) {
@@ -480,6 +481,14 @@ const renderFeedsSection = (loc) => {
         }
         for (let slot = 1; slot <= maxSlots; slot++) {
             _comboHydrate(slot, printers);
+        }
+
+        // Sync the slot-order radio group with persisted value.
+        const ltrRadio = document.getElementById('feeds-slot-order-ltr');
+        const rtlRadio = document.getElementById('feeds-slot-order-rtl');
+        if (ltrRadio && rtlRadio) {
+            ltrRadio.checked = order !== 'rtl';
+            rtlRadio.checked = order === 'rtl';
         }
 
         // One-shot: if the user came here via "Edit Full Bindings" from a
@@ -529,6 +538,29 @@ window.saveFeedsSection = () => {
         const val = sel.value;
         slot_targets[slot] = val || null;
     });
+
+    // Capture the slot-order radio selection so we can fire a parallel
+    // PUT. Keeping bindings and slot_order on separate endpoints means one
+    // can succeed even if the other fails validation.
+    const orderRadio = document.querySelector('input[name="feeds-slot-order"]:checked');
+    const order = orderRadio ? orderRadio.value : 'ltr';
+
+    // Fire-and-log the slot-order PUT alongside the bindings PUT. Ignore
+    // its result here — user sees bindings outcome in the toast; the
+    // order update only affects UI render direction.
+    fetch(`/api/dryer_box/${encodeURIComponent(locId)}/slot_order`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order }),
+    }).then(() => {
+        // Update the cached location so next renderGrid tick picks up the new order
+        // without a full reload.
+        const locRow = state.allLocations.find(l => l.LocationID === locId);
+        if (locRow) {
+            locRow.extra = locRow.extra || {};
+            locRow.extra.slot_order = order;
+        }
+    }).catch(() => { /* non-fatal */ });
 
     fetch(`/api/dryer_box/${encodeURIComponent(locId)}/bindings`, {
         method: 'PUT',
@@ -684,13 +716,27 @@ const renderGrid = (data, max) => {
         else unslotted.push(i);
     });
 
+    // Read the current location's slot_order preference (rtl reverses the
+    // grid render direction). Pulled from the cached allLocations list so
+    // we avoid an extra fetch on every refresh tick.
+    const locId = document.getElementById('manage-loc-id').value;
+    const locRow = state.allLocations.find(l => l.LocationID === locId) || {};
+    const slotOrder = (locRow.extra && String(locRow.extra.slot_order || '').toLowerCase()) === 'rtl' ? 'rtl' : 'ltr';
+
+    // Build slot index list in render order. RTL renders [max..1]; LTR renders [1..max].
+    const slotIndices = [];
+    if (slotOrder === 'rtl') {
+        for (let i = max; i >= 1; i--) slotIndices.push(i);
+    } else {
+        for (let i = 1; i <= max; i++) slotIndices.push(i);
+    }
+
     let gridHTML = "";
-    for (let i = 1; i <= max; i++) {
+    for (const i of slotIndices) {
         const item = state.currentGrid[i];
         if (item) {
-            gridHTML += window.SpoolCardBuilder.buildCard(item, 'loc_grid', { slotNum: i, locId: document.getElementById('manage-loc-id').value });
+            gridHTML += window.SpoolCardBuilder.buildCard(item, 'loc_grid', { slotNum: i, locId });
         } else {
-            // FIX: Removed opacity:0.5 from QR div to make it sharp and scannable
             gridHTML += `
                 <div class="slot-btn empty" onclick="handleSlotInteraction(${i})">
                     <div class="slot-inner-gold">
@@ -704,7 +750,7 @@ const renderGrid = (data, max) => {
     }
     grid.innerHTML = gridHTML;
 
-    for (let i = 1; i <= max; i++) {
+    for (const i of slotIndices) {
         const item = state.currentGrid[i];
         requestAnimationFrame(() => {
             if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:" + i, 90);

@@ -1172,7 +1172,36 @@ def api_dryer_box_bindings_get(loc_id):
     bindings = locations_db.get_dryer_box_bindings(loc_id)
     if bindings is None:
         return jsonify({"error": "not_a_dryer_box", "location": loc_id}), 404
-    return jsonify({"location": loc_id, "slot_targets": bindings})
+    order = locations_db.get_dryer_box_slot_order(loc_id) or 'ltr'
+    return jsonify({"location": loc_id, "slot_targets": bindings, "slot_order": order})
+
+
+@app.route('/api/dryer_box/<loc_id>/slot_order', methods=['GET'])
+def api_dryer_box_slot_order_get(loc_id):
+    order = locations_db.get_dryer_box_slot_order(loc_id)
+    if order is None:
+        return jsonify({"error": "not_a_dryer_box", "location": loc_id}), 404
+    return jsonify({"location": loc_id, "order": order})
+
+
+@app.route('/api/dryer_box/<loc_id>/slot_order', methods=['PUT'])
+def api_dryer_box_slot_order_put(loc_id):
+    """Persist a dryer box's slot-grid render direction. Body: {"order": "ltr"|"rtl"}.
+    Pure UI preference — doesn't touch bindings or any Spoolman data.
+    """
+    data = request.get_json(silent=True) or {}
+    order = data.get('order')
+    ok, msg = locations_db.set_dryer_box_slot_order(loc_id, order)
+    if not ok:
+        return jsonify({"error": "invalid_request", "location": loc_id, "msg": msg}), 400
+    # Read back the stored (normalized) value so the response + log entry
+    # reflect exactly what's on disk, not the caller's input casing.
+    normalized = locations_db.get_dryer_box_slot_order(loc_id) or 'ltr'
+    state.add_log_entry(
+        f"🔁 Slot order for <b>{loc_id}</b> set to {normalized.upper()}",
+        "INFO", "00d4ff",
+    )
+    return jsonify({"location": loc_id, "order": normalized})
 
 
 @app.route('/api/dryer_box/<loc_id>/bindings', methods=['PUT'])
