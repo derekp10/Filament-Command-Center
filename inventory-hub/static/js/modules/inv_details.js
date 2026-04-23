@@ -248,6 +248,14 @@ const openFilamentDetails = (fid, silent = false) => {
                         if (window.openNewSpoolFromFilamentWizard) window.openNewSpoolFromFilamentWizard(d.id);
                     };
                 }
+
+                // Edit Filament (direct filament-only edit — no spool coupling)
+                const btnEditFil = document.getElementById('btn-fil-edit');
+                if (btnEditFil) {
+                    btnEditFil.onclick = () => {
+                        if (window.openEditFilamentForm) window.openEditFilamentForm(d);
+                    };
+                }
             }
 
             // --- NEW: Fetch Associated Spools for this Filament ---
@@ -661,4 +669,250 @@ window.refreshFilamentSpools = () => {
         }
         openFilamentDetails(fidEl.innerText, false);
     }
+};
+
+
+// --- Archive-Empty-Weight Prompt -------------------------------------------
+// Fires after a spool auto-archives (remaining weight hit 0) when the parent
+// filament has no empty_spool_weight recorded. Walks the user through weighing
+// the now-empty spool so all future spools of this filament inherit the value.
+//
+// Option-B from the backlog: a dedicated modal, bigger affordance than a
+// toast, with explicit "Save" / "Later" / "Cancel" paths.
+window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId) => {
+    if (!filamentId) return;
+    let fil;
+    try {
+        const r = await fetch(`/api/filament_details?id=${filamentId}`);
+        fil = await r.json();
+    } catch (e) {
+        console.warn("Could not fetch filament for empty-weight prompt", e);
+        return;
+    }
+    if (!fil || !fil.id) return;
+
+    const vendorName = (fil.vendor && fil.vendor.name) ? fil.vendor.name : 'Unknown';
+    const material = fil.material || 'Unknown';
+    const colorName = fil.name || 'Unknown';
+
+    const result = await Swal.fire({
+        target: document.body,
+        title: '📦 Spool archived — weigh the empty?',
+        html: `
+            <div class="text-start">
+                <p class="text-light mb-2">
+                    Spool <strong>#${spoolId}</strong> just hit 0g and was auto-archived.
+                    Its filament <strong>#${fil.id}</strong>
+                    (<em>${vendorName} ${material}, ${colorName}</em>)
+                    has no recorded <strong>empty spool weight</strong>.
+                </p>
+                <p class="text-light small mb-3">
+                    Put the now-empty spool on your scale and enter the measured weight below.
+                    The value will be saved to the filament, so every future spool of this filament
+                    inherits it automatically.
+                </p>
+                <label class="form-label text-warning small mb-1">Empty spool weight (g)</label>
+                <input type="number" step="0.1" min="0" id="fcc-archive-empty-wt"
+                    class="form-control bg-dark text-white border-warning" autocomplete="off"
+                    placeholder="e.g. 167">
+                <small class="text-secondary d-block mt-2">
+                    Tap <strong>Later</strong> to dismiss without saving — you can enter the weight
+                    any time from the Filament Details modal.
+                </small>
+            </div>
+        `,
+        background: '#1e1e1e',
+        color: '#fff',
+        showCancelButton: true,
+        showDenyButton: true,
+        confirmButtonText: 'Save weight',
+        denyButtonText: 'Later',
+        cancelButtonText: 'Cancel',
+        confirmButtonColor: '#ffc107',
+        denyButtonColor: '#6c757d',
+        allowEscapeKey: true,
+        focusConfirm: false,
+        didOpen: () => {
+            const wtEl = Swal.getPopup().querySelector('#fcc-archive-empty-wt');
+            if (wtEl) wtEl.focus();
+        },
+        preConfirm: () => {
+            const raw = Swal.getPopup().querySelector('#fcc-archive-empty-wt')?.value;
+            if (raw === '' || raw == null) {
+                Swal.showValidationMessage('Enter a weight or tap Later.');
+                return false;
+            }
+            const n = Number(raw);
+            if (!Number.isFinite(n) || n <= 0) {
+                Swal.showValidationMessage('Weight must be a positive number.');
+                return false;
+            }
+            return n;
+        },
+    });
+
+    if (!result.isConfirmed) return;  // Later / Cancel / Escape — all no-op
+
+    const weight = result.value;
+    try {
+        const r = await fetch('/api/update_filament', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: fil.id, data: { spool_weight: weight } }),
+        });
+        const d = await r.json();
+        if (d && d.success) {
+            showToast(`Saved ${weight}g as Filament #${fil.id} empty weight.`, 'success');
+        } else {
+            showToast(`Save failed: ${d && d.msg ? d.msg : 'unknown'}`, 'error', 7000);
+        }
+    } catch (e) {
+        showToast(`Save error: ${e.message || e}`, 'error', 7000);
+    }
+};
+
+// --- Edit Filament (direct, filament-only) ---
+// Opens a Swal form over the Filament Details modal (Bootstrap, not Swal, so
+// no nested-Swal footgun). Only the commonly-edited, filament-level fields
+// are exposed here. Vendor + color hex are intentionally read-only for now;
+// use the full wizard edit flow for those.
+window.openEditFilamentForm = (fil) => {
+    if (!fil || !fil.id) { showToast('Missing filament data', 'error'); return; }
+
+    const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    const currentName = esc(fil.name || '');
+    const currentMaterial = esc(fil.material || 'PLA');
+    const currentSpoolWt = fil.spool_weight != null ? fil.spool_weight : '';
+    const currentDensity = fil.density != null ? fil.density : '';
+    const currentNozzle = fil.settings_extruder_temp != null ? fil.settings_extruder_temp : '';
+    const currentBed = fil.settings_bed_temp != null ? fil.settings_bed_temp : '';
+    const currentComment = esc(fil.comment || '');
+
+    // Vendor's inherited empty_spool_weight surfaces as placeholder text so the
+    // user sees the fallback value that would apply if this field is left blank.
+    const vendorWt = fil.vendor && fil.vendor.empty_spool_weight
+        ? Number(fil.vendor.empty_spool_weight) : null;
+    const vendorWtHint = vendorWt ? ` (vendor: ${vendorWt}g)` : '';
+
+    // Target the filament modal when it's actually shown so the Swal sits over it;
+    // otherwise fall back to body (hidden modal keeps Swal from laying out).
+    const filModalEl = document.getElementById('filamentModal');
+    const filModalShown = filModalEl && filModalEl.classList.contains('show');
+    Swal.fire({
+        target: filModalShown ? filModalEl : document.body,
+        title: `✏️ Edit Filament #${fil.id}`,
+        html: `
+            <div class="text-start">
+                <div class="mb-2">
+                    <label class="form-label text-light small mb-1">Color Name</label>
+                    <input type="text" id="edit-fil-name" class="form-control bg-dark text-white border-secondary" value="${currentName}" autocomplete="off">
+                </div>
+                <div class="mb-2">
+                    <label class="form-label text-light small mb-1">Material</label>
+                    <input type="text" id="edit-fil-material" class="form-control bg-dark text-white border-secondary" value="${currentMaterial}" autocomplete="off">
+                </div>
+                <div class="row g-2">
+                    <div class="col-6">
+                        <label class="form-label text-light small mb-1">Empty Spool Wt (g)${vendorWtHint}</label>
+                        <input type="number" step="0.1" id="edit-fil-spool-weight" class="form-control bg-dark text-white border-secondary" value="${currentSpoolWt}" placeholder="${vendorWt || ''}" autocomplete="off">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label text-light small mb-1">Density (g/cm³)</label>
+                        <input type="number" step="0.01" id="edit-fil-density" class="form-control bg-dark text-white border-secondary" value="${currentDensity}" autocomplete="off">
+                    </div>
+                </div>
+                <div class="row g-2 mt-1">
+                    <div class="col-6">
+                        <label class="form-label text-light small mb-1">🔥 Nozzle (°C)</label>
+                        <input type="number" id="edit-fil-nozzle" class="form-control bg-dark text-white border-secondary" value="${currentNozzle}" autocomplete="off">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label text-light small mb-1">🛏️ Bed (°C)</label>
+                        <input type="number" id="edit-fil-bed" class="form-control bg-dark text-white border-secondary" value="${currentBed}" autocomplete="off">
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <label class="form-label text-light small mb-1">Notes</label>
+                    <textarea id="edit-fil-comment" rows="2" class="form-control bg-dark text-white border-secondary">${currentComment}</textarea>
+                </div>
+            </div>
+        `,
+        background: '#1e1e1e',
+        color: '#fff',
+        showCancelButton: true,
+        confirmButtonColor: '#ffc107',
+        confirmButtonText: 'Save',
+        focusConfirm: false,
+        didOpen: () => {
+            const nameEl = Swal.getPopup().querySelector('#edit-fil-name');
+            if (nameEl) nameEl.focus();
+        },
+        preConfirm: () => {
+            const val = (id) => Swal.getPopup().querySelector(id)?.value;
+            const numOrNull = (id) => {
+                const v = val(id);
+                if (v === '' || v == null) return null;
+                const n = Number(v);
+                return Number.isFinite(n) ? n : null;
+            };
+            const intOrNull = (id) => {
+                const n = numOrNull(id);
+                return n == null ? null : Math.round(n);
+            };
+            const data = {
+                name: (val('#edit-fil-name') || '').trim() || null,
+                material: (val('#edit-fil-material') || '').trim() || null,
+                spool_weight: numOrNull('#edit-fil-spool-weight'),
+                density: numOrNull('#edit-fil-density'),
+                settings_extruder_temp: intOrNull('#edit-fil-nozzle'),
+                settings_bed_temp: intOrNull('#edit-fil-bed'),
+                comment: val('#edit-fil-comment') || '',
+            };
+            // Strip unchanged fields so we don't POST no-ops. This matches the
+            // edit_spool_wizard dirty-diff convention and keeps Activity Log
+            // messages accurate ("edited: spool_weight" vs "edited: 7 fields").
+            const changed = {};
+            const same = (a, b) => {
+                if (a == null && (b == null || b === '')) return true;
+                if (b == null && (a == null || a === '')) return true;
+                return String(a) === String(b);
+            };
+            if (!same(data.name, fil.name)) changed.name = data.name;
+            if (!same(data.material, fil.material)) changed.material = data.material;
+            if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
+            if (!same(data.density, fil.density)) changed.density = data.density;
+            if (!same(data.settings_extruder_temp, fil.settings_extruder_temp))
+                changed.settings_extruder_temp = data.settings_extruder_temp;
+            if (!same(data.settings_bed_temp, fil.settings_bed_temp))
+                changed.settings_bed_temp = data.settings_bed_temp;
+            if (!same(data.comment, fil.comment)) changed.comment = data.comment;
+            return changed;
+        },
+    }).then((res) => {
+        if (!res.isConfirmed) return;
+        const dirty = res.value || {};
+        if (Object.keys(dirty).length === 0) {
+            showToast('No changes to save.', 'info');
+            return;
+        }
+        fetch('/api/update_filament', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: fil.id, data: dirty }),
+        })
+            .then((r) => r.json())
+            .then((d) => {
+                if (d && d.success) {
+                    showToast(`Filament #${fil.id} updated.`, 'success');
+                    if (window.refreshFilamentSpools) window.refreshFilamentSpools();
+                } else {
+                    showToast(`Update failed: ${d && d.msg ? d.msg : 'unknown'}`, 'error', 7000);
+                }
+            })
+            .catch((e) => {
+                showToast(`Update error: ${e.message || e}`, 'error', 7000);
+            });
+    });
 };

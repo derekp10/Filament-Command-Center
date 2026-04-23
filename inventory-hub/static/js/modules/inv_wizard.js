@@ -13,6 +13,19 @@ let wizardState = {
     forceClose: false  // set true to bypass the dirty guard when we want to programmatically close
 };
 
+// Empty-spool-weight inheritance: Spool > Filament > Vendor (manufacturer).
+// Treats null / undefined / 0 as "unset" so the next level in the chain wins.
+// A vendor value entered in Spoolman flows down and auto-populates blank spool
+// and filament fields instead of surfacing as 0.
+function resolveEmptySpoolWeight({ spoolWt, filamentWt, vendor } = {}) {
+    const has = (v) => v !== null && v !== undefined && v !== '' && Number(v) > 0;
+    if (has(spoolWt)) return Number(spoolWt);
+    if (has(filamentWt)) return Number(filamentWt);
+    if (vendor && has(vendor.empty_spool_weight)) return Number(vendor.empty_spool_weight);
+    return null;
+}
+window.resolveEmptySpoolWeight = resolveEmptySpoolWeight;
+
 // --- WIZARD CLOSE → RE-OPEN DETAIL MODAL ---
 // Register immediately — this script loads after the DOM is fully parsed.
 (function() {
@@ -1457,9 +1470,23 @@ window.wizardSubmit = async () => {
                 extra: {}
             };
 
-            // Cross-Inherit Spool Weight from Filament if left blank in Step 3
-            if (sp_payload.spool_weight === null && f_payload.spool_weight !== null) {
-                sp_payload.spool_weight = f_payload.spool_weight;
+            // Cross-Inherit empty-spool-weight along the chain: Spool → Filament → Vendor.
+            // Resolves the selected vendor from wizardState so a manufacturer-level weight
+            // flows down even when both Filament and Spool fields are left blank.
+            {
+                const selectedVendorId = document.getElementById('wiz-fil-vendor-sel')?.value;
+                const vendor = selectedVendorId
+                    ? (wizardState.vendors || []).find(v => String(v.id) === String(selectedVendorId))
+                    : null;
+                const resolved = resolveEmptySpoolWeight({
+                    spoolWt: sp_payload.spool_weight,
+                    filamentWt: f_payload.spool_weight,
+                    vendor,
+                });
+                if (resolved !== null) {
+                    if (sp_payload.spool_weight === null) sp_payload.spool_weight = resolved;
+                    if (f_payload.spool_weight === null) f_payload.spool_weight = resolved;
+                }
             }
 
             // Note: Spoolman 0.19.1 natively supports `multi_color_hexes` 
@@ -1624,9 +1651,15 @@ window.openCloneWizard = async (spoolId) => {
                 const locRec = (wizardState.locations || []).find(l => l.LocationID === locId);
                 window.wizardComboboxSet('wiz-spool-location-search', 'wiz-spool-location', locId, locRec ? locRec.Name : locId);
             }
-            // Spool Weight: prefer spool-level, fall back to filament-level
-            const cloneSpoolWt = d.spool_weight !== null ? d.spool_weight : (d.filament?.spool_weight ?? "");
-            document.getElementById('wiz-spool-empty_weight').value = cloneSpoolWt;
+            // Spool Weight: walk Spool → Filament → Vendor so a clone picks up whichever level is populated.
+            {
+                const resolved = resolveEmptySpoolWeight({
+                    spoolWt: d.spool_weight,
+                    filamentWt: d.filament?.spool_weight,
+                    vendor: d.filament?.vendor,
+                });
+                document.getElementById('wiz-spool-empty_weight').value = resolved !== null ? resolved : "";
+            }
             document.getElementById('wiz-spool-used').value = 0; // Fresh spool is usually 0
             document.getElementById('wiz-spool-comment').value = d.comment || "";
             // Price & Purchase Link
@@ -1780,7 +1813,11 @@ window.openEditWizard = async (spoolId) => {
             document.getElementById('wiz-fil-diameter').value = f.diameter || 1.75;
             document.getElementById('wiz-fil-density').value = f.density || 1.24;
             document.getElementById('wiz-fil-weight').value = f.weight || 1000;
-            document.getElementById('wiz-fil-empty_weight').value = f.spool_weight !== null ? f.spool_weight : '';
+            {
+                // Inherit empty-spool-weight from the vendor if the filament's own value is blank/0.
+                const resolved = resolveEmptySpoolWeight({ filamentWt: f.spool_weight, vendor: f.vendor });
+                document.getElementById('wiz-fil-empty_weight').value = resolved !== null ? resolved : '';
+            }
 
             // Map Temperatures
             if (document.getElementById('wiz-fil-settings_extruder_temp')) {
@@ -1832,7 +1869,16 @@ window.openEditWizard = async (spoolId) => {
                 const locRec = (wizardState.locations || []).find(l => l.LocationID === locId);
                 window.wizardComboboxSet('wiz-spool-location-search', 'wiz-spool-location', locId, locRec ? locRec.Name : locId);
             }
-            document.getElementById('wiz-spool-empty_weight').value = d.spool_weight !== null ? d.spool_weight : "";
+            {
+                // Walk the chain: spool → filament → vendor. A blank spool inherits
+                // from its filament, then its manufacturer's empty_spool_weight.
+                const resolved = resolveEmptySpoolWeight({
+                    spoolWt: d.spool_weight,
+                    filamentWt: d.filament?.spool_weight,
+                    vendor: d.filament?.vendor,
+                });
+                document.getElementById('wiz-spool-empty_weight').value = resolved !== null ? resolved : "";
+            }
             document.getElementById('wiz-spool-initial_weight').value = d.initial_weight !== null ? d.initial_weight : "";
             document.getElementById('wiz-spool-used').value = d.used_weight || 0;
             

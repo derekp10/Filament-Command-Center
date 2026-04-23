@@ -4,8 +4,9 @@
 
 
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop.
-* Filament Edit button? To access the fiament to make changes. (Updating the spool weight, or other attributes.) Might also make sense to add a way to edit the manufacture to add an empty spool weight as well. We would need a way to populate some weights into existing spools, if the spool weight is currently 0. As I don't think spoolman retroactivly updates past spools with a an empty spool weight of 0.
-* If a spools remaining weight is 0, suggest, or possibly auto set archived to true. Possibly also move to unassigned location.
+* Filament Edit follow-ups (Edit Filament MVP landed 2026-04-22):
+  * Backfill tool for historical spools stored with `spool_weight=0` so they adopt the parent filament/vendor value (the live inheritance resolver handles new reads, but old saved-zero values don't auto-update).
+  * Vendor and `color_hex` editing — currently the direct Edit Filament form omits these; still need the full wizard path. Consider adding them to `openEditFilamentForm` as follow-up.
 
 * Ability to edit filament specific data inside Filament command center. Currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool. Some sort of edit workflow for chaing data directly related to filaments.
 
@@ -14,14 +15,12 @@
 * In location manager, if an item is added to a loction that has slots, and there is a free slot, auto assign the item into that free slot. (If there are multiple free slots, fill the first empty one.)
 
 * Review and unify update logic across the program, we have to many versions of update that keep getting orphined, or cause problems later on when they aren't included in a recent design change. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of.
-* Figure out why playright can't be run or is not installed on the local docker if that is the issue, otherwise find out if we need to add it to dev, and if needed add it to live/prod if it makes sense.
 
 * Filabridge status light is still blinking on and of, just more eraticly now. Need to look into this further.
 
 
 * Check why FIL:58 wasn't marked as labeled when scanned. The `label_printed` field was retired in M7 and replaced with `needs_label_print` (boolean) — barcode-scan path now updates this field at `app.py:921-922, 968-969`. The FIL:58 case specifically needs manual repro to see whether the update fires and why Activity Log was silent. Could be because FIL:58 is an old physical swatch with no prior spoolman state.
 
-* Check to see if changes to spool card gradint/coextredud color modificaitons were also applied to the Filament cards. (They should have been, this is supposed to be a unified code set for this type of item.)
 
 * Adding filament to an archived filament should automatically unarchive the filament.
 
@@ -37,19 +36,22 @@
 
 * Possible issues with >1kg spools and tracking weights?
 
-* Text Cacing is being changed on some manufactures (CC3D being Cc3D) and should just show the actual name without trying to correct it.
 
 * `test_manual_loc_override_e2e` — offcanvas-intercept bug fixed in M0. Currently xfailed because the Force Location modal was refactored from `<select>` to a searchable list; step 6 still drives the old select. Rewrite test against the new search+list UI.
 
 * FCC Main Main screen buffer cards still don't always update after several backend changes. Setting filament to 0, doesn't seem to update to unassinged or it's deployed status.
 
-* Adding spool weight (Empty Spool Weight) on the manufacturer, doesn't seem to pull down to the filament/spool if those fields are blank. This should be fixed so that It uses what ever one is available based on a priority system. (Manufacturer > Filament > Spool)
-
-* For Auto Detect, the activity log should also include the manufacture and the spool color in there as well as the data already included.
 
 
-* When a Spool gets archived, and the filamen attached to it doesn't have an empty spool weight, propmt the user of the missing spool weight and offer to assist in updating that data after they way the empty spool.
 
+
+* Need to do something about the fact that if a toolhead has multiple slots assigned to it for a dryer box, that new spool assignments don't automatically take over the current toolhead's assigned spool. 
+
+* Warn if a spool reassignment to a toolhead is happening during an active print.
+
+* If a spool isn't activly deployed to a toolhead during an update to the Filament Command Center, it looses it's current slot assignment, and has to be reassigned. (This might happen during other senerios, but this one is the first I've noticed.)
+
+* No way to assigne a slot to a printer without having a toolhead assigned to it. It would be nice if we could assign slots to a printer so they show up for possible easy swaping, but not actually being assigned to a toolhead. (in cases where the dryer box is basically ment for a printer, but we can't use a slot because of layout. Prusa XL and LR-MDB-1:SLOT:4 is a good example.)
 
 # **Active Backlog (Organized by Feature Area)**
 
@@ -63,7 +65,6 @@
 ## 🎨 UI & Theming
 * Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird.
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
-* Audit `text-pop` class usage across all card types and UI elements. There are spots not currently using it that would benefit from the shadow (discovered when moving the archive badge to Row 3 — it looked flat without inheriting `text-pop` from its old parent). Not a global apply, but a targeted pass to find and add where it makes sense.
 * Theres a little animation and modal that appears when you add a new Slicer Profile in the Add/edit enventory wizzard. Its so nifty I want this used in other places. (I'm not sure if this is a sweetalert2 thing, or if we implemented ourselves.)
 
 
