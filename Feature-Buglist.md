@@ -4,61 +4,12 @@
 
 
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop. _[ON HOLD — OS-level power management, not fixable in app code. Candidate mitigations if we care: Wake Lock API (`navigator.wakeLock.request('screen')`) gated behind a toggle in the nav bar; only works when the tab is foreground. Worth considering if we add a kiosk/shop-floor mode.]_
-* Filament Edit follow-ups (Edit Filament MVP landed 2026-04-22):
+* Filament Edit follow-ups (Edit Filament Waves 0–8 shipped 2026-04-22 / 2026-04-23):
   * Backfill tool for historical spools stored with `spool_weight=0` so they adopt the parent filament/vendor value (the live inheritance resolver handles new reads, but old saved-zero values don't auto-update). _[NEEDS INPUT: should this be a one-shot admin script, a UI button on the Filament Details modal, or a batch endpoint that fires on a timer? The correct scope depends on whether we want it user-facing.]_
-  * ~~Vendor and `color_hex` editing — currently the direct Edit Filament form omits these; still need the full wizard path. Consider adding them to `openEditFilamentForm` as follow-up.~~ **DONE 2026-04-23** — `openEditFilamentForm` now renders a Vendor `<select>` (loaded from `/api/vendors`) and a paired color picker + hex input. Dirty-diff handles both fields and validates hex format.
-  * **Edit Filament Wave 1 expansion DONE 2026-04-23** — added Spoolman default fields (diameter, filament net weight, price, external_id/legacy ID) and multi-color picker matching the wizard's pattern (+ button adds extra rows, direction selector appears when 2+ colors, Spoolman `multi_color_hexes` CSV round-trips correctly). Covered by `test_filament_edit_button.py` (17 tests).
-  * ~~**Edit Filament Wave 2**~~ **DONE 2026-04-23** — most of the gaps vs. the wizard are now closed:
-    - Searchable Material input via `<input list>` + datalist populated from `/api/materials`.
-    - Searchable Vendor with inline new-vendor creation: `<input list>` + hidden id, "+ NEW" badge shown when typed name doesn't match. On save, POSTs `/api/vendors` first (new endpoint, `api_create_vendor`), then PATCHes the filament with the returned id. Old flat `<select>` retired.
-    - Collapsible Advanced section (`<details>`) now holds: Original Color, Filament Attributes (comma-separated → JSON array round-trip), Product URL, Purchase URL, Sheet Link, Legacy/External ID.
-    - Extras merge is safe: preConfirm clones the filament's existing `extra` and only overrides the fields the user touched, so Spoolman's wholesale-replace PATCH no longer drops untouched keys (`price_total`, `sample_printed`, `flush_multiplier`, etc.).
-    - 24 tests in `test_filament_edit_button.py` cover the new fields + merge behavior.
-  * ~~**Edit Filament Wave 3**~~ **DONE 2026-04-23** — promoted from SweetAlert to a Bootstrap tabbed modal (`#editFilamentModal` in `modals_details.html`). Four tabs (Basic / Colors / Specs / Advanced). Covered by `test_filament_edit_button.py` (42 tests).
-  * ~~**Edit Filament Wave 4**~~ **DONE 2026-04-23** — feedback round on the Bootstrap modal:
-    - Stable modal size across tabs (min-height on tab-content).
-    - Max-temperature fields (native `settings_extruder_temp`/`settings_bed_temp` are min/recommended; new `extra.nozzle_temp_max`/`extra.bed_temp_max` hold the high side — closes the "track high temperatures" line item below).
-    - Color reorder with up/down buttons on every row.
-    - Filament Attributes chip-picker matching the wizard.
-    - "+ NEW" badge on Material.
-    - Add mode: `window.openAddFilamentForm()` + new `/api/create_filament` endpoint.
-  * **Active-print confirm overlays now scan-confirmable 2026-04-23** — new `window.attachConfirmQRs()` helper mounts a polished QR pair (~70px each, white-on-tinted-warning-border tiles with "📷 SCAN TO CONFIRM" / "📷 SCAN TO CANCEL" labels) inline below the Yes/No buttons. Each session gets a unique id (`CMD:CONFIRM:<sid>` / `CMD:CANCEL:<sid>`) so a stale printed QR can't fire into the wrong dialog. Wired into all three active-print overlays: Location Manager `doAssign`, scan-based `_confirmActivePrintScan`, and the Quick-Swap `showConfirmOverlay` (only when the active-print warning banner is showing — normal Quick-Swap moves don't need scan confirmation). Scan handler intercepts CMD:CONFIRM/CMD:CANCEL at the top of `processScan` before normal dispatch. Covered by `test_confirm_qr.py` (6 tests) + `test_confirm_qr_visual.py` (1 snapshot).
-
-  * ~~**Edit Filament Wave 7**~~ **DONE 2026-04-23** — three real bugs surfaced after Wave 6:
-    - **Color save was still failing** — Spoolman now demanded `multi_color_direction` ("Multi-color filament must have multi_color_direction set."). Confirmed via live Spoolman 0.23.1 schema that `multi_color_direction` IS a native top-level filament field (verified via `GET /api/v1/filament/<id>` returning it at top-level), not an extra. Reverted my Wave 5 mistake — direction is now always sent at top-level alongside `multi_color_hexes`, defaulting to 'longitudinal' when the user hasn't set one.
-    - **Max-temp save was failing** with "Unknown extra field nozzle_temp_max." — Spoolman validates extras against its registered schema, so `setup_fields.py` updates only help if you actually run them. Added `spoolman_api.ensure_required_extras()` that runs at app startup and idempotently registers `nozzle_temp_max` + `bed_temp_max` (and any other Edit-Filament-mandated extras) so prod self-heals on next restart. No need to manually run `setup_fields.py`. Verified extras now exist in the live Spoolman.
-    - **Buffer item disappeared on cancel-swap-confirm flows** — `handleSlotInteraction` was eagerly shifting the held spool out of the buffer BEFORE `doAssign` POSTed. If the move was rejected (active-print confirm dismissed, network error, Spoolman 422, swap-cancel-swap-continue race), the spool was already gone. Fixed: buffer mutation moved into `_doAssignFinalize`'s success branch, with `options.swapDisplaced` threaded through `doAssign` → `_confirmActivePrintAssign` → `_doAssignFinalize` so the displaced spool also lands in the buffer only on success.
-
-  * ~~**Edit Filament Wave 6**~~ **DONE 2026-04-23** — another feedback round:
-    - **Color save was failing** (HTTP 422: "Cannot specify both color_hex and multi_color_hexes") — Spoolman rejects any PATCH body with both fields set. Fixed by emitting multi_color_hexes exclusively for 2+ colors and excluding color_hex from the dirty-diff in that case.
-    - **Nozzle/Bed moved back to Specs** (user reversed earlier feedback — min + max entered together should stay together).
-    - **Original Color + Filament Attributes moved to Basic** for easier data entry alongside Name/Material/Vendor.
-    - **Hex input Enter/Tab commits** — typing a hex and pressing Enter or Tab now normalizes to `#rrggbb` and pushes the value into the color picker. Enter is swallowed (no modal submit).
-    - **Price placeholder visibility fixed** — CSS `::placeholder` was near-invisible on black; bumped to `#8a8a8a`.
-    - **Use-Vendor button has visible text** — the earlier `⇩` glyph wasn't rendering for the user. Now reads "Use Vendor" with a solid cyan background.
-    - **Vendor info pill** — selecting an existing vendor shows a small `ⓘ 165g empty · 2 extras` summary next to the vendor label, with a tooltip listing the vendor's extras.
-    - **Escape-with-unsaved-changes prompt** — pressing Escape after editing any field pops an inline confirm overlay ("Close without saving?") instead of dismissing the modal outright. Scoped per-modal via `keydown` capture.
-    - **Active-print pre-flight now walks slot bindings** — when the target is a Dryer Box slot that's bound to an active toolhead (via `extra.slot_targets`), `perform_smart_move` bails with requires_confirm BEFORE any Spoolman writes. Earlier the auto-deploy recursive call silently swallowed requires_confirm, so swapping slots 1↔2 on a box with slot 1 bound to an actively-printing toolhead showed no warning.
-    - **Visual regression tests** — new `test_edit_filament_visual.py` captures snapshots of all 4 tabs (Basic / Colors / Specs / Advanced) so future visual regressions are caught automatically.
-
-  * ~~**Edit Filament Wave 5**~~ **DONE 2026-04-23** — another feedback round:
-    - **Fixed pre-existing SyntaxError** (dangling `};` in `modals_filabridge_recovery.html`) that was breaking ALL page JS and masking every Edit-Filament behavior. Unrelated to the Edit Filament work itself but surfaced while debugging it.
-    - **Softer active-tab styling** — muted cyan pop on dark background (was too-gold).
-    - **Custom combobox dropdowns** for Material and Vendor replacing the browser-native `<input list>` — keyboard-navigable (arrows + Enter), styled to match the dark theme, shows a "+ Create" hint row when the typed name doesn't exist. Matches the Add/Edit wizard pattern.
-    - **Escape scoped to dropdowns** — pressing Escape while a combobox or chip-picker dropdown is open closes the dropdown only (not the whole modal). Bubble-blocked via `e.stopPropagation()`.
-    - **Nozzle/Bed moved back to Basic tab** alongside Material/Vendor (user feedback — felt missing). Max-temps stay on Specs.
-    - **Copy-from-vendor button** (⇩) next to Empty Spool Wt — when the filament's vendor has a default `empty_spool_weight`, clicking drops that value into the input. Button hides when no vendor default exists.
-    - **Improved text contrast** — bumped `.text-muted` inside the modal to `#adb5bd` (lighter) so helper text is readable on dimmer monitors.
-    - **Spoolman error passthrough** — `update_filament` stashes the actual Spoolman response body in `spoolman_api.LAST_SPOOLMAN_ERROR`; `api_update_filament` surfaces it so the UI shows the real rejection reason (e.g. "HTTP 422: multi_color_direction is not a valid field") instead of a generic "rejected".
-    - **`multi_color_direction` routed through extras** — it isn't a native Spoolman filament field (caused "Spoolman rejected update" on color reorder). Now merged into `extra.multi_color_direction` with the standard quote-wrapped string convention.
-    - **`setup_fields.py` updated** — prod/new-install deploys now create `nozzle_temp_max`, `bed_temp_max`, and `multi_color_direction` as filament extras automatically.
-    - Remaining Wave 6 gap: external-metadata import panel (Prusament / open-filament-database).
-
-* ~~Ability to edit filament specific data inside Filament command center. Currently there isn't a way to directly edit a filament that's used as the basis of other spools, without opening a spool. Some sort of edit workflow for chaing data directly related to filaments.~~ **DONE** — covered by the Edit Filament MVP (2026-04-22) + vendor/color follow-up (2026-04-23).
+  * External-metadata import panel for the Edit Filament modal — Prusament spool-specific data links and open-filament-database lookup, parity with the wizard's "Import from External" button. _[NEEDS INPUT — reuse the existing wizard importer UI verbatim or build a slimmer single-URL quick-paste version?]_
+  * Wizard-side max-temp parity — `extra.nozzle_temp_max` / `extra.bed_temp_max` now exist and are edited from the Edit Filament Specs tab, but the Add Inventory Wizard doesn't yet surface them. Next time the wizard is touched, add matching max-temp inputs.
 
 * Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. (I'm not sure what all we'd want to put here, but it'd be nice to have.) _[NEEDS INPUT — scope is unclear: minimum viable config would surface `printer_map`, Spoolman URL, filabridge URL, toast durations, and extra-field propagation pairs. Bigger version pulls in the "Make as much of Command Center user configurable as possible" item below. Want to decide: start small (3-5 fields in a modal) or design the full schema first?]_
-
-* ~~In location manager, if an item is added to a loction that has slots, and there is a free slot, auto assign the item into that free slot. (If there are multiple free slots, fill the first empty one.)~~ **DONE 2026-04-23** — `perform_smart_move` now picks the lowest-numbered free slot for single-spool moves into Max-Spools>1 containers. Bulk moves intentionally skip the auto-pick (they'd share one slot and unseat each other). Covered by `test_auto_slot_pick.py`.
 
 * Review and unify update logic across the program, we have to many versions of update that keep getting orphined, or cause problems later on when they aren't included in a recent design change. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of. _[ON HOLD — requires a design-discussion session before any code changes. Candidate approach when we sit down for it: inventory every caller that writes to Spoolman spool/filament/location records, classify by "edit surface" (wizard, quick edit, scan handler, auto-unmap), define a single dirty-diff helper that every surface funnels through, then migrate one surface at a time. Same shape as the `openEditFilamentForm` dirty-diff already uses.]_
 
@@ -78,12 +29,8 @@
 
 * It appears that while I was editing a spool's filament data that was sloted into a print head, saving caused it to be removed. We need to check to see why that is. Or the filament's location was listed the correct location, but it the location was regestring as empty 0/1 on location list modal, and nothing assigned inside the location manager modal. _[NEEDS REPRO — unclear which path caused the removal. Candidates: wizard save that writes `location=''`, a filabridge unmap kicked off by a stray update, or an overwrite that cleared `container_slot`. Next time: reproduce with Spoolman DB dump before + after + browser Network tab so we can see the exact write payload.]_
 
-* ~~Currently using temp (Bed, Nozzle/Toolhead) in spoolman to store the low tempratures, but I really think we need to track the high tempratures for those values.~~ **DONE 2026-04-23 Wave 4** in the Edit Filament modal — `extra.nozzle_temp_max` + `extra.bed_temp_max` land via the Specs tab (native settings stay as min/recommended on Basic). `setup_fields.py` creates the two new filament extras on deploy. Wizard-side parity is still TODO — when the Add Inventory Wizard is next touched, add matching max-temp fields there too.
-
 * Possible issues with >1kg spools and tracking weights? _[NEEDS REPRO — no known failure, just a lingering concern. Next time you work with a >1kg spool, compare the UI's remaining_weight across a print against the actual scale delta. If they match, close this out.]_
 
-
-* ~~`test_manual_loc_override_e2e` — offcanvas-intercept bug fixed in M0. Currently xfailed because the Force Location modal was refactored from `<select>` to a searchable list; step 6 still drives the old select. Rewrite test against the new search+list UI.~~ **DONE 2026-04-23** — Test rewritten for the new `.swal-loc-item[data-id=""]` click pattern. Added a keyboard-path variant (ArrowDown + Enter). xfail marker removed; both tests pass green.
 
 * FCC Main Main screen buffer cards still don't always update after several backend changes. Setting filament to 0, doesn't seem to update to unassinged or it's deployed status. _[NEEDS REPRO — the dashboard relies on `inventory:sync-pulse` and `inventory:locations-changed` events to rerender. Find one path that sets a spool's weight to 0 and see whether either event fires. The auto-archive path (`app.py`) fires them; manual-weight-zero via the wizard might not.]_
 
@@ -92,8 +39,6 @@
 
 
 * Need to do something about the fact that if a toolhead has multiple slots assigned to it for a dryer box, that new spool assignments don't automatically take over the current toolhead's assigned spool. _[NEEDS INPUT — this conflicts with the Quick-Swap design where "slot → toolhead" bindings are explicit. Options: (a) auto-switch the toolhead's active spool to the most-recently-assigned slot whenever a new spool lands in any bound slot, (b) prompt with a Quick-Swap-style confirmation overlay, (c) leave it to the user via Quick-Swap. Decision needs your call before coding.]_
-
-* ~~Warn if a spool reassignment to a toolhead is happening during an active print.~~ **DONE 2026-04-23** — `prusalink_api.get_printer_state()` best-effort probes `/api/v1/status` then legacy `/api/printer` for state. New `/api/printer_state/<toolhead_id>` endpoint exposes it. `doAssign` in `inv_loc_mgr.js` shows an inline confirm overlay on PRINTING/PAUSED/BUSY; `inv_quickswap.js` prepends a warning banner inside the existing confirm overlay. Fail-open on any network hiccup so a cold printer doesn't block moves. **Follow-up 2026-04-23** (after user tested and got no warning): the state probe was previously only wired into 1 of 4 `showConfirmOverlay` call sites. Moved the probe into `showConfirmOverlay` itself so every caller (quick-swap, deposit, return-to-slot, empty-return) now gets the banner automatically when the target printer reports PRINTING/PAUSED/BUSY. The probe fires async so the overlay still opens instantly — banner slots in when the response lands. Covered by `test_printer_state_api.py` and `test_active_print_warning_e2e.py`.
 
 * If a spool isn't activly deployed to a toolhead during an update to the Filament Command Center, it looses it's current slot assignment, and has to be reassigned. (This might happen during other senerios, but this one is the first I've noticed.) _[NEEDS REPRO — "update" is ambiguous here. Which write? Probably `container_slot` is getting cleared when `update_spool` runs without merging prior extras. This class of bug has been fixed in `perform_smart_move` (the read-merge-write pattern on line 321-330 of logic.py); there may still be surfaces that write a bare `{'extra': {'container_slot': ''}}` and clobber siblings. Audit all `update_spool` callers.]_
 
@@ -127,7 +72,6 @@
 * SweetAlert2 does not support nested modals — calling `Swal.fire()` while one is already open replaces the first one. Any future confirmation dialogs inside SweetAlert modals must use inline overlay divs (see force location modal's `#fcc-escape-confirm-overlay` pattern) instead of nested `Swal.fire()` calls. Audit existing code for any other nested Swal usage.
 
 ## 🔍 Search, Display & Filtering
-* ~~Search by deployment status. Maybe under an advanced search set that is hidden but can be shown, so it doesn't take up a lot of extra space.~~ **DONE 2026-04-23** — `/api/search` accepts a new `deployed` query param ('deployed'|'undeployed'|'' or 'any'). A spool counts as deployed when its Spoolman location is in `printer_map` OR it carries a ghost `extra.physical_source` pointing at a toolhead. Filter is silently skipped for filaments. Frontend: small select dropdown added to the search offcanvas next to Min Weight. Covered by `test_search_deployed_filter.py`. **Follow-up 2026-04-23**: Reset button now also clears this filter (was leaving it stuck on deployed/undeployed after reset). _Note: we didn't hide this behind "advanced filters" since the select only adds ~140px of width; revisit if more filters accumulate._
 * Search by and filter by remaining weight.
 
 
@@ -137,8 +81,6 @@
 
 ## 📍 Location Management & Scanning
 * Refactor the entire location managment system from the ground up. It's currently being a bit too complicated, and I think it can be cleaned up a bit if we just rethink the flow of this process. We've bolted a lot of stuff onto this system, and the has caused it to become a bit too cumbersome to both code and work with. I think we need to build in a better system for linking locations and device/boxes/storage things. We need to have a discussion on how best to fix this, so I want to have an implementation plan in place to iterate off of. _[ON HOLD — needs design session. Large refactor, bundles with the DB-driven parent/child hierarchy item below since they'd share a schema change. When we sit down: first define the hierarchy model (ParentLocation FK vs prefix parsing), then draft a migration plan, then split the location-manager UI work into vertical slices.]_
-* ~~The ability to configure a box to change the slot order to go from left to right, or right to left.~~ **DONE 2026-04-23** — per-dryer-box `extra.slot_order` ('ltr'|'rtl'), new `/api/dryer_box/<id>/slot_order` GET/PUT endpoints, radio toggle in the Location Manager feeds editor. `renderGrid` reverses iteration when rtl. Covered by `test_slot_order_api.py` + `test_slot_order_ui_e2e.py`. **Follow-up 2026-04-23**: after Save Feeds the grid now re-renders immediately in the new direction (was previously requiring a close+reopen) — busts `state.lastLocRenderHash` before calling `refreshManageView`.
-
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
 
@@ -151,7 +93,6 @@
     - Label Printed in Spoolman Spool data can be used to determine if a new Label has been printed.
     - Filaments: Spoolman Reprint field is set to Yes for items that need to have a label reprinted. Null or No mean that it already has a label with the Spoolman ID.
 * It's too easy to have multiple legacy spools with no exact ID, where we could be assigning the wrong item... perhaps a pop-up when there could be more than 1 spool attached to the legacy ID, asking the user if they want to see the list of spools, or just reprint a new label.
-* ~~Confirmed label print should be displayed somewhere on the card. Perhaps changing the printer icon to a checkmark for confirmed spools.~~ **DONE 2026-04-23** — `format_spool_display` now emits a normalized `needs_label_print` bool in its details dict. `SpoolCardBuilder.buildCard` renders a small green ✅ next to the 🖨️ Add-to-Queue button when the flag is explicitly `false`. Kept the 🖨️ button untouched so the "add to queue" affordance is preserved; the ✅ is purely a status indicator. Missing details stays quiet. Covered by `test_label_confirmed_indicator.py`.
 * Add label print button to filament sample cards.
 
 * Some values in Print Queue are being set to yes, most are null. What is the process for setting them to true?
