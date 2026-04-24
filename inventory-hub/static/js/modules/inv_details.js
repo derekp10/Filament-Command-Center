@@ -1709,18 +1709,38 @@ const _editfilShowEscapeConfirm = (bsModal) => {
     dialog.appendChild(ov);
     const cleanup = () => { try { ov.remove(); } catch (_) { /* noop */ } document.removeEventListener('keydown', keyHandler, true); };
     // Enter activates the focused button. "Keep Editing" is focused by
-    // default (the SAFE choice — don't lose edits if user mashes Enter),
-    // so Enter dismisses just the overlay. Tab moves focus to "Close
-    // Anyway"; Enter there confirms losing the edits. Escape is
-    // unconditional cancel of the overlay.
+    // default (the SAFE choice — don't lose edits on stray Enter), so
+    // Enter dismisses just the overlay. Tab moves focus to "Close Anyway";
+    // Enter there confirms losing the edits. Escape unconditionally
+    // cancels the overlay. Tab is trapped inside the two buttons so it
+    // can't escape to the page (or browser chrome) behind.
     const keyHandler = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
+        const yesBtn = document.getElementById('editfil-esc-yes');
+        const noBtn = document.getElementById('editfil-esc-no');
         if (e.key === 'Enter') {
-            const yesBtn = document.getElementById('editfil-esc-yes');
-            const noBtn = document.getElementById('editfil-esc-no');
             const active = document.activeElement;
             if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); bsModal.hide(); }
             else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
+            return;
+        }
+        if (e.key === 'Tab') {
+            const focusables = [yesBtn, noBtn].filter(Boolean);
+            if (focusables.length === 0) return;
+            const active = document.activeElement;
+            const idx = focusables.indexOf(active);
+            if (idx === -1) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
+                return;
+            }
+            if (e.shiftKey && idx === 0) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[focusables.length - 1].focus();
+            } else if (!e.shiftKey && idx === focusables.length - 1) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[0].focus();
+            }
         }
     };
     document.getElementById('editfil-esc-no').onclick = cleanup;

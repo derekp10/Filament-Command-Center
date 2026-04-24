@@ -278,3 +278,45 @@ def test_active_print_confirm_escape_always_cancels(page: Page):
     assert assigns == 0
     overlay_count = page.locator("#fcc-active-print-confirm-overlay").count()
     assert overlay_count == 0
+
+
+def test_active_print_confirm_tab_cycles_between_buttons(page: Page):
+    """Focus trap: Tab from Continue moves to Cancel; Tab from Cancel wraps
+    back to Continue. Focus never escapes the overlay to the page behind
+    (or to browser chrome)."""
+    _setup_active_print_overlay(page)
+    # Default focus: Continue.
+    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-yes"
+    # Tab → Cancel.
+    page.keyboard.press("Tab")
+    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-no"
+    # Tab → wrap back to Continue.
+    page.keyboard.press("Tab")
+    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-yes"
+
+
+def test_active_print_confirm_shift_tab_reverses(page: Page):
+    """Shift+Tab wraps from Continue back to Cancel, then to Continue."""
+    _setup_active_print_overlay(page)
+    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-yes"
+    # Shift+Tab from Continue → wrap to Cancel.
+    page.keyboard.press("Shift+Tab")
+    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-no"
+    # Shift+Tab from Cancel → Continue.
+    page.keyboard.press("Shift+Tab")
+    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-yes"
+
+
+def test_active_print_confirm_tab_reels_in_stray_focus(page: Page):
+    """If focus somehow leaks outside the overlay (e.g. via programmatic
+    focus on a background element), the next Tab must pull focus back
+    into the overlay rather than continuing to cycle through the page."""
+    _setup_active_print_overlay(page)
+    # Simulate focus escaping: focus a random background element.
+    page.evaluate("() => document.body.focus()")
+    # Tab should pull focus back into the overlay.
+    page.keyboard.press("Tab")
+    focused = page.evaluate("() => document.activeElement && document.activeElement.id")
+    assert focused in ("fcc-apc-yes", "fcc-apc-no"), (
+        f"Tab from outside the overlay should pull focus back in; got {focused!r}"
+    )

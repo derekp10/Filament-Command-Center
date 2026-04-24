@@ -317,13 +317,45 @@
             if (_activeConfirmClose === close) _activeConfirmClose = null;
         };
         _activeConfirmClose = close;
-        // Enter NOT handled here — the Yes button is focused by default,
-        // so native <button> Enter-activation fires yes.onclick for us.
-        // The earlier explicit Enter→confirm handler bypassed whichever
-        // button actually had focus (including Cancel after a tab), which
-        // caused Cancel-then-Enter to still run the swap.
+        // Keyboard contract:
+        //   - Escape cancels (unconditional).
+        //   - Enter activates whichever button is focused (yes → confirm+close,
+        //     no → close only). Yes is focused by default.
+        //   - Tab cycles between the two buttons; focus trap prevents escape
+        //     to the page behind (otherwise Tab leaks to the Location
+        //     Manager modal behind and eventually the browser chrome).
         const keyHandler = (e) => {
-            if (e.key === 'Escape') { e.stopPropagation(); close(); }
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+            if (e.key === 'Enter') {
+                const active = document.activeElement;
+                if (active === yes) {
+                    e.preventDefault(); e.stopPropagation();
+                    opts.onConfirm && opts.onConfirm();
+                    close();
+                } else if (active === no) {
+                    e.preventDefault(); e.stopPropagation();
+                    close();
+                }
+                return;
+            }
+            if (e.key === 'Tab') {
+                const focusables = [yes, no].filter(Boolean);
+                if (focusables.length === 0) return;
+                const active = document.activeElement;
+                const idx = focusables.indexOf(active);
+                if (idx === -1) {
+                    e.preventDefault(); e.stopPropagation();
+                    focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
+                    return;
+                }
+                if (e.shiftKey && idx === 0) {
+                    e.preventDefault(); e.stopPropagation();
+                    focusables[focusables.length - 1].focus();
+                } else if (!e.shiftKey && idx === focusables.length - 1) {
+                    e.preventDefault(); e.stopPropagation();
+                    focusables[0].focus();
+                }
+            }
         };
         yes.onclick = () => { opts.onConfirm && opts.onConfirm(); close(); };
         no.onclick = close;

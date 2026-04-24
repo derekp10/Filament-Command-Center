@@ -313,12 +313,34 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
     // across the document-level capture handler.
     const keyHandler = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
+        const yesBtn = document.getElementById('fcc-aps-yes');
+        const noBtn = document.getElementById('fcc-aps-no');
         if (e.key === 'Enter') {
-            const yesBtn = document.getElementById('fcc-aps-yes');
-            const noBtn = document.getElementById('fcc-aps-no');
             const active = document.activeElement;
             if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
             else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
+            return;
+        }
+        if (e.key === 'Tab') {
+            // Focus trap (see inv_loc_mgr.js _confirmActivePrintAssign for
+            // the full rationale). Tab cycles between the two buttons;
+            // prevents escape to the page behind the overlay.
+            const focusables = [yesBtn, noBtn].filter(Boolean);
+            if (focusables.length === 0) return;
+            const active = document.activeElement;
+            const idx = focusables.indexOf(active);
+            if (idx === -1) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
+                return;
+            }
+            if (e.shiftKey && idx === 0) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[focusables.length - 1].focus();
+            } else if (!e.shiftKey && idx === focusables.length - 1) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[0].focus();
+            }
         }
     };
     document.getElementById('fcc-aps-no').onclick = cleanup;

@@ -1122,15 +1122,36 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     // safer path for scan-driven flows.
     const keyHandler = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
+        const yesBtn = document.getElementById('fcc-apc-yes');
+        const noBtn = document.getElementById('fcc-apc-no');
         if (e.key === 'Enter') {
-            const yesBtn = document.getElementById('fcc-apc-yes');
-            const noBtn = document.getElementById('fcc-apc-no');
             const active = document.activeElement;
-            // Only intercept Enter when focus is on one of OUR buttons —
-            // leave it alone if focus is somewhere else (e.g. a text input
-            // a future iteration of the dialog might add).
             if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
             else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
+            return;
+        }
+        if (e.key === 'Tab') {
+            // Focus trap: Tab should cycle between our two buttons only,
+            // never escape to the page behind the overlay (which let the
+            // user tab all the way out to the browser chrome). Shift+Tab
+            // reverses. If focus is somewhere OUTSIDE the overlay when
+            // Tab is pressed (e.g. a background element), pull it back in.
+            const focusables = [yesBtn, noBtn].filter(Boolean);
+            if (focusables.length === 0) return;
+            const active = document.activeElement;
+            const idx = focusables.indexOf(active);
+            if (idx === -1) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
+                return;
+            }
+            if (e.shiftKey && idx === 0) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[focusables.length - 1].focus();
+            } else if (!e.shiftKey && idx === focusables.length - 1) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[0].focus();
+            }
         }
     };
     document.getElementById('fcc-apc-no').onclick = cleanup;
