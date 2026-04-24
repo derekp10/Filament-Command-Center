@@ -243,7 +243,26 @@
     // instead of just hiding the element and leaking the listener.
     let _activeConfirmClose = null;
 
-    const showConfirmOverlay = (opts) => {
+    // Helper: race the printer-state probe against a short timeout so a slow
+    // or unreachable PrusaLink can't stall the confirm UI. Returns stateInfo
+    // (truthy → active) or null (unknown → no banner).
+    //
+    // Timeout is 3s by default — earlier 1s was too tight; some networks take
+    // longer to round-trip through backend → filabridge credential lookup →
+    // PrusaLink. Backend itself has a 2s per-endpoint timeout inside
+    // `get_printer_state`, so 3s gives headroom plus network overhead.
+    const _probeWithTimeout = (toolheadId, timeoutMs = 3000) => {
+        const dbg = (...args) => { if (window.FCC_DEBUG_ACTIVE_PRINT) console.log('[active-print overlay]', ...args); };
+        if (!toolheadId) { dbg('no toolhead id, skipping probe'); return Promise.resolve(null); }
+        if (!window.fetchPrinterStateForToolhead) { dbg('helper missing — stale cached JS?'); return Promise.resolve(null); }
+        dbg('probing', toolheadId, 'with timeout', timeoutMs + 'ms');
+        return Promise.race([
+            window.fetchPrinterStateForToolhead(toolheadId),
+            new Promise(resolve => setTimeout(() => { dbg('probe timeout for', toolheadId); resolve(null); }, timeoutMs)),
+        ]).catch((e) => { dbg('probe error', e); return null; });
+    };
+
+    const showConfirmOverlay = async (opts) => {
         const ov = document.getElementById('fcc-quickswap-confirm-overlay');
         const title = document.getElementById('fcc-quickswap-confirm-title');
         const body = document.getElementById('fcc-quickswap-confirm-body');
@@ -255,20 +274,88 @@
         if (_activeConfirmClose) {
             try { _activeConfirmClose(); } catch (e) { /* noop */ }
         }
+
+        // Active-print probe must complete BEFORE the overlay becomes visible —
+        // otherwise a fast-clicking user can confirm before the banner lands
+        // (the async-append pattern we tried first lost that race). 1s cap
+        // keeps the delay bounded when the printer is offline. The probe
+        // fails open — null means "unknown, show overlay normally."
+        const stateInfo = await _probeWithTimeout(opts.toolhead);
+        const warningBanner = stateInfo
+            ? `<div class="alert alert-warning py-2 px-3 mb-2" style="font-size:0.95em;">`
+                + `⚠️ <b>${stateInfo.printer_name} is ${stateInfo.state}</b> — loading a new spool now will disrupt the print.`
+                + `</div>`
+            : '';
+
         title.innerText = opts.title || `Swap ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`;
-        body.innerHTML = opts.body || ('This moves the spool currently in that slot into the active toolhead. ' +
-                        'Any spool already on the toolhead will be auto-ejected back to its source.');
+        const defaultBody = 'This moves the spool currently in that slot into the active toolhead. ' +
+                            'Any spool already on the toolhead will be auto-ejected back to its source.';
+        body.innerHTML = warningBanner + (opts.body || defaultBody);
         ov.style.display = 'block';
+
+        // Mount QR-confirm pair only when the active-print warning is
+        // showing — Quick-Swap during a normal move doesn't need scan
+        // confirmation since the user already had a card to scan to
+        // initiate the swap. The active-print case is the safety-critical
+        // one that benefits from "scan to confirm I really meant to
+        // disrupt my print."
+        let qrSession = null;
+        if (stateInfo && warningBanner && window.attachConfirmQRs) {
+            qrSession = window.attachConfirmQRs({
+                host: body,
+                onConfirm: () => { opts.onConfirm && opts.onConfirm(); close(); },
+                onCancel: () => { close(); },
+                theme: 'warning',
+            });
+        }
+
         const close = () => {
             ov.style.display = 'none';
             yes.onclick = null; no.onclick = null;
             document.removeEventListener('keydown', keyHandler, true);
+            if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
             if (_activeConfirmClose === close) _activeConfirmClose = null;
         };
         _activeConfirmClose = close;
+        // Keyboard contract:
+        //   - Escape cancels (unconditional).
+        //   - Enter activates whichever button is focused (yes → confirm+close,
+        //     no → close only). Yes is focused by default.
+        //   - Tab cycles between the two buttons; focus trap prevents escape
+        //     to the page behind (otherwise Tab leaks to the Location
+        //     Manager modal behind and eventually the browser chrome).
         const keyHandler = (e) => {
-            if (e.key === 'Escape') { e.stopPropagation(); close(); }
-            else if (e.key === 'Enter') { e.stopPropagation(); opts.onConfirm && opts.onConfirm(); close(); }
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+            if (e.key === 'Enter') {
+                const active = document.activeElement;
+                if (active === yes) {
+                    e.preventDefault(); e.stopPropagation();
+                    opts.onConfirm && opts.onConfirm();
+                    close();
+                } else if (active === no) {
+                    e.preventDefault(); e.stopPropagation();
+                    close();
+                }
+                return;
+            }
+            if (e.key === 'Tab') {
+                const focusables = [yes, no].filter(Boolean);
+                if (focusables.length === 0) return;
+                const active = document.activeElement;
+                const idx = focusables.indexOf(active);
+                if (idx === -1) {
+                    e.preventDefault(); e.stopPropagation();
+                    focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
+                    return;
+                }
+                if (e.shiftKey && idx === 0) {
+                    e.preventDefault(); e.stopPropagation();
+                    focusables[focusables.length - 1].focus();
+                } else if (!e.shiftKey && idx === focusables.length - 1) {
+                    e.preventDefault(); e.stopPropagation();
+                    focusables[0].focus();
+                }
+            }
         };
         yes.onclick = () => { opts.onConfirm && opts.onConfirm(); close(); };
         no.onclick = close;
@@ -451,12 +538,14 @@
         // button text tells you what you're committing to.
         const labelEl = btn.querySelector('.fw-bold + .fw-bold, div.fw-bold:nth-child(2)');
         const spoolLabel = labelEl ? labelEl.innerText.trim() : '';
+        // Active-print banner is handled inside showConfirmOverlay itself
+        // now (covers all 4 call sites). No pre-probe wrapper here.
         showConfirmOverlay({
             ...opts,
             title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
             body: (spoolLabel
-                ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
-                : '')
+                    ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
+                    : '')
                 + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
                 + 'Any spool currently on the toolhead gets auto-returned to <em>its own</em> origin box — '
                 + 'never re-routed into a different dryer box.',

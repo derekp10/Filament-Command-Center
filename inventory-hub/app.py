@@ -166,6 +166,58 @@ def api_vendors():
     except Exception as e:
         return jsonify({"success": False, "msg": str(e)}), 500
 
+
+@app.route('/api/create_filament', methods=['POST'])
+def api_create_filament():
+    """Create a new filament in Spoolman. Body: {"data": {...filament fields...}}.
+
+    Used by the Edit Filament modal's "Add" mode (when openAddFilamentForm is
+    called with no existing filament). Returns {success, filament|msg}.
+    Mirrors api_update_filament's shape so the frontend can share response
+    handling.
+    """
+    payload = request.json or {}
+    data = payload.get('data') or {}
+    if not isinstance(data, dict) or not data:
+        return jsonify({"success": False, "msg": "No fields to create with."}), 400
+    if not data.get('material'):
+        return jsonify({"success": False, "msg": "Material is required."}), 400
+    try:
+        created = spoolman_api.create_filament(data)
+        if created and created.get('id') is not None:
+            state.add_log_entry(
+                f"➕ Filament #{created['id']} created ({data.get('material', '')}: {data.get('name', '')})",
+                "SUCCESS", "00ff00",
+            )
+            return jsonify({"success": True, "filament": created})
+        return jsonify({"success": False, "msg": "Spoolman rejected the filament create."}), 500
+    except Exception as e:
+        state.logger.error(f"Failed to create filament: {e}")
+        return jsonify({"success": False, "msg": str(e)}), 500
+
+
+@app.route('/api/vendors', methods=['POST'])
+def api_create_vendor():
+    """Create a vendor in Spoolman. Body: {"name": "<vendor name>"}.
+
+    Used by the Edit Filament form when the user types a vendor name that
+    doesn't match any existing vendor — the frontend POSTs here first, then
+    PATCHes the filament with the new vendor_id. Returns {success, vendor}.
+    """
+    payload = request.json or {}
+    name = str(payload.get('name') or '').strip()
+    if not name:
+        return jsonify({"success": False, "msg": "Vendor name required."}), 400
+    try:
+        created = spoolman_api.create_vendor({"name": name})
+        if created and created.get('id') is not None:
+            state.add_log_entry(f"➕ Vendor '{name}' created", "SUCCESS", "00ff00")
+            return jsonify({"success": True, "vendor": created})
+        return jsonify({"success": False, "msg": "Spoolman rejected the vendor create."}), 500
+    except Exception as e:
+        state.logger.error(f"Failed to create vendor '{name}': {e}")
+        return jsonify({"success": False, "msg": str(e)}), 500
+
 @app.route('/api/materials', methods=['GET'])
 def api_materials():
     """Returns a list of all unique materials in Spoolman."""
@@ -463,17 +515,21 @@ def api_search_inventory():
     empty = request.args.get('empty', 'false').lower() == 'true'
     min_weight = request.args.get('min_weight', '')
     target_type = request.args.get('type', 'spool')
-    
+    # Deployment status filter: '' | 'any' = no filter, 'deployed' = toolhead/ghost only,
+    # 'undeployed' = not on a toolhead. Filaments ignore this.
+    deployed_state = request.args.get('deployed', '').strip().lower()
+
     try:
         results = spoolman_api.search_inventory(
-            query=query, 
-            material=material, 
-            vendor=vendor, 
-            color_hex=color_hex, 
-            only_in_stock=only_in_stock, 
+            query=query,
+            material=material,
+            vendor=vendor,
+            color_hex=color_hex,
+            only_in_stock=only_in_stock,
             empty=empty,
             target_type=target_type,
-            min_weight=min_weight
+            min_weight=min_weight,
+            deployed_state=deployed_state,
         )
         return jsonify({"success": True, "results": results})
     except Exception as e:
@@ -910,7 +966,11 @@ def api_update_filament():
                 "SUCCESS", "00ff00",
             )
             return jsonify({"success": True, "filament": updated})
-        return jsonify({"success": False, "msg": "Spoolman rejected the update."})
+        # Surface the stashed Spoolman error body so the UI can tell the user
+        # WHY the update was rejected (invalid field, bad vendor_id, etc.)
+        # instead of showing an opaque "rejected" message.
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "No response body"
+        return jsonify({"success": False, "msg": f"Spoolman rejected update: {err}"})
     except Exception as e:
         state.logger.error(f"Failed to update filament #{fid}: {e}")
         return jsonify({"success": False, "msg": str(e)})
@@ -918,21 +978,38 @@ def api_update_filament():
 @app.route('/api/manage_contents', methods=['POST'])
 def api_manage_contents():
     data = request.json
-    action = data.get('action') 
-    loc_id = data.get('location', '').strip().upper() 
-    spool_input = data.get('spool_id') 
-    slot_arg = data.get('slot') 
+    action = data.get('action')
+    loc_id = data.get('location', '').strip().upper()
+    spool_input = data.get('spool_id')
+    slot_arg = data.get('slot')
+    # Caller opts into the active-print-confirmed branch by passing this
+    # flag alongside the main payload. Added 2026-04-23 so ejects, force-
+    # unassigns, and clear-location ops all inherit the same safety net.
+    confirm_active_print = bool(data.get('confirm_active_print', False))
 
     if action == 'clear_location':
         contents = spoolman_api.get_spools_at_location_detailed(loc_id)
+        # Pre-flight: if the box being cleared is itself a toolhead that's
+        # actively printing, bail. Individual per-spool checks are bypassed
+        # (we don't want per-spool prompts during a bulk clear).
+        if not confirm_active_print:
+            ap = logic._active_print_info_for_location(loc_id)
+            if ap:
+                return jsonify({
+                    "success": False,
+                    "require_confirm": True,
+                    "confirm_type": "active_print",
+                    "active_print": ap,
+                    "msg": f"{ap['printer_name']} is {ap['state']} — clearing this location will disrupt the print.",
+                })
         for spool in contents:
             # [ALEX FIX] Protect "Ghost" items from being ejected when a box is cleared
             if spool.get('is_ghost'):
                 continue
-                
+
             slot_val = spool.get('slot', '')
             if not slot_val or slot_val == 'None' or slot_val == '':
-                logic.perform_smart_eject(spool['id'])
+                logic.perform_smart_eject(spool['id'], confirm_active_print=True)
         return jsonify({"success": True})
 
     spool_id = None
@@ -945,12 +1022,24 @@ def api_manage_contents():
                  return jsonify({"success": False, "msg": resolution['msg']})
     elif action in ['remove', 'force_unassign']:
         if str(spool_input).isdigit(): spool_id = int(spool_input)
-        
+
     if not spool_id: return jsonify({"success": False, "msg": "Spool not found"})
 
     if action == 'remove':
         is_confirmed = data.get('confirmed', False)
-        result = logic.perform_smart_eject(spool_id, confirmed_unassign=is_confirmed)
+        result = logic.perform_smart_eject(
+            spool_id,
+            confirmed_unassign=is_confirmed,
+            confirm_active_print=confirm_active_print,
+        )
+        if isinstance(result, dict) and result.get('status') == 'requires_confirm':
+            return jsonify({
+                "success": False,
+                "require_confirm": True,
+                "confirm_type": result.get('confirm_type'),
+                "active_print": result.get('active_print'),
+                "msg": result.get('msg', 'Confirmation required.'),
+            })
         if result == "REQUIRE_CONFIRM":
             return jsonify({"success": False, "require_confirm": True, "msg": "Spool is already in a room. Confirm true unassign to nowhere?"})
         elif result is True:
@@ -958,11 +1047,25 @@ def api_manage_contents():
         else:
             return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'force_unassign':
-        if logic.perform_force_unassign(spool_id): return jsonify({"success": True})
-        else: return jsonify({"success": False, "msg": "DB Update Failed"})
+        result = logic.perform_force_unassign(spool_id, confirm_active_print=confirm_active_print)
+        if isinstance(result, dict) and result.get('status') == 'requires_confirm':
+            return jsonify({
+                "success": False,
+                "require_confirm": True,
+                "confirm_type": result.get('confirm_type'),
+                "active_print": result.get('active_print'),
+                "msg": result.get('msg', 'Confirmation required.'),
+            })
+        if result:
+            return jsonify({"success": True})
+        return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'add':
         origin = data.get('origin', '')
-        return jsonify(logic.perform_smart_move(loc_id, [spool_id], target_slot=slot_arg, origin=origin))
+        return jsonify(logic.perform_smart_move(
+            loc_id, [spool_id],
+            target_slot=slot_arg, origin=origin,
+            confirm_active_print=confirm_active_print,
+        ))
     return jsonify({"success": False})
 
 @app.route('/api/identify_scan', methods=['POST'])
@@ -1118,9 +1221,28 @@ def api_identify_scan():
             }), 200
 
         spool_id = int(first_spool['id'])
+        # Slot-QR scans pass the caller's confirm-active-print flag through
+        # transparently. Frontend slot-QR paths pre-probe too, but the
+        # backend check is the authoritative safety net — if the printer
+        # went active between the probe and the scan, we still bail.
+        confirm_active_print = bool(request.json.get('confirm_active_print', False))
         move_result = logic.perform_smart_move(
-            target, [spool_id], target_slot=slot, origin='slot_qr_scan'
+            target, [spool_id], target_slot=slot, origin='slot_qr_scan',
+            confirm_active_print=confirm_active_print,
         )
+        # If perform_smart_move bailed on an active-print check, surface the
+        # confirmation prompt to the client. Frontend slot-QR path (scan
+        # handler) renders this as a modal and retries on confirm.
+        if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
+            return jsonify({
+                "type": "assignment",
+                "action": "assignment_requires_confirm",
+                "location": target, "slot": slot,
+                "confirm_type": move_result.get('confirm_type'),
+                "active_print": move_result.get('active_print'),
+                "msg": move_result.get('msg'),
+                "moved": spool_id,
+            }), 200
         # perform_smart_move now handles auto-deploy internally when the
         # target slot is bound to a toolhead. Pick up the deployed-to
         # hint from its response so we can surface it in the toast.
@@ -1172,7 +1294,36 @@ def api_dryer_box_bindings_get(loc_id):
     bindings = locations_db.get_dryer_box_bindings(loc_id)
     if bindings is None:
         return jsonify({"error": "not_a_dryer_box", "location": loc_id}), 404
-    return jsonify({"location": loc_id, "slot_targets": bindings})
+    order = locations_db.get_dryer_box_slot_order(loc_id) or 'ltr'
+    return jsonify({"location": loc_id, "slot_targets": bindings, "slot_order": order})
+
+
+@app.route('/api/dryer_box/<loc_id>/slot_order', methods=['GET'])
+def api_dryer_box_slot_order_get(loc_id):
+    order = locations_db.get_dryer_box_slot_order(loc_id)
+    if order is None:
+        return jsonify({"error": "not_a_dryer_box", "location": loc_id}), 404
+    return jsonify({"location": loc_id, "order": order})
+
+
+@app.route('/api/dryer_box/<loc_id>/slot_order', methods=['PUT'])
+def api_dryer_box_slot_order_put(loc_id):
+    """Persist a dryer box's slot-grid render direction. Body: {"order": "ltr"|"rtl"}.
+    Pure UI preference — doesn't touch bindings or any Spoolman data.
+    """
+    data = request.get_json(silent=True) or {}
+    order = data.get('order')
+    ok, msg = locations_db.set_dryer_box_slot_order(loc_id, order)
+    if not ok:
+        return jsonify({"error": "invalid_request", "location": loc_id, "msg": msg}), 400
+    # Read back the stored (normalized) value so the response + log entry
+    # reflect exactly what's on disk, not the caller's input casing.
+    normalized = locations_db.get_dryer_box_slot_order(loc_id) or 'ltr'
+    state.add_log_entry(
+        f"🔁 Slot order for <b>{loc_id}</b> set to {normalized.upper()}",
+        "INFO", "00d4ff",
+    )
+    return jsonify({"location": loc_id, "order": normalized})
 
 
 @app.route('/api/dryer_box/<loc_id>/bindings', methods=['PUT'])
@@ -1217,6 +1368,39 @@ def api_dryer_box_bindings_put(loc_id):
         "warnings": [
             {"slot": w[0], "target": w[1], "reason": w[2]} for w in warnings
         ],
+    })
+
+
+@app.route('/api/printer_state/<path:toolhead_id>', methods=['GET'])
+def api_printer_state(toolhead_id):
+    """Return PrusaLink state for the printer that owns `toolhead_id`.
+
+    toolhead_id is a location ID like "CORE1-M0" or "XL-3". If the location
+    doesn't map to a printer or PrusaLink is unreachable, returns
+    {"known": false} — callers treat that as "don't block the user."
+    Successful response: {"known": true, "state": "PRINTING", "is_active": true}.
+
+    Deliberately fail-open so a UI pre-check never stalls on a cold/rebooting
+    printer, wrong API key, or missing filabridge entry.
+    """
+    import prusalink_api  # local import keeps the module optional at module load
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    info = printer_map.get((toolhead_id or '').strip().upper())
+    if not info:
+        return jsonify({"known": False, "reason": "not_in_printer_map"})
+    printer_name = info.get('printer_name')
+    if not printer_name:
+        return jsonify({"known": False, "reason": "no_printer_name"})
+    _, fb_url = config_loader.get_api_urls()
+    result = prusalink_api.get_printer_state(fb_url, printer_name)
+    if not result:
+        return jsonify({"known": False, "reason": "prusalink_unreachable"})
+    return jsonify({
+        "known": True,
+        "state": result.get('state'),
+        "is_active": bool(result.get('is_active')),
+        "printer_name": printer_name,
     })
 
 
@@ -1450,8 +1634,14 @@ def api_quickswap_return():
     toolhead = active_toolhead
 
     # 3) Send the spool back. perform_smart_move handles Filabridge + extras.
+    # The destination is a dryer box (not a toolhead), so the destination
+    # active-print check won't fire. The source-side disruption was already
+    # surfaced by the Quick-Swap confirm overlay's banner before this
+    # endpoint was called — backend just passes confirm_active_print=True
+    # unconditionally here because the user already saw the warning.
     move_result = logic.perform_smart_move(
-        found_box, [spool_id], target_slot=found_slot, origin='quickswap_return'
+        found_box, [spool_id], target_slot=found_slot, origin='quickswap_return',
+        confirm_active_print=True,
     )
     src_note = " (original source)" if found_source == 'physical_source' else " (first bound slot)"
     slot_part = f":SLOT:{found_slot}" if found_slot else ""
@@ -1532,8 +1722,13 @@ def api_quickswap():
             "box": box, "slot": slot, "toolhead": toolhead,
         }), 404
 
+    # Quick-Swap confirm overlay already probed the destination toolhead and
+    # surfaced the warning banner before this endpoint was called, so the
+    # user has already opted in. Pass confirm_active_print=True so the
+    # backend check doesn't re-prompt.
     move_result = logic.perform_smart_move(
-        toolhead, [spool_id], target_slot=None, origin='quickswap'
+        toolhead, [spool_id], target_slot=None, origin='quickswap',
+        confirm_active_print=True,
     )
     state.add_log_entry(
         f"⚡ Quick-swap: Spool #{spool_id} from <b>{box}:SLOT:{slot}</b> → <b>{toolhead}</b>",
@@ -1862,11 +2057,13 @@ def api_get_spools_by_filament():
 
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
+    payload = request.json or {}
     return jsonify(logic.perform_smart_move(
-        request.json.get('location'), 
-        request.json.get('spools'),
-        target_slot=request.json.get('slot'),
-        origin=request.json.get('origin', '')
+        payload.get('location'),
+        payload.get('spools'),
+        target_slot=payload.get('slot'),
+        origin=payload.get('origin', ''),
+        confirm_active_print=bool(payload.get('confirm_active_print', False)),
     ))
 
 # --- FILABRIDGE ERROR RECOVERY ROUTES ---
@@ -2159,4 +2356,12 @@ def api_get_logs_route():
 
 if __name__ == '__main__':
     state.logger.info(f"🛠️ Server {VERSION} Started")
+    # Register required Spoolman extras (max-temps etc.) so saves from the
+    # Edit Filament modal don't hit "Unknown extra field" errors on prod
+    # instances that haven't run setup_fields.py since the new fields
+    # were added. Idempotent — skips fields that already exist.
+    try:
+        spoolman_api.ensure_required_extras()
+    except Exception as _e:
+        state.logger.warning(f"ensure_required_extras failed at startup: {_e}")
     app.run(host='0.0.0.0', port=8000)

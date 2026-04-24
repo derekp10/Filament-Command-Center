@@ -84,6 +84,15 @@ const SpoolCardBuilder = {
                 else if (window.processScan) actionTarget = `processScan('ID:${item.id}', 'search')`;
                 else actionTarget = `openSpoolDetails(${item.id})`;
                 
+                // needs_label_print is surfaced from format_spool_display's details block.
+                // Only render the ✅ when we have an explicit false — missing details
+                // means we can't be sure, so stay quiet rather than over-promising.
+                const labelFlagKnown = item.details && Object.prototype.hasOwnProperty.call(item.details, 'needs_label_print');
+                const labelConfirmed = labelFlagKnown && item.details.needs_label_print === false;
+                const labelStateIcon = !isFil && labelConfirmed
+                    ? `<div class="fcc-card-label-ok" style="color:#33d17a; font-size:1.05rem; line-height:1; padding:2px 4px;" title="Label confirmed printed">✅</div>`
+                    : '';
+
                 // Add top-right fast-actions
                 navActionsHTML = `
                     <div class="d-flex gap-3 align-items-center" style="z-index: 10; margin-right: 5px;">
@@ -91,6 +100,7 @@ const SpoolCardBuilder = {
                         <div class="fcc-card-action-btn" onclick="event.stopPropagation(); ${isFil ? `openFilamentDetails(${item.id})` : `openSpoolDetails(${item.id})`}" title="View Details">🔍</div>
                         ${!isFil ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.openEditWizard(${item.id});" title="Edit Spool">✏️</div>` : ''}
                         ${!isFil && window.addToQueue ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>` : ''}
+                        ${labelStateIcon}
                     </div>
                 `;
             }

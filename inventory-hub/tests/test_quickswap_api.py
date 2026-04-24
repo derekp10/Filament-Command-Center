@@ -73,7 +73,7 @@ def test_quickswap_happy_path(client):
     body = r.get_json()
     assert body["action"] == "quickswap_done"
     assert body["moved"] == 42
-    mv.assert_called_once_with("XL-1", [42], target_slot=None, origin="quickswap")
+    mv.assert_called_once_with("XL-1", [42], target_slot=None, origin="quickswap", confirm_active_print=True)
     # Success log entry fired.
     assert any(e["type"] == "SUCCESS" for e in state.RECENT_LOGS)
 

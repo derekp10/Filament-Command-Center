@@ -296,6 +296,36 @@ const fetchPrinterMap = () => {
         .catch(e => { console.warn("printer_map fetch failed", e); return {}; });
 };
 
+// Best-effort PrusaLink state probe for a given toolhead location (e.g.
+// "CORE1-M0"). Resolves to null on any failure (fail-open — UI should
+// proceed normally). Used by the "warn before reassigning during an
+// active print" pre-check in doAssign and the Quick-Swap confirm overlay.
+//
+// Diagnostic logging is deliberately on a conditional so users chasing
+// "why is the banner not showing?" can flip it with:
+//   window.FCC_DEBUG_ACTIVE_PRINT = true
+// in the DevTools console and rerun the swap. Leaves production quiet.
+window.FCC_DEBUG_ACTIVE_PRINT = window.FCC_DEBUG_ACTIVE_PRINT || false;
+window.fetchPrinterStateForToolhead = (toolheadLocId) => {
+    const dbg = (...args) => { if (window.FCC_DEBUG_ACTIVE_PRINT) console.log('[active-print probe]', ...args); };
+    if (!toolheadLocId) { dbg('no toolhead id, skipping'); return Promise.resolve(null); }
+    dbg('querying', toolheadLocId);
+    return fetch(`/api/printer_state/${encodeURIComponent(toolheadLocId)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+            dbg('response for', toolheadLocId, d);
+            if (!d) return null;
+            if (!d.known) { dbg('backend says unknown:', d.reason); return null; }
+            if (!d.is_active) { dbg('printer is idle:', d.state); return null; }
+            dbg('ACTIVE:', d.printer_name, d.state);
+            return {
+                state: d.state || 'ACTIVE',
+                printer_name: d.printer_name || toolheadLocId,
+            };
+        })
+        .catch((e) => { dbg('probe failed', e); return null; });
+};
+
 // Render a searchable combobox backed by a native <select> so existing
 // save logic (reading .feeds-select.value) keeps working. The text input
 // filters a dropdown list; Arrow/Enter/Escape drive selection; clicking
@@ -451,9 +481,10 @@ const renderFeedsSection = (loc) => {
     Promise.all([
         fetchPrinterMap(),
         fetch(`/api/dryer_box/${encodeURIComponent(loc.LocationID)}/bindings`)
-            .then(r => r.ok ? r.json() : { slot_targets: {} }),
+            .then(r => r.ok ? r.json() : { slot_targets: {}, slot_order: 'ltr' }),
     ]).then(([printers, bindingsResp]) => {
         const targets = bindingsResp.slot_targets || {};
+        const order = (bindingsResp.slot_order || 'ltr').toLowerCase();
         const rows = document.getElementById('feeds-rows');
         rows.innerHTML = '';
         for (let slot = 1; slot <= maxSlots; slot++) {
@@ -462,6 +493,14 @@ const renderFeedsSection = (loc) => {
         }
         for (let slot = 1; slot <= maxSlots; slot++) {
             _comboHydrate(slot, printers);
+        }
+
+        // Sync the slot-order radio group with persisted value.
+        const ltrRadio = document.getElementById('feeds-slot-order-ltr');
+        const rtlRadio = document.getElementById('feeds-slot-order-rtl');
+        if (ltrRadio && rtlRadio) {
+            ltrRadio.checked = order !== 'rtl';
+            rtlRadio.checked = order === 'rtl';
         }
 
         // One-shot: if the user came here via "Edit Full Bindings" from a
@@ -511,6 +550,35 @@ window.saveFeedsSection = () => {
         const val = sel.value;
         slot_targets[slot] = val || null;
     });
+
+    // Capture the slot-order radio selection so we can fire a parallel
+    // PUT. Keeping bindings and slot_order on separate endpoints means one
+    // can succeed even if the other fails validation.
+    const orderRadio = document.querySelector('input[name="feeds-slot-order"]:checked');
+    const order = orderRadio ? orderRadio.value : 'ltr';
+
+    // Fire-and-log the slot-order PUT alongside the bindings PUT. Ignore
+    // its result here — user sees bindings outcome in the toast; the
+    // order update only affects UI render direction.
+    fetch(`/api/dryer_box/${encodeURIComponent(locId)}/slot_order`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order }),
+    }).then(() => {
+        // Update the cached location so next renderGrid tick picks up the new order
+        // without a full reload.
+        const locRow = state.allLocations.find(l => l.LocationID === locId);
+        if (locRow) {
+            locRow.extra = locRow.extra || {};
+            locRow.extra.slot_order = order;
+        }
+        // Bust the anti-wiggle content-hash cache so refreshManageView actually
+        // rerenders — the location's contents haven't changed, only its render
+        // order, so the cache would otherwise early-exit and leave the stale
+        // LTR/RTL layout on screen until the user closed and reopened the modal.
+        state.lastLocRenderHash = null;
+        if (window.refreshManageView) window.refreshManageView(locId);
+    }).catch(() => { /* non-fatal */ });
 
     fetch(`/api/dryer_box/${encodeURIComponent(locId)}/bindings`, {
         method: 'PUT',
@@ -666,13 +734,27 @@ const renderGrid = (data, max) => {
         else unslotted.push(i);
     });
 
+    // Read the current location's slot_order preference (rtl reverses the
+    // grid render direction). Pulled from the cached allLocations list so
+    // we avoid an extra fetch on every refresh tick.
+    const locId = document.getElementById('manage-loc-id').value;
+    const locRow = state.allLocations.find(l => l.LocationID === locId) || {};
+    const slotOrder = (locRow.extra && String(locRow.extra.slot_order || '').toLowerCase()) === 'rtl' ? 'rtl' : 'ltr';
+
+    // Build slot index list in render order. RTL renders [max..1]; LTR renders [1..max].
+    const slotIndices = [];
+    if (slotOrder === 'rtl') {
+        for (let i = max; i >= 1; i--) slotIndices.push(i);
+    } else {
+        for (let i = 1; i <= max; i++) slotIndices.push(i);
+    }
+
     let gridHTML = "";
-    for (let i = 1; i <= max; i++) {
+    for (const i of slotIndices) {
         const item = state.currentGrid[i];
         if (item) {
-            gridHTML += window.SpoolCardBuilder.buildCard(item, 'loc_grid', { slotNum: i, locId: document.getElementById('manage-loc-id').value });
+            gridHTML += window.SpoolCardBuilder.buildCard(item, 'loc_grid', { slotNum: i, locId });
         } else {
-            // FIX: Removed opacity:0.5 from QR div to make it sharp and scannable
             gridHTML += `
                 <div class="slot-btn empty" onclick="handleSlotInteraction(${i})">
                     <div class="slot-inner-gold">
@@ -686,7 +768,7 @@ const renderGrid = (data, max) => {
     }
     grid.innerHTML = gridHTML;
 
-    for (let i = 1; i <= max; i++) {
+    for (const i of slotIndices) {
         const item = state.currentGrid[i];
         requestAnimationFrame(() => {
             if (item) generateSafeQR(`qr-slot-${i}`, "CMD:SLOT:" + i, 90);
@@ -906,35 +988,31 @@ window.handleSlotInteraction = (slot) => {
     const locId = document.getElementById('manage-loc-id').value, item = state.currentGrid[slot];
     if (state.heldSpools.length > 0) {
         const newId = state.heldSpools[0].id;
+        // IMPORTANT: don't shift the buffer here. _doAssignFinalize's success
+        // branch handles the removal once the move actually lands. The
+        // earlier eager shift caused the spool to disappear when the move
+        // was cancelled or rejected (e.g. backend requires_confirm flow,
+        // active-print bail, network error, swap-cancel-swap-continue race).
         if (item) {
             promptAction("Slot Occupied", `Swap/Overwrite Slot ${slot}?`, [
                 {
                     label: "Swap", action: () => {
-                        let isFromBuf = true;
-                        state.heldSpools.shift();
-                        state.heldSpools.push({ id: item.id, display: item.display, color: item.color });
-                        if (window.renderBuffer) window.renderBuffer();
-                        renderManagerNav();
-                        doAssign(locId, newId, slot, isFromBuf);
+                        // Pass the displaced item so doAssign can push it
+                        // into the buffer ONLY on success — never before.
+                        doAssign(locId, newId, slot, true, {
+                            swapDisplaced: { id: item.id, display: item.display, color: item.color },
+                        });
                     }
                 },
                 {
                     label: "Overwrite", action: () => {
-                        let isFromBuf = true;
-                        state.heldSpools.shift();
-                        if (window.renderBuffer) window.renderBuffer();
-                        renderManagerNav();
-                        doAssign(locId, newId, slot, isFromBuf);
+                        doAssign(locId, newId, slot, true);
                     }
                 },
                 { label: "Cancel", action: () => { closeModal('actionModal'); } }
             ]);
         } else {
-            let isFromBuf = true;
-            state.heldSpools.shift();
-            if (window.renderBuffer) window.renderBuffer();
-            renderManagerNav();
-            doAssign(locId, newId, slot, isFromBuf);
+            doAssign(locId, newId, slot, true);
         }
     } else if (item) {
         // Filled slot + empty buffer: direct Pick Up. Eject/Details/Edit/Queue
@@ -946,9 +1024,151 @@ window.handleSlotInteraction = (slot) => {
     }
 };
 
-window.doAssign = (loc, spool, slot, isFromBufferFlag = null) => {
+window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
     setProcessing(true);
 
+    // options.swapDisplaced: spool item to push into the buffer ONLY on
+    // successful assign (used by the Swap branch of handleSlotInteraction).
+    // Threading this through doAssign instead of mutating the buffer up-
+    // front means the displaced item never gets stranded if the move
+    // fails / requires a confirmation that the user dismisses.
+
+    // Pre-check: if the target is a toolhead in the printer_map, probe
+    // PrusaLink for current print state and ask the user to confirm when
+    // it's actively printing/paused. Fails open on any network hiccup —
+    // we don't want to block moves on a cold printer.
+    const locObjCheck = state.allLocations.find(l => l.LocationID === loc);
+    const isToolheadTarget = locObjCheck && (
+        locObjCheck.Type === 'Tool Head' ||
+        locObjCheck.Type === 'MMU Slot' ||
+        locObjCheck.Type === 'No MMU Direct Load' ||
+        locObjCheck.Type === 'Printer'
+    );
+    if (isToolheadTarget && window.fetchPrinterStateForToolhead) {
+        return window.fetchPrinterStateForToolhead(loc).then(stateInfo => {
+            if (!stateInfo) {
+                // Unknown state → proceed normally.
+                return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, false, options);
+            }
+            // Active print → inline confirm overlay (no nested Swal).
+            setProcessing(false);
+            return _confirmActivePrintAssign({
+                loc,
+                spool,
+                slot,
+                isFromBufferFlag,
+                stateInfo,
+                options,
+            });
+        });
+    }
+
+    return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, false, options);
+};
+
+// Inline confirm overlay for "you're moving onto a printer that's actively
+// printing." Avoids nested Swal per project convention; mounts into the
+// manage modal body so it stacks correctly above the manage modal backdrop.
+const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {} }) => {
+    const host = document.getElementById('manageModal') || document.body;
+    // Reuse a single overlay per page — tear down prior one if present.
+    let ov = document.getElementById('fcc-active-print-confirm-overlay');
+    if (ov) ov.remove();
+    ov = document.createElement('div');
+    ov.id = 'fcc-active-print-confirm-overlay';
+    ov.style.cssText = 'position:fixed; inset:0; z-index:20000; background:rgba(0,0,0,0.8); display:flex; align-items:center; justify-content:center;';
+    ov.innerHTML = `
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:460px; text-align:center;">
+            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${stateInfo.printer_name} is ${stateInfo.state}</div>
+            <div style="color:#ffc; margin-bottom:14px;">
+                Reassigning a spool to <b>${loc}</b> during an active print will disrupt the print and may leave filabridge/Spoolman in a stale state. Continue anyway?
+            </div>
+            <div style="display:flex; gap:10px; justify-content:center;">
+                <button id="fcc-apc-yes" class="btn btn-warning btn-sm" style="min-width:120px;">Continue Anyway</button>
+                <button id="fcc-apc-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Cancel</button>
+            </div>
+        </div>
+    `;
+    host.appendChild(ov);
+    // Mount the QR-confirm pair inside the dialog box (under the buttons).
+    // qrSession.cleanup() unregisters the scan callbacks AND removes the
+    // QR row from the DOM — must run on every dialog dismissal so a late
+    // scan can't re-fire after the user already clicked.
+    const dialogBox = ov.querySelector('div');
+    let qrSession = null;
+    const cleanup = () => {
+        try { ov.remove(); } catch (_) { /* noop */ }
+        document.removeEventListener('keydown', keyHandler, true);
+        if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
+    };
+    // After user confirms, call _doAssignFinalize with confirmActivePrint=true
+    // so the backend's safety check doesn't re-prompt. Without this flag,
+    // the backend would see the POST has no confirm and return requires_confirm,
+    // creating an infinite loop.
+    const proceed = () => { cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true, options); };
+    // Keyboard contract: Enter activates whichever button is focused.
+    // Continue is focused by default → Enter accepts. Tab to Cancel + Enter
+    // → cancels. Escape always cancels regardless of focus.
+    //
+    // We explicitly route Enter to the focused button (not relying on the
+    // browser's native <button> Enter activation) because: (1) the document
+    // capture-phase keydown handler runs first and the user-tested behavior
+    // was inconsistent across barcode-scanner setups, and (2) being explicit
+    // means the test harness can simulate it reliably.
+    //
+    // Tradeoff: a barcode scanner emitting Enter as a suffix while this
+    // dialog is open will activate the focused button (Continue by default).
+    // The QR-CONFIRM/CANCEL pair routed via window.routeConfirmScan is the
+    // safer path for scan-driven flows.
+    const keyHandler = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
+        const yesBtn = document.getElementById('fcc-apc-yes');
+        const noBtn = document.getElementById('fcc-apc-no');
+        if (e.key === 'Enter') {
+            const active = document.activeElement;
+            if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
+            else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
+            return;
+        }
+        if (e.key === 'Tab') {
+            // Focus trap: Tab should cycle between our two buttons only,
+            // never escape to the page behind the overlay (which let the
+            // user tab all the way out to the browser chrome). Shift+Tab
+            // reverses. If focus is somewhere OUTSIDE the overlay when
+            // Tab is pressed (e.g. a background element), pull it back in.
+            const focusables = [yesBtn, noBtn].filter(Boolean);
+            if (focusables.length === 0) return;
+            const active = document.activeElement;
+            const idx = focusables.indexOf(active);
+            if (idx === -1) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
+                return;
+            }
+            if (e.shiftKey && idx === 0) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[focusables.length - 1].focus();
+            } else if (!e.shiftKey && idx === focusables.length - 1) {
+                e.preventDefault(); e.stopPropagation();
+                focusables[0].focus();
+            }
+        }
+    };
+    document.getElementById('fcc-apc-no').onclick = cleanup;
+    document.getElementById('fcc-apc-yes').onclick = proceed;
+    document.addEventListener('keydown', keyHandler, true);
+    document.getElementById('fcc-apc-yes').focus();
+    if (window.attachConfirmQRs && dialogBox) {
+        qrSession = window.attachConfirmQRs({
+            host: dialogBox,
+            onConfirm: proceed,
+            onCancel: cleanup,
+            theme: 'warning',
+        });
+    }
+};
+
+const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmActivePrint = false, options = {}) => {
     // FIX: 0-based index correction for MMU/CORE slots
     let finalSlot = slot;
     if (slot !== null) {
@@ -977,19 +1197,58 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null) => {
         }
     }
 
-    fetch('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'add', location: loc, spool_id: "ID:" + spool, slot: finalSlot, origin: isFromBuffer ? 'buffer' : '' }) })
+    fetch('/api/manage_contents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            action: 'add',
+            location: loc,
+            spool_id: "ID:" + spool,
+            slot: finalSlot,
+            origin: isFromBuffer ? 'buffer' : '',
+            // Pass the UI-probe's opt-in through so the backend's safety net
+            // doesn't re-prompt us. Without this, the backend active-print
+            // check would flag the move even after the user already confirmed.
+            confirm_active_print: confirmActivePrint,
+        }),
+    })
         .then(r => r.json())
         .then(res => {
             setProcessing(false);
+            // Backend safety net: if the printer flipped from IDLE to PRINTING
+            // in the race window between our UI probe and the POST, OR the
+            // user's browser skipped the UI probe for any reason (cache, older
+            // bundle), the backend returns requires_confirm. Show our confirm
+            // overlay and retry on user opt-in.
+            if (res.status === 'requires_confirm' && res.confirm_type === 'active_print') {
+                _confirmActivePrintAssign({
+                    loc, spool, slot, isFromBufferFlag,
+                    stateInfo: res.active_print || { printer_name: loc, state: 'ACTIVE' },
+                    options,
+                });
+                return;
+            }
             if (res.status === 'success') {
                 showToast("Assigned");
 
-                // --- FIX: Remove the assigned spool from buffer ---
+                // --- Buffer mutation only on success ---
+                // Remove the assigned spool. handleSlotInteraction no longer
+                // pre-shifts (that caused the spool to vanish on cancel/
+                // reject), so we do it here once we know the move actually
+                // landed.
                 const bufIdx = state.heldSpools.findIndex(s => String(s.id) === spoolIdStr);
-                if (bufIdx > -1) {
-                    state.heldSpools.splice(bufIdx, 1);
-                    if (window.renderBuffer) window.renderBuffer();
+                if (bufIdx > -1) state.heldSpools.splice(bufIdx, 1);
+                // Swap path: push the displaced item into the buffer too.
+                // Skipped if the displaced item is somehow already there
+                // (e.g. user opened multiple manage modals).
+                if (options.swapDisplaced && options.swapDisplaced.id) {
+                    const dispId = String(options.swapDisplaced.id);
+                    if (!state.heldSpools.some(s => String(s.id) === dispId)) {
+                        state.heldSpools.push(options.swapDisplaced);
+                    }
                 }
+                if (window.renderBuffer) window.renderBuffer();
+                if (typeof renderManagerNav === 'function') renderManagerNav();
 
                 if (window.fetchLocations) window.fetchLocations();
                 refreshManageView(loc);

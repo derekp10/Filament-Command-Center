@@ -8,6 +8,46 @@ import spoolman_api
 import locations_db
 
 
+def _active_print_info_for_location(location_str, printer_map=None):
+    """If `location_str` is a toolhead whose printer is currently PRINTING/
+    PAUSED/BUSY, return {'printer_name', 'state', 'toolhead'} so a warning
+    can be surfaced. Returns None otherwise (not a toolhead, printer idle,
+    or probe failed — fail open, never block moves).
+
+    Used as a shared backend pre-flight so every spool-move surface
+    (manage_contents add/remove, smart_move, identify_scan assignment,
+    quickswap) inherits the same protection without each endpoint
+    re-implementing the lookup.
+    """
+    if not location_str:
+        return None
+    loc_up = str(location_str).strip().strip('"').upper()
+    if printer_map is None:
+        cfg = config_loader.load_config()
+        printer_map = cfg.get("printer_map", {}) or {}
+    info = printer_map.get(loc_up)
+    if not info:
+        return None
+    printer_name = info.get('printer_name')
+    if not printer_name:
+        return None
+    try:
+        # Deferred import: keeps logic.py usable in unit tests that don't
+        # have prusalink_api's `requests` import graph fully satisfied.
+        import prusalink_api
+        _, fb_url = config_loader.get_api_urls()
+        state_dict = prusalink_api.get_printer_state(fb_url, printer_name)
+    except Exception:
+        return None
+    if not state_dict or not state_dict.get('is_active'):
+        return None
+    return {
+        'toolhead': loc_up,
+        'printer_name': printer_name,
+        'state': state_dict.get('state', 'ACTIVE'),
+    }
+
+
 def _toolhead_of(location_str, printer_map=None):
     """Resolve a location string to its (printer_name, toolhead_id) tuple.
 
@@ -222,7 +262,7 @@ def resolve_scan(text):
         
     return {'type': 'error', 'msg': 'Unknown Code'}
 
-def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, origin_toolhead=None):
+def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, origin_toolhead=None, confirm_active_print=False):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
@@ -259,6 +299,67 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             if found: spools.extend(found)
 
     if not spools: return {"status": "error", "msg": "No spools found"}
+
+    # Active-print safety check: if the destination is a toolhead on a
+    # printer that's currently PRINTING/PAUSED/BUSY, bail with a
+    # requires_confirm response so the caller can show a dialog and retry
+    # with confirm_active_print=True. Fail-open via None inside the helper.
+    #
+    # Walks slot-targets too: if target is a Dryer Box and target_slot is
+    # bound to a toolhead, that toolhead is the eventual destination (via
+    # the auto-deploy chain below). Checking it preemptively means the
+    # user gets prompted BEFORE any Spoolman writes happen, instead of
+    # having the recursive call swallow requires_confirm silently.
+    if not confirm_active_print:
+        ap = _active_print_info_for_location(target, printer_map)
+        if not ap:
+            # Check slot-binding's eventual toolhead.
+            tgt_row = loc_info_map.get(target)
+            if tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot:
+                bound = (tgt_row.get('extra') or {}).get('slot_targets', {}) or {}
+                bound_th = bound.get(str(target_slot)) or bound.get(str(int(target_slot))) if str(target_slot).isdigit() else bound.get(str(target_slot))
+                if bound_th:
+                    ap = _active_print_info_for_location(bound_th, printer_map)
+        if ap:
+            return {
+                "status": "requires_confirm",
+                "confirm_type": "active_print",
+                "active_print": ap,
+                "msg": f"{ap['printer_name']} is {ap['state']} — moving a spool here will disrupt the print.",
+            }
+
+    # Auto-slot-pick: if the caller didn't specify a slot and the target is a
+    # slotted container (Max Spools > 1) with at least one free slot, fill the
+    # lowest-numbered free slot. Only fires for single-spool moves — in a bulk
+    # move, a shared target_slot would make each spool unseat the previous
+    # one, so a bulk slotless move stays slotless (rooms/shelves handle that
+    # case correctly; slotted bulk moves should be explicit).
+    tgt_info_auto = loc_info_map.get(target)
+    if not target_slot and tgt_info_auto and len(spools) == 1:
+        try:
+            max_slots_auto = int(str(tgt_info_auto.get('Max Spools', '0')).strip() or '0')
+        except (TypeError, ValueError):
+            max_slots_auto = 0
+        if max_slots_auto > 1:
+            # Collect currently-occupied slot numbers at this target.
+            existing_at_target = spoolman_api.get_spools_at_location_detailed(target) or []
+            occupied_slots = set()
+            for existing in existing_at_target:
+                # Skip the spool we're about to move — otherwise its own current slot
+                # gets flagged as occupied and we miss the obvious re-slot case.
+                if str(existing.get('id')) in [str(s) for s in spools]:
+                    continue
+                raw = str(existing.get('slot', '') or '').strip().strip('"')
+                if raw and raw.isdigit():
+                    occupied_slots.add(int(raw))
+            # Pick lowest-numbered free slot.
+            for i in range(1, max_slots_auto + 1):
+                if i not in occupied_slots:
+                    target_slot = str(i)
+                    state.logger.info(
+                        f"🪑 Auto-slot: {target} has free slot {i} — assigning spool there"
+                    )
+                    break
 
     # Snapshot each spool's origin toolhead BEFORE any Spoolman writes.
     # Phase 2 of the auto-deploy chain uses this to unmap filabridge for
@@ -497,13 +598,21 @@ def get_room_from_location(loc_id):
             
     return prefix
 
-def perform_smart_eject(spool_id, confirmed_unassign=False):
+def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print=False):
     """Remove `spool_id` from its current location.
 
     If it's on a toolhead, the filabridge unmap ALWAYS fires — there's no
     opt-out (the old `suppress_fb_unmap` flag was a footgun that caused
     filabridge desync). Callers needing "eject without filabridge" were
     wrong to skip the unmap and have been corrected.
+
+    Returns:
+      - True on successful eject
+      - False on any failure (load error, DB write error, etc.)
+      - "REQUIRE_CONFIRM" if the spool is in a room and confirmed_unassign=False
+      - {"status": "requires_confirm", "confirm_type": "active_print", ...}
+        when the spool is currently on an actively-printing toolhead and the
+        caller hasn't explicitly opted in via confirm_active_print=True.
     """
     spool_data = spoolman_api.get_spool(spool_id)
     if not spool_data: return False
@@ -514,6 +623,18 @@ def perform_smart_eject(spool_id, confirmed_unassign=False):
     cfg = config_loader.load_config()
     printer_map = cfg.get("printer_map", {})
     sm_url, fb_url = config_loader.get_api_urls()
+
+    # Active-print safety: ejecting a spool from a printing toolhead is
+    # destructive. Bail with requires_confirm so the caller can prompt.
+    if not confirm_active_print:
+        ap = _active_print_info_for_location(current_location, printer_map)
+        if ap:
+            return {
+                "status": "requires_confirm",
+                "confirm_type": "active_print",
+                "active_print": ap,
+                "msg": f"{ap['printer_name']} is {ap['state']} — ejecting from this toolhead will disrupt the print.",
+            }
 
     # Ensure toolhead is cleared in filabridge BEFORE we rewrite Spoolman,
     # so filabridge's one-spool-one-toolhead invariant is maintained if
@@ -592,16 +713,28 @@ def perform_smart_eject(spool_id, confirmed_unassign=False):
             return True
     return False
 
-def perform_force_unassign(spool_id):
+def perform_force_unassign(spool_id, confirm_active_print=False):
     spool_data = spoolman_api.get_spool(spool_id)
     if not spool_data: return False
     extra = spool_data.get('extra', {})
     current_location = spool_data.get('location', '').strip().upper()
-    
+
     cfg = config_loader.load_config()
     printer_map = cfg.get("printer_map", {})
     sm_url, fb_url = config_loader.get_api_urls()
-    
+
+    # Active-print safety: force-unassign from a printing toolhead disrupts
+    # the print. Bail with requires_confirm unless the caller opted in.
+    if not confirm_active_print:
+        ap = _active_print_info_for_location(current_location, printer_map)
+        if ap:
+            return {
+                "status": "requires_confirm",
+                "confirm_type": "active_print",
+                "active_print": ap,
+                "msg": f"{ap['printer_name']} is {ap['state']} — force-unassigning from this toolhead will disrupt the print.",
+            }
+
     if current_location in printer_map:
         p = printer_map[current_location]
         ok, detail = _fb_write(p['printer_name'], p['position'], 0, fb_url)

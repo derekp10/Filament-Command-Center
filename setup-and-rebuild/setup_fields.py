@@ -199,7 +199,16 @@ filament_standards = [
     ("original_color", "Original Color", "text"),
     ("drying_temp", "Drying Temp", "text"),
     ("drying_time", "Drying Time", "text"),
-    ("flush_multiplier", "Flush Multiplier", "text")
+    ("flush_multiplier", "Flush Multiplier", "text"),
+    # Max-temp companions to Spoolman's native min/recommended nozzle+bed
+    # fields. Added 2026-04-23 with the Edit Filament Wave 4 Specs tab so
+    # prod/new-install deploys create them automatically and the UI's
+    # number inputs have a schema to write into.
+    ("nozzle_temp_max", "Nozzle Temp Max", "text"),
+    ("bed_temp_max", "Bed Temp Max", "text"),
+    # Multi-color filaments need to know the gradient direction.
+    # Values: 'longitudinal' (length-wise) | 'coaxial' (radial).
+    ("multi_color_direction", "Multi-Color Direction", "text"),
 ]
 
 for key, name, ftype in filament_standards:

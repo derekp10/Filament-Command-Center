@@ -66,6 +66,16 @@
                     <input type="number" id="global-search-min-weight" class="form-control bg-dark text-white border-secondary px-1" placeholder="Min g" min="0" title="Minimum Remaining Weight (g)">
                 </div>
 
+                <!-- Deployment filter (spool-only). Skipped silently by the
+                     backend when target_type=filament. -->
+                <select id="global-search-deployed"
+                    class="form-select form-select-sm bg-dark text-white border-secondary"
+                    title="Filter by deployment status">
+                    <option value="">Any deployment</option>
+                    <option value="deployed">🖨️ Deployed</option>
+                    <option value="undeployed">📦 Not deployed</option>
+                </select>
+
                 <div class="form-check form-switch ms-auto">
                     <input class="form-check-input" type="checkbox" role="switch" id="global-search-in-stock" checked>
                     <label class="form-check-label small text-info" for="global-search-in-stock">In Stock</label>

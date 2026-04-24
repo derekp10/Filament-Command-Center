@@ -91,7 +91,7 @@ def test_assignment_happy_path_moves_spool_and_clears_buffer(client, fake_locati
     assert body["slot"] == "2"
     assert body["moved"] == 42
     assert body["remaining_buffer"] == 0
-    mv.assert_called_once_with("LR-MDB-1", [42], target_slot="2", origin="slot_qr_scan")
+    mv.assert_called_once_with("LR-MDB-1", [42], target_slot="2", origin="slot_qr_scan", confirm_active_print=False)
     assert state.GLOBAL_BUFFER == []
     assert any("Spool #42" in e["msg"] for e in _last_log_entries())
 
@@ -224,7 +224,7 @@ def test_assignment_non_spool_items_in_buffer_are_skipped(client, fake_locations
     body = resp.get_json()
     assert body["action"] == "assignment_partial"
     assert body["moved"] == 99
-    mv.assert_called_once_with("LR-MDB-1", [99], target_slot="1", origin="slot_qr_scan")
+    mv.assert_called_once_with("LR-MDB-1", [99], target_slot="1", origin="slot_qr_scan", confirm_active_print=False)
     # Non-spool item stays.
     assert any(e.get("type") == "filament" for e in state.GLOBAL_BUFFER)
 
