@@ -151,6 +151,64 @@ def test_validate_allows_mix_of_null_and_real_targets(sample_locs, printer_map):
 
 
 # ---------------------------------------------------------------------------
+# PRINTER:<id> sentinel — printer-affiliated staging slots
+# ---------------------------------------------------------------------------
+
+def test_validate_accepts_printer_sentinel_with_known_prefix(sample_locs, printer_map):
+    errors = locations_db.validate_slot_targets(
+        {"1": "PRINTER:XL"}, sample_locs, printer_map
+    )
+    assert errors == []
+
+
+def test_validate_rejects_printer_sentinel_with_unknown_prefix(sample_locs, printer_map):
+    errors = locations_db.validate_slot_targets(
+        {"1": "PRINTER:GHOST"}, sample_locs, printer_map
+    )
+    assert len(errors) == 1
+    assert "unknown printer id" in errors[0][2].lower()
+
+
+def test_validate_rejects_empty_printer_sentinel(sample_locs, printer_map):
+    errors = locations_db.validate_slot_targets(
+        {"1": "PRINTER:"}, sample_locs, printer_map
+    )
+    assert len(errors) == 1
+    assert "missing id" in errors[0][2].lower()
+
+
+def test_is_printer_sentinel_helper():
+    assert locations_db.is_printer_sentinel("PRINTER:XL")
+    assert locations_db.is_printer_sentinel("printer:xl")
+    assert not locations_db.is_printer_sentinel("XL-1")
+    assert not locations_db.is_printer_sentinel(None)
+    assert not locations_db.is_printer_sentinel("")
+
+
+def test_set_bindings_allows_printer_sentinel_round_trip(sample_locs, printer_map, tmp_locations_file):
+    locations_db.save_locations_list(sample_locs)
+    ok, errors, _warnings = locations_db.set_dryer_box_bindings(
+        "PM-DB-XL-L", {"1": "XL-1", "4": "PRINTER:XL"}, printer_map
+    )
+    assert ok and errors == []
+    got = locations_db.get_dryer_box_bindings("PM-DB-XL-L")
+    assert got == {"1": "XL-1", "4": "PRINTER:XL"}
+
+
+def test_printer_sentinel_skips_cross_box_duplicate_warning(sample_locs, printer_map, tmp_locations_file):
+    # Two different boxes both binding slot 1 → PRINTER:XL should NOT warn
+    # like it does for duplicate toolhead bindings — a printer pool can be
+    # fed by multiple boxes without conflict.
+    sample_locs[0]["extra"] = {"slot_targets": {"1": "PRINTER:XL"}}
+    locations_db.save_locations_list(sample_locs)
+    ok, errors, warnings = locations_db.set_dryer_box_bindings(
+        "PM-DB-XL-R", {"1": "PRINTER:XL"}, printer_map
+    )
+    assert ok and errors == []
+    assert not any("already bound" in w[2] for w in warnings), warnings
+
+
+# ---------------------------------------------------------------------------
 # set/get round-trip
 # ---------------------------------------------------------------------------
 
