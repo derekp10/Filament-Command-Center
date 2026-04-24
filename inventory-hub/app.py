@@ -2055,6 +2055,73 @@ def api_get_spools_by_filament():
     except:
         return jsonify([])
 
+
+@app.route('/api/backfill_spool_weights/<int:fid>', methods=['POST'])
+def api_backfill_spool_weights(fid):
+    """Backfill spool_weight on historical spools that saved as 0 before the
+    inheritance chain landed. Resolves the inheritable empty-spool weight from
+    the filament (then its vendor), then PATCHes every spool under this
+    filament whose own spool_weight is null or <= 0. Archived spools are
+    included so old empty-weight references stay accurate.
+    """
+    try:
+        fil = spoolman_api.get_filament(fid)
+        if not fil:
+            return jsonify({"success": False, "msg": f"Filament #{fid} not found."}), 404
+
+        def _positive(v):
+            try: return v is not None and float(v) > 0
+            except (TypeError, ValueError): return False
+
+        fil_wt = fil.get('spool_weight')
+        vendor_wt = (fil.get('vendor') or {}).get('empty_spool_weight')
+
+        if _positive(fil_wt):
+            target = float(fil_wt); source = 'filament'
+        elif _positive(vendor_wt):
+            target = float(vendor_wt); source = 'vendor'
+        else:
+            return jsonify({
+                "success": False,
+                "msg": "No inheritable empty-spool weight on this filament or its vendor — set one on the filament or the vendor first."
+            }), 400
+
+        sm_url, _ = config_loader.get_api_urls()
+        resp = requests.get(f"{sm_url}/api/v1/spool?filament_id={fid}&allow_archived=true", timeout=5)
+        if not resp.ok:
+            return jsonify({"success": False, "msg": "Failed to fetch spools from Spoolman."}), 502
+        spools = resp.json() or []
+
+        updated_ids = []
+        skipped = 0
+        errors = []
+        for sp in spools:
+            sid = sp.get('id')
+            sp_wt = sp.get('spool_weight')
+            if _positive(sp_wt):
+                skipped += 1
+                continue
+            res = spoolman_api.update_spool(sid, {'spool_weight': target})
+            if res:
+                updated_ids.append(sid)
+            else:
+                errors.append(sid)
+
+        return jsonify({
+            "success": True,
+            "filament_id": fid,
+            "target_weight": target,
+            "source": source,
+            "updated": len(updated_ids),
+            "updated_ids": updated_ids,
+            "skipped": skipped,
+            "errors": errors,
+        })
+    except Exception as e:
+        state.logger.error(f"api_backfill_spool_weights({fid}) failed: {e}")
+        return jsonify({"success": False, "msg": str(e)}), 500
+
+
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
     payload = request.json or {}

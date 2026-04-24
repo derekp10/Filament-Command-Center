@@ -262,6 +262,8 @@ const openFilamentDetails = (fid, silent = false) => {
             const listContainer = document.getElementById('fil-spools-list');
             const countBadge = document.getElementById('fil-spool-count');
             const btnQueueAll = document.getElementById('btn-queue-all-spools');
+            const btnBackfill = document.getElementById('btn-fil-backfill-weights');
+            const backfillCountEl = document.getElementById('btn-fil-backfill-count');
 
             // Only run if the HTML element exists (safety check)
             if (listContainer) {
@@ -355,11 +357,49 @@ const openFilamentDetails = (fid, silent = false) => {
                                     }
                                 };
                             }
+
+                            // Backfill prompt — surfaces only when this filament has at least one
+                            // spool saved with an empty (null / <= 0) spool_weight AND an inheritable
+                            // value exists on the filament or its vendor.
+                            if (btnBackfill && backfillCountEl) {
+                                const zeroSpools = spools.filter(s => {
+                                    const w = s.spool_weight;
+                                    return w === null || w === undefined || Number(w) <= 0;
+                                });
+                                const filWt = Number(d.spool_weight);
+                                const vendorWt = d.vendor && d.vendor.empty_spool_weight != null
+                                    ? Number(d.vendor.empty_spool_weight) : null;
+                                const inheritable = (filWt > 0) || (vendorWt != null && vendorWt > 0);
+                                if (zeroSpools.length > 0 && inheritable) {
+                                    backfillCountEl.innerText = zeroSpools.length;
+                                    btnBackfill.style.display = 'block';
+                                    btnBackfill.onclick = () => {
+                                        btnBackfill.disabled = true;
+                                        fetch(`/api/backfill_spool_weights/${d.id}`, { method: 'POST' })
+                                            .then(r => r.json().then(j => ({ ok: r.ok, j })))
+                                            .then(({ ok, j }) => {
+                                                if (ok && j.success) {
+                                                    showToast(`Backfilled ${j.updated} spool${j.updated === 1 ? '' : 's'} to ${j.target_weight}g (from ${j.source}).`, 'success');
+                                                    if (window.refreshFilamentSpools) window.refreshFilamentSpools();
+                                                } else {
+                                                    showToast(j.msg || 'Backfill failed.', 'error', 7000);
+                                                }
+                                            })
+                                            .catch(err => {
+                                                showToast(`Backfill error: ${err}`, 'error', 7000);
+                                            })
+                                            .finally(() => { btnBackfill.disabled = false; });
+                                    };
+                                } else {
+                                    btnBackfill.style.display = 'none';
+                                }
+                            }
                         } else {
                             // No spools found
                             if (countBadge) countBadge.innerText = "0";
                             listContainer.innerHTML = "<div class='p-2 text-light text-center small'>No spools found.</div>";
                             if (btnQueueAll) btnQueueAll.style.display = 'none';
+                            if (btnBackfill) btnBackfill.style.display = 'none';
                         }
 
                         if (!silent && modals.filamentModal) modals.filamentModal.show();
