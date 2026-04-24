@@ -1708,9 +1708,13 @@ const _editfilShowEscapeConfirm = (bsModal) => {
     dialog.style.position = 'relative';
     dialog.appendChild(ov);
     const cleanup = () => { try { ov.remove(); } catch (_) { /* noop */ } document.removeEventListener('keydown', keyHandler, true); };
+    // Enter NOT mapped to the destructive "close anyway" action. The "Keep
+    // Editing" button is focused by default, so native Enter-on-focused-
+    // button fires its onclick (cleanup). The earlier explicit Enter→hide
+    // handler overrode that and lost the user's edits when they pressed
+    // Enter expecting the focused Keep-Editing button to activate.
     const keyHandler = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
-        else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); cleanup(); bsModal.hide(); }
     };
     document.getElementById('editfil-esc-no').onclick = cleanup;
     document.getElementById('editfil-esc-yes').onclick = () => { cleanup(); bsModal.hide(); };

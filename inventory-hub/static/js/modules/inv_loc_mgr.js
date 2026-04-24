@@ -1106,9 +1106,15 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     // the backend would see the POST has no confirm and return requires_confirm,
     // creating an infinite loop.
     const proceed = () => { cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true, options); };
+    // IMPORTANT: Enter is NOT mapped to proceed here. The Cancel button is
+    // focused by default, so pressing Enter should activate whatever button
+    // is focused (native browser behavior). The earlier "Enter → proceed"
+    // handler caused a user-reported bug where hitting Enter on the focused
+    // Cancel button ran the assign path anyway. Barcode scanners that emit
+    // Enter as a suffix would also trigger the same wrong path. Browser's
+    // built-in <button> activation handles Enter correctly for us.
     const keyHandler = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
-        else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); proceed(); }
     };
     document.getElementById('fcc-apc-no').onclick = cleanup;
     document.getElementById('fcc-apc-yes').onclick = proceed;

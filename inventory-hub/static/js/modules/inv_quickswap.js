@@ -317,9 +317,13 @@
             if (_activeConfirmClose === close) _activeConfirmClose = null;
         };
         _activeConfirmClose = close;
+        // Enter NOT handled here — the Yes button is focused by default,
+        // so native <button> Enter-activation fires yes.onclick for us.
+        // The earlier explicit Enter→confirm handler bypassed whichever
+        // button actually had focus (including Cancel after a tab), which
+        // caused Cancel-then-Enter to still run the swap.
         const keyHandler = (e) => {
             if (e.key === 'Escape') { e.stopPropagation(); close(); }
-            else if (e.key === 'Enter') { e.stopPropagation(); opts.onConfirm && opts.onConfirm(); close(); }
         };
         yes.onclick = () => { opts.onConfirm && opts.onConfirm(); close(); };
         no.onclick = close;
