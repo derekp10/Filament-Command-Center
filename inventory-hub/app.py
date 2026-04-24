@@ -124,6 +124,52 @@ def sanitize_label_text(text):
         text = text.replace(char, name)
     return text
 
+def _resolve_active_locs_for_printer(printer_map, printer_name, filabridge_url):
+    """Return [(loc_id, p_info)] for `printer_name`, ordered so the
+    physically-active location for each position comes first.
+
+    Background: printer_map can have two entries sharing the same position
+    — e.g. CORE1-M0 (direct feed) and CORE1-M1 (MMU-routed). Only one is
+    active per print. We query PrusaLink /api/v1/info.mmu to decide:
+      - mmu=True  → M1-suffix aliases are preferred (MMU routed)
+      - mmu=False → M0-suffix aliases are preferred (direct feed)
+      - unknown   → printer_map insertion order is used (fallback)
+
+    Downstream code iterates this ordering and deducts from the first
+    location per position that actually has a spool assigned.
+    """
+    import prusalink_api  # local import keeps this helper usable at import time
+    candidates = [
+        (loc_id, p_info) for loc_id, p_info in printer_map.items()
+        if p_info.get('printer_name') == printer_name
+    ]
+    if not candidates:
+        return []
+
+    positions_seen = {}
+    for _, p_info in candidates:
+        positions_seen[p_info.get('position', 0)] = positions_seen.get(p_info.get('position', 0), 0) + 1
+    if not any(count > 1 for count in positions_seen.values()):
+        return candidates  # no aliases — nothing to re-order
+
+    mmu = None
+    try:
+        mmu = prusalink_api.get_printer_mmu_flag(filabridge_url, printer_name)
+    except Exception:
+        mmu = None
+    if mmu is None:
+        return candidates  # can't tell which is active — keep insertion order
+
+    def _sort_key(item):
+        loc_id = str(item[0]).upper()
+        # Preferred alias sorts first (0), non-preferred second (1).
+        if mmu:
+            return (0 if loc_id.endswith('-M1') else 1, loc_id)
+        return (0 if loc_id.endswith('-M0') else 1, loc_id)
+
+    return sorted(candidates, key=_sort_key)
+
+
 def flatten_json(y):
     out = {}
     def flatten(x, name=''):
@@ -2213,27 +2259,36 @@ def api_fb_aggressive_parse():
     cfg = config_loader.load_config()
     printer_map = cfg.get("printer_map", {})
     
+    _, _fb_url_for_mmu = config_loader.get_api_urls()
+    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, _fb_url_for_mmu)
     spools_updated = 0
-    for loc_id, p_info in printer_map.items():
-        if p_info.get('printer_name') == printer_name:
-            toolhead_idx = p_info.get('position', 0)
-            if toolhead_idx in usage_map:
-                weight_used = usage_map[toolhead_idx]
-                loc_spools = spoolman_api.get_spools_at_location(loc_id)
-                # Deduct weight directly
-                for sid in loc_spools:
-                    spool_data = spoolman_api.get_spool(sid)
-                    if spool_data and weight_used > 0:
-                        used = float(spool_data.get('used_weight', 0))
-                        initial = float(spool_data.get('initial_weight', 0) or 0)
-                        remaining = max(0, initial - used)
-                        new_remaining = max(0, remaining - weight_used)
-                        new_used = used + weight_used
-                        if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-                            spools_updated += 1
-                            info = spoolman_api.format_spool_display(spool_data)
-                            strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
-                            state.add_log_entry(f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
+    # Track positions we've already processed so MMU-alias entries (CORE1-M0
+    # vs CORE1-M1 — same position in printer_map) don't double-deduct the
+    # same gcode usage slice.
+    processed_positions = set()
+    for loc_id, p_info in active_locs:
+        toolhead_idx = p_info.get('position', 0)
+        if toolhead_idx in processed_positions:
+            continue
+        if toolhead_idx in usage_map:
+            weight_used = usage_map[toolhead_idx]
+            loc_spools = spoolman_api.get_spools_at_location(loc_id)
+            if not loc_spools:
+                continue  # try the next alias for this position
+            processed_positions.add(toolhead_idx)
+            for sid in loc_spools:
+                spool_data = spoolman_api.get_spool(sid)
+                if spool_data and weight_used > 0:
+                    used = float(spool_data.get('used_weight', 0))
+                    initial = float(spool_data.get('initial_weight', 0) or 0)
+                    remaining = max(0, initial - used)
+                    new_remaining = max(0, remaining - weight_used)
+                    new_used = used + weight_used
+                    if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+                        spools_updated += 1
+                        info = spoolman_api.format_spool_display(spool_data)
+                        strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
+                        state.add_log_entry(f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
                             
     # 4. Acknowledge Error
     if spools_updated > 0:
@@ -2371,24 +2426,32 @@ def api_get_logs_route():
                                         if usage_map:
                                             printer_map = config_loader.load_config().get("printer_map", {})
                                             spools_updated = 0
-                                            for loc_id, p_info in printer_map.items():
-                                                if p_info.get('printer_name') == printer_name:
-                                                    toolhead_idx = p_info.get('position', 0)
-                                                    if toolhead_idx in usage_map:
-                                                        w_used = usage_map[toolhead_idx]
-                                                        for sid in spoolman_api.get_spools_at_location(loc_id):
-                                                            spool = spoolman_api.get_spool(sid)
-                                                            if spool and w_used > 0:
-                                                                used = float(spool.get('used_weight', 0))
-                                                                initial = float(spool.get('initial_weight', 0) or 0)
-                                                                remaining = max(0, initial - used)
-                                                                new_rem = max(0, remaining - w_used)
-                                                                new_used = used + w_used
-                                                                if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-                                                                    spools_updated += 1
-                                                                    inf = spoolman_api.format_spool_display(spool)
-                                                                    strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
-                                                                    state.add_log_entry(f"✔️ Auto-deducted {w_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_rem:.1f}g remaining]", "SUCCESS", inf['color'])
+                                            # Same MMU-alias dedup as the primary auto-deduct path.
+                                            ar_active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+                                            ar_processed_positions = set()
+                                            for loc_id, p_info in ar_active_locs:
+                                                toolhead_idx = p_info.get('position', 0)
+                                                if toolhead_idx in ar_processed_positions:
+                                                    continue
+                                                if toolhead_idx in usage_map:
+                                                    w_used = usage_map[toolhead_idx]
+                                                    loc_spools = spoolman_api.get_spools_at_location(loc_id)
+                                                    if not loc_spools:
+                                                        continue
+                                                    ar_processed_positions.add(toolhead_idx)
+                                                    for sid in loc_spools:
+                                                        spool = spoolman_api.get_spool(sid)
+                                                        if spool and w_used > 0:
+                                                            used = float(spool.get('used_weight', 0))
+                                                            initial = float(spool.get('initial_weight', 0) or 0)
+                                                            remaining = max(0, initial - used)
+                                                            new_rem = max(0, remaining - w_used)
+                                                            new_used = used + w_used
+                                                            if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+                                                                spools_updated += 1
+                                                                inf = spoolman_api.format_spool_display(spool)
+                                                                strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
+                                                                state.add_log_entry(f"✔️ Auto-deducted {w_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_rem:.1f}g remaining]", "SUCCESS", inf['color'])
                                             if spools_updated > 0:
                                                 prusalink_api.acknowledge_filabridge_error(fb_url, e_id)
                                                 return # Success
