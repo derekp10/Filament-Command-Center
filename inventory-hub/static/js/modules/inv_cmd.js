@@ -305,19 +305,26 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
         if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
     };
     const proceed = () => { cleanup(); onConfirm(); };
-    // Enter NOT mapped to proceed — the Cancel button is focused by default,
-    // so Enter should activate whatever button is focused (native browser
-    // behavior). Earlier "Enter → proceed" caused pressing Enter on the
-    // focused Cancel to still fire the assign. Barcode scanners that emit
-    // Enter as a suffix would hit the same bug. See _confirmActivePrintAssign
-    // in inv_loc_mgr.js for the matching fix.
+    // Keyboard contract (matches _confirmActivePrintAssign in inv_loc_mgr):
+    // Enter activates whichever button is focused — Continue is focused
+    // by default so Enter accepts; Tab + Enter cancels; Escape always
+    // cancels. Explicitly routing to the focused button (rather than
+    // relying on native <button> activation) keeps behavior consistent
+    // across the document-level capture handler.
     const keyHandler = (e) => {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
+        if (e.key === 'Enter') {
+            const yesBtn = document.getElementById('fcc-aps-yes');
+            const noBtn = document.getElementById('fcc-aps-no');
+            const active = document.activeElement;
+            if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
+            else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
+        }
     };
     document.getElementById('fcc-aps-no').onclick = cleanup;
     document.getElementById('fcc-aps-yes').onclick = proceed;
     document.addEventListener('keydown', keyHandler, true);
-    document.getElementById('fcc-aps-no').focus();
+    document.getElementById('fcc-aps-yes').focus();
     if (window.attachConfirmQRs && dialogBox) {
         qrSession = window.attachConfirmQRs({
             host: dialogBox,

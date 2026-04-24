@@ -1106,20 +1106,37 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     // the backend would see the POST has no confirm and return requires_confirm,
     // creating an infinite loop.
     const proceed = () => { cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true, options); };
-    // IMPORTANT: Enter is NOT mapped to proceed here. The Cancel button is
-    // focused by default, so pressing Enter should activate whatever button
-    // is focused (native browser behavior). The earlier "Enter → proceed"
-    // handler caused a user-reported bug where hitting Enter on the focused
-    // Cancel button ran the assign path anyway. Barcode scanners that emit
-    // Enter as a suffix would also trigger the same wrong path. Browser's
-    // built-in <button> activation handles Enter correctly for us.
+    // Keyboard contract: Enter activates whichever button is focused.
+    // Continue is focused by default → Enter accepts. Tab to Cancel + Enter
+    // → cancels. Escape always cancels regardless of focus.
+    //
+    // We explicitly route Enter to the focused button (not relying on the
+    // browser's native <button> Enter activation) because: (1) the document
+    // capture-phase keydown handler runs first and the user-tested behavior
+    // was inconsistent across barcode-scanner setups, and (2) being explicit
+    // means the test harness can simulate it reliably.
+    //
+    // Tradeoff: a barcode scanner emitting Enter as a suffix while this
+    // dialog is open will activate the focused button (Continue by default).
+    // The QR-CONFIRM/CANCEL pair routed via window.routeConfirmScan is the
+    // safer path for scan-driven flows.
     const keyHandler = (e) => {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
+        if (e.key === 'Enter') {
+            const yesBtn = document.getElementById('fcc-apc-yes');
+            const noBtn = document.getElementById('fcc-apc-no');
+            const active = document.activeElement;
+            // Only intercept Enter when focus is on one of OUR buttons —
+            // leave it alone if focus is somewhere else (e.g. a text input
+            // a future iteration of the dialog might add).
+            if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
+            else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
+        }
     };
     document.getElementById('fcc-apc-no').onclick = cleanup;
     document.getElementById('fcc-apc-yes').onclick = proceed;
     document.addEventListener('keydown', keyHandler, true);
-    document.getElementById('fcc-apc-no').focus();
+    document.getElementById('fcc-apc-yes').focus();
     if (window.attachConfirmQRs && dialogBox) {
         qrSession = window.attachConfirmQRs({
             host: dialogBox,

@@ -1708,13 +1708,20 @@ const _editfilShowEscapeConfirm = (bsModal) => {
     dialog.style.position = 'relative';
     dialog.appendChild(ov);
     const cleanup = () => { try { ov.remove(); } catch (_) { /* noop */ } document.removeEventListener('keydown', keyHandler, true); };
-    // Enter NOT mapped to the destructive "close anyway" action. The "Keep
-    // Editing" button is focused by default, so native Enter-on-focused-
-    // button fires its onclick (cleanup). The earlier explicit Enter→hide
-    // handler overrode that and lost the user's edits when they pressed
-    // Enter expecting the focused Keep-Editing button to activate.
+    // Enter activates the focused button. "Keep Editing" is focused by
+    // default (the SAFE choice — don't lose edits if user mashes Enter),
+    // so Enter dismisses just the overlay. Tab moves focus to "Close
+    // Anyway"; Enter there confirms losing the edits. Escape is
+    // unconditional cancel of the overlay.
     const keyHandler = (e) => {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
+        if (e.key === 'Enter') {
+            const yesBtn = document.getElementById('editfil-esc-yes');
+            const noBtn = document.getElementById('editfil-esc-no');
+            const active = document.activeElement;
+            if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); bsModal.hide(); }
+            else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
+        }
     };
     document.getElementById('editfil-esc-no').onclick = cleanup;
     document.getElementById('editfil-esc-yes').onclick = () => { cleanup(); bsModal.hide(); };

@@ -122,78 +122,6 @@ def test_doassign_swap_pushes_displaced_only_on_success(page: Page):
     assert 99 not in buffer_ids, "Displaced spool must not enter buffer when assign fails"
 
 
-def test_active_print_confirm_enter_on_focused_cancel_does_not_assign(page: Page):
-    """Regression: user-reported bug where hitting Enter on the active-print
-    confirm overlay — which focuses Cancel by default — would fire the
-    Continue path instead of Cancel. The overlay's keyHandler was
-    unconditionally mapping Enter → proceed, bypassing whichever button
-    actually had focus. Barcode scanners that emit an Enter suffix hit the
-    same trap.
-
-    The fix relies on native <button> Enter-activation: Enter on a focused
-    button fires that button's click, full stop. No override."""
-    page.goto("http://localhost:8000")
-    page.wait_for_selector("#buffer-zone")
-    page.wait_for_function("typeof window.doAssign === 'function'")
-
-    # Stub /api/printer_state (frontend probe) to return ACTIVE so doAssign
-    # opens the inline confirm overlay directly. Seed state.allLocations so
-    # doAssign recognizes XL-1 as a toolhead-target and fires the probe.
-    page.evaluate(
-        """
-        const orig = window.fetch;
-        window.__assignHits = 0;
-        window.fetch = async (url, opts) => {
-            const u = typeof url === 'string' ? url : (url && url.url) || '';
-            if (u.startsWith('/api/printer_state/')) {
-                return new Response(JSON.stringify({
-                    known: true, is_active: true, state: 'PRINTING', printer_name: 'TestPrinter'
-                }), {status: 200, headers: {'Content-Type': 'application/json'}});
-            }
-            if (u === '/api/manage_contents') {
-                window.__assignHits += 1;
-                return new Response(JSON.stringify({status: 'success'}),
-                    {status: 200, headers: {'Content-Type': 'application/json'}});
-            }
-            if (u.startsWith('/api/get_contents')) {
-                return new Response(JSON.stringify([]),
-                    {status: 200, headers: {'Content-Type': 'application/json'}});
-            }
-            return orig(url, opts);
-        };
-        state.heldSpools = [{id: 99, display: '#99', color: 'ff0000'}];
-        state.allLocations = (state.allLocations || []).filter(l => l.LocationID !== 'XL-1');
-        state.allLocations.push({LocationID: 'XL-1', Type: 'Tool Head', 'Max Spools': '1', Name: 'XL-1'});
-        // Also seed the manage-loc-id input so doAssign's refresh tries to
-        // refresh the right location (harmless otherwise).
-        const m = document.getElementById('manage-loc-id');
-        if (m) m.value = 'XL-1';
-        """
-    )
-    # Trigger doAssign. Active-print probe resolves → overlay mounts.
-    page.evaluate("() => window.doAssign('XL-1', 99, 1, true)")
-    page.wait_for_selector("#fcc-apc-no", state="attached", timeout=3_000)
-    # Cancel button is focused by default. Dispatch Enter and verify the
-    # assign endpoint is NOT hit.
-    page.evaluate(
-        """() => {
-            document.getElementById('fcc-apc-no').focus();
-            // Fire Enter via keydown dispatch so the document-level capture
-            // handler sees it (mirrors what a barcode scanner / hardware
-            // Enter would produce).
-            document.getElementById('fcc-apc-no').dispatchEvent(
-                new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true})
-            );
-        }"""
-    )
-    page.wait_for_timeout(400)
-    assigns = page.evaluate("() => window.__assignHits")
-    assert assigns == 0, (
-        f"Enter on the focused Cancel button should NOT trigger a manage_contents "
-        f"POST. Saw {assigns} POST(s). This is the user-reported 'cancel still "
-        f"assigns' bug — keyHandler was mapping Enter unconditionally to proceed."
-    )
-
 
 def test_doassign_swap_pushes_displaced_on_success(page: Page):
     """Swap path success: displaced item lands in buffer alongside removal
@@ -229,3 +157,124 @@ def test_doassign_swap_pushes_displaced_on_success(page: Page):
     buffer_ids = page.evaluate("() => state.heldSpools.map(s => s.id)")
     assert 45 not in buffer_ids, "Assigned spool should be removed from buffer on success"
     assert 99 in buffer_ids, "Displaced spool should land in buffer on success"
+
+
+# ---------------------------------------------------------------------------
+# Active-print confirm overlay: keyboard contract.
+# ---------------------------------------------------------------------------
+#
+# The dialog focuses Continue Anyway by default so keyboard users get the
+# standard "Enter activates the default action" UX. Cancel is one Tab away,
+# Escape always cancels. Native <button> Enter-activation handles Enter on
+# the focused button — no document-level keyHandler override.
+#
+# Earlier history: a document-capture keyHandler unconditionally mapped
+# Enter → proceed, which meant Enter on a focused Cancel button still
+# fired the assign. That bug was fixed by removing the Enter handler;
+# this test set guards against the regression AND verifies the restored
+# keyboard-accept UX still works.
+
+
+def _setup_active_print_overlay(page: Page):
+    """Open the active-print confirm overlay by stubbing the printer probe
+    and manage_contents endpoint, then triggering doAssign on a fake
+    toolhead. Exposes window.__assignHits as a counter.
+
+    NOTE: _confirmActivePrintAssign mounts the overlay inside #manageModal
+    (the Location Manager modal). In production the user has that modal
+    open, so focus works fine. In this test we force #manageModal visible
+    via inline display:block — otherwise focus on overlay descendants
+    silently fails because focus can't land on a hidden ancestor's child.
+    """
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.doAssign === 'function'")
+    page.evaluate(
+        """
+        const orig = window.fetch;
+        window.__assignHits = 0;
+        window.fetch = async (url, opts) => {
+            const u = typeof url === 'string' ? url : (url && url.url) || '';
+            if (u.startsWith('/api/printer_state/')) {
+                return new Response(JSON.stringify({
+                    known: true, is_active: true, state: 'PRINTING', printer_name: 'TestPrinter'
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (u === '/api/manage_contents') {
+                window.__assignHits += 1;
+                return new Response(JSON.stringify({status: 'success'}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            if (u.startsWith('/api/get_contents')) {
+                return new Response(JSON.stringify([]),
+                    {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            return orig(url, opts);
+        };
+        state.heldSpools = [{id: 99, display: '#99', color: 'ff0000'}];
+        state.allLocations = (state.allLocations || []).filter(l => l.LocationID !== 'XL-1');
+        state.allLocations.push({LocationID: 'XL-1', Type: 'Tool Head', 'Max Spools': '1', Name: 'XL-1'});
+        const m = document.getElementById('manage-loc-id');
+        if (m) m.value = 'XL-1';
+        // Force manageModal visible so the overlay's focus calls actually land.
+        const mm = document.getElementById('manageModal');
+        if (mm) { mm.style.display = 'block'; mm.style.visibility = 'visible'; }
+        """
+    )
+    page.evaluate("() => window.doAssign('XL-1', 99, 1, true)")
+    page.wait_for_selector("#fcc-apc-yes", state="attached", timeout=3_000)
+
+
+def test_active_print_confirm_continue_focused_by_default(page: Page):
+    """Restored keyboard-accept UX: Continue Anyway is focused on dialog
+    open so keyboard users get the standard 'press Enter to accept the
+    default action' behavior. Cancel is one Tab away."""
+    _setup_active_print_overlay(page)
+    focused_id = page.evaluate("() => document.activeElement && document.activeElement.id")
+    assert focused_id == "fcc-apc-yes", (
+        f"Expected #fcc-apc-yes (Continue Anyway) focused on dialog open; "
+        f"got {focused_id!r}. Default focus drives Enter-to-accept."
+    )
+
+
+def test_active_print_confirm_enter_default_focus_assigns(page: Page):
+    """Keyboard accept: with default focus on Continue, pressing Enter
+    activates Continue and the assign goes through. This is the UX the
+    user explicitly asked to restore."""
+    _setup_active_print_overlay(page)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(400)
+    assigns = page.evaluate("() => window.__assignHits")
+    assert assigns == 1, (
+        f"Enter on the default-focused Continue button should fire ONE assign POST. "
+        f"Saw {assigns}. Native <button> Enter-activation isn't firing onclick."
+    )
+
+
+def test_active_print_confirm_enter_on_focused_cancel_does_not_assign(page: Page):
+    """Original-bug guard: Enter on a focused Cancel must NOT trigger the
+    assign. After Tab moves focus to Cancel, Enter activates Cancel's
+    onclick (cleanup), not the document-level proceed path that the old
+    keyHandler implemented."""
+    _setup_active_print_overlay(page)
+    page.locator("#fcc-apc-no").focus()
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(400)
+    assigns = page.evaluate("() => window.__assignHits")
+    assert assigns == 0, (
+        f"Enter on a focused Cancel button must NOT trigger manage_contents POST. "
+        f"Saw {assigns} POST(s) — keyHandler is overriding native button activation."
+    )
+    overlay_count = page.locator("#fcc-active-print-confirm-overlay").count()
+    assert overlay_count == 0, "Cancel via Enter on focused Cancel should close the overlay"
+
+
+def test_active_print_confirm_escape_always_cancels(page: Page):
+    """Escape unconditionally cancels regardless of which button is focused."""
+    _setup_active_print_overlay(page)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+    assigns = page.evaluate("() => window.__assignHits")
+    assert assigns == 0
+    overlay_count = page.locator("#fcc-active-print-confirm-overlay").count()
+    assert overlay_count == 0
