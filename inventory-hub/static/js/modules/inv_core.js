@@ -144,6 +144,124 @@ const generateSafeQR = (elementId, text, size) => {
     });
 };
 
+// --- Scan-confirmable dialog registry ----------------------------------------
+// When a confirm overlay (active-print warning, etc.) wants to accept QR-code
+// confirmations alongside its mouse/keyboard buttons, it registers itself here
+// with a unique session id. Two QR codes are rendered in the dialog encoding
+// `CMD:CONFIRM:<sid>` and `CMD:CANCEL:<sid>`. The scan handler in inv_cmd.js
+// looks up the session and fires the appropriate callback, then clears the
+// entry so a stale QR scanned later can't re-fire.
+//
+// Why session ids: prevents a printed QR or one captured from another browser
+// session firing into a different dialog. The id is rotated on every dialog
+// open and torn down on close.
+window._fccActiveConfirms = window._fccActiveConfirms || {};
+let _fccConfirmSeq = 0;
+
+/**
+ * Mount two QR codes (~70px each) inside `host` element next to the existing
+ * Yes / No buttons. The QRs encode CMD:CONFIRM / CMD:CANCEL with a session id
+ * so a scan triggers the same callback as clicking the matching button.
+ *
+ * @param {Object} opts
+ *   host:   DOM node to mount the QR row into (typically the dialog body).
+ *   onConfirm: () => void  — fired on CMD:CONFIRM scan or [Yes] click.
+ *   onCancel:  () => void  — fired on CMD:CANCEL scan or [No] click.
+ *   confirmLabel: string, default "Scan to Confirm"
+ *   cancelLabel:  string, default "Scan to Cancel"
+ *   theme: 'warning' | 'info' | 'danger' — drives the QR card border tint.
+ *
+ * @returns {{sessionId: string, cleanup: function}} cleanup() removes the QR
+ *   row from the DOM and unregisters the session. Call from your dialog's
+ *   close handler so a late scan can't re-fire after the user dismissed.
+ */
+window.attachConfirmQRs = (opts) => {
+    if (!opts || !opts.host) return { sessionId: '', cleanup: () => {} };
+    const host = opts.host;
+    const sid = `fcc-cqr-${++_fccConfirmSeq}-${Date.now().toString(36)}`;
+    const theme = opts.theme || 'warning';
+    const palette = {
+        warning: { border: '#ff8800', tint: 'rgba(255,136,0,0.12)', confirmBg: '#1a1208', cancelBg: '#0f1014' },
+        info:    { border: '#4fa2c9', tint: 'rgba(79,162,201,0.12)', confirmBg: '#0d1a20', cancelBg: '#0f1014' },
+        danger:  { border: '#dc3545', tint: 'rgba(220,53,69,0.12)', confirmBg: '#1c0c0e', cancelBg: '#0f1014' },
+    }[theme] || { border: '#ff8800', tint: 'rgba(255,136,0,0.12)', confirmBg: '#1a1208', cancelBg: '#0f1014' };
+
+    const row = document.createElement('div');
+    row.id = `${sid}-row`;
+    row.className = 'fcc-confirm-qr-row';
+    row.style.cssText = 'display:flex; gap:14px; justify-content:center; margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
+    row.innerHTML = `
+        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+            <div style="background:${palette.confirmBg}; border:2px solid ${palette.border}; border-radius:6px; padding:6px;">
+                <div id="${sid}-yes-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
+            </div>
+            <div style="font-size:0.72rem; color:${palette.border}; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.confirmLabel || 'Scan to Confirm'}</div>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+            <div style="background:${palette.cancelBg}; border:2px solid #6c757d; border-radius:6px; padding:6px;">
+                <div id="${sid}-no-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
+            </div>
+            <div style="font-size:0.72rem; color:#adb5bd; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.cancelLabel || 'Scan to Cancel'}</div>
+        </div>
+    `;
+    host.appendChild(row);
+
+    // Generate the QR codes themselves (uses the same lib generateSafeQR uses).
+    generateSafeQR(`${sid}-yes-qr`, `CMD:CONFIRM:${sid}`, 70);
+    generateSafeQR(`${sid}-no-qr`, `CMD:CANCEL:${sid}`, 70);
+
+    // Register the callbacks. Both fire-then-clear so a duplicate scan can't
+    // re-trigger after the dialog closed.
+    window._fccActiveConfirms[sid] = {
+        onConfirm: () => {
+            const entry = window._fccActiveConfirms[sid];
+            if (!entry) return;
+            delete window._fccActiveConfirms[sid];
+            try { opts.onConfirm && opts.onConfirm(); } catch (e) { console.error('[confirm-qr]', e); }
+        },
+        onCancel: () => {
+            const entry = window._fccActiveConfirms[sid];
+            if (!entry) return;
+            delete window._fccActiveConfirms[sid];
+            try { opts.onCancel && opts.onCancel(); } catch (e) { console.error('[confirm-qr]', e); }
+        },
+    };
+
+    return {
+        sessionId: sid,
+        cleanup: () => {
+            delete window._fccActiveConfirms[sid];
+            try { row.remove(); } catch (_) { /* noop */ }
+        },
+    };
+};
+
+/**
+ * Looked up by the scan handler when a CMD:CONFIRM:<sid> or CMD:CANCEL:<sid>
+ * scan arrives. Returns true if the scan was handled (matched an active
+ * dialog), false otherwise so the caller can fall through to normal scan
+ * dispatch.
+ */
+window.routeConfirmScan = (text) => {
+    if (!text) return false;
+    // Match the prefix case-insensitively but preserve the session id's
+    // case verbatim — sid contains base-36 digits/letters that uppercase
+    // would mangle (broke registry lookup in earlier draft).
+    const m = String(text).match(/^[Cc][Mm][Dd]:(CONFIRM|CANCEL|confirm|cancel):(.+)$/);
+    if (!m) return false;
+    const action = m[1].toUpperCase();
+    const sid = m[2].trim();
+    // Match either the exact sid OR — if the user printed an unscoped QR —
+    // the most-recently-registered active confirm. The exact-sid path is the
+    // safe one. Unscoped matches are NOT supported intentionally so a stale
+    // printed QR can't accidentally fire.
+    const entry = window._fccActiveConfirms && window._fccActiveConfirms[sid];
+    if (!entry) return false;
+    if (action === 'CONFIRM') entry.onConfirm();
+    else entry.onCancel();
+    return true;
+};
+
 const getHexDark = (hex, opacity = 0.3) => {
     if (!hex) return 'rgba(0,0,0,0.5)';
     hex = hex.replace('#', '');

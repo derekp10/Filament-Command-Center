@@ -241,6 +241,24 @@
                             printer; multiple dryer boxes can feed the same machine.
                         </div>
                         <div id="feeds-rows" class="d-flex flex-column gap-2"></div>
+
+                        <!-- Per-box slot render direction. Persists as extra.slot_order on
+                             the dryer box; affects the grid view in this modal and the
+                             Quick-Swap grid. Doesn't change slot *numbers* — slot 1 is
+                             still slot 1 regardless of direction. -->
+                        <div class="mt-3 pt-3 border-top border-secondary">
+                            <label class="text-info fw-bold d-block mb-2" style="font-size:1rem;">🔁 Slot Render Order</label>
+                            <div class="btn-group" role="group" aria-label="Slot render direction">
+                                <input type="radio" class="btn-check" name="feeds-slot-order" id="feeds-slot-order-ltr" value="ltr" autocomplete="off" checked>
+                                <label class="btn btn-outline-info fw-bold" for="feeds-slot-order-ltr">← Left → Right</label>
+                                <input type="radio" class="btn-check" name="feeds-slot-order" id="feeds-slot-order-rtl" value="rtl" autocomplete="off">
+                                <label class="btn btn-outline-info fw-bold" for="feeds-slot-order-rtl">Right → Left →</label>
+                            </div>
+                            <div class="text-muted mt-1" style="font-size:0.85rem;">
+                                Flip this for dryer boxes mounted on the right side of a printer so the slot numbers visually match the physical layout.
+                            </div>
+                        </div>
+
                         <div class="d-flex align-items-center gap-3 mt-3">
                             <button type="button" class="btn btn-primary fw-bold"
                                 onclick="window.saveFeedsSection()">💾 Save Feeds</button>

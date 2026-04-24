@@ -25,6 +25,13 @@ def parse_inbound_data(data):
 # [ALEX FIX] Added 'physical_source_slot', and 'product_url' to ensure strict JSON string formatting
 JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "physical_source_slot", "original_color", "spool_temp", "product_url", "purchase_url"]
 
+# Captures the last Spoolman non-ok response body so callers like
+# api_update_filament can surface the actual rejection reason to the UI
+# instead of returning a generic "rejected" message. Reset on each successful
+# call. Kept module-global rather than threaded through every return signature
+# so existing callers (which check `if result:`) keep working unchanged.
+LAST_SPOOLMAN_ERROR = None
+
 def get_spool(sid):
     sm_url, _ = config_loader.get_api_urls()
     try: return parse_inbound_data(requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3).json())
@@ -177,14 +184,24 @@ def create_spool(data):
     return None
 
 def update_filament(fid, data):
+    """Returns the updated filament dict on success, or None on failure.
+    The last Spoolman error message is stashed in module-global
+    LAST_SPOOLMAN_ERROR for callers that want to surface the actual
+    rejection reason to the UI (see api_update_filament)."""
+    global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
     sanitized = sanitize_outbound_data(data)
     try:
         r = requests.patch(f"{sm_url}/api/v1/filament/{fid}", json=sanitized, timeout=2)
-        if r.ok: return r.json()
-        state.logger.error(f"Failed to update filament {fid}: {r.status_code} - {r.text}")
+        if r.ok:
+            LAST_SPOOLMAN_ERROR = None
+            return r.json()
+        err_body = r.text
+        state.logger.error(f"Failed to update filament {fid}: {r.status_code} - {err_body}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {err_body[:400]}"
     except Exception as e:
         state.logger.error(f"API Error updating filament {fid}: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
     return None
 
 def create_filament(data):
@@ -238,6 +255,66 @@ def create_vendor(data):
     except Exception as e:
         state.logger.error(f"API Error creating vendor: {e}")
     return None
+
+def ensure_extra_field(entity_type, key, name, field_type="text", choices=None, multi=False):
+    """Idempotent register-if-missing for a Spoolman extra field schema.
+
+    Spoolman validates extra-field keys at write time and rejects unknown
+    keys with HTTP 400 ("Unknown extra field..."). This helper checks the
+    current schema, POSTs the field definition only if it's missing, and
+    returns True on success/already-exists. Safe to call repeatedly.
+
+    Used by ensure_required_extras() at app startup to make sure the
+    Edit Filament modal's max-temp / direction extras are always
+    available, even on Spoolman instances that pre-date setup_fields.py
+    being updated.
+    """
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.get(f"{sm_url}/api/v1/field/{entity_type}", timeout=5)
+        if r.ok:
+            existing = r.json()
+            if any(f.get('key') == key for f in existing):
+                return True  # Already there.
+        payload = {"name": name, "field_type": field_type}
+        if field_type == "choice":
+            payload["multi_choice"] = bool(multi)
+            if choices:
+                payload["choices"] = sorted({c for c in choices if str(c).strip()})
+        post_r = requests.post(f"{sm_url}/api/v1/field/{entity_type}/{key}", json=payload, timeout=5)
+        if post_r.status_code in (200, 201):
+            state.logger.info(f"Spoolman extra field registered: {entity_type}/{key}")
+            return True
+        # 400 "already exists" is also fine — race with a parallel install.
+        if post_r.status_code == 400 and "already exists" in (post_r.text or ""):
+            return True
+        state.logger.warning(
+            f"Could not register Spoolman extra field {entity_type}/{key}: "
+            f"HTTP {post_r.status_code} — {post_r.text[:200]}"
+        )
+    except Exception as e:
+        state.logger.warning(f"ensure_extra_field({entity_type}/{key}) failed: {e}")
+    return False
+
+
+# Filament extras the Edit Filament / Add Filament modal writes. Kept here
+# (rather than in setup_fields.py only) so app startup can self-heal a
+# Spoolman that's missing them — otherwise users hit "Unknown extra field"
+# errors until they remember to re-run setup_fields.py against prod.
+REQUIRED_FILAMENT_EXTRAS = [
+    ("nozzle_temp_max", "Nozzle Temp Max", "text"),
+    ("bed_temp_max", "Bed Temp Max", "text"),
+]
+
+
+def ensure_required_extras():
+    """Register any missing Edit-Filament extras with Spoolman. Called once
+    at Flask startup. Failures log a warning but don't block the app —
+    the same fields will keep silently failing to write, but the app stays
+    up so the user can fix Spoolman directly."""
+    for key, name, ftype in REQUIRED_FILAMENT_EXTRAS:
+        ensure_extra_field("filament", key, name, ftype)
+
 
 def update_extra_field_choices(entity_type, key, new_choices):
     """Pulls existing field config, appends new choices, and PUTs back to Spoolman."""
@@ -343,7 +420,10 @@ def format_spool_display(spool_data):
                 "material": smart_mat,
                 "color_name": col_name,
                 "weight": rem,
-                "temp": f"{fil.get('settings_extruder_temp', '')}°C" if fil.get('settings_extruder_temp') else ""
+                "temp": f"{fil.get('settings_extruder_temp', '')}°C" if fil.get('settings_extruder_temp') else "",
+                # Spoolman stores needs_label_print loosely (bool, 'true'/'false' string, or missing).
+                # Normalize to a strict bool so the card can branch without re-checking types.
+                "needs_label_print": str(extra.get('needs_label_print', '')).lower() in ('true', '1'),
             }
         }
 
@@ -497,13 +577,29 @@ def get_best_color_distance(target_hex, compare_hex_csv):
         return float('inf')
     return min(distances)
 
-def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight=""):
+def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", deployed_state=""):
     """
     Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
     Returns a sorted list of dictionaries matching the criteria.
+
+    `deployed_state` (spool-only): '' or 'any' = no filter, 'deployed' = only
+    spools currently on a toolhead (location ∈ printer_map) OR with a ghost
+    physical_source set, 'undeployed' = the inverse. Filaments ignore this.
     """
     sm_url, _ = config_loader.get_api_urls()
     results = []
+
+    # Load printer_map once so deployed_state filtering can check whether a
+    # spool's location maps to a toolhead without touching the filesystem
+    # per item. Cheap: config_loader caches internally.
+    deployed_targets = set()
+    if deployed_state and deployed_state.lower() in ('deployed', 'undeployed'):
+        try:
+            cfg = config_loader.load_config()
+            pm = cfg.get('printer_map', {}) or {}
+            deployed_targets = {str(k).strip().upper() for k in pm.keys()}
+        except Exception:
+            deployed_targets = set()
     
     try:
         # If the user toggles 'In Stock' off (meaning they want to see everything), we must explicitly tell Spoolman API to return archived items
@@ -567,6 +663,22 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                     try:
                         if rem < float(min_weight): continue
                     except: pass
+
+                # 2b. Deployment filter (spool-only). A spool counts as
+                # deployed if its Spoolman location is a known toolhead OR
+                # it carries a ghost physical_source hint (meaning it's
+                # currently visually on a toolhead elsewhere).
+                if deployed_state and deployed_state.lower() in ('deployed', 'undeployed'):
+                    sloc_up = str(spool.get('location') or '').strip().upper()
+                    extra_map = spool.get('extra') or {}
+                    ghost_src = str(extra_map.get('physical_source') or '').strip().replace('"', '').upper()
+                    is_deployed = (sloc_up in deployed_targets) or (
+                        ghost_src and ghost_src in deployed_targets
+                    )
+                    if deployed_state.lower() == 'deployed' and not is_deployed:
+                        continue
+                    if deployed_state.lower() == 'undeployed' and is_deployed:
+                        continue
             
             # 3. Fuzzy Keyword Match (Tokenized)
             # Support `color_hexes` for multi-color gradients

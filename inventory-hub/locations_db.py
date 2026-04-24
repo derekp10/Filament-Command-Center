@@ -210,6 +210,40 @@ def get_dryer_box_bindings(loc_id):
     return _bindings_from_row(row)
 
 
+def get_dryer_box_slot_order(loc_id):
+    """Return the render order for a dryer box's slot grid ('ltr' or 'rtl').
+    Defaults to 'ltr' when unset. Returns None if the location is missing or
+    isn't a Dryer Box.
+    """
+    loc_list = load_locations_list()
+    _, row = _find_location(loc_list, loc_id)
+    if not row or row.get('Type') != DRYER_BOX_TYPE:
+        return None
+    extra = row.get('extra') or {}
+    order = str(extra.get('slot_order') or '').strip().lower()
+    return order if order in ('ltr', 'rtl') else 'ltr'
+
+
+def set_dryer_box_slot_order(loc_id, order):
+    """Persist a dryer box's slot render order ('ltr' or 'rtl'). Anything
+    else falls back to 'ltr'. Returns (ok_bool, msg_or_none)."""
+    order = str(order or '').strip().lower()
+    if order not in ('ltr', 'rtl'):
+        return False, f"invalid order '{order}' (expected 'ltr' or 'rtl')"
+    loc_list = load_locations_list()
+    idx, row = _find_location(loc_list, loc_id)
+    if idx is None:
+        return False, "location not found"
+    if row.get('Type') != DRYER_BOX_TYPE:
+        return False, f"type '{row.get('Type')}' is not a Dryer Box"
+    extra = dict(row.get('extra') or {})
+    extra['slot_order'] = order
+    row['extra'] = extra
+    loc_list[idx] = row
+    save_locations_list(loc_list)
+    return True, None
+
+
 def set_dryer_box_bindings(loc_id, slot_targets, printer_map):
     """Validate + persist per-slot bindings for a dryer box.
 
