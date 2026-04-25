@@ -175,3 +175,34 @@ def test_wizard_save_quotes_max_temp_extras_for_spoolman(page: Page):
     # The literal value Spoolman expects — JSON-quoted text string.
     assert payload["nozzle_temp_max"] == '"245"', payload
     assert payload["bed_temp_max"] == '"75"', payload
+
+
+def test_wizard_does_not_render_duplicate_max_temp_dynamic_inputs(page: Page):
+    """Bug 1b regression: when nozzle_temp_max / bed_temp_max are
+    registered as Spoolman extras, the dynamic-extras renderer used to
+    auto-create a second input (`#wiz_fil_ef_nozzle_temp_max`). On save,
+    that dynamic input's raw numeric string would still be picked up by
+    the .sync-source-fil iterator even after the user cleared the static
+    Min/Max input — and Spoolman rejected the unquoted value.
+
+    The renderer must skip these two specific keys so the static input is
+    the sole source of truth.
+    """
+    page.goto("http://localhost:8000")
+    page.get_by_role("button", name=re.compile("ADD INVENTORY")).click()
+    expect(page.locator("#wizardModal")).to_be_visible()
+
+    # Wait for dynamic extras to render (they're fetched async on open).
+    page.wait_for_timeout(800)
+
+    # Static inputs: present.
+    expect(page.locator("#wiz-fil-nozzle_temp_max")).to_be_visible()
+    expect(page.locator("#wiz-fil-bed_temp_max")).to_be_visible()
+
+    # Dynamic auto-generated duplicates: must NOT exist.
+    assert page.locator("#wiz_fil_ef_nozzle_temp_max").count() == 0, (
+        "duplicate dynamic input #wiz_fil_ef_nozzle_temp_max would race the static input on save"
+    )
+    assert page.locator("#wiz_fil_ef_bed_temp_max").count() == 0, (
+        "duplicate dynamic input #wiz_fil_ef_bed_temp_max would race the static input on save"
+    )

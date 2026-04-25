@@ -644,8 +644,13 @@ const wizardFetchExtraFields = () => {
                 if (d.fields.filament) {
                     d.fields.filament.sort((a, b) => (a.order || 0) - (b.order || 0));
                     d.fields.filament.forEach(field => {
-                        // Hide legacy/system fields
-                        if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed', 'needs_label_print'].includes(field.key)) return;
+                        // Hide legacy/system fields, plus the two max-temp keys —
+                        // those have dedicated static inputs (#wiz-fil-nozzle_temp_max
+                        // and #wiz-fil-bed_temp_max) so a second dynamic input would
+                        // race the static one on save and re-send a raw numeric value
+                        // that Spoolman rejects.
+                        if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed', 'needs_label_print',
+                             'nozzle_temp_max', 'bed_temp_max'].includes(field.key)) return;
 
                         let html = wizardGenerateFieldHTML(field, 'fil');
                         if (html) fContainer.innerHTML += html;
