@@ -110,3 +110,50 @@ def test_feeds_section_save_with_some_slots_none(page: Page, base_url: str, api_
     assert targets.get("1") == "XL-1"
     # Slot 2 is absent (not null) — absence == unassigned in storage.
     assert "2" not in targets
+
+
+@pytest.mark.usefixtures("require_server", "restore_bindings")
+def test_feeds_combobox_exposes_printer_sentinel_options(page: Page, base_url: str):
+    """The searchable combobox should expose PRINTER:<id> sentinel options
+    alongside the per-toolhead ones, so the user can bind a slot to a
+    printer pool without picking a specific toolhead."""
+    _open_manage(page, base_url, TEST_BOX)
+    page.locator("#feeds-toggle-btn").click()
+    page.wait_for_timeout(300)
+    # The hidden <select> holds every option the combobox offers.
+    option_values = page.evaluate(
+        "() => Array.from(document.querySelectorAll("
+        "'select.feeds-select[data-slot=\"1\"] option')).map(o => o.value)"
+    )
+    sentinels = [v for v in option_values if v.startswith("PRINTER:")]
+    assert sentinels, f"expected at least one PRINTER:<id> option, got {option_values!r}"
+
+
+@pytest.mark.usefixtures("require_server", "restore_bindings")
+def test_feeds_save_round_trip_with_printer_sentinel(page: Page, base_url: str, api_base_url):
+    """Saving a slot with a PRINTER:<id> sentinel value should round-trip
+    through the bindings API exactly as-written (no coercion to null / blank)."""
+    _open_manage(page, base_url, TEST_BOX)
+    page.locator("#feeds-toggle-btn").click()
+    page.wait_for_timeout(300)
+
+    option_values = page.evaluate(
+        "() => Array.from(document.querySelectorAll("
+        "'select.feeds-select[data-slot=\"1\"] option')).map(o => o.value)"
+    )
+    sentinels = [v for v in option_values if v.startswith("PRINTER:")]
+    if not sentinels:
+        pytest.skip("no printer sentinel options available on this dev env")
+    target = sentinels[0]
+
+    page.evaluate(
+        "(v) => { const s = document.querySelector('select.feeds-select[data-slot=\"1\"]'); "
+        "s.value = v; }",
+        target,
+    )
+    page.locator("#feeds-body button:has-text('Save Feeds')").click()
+    expect(page.locator("#feeds-status")).to_contain_text("Saved", timeout=5000)
+
+    r = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5)
+    targets = r.json()["slot_targets"]
+    assert targets.get("1", "").upper() == target.upper()

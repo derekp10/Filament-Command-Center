@@ -158,6 +158,36 @@ def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
     return None
 
 
+def get_printer_mmu_flag(filabridge_url: str, printer_name: str) -> Optional[bool]:
+    """Best-effort probe of `/api/v1/info.mmu` on the named printer.
+
+    Returns True when an MMU unit is attached/enabled, False when it's
+    definitively not, or None when the printer is unreachable or the
+    firmware doesn't expose the field. Callers treat None as "unknown" —
+    do not block behaviour on an unknown answer.
+
+    Note: the `mmu` field reflects hardware attachment, not per-print
+    routing. A Core One with MMU3 attached but printing via direct feed
+    still reports `mmu: true`. Used by the usage-deduction path to pick
+    between M0/M1 alias locations when printer_map has both.
+    """
+    creds = fetch_printer_credentials(filabridge_url, printer_name)
+    if not creds or not creds.get("ip_address"):
+        return None
+    ip = creds["ip_address"]
+    api_key = creds.get("api_key")
+    headers = {"X-Api-Key": api_key} if api_key else {}
+    try:
+        r = requests.get(f"http://{ip}/api/v1/info", headers=headers, timeout=2)
+        if r.ok:
+            body = r.json() or {}
+            if "mmu" in body:
+                return bool(body.get("mmu"))
+    except Exception:
+        pass
+    return None
+
+
 def acknowledge_filabridge_error(filabridge_url: str, error_id: str) -> bool:
     """
     Acknowledges the FilaBridge error to dismiss it from the server.

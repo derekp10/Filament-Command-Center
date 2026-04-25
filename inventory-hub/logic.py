@@ -528,6 +528,10 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     if auto_deploy and target_slot and tgt_info and tgt_info.get('Type') == 'Dryer Box':
         bindings = (tgt_info.get('extra') or {}).get('slot_targets') or {}
         bound_toolhead = bindings.get(str(target_slot))
+        # PRINTER:<id> sentinels declare "this slot is staged for the named
+        # printer's pool" — no toolhead is implied, so auto-deploy is a no-op.
+        if bound_toolhead and locations_db.is_printer_sentinel(bound_toolhead):
+            bound_toolhead = None
         if bound_toolhead:
             try:
                 # Thread the spool's pre-phase-1 toolhead (snapshotted

@@ -3,7 +3,9 @@
     "allow": [
       "Read(//d/My Documents/Documents/3D Printing/Filament Command Center/**)",
       "WebFetch(domain:api.github.com)",
-      "Read(//d/My Documents/Documents/3D Printing/Filament Command Center/inventory-hub/static/js/modules/**)"
+      "Read(//d/My Documents/Documents/3D Printing/Filament Command Center/inventory-hub/static/js/modules/**)",
+      "Read(//c/Users/Derek/AppData/Local/Temp/**)",
+      "Read(//d/My Documents/Documents/3D Printing/Filament Command Center/inventory-hub/**)"
     ]
   }
 }

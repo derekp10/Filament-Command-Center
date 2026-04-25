@@ -131,7 +131,9 @@ class PrusamentParser(BaseParser):
                 "settings_bed_temp": fil.get("hb_min") if fil.get("hb_min") else None,
                 "extra": {
                     "prusament_manufacturing_date": data.get("manufacture_date", ""),
-                    "prusament_length_m": data.get("length", 0)
+                    "prusament_length_m": data.get("length", 0),
+                    **({"nozzle_temp_max": str(fil.get("he_max"))} if fil.get("he_max") else {}),
+                    **({"bed_temp_max": str(fil.get("hb_max"))} if fil.get("hb_max") else {}),
                 }
             }
             return [standard_obj]

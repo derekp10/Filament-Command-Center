@@ -26,3 +26,4 @@ inventory-hub/data/*
 inventory-hub/locations.json
 inventory-hub/locations.json.*.bak
 inventory-hub/data/locations.json.*.bak
+inventory-hub/hub.log.2

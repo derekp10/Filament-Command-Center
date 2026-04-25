@@ -82,24 +82,54 @@ def _ensure_json_migration():
         state.logger.error(f"❌ Migration Error: {e}")
 
 def load_locations_list():
-    """Loads location configurations from the JSON file."""
+    """Loads location configurations from the JSON file.
+
+    Returns [] only when the file legitimately doesn't exist or has a
+    non-list root (a fresh-install or schema-mismatch shape). On a real
+    JSON parse failure (corrupt file from a manual edit gone wrong, etc.)
+    we propagate as LocationsCorruptError so the operator sees the
+    failure on the very first request — silently returning [] previously
+    masked an XL-3 syntax error and surfaced as the entire dashboard
+    losing names/types/grouping.
+    """
     _ensure_data_dir()
     _ensure_runtime_migration()
     _ensure_json_migration()
 
     if not os.path.exists(JSON_FILE):
         return []
-        
+
     try:
         with open(JSON_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            # Ensure we always return a list
-            if isinstance(data, list):
-                return data
-            return []
-    except Exception as e: 
+    except json.JSONDecodeError as e:
+        state.logger.critical(
+            f"💥 locations.json corrupt at {JSON_FILE}:{e.lineno}:{e.colno} — {e.msg}. "
+            "Fix the file (manual edit gone wrong?) before the dashboard can render."
+        )
+        raise LocationsCorruptError(JSON_FILE, e) from e
+    except Exception as e:
         state.logger.error(f"JSON Read Error: {e}")
+        return []
+
+    # Ensure we always return a list
+    if isinstance(data, list):
+        return data
     return []
+
+
+class LocationsCorruptError(RuntimeError):
+    """Raised when locations.json fails to parse. Carries the file path
+    and the underlying JSONDecodeError so callers can surface a clear
+    message to the operator instead of silently rendering an empty UI."""
+
+    def __init__(self, path, decode_error):
+        self.path = path
+        self.decode_error = decode_error
+        super().__init__(
+            f"locations.json corrupt at {path} "
+            f"(line {decode_error.lineno}, col {decode_error.colno}): {decode_error.msg}"
+        )
 
 def save_locations_list(new_list):
     """Saves location configurations to the JSON file."""
@@ -169,12 +199,33 @@ def migrate_feeder_map_if_needed(loc_list, feeder_map):
     return loc_list, changed
 
 
+def _known_printer_prefixes(printer_map):
+    """Return the set of uppercase printer LocationID prefixes — i.e. the
+    portion of each toolhead LocationID before the first '-'. These are the
+    valid suffixes for a `PRINTER:<id>` sentinel slot_target.
+    """
+    prefixes = set()
+    for key in (printer_map or {}).keys():
+        ku = str(key).upper()
+        prefixes.add(ku.split('-', 1)[0] if '-' in ku else ku)
+    return prefixes
+
+
+def is_printer_sentinel(target):
+    """True if `target` is a `PRINTER:<id>` sentinel slot_target."""
+    if not isinstance(target, str):
+        return False
+    return target.strip().upper().startswith('PRINTER:')
+
+
 def validate_slot_targets(slot_targets, loc_list, printer_map):
     """Return a list of (slot, target, reason) tuples for any invalid
     entries. Empty list means the mapping is valid.
 
-    Rules: every non-null/non-empty target must be a known LocationID
-    whose Type is a toolhead type AND must be present in printer_map.
+    Rules:
+      - A non-null/non-empty target must either be a known LocationID whose
+        Type is a toolhead type AND is registered in printer_map, OR a
+        `PRINTER:<id>` sentinel whose <id> matches a known printer prefix.
     """
     if not isinstance(slot_targets, dict):
         return [("*", slot_targets, "slot_targets must be an object")]
@@ -184,9 +235,19 @@ def validate_slot_targets(slot_targets, loc_list, printer_map):
         str(r.get('LocationID', '')).strip().upper(): r
         for r in loc_list
     }
+    printer_prefixes = _known_printer_prefixes(printer_map)
     for slot, target in slot_targets.items():
         if target in (None, '', 'null', 'None'):
             continue  # unassigned — valid
+
+        if is_printer_sentinel(target):
+            suffix = str(target).strip().upper().split(':', 1)[1]
+            if not suffix:
+                errors.append((str(slot), target, "PRINTER: sentinel missing id"))
+            elif suffix not in printer_prefixes:
+                errors.append((str(slot), target, f"unknown printer id '{suffix}'"))
+            continue
+
         tgt_norm = str(target).strip().upper()
         row = loc_map.get(tgt_norm)
         if not row:
@@ -279,13 +340,15 @@ def set_dryer_box_bindings(loc_id, slot_targets, printer_map):
     for slot, target in clean.items():
         reverse.setdefault(target, []).append(slot)
     for target, slots in reverse.items():
-        if len(slots) > 1:
+        if len(slots) > 1 and not is_printer_sentinel(target):
             warnings.append((
                 ",".join(sorted(slots)), target,
                 f"multiple slots in this box bind to {target} (possible duplicate)"
             ))
 
-    # 2) Same toolhead already bound by a different dryer box.
+    # 2) Same toolhead already bound by a different dryer box. Printer-pool
+    # sentinels are exempt — multiple boxes can legitimately feed the same
+    # printer's staging pool without conflicting on any physical toolhead.
     my_id_up = str(loc_id).strip().upper()
     for other in loc_list:
         if other.get('Type') != DRYER_BOX_TYPE:
@@ -295,7 +358,7 @@ def set_dryer_box_bindings(loc_id, slot_targets, printer_map):
         other_targets = (other.get('extra') or {}).get('slot_targets') or {}
         for other_slot, other_target in other_targets.items():
             other_up = str(other_target or '').strip().upper()
-            if other_up and other_up in reverse:
+            if other_up and other_up in reverse and not is_printer_sentinel(other_up):
                 warnings.append((
                     reverse[other_up][0], other_up,
                     f"already bound by {other['LocationID']} slot {other_slot}"
