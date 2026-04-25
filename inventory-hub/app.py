@@ -805,8 +805,20 @@ def api_print_batch_csv():
 # --- EXISTING ROUTES ---
 
 @app.route('/api/locations', methods=['GET'])
-def api_get_locations(): 
-    local_rows = locations_db.load_locations_list()
+def api_get_locations():
+    try:
+        local_rows = locations_db.load_locations_list()
+    except locations_db.LocationsCorruptError as e:
+        # Surface the corruption directly instead of falling back to an
+        # empty list — silent fallback masks the failure as a UI-wide
+        # "Names/Types/Grouping all gone" symptom.
+        return jsonify({
+            "error": "locations_corrupt",
+            "path": str(e.path),
+            "line": e.decode_error.lineno,
+            "col": e.decode_error.colno,
+            "msg": e.decode_error.msg,
+        }), 500
     local_map = {str(row['LocationID']).upper(): row for row in local_rows}
     
     # 1. Fetch native Spoolman Locations

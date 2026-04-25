@@ -1478,11 +1478,17 @@ window.wizardSubmit = async () => {
                 extra: {}
             };
 
+            // Spoolman extras of type "text" must arrive as JSON-quoted strings
+            // (`"245"` — 5 bytes including literal quote chars). spoolman_api's
+            // sanitize_outbound_data runs json.loads on each value: a raw "245"
+            // parses as the integer 245 and Spoolman rejects with
+            // "Value is not a string." Match the Edit Filament pattern at
+            // inv_details.js:1617 by wrapping in literal quotes.
             if (getVal('wiz-fil-nozzle_temp_max') !== "") {
-                f_payload.extra.nozzle_temp_max = getVal('wiz-fil-nozzle_temp_max');
+                f_payload.extra.nozzle_temp_max = `"${getVal('wiz-fil-nozzle_temp_max')}"`;
             }
             if (getVal('wiz-fil-bed_temp_max') !== "") {
-                f_payload.extra.bed_temp_max = getVal('wiz-fil-bed_temp_max');
+                f_payload.extra.bed_temp_max = `"${getVal('wiz-fil-bed_temp_max')}"`;
             }
 
             // Cross-Inherit empty-spool-weight along the chain: Spool → Filament → Vendor.
@@ -1550,8 +1556,8 @@ window.wizardSubmit = async () => {
                 if (t.bed_temp && !getVal('wiz-fil-settings_bed_temp')) f_payload.settings_bed_temp = t.bed_temp;
                 const extNozMax = (t.extra && t.extra.nozzle_temp_max) || t.nozzle_temp_max;
                 const extBedMax = (t.extra && t.extra.bed_temp_max) || t.bed_temp_max;
-                if (extNozMax && !getVal('wiz-fil-nozzle_temp_max')) f_payload.extra.nozzle_temp_max = String(extNozMax);
-                if (extBedMax && !getVal('wiz-fil-bed_temp_max')) f_payload.extra.bed_temp_max = String(extBedMax);
+                if (extNozMax && !getVal('wiz-fil-nozzle_temp_max')) f_payload.extra.nozzle_temp_max = `"${String(extNozMax)}"`;
+                if (extBedMax && !getVal('wiz-fil-bed_temp_max')) f_payload.extra.bed_temp_max = `"${String(extBedMax)}"`;
                 if (t.article_number) f_payload.article_number = t.article_number;
             }
 

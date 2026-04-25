@@ -82,24 +82,54 @@ def _ensure_json_migration():
         state.logger.error(f"❌ Migration Error: {e}")
 
 def load_locations_list():
-    """Loads location configurations from the JSON file."""
+    """Loads location configurations from the JSON file.
+
+    Returns [] only when the file legitimately doesn't exist or has a
+    non-list root (a fresh-install or schema-mismatch shape). On a real
+    JSON parse failure (corrupt file from a manual edit gone wrong, etc.)
+    we propagate as LocationsCorruptError so the operator sees the
+    failure on the very first request — silently returning [] previously
+    masked an XL-3 syntax error and surfaced as the entire dashboard
+    losing names/types/grouping.
+    """
     _ensure_data_dir()
     _ensure_runtime_migration()
     _ensure_json_migration()
 
     if not os.path.exists(JSON_FILE):
         return []
-        
+
     try:
         with open(JSON_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            # Ensure we always return a list
-            if isinstance(data, list):
-                return data
-            return []
-    except Exception as e: 
+    except json.JSONDecodeError as e:
+        state.logger.critical(
+            f"💥 locations.json corrupt at {JSON_FILE}:{e.lineno}:{e.colno} — {e.msg}. "
+            "Fix the file (manual edit gone wrong?) before the dashboard can render."
+        )
+        raise LocationsCorruptError(JSON_FILE, e) from e
+    except Exception as e:
         state.logger.error(f"JSON Read Error: {e}")
+        return []
+
+    # Ensure we always return a list
+    if isinstance(data, list):
+        return data
     return []
+
+
+class LocationsCorruptError(RuntimeError):
+    """Raised when locations.json fails to parse. Carries the file path
+    and the underlying JSONDecodeError so callers can surface a clear
+    message to the operator instead of silently rendering an empty UI."""
+
+    def __init__(self, path, decode_error):
+        self.path = path
+        self.decode_error = decode_error
+        super().__init__(
+            f"locations.json corrupt at {path} "
+            f"(line {decode_error.lineno}, col {decode_error.colno}): {decode_error.msg}"
+        )
 
 def save_locations_list(new_list):
     """Saves location configurations to the JSON file."""

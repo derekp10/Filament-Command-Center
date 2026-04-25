@@ -209,6 +209,44 @@ def test_printer_sentinel_skips_cross_box_duplicate_warning(sample_locs, printer
 
 
 # ---------------------------------------------------------------------------
+# Bug 2b — load_locations_list raises loudly on JSON corruption
+# ---------------------------------------------------------------------------
+
+def test_load_locations_list_raises_on_json_decode_error(tmp_locations_file):
+    """Regression: a syntax error in locations.json (e.g. a stray comma
+    from a manual edit) used to be silently swallowed — load returned [],
+    which made the dashboard render with no Names / Types / grouping and
+    caused the user to misattribute the symptom to whatever feature was
+    being tested at the time. Now it must raise LocationsCorruptError so
+    the operator sees the real cause on the first request."""
+    tmp_locations_file.write_text(
+        '[\n  {\n    "LocationID": "XL-3",\n    "Type": "Tool Head",\n    ,\n    "Order": "3"\n  }\n]',
+        encoding="utf-8",
+    )
+    with pytest.raises(locations_db.LocationsCorruptError) as exc_info:
+        locations_db.load_locations_list()
+    err = exc_info.value
+    assert err.path == str(tmp_locations_file)
+    assert err.decode_error.lineno >= 1
+
+
+def test_load_locations_list_returns_empty_for_missing_file(tmp_locations_file):
+    """File-not-present is a legitimate fresh-install state — must NOT
+    raise. (This is the carve-out from the bug-2b hardening.)"""
+    if tmp_locations_file.exists():
+        tmp_locations_file.unlink()
+    assert locations_db.load_locations_list() == []
+
+
+def test_load_locations_list_returns_empty_for_non_list_root(tmp_locations_file):
+    """A valid JSON file whose root is not a list (schema mismatch) is
+    also treated as empty rather than raising — preserves prior behavior
+    for that specific case."""
+    tmp_locations_file.write_text('{"unexpected": "shape"}', encoding="utf-8")
+    assert locations_db.load_locations_list() == []
+
+
+# ---------------------------------------------------------------------------
 # set/get round-trip
 # ---------------------------------------------------------------------------
 
