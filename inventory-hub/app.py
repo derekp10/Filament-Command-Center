@@ -887,24 +887,76 @@ def api_get_locations():
                 room_floating[loc] = room_floating.get(loc, 0) + count
 
     # 2. Inject Virtual Rooms/Printers if they don't exist
-    for parent in room_occupancy.keys():
-        if parent not in local_map:
-            # Check children types to determine if this is a Printer or a Room
-            is_printer = False
+    #
+    # Two seeds: any prefix that has spool occupancy today (room_occupancy),
+    # AND every printer prefix declared in config.json's printer_map (even
+    # when no spool is currently deployed). The printer_map seed makes
+    # "🦝 Core One Upgraded" show up as a Printer parent in the Location
+    # Manager even if every CORE1 toolhead is empty — without it, an
+    # all-idle printer disappears from the grouping until a spool lands.
+    cfg_for_synth = config_loader.load_config()
+    pm_for_synth = cfg_for_synth.get('printer_map', {}) or {}
+    printer_prefixes_to_inject = {
+        str(loc_id).upper().split('-', 1)[0]
+        for loc_id in pm_for_synth.keys()
+        if '-' in str(loc_id)
+    }
+
+    parents_to_consider = set(room_occupancy.keys()) | printer_prefixes_to_inject
+
+    for parent in parents_to_consider:
+        # Promote a row that exists with an empty/missing Type to a real
+        # Printer/Virtual Room — locations.json sometimes carries a
+        # parent placeholder (manual edit or legacy state) with Type=""
+        # which strands the row in "Unassigned" rendering. Treat empty
+        # Type the same as "not in local_map" for the inject decision.
+        existing = local_map.get(parent)
+        existing_type_blank = bool(existing) and not str(existing.get('Type', '')).strip()
+        if existing and not existing_type_blank:
+            continue
+
+        # Check children types AND printer_map to determine if this is a
+        # Printer or a Room. printer_map is authoritative — if the parent
+        # has any toolhead registered there, it's a Printer.
+        is_printer = parent in printer_prefixes_to_inject
+        if not is_printer:
             for c_loc, meta in local_map.items():
                 if c_loc.startswith(parent + "-"):
                     t = str(meta.get('Type', '')).lower()
                     if 'printer' in t or 'tool head' in t or 'mmu' in t:
                         is_printer = True
                         break
-                        
-            csv_rows.append({
-                "LocationID": parent,
-                "Name": f"{parent} System" if is_printer else f"{parent} (Room)",
-                "Type": "Printer" if is_printer else "Virtual Room",
-                "Max Spools": 0,
-                "OccupancyRaw": 0
-            })
+
+        # Pick a friendly name from printer_map's printer_name when it's
+        # a printer (so we get "🦝 Core One Upgraded" instead of "CORE1
+        # System"). Fall back to the legacy synthetic name otherwise.
+        synthetic_name = None
+        if is_printer:
+            for loc_id, info in pm_for_synth.items():
+                if str(loc_id).upper().startswith(parent + '-') or str(loc_id).upper() == parent:
+                    if info.get('printer_name'):
+                        synthetic_name = info['printer_name']
+                        break
+        if not synthetic_name:
+            synthetic_name = f"{parent} System" if is_printer else f"{parent} (Room)"
+
+        synthetic_row = {
+            "LocationID": parent,
+            "Name": synthetic_name,
+            "Type": "Printer" if is_printer else "Virtual Room",
+            "Max Spools": 0,
+            "OccupancyRaw": 0,
+        }
+
+        if existing_type_blank:
+            # Replace the broken existing row in-place rather than appending
+            # a duplicate (would trip duplicate-LocationID guards downstream).
+            for i, r in enumerate(csv_rows):
+                if str(r.get('LocationID', '')).upper() == parent:
+                    csv_rows[i] = {**r, **synthetic_row}
+                    break
+        else:
+            csv_rows.append(synthetic_row)
 
     final_list = []
     # [ALEX FIX] Inject Virtual Unassigned Row

@@ -166,3 +166,50 @@ def test_save_then_load_roundtrip_preserves_list(tmp_path, monkeypatch):
     locations_db.save_locations_list(sample)
     rows = locations_db.load_locations_list()
     assert rows == sample
+
+
+def test_no_blank_type_on_parent_rows(locations_data):
+    """A parent placeholder row (LocationID with no `-`, e.g. 'XL' or
+    'CORE1') with `Type: ""` strands the row in 'Unassigned virtual
+    storage' rendering — the synthesizer skips it because the row
+    technically exists, but the empty Type means the UI can't classify
+    it. Any parent-shaped row must declare its Type explicitly.
+    """
+    _, data = locations_data
+    for row in data:
+        lid = str(row.get("LocationID", ""))
+        if lid and "-" not in lid:
+            t = str(row.get("Type", "")).strip()
+            assert t, (
+                f"parent row LocationID={lid!r} has blank Type — would render as "
+                "Unassigned virtual storage. Set Type to 'Printer', 'Room', or 'Virtual Room'."
+            )
+
+
+def test_every_printer_map_prefix_has_a_parent_or_is_synthesized():
+    """Every printer prefix declared in config.json's printer_map MUST
+    eventually appear as a Printer-typed entry in /api/locations — either
+    because locations.json carries the parent row or because the
+    synthesizer at app.py injects it. Test against the live API so we
+    catch both paths."""
+    import requests
+    try:
+        cfg = requests.get("http://localhost:8000/api/printer_map", timeout=3).json()
+    except requests.RequestException:
+        pytest.skip("dev server unreachable")
+    prefixes = set()
+    for printer_name, entries in (cfg.get("printers") or {}).items():
+        for e in entries or []:
+            loc = str(e.get("location_id", ""))
+            if "-" in loc:
+                prefixes.add(loc.split("-", 1)[0].upper())
+    if not prefixes:
+        pytest.skip("printer_map empty on this env")
+
+    locs = requests.get("http://localhost:8000/api/locations", timeout=5).json()
+    printer_lids = {str(r.get("LocationID", "")).upper() for r in locs if r.get("Type") == "Printer"}
+    missing = prefixes - printer_lids
+    assert not missing, (
+        f"printer_map declares prefixes {sorted(prefixes)} but only {sorted(printer_lids)} "
+        f"surface as Type=='Printer' in /api/locations. Missing: {sorted(missing)}"
+    )
