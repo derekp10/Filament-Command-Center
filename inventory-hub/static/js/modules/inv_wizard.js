@@ -78,8 +78,21 @@ window.resolveEmptySpoolWeight = resolveEmptySpoolWeight;
         });
 
         // Track dirty state from any form input/change inside the wizard (delegated).
-        wizEl.addEventListener('input', () => { wizardState.isDirty = true; });
-        wizEl.addEventListener('change', () => { wizardState.isDirty = true; });
+        // Also lift the post-success submit lock here: once the user edits anything
+        // after a successful create, the wizard is fair game again. Without this,
+        // a second click on Create would silently rebuild the same spools.
+        const _onDirty = () => {
+            wizardState.isDirty = true;
+            if (wizardState.lockedAfterSuccess) {
+                wizardState.lockedAfterSuccess = false;
+                const submitBtn = document.getElementById('btn-wiz-submit');
+                if (submitBtn) submitBtn.disabled = false;
+                const msg = document.getElementById('wiz-status-msg');
+                if (msg) msg.innerHTML = '';
+            }
+        };
+        wizEl.addEventListener('input', _onDirty);
+        wizEl.addEventListener('change', _onDirty);
 
         // Chip removal uses onclick="this.remove()" which bypasses input/change events.
         wizEl.addEventListener('click', (e) => {
@@ -104,12 +117,14 @@ window.openWizardModal = async () => {
         wizardFetchExtraFields(),
         wizardFetchMaterials()
     ]);
+    if (window.wizardSyncSpoolRows) window.wizardSyncSpoolRows();
 };
 
 const wizardReset = () => {
     wizardState.mode = 'manual';
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
+    wizardState.lockedAfterSuccess = false;
     // Note: returnToSpoolId is NOT cleared here — it persists across reset so that
     // after a clone/edit completes, the original spool detail modal can re-open.
 
@@ -126,6 +141,8 @@ const wizardReset = () => {
     if (dirEl) dirEl.style.display = 'none';
 
     document.getElementById('wiz-spool-qty').value = 1;
+
+    if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
 
     document.getElementById('wiz-spool-used').value = 0;
     
@@ -390,6 +407,10 @@ window.wizardSelectType = (mode, skipSearch = false) => {
 
 window.wizardValidateSubmit = () => {
     const btn = document.getElementById('btn-wiz-submit');
+    if (wizardState.lockedAfterSuccess) {
+        btn.disabled = true;
+        return;
+    }
     if (wizardState.mode === 'existing' && !wizardState.selectedFilamentId) {
         btn.disabled = true;
     } else {
@@ -476,6 +497,9 @@ const wizardFetchMaterials = () => {
         .then(r => r.json())
         .then(d => {
             if (d.success && d.filaments) {
+                // Cache the full filament list for the duplicate-detection check in
+                // the per-spool Prusament scan flow (see findFilamentMatches).
+                wizardState.allFilaments = d.filaments;
                 const materials = [...new Set(d.filaments.map(f => f.material).filter(Boolean))].sort(function (a, b) {
                     return a.toLowerCase().localeCompare(b.toLowerCase());
                 });
@@ -1333,69 +1357,104 @@ window.wizardSearchExternal = () => {
         });
 };
 
+// Filament-level fill — material/color/temps/vendor/template weights.
+// Extracted from wizardExternalSelected so the per-spool scan flow can call
+// just the spool half without re-touching Step 2.
+window.applyFilamentFieldsFromTemplate = (temp) => {
+    wizardState.externalMetaData = temp;
+
+    document.getElementById('wiz-fil-material').value = temp.material || '';
+    document.getElementById('wiz-fil-color_name').value = temp.color_name || temp.name || '';
+
+    let colorPayload = temp.multi_color_hexes || temp.color_hexes || temp.color_hex || 'FFFFFF';
+    let colorDirection = temp.multi_color_direction || 'longitudinal';
+    if (window.wizardPopulateColors) window.wizardPopulateColors(colorPayload, colorDirection);
+
+    document.getElementById('wiz-fil-diameter').value = temp.diameter || temp.settings_extrusion_diameter || 1.75;
+    document.getElementById('wiz-fil-density').value = temp.density || temp.settings_density || 1.24;
+    document.getElementById('wiz-fil-weight').value = temp.weight || 1000;
+    document.getElementById('wiz-fil-empty_weight').value = temp.spool_weight || '';
+
+    if (document.getElementById('wiz-fil-settings_extruder_temp')) {
+        document.getElementById('wiz-fil-settings_extruder_temp').value = temp.settings_extruder_temp || '';
+    }
+    if (document.getElementById('wiz-fil-settings_bed_temp')) {
+        document.getElementById('wiz-fil-settings_bed_temp').value = temp.settings_bed_temp || '';
+    }
+    if (document.getElementById('wiz-fil-nozzle_temp_max')) {
+        const nozMax = (temp.extra && temp.extra.nozzle_temp_max) || temp.nozzle_temp_max || '';
+        document.getElementById('wiz-fil-nozzle_temp_max').value = nozMax;
+    }
+    if (document.getElementById('wiz-fil-bed_temp_max')) {
+        const bedMax = (temp.extra && temp.extra.bed_temp_max) || temp.bed_temp_max || '';
+        document.getElementById('wiz-fil-bed_temp_max').value = bedMax;
+    }
+
+    if (temp.external_link) {
+        const filUrlNode = document.getElementById('wiz-fil-product_url');
+        if (filUrlNode) filUrlNode.value = temp.external_link;
+    }
+
+    const vName = temp.manufacturer || temp.vendor?.name;
+    if (vName) {
+        const match = (wizardState.vendors || []).find(v => (v.name || '').toLowerCase() === vName.toLowerCase());
+        if (match) {
+            window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', String(match.id), match.name);
+            document.getElementById('wiz-fil-vendor-group').style.display = 'flex';
+            document.getElementById('wiz-fil-vendor-new').style.display = 'none';
+        } else {
+            document.getElementById('wiz-fil-vendor-group').style.display = 'none';
+            document.getElementById('wiz-fil-vendor-new').style.display = 'block';
+            document.getElementById('wiz-fil-vendor-new').value = vName;
+        }
+    }
+};
+
+// Spool-level extract — returns the per-spool override dict the wizard
+// will merge onto each created spool. Does NOT touch the DOM.
+window.extractSpoolFieldsFromTemplate = (temp) => {
+    const override = { extra: {} };
+    if (temp.weight !== undefined && temp.weight !== null && !Number.isNaN(Number(temp.weight))) {
+        override.initial_weight = Number(temp.weight);
+    }
+    if (temp.spool_weight !== undefined && temp.spool_weight !== null && Number(temp.spool_weight) > 0) {
+        override.spool_weight = Number(temp.spool_weight);
+    }
+    if (temp.external_link) {
+        override.product_url = temp.external_link;
+    }
+    // Spoolman text-type extras must arrive as JSON-quoted strings (e.g. the
+    // 5 bytes `"348"` including literal quote chars). sanitize_outbound_data
+    // runs json.loads on each value and `"348"` parses as the integer 348,
+    // which Spoolman then rejects with "Value is not a string." Wrap in
+    // literal quotes here, matching the inv_details.js Edit Filament pattern
+    // and the nozzle_temp_max handling in wizardSubmit at line ~1493.
+    const mfgDate = temp.extra && temp.extra.prusament_manufacturing_date;
+    if (mfgDate) override.extra.prusament_manufacturing_date = `"${mfgDate}"`;
+    const lengthM = temp.extra && temp.extra.prusament_length_m;
+    if (lengthM !== undefined && lengthM !== null && lengthM !== '') {
+        override.extra.prusament_length_m = `"${lengthM}"`;
+    }
+    if (Object.keys(override.extra).length === 0) delete override.extra;
+    return override;
+};
+
 window.wizardExternalSelected = () => {
     const sel = document.getElementById('wiz-external-results');
     if (sel.value) {
         try {
             const temp = JSON.parse(sel.value);
-            wizardState.externalMetaData = temp; // Save for hidden Extra params
+            window.applyFilamentFieldsFromTemplate(temp);
 
-            // Auto-fill Step 2 Manual Form!
-            document.getElementById('wiz-fil-material').value = temp.material || '';
-            document.getElementById('wiz-fil-color_name').value = temp.color_name || temp.name || '';
-            
-            let colorPayload = temp.multi_color_hexes || temp.color_hexes || temp.color_hex || 'FFFFFF';
-            let colorDirection = temp.multi_color_direction || 'longitudinal';
-            if (window.wizardPopulateColors) window.wizardPopulateColors(colorPayload, colorDirection);
-            
-            document.getElementById('wiz-fil-diameter').value = temp.diameter || temp.settings_extrusion_diameter || 1.75;
-            document.getElementById('wiz-fil-density').value = temp.density || temp.settings_density || 1.24;
-            document.getElementById('wiz-fil-weight').value = temp.weight || 1000;
-            document.getElementById('wiz-fil-empty_weight').value = temp.spool_weight || '';
-
-            // Map Temperatures
-            if (document.getElementById('wiz-fil-settings_extruder_temp')) {
-                document.getElementById('wiz-fil-settings_extruder_temp').value = temp.settings_extruder_temp || '';
-            }
-            if (document.getElementById('wiz-fil-settings_bed_temp')) {
-                document.getElementById('wiz-fil-settings_bed_temp').value = temp.settings_bed_temp || '';
-            }
-            if (document.getElementById('wiz-fil-nozzle_temp_max')) {
-                const nozMax = (temp.extra && temp.extra.nozzle_temp_max) || temp.nozzle_temp_max || '';
-                document.getElementById('wiz-fil-nozzle_temp_max').value = nozMax;
-            }
-            if (document.getElementById('wiz-fil-bed_temp_max')) {
-                const bedMax = (temp.extra && temp.extra.bed_temp_max) || temp.bed_temp_max || '';
-                document.getElementById('wiz-fil-bed_temp_max').value = bedMax;
-            }
-
-            // Map the API source link into the Product URL field specifically for the Spool if applicable
+            // Legacy "Import from External" button also drops the source URL into
+            // the Spool's product_url field as a default for non-per-spool flows.
             if (temp.external_link) {
                 const spoolUrlNode = document.getElementById('wiz-spool-product_url');
-                const filUrlNode = document.getElementById('wiz-fil-product_url');
                 if (spoolUrlNode) spoolUrlNode.value = temp.external_link;
-                if (filUrlNode) filUrlNode.value = temp.external_link;
-            }
-
-            // Map Vendor
-            const vName = temp.manufacturer || temp.vendor?.name;
-            if (vName) {
-                const match = (wizardState.vendors || []).find(v => (v.name || '').toLowerCase() === vName.toLowerCase());
-                if (match) {
-                    window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', String(match.id), match.name);
-                    document.getElementById('wiz-fil-vendor-group').style.display = 'flex';
-                    document.getElementById('wiz-fil-vendor-new').style.display = 'none';
-                } else {
-                    // Unknown vendor — drop into "add new vendor" text field.
-                    document.getElementById('wiz-fil-vendor-group').style.display = 'none';
-                    document.getElementById('wiz-fil-vendor-new').style.display = 'block';
-                    document.getElementById('wiz-fil-vendor-new').value = vName;
-                }
             }
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">✅ Auto-filled from template!</span>`;
             wizardValidateSubmit();
-
         } catch (e) { console.error("Could not parse external data payload", e); }
     }
 };
@@ -1572,6 +1631,23 @@ window.wizardSubmit = async () => {
             });
         }
 
+        // Per-spool overrides from the Step-3 Prusament scan rows. When at least
+        // one row scanned successfully, the backend uses the override list to drive
+        // the spool count + per-spool field merge instead of `quantity`.
+        let spool_overrides = null;
+        if (wizardState.spoolRows && wizardState.spoolRows.length > 0) {
+            const blocking = wizardState.spoolRows.some(r => r.status === 'pending' || r.status === 'error');
+            if (blocking) {
+                msg.innerHTML = '<span class="text-danger fw-bold">⚠ One or more spool scans failed or are still loading. Fix or clear them before creating.</span>';
+                document.getElementById('btn-wiz-submit').disabled = false;
+                return;
+            }
+            const anyOk = wizardState.spoolRows.some(r => r.status === 'ok');
+            if (anyOk && wizardState.mode !== 'edit_spool') {
+                spool_overrides = wizardState.spoolRows.map(r => r.override || {});
+            }
+        }
+
         const payload = {
             spool_id: wizardState.editSpoolId, // Used by Edit router
             filament_id: target_fid,
@@ -1579,6 +1655,7 @@ window.wizardSubmit = async () => {
             spool_data: sp_payload,
             quantity: qty
         };
+        if (spool_overrides) payload.spool_overrides = spool_overrides;
 
         const endpoint = wizardState.mode === 'edit_spool' ? '/api/edit_spool_wizard' : '/api/create_inventory_wizard';
 
@@ -1615,11 +1692,32 @@ window.wizardSubmit = async () => {
                 }
             }
 
-            // Keep modal open across all modes so user can rapidly create subsequent items.
-            setTimeout(() => {
-                msg.innerHTML = "";
-                document.getElementById('btn-wiz-submit').disabled = false;
-            }, 3000);
+            // Keep modal open across all modes so user can rapidly create subsequent items —
+            // but don't let them accidentally re-submit the same spools. After a non-edit
+            // success, clear the per-spool scan URLs + reset bulk quantity to 1 + leave
+            // submit disabled until the user makes a change. The existing input/change
+            // listener flips lockedAfterSuccess off and re-enables submit on next edit.
+            if (wizardState.mode !== 'edit_spool') {
+                wizardState.lockedAfterSuccess = true;
+                // Reset quantity FIRST so the row reset rebuilds at the new size.
+                // Reversed order rebuilt rows at the OLD count and left submit
+                // enabled because the row sync re-ran wizardValidateSubmit.
+                const qtyEl = document.getElementById('wiz-spool-qty');
+                if (qtyEl) qtyEl.value = 1;
+                if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
+                setTimeout(() => {
+                    if (wizardState.lockedAfterSuccess) {
+                        msg.innerHTML = `<span class="text-info">Make a change to add more — submit is locked until you scan, edit, or pick a new filament.</span>`;
+                    }
+                }, 3000);
+                // Submit stays disabled. The dirty-listener below re-enables it when
+                // the user edits any field in the wizard.
+            } else {
+                setTimeout(() => {
+                    msg.innerHTML = "";
+                    document.getElementById('btn-wiz-submit').disabled = false;
+                }, 3000);
+            }
 
         } else {
             msg.innerHTML = `<span class="text-danger">Error: ${data.msg}</span>`;
@@ -1960,4 +2058,231 @@ window.openEditWizard = async (spoolId) => {
             document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to connect for edit.</span>';
             submitBtn.disabled = false;
         });
+};
+
+// --- PER-SPOOL PRUSAMENT SCAN (Step 3) ---
+// One row per spool, driven by `wiz-spool-qty`. Each row holds an optional
+// Prusament URL; a successful scan provides per-spool overrides that ride
+// alongside spool_data when the wizard submits. The first scan in `manual`
+// mode also fills Step 2 (filament template) — unless a matching filament
+// already exists in Spoolman, in which case the wizard auto-switches into
+// `existing` mode against the match. Failed scans block submit until cleared.
+
+wizardState.spoolRows = [];
+wizardState.filamentLockedFromScan = false;
+
+const _normalizeStr = (s) => (s || '').toString().trim().toLowerCase();
+
+window.findFilamentMatches = (temp) => {
+    const all = wizardState.allFilaments || [];
+    const vName = _normalizeStr((temp.vendor && temp.vendor.name) || temp.manufacturer);
+    const mat = _normalizeStr(temp.material);
+    const parsedColor = _normalizeStr(temp.color_name || temp.name);
+    if (!vName || !mat || !parsedColor) return [];
+    const matches = all.filter(f => {
+        const fv = _normalizeStr(f.vendor && f.vendor.name);
+        const fm = _normalizeStr(f.material);
+        if (fv !== vName || fm !== mat) return false;
+        // Fuzzy color match: a Prusament filament might be stored with no
+        // dedicated color_name (just a `name` like "Silver (Pearl Mouse)"),
+        // while the scan returns color_name "Pearl Mouse". Accept any of:
+        //   1. exact equality on the filament's color_name field
+        //   2. parsed color appears anywhere in the filament's name
+        //   3. filament's color_name appears in the parsed color (only when
+        //      color_name is non-empty — the truthy guard prevents the
+        //      empty-string substring trap from matching everything)
+        const fColorName = _normalizeStr(f.color_name);
+        const fName = _normalizeStr(f.name);
+        if (fColorName && fColorName === parsedColor) return true;
+        if (fName && fName.includes(parsedColor)) return true;
+        if (fColorName && parsedColor.includes(fColorName)) return true;
+        return false;
+    });
+    // Sort by id ascending so the oldest (canonical) filament wins when the
+    // user already has fuzzy duplicates from earlier broken runs. Avoids
+    // forcing a picker on the user — the right answer is almost always
+    // "the one I created first".
+    matches.sort((a, b) => Number(a.id) - Number(b.id));
+    return matches;
+};
+
+window.wizardSyncSpoolRows = () => {
+    const qtyInput = document.getElementById('wiz-spool-qty');
+    const qty = Math.max(1, parseInt(qtyInput && qtyInput.value) || 1);
+    while (wizardState.spoolRows.length < qty) {
+        wizardState.spoolRows.push({
+            idx: wizardState.spoolRows.length,
+            url: '',
+            status: 'empty',
+            errorMsg: '',
+            override: null,
+        });
+    }
+    if (wizardState.spoolRows.length > qty) {
+        wizardState.spoolRows = wizardState.spoolRows.slice(0, qty);
+    }
+    wizardState.spoolRows.forEach((r, i) => { r.idx = i; });
+    window.wizardRenderSpoolRows();
+    window.wizardUpdateSubmitGate();
+};
+
+window.wizardRenderSpoolRows = () => {
+    const container = document.getElementById('wiz-spool-rows-container');
+    if (!container) return;
+    const summary = document.getElementById('wiz-spool-rows-summary');
+
+    container.innerHTML = wizardState.spoolRows.map(row => {
+        let badge = '';
+        let rowCls = '';
+        if (row.status === 'pending') {
+            badge = `<span class="badge bg-secondary">⏳ Scanning…</span>`;
+        } else if (row.status === 'ok') {
+            const o = row.override || {};
+            const parts = [];
+            if (o.initial_weight !== undefined) parts.push(`${o.initial_weight}g`);
+            if (o.spool_weight !== undefined) parts.push(`${o.spool_weight}g empty`);
+            if (o.extra && o.extra.prusament_manufacturing_date) parts.push(o.extra.prusament_manufacturing_date);
+            badge = `<span class="badge bg-success">✓ ${parts.join(' · ') || 'Scanned'}</span>`;
+        } else if (row.status === 'error') {
+            badge = `<span class="badge bg-danger">✗ ${row.errorMsg || 'Scan failed'}</span>`;
+            rowCls = 'border border-danger rounded p-1';
+        }
+        const valAttr = row.url ? `value="${row.url.replace(/"/g, '&quot;')}"` : '';
+        return `
+        <div class="d-flex align-items-center gap-2 mb-1 ${rowCls}" data-spool-row-idx="${row.idx}">
+            <span class="text-secondary small" style="min-width: 64px;">Spool ${row.idx + 1}</span>
+            <input type="url" class="form-control form-control-sm bg-dark text-white border-secondary"
+                placeholder="📷 Scan/paste Prusament URL — optional"
+                ${valAttr}
+                onblur="window.wizardScanSpoolRow(${row.idx}, this.value)"
+                onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.blur(); }">
+            ${badge}
+        </div>`;
+    }).join('');
+
+    if (summary) {
+        const okCount = wizardState.spoolRows.filter(r => r.status === 'ok').length;
+        const total = wizardState.spoolRows.length;
+        const errCount = wizardState.spoolRows.filter(r => r.status === 'error').length;
+        let html = `${okCount} of ${total} spools have scan data — others use defaults above.`;
+        if (errCount > 0) {
+            html = `<span class="text-danger fw-bold">⚠ ${errCount} of ${total} spool scans failed — fix or clear before creating.</span>`;
+        }
+        summary.innerHTML = html;
+    }
+};
+
+window.wizardUpdateSubmitGate = () => {
+    const submitBtn = document.getElementById('btn-wiz-submit');
+    if (!submitBtn) return;
+    const blocking = wizardState.spoolRows.some(r => r.status === 'pending' || r.status === 'error');
+    if (blocking) {
+        submitBtn.disabled = true;
+    } else {
+        // Defer to wizardValidateSubmit's own logic (existing-mode + selection check).
+        wizardValidateSubmit();
+    }
+};
+
+window.wizardScanSpoolRow = async (idx, rawUrl) => {
+    const row = wizardState.spoolRows[idx];
+    if (!row) return;
+    const url = (rawUrl || '').trim();
+    row.url = url;
+
+    if (!url) {
+        row.status = 'empty';
+        row.errorMsg = '';
+        row.override = null;
+        window.wizardRenderSpoolRows();
+        window.wizardUpdateSubmitGate();
+        return;
+    }
+
+    if (!url.includes('prusament.com/spool/')) {
+        row.status = 'error';
+        row.errorMsg = 'Not a Prusament URL';
+        row.override = null;
+        window.wizardRenderSpoolRows();
+        window.wizardUpdateSubmitGate();
+        return;
+    }
+
+    row.status = 'pending';
+    row.errorMsg = '';
+    window.wizardRenderSpoolRows();
+    window.wizardUpdateSubmitGate();
+
+    try {
+        const r = await fetch(`/api/external/search?source=prusament&q=${encodeURIComponent(url)}`);
+        const data = await r.json();
+        if (!data.success || !data.results || data.results.length === 0) {
+            row.status = 'error';
+            row.errorMsg = 'Prusament URL not recognized';
+            row.override = null;
+            window.wizardRenderSpoolRows();
+            window.wizardUpdateSubmitGate();
+            return;
+        }
+
+        const temp = data.results[0];
+        row.override = window.extractSpoolFieldsFromTemplate(temp);
+        row.status = 'ok';
+        row.errorMsg = '';
+
+        // First successful scan in the session: maybe fill Step 2. If any
+        // existing filament fuzzy-matches the scan, switch to existing-mode
+        // against the oldest match — no picker, no clicks, no chance for
+        // the user to accidentally create another duplicate.
+        if (!wizardState.filamentLockedFromScan && wizardState.mode === 'manual') {
+            const matches = window.findFilamentMatches(temp);
+            if (matches.length >= 1) {
+                window.wizardAutoSwitchToExisting(matches[0]);
+            } else {
+                window.applyFilamentFieldsFromTemplate(temp);
+            }
+            wizardState.filamentLockedFromScan = true;
+        }
+
+        window.wizardRenderSpoolRows();
+        window.wizardUpdateSubmitGate();
+
+        // Hop focus to the next still-empty URL row so the user can keep
+        // scanning without reaching for the mouse. No wraparound — landing
+        // back on row 0 after a successful scan would just re-trigger.
+        const nextEmpty = wizardState.spoolRows.find(r => r.idx > idx && r.status === 'empty');
+        if (nextEmpty) {
+            const nextInput = document.querySelector(
+                `[data-spool-row-idx="${nextEmpty.idx}"] input[type='url']`
+            );
+            if (nextInput) nextInput.focus();
+        }
+    } catch (e) {
+        console.error('wizardScanSpoolRow error', e);
+        row.status = 'error';
+        row.errorMsg = 'Network error';
+        row.override = null;
+        window.wizardRenderSpoolRows();
+        window.wizardUpdateSubmitGate();
+    }
+};
+
+window.wizardAutoSwitchToExisting = (filament) => {
+    window.wizardSelectType('existing', true);
+    const sel = document.getElementById('wiz-existing-results');
+    if (sel) {
+        const name = `${filament.vendor?.name || 'Generic'} ${filament.material} - ${filament.name || 'Unknown'}`;
+        sel.innerHTML = `<option value="${filament.id}" selected>${name} (ID: ${filament.id})</option>`;
+        window.wizardExistingSelected();
+    }
+    const msg = document.getElementById('wiz-status-msg');
+    if (msg) {
+        msg.innerHTML = `<span class="text-success">✅ Recognized existing Prusament Filament #${filament.id} — switched to new-spool mode.</span>`;
+    }
+};
+
+window.wizardResetSpoolRows = () => {
+    wizardState.spoolRows = [];
+    wizardState.filamentLockedFromScan = false;
+    window.wizardSyncSpoolRows();
 };

@@ -222,8 +222,18 @@
                             <label class="text-warning me-2 mb-0 fw-bold fs-5">BULK QUANTITY TO CREATE:</label>
                             <input type="number"
                                 class="form-control form-control-lg bg-dark text-warning border-warning font-monospace text-center fw-bold fs-4 w-90px"
-                                id="wiz-spool-qty" value="1" min="1" max="50">
+                                id="wiz-spool-qty" value="1" min="1" max="50"
+                                oninput="window.wizardSyncSpoolRows && window.wizardSyncSpoolRows()">
                         </div>
+                    </div>
+
+                    <!-- Per-spool Prusament scan rows (one per spool, optional). -->
+                    <div class="bg-dark p-2 rounded border border-secondary mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <label class="text-info mb-0 small fw-bold">📷 Per-spool Prusament scan (optional)</label>
+                            <span id="wiz-spool-rows-summary" class="text-secondary small"></span>
+                        </div>
+                        <div id="wiz-spool-rows-container"></div>
                     </div>
 
                     <div class="row g-3">

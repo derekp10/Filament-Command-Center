@@ -306,14 +306,27 @@ REQUIRED_FILAMENT_EXTRAS = [
     ("bed_temp_max", "Bed Temp Max", "text"),
 ]
 
+# Spool extras the per-spool Prusament scan flow writes when a row is scanned.
+# Spoolman validates extra-field keys at write time; without these registered,
+# spool creation fails 400 with "Unknown extra field..." and the wizard
+# silently logs the failure (parent endpoint still returns success because
+# filament creation succeeded). Self-heal at startup mirrors the filament
+# pattern above.
+REQUIRED_SPOOL_EXTRAS = [
+    ("prusament_manufacturing_date", "Prusament Manufacturing Date", "text"),
+    ("prusament_length_m", "Prusament Length (m)", "text"),
+]
+
 
 def ensure_required_extras():
-    """Register any missing Edit-Filament extras with Spoolman. Called once
-    at Flask startup. Failures log a warning but don't block the app —
-    the same fields will keep silently failing to write, but the app stays
-    up so the user can fix Spoolman directly."""
+    """Register any missing Edit-Filament + per-spool-scan extras with
+    Spoolman. Called once at Flask startup. Failures log a warning but
+    don't block the app — the same fields will keep silently failing to
+    write, but the app stays up so the user can fix Spoolman directly."""
     for key, name, ftype in REQUIRED_FILAMENT_EXTRAS:
         ensure_extra_field("filament", key, name, ftype)
+    for key, name, ftype in REQUIRED_SPOOL_EXTRAS:
+        ensure_extra_field("spool", key, name, ftype)
 
 
 def update_extra_field_choices(entity_type, key, new_choices):

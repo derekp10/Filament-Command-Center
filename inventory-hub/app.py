@@ -368,6 +368,11 @@ def api_create_inventory_wizard():
     filament_data = data.get('filament_data')
     spool_data = data.get('spool_data')
     quantity = int(data.get('quantity', 1))
+    # Optional per-spool override list. When present, drives the spool count
+    # (one created per entry) and merges onto spool_data per index. Used by
+    # the per-spool Prusament scan flow in Step 3 of the wizard so each box's
+    # actual weight / manufacture date / product URL lands on the right spool.
+    spool_overrides = data.get('spool_overrides')
 
     created_spool_ids = []
 
@@ -408,19 +413,45 @@ def api_create_inventory_wizard():
         # Step 2: Create Spool(s)
         if spool_data:
             spool_data['filament_id'] = filament_id
-            
-            for _ in range(quantity):
-                # Copy properties to ensure unique timestamps per spool creation request if needed
+
+            # Per-spool override list takes precedence over `quantity` when present.
+            # Each entry shallow-merges onto spool_data, with `extra` deep-merged
+            # so per-spool fields (e.g. prusament_manufacturing_date) don't clobber
+            # wizard-wide extras (e.g. needs_label_print).
+            if spool_overrides and isinstance(spool_overrides, list):
+                spool_iter = spool_overrides
+            else:
+                spool_iter = [None] * quantity
+
+            for override in spool_iter:
                 payload = dict(spool_data)
+                if override:
+                    base_extra = dict(payload.get('extra') or {})
+                    override_extra = override.get('extra') or {}
+                    payload.update({k: v for k, v in override.items() if k != 'extra'})
+                    if base_extra or override_extra:
+                        base_extra.update(override_extra)
+                        payload['extra'] = base_extra
                 new_spool = spoolman_api.create_spool(payload)
                 if new_spool and 'id' in new_spool:
                     created_spool_ids.append(new_spool['id'])
                 else:
                     state.logger.error("A spool creation failed during bulk wizard execution.")
-            
+
+            # Surface failure when spool creation was requested but produced
+            # zero results — otherwise the wizard reports "Success!" and the
+            # user only notices the missing spools much later.
+            if len(created_spool_ids) == 0:
+                return jsonify({
+                    "success": False,
+                    "filament_id": filament_id,
+                    "created_spools": [],
+                    "msg": "Filament was created/found but every spool creation failed. Check Spoolman logs for the rejection reason (e.g. unknown extra field).",
+                })
+
         return jsonify({
-            "success": True, 
-            "filament_id": filament_id, 
+            "success": True,
+            "filament_id": filament_id,
             "created_spools": created_spool_ids
         })
 
