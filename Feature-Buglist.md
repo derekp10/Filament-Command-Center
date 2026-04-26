@@ -57,8 +57,6 @@
 
 * Need to retool how the location selector works in the add/edit wizzard. It doesn't "Flow" properly. Having to delete the existing text to get the full list to change it is a bit clunky.
 
-* **[Feature]** For Prusament, add ability to scan the QR code on the box to auto load spool based data. We have this currently for loading the filament, but we need to also enable it for spool creation. Will need to figure out a way to do this for multiple spools of the same filament, but allow ust to configure each spool using the QR code, and a quick scan. Currently the flow expects you to not have this spool specific data available, I'd love to be able to make use of this to reduce data entry.
-
 # **Active Backlog (Organized by Feature Area)**
 
 ## 📋 Activity Log
