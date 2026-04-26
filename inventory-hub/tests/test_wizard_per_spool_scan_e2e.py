@@ -144,16 +144,19 @@ def test_per_spool_scan_sends_overrides_and_fills_step2(page: Page):
     overrides = body.get("spool_overrides")
     assert overrides is not None and len(overrides) == 2, body
     assert overrides[0]["initial_weight"] == 998
-    # product_url lives in extras (Spoolman has no native product_url on
-    # Spool). Wrapped in literal quotes for the text-type validator.
+    # product_url + purchase_url live in extras (no native product_url on
+    # Spool). Sent UNWRAPPED — sanitize_outbound_data wraps both since
+    # they're in JSON_STRING_FIELDS. Pre-wrapping would double-wrap.
     assert "product_url" not in overrides[0]
-    assert overrides[0]["extra"]["product_url"] == '"https://prusament.com/spool/1/aaa/"'
-    # Other text-type extras follow the same wrap-in-quotes pattern.
+    assert overrides[0]["extra"]["product_url"] == 'https://prusament.com/spool/1/aaa/'
+    assert overrides[0]["extra"]["purchase_url"] == 'https://prusament.com/spool/1/aaa/'
+    # Date and length are NOT in JSON_STRING_FIELDS, so they DO need
+    # literal-quote wrapping to survive the json.loads round-trip.
     assert overrides[0]["extra"]["prusament_manufacturing_date"] == '"2026-03-12"'
     assert overrides[0]["extra"]["prusament_length_m"] == '"330"'
     assert overrides[1]["initial_weight"] == 1003
     assert overrides[1]["extra"]["prusament_manufacturing_date"] == '"2026-03-13"'
-    assert overrides[1]["extra"]["product_url"] == '"https://prusament.com/spool/2/bbb/"'
+    assert overrides[1]["extra"]["product_url"] == 'https://prusament.com/spool/2/bbb/'
     # Manual mode → filament_data still in the payload (not filament_id).
     assert body.get("filament_data") is not None
     assert not body.get("filament_id")
