@@ -1428,8 +1428,17 @@ window.extractSpoolFieldsFromTemplate = (temp) => {
     // and the nozzle_temp_max handling in wizardSubmit at line ~1493.
     if (temp.external_link) {
         // product_url is a Spoolman *extra* on Spool, not a native field —
-        // sending it at top-level made Spoolman silently drop it.
-        override.extra.product_url = `"${temp.external_link}"`;
+        // sending it at top-level made Spoolman silently drop it. Send the
+        // raw URL — sanitize_outbound_data wraps JSON_STRING_FIELDS (which
+        // includes product_url and purchase_url) via json.dumps for us.
+        // Pre-wrapping here would double-wrap and the literal quote chars
+        // would leak into the UI on read-back.
+        override.extra.product_url = temp.external_link;
+        // Mirror into purchase_url so the spool's "Purchase Link" field is
+        // also populated. The parser only knows the per-spool product page
+        // URL — without a separate scrape for the canonical store link,
+        // using the same URL for both is the most useful default.
+        override.extra.purchase_url = temp.external_link;
     }
     const mfgDate = temp.extra && temp.extra.prusament_manufacturing_date;
     if (mfgDate) override.extra.prusament_manufacturing_date = `"${mfgDate}"`;
@@ -2075,6 +2084,24 @@ wizardState.filamentLockedFromScan = false;
 
 const _normalizeStr = (s) => (s || '').toString().trim().toLowerCase();
 
+// Token-aware material match. The Prusament parser returns full names like
+// "PC Blend Carbon Fiber" while users often store the canonical short code
+// ("PC", "PLA"). Tokenize both, require the smaller token set to be a
+// subset of the larger. Word-aware so "PE" won't sneak into "PETG".
+const _materialMatches = (storedMat, parsedMat) => {
+    if (!storedMat || !parsedMat) return false;
+    if (storedMat === parsedMat) return true;
+    const tokens = (s) => new Set(s.split(/[\s\-_,;()/]+/).filter(Boolean));
+    const a = tokens(storedMat);
+    const b = tokens(parsedMat);
+    if (a.size === 0 || b.size === 0) return false;
+    const [smaller, larger] = a.size <= b.size ? [a, b] : [b, a];
+    for (const t of smaller) {
+        if (!larger.has(t)) return false;
+    }
+    return true;
+};
+
 window.findFilamentMatches = (temp) => {
     const all = wizardState.allFilaments || [];
     const vName = _normalizeStr((temp.vendor && temp.vendor.name) || temp.manufacturer);
@@ -2084,7 +2111,8 @@ window.findFilamentMatches = (temp) => {
     const matches = all.filter(f => {
         const fv = _normalizeStr(f.vendor && f.vendor.name);
         const fm = _normalizeStr(f.material);
-        if (fv !== vName || fm !== mat) return false;
+        if (fv !== vName) return false;
+        if (!_materialMatches(fm, mat)) return false;
         // Fuzzy color match: a Prusament filament might be stored with no
         // dedicated color_name (just a `name` like "Silver (Pearl Mouse)"),
         // while the scan returns color_name "Pearl Mouse". Accept any of:
@@ -2128,27 +2156,75 @@ window.wizardSyncSpoolRows = () => {
     window.wizardUpdateSubmitGate();
 };
 
+// Build the badge HTML for a single row — pure function, no DOM access.
+const _spoolRowBadgeHtml = (row) => {
+    if (row.status === 'pending') {
+        return `<span class="badge bg-secondary">⏳ Scanning…</span>`;
+    }
+    if (row.status === 'ok') {
+        const o = row.override || {};
+        const parts = [];
+        if (o.initial_weight !== undefined) parts.push(`${o.initial_weight}g`);
+        if (o.spool_weight !== undefined) parts.push(`${o.spool_weight}g empty`);
+        if (o.extra && o.extra.prusament_manufacturing_date) {
+            // Strip the literal-quote wrapper for display.
+            parts.push(String(o.extra.prusament_manufacturing_date).replace(/^"|"$/g, ''));
+        }
+        return `<span class="badge bg-success">✓ ${parts.join(' · ') || 'Scanned'}</span>`;
+    }
+    if (row.status === 'error') {
+        return `<span class="badge bg-danger">✗ ${row.errorMsg || 'Scan failed'}</span>`;
+    }
+    return '';
+};
+
+const _spoolRowSummaryHtml = () => {
+    const okCount = wizardState.spoolRows.filter(r => r.status === 'ok').length;
+    const total = wizardState.spoolRows.length;
+    const errCount = wizardState.spoolRows.filter(r => r.status === 'error').length;
+    if (errCount > 0) {
+        return `<span class="text-danger fw-bold">⚠ ${errCount} of ${total} spool scans failed — fix or clear before creating.</span>`;
+    }
+    return `${okCount} of ${total} spools have scan data — others use defaults above.`;
+};
+
+// Update only the changed row's badge + outline class. Critically does NOT
+// touch the URL input or any neighbor row. Without this, every status
+// transition (pending → ok) used to blow away the entire rows container
+// via innerHTML, destroying any input the user was actively typing into
+// in another row — broke rapid-fire blind scanning of multiple boxes.
+window.wizardRenderSpoolRowBadge = (idx) => {
+    const row = wizardState.spoolRows[idx];
+    if (!row) return;
+    const rowEl = document.querySelector(`[data-spool-row-idx="${idx}"]`);
+    if (rowEl) {
+        // Replace just the trailing badge span (last child) to avoid touching
+        // siblings (label, input). If no badge yet, append one.
+        const lastChild = rowEl.lastElementChild;
+        if (lastChild && lastChild.classList && lastChild.classList.contains('badge')) {
+            lastChild.outerHTML = _spoolRowBadgeHtml(row) || '';
+        } else {
+            rowEl.insertAdjacentHTML('beforeend', _spoolRowBadgeHtml(row));
+        }
+        // Outline class for error state.
+        rowEl.classList.toggle('border', row.status === 'error');
+        rowEl.classList.toggle('border-danger', row.status === 'error');
+        rowEl.classList.toggle('rounded', row.status === 'error');
+        rowEl.classList.toggle('p-1', row.status === 'error');
+    }
+    const summary = document.getElementById('wiz-spool-rows-summary');
+    if (summary) summary.innerHTML = _spoolRowSummaryHtml();
+};
+
+// Full re-render — only used when the row count changes (qty change or
+// reset). Blows away inputs, so do not call this on a status transition.
 window.wizardRenderSpoolRows = () => {
     const container = document.getElementById('wiz-spool-rows-container');
     if (!container) return;
     const summary = document.getElementById('wiz-spool-rows-summary');
 
     container.innerHTML = wizardState.spoolRows.map(row => {
-        let badge = '';
-        let rowCls = '';
-        if (row.status === 'pending') {
-            badge = `<span class="badge bg-secondary">⏳ Scanning…</span>`;
-        } else if (row.status === 'ok') {
-            const o = row.override || {};
-            const parts = [];
-            if (o.initial_weight !== undefined) parts.push(`${o.initial_weight}g`);
-            if (o.spool_weight !== undefined) parts.push(`${o.spool_weight}g empty`);
-            if (o.extra && o.extra.prusament_manufacturing_date) parts.push(o.extra.prusament_manufacturing_date);
-            badge = `<span class="badge bg-success">✓ ${parts.join(' · ') || 'Scanned'}</span>`;
-        } else if (row.status === 'error') {
-            badge = `<span class="badge bg-danger">✗ ${row.errorMsg || 'Scan failed'}</span>`;
-            rowCls = 'border border-danger rounded p-1';
-        }
+        const rowCls = row.status === 'error' ? 'border border-danger rounded p-1' : '';
         const valAttr = row.url ? `value="${row.url.replace(/"/g, '&quot;')}"` : '';
         return `
         <div class="d-flex align-items-center gap-2 mb-1 ${rowCls}" data-spool-row-idx="${row.idx}">
@@ -2158,20 +2234,11 @@ window.wizardRenderSpoolRows = () => {
                 ${valAttr}
                 onblur="window.wizardScanSpoolRow(${row.idx}, this.value)"
                 onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.blur(); }">
-            ${badge}
+            ${_spoolRowBadgeHtml(row)}
         </div>`;
     }).join('');
 
-    if (summary) {
-        const okCount = wizardState.spoolRows.filter(r => r.status === 'ok').length;
-        const total = wizardState.spoolRows.length;
-        const errCount = wizardState.spoolRows.filter(r => r.status === 'error').length;
-        let html = `${okCount} of ${total} spools have scan data — others use defaults above.`;
-        if (errCount > 0) {
-            html = `<span class="text-danger fw-bold">⚠ ${errCount} of ${total} spool scans failed — fix or clear before creating.</span>`;
-        }
-        summary.innerHTML = html;
-    }
+    if (summary) summary.innerHTML = _spoolRowSummaryHtml();
 };
 
 window.wizardUpdateSubmitGate = () => {
@@ -2196,7 +2263,7 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
         row.status = 'empty';
         row.errorMsg = '';
         row.override = null;
-        window.wizardRenderSpoolRows();
+        window.wizardRenderSpoolRowBadge(idx);
         window.wizardUpdateSubmitGate();
         return;
     }
@@ -2205,14 +2272,14 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
         row.status = 'error';
         row.errorMsg = 'Not a Prusament URL';
         row.override = null;
-        window.wizardRenderSpoolRows();
+        window.wizardRenderSpoolRowBadge(idx);
         window.wizardUpdateSubmitGate();
         return;
     }
 
     row.status = 'pending';
     row.errorMsg = '';
-    window.wizardRenderSpoolRows();
+    window.wizardRenderSpoolRowBadge(idx);
     window.wizardUpdateSubmitGate();
 
     try {
@@ -2222,7 +2289,7 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
             row.status = 'error';
             row.errorMsg = 'Prusament URL not recognized';
             row.override = null;
-            window.wizardRenderSpoolRows();
+            window.wizardRenderSpoolRowBadge(idx);
             window.wizardUpdateSubmitGate();
             return;
         }
@@ -2246,25 +2313,31 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
             wizardState.filamentLockedFromScan = true;
         }
 
-        window.wizardRenderSpoolRows();
+        window.wizardRenderSpoolRowBadge(idx);
         window.wizardUpdateSubmitGate();
 
         // Hop focus to the next still-empty URL row so the user can keep
-        // scanning without reaching for the mouse. No wraparound — landing
-        // back on row 0 after a successful scan would just re-trigger.
-        const nextEmpty = wizardState.spoolRows.find(r => r.idx > idx && r.status === 'empty');
-        if (nextEmpty) {
-            const nextInput = document.querySelector(
-                `[data-spool-row-idx="${nextEmpty.idx}"] input[type='url']`
-            );
-            if (nextInput) nextInput.focus();
+        // scanning without reaching for the mouse. Defensive: if the user
+        // has already moved focus into another row's input (mid-typing the
+        // next scan), DON'T yoink them back — that broke rapid-fire blind
+        // scanning of multiple boxes.
+        const active = document.activeElement;
+        const focusInsideRow = active && active.closest && active.closest('[data-spool-row-idx]');
+        if (!focusInsideRow || focusInsideRow.getAttribute('data-spool-row-idx') === String(idx)) {
+            const nextEmpty = wizardState.spoolRows.find(r => r.idx > idx && r.status === 'empty');
+            if (nextEmpty) {
+                const nextInput = document.querySelector(
+                    `[data-spool-row-idx="${nextEmpty.idx}"] input[type='url']`
+                );
+                if (nextInput) nextInput.focus();
+            }
         }
     } catch (e) {
         console.error('wizardScanSpoolRow error', e);
         row.status = 'error';
         row.errorMsg = 'Network error';
         row.override = null;
-        window.wizardRenderSpoolRows();
+        window.wizardRenderSpoolRowBadge(idx);
         window.wizardUpdateSubmitGate();
     }
 };
