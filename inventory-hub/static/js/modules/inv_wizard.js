@@ -1363,7 +1363,30 @@ window.wizardSearchExternal = () => {
 window.applyFilamentFieldsFromTemplate = (temp) => {
     wizardState.externalMetaData = temp;
 
-    document.getElementById('wiz-fil-material').value = temp.material || '';
+    // Split the parser's "full" material string ("PC Blend Carbon Fiber")
+    // into a base material ("PC") + canonical filament_attributes
+    // (["Blend", "Carbon Fiber"]). Spoolman's filtering only works on the
+    // native material field, so the base is what should land there;
+    // modifiers ride along as multi-choice extras for downstream display
+    // and to satisfy the duplicate-detection matcher.
+    const known = _knownFilamentAttributes();
+    const split = window.splitMaterialAndAttributes(temp.material || '', known);
+    document.getElementById('wiz-fil-material').value = split.base || temp.material || '';
+
+    // Replace any existing chips for filament_attributes with the parsed
+    // set. Keeps applyFilamentFieldsFromTemplate idempotent — calling it
+    // again with different scan data fully replaces the form state instead
+    // of accumulating attrs from prior scans.
+    const chipContainer = document.getElementById('chip-container-fil-filament_attributes');
+    if (chipContainer) {
+        chipContainer.querySelectorAll('.dynamic-chip[data-key="filament_attributes"]').forEach(c => c.remove());
+    }
+    if (window.wizardAddMultiChoiceChip) {
+        split.attrs.forEach(attr => {
+            window.wizardAddMultiChoiceChip('fil', 'filament_attributes', attr);
+        });
+    }
+
     document.getElementById('wiz-fil-color_name').value = temp.color_name || temp.name || '';
 
     let colorPayload = temp.multi_color_hexes || temp.color_hexes || temp.color_hex || 'FFFFFF';
@@ -2084,13 +2107,65 @@ wizardState.filamentLockedFromScan = false;
 
 const _normalizeStr = (s) => (s || '').toString().trim().toLowerCase();
 
-// Token-aware material match. The Prusament parser returns full names like
-// "PC Blend Carbon Fiber" while users often store the canonical short code
-// ("PC", "PLA"). Tokenize both, require the smaller token set to be a
-// subset of the larger. Word-aware so "PE" won't sneak into "PETG".
+// Pull the canonical filament_attributes choice list from the cached
+// Spoolman field config. Returns [] when the wizard's extraFields
+// fetch hasn't completed yet — callers fall back gracefully.
+const _knownFilamentAttributes = () => {
+    const fields = wizardState.extraFields && wizardState.extraFields.filament;
+    if (!fields) return [];
+    const fa = fields.find(f => f.key === 'filament_attributes');
+    return (fa && fa.choices) || [];
+};
+
+// Split a Prusament-style "full" material string ("PC Blend Carbon Fiber")
+// into a base material and a list of attributes. Greedy longest-first
+// match against the canonical Spoolman filament_attributes choices so
+// multi-word attrs like "Carbon Fiber" win over their substrings.
+// Word-boundary aware so the match is exact ("PE" won't pull from
+// "PETG"). Anything left after attrs are stripped is the base material.
+window.splitMaterialAndAttributes = (rawMaterial, knownAttrs) => {
+    if (!rawMaterial) return { base: '', attrs: [] };
+    const list = Array.isArray(knownAttrs) ? knownAttrs : [];
+    if (list.length === 0) return { base: rawMaterial.trim(), attrs: [] };
+    const sorted = [...list].sort((a, b) => b.length - a.length);
+    let remaining = ` ${rawMaterial} `;
+    const matched = [];
+    for (const attr of sorted) {
+        const escaped = attr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`(^|[^A-Za-z0-9])${escaped}(?=$|[^A-Za-z0-9])`, 'i');
+        if (re.test(remaining)) {
+            remaining = remaining.replace(re, '$1 ');
+            matched.push(attr);
+        }
+    }
+    const base = remaining.trim().replace(/\s+/g, ' ');
+    return { base, attrs: matched };
+};
+
+// Material match strategy, in order of preference:
+//   1. Strip known attributes off the parser side, exact-match the
+//      remaining base against stored material. This is the right answer
+//      whenever extraFields is loaded — handles "PC Blend Carbon Fiber"
+//      vs stored "PC".
+//   2. Token-subset fallback when the canonical attribute list isn't
+//      available yet (wizard race or older deployment). Word-aware so
+//      "PE" still won't match "PETG".
 const _materialMatches = (storedMat, parsedMat) => {
     if (!storedMat || !parsedMat) return false;
     if (storedMat === parsedMat) return true;
+    const known = _knownFilamentAttributes().map(_normalizeStr);
+    if (known.length > 0) {
+        const split = window.splitMaterialAndAttributes(parsedMat, known);
+        if (_normalizeStr(split.base) === storedMat) return true;
+        // And the reverse — stored side may itself be a "full" string on
+        // older filaments that pre-date the base/attrs split convention.
+        const splitStored = window.splitMaterialAndAttributes(storedMat, known);
+        if (_normalizeStr(splitStored.base) === _normalizeStr(split.base)
+                && splitStored.base) {
+            return true;
+        }
+    }
+    // Token-subset fallback (race / no canonical list available).
     const tokens = (s) => new Set(s.split(/[\s\-_,;()/]+/).filter(Boolean));
     const a = tokens(storedMat);
     const b = tokens(parsedMat);

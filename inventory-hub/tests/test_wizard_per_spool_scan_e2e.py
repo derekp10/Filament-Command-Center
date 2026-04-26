@@ -321,6 +321,62 @@ def test_post_success_lock_blocks_repeat_submit_until_edit(page: Page):
     expect(submit).not_to_be_disabled(timeout=2000)
 
 
+def test_per_spool_scan_splits_material_into_base_plus_attribute_chips(page: Page):
+    """When the parser returns 'PC Blend Carbon Fiber' for a brand-new
+    filament, Step 2's material field must show 'PC' and the
+    filament_attributes chip container must hold 'Blend' + 'Carbon Fiber'.
+    Without this split, Spoolman's flat material filter can't group all
+    PC variants together — the whole reason the user introduced the
+    base/attrs convention."""
+    page.route("**/api/filaments", lambda route, req: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"success": True, "filaments": []}),
+    ))
+    _route_external_search(page, lambda q: {
+        "id": "fake",
+        "name": "Prusament PC Blend Carbon Fiber Black",
+        "material": "PC Blend Carbon Fiber",
+        "vendor": {"name": "Prusament"},
+        "weight": 800,
+        "spool_weight": 215,
+        "diameter": 1.75,
+        "density": 1.18,
+        "color_hex": "111111",
+        "color_name": "Black",
+        "external_link": "https://prusament.com/spool/9/zzz/",
+        "extra": {},
+    })
+    captured = _capture_create_wizard(page)
+
+    page.goto("http://localhost:8000")
+    page.get_by_role("button", name=re.compile("ADD INVENTORY")).click()
+    expect(page.locator("#wizardModal")).to_be_visible()
+    page.locator("#btn-type-manual").click()
+
+    rows = page.locator("[data-spool-row-idx]")
+    rows.nth(0).locator("input[type='url']").fill("https://prusament.com/spool/9/zzz/")
+    rows.nth(0).locator("input[type='url']").blur()
+    expect(rows.nth(0).locator(".badge.bg-success")).to_be_visible(timeout=5000)
+
+    # Step 2's native material field must hold the BASE only.
+    expect(page.locator("#wiz-fil-material")).to_have_value("PC")
+
+    # Both attributes must be rendered as chips with data-selected="true"
+    # so the existing wizardSubmit collector at line ~1610 picks them up.
+    chip_values = page.locator(
+        '#chip-container-fil-filament_attributes .dynamic-chip[data-selected="true"]'
+    ).evaluate_all("els => els.map(e => e.getAttribute('data-value')).sort()")
+    assert chip_values == ["Blend", "Carbon Fiber"]
+
+    page.locator("#btn-wiz-submit").click()
+    expect(page.locator("#wiz-status-msg")).to_contain_text("Success!", timeout=5000)
+    fil_data = captured[0].get("filament_data") or {}
+    assert fil_data.get("material") == "PC"
+    # Attributes flow into the filament's extras as a list (the wizard's
+    # existing chip collector at inv_wizard.js:1610).
+    assert sorted(fil_data.get("extra", {}).get("filament_attributes", [])) == ["Blend", "Carbon Fiber"]
+
+
 def test_per_spool_scan_failure_blocks_submit(page: Page):
     """A failed scan must mark the row red and block submit until the URL
     is cleared. Never silently fall back to defaults."""
