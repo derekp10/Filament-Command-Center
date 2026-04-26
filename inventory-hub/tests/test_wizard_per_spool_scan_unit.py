@@ -159,7 +159,20 @@ def test_extract_spool_fields_basic_mapping(page: Page):
     })""")
     assert override['initial_weight'] == 998
     assert override['spool_weight'] == 215
-    assert override['product_url'] == 'https://prusament.com/spool/1/aaa/'
+
+
+def test_extract_spool_fields_product_url_goes_into_extras(page: Page):
+    """Regression: Spoolman has NO native product_url on Spool — it's a
+    registered extra. Sending it at top-level made Spoolman silently drop
+    it, so per-spool product links were missing on every created spool.
+    Must land at extras['product_url'] wrapped in literal quotes for the
+    text-type validator."""
+    _open_wizard_no_fetches(page)
+    override = page.evaluate("""() => window.extractSpoolFieldsFromTemplate({
+        external_link: 'https://prusament.com/spool/1/aaa/'
+    })""")
+    assert 'product_url' not in override, "must NOT be top-level — Spoolman drops it"
+    assert override['extra']['product_url'] == '"https://prusament.com/spool/1/aaa/"'
 
 
 def test_extract_spool_fields_wraps_extras_in_literal_quotes(page: Page):
@@ -179,13 +192,12 @@ def test_extract_spool_fields_wraps_extras_in_literal_quotes(page: Page):
 
 
 def test_extract_spool_fields_omits_empty_extras(page: Page):
-    """No prusament-specific data → no `extra` key on the override at all,
-    so we don't accidentally clobber wizard-wide extras like
-    needs_label_print on the backend merge step."""
+    """No url and no prusament-specific data → no `extra` key on the
+    override at all, so we don't accidentally clobber wizard-wide extras
+    like needs_label_print on the backend merge step."""
     _open_wizard_no_fetches(page)
     override = page.evaluate("""() => window.extractSpoolFieldsFromTemplate({
-        weight: 1000,
-        external_link: 'https://prusament.com/spool/x/yyy/'
+        weight: 1000
     })""")
     assert 'extra' not in override
     assert override['initial_weight'] == 1000

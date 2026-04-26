@@ -1420,15 +1420,17 @@ window.extractSpoolFieldsFromTemplate = (temp) => {
     if (temp.spool_weight !== undefined && temp.spool_weight !== null && Number(temp.spool_weight) > 0) {
         override.spool_weight = Number(temp.spool_weight);
     }
-    if (temp.external_link) {
-        override.product_url = temp.external_link;
-    }
     // Spoolman text-type extras must arrive as JSON-quoted strings (e.g. the
     // 5 bytes `"348"` including literal quote chars). sanitize_outbound_data
     // runs json.loads on each value and `"348"` parses as the integer 348,
     // which Spoolman then rejects with "Value is not a string." Wrap in
     // literal quotes here, matching the inv_details.js Edit Filament pattern
     // and the nozzle_temp_max handling in wizardSubmit at line ~1493.
+    if (temp.external_link) {
+        // product_url is a Spoolman *extra* on Spool, not a native field —
+        // sending it at top-level made Spoolman silently drop it.
+        override.extra.product_url = `"${temp.external_link}"`;
+    }
     const mfgDate = temp.extra && temp.extra.prusament_manufacturing_date;
     if (mfgDate) override.extra.prusament_manufacturing_date = `"${mfgDate}"`;
     const lengthM = temp.extra && temp.extra.prusament_length_m;
