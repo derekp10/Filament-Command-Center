@@ -101,6 +101,34 @@ def test_find_filament_matches_different_vendor_no_match(page: Page):
     assert matches == []
 
 
+def test_find_filament_matches_does_not_touch_non_prusament_filaments(page: Page):
+    """Defensive: even with a perfect color/material match, the Prusament
+    scan must NEVER mutate a non-Prusament filament. The user's whole
+    inventory has many vendors — Polymaker, Bambu, etc. — and a stray
+    backfill writing Prusa3D store links into a Bambu filament would be
+    seriously bad. Vendor must be an exact-match gate."""
+    _open_wizard_no_fetches(page)
+    matches = page.evaluate("""() => {
+        wizardState.allFilaments = [
+            // Same color/material as the scan, different vendor → no match.
+            {id: 100, name: 'Pearl Mouse', color_name: 'Pearl Mouse', material: 'PLA', vendor: {name: 'Polymaker'}},
+            {id: 101, name: 'Pearl Mouse', color_name: 'Pearl Mouse', material: 'PLA', vendor: {name: 'Bambu'}},
+            // Vendor null/missing → no match.
+            {id: 102, name: 'Pearl Mouse', color_name: 'Pearl Mouse', material: 'PLA', vendor: null},
+            {id: 103, name: 'Pearl Mouse', color_name: 'Pearl Mouse', material: 'PLA'},
+            // Vendor casing matches Prusament → IS a match (proves the gate
+            // works — only the wrong-vendor cases above are excluded).
+            {id: 200, name: 'Pearl Mouse', color_name: 'Pearl Mouse', material: 'PLA', vendor: {name: 'PRUSAMENT'}}
+        ];
+        return window.findFilamentMatches({
+            vendor: {name: 'Prusament'}, material: 'PLA', color_name: 'Pearl Mouse'
+        });
+    }""")
+    ids = [m['id'] for m in matches]
+    assert 100 not in ids and 101 not in ids and 102 not in ids and 103 not in ids
+    assert ids == [200]
+
+
 def test_find_filament_matches_different_material_no_match(page: Page):
     _open_wizard_no_fetches(page)
     matches = page.evaluate("""() => {
@@ -505,7 +533,10 @@ def test_backfill_diff_silent_fills_when_existing_is_unset(page: Page):
     assert s.get('extra.bed_temp_max') == '"60"'
     # filament_attributes set-union: existing kept, parser-implied added.
     assert sorted(s.get('extra.filament_attributes', [])) == ['Blend', 'Carbon Fiber']
-    assert s.get('extra.original_color') == '"Black"'
+    # original_color is in spoolman_api.JSON_STRING_FIELDS so the backend's
+    # sanitize_outbound_data wraps it via json.dumps. Send raw — wrapping
+    # here would double-wrap and the literal quote chars would leak.
+    assert s.get('extra.original_color') == 'Black'
     # No mismatches because everything was unset OR equal.
     assert diff['mismatches'] == []
 
@@ -619,11 +650,17 @@ def test_backfill_diff_original_color_always_overwrites(page: Page):
     field by design (user's color_name stays the filter-friendly value)."""
     _open_wizard_no_fetches(page)
     overwrite = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        // Stored has DIFFERENT content (Black vs Pearl Mouse). Even
+        // though "Black" is in canonical wrapped form, the content
+        // differs from the scan, so fire an update.
         {id: 1, material: 'PLA', extra: {original_color: '"Black"'}},
         {material: 'PLA', color_name: 'Pearl Mouse', extra: {}},
         []
     )""")
-    assert overwrite['silent']['extra.original_color'] == '"Pearl Mouse"'
+    # Sent RAW — sanitize_outbound_data adds the JSON layer for us since
+    # original_color is in JSON_STRING_FIELDS. Pre-wrapping would
+    # double-wrap and corrupt the field permanently each subsequent scan.
+    assert overwrite['silent']['extra.original_color'] == 'Pearl Mouse'
 
     # Same value already stored → no-op (don't fire a useless PATCH).
     no_change = page.evaluate("""() => window.computeFilamentBackfillDiff(
@@ -632,6 +669,40 @@ def test_backfill_diff_original_color_always_overwrites(page: Page):
         []
     )""")
     assert 'extra.original_color' not in no_change['silent']
+
+
+def test_backfill_diff_cleans_already_corrupted_original_color(page: Page):
+    """Real-world: existing records may already have extra literal-quote
+    layers from prior buggy versions of this code (e.g. `""Pearl Mouse""`).
+    Canonical forms are exactly two: raw `Pearl Mouse` or single-wrapped
+    `"Pearl Mouse"` (depending on whether parse_inbound_data ran). Any
+    other shape means the field is corrupted — fire a cleanup update
+    that sanitize will wrap to single-layer canonical."""
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        // Double-wrapped (15 chars: 2 outer quotes + 11 char content + 2 inner-end quotes).
+        // Wait — JS sees this as: " + " + Pearl Mouse + " + " = 14 chars.
+        // Either way, NOT one of the two canonical forms.
+        {id: 1, material: 'PLA', extra: {original_color: '""Pearl Mouse""'}},
+        {material: 'PLA', color_name: 'Pearl Mouse', extra: {}},
+        []
+    )""")
+    assert diff['silent']['extra.original_color'] == 'Pearl Mouse'
+
+    # And the canonical no-update cases — both shapes accepted.
+    no_change_wrapped = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', extra: {original_color: '"Pearl Mouse"'}},
+        {material: 'PLA', color_name: 'Pearl Mouse', extra: {}},
+        []
+    )""")
+    assert 'extra.original_color' not in no_change_wrapped['silent']
+
+    no_change_raw = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', extra: {original_color: 'Pearl Mouse'}},
+        {material: 'PLA', color_name: 'Pearl Mouse', extra: {}},
+        []
+    )""")
+    assert 'extra.original_color' not in no_change_raw['silent']
 
 
 def test_backfill_diff_color_hex_never_silent(page: Page):
@@ -679,8 +750,8 @@ def test_backfill_diff_color_name_never_appears(page: Page):
     assert 'color_name' not in diff['silent']
     assert 'name' not in diff['silent']
     assert not any(m['key'] in ('color_name', 'name') for m in diff['mismatches'])
-    # But original_color does flow.
-    assert diff['silent'].get('extra.original_color') == '"Pearl Mouse"'
+    # original_color flows in raw (no pre-wrap) — sanitize handles it.
+    assert diff['silent'].get('extra.original_color') == 'Pearl Mouse'
 
 
 def test_backfill_diff_no_change_when_existing_complete(page: Page):
