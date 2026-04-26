@@ -46,6 +46,29 @@ try:
 except Exception as _mig_err:
     state.logger.error(f"feeder_map migration skipped due to error: {_mig_err}")
 
+# Phase-1A locations schema migration: backfill `parent_id` on every row.
+# Purely additive — no consumer reads parent_id yet, so a defect here cannot
+# affect dashboard rendering, scanning, smart-move, or any UI surface. Sits
+# after the feeder_map migration so any rows it touched also get parent_id.
+# Idempotent on second boot. See Feature-Buglist.md "[CRITICAL DESIGN —
+# blocks Project Color Loadout]" for the multi-phase plan.
+try:
+    _phase1a_locs = locations_db.load_locations_list()
+    _phase1a_migrated, _phase1a_changed = locations_db.migrate_parent_ids_if_needed(_phase1a_locs)
+    if _phase1a_changed:
+        try:
+            import shutil, time as _t
+            _stamp = _t.strftime('%Y%m%d-%H%M%S')
+            _backup = f"{locations_db.JSON_FILE}.pre-parent-id-migration-{_stamp}.bak"
+            shutil.copy2(locations_db.JSON_FILE, _backup)
+            state.logger.info(f"📦 Backed up locations.json → {_backup}")
+        except Exception as _bk_err:
+            state.logger.warning(f"Could not write pre-parent-id-migration backup: {_bk_err}")
+        locations_db.save_locations_list(_phase1a_migrated)
+        state.logger.info("💾 parent_id backfilled across locations.json — Phase-1A migration complete.")
+except Exception as _p1a_err:
+    state.logger.error(f"parent_id migration skipped due to error: {_p1a_err}")
+
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)

@@ -213,3 +213,77 @@ def test_every_printer_map_prefix_has_a_parent_or_is_synthesized():
         f"printer_map declares prefixes {sorted(prefixes)} but only {sorted(printer_lids)} "
         f"surface as Type=='Printer' in /api/locations. Missing: {sorted(missing)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase-1A: parent_id schema guards
+#
+# These run the parent_id backfill migration in-memory against the real
+# committed file, then assert the result is well-formed. Pre-restart on
+# any host, the on-disk file may not yet carry parent_id — the migration
+# runs at app startup and writes back. These tests guard the *contract*
+# (after migration, every row has a string-or-None parent_id) so a future
+# refactor that breaks the migration's output shape fails CI immediately.
+# ---------------------------------------------------------------------------
+
+def test_every_row_has_parent_id_after_migration(locations_data):
+    """After running migrate_parent_ids_if_needed, every dict row carries
+    a `parent_id` key. Catches a future refactor that strips the field."""
+    _, data = locations_data
+    migrated, _ = locations_db.migrate_parent_ids_if_needed(list(data))
+    for row in migrated:
+        if not isinstance(row, dict):
+            continue
+        assert "parent_id" in row, (
+            f"row LocationID={row.get('LocationID')!r} missing parent_id "
+            "after migration — migration is broken or the schema regressed."
+        )
+
+
+def test_parent_id_is_string_or_none_after_migration(locations_data):
+    """`parent_id` must be either a non-empty uppercase string (a parent
+    LocationID) or None (top-level row). Catches accidental empty-string
+    or non-string types creeping into the schema."""
+    _, data = locations_data
+    migrated, _ = locations_db.migrate_parent_ids_if_needed(list(data))
+    for row in migrated:
+        if not isinstance(row, dict):
+            continue
+        pid = row.get("parent_id")
+        if pid is None:
+            continue
+        assert isinstance(pid, str), (
+            f"row LocationID={row.get('LocationID')!r} has non-string "
+            f"parent_id={pid!r} (type={type(pid).__name__})"
+        )
+        assert pid, (
+            f"row LocationID={row.get('LocationID')!r} has empty-string "
+            "parent_id — should be None for top-level rows."
+        )
+        assert pid == pid.upper(), (
+            f"row LocationID={row.get('LocationID')!r} has non-uppercase "
+            f"parent_id={pid!r} — migration uppercases all values."
+        )
+
+
+def test_parent_id_matches_prefix_for_pre_migration_rows(locations_data):
+    """For any row whose parent_id was derived (not operator-set), the
+    value must equal the LocationID prefix. Cross-check that catches a
+    drift between the migration logic and the prefix-parsing fallback
+    that remaining consumers still use during Phases 1B/2."""
+    _, data = locations_data
+    migrated, _ = locations_db.migrate_parent_ids_if_needed(list(data))
+    for row in migrated:
+        if not isinstance(row, dict):
+            continue
+        loc_id = row.get("LocationID")
+        if not isinstance(loc_id, str):
+            continue
+        expected = locations_db.derive_parent_id_from_prefix(loc_id)
+        actual = row.get("parent_id")
+        assert actual == expected, (
+            f"row LocationID={loc_id!r} has parent_id={actual!r} but "
+            f"prefix derivation expects {expected!r}. If this row was "
+            "operator-edited, that's fine — but the committed file should "
+            "match prefix-derivation in Phase 1A."
+        )

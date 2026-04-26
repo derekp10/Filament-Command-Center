@@ -199,6 +199,73 @@ def migrate_feeder_map_if_needed(loc_list, feeder_map):
     return loc_list, changed
 
 
+def derive_parent_id_from_prefix(loc_id):
+    """Compute the legacy prefix-based parent for a LocationID.
+
+    Returns the uppercased substring before the first '-', or None if the
+    LocationID has no '-' (top-level rows like rooms have no parent). Used
+    by the Phase-1A migration and by resolve_parent() as a fallback when a
+    row has no explicit parent_id yet.
+    """
+    if not isinstance(loc_id, str):
+        return None
+    s = loc_id.strip()
+    if '-' not in s:
+        return None
+    return s.split('-', 1)[0].upper()
+
+
+def resolve_parent(row_or_id, loc_list=None):
+    """Return the parent LocationID for a row dict or a LocationID string.
+
+    Prefers an explicit `parent_id` on the row when present (Phase-1A and
+    later schema). Falls back to derive_parent_id_from_prefix() for rows
+    that haven't been migrated yet — keeps callers safe during the gradual
+    consumer-migration phases. `loc_list` is accepted for forward-compat
+    (Phase 3 will validate the FK against it) and ignored in Phase 1A.
+    """
+    if isinstance(row_or_id, dict):
+        if 'parent_id' in row_or_id:
+            explicit = row_or_id.get('parent_id')
+            if explicit is None:
+                return None
+            s = str(explicit).strip()
+            return s.upper() if s else None
+        return derive_parent_id_from_prefix(row_or_id.get('LocationID'))
+    return derive_parent_id_from_prefix(row_or_id)
+
+
+def migrate_parent_ids_if_needed(loc_list):
+    """One-time backfill: every row gets a `parent_id` field derived from
+    its LocationID prefix (or None for top-level rows). Idempotent — skips
+    rows that already have the key set (including explicit None).
+
+    Phase 1A of the locations schema refactor (see Feature-Buglist.md
+    "[CRITICAL DESIGN — blocks Project Color Loadout]"). Adds the field on
+    disk; no consumer reads it yet, so a defect here cannot break dashboard
+    rendering or any other surface.
+
+    Returns (mutated_list, changed_bool).
+    """
+    if not isinstance(loc_list, list):
+        return loc_list, False
+
+    changed = False
+    for row in loc_list:
+        if not isinstance(row, dict):
+            continue
+        if 'parent_id' in row:
+            continue  # already migrated; respect operator-set value
+        loc_id = row.get('LocationID')
+        parent = derive_parent_id_from_prefix(loc_id)
+        row['parent_id'] = parent  # may be None for top-level rows
+        state.logger.info(
+            f"🔄 Backfilled parent_id: {loc_id} → {parent!r}"
+        )
+        changed = True
+    return loc_list, changed
+
+
 def _known_printer_prefixes(printer_map):
     """Return the set of uppercase printer LocationID prefixes — i.e. the
     portion of each toolhead LocationID before the first '-'. These are the
