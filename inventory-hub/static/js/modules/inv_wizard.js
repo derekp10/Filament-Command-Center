@@ -644,8 +644,13 @@ const wizardFetchExtraFields = () => {
                 if (d.fields.filament) {
                     d.fields.filament.sort((a, b) => (a.order || 0) - (b.order || 0));
                     d.fields.filament.forEach(field => {
-                        // Hide legacy/system fields
-                        if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed', 'needs_label_print'].includes(field.key)) return;
+                        // Hide legacy/system fields, plus the two max-temp keys —
+                        // those have dedicated static inputs (#wiz-fil-nozzle_temp_max
+                        // and #wiz-fil-bed_temp_max) so a second dynamic input would
+                        // race the static one on save and re-send a raw numeric value
+                        // that Spoolman rejects.
+                        if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed', 'needs_label_print',
+                             'nozzle_temp_max', 'bed_temp_max'].includes(field.key)) return;
 
                         let html = wizardGenerateFieldHTML(field, 'fil');
                         if (html) fContainer.innerHTML += html;
@@ -1355,6 +1360,14 @@ window.wizardExternalSelected = () => {
             if (document.getElementById('wiz-fil-settings_bed_temp')) {
                 document.getElementById('wiz-fil-settings_bed_temp').value = temp.settings_bed_temp || '';
             }
+            if (document.getElementById('wiz-fil-nozzle_temp_max')) {
+                const nozMax = (temp.extra && temp.extra.nozzle_temp_max) || temp.nozzle_temp_max || '';
+                document.getElementById('wiz-fil-nozzle_temp_max').value = nozMax;
+            }
+            if (document.getElementById('wiz-fil-bed_temp_max')) {
+                const bedMax = (temp.extra && temp.extra.bed_temp_max) || temp.bed_temp_max || '';
+                document.getElementById('wiz-fil-bed_temp_max').value = bedMax;
+            }
 
             // Map the API source link into the Product URL field specifically for the Spool if applicable
             if (temp.external_link) {
@@ -1470,6 +1483,19 @@ window.wizardSubmit = async () => {
                 extra: {}
             };
 
+            // Spoolman extras of type "text" must arrive as JSON-quoted strings
+            // (`"245"` — 5 bytes including literal quote chars). spoolman_api's
+            // sanitize_outbound_data runs json.loads on each value: a raw "245"
+            // parses as the integer 245 and Spoolman rejects with
+            // "Value is not a string." Match the Edit Filament pattern at
+            // inv_details.js:1617 by wrapping in literal quotes.
+            if (getVal('wiz-fil-nozzle_temp_max') !== "") {
+                f_payload.extra.nozzle_temp_max = `"${getVal('wiz-fil-nozzle_temp_max')}"`;
+            }
+            if (getVal('wiz-fil-bed_temp_max') !== "") {
+                f_payload.extra.bed_temp_max = `"${getVal('wiz-fil-bed_temp_max')}"`;
+            }
+
             // Cross-Inherit empty-spool-weight along the chain: Spool → Filament → Vendor.
             // Resolves the selected vendor from wizardState so a manufacturer-level weight
             // flows down even when both Filament and Spool fields are left blank.
@@ -1533,6 +1559,10 @@ window.wizardSubmit = async () => {
                 const t = wizardState.externalMetaData;
                 if (t.extruder_temp && !getVal('wiz-fil-settings_extruder_temp')) f_payload.settings_extruder_temp = t.extruder_temp;
                 if (t.bed_temp && !getVal('wiz-fil-settings_bed_temp')) f_payload.settings_bed_temp = t.bed_temp;
+                const extNozMax = (t.extra && t.extra.nozzle_temp_max) || t.nozzle_temp_max;
+                const extBedMax = (t.extra && t.extra.bed_temp_max) || t.bed_temp_max;
+                if (extNozMax && !getVal('wiz-fil-nozzle_temp_max')) f_payload.extra.nozzle_temp_max = `"${String(extNozMax)}"`;
+                if (extBedMax && !getVal('wiz-fil-bed_temp_max')) f_payload.extra.bed_temp_max = `"${String(extBedMax)}"`;
                 if (t.article_number) f_payload.article_number = t.article_number;
             }
 
@@ -1825,6 +1855,14 @@ window.openEditWizard = async (spoolId) => {
             }
             if (document.getElementById('wiz-fil-settings_bed_temp')) {
                 document.getElementById('wiz-fil-settings_bed_temp').value = f.settings_bed_temp || '';
+            }
+            if (document.getElementById('wiz-fil-nozzle_temp_max')) {
+                const nozMax = f.extra && f.extra.nozzle_temp_max;
+                document.getElementById('wiz-fil-nozzle_temp_max').value = typeof nozMax === 'string' ? nozMax.replace(/^"|"$/g, '') : (nozMax || '');
+            }
+            if (document.getElementById('wiz-fil-bed_temp_max')) {
+                const bedMax = f.extra && f.extra.bed_temp_max;
+                document.getElementById('wiz-fil-bed_temp_max').value = typeof bedMax === 'string' ? bedMax.replace(/^"|"$/g, '') : (bedMax || '');
             }
 
             // Filament Extra

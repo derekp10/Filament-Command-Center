@@ -331,6 +331,29 @@ window.fetchPrinterStateForToolhead = (toolheadLocId) => {
 // filters a dropdown list; Arrow/Enter/Escape drive selection; clicking
 // outside closes the list. Options are labeled "XL-1 — Toolhead 1 on 🦝 XL"
 // (no more cryptic "pos #").
+const _printerSentinelOptions = (printers) => {
+    // Derive PRINTER:<id> sentinel options — one per printer. The id is the
+    // shared prefix of that printer's toolhead LocationIDs (e.g. XL-1, XL-2
+    // → "XL"). Slots bound to a sentinel are "staged for this printer" and
+    // skip auto-deploy (see perform_smart_move).
+    const opts = [];
+    Object.keys(printers).sort().forEach(printerName => {
+        const entries = printers[printerName] || [];
+        if (!entries.length) return;
+        const firstId = String(entries[0].location_id || '').toUpperCase();
+        const prefix = firstId.includes('-') ? firstId.split('-', 1)[0] : firstId;
+        if (!prefix) return;
+        const sentinel = `PRINTER:${prefix}`;
+        opts.push({
+            value: sentinel,
+            label: `${sentinel} — Printer Pool (${printerName})`,
+            search: `printer pool staging ${prefix} ${printerName}`.toLowerCase(),
+            printer: printerName,
+        });
+    });
+    return opts;
+};
+
 const buildFeedsCombobox = (slot, printers, currentTarget) => {
     const comboId = `feeds-combo-${slot}`;
     const optionList = [
@@ -347,6 +370,7 @@ const buildFeedsCombobox = (slot, printers, currentTarget) => {
             });
         });
     });
+    optionList.push(..._printerSentinelOptions(printers));
 
     // Preserve a hidden <select> so window.saveFeedsSection keeps working.
     const selOpts = optionList.map(o => {
@@ -396,6 +420,7 @@ const _comboHydrate = (slot, printers) => {
                 });
             });
         });
+        opts.push(..._printerSentinelOptions(printers));
         return opts;
     };
 

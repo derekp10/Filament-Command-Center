@@ -46,6 +46,29 @@ try:
 except Exception as _mig_err:
     state.logger.error(f"feeder_map migration skipped due to error: {_mig_err}")
 
+# Phase-1A locations schema migration: backfill `parent_id` on every row.
+# Purely additive — no consumer reads parent_id yet, so a defect here cannot
+# affect dashboard rendering, scanning, smart-move, or any UI surface. Sits
+# after the feeder_map migration so any rows it touched also get parent_id.
+# Idempotent on second boot. See Feature-Buglist.md "[CRITICAL DESIGN —
+# blocks Project Color Loadout]" for the multi-phase plan.
+try:
+    _phase1a_locs = locations_db.load_locations_list()
+    _phase1a_migrated, _phase1a_changed = locations_db.migrate_parent_ids_if_needed(_phase1a_locs)
+    if _phase1a_changed:
+        try:
+            import shutil, time as _t
+            _stamp = _t.strftime('%Y%m%d-%H%M%S')
+            _backup = f"{locations_db.JSON_FILE}.pre-parent-id-migration-{_stamp}.bak"
+            shutil.copy2(locations_db.JSON_FILE, _backup)
+            state.logger.info(f"📦 Backed up locations.json → {_backup}")
+        except Exception as _bk_err:
+            state.logger.warning(f"Could not write pre-parent-id-migration backup: {_bk_err}")
+        locations_db.save_locations_list(_phase1a_migrated)
+        state.logger.info("💾 parent_id backfilled across locations.json — Phase-1A migration complete.")
+except Exception as _p1a_err:
+    state.logger.error(f"parent_id migration skipped due to error: {_p1a_err}")
+
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
@@ -123,6 +146,52 @@ def sanitize_label_text(text):
     for char, name in replacements.items():
         text = text.replace(char, name)
     return text
+
+def _resolve_active_locs_for_printer(printer_map, printer_name, filabridge_url):
+    """Return [(loc_id, p_info)] for `printer_name`, ordered so the
+    physically-active location for each position comes first.
+
+    Background: printer_map can have two entries sharing the same position
+    — e.g. CORE1-M0 (direct feed) and CORE1-M1 (MMU-routed). Only one is
+    active per print. We query PrusaLink /api/v1/info.mmu to decide:
+      - mmu=True  → M1-suffix aliases are preferred (MMU routed)
+      - mmu=False → M0-suffix aliases are preferred (direct feed)
+      - unknown   → printer_map insertion order is used (fallback)
+
+    Downstream code iterates this ordering and deducts from the first
+    location per position that actually has a spool assigned.
+    """
+    import prusalink_api  # local import keeps this helper usable at import time
+    candidates = [
+        (loc_id, p_info) for loc_id, p_info in printer_map.items()
+        if p_info.get('printer_name') == printer_name
+    ]
+    if not candidates:
+        return []
+
+    positions_seen = {}
+    for _, p_info in candidates:
+        positions_seen[p_info.get('position', 0)] = positions_seen.get(p_info.get('position', 0), 0) + 1
+    if not any(count > 1 for count in positions_seen.values()):
+        return candidates  # no aliases — nothing to re-order
+
+    mmu = None
+    try:
+        mmu = prusalink_api.get_printer_mmu_flag(filabridge_url, printer_name)
+    except Exception:
+        mmu = None
+    if mmu is None:
+        return candidates  # can't tell which is active — keep insertion order
+
+    def _sort_key(item):
+        loc_id = str(item[0]).upper()
+        # Preferred alias sorts first (0), non-preferred second (1).
+        if mmu:
+            return (0 if loc_id.endswith('-M1') else 1, loc_id)
+        return (0 if loc_id.endswith('-M0') else 1, loc_id)
+
+    return sorted(candidates, key=_sort_key)
+
 
 def flatten_json(y):
     out = {}
@@ -759,8 +828,20 @@ def api_print_batch_csv():
 # --- EXISTING ROUTES ---
 
 @app.route('/api/locations', methods=['GET'])
-def api_get_locations(): 
-    local_rows = locations_db.load_locations_list()
+def api_get_locations():
+    try:
+        local_rows = locations_db.load_locations_list()
+    except locations_db.LocationsCorruptError as e:
+        # Surface the corruption directly instead of falling back to an
+        # empty list — silent fallback masks the failure as a UI-wide
+        # "Names/Types/Grouping all gone" symptom.
+        return jsonify({
+            "error": "locations_corrupt",
+            "path": str(e.path),
+            "line": e.decode_error.lineno,
+            "col": e.decode_error.colno,
+            "msg": e.decode_error.msg,
+        }), 500
     local_map = {str(row['LocationID']).upper(): row for row in local_rows}
     
     # 1. Fetch native Spoolman Locations
@@ -829,24 +910,76 @@ def api_get_locations():
                 room_floating[loc] = room_floating.get(loc, 0) + count
 
     # 2. Inject Virtual Rooms/Printers if they don't exist
-    for parent in room_occupancy.keys():
-        if parent not in local_map:
-            # Check children types to determine if this is a Printer or a Room
-            is_printer = False
+    #
+    # Two seeds: any prefix that has spool occupancy today (room_occupancy),
+    # AND every printer prefix declared in config.json's printer_map (even
+    # when no spool is currently deployed). The printer_map seed makes
+    # "🦝 Core One Upgraded" show up as a Printer parent in the Location
+    # Manager even if every CORE1 toolhead is empty — without it, an
+    # all-idle printer disappears from the grouping until a spool lands.
+    cfg_for_synth = config_loader.load_config()
+    pm_for_synth = cfg_for_synth.get('printer_map', {}) or {}
+    printer_prefixes_to_inject = {
+        str(loc_id).upper().split('-', 1)[0]
+        for loc_id in pm_for_synth.keys()
+        if '-' in str(loc_id)
+    }
+
+    parents_to_consider = set(room_occupancy.keys()) | printer_prefixes_to_inject
+
+    for parent in parents_to_consider:
+        # Promote a row that exists with an empty/missing Type to a real
+        # Printer/Virtual Room — locations.json sometimes carries a
+        # parent placeholder (manual edit or legacy state) with Type=""
+        # which strands the row in "Unassigned" rendering. Treat empty
+        # Type the same as "not in local_map" for the inject decision.
+        existing = local_map.get(parent)
+        existing_type_blank = bool(existing) and not str(existing.get('Type', '')).strip()
+        if existing and not existing_type_blank:
+            continue
+
+        # Check children types AND printer_map to determine if this is a
+        # Printer or a Room. printer_map is authoritative — if the parent
+        # has any toolhead registered there, it's a Printer.
+        is_printer = parent in printer_prefixes_to_inject
+        if not is_printer:
             for c_loc, meta in local_map.items():
                 if c_loc.startswith(parent + "-"):
                     t = str(meta.get('Type', '')).lower()
                     if 'printer' in t or 'tool head' in t or 'mmu' in t:
                         is_printer = True
                         break
-                        
-            csv_rows.append({
-                "LocationID": parent,
-                "Name": f"{parent} System" if is_printer else f"{parent} (Room)",
-                "Type": "Printer" if is_printer else "Virtual Room",
-                "Max Spools": 0,
-                "OccupancyRaw": 0
-            })
+
+        # Pick a friendly name from printer_map's printer_name when it's
+        # a printer (so we get "🦝 Core One Upgraded" instead of "CORE1
+        # System"). Fall back to the legacy synthetic name otherwise.
+        synthetic_name = None
+        if is_printer:
+            for loc_id, info in pm_for_synth.items():
+                if str(loc_id).upper().startswith(parent + '-') or str(loc_id).upper() == parent:
+                    if info.get('printer_name'):
+                        synthetic_name = info['printer_name']
+                        break
+        if not synthetic_name:
+            synthetic_name = f"{parent} System" if is_printer else f"{parent} (Room)"
+
+        synthetic_row = {
+            "LocationID": parent,
+            "Name": synthetic_name,
+            "Type": "Printer" if is_printer else "Virtual Room",
+            "Max Spools": 0,
+            "OccupancyRaw": 0,
+        }
+
+        if existing_type_blank:
+            # Replace the broken existing row in-place rather than appending
+            # a duplicate (would trip duplicate-LocationID guards downstream).
+            for i, r in enumerate(csv_rows):
+                if str(r.get('LocationID', '')).upper() == parent:
+                    csv_rows[i] = {**r, **synthetic_row}
+                    break
+        else:
+            csv_rows.append(synthetic_row)
 
     final_list = []
     # [ALEX FIX] Inject Virtual Unassigned Row
@@ -2055,6 +2188,73 @@ def api_get_spools_by_filament():
     except:
         return jsonify([])
 
+
+@app.route('/api/backfill_spool_weights/<int:fid>', methods=['POST'])
+def api_backfill_spool_weights(fid):
+    """Backfill spool_weight on historical spools that saved as 0 before the
+    inheritance chain landed. Resolves the inheritable empty-spool weight from
+    the filament (then its vendor), then PATCHes every spool under this
+    filament whose own spool_weight is null or <= 0. Archived spools are
+    included so old empty-weight references stay accurate.
+    """
+    try:
+        fil = spoolman_api.get_filament(fid)
+        if not fil:
+            return jsonify({"success": False, "msg": f"Filament #{fid} not found."}), 404
+
+        def _positive(v):
+            try: return v is not None and float(v) > 0
+            except (TypeError, ValueError): return False
+
+        fil_wt = fil.get('spool_weight')
+        vendor_wt = (fil.get('vendor') or {}).get('empty_spool_weight')
+
+        if _positive(fil_wt):
+            target = float(fil_wt); source = 'filament'
+        elif _positive(vendor_wt):
+            target = float(vendor_wt); source = 'vendor'
+        else:
+            return jsonify({
+                "success": False,
+                "msg": "No inheritable empty-spool weight on this filament or its vendor — set one on the filament or the vendor first."
+            }), 400
+
+        sm_url, _ = config_loader.get_api_urls()
+        resp = requests.get(f"{sm_url}/api/v1/spool?filament_id={fid}&allow_archived=true", timeout=5)
+        if not resp.ok:
+            return jsonify({"success": False, "msg": "Failed to fetch spools from Spoolman."}), 502
+        spools = resp.json() or []
+
+        updated_ids = []
+        skipped = 0
+        errors = []
+        for sp in spools:
+            sid = sp.get('id')
+            sp_wt = sp.get('spool_weight')
+            if _positive(sp_wt):
+                skipped += 1
+                continue
+            res = spoolman_api.update_spool(sid, {'spool_weight': target})
+            if res:
+                updated_ids.append(sid)
+            else:
+                errors.append(sid)
+
+        return jsonify({
+            "success": True,
+            "filament_id": fid,
+            "target_weight": target,
+            "source": source,
+            "updated": len(updated_ids),
+            "updated_ids": updated_ids,
+            "skipped": skipped,
+            "errors": errors,
+        })
+    except Exception as e:
+        state.logger.error(f"api_backfill_spool_weights({fid}) failed: {e}")
+        return jsonify({"success": False, "msg": str(e)}), 500
+
+
 @app.route('/api/smart_move', methods=['POST'])
 def api_smart_move():
     payload = request.json or {}
@@ -2146,27 +2346,36 @@ def api_fb_aggressive_parse():
     cfg = config_loader.load_config()
     printer_map = cfg.get("printer_map", {})
     
+    _, _fb_url_for_mmu = config_loader.get_api_urls()
+    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, _fb_url_for_mmu)
     spools_updated = 0
-    for loc_id, p_info in printer_map.items():
-        if p_info.get('printer_name') == printer_name:
-            toolhead_idx = p_info.get('position', 0)
-            if toolhead_idx in usage_map:
-                weight_used = usage_map[toolhead_idx]
-                loc_spools = spoolman_api.get_spools_at_location(loc_id)
-                # Deduct weight directly
-                for sid in loc_spools:
-                    spool_data = spoolman_api.get_spool(sid)
-                    if spool_data and weight_used > 0:
-                        used = float(spool_data.get('used_weight', 0))
-                        initial = float(spool_data.get('initial_weight', 0) or 0)
-                        remaining = max(0, initial - used)
-                        new_remaining = max(0, remaining - weight_used)
-                        new_used = used + weight_used
-                        if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-                            spools_updated += 1
-                            info = spoolman_api.format_spool_display(spool_data)
-                            strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
-                            state.add_log_entry(f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
+    # Track positions we've already processed so MMU-alias entries (CORE1-M0
+    # vs CORE1-M1 — same position in printer_map) don't double-deduct the
+    # same gcode usage slice.
+    processed_positions = set()
+    for loc_id, p_info in active_locs:
+        toolhead_idx = p_info.get('position', 0)
+        if toolhead_idx in processed_positions:
+            continue
+        if toolhead_idx in usage_map:
+            weight_used = usage_map[toolhead_idx]
+            loc_spools = spoolman_api.get_spools_at_location(loc_id)
+            if not loc_spools:
+                continue  # try the next alias for this position
+            processed_positions.add(toolhead_idx)
+            for sid in loc_spools:
+                spool_data = spoolman_api.get_spool(sid)
+                if spool_data and weight_used > 0:
+                    used = float(spool_data.get('used_weight', 0))
+                    initial = float(spool_data.get('initial_weight', 0) or 0)
+                    remaining = max(0, initial - used)
+                    new_remaining = max(0, remaining - weight_used)
+                    new_used = used + weight_used
+                    if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+                        spools_updated += 1
+                        info = spoolman_api.format_spool_display(spool_data)
+                        strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
+                        state.add_log_entry(f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
                             
     # 4. Acknowledge Error
     if spools_updated > 0:
@@ -2304,24 +2513,32 @@ def api_get_logs_route():
                                         if usage_map:
                                             printer_map = config_loader.load_config().get("printer_map", {})
                                             spools_updated = 0
-                                            for loc_id, p_info in printer_map.items():
-                                                if p_info.get('printer_name') == printer_name:
-                                                    toolhead_idx = p_info.get('position', 0)
-                                                    if toolhead_idx in usage_map:
-                                                        w_used = usage_map[toolhead_idx]
-                                                        for sid in spoolman_api.get_spools_at_location(loc_id):
-                                                            spool = spoolman_api.get_spool(sid)
-                                                            if spool and w_used > 0:
-                                                                used = float(spool.get('used_weight', 0))
-                                                                initial = float(spool.get('initial_weight', 0) or 0)
-                                                                remaining = max(0, initial - used)
-                                                                new_rem = max(0, remaining - w_used)
-                                                                new_used = used + w_used
-                                                                if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-                                                                    spools_updated += 1
-                                                                    inf = spoolman_api.format_spool_display(spool)
-                                                                    strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
-                                                                    state.add_log_entry(f"✔️ Auto-deducted {w_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_rem:.1f}g remaining]", "SUCCESS", inf['color'])
+                                            # Same MMU-alias dedup as the primary auto-deduct path.
+                                            ar_active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+                                            ar_processed_positions = set()
+                                            for loc_id, p_info in ar_active_locs:
+                                                toolhead_idx = p_info.get('position', 0)
+                                                if toolhead_idx in ar_processed_positions:
+                                                    continue
+                                                if toolhead_idx in usage_map:
+                                                    w_used = usage_map[toolhead_idx]
+                                                    loc_spools = spoolman_api.get_spools_at_location(loc_id)
+                                                    if not loc_spools:
+                                                        continue
+                                                    ar_processed_positions.add(toolhead_idx)
+                                                    for sid in loc_spools:
+                                                        spool = spoolman_api.get_spool(sid)
+                                                        if spool and w_used > 0:
+                                                            used = float(spool.get('used_weight', 0))
+                                                            initial = float(spool.get('initial_weight', 0) or 0)
+                                                            remaining = max(0, initial - used)
+                                                            new_rem = max(0, remaining - w_used)
+                                                            new_used = used + w_used
+                                                            if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+                                                                spools_updated += 1
+                                                                inf = spoolman_api.format_spool_display(spool)
+                                                                strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
+                                                                state.add_log_entry(f"✔️ Auto-deducted {w_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_rem:.1f}g remaining]", "SUCCESS", inf['color'])
                                             if spools_updated > 0:
                                                 prusalink_api.acknowledge_filabridge_error(fb_url, e_id)
                                                 return # Success

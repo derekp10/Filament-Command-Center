@@ -151,6 +151,102 @@ def test_validate_allows_mix_of_null_and_real_targets(sample_locs, printer_map):
 
 
 # ---------------------------------------------------------------------------
+# PRINTER:<id> sentinel — printer-affiliated staging slots
+# ---------------------------------------------------------------------------
+
+def test_validate_accepts_printer_sentinel_with_known_prefix(sample_locs, printer_map):
+    errors = locations_db.validate_slot_targets(
+        {"1": "PRINTER:XL"}, sample_locs, printer_map
+    )
+    assert errors == []
+
+
+def test_validate_rejects_printer_sentinel_with_unknown_prefix(sample_locs, printer_map):
+    errors = locations_db.validate_slot_targets(
+        {"1": "PRINTER:GHOST"}, sample_locs, printer_map
+    )
+    assert len(errors) == 1
+    assert "unknown printer id" in errors[0][2].lower()
+
+
+def test_validate_rejects_empty_printer_sentinel(sample_locs, printer_map):
+    errors = locations_db.validate_slot_targets(
+        {"1": "PRINTER:"}, sample_locs, printer_map
+    )
+    assert len(errors) == 1
+    assert "missing id" in errors[0][2].lower()
+
+
+def test_is_printer_sentinel_helper():
+    assert locations_db.is_printer_sentinel("PRINTER:XL")
+    assert locations_db.is_printer_sentinel("printer:xl")
+    assert not locations_db.is_printer_sentinel("XL-1")
+    assert not locations_db.is_printer_sentinel(None)
+    assert not locations_db.is_printer_sentinel("")
+
+
+def test_set_bindings_allows_printer_sentinel_round_trip(sample_locs, printer_map, tmp_locations_file):
+    locations_db.save_locations_list(sample_locs)
+    ok, errors, _warnings = locations_db.set_dryer_box_bindings(
+        "PM-DB-XL-L", {"1": "XL-1", "4": "PRINTER:XL"}, printer_map
+    )
+    assert ok and errors == []
+    got = locations_db.get_dryer_box_bindings("PM-DB-XL-L")
+    assert got == {"1": "XL-1", "4": "PRINTER:XL"}
+
+
+def test_printer_sentinel_skips_cross_box_duplicate_warning(sample_locs, printer_map, tmp_locations_file):
+    # Two different boxes both binding slot 1 → PRINTER:XL should NOT warn
+    # like it does for duplicate toolhead bindings — a printer pool can be
+    # fed by multiple boxes without conflict.
+    sample_locs[0]["extra"] = {"slot_targets": {"1": "PRINTER:XL"}}
+    locations_db.save_locations_list(sample_locs)
+    ok, errors, warnings = locations_db.set_dryer_box_bindings(
+        "PM-DB-XL-R", {"1": "PRINTER:XL"}, printer_map
+    )
+    assert ok and errors == []
+    assert not any("already bound" in w[2] for w in warnings), warnings
+
+
+# ---------------------------------------------------------------------------
+# Bug 2b — load_locations_list raises loudly on JSON corruption
+# ---------------------------------------------------------------------------
+
+def test_load_locations_list_raises_on_json_decode_error(tmp_locations_file):
+    """Regression: a syntax error in locations.json (e.g. a stray comma
+    from a manual edit) used to be silently swallowed — load returned [],
+    which made the dashboard render with no Names / Types / grouping and
+    caused the user to misattribute the symptom to whatever feature was
+    being tested at the time. Now it must raise LocationsCorruptError so
+    the operator sees the real cause on the first request."""
+    tmp_locations_file.write_text(
+        '[\n  {\n    "LocationID": "XL-3",\n    "Type": "Tool Head",\n    ,\n    "Order": "3"\n  }\n]',
+        encoding="utf-8",
+    )
+    with pytest.raises(locations_db.LocationsCorruptError) as exc_info:
+        locations_db.load_locations_list()
+    err = exc_info.value
+    assert err.path == str(tmp_locations_file)
+    assert err.decode_error.lineno >= 1
+
+
+def test_load_locations_list_returns_empty_for_missing_file(tmp_locations_file):
+    """File-not-present is a legitimate fresh-install state — must NOT
+    raise. (This is the carve-out from the bug-2b hardening.)"""
+    if tmp_locations_file.exists():
+        tmp_locations_file.unlink()
+    assert locations_db.load_locations_list() == []
+
+
+def test_load_locations_list_returns_empty_for_non_list_root(tmp_locations_file):
+    """A valid JSON file whose root is not a list (schema mismatch) is
+    also treated as empty rather than raising — preserves prior behavior
+    for that specific case."""
+    tmp_locations_file.write_text('{"unexpected": "shape"}', encoding="utf-8")
+    assert locations_db.load_locations_list() == []
+
+
+# ---------------------------------------------------------------------------
 # set/get round-trip
 # ---------------------------------------------------------------------------
 
@@ -317,3 +413,157 @@ def test_api_machine_toolhead_slots_404_on_unknown_printer(client, tmp_locations
     with patch.object(app_module.config_loader, "load_config", return_value={"printer_map": printer_map}):
         r = client.get("/api/machine/nonexistent/toolhead_slots")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Phase-1A: parent_id helpers + migration
+#
+# Every test below covers purely additive behavior — no consumer reads
+# parent_id yet. These guard the migration's correctness and idempotence
+# so future phases can lean on the field as a source of truth.
+# ---------------------------------------------------------------------------
+
+def test_derive_parent_id_from_prefix_basic():
+    assert locations_db.derive_parent_id_from_prefix("LR-MDB-1") == "LR"
+    assert locations_db.derive_parent_id_from_prefix("CORE1-M0") == "CORE1"
+    assert locations_db.derive_parent_id_from_prefix("PM-DB-XL-L") == "PM"
+    assert locations_db.derive_parent_id_from_prefix("LR") is None
+    assert locations_db.derive_parent_id_from_prefix("") is None
+    assert locations_db.derive_parent_id_from_prefix(None) is None
+    assert locations_db.derive_parent_id_from_prefix(123) is None
+
+
+def test_derive_parent_id_uppercases():
+    assert locations_db.derive_parent_id_from_prefix("lr-mdb-1") == "LR"
+    assert locations_db.derive_parent_id_from_prefix("core1-m0") == "CORE1"
+
+
+def test_resolve_parent_prefers_explicit():
+    row = {"LocationID": "LR-MDB-1", "parent_id": "EXPLICIT"}
+    assert locations_db.resolve_parent(row) == "EXPLICIT"
+
+
+def test_resolve_parent_uppercases_explicit_value():
+    row = {"LocationID": "LR-MDB-1", "parent_id": "lr"}
+    assert locations_db.resolve_parent(row) == "LR"
+
+
+def test_resolve_parent_explicit_null_returns_none():
+    # An explicit `parent_id: None` is the schema's way of saying "this is a
+    # top-level row." resolve_parent must honor that and not fall back to
+    # prefix parsing — otherwise a Room incorrectly named "FOO-BAR" would
+    # be treated as having parent FOO.
+    row = {"LocationID": "FOO-BAR", "parent_id": None}
+    assert locations_db.resolve_parent(row) is None
+
+
+def test_resolve_parent_falls_back_to_prefix_when_key_missing():
+    row = {"LocationID": "LR-MDB-1"}  # no parent_id key
+    assert locations_db.resolve_parent(row) == "LR"
+
+
+def test_resolve_parent_handles_string_arg():
+    assert locations_db.resolve_parent("CORE1-M0") == "CORE1"
+    assert locations_db.resolve_parent("CR") is None
+
+
+def test_resolve_parent_empty_string_explicit_treated_as_none():
+    row = {"LocationID": "LR-MDB-1", "parent_id": "   "}
+    assert locations_db.resolve_parent(row) is None
+
+
+def test_migrate_parent_ids_backfills_missing(sample_locs):
+    migrated, changed = locations_db.migrate_parent_ids_if_needed(sample_locs)
+    assert changed is True
+    by_id = {r["LocationID"]: r for r in migrated}
+    assert by_id["LR-MDB-1" if "LR-MDB-1" in by_id else "PM-DB-XL-L"]  # sample exists
+    # Every row gained a parent_id key.
+    for row in migrated:
+        assert "parent_id" in row, f"row {row.get('LocationID')!r} missing parent_id"
+    # Spot-check derived values.
+    assert by_id["PM-DB-XL-L"]["parent_id"] == "PM"
+    assert by_id["XL-1"]["parent_id"] == "XL"
+    assert by_id["CORE1-M0"]["parent_id"] == "CORE1"
+    assert by_id["CR"]["parent_id"] is None
+
+
+def test_migrate_parent_ids_handles_top_level_rows():
+    rows = [
+        {"LocationID": "CR", "Type": "Room"},
+        {"LocationID": "LR", "Type": "Room"},
+        {"LocationID": "BR", "Type": "Room"},
+    ]
+    migrated, changed = locations_db.migrate_parent_ids_if_needed(rows)
+    assert changed is True
+    for row in migrated:
+        assert row["parent_id"] is None
+
+
+def test_migrate_parent_ids_synthesized_printer_parents():
+    """A toolhead like CORE1-M0 gets parent_id='CORE1' even though no CORE1
+    row exists on disk yet (printers are still synthesized at runtime in
+    Phase 1A). This is intentional — Phase 3 will persist the parent rows."""
+    rows = [
+        {"LocationID": "CORE1-M0", "Type": "MMU Slot"},
+        {"LocationID": "CORE1-M1", "Type": "MMU Slot"},
+    ]
+    migrated, _ = locations_db.migrate_parent_ids_if_needed(rows)
+    assert all(r["parent_id"] == "CORE1" for r in migrated)
+
+
+def test_migrate_parent_ids_is_idempotent(sample_locs):
+    locations_db.migrate_parent_ids_if_needed(sample_locs)
+    second_pass, changed = locations_db.migrate_parent_ids_if_needed(sample_locs)
+    assert changed is False
+    # No duplicate keys, no value drift.
+    assert second_pass is sample_locs  # mutates in place
+    for row in second_pass:
+        assert "parent_id" in row
+
+
+def test_migrate_parent_ids_respects_explicit_null():
+    """If an operator pre-set parent_id=None, leave it. The 'parent_id' key
+    being present is the migration's only signal that the row was already
+    visited — even if the value is None."""
+    rows = [
+        {"LocationID": "LR-MDB-1", "parent_id": None, "Type": "Dryer Box"},
+        {"LocationID": "PM-DB-XL-L", "Type": "Dryer Box"},  # missing → will backfill
+    ]
+    migrated, changed = locations_db.migrate_parent_ids_if_needed(rows)
+    assert changed is True  # PM row triggered a change
+    by_id = {r["LocationID"]: r for r in migrated}
+    assert by_id["LR-MDB-1"]["parent_id"] is None  # operator value preserved
+    assert by_id["PM-DB-XL-L"]["parent_id"] == "PM"  # backfilled
+
+
+def test_migrate_parent_ids_handles_non_list_input():
+    out, changed = locations_db.migrate_parent_ids_if_needed(None)
+    assert changed is False
+    assert out is None
+    out2, changed2 = locations_db.migrate_parent_ids_if_needed({"not": "a list"})
+    assert changed2 is False
+
+
+def test_migrate_parent_ids_skips_non_dict_rows():
+    rows = [
+        {"LocationID": "LR-MDB-1", "Type": "Dryer Box"},
+        "not a dict",
+        {"LocationID": "CR", "Type": "Room"},
+    ]
+    migrated, changed = locations_db.migrate_parent_ids_if_needed(rows)
+    assert changed is True
+    assert migrated[0]["parent_id"] == "LR"
+    assert migrated[1] == "not a dict"  # untouched
+    assert migrated[2]["parent_id"] is None
+
+
+def test_migrate_parent_ids_save_load_round_trip(tmp_locations_file, sample_locs):
+    """Round-trip through disk: migrate, save, load, every row still has parent_id."""
+    migrated, _ = locations_db.migrate_parent_ids_if_needed(sample_locs)
+    locations_db.save_locations_list(migrated)
+    reloaded = locations_db.load_locations_list()
+    for row in reloaded:
+        assert "parent_id" in row, f"row {row.get('LocationID')!r} lost parent_id on round-trip"
+    by_id = {r["LocationID"]: r for r in reloaded}
+    assert by_id["XL-1"]["parent_id"] == "XL"
+    assert by_id["CR"]["parent_id"] is None
