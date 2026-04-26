@@ -100,6 +100,18 @@ class PrusamentParser(BaseParser):
                 
             data = json.loads(match.group(1))
             fil = data.get("filament", {})
+
+            # The Prusament spool page also links to the canonical Prusa3D
+            # store URL via a "Buy now" button. First prusa3d.com/product/
+            # link on the page is the right one — the others are footer
+            # links to T&Cs / privacy. Skim it so we can populate both
+            # filament-level and spool-level purchase_url fields with the
+            # storefront link instead of the per-box page URL.
+            store_match = re.search(
+                r"https?://(?:www\.)?prusa3d\.com/product/[A-Za-z0-9_\-]+/?",
+                html,
+            )
+            store_url = store_match.group(0) if store_match else None
             
             # Extract attributes
             color_hex = fil.get("color_rgb", "#FFFFFF").replace("#", "")
@@ -127,6 +139,7 @@ class PrusamentParser(BaseParser):
                 "color_hex": color_hex,
                 "color_name": fil.get("color_name", ""),
                 "external_link": query,
+                "purchase_link": store_url,
                 "settings_extruder_temp": fil.get("he_min") if fil.get("he_min") else None,
                 "settings_bed_temp": fil.get("hb_min") if fil.get("hb_min") else None,
                 "extra": {

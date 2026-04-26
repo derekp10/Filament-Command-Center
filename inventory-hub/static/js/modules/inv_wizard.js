@@ -143,6 +143,7 @@ const wizardReset = () => {
     document.getElementById('wiz-spool-qty').value = 1;
 
     if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
+    if (window.wizardClearFilamentMismatchPanel) window.wizardClearFilamentMismatchPanel();
 
     document.getElementById('wiz-spool-used').value = 0;
     
@@ -1413,9 +1414,20 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
         document.getElementById('wiz-fil-bed_temp_max').value = bedMax;
     }
 
+    // The wizard's filament extras (product_url, purchase_url) are rendered
+    // by wizardFetchExtraFields as dynamic inputs with IDs of the shape
+    // wiz_fil_ef_<key> (underscores). Writing to legacy `wiz-fil-product_url`
+    // (hyphens) was a no-op — the static element has been gone for ages and
+    // the wizardSubmit collector at line ~1610 only picks up `.dynamic-extra-field`
+    // values. Hit the dynamic IDs directly so the URL actually rides along
+    // when the wizard saves.
     if (temp.external_link) {
-        const filUrlNode = document.getElementById('wiz-fil-product_url');
+        const filUrlNode = document.getElementById('wiz_fil_ef_product_url');
         if (filUrlNode) filUrlNode.value = temp.external_link;
+    }
+    if (temp.purchase_link) {
+        const filPurchaseNode = document.getElementById('wiz_fil_ef_purchase_url');
+        if (filPurchaseNode) filPurchaseNode.value = temp.purchase_link;
     }
 
     const vName = temp.manufacturer || temp.vendor?.name;
@@ -1457,10 +1469,14 @@ window.extractSpoolFieldsFromTemplate = (temp) => {
         // Pre-wrapping here would double-wrap and the literal quote chars
         // would leak into the UI on read-back.
         override.extra.product_url = temp.external_link;
-        // Mirror into purchase_url so the spool's "Purchase Link" field is
-        // also populated. The parser only knows the per-spool product page
-        // URL — without a separate scrape for the canonical store link,
-        // using the same URL for both is the most useful default.
+    }
+    // purchase_url is the canonical Prusa3D storefront link — scraped by
+    // the parser from a "Buy now" link on the spool page. Falls back to
+    // the per-spool URL only when the scrape didn't find anything, so
+    // the field is never blank for a successful Prusament scan.
+    if (temp.purchase_link) {
+        override.extra.purchase_url = temp.purchase_link;
+    } else if (temp.external_link) {
         override.extra.purchase_url = temp.external_link;
     }
     const mfgDate = temp.extra && temp.extra.prusament_manufacturing_date;
@@ -1478,7 +1494,24 @@ window.wizardExternalSelected = () => {
     if (sel.value) {
         try {
             const temp = JSON.parse(sel.value);
-            window.applyFilamentFieldsFromTemplate(temp);
+
+            // Same duplicate-detect + auto-switch + backfill flow used by
+            // the per-spool Prusament scan. Without this, a user who hit
+            // the legacy Step-2 "Import from External" button instead of
+            // the Step-3 row scan would skip every safeguard we added —
+            // duplicate filaments would still get created, existing
+            // filaments wouldn't get their missing fields filled in.
+            if (!wizardState.filamentLockedFromScan && wizardState.mode === 'manual') {
+                const matches = window.findFilamentMatches(temp);
+                if (matches.length >= 1) {
+                    window.wizardAutoSwitchToExisting(matches[0], temp);
+                } else {
+                    window.applyFilamentFieldsFromTemplate(temp);
+                }
+                wizardState.filamentLockedFromScan = true;
+            } else {
+                window.applyFilamentFieldsFromTemplate(temp);
+            }
 
             // Legacy "Import from External" button also drops the source URL into
             // the Spool's product_url field as a default for non-per-spool flows.
@@ -1487,7 +1520,6 @@ window.wizardExternalSelected = () => {
                 if (spoolUrlNode) spoolUrlNode.value = temp.external_link;
             }
 
-            document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">✅ Auto-filled from template!</span>`;
             wizardValidateSubmit();
         } catch (e) { console.error("Could not parse external data payload", e); }
     }
@@ -2352,6 +2384,23 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
         return;
     }
 
+    // EAGER FOCUS ADVANCE — before the slow fetch begins, hop focus to
+    // the next still-empty row. Hardware QR scanners send Enter at the
+    // end of the scan, which blurs row N; the very next keystroke from
+    // the scanner for row N+1 arrives within milliseconds. If we wait
+    // until the fetch resolves to advance focus, those early keystrokes
+    // land on document.body or wherever and get lost — the user sees
+    // a partial URL on row N+1, or worse, the global scan handler picks
+    // up the URL prefix and 400s with "Unknown/Invalid Link". Move
+    // focus NOW so the scanner's row N+1 stream has a target.
+    const eagerNext = wizardState.spoolRows.find(r => r.idx > idx && r.status === 'empty');
+    if (eagerNext) {
+        const eagerInput = document.querySelector(
+            `[data-spool-row-idx="${eagerNext.idx}"] input[type='url']`
+        );
+        if (eagerInput) eagerInput.focus();
+    }
+
     row.status = 'pending';
     row.errorMsg = '';
     window.wizardRenderSpoolRowBadge(idx);
@@ -2381,7 +2430,7 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
         if (!wizardState.filamentLockedFromScan && wizardState.mode === 'manual') {
             const matches = window.findFilamentMatches(temp);
             if (matches.length >= 1) {
-                window.wizardAutoSwitchToExisting(matches[0]);
+                window.wizardAutoSwitchToExisting(matches[0], temp);
             } else {
                 window.applyFilamentFieldsFromTemplate(temp);
             }
@@ -2390,23 +2439,10 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
 
         window.wizardRenderSpoolRowBadge(idx);
         window.wizardUpdateSubmitGate();
-
-        // Hop focus to the next still-empty URL row so the user can keep
-        // scanning without reaching for the mouse. Defensive: if the user
-        // has already moved focus into another row's input (mid-typing the
-        // next scan), DON'T yoink them back — that broke rapid-fire blind
-        // scanning of multiple boxes.
-        const active = document.activeElement;
-        const focusInsideRow = active && active.closest && active.closest('[data-spool-row-idx]');
-        if (!focusInsideRow || focusInsideRow.getAttribute('data-spool-row-idx') === String(idx)) {
-            const nextEmpty = wizardState.spoolRows.find(r => r.idx > idx && r.status === 'empty');
-            if (nextEmpty) {
-                const nextInput = document.querySelector(
-                    `[data-spool-row-idx="${nextEmpty.idx}"] input[type='url']`
-                );
-                if (nextInput) nextInput.focus();
-            }
-        }
+        // Note: focus-next is no longer fired here — done eagerly before
+        // the fetch above so the QR scanner's next-box stream has a
+        // landing target as soon as possible. Firing it again here
+        // would steal focus from a user who's already typing into row N+2.
     } catch (e) {
         console.error('wizardScanSpoolRow error', e);
         row.status = 'error';
@@ -2417,7 +2453,7 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
     }
 };
 
-window.wizardAutoSwitchToExisting = (filament) => {
+window.wizardAutoSwitchToExisting = (filament, parsedTemplate) => {
     window.wizardSelectType('existing', true);
     const sel = document.getElementById('wiz-existing-results');
     if (sel) {
@@ -2429,7 +2465,315 @@ window.wizardAutoSwitchToExisting = (filament) => {
     if (msg) {
         msg.innerHTML = `<span class="text-success">✅ Recognized existing Prusament Filament #${filament.id} — switched to new-spool mode.</span>`;
     }
+    // Opportunistic backfill: silently fill any field the existing record
+    // is missing, surface mismatches as an opt-in panel. Skipped when the
+    // caller didn't pass the parser template (e.g. clone flow).
+    if (parsedTemplate && window.computeFilamentBackfillDiff) {
+        const known = _knownFilamentAttributes();
+        const diff = window.computeFilamentBackfillDiff(filament, parsedTemplate, known);
+        if (diff.silent && Object.keys(diff.silent).length > 0) {
+            window.applyFilamentBackfillSilent(filament.id, diff.silent);
+        }
+        if (diff.mismatches && diff.mismatches.length > 0) {
+            window.wizardRenderFilamentMismatchPanel(filament.id, diff.mismatches);
+        } else {
+            window.wizardClearFilamentMismatchPanel();
+        }
+    }
 };
+
+// Treat null / undefined / '' / 0 (numeric only) all as "unset" so the
+// backfill detector can fairly say "this slot is empty, fill it." Matches
+// the inv_details.js Edit Filament dirty-diff `same()` helper convention.
+const _isUnset = (v) => v === null || v === undefined || v === '' || v === 0 || v === '0';
+
+const _normalizeFilamentAttrs = (raw) => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw.map(String);
+    if (typeof raw === 'string') {
+        try {
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed.map(String) : [];
+        } catch (e) {
+            return [];
+        }
+    }
+    return [];
+};
+
+// Pure function — given an existing filament record and a fresh parser
+// template, decide what to silently backfill vs surface as a mismatch
+// for opt-in. See plan: "Backfill Existing Filament From Prusament Scan
+// Data" for the field-by-field rule table this implements.
+window.computeFilamentBackfillDiff = (existing, parsedTemplate, knownAttrs) => {
+    const out = { silent: {}, mismatches: [] };
+    if (!existing || !parsedTemplate) return out;
+    const ex = existing;
+    const tp = parsedTemplate;
+
+    // Native scalar fields with simple "fill if unset, mismatch if differs"
+    // semantics. Each entry: [key, parsed value, mismatch threshold (number),
+    // human label, kind hint for renderer].
+    const tempExtra = (tp.extra || {});
+    const exExtra = (ex.extra || {});
+
+    const split = (window.splitMaterialAndAttributes || ((m) => ({ base: m, attrs: [] })))(
+        tp.material || '', knownAttrs || []
+    );
+    const parsedBase = split.base || tp.material || '';
+
+    const pushMismatch = (key, label, stored, scanned, kind) => {
+        out.mismatches.push({ key, label, stored, scanned, kind });
+    };
+
+    // material: never silent. Mismatch only when parsed-base differs from
+    // the user's stored value (the common case — user keeps "PC", parser
+    // returned "PC Blend Carbon Fiber" → base "PC" → no mismatch).
+    if (parsedBase && ex.material && parsedBase !== ex.material) {
+        pushMismatch('material', 'Material', ex.material, parsedBase, 'text');
+    } else if (parsedBase && _isUnset(ex.material)) {
+        out.silent.material = parsedBase;
+    }
+
+    // diameter / density / weight / spool_weight — fill when unset,
+    // mismatch when meaningfully different.
+    const numericFields = [
+        ['diameter', 'Diameter (mm)', 0.05],
+        ['density', 'Density (g/cm³)', 0.05],
+        ['weight', 'Weight (g)', 10],
+        ['spool_weight', 'Spool weight (g)', 5],
+    ];
+    for (const [key, label, threshold] of numericFields) {
+        const stored = ex[key];
+        const scanned = tp[key];
+        if (_isUnset(scanned)) continue;
+        if (_isUnset(stored)) {
+            out.silent[key] = scanned;
+        } else if (Math.abs(Number(stored) - Number(scanned)) > threshold) {
+            const kind = (key === 'spool_weight') ? 'spool_weight' : 'number';
+            pushMismatch(key, label, Number(stored), Number(scanned), kind);
+        }
+    }
+
+    // settings_extruder_temp / settings_bed_temp — fill if unset, mismatch
+    // if differs (no threshold; temps are integers in Spoolman).
+    const tempFields = [
+        ['settings_extruder_temp', 'Extruder Temp Min (°C)'],
+        ['settings_bed_temp', 'Bed Temp Min (°C)'],
+    ];
+    for (const [key, label] of tempFields) {
+        const stored = ex[key];
+        const scanned = tp[key];
+        if (_isUnset(scanned)) continue;
+        if (_isUnset(stored)) {
+            out.silent[key] = scanned;
+        } else if (Number(stored) !== Number(scanned)) {
+            pushMismatch(key, label, Number(stored), Number(scanned), 'number');
+        }
+    }
+
+    // color_hex — never silent. Mismatch only with a 'color' kind hint so
+    // the renderer can show swatches.
+    if (tp.color_hex && ex.color_hex
+            && String(tp.color_hex).replace('#', '').toLowerCase() !== String(ex.color_hex).replace('#', '').toLowerCase()) {
+        pushMismatch('color_hex', 'Color hex',
+            String(ex.color_hex).replace('#', ''),
+            String(tp.color_hex).replace('#', ''),
+            'color');
+    } else if (tp.color_hex && _isUnset(ex.color_hex)) {
+        out.silent.color_hex = String(tp.color_hex).replace('#', '');
+    }
+
+    // Extras (text-type max-temps): JSON-quote-wrap before sending so the
+    // backend's sanitize_outbound_data doesn't reject "225" as an int.
+    const extraTextFields = [
+        ['nozzle_temp_max', 'Nozzle Temp Max (°C)'],
+        ['bed_temp_max', 'Bed Temp Max (°C)'],
+    ];
+    for (const [key, label] of extraTextFields) {
+        const stored = exExtra[key];
+        const scanned = tempExtra[key];
+        if (_isUnset(scanned)) continue;
+        // The parser sometimes returns these wrapped (`'"225"'`) and
+        // sometimes raw ('225'). Normalize for comparison.
+        const unwrap = (v) => {
+            if (v === null || v === undefined) return v;
+            const s = String(v);
+            return s.replace(/^"|"$/g, '');
+        };
+        const storedNorm = unwrap(stored);
+        const scannedNorm = unwrap(scanned);
+        if (_isUnset(storedNorm)) {
+            out.silent['extra.' + key] = `"${scannedNorm}"`;
+        } else if (storedNorm !== scannedNorm) {
+            pushMismatch('extra.' + key, label, storedNorm, scannedNorm, 'number');
+        }
+    }
+
+    // filament_attributes — set-union, only ever ADD missing canonical
+    // attrs (never remove existing). Drives the user's PC → PC + "Blend"
+    // upgrade silently after a scan that splits to ["Blend", "Carbon Fiber"].
+    const exAttrs = _normalizeFilamentAttrs(exExtra.filament_attributes);
+    const exAttrsLc = new Set(exAttrs.map(s => s.toLowerCase()));
+    const newAttrs = (split.attrs || []).filter(a => !exAttrsLc.has(a.toLowerCase()));
+    if (newAttrs.length > 0) {
+        out.silent['extra.filament_attributes'] = [...exAttrs, ...newAttrs];
+    }
+
+    // original_color — silent overwrite when the parser has a value.
+    // This field's whole purpose is to capture the manufacturer's name
+    // for the filament (e.g. "Pearl Mouse"), distinct from the user's
+    // filter-friendly color_name ("Black"). The parser's color_name is
+    // the authoritative source by definition, so prefer it whenever
+    // present. Only skip the silent update when the values already match
+    // (avoid a no-op PATCH).
+    const exOrigColor = exExtra.original_color;
+    const scannedOrigColor = tp.color_name;
+    const unwrapOrig = (v) => v === null || v === undefined ? v : String(v).replace(/^"|"$/g, '');
+    if (scannedOrigColor && unwrapOrig(exOrigColor) !== scannedOrigColor) {
+        out.silent['extra.original_color'] = `"${scannedOrigColor}"`;
+    }
+
+    return out;
+};
+
+// Apply a silent backfill diff against an existing filament. Splits any
+// "extra.<key>" entries in the diff into a nested {extra: {...}} dict
+// since /api/update_filament expects the same shape Spoolman uses.
+window.applyFilamentBackfillSilent = async (existingId, silentDiff, opts = {}) => {
+    if (!silentDiff || Object.keys(silentDiff).length === 0) return null;
+    const data = {};
+    for (const [k, v] of Object.entries(silentDiff)) {
+        if (k.startsWith('extra.')) {
+            if (!data.extra) data.extra = {};
+            data.extra[k.slice(6)] = v;
+        } else {
+            data[k] = v;
+        }
+    }
+    try {
+        const res = await fetch('/api/update_filament', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: existingId, data }),
+        });
+        const body = await res.json();
+        if (!body.success) {
+            console.error('backfill update rejected', body);
+            return body;
+        }
+        // Refresh wizardState.allFilaments so a follow-up scan in the
+        // same session sees the upgraded record (otherwise the next
+        // computeFilamentBackfillDiff would think the same fields are
+        // still missing).
+        if (Array.isArray(wizardState.allFilaments)) {
+            const idx = wizardState.allFilaments.findIndex(f => String(f.id) === String(existingId));
+            if (idx >= 0 && body.filament) {
+                wizardState.allFilaments[idx] = body.filament;
+            }
+        }
+        if (!opts.suppressBanner) {
+            const msg = document.getElementById('wiz-status-msg');
+            if (msg) {
+                const summary = Object.keys(silentDiff).map(k => k.replace(/^extra\./, '')).join(', ');
+                msg.innerHTML = `<span class="text-success">✨ Updated existing Filament #${existingId} from scan: ${summary}.</span>`;
+            }
+        }
+        return body;
+    } catch (e) {
+        console.error('backfill fetch failed', e);
+        return null;
+    }
+};
+
+const _formatSpoolWeightHint = (stored, scanned) => {
+    // Heuristic: NFC Prusament spools are roughly 30-50g heavier than
+    // legacy plastic. Hint only when the SCAN reports a heavier tare
+    // than what's stored — i.e. the user is being offered an upgrade
+    // from legacy to NFC. Earlier the hint fired in both directions,
+    // which incorrectly tagged a lighter (older) replacement as NFC.
+    const delta = Number(scanned) - Number(stored);
+    if (delta >= 25 && delta <= 75) return ' (NFC?)';
+    return '';
+};
+
+window.wizardRenderFilamentMismatchPanel = (existingId, mismatches) => {
+    const host = document.getElementById('wiz-fil-mismatch-panel');
+    if (!host) return;
+    if (!mismatches || mismatches.length === 0) {
+        host.innerHTML = '';
+        host.style.display = 'none';
+        return;
+    }
+    const rowsHtml = mismatches.map((m, i) => {
+        const swatch = (val) => `<span style="display:inline-block;width:14px;height:14px;background:#${String(val).replace('#','')};border:1px solid #555;vertical-align:middle;margin-left:4px;"></span>`;
+        const storedDisplay = m.kind === 'color'
+            ? `#${m.stored}${swatch(m.stored)}`
+            : escapeHtml(String(m.stored));
+        let scannedDisplay = m.kind === 'color'
+            ? `#${m.scanned}${swatch(m.scanned)}`
+            : escapeHtml(String(m.scanned));
+        if (m.kind === 'spool_weight') {
+            scannedDisplay += `<span class="text-warning small">${_formatSpoolWeightHint(m.stored, m.scanned)}</span>`;
+        }
+        return `
+            <tr data-mismatch-row="${i}" data-mismatch-key="${escapeHtml(m.key)}">
+                <td class="text-secondary small">${escapeHtml(m.label)}</td>
+                <td class="font-monospace">${storedDisplay}</td>
+                <td class="font-monospace">${scannedDisplay}</td>
+                <td>
+                    <button type="button" class="btn btn-sm btn-outline-warning"
+                        onclick="window.wizardApplyMismatchRow(${existingId}, ${i})">Use Scanned</button>
+                </td>
+            </tr>`;
+    }).join('');
+    host.innerHTML = `
+        <div class="alert alert-warning my-2">
+            <div class="mb-2"><strong>⚠ Scan data differs from Filament #${existingId}</strong> — pick what to keep:</div>
+            <table class="table table-sm table-dark mb-2" style="font-size: 0.9em;">
+                <thead><tr><th>Field</th><th>Stored</th><th>Scanned</th><th></th></tr></thead>
+                <tbody id="wiz-fil-mismatch-rows">${rowsHtml}</tbody>
+            </table>
+            <button type="button" class="btn btn-sm btn-secondary"
+                onclick="window.wizardClearFilamentMismatchPanel()">Dismiss</button>
+        </div>
+    `;
+    host.style.display = 'block';
+    wizardState._mismatches = mismatches;
+};
+
+window.wizardApplyMismatchRow = async (existingId, rowIdx) => {
+    const list = wizardState._mismatches || [];
+    const m = list[rowIdx];
+    if (!m) return;
+    const diff = {};
+    if (m.key.startsWith('extra.')) {
+        // Wrap text-type extras for sanitize_outbound_data.
+        diff[m.key] = `"${m.scanned}"`;
+    } else {
+        diff[m.key] = m.scanned;
+    }
+    const res = await window.applyFilamentBackfillSilent(existingId, diff, { suppressBanner: true });
+    if (res && res.success) {
+        const tr = document.querySelector(`#wiz-fil-mismatch-rows tr[data-mismatch-row="${rowIdx}"]`);
+        if (tr) {
+            tr.innerHTML = `<td colspan="4" class="text-success small">✓ Updated ${escapeHtml(m.label)} → ${escapeHtml(String(m.scanned))}</td>`;
+        }
+    }
+};
+
+window.wizardClearFilamentMismatchPanel = () => {
+    const host = document.getElementById('wiz-fil-mismatch-panel');
+    if (host) {
+        host.innerHTML = '';
+        host.style.display = 'none';
+    }
+    wizardState._mismatches = null;
+};
+
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[c]));
 
 window.wizardResetSpoolRows = () => {
     wizardState.spoolRows = [];
