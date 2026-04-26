@@ -195,7 +195,10 @@ def test_per_spool_scan_auto_switches_to_existing_filament(page: Page):
     assert str(selected_id) == "42"
 
     page.locator("#btn-wiz-submit").click()
-    expect(page.locator("#wiz-status-msg")).to_contain_text("Success!", timeout=5000)
+    # Backfill banner can overwrite "Success!" mid-frame, so wait for the
+    # post-success lock instead — that flag is only set after the create
+    # POST returns success on the wizard's side.
+    page.wait_for_function("() => wizardState.lockedAfterSuccess === true", timeout=5000)
 
     assert len(captured) == 1
     body = captured[0]
@@ -462,8 +465,9 @@ def test_backfill_silent_patch_fires_on_autoswitch(page: Page):
     assert extra.get("bed_temp_max") == '"60"'
     # filament_attributes set-union: existing kept, parser-implied added.
     assert sorted(extra.get("filament_attributes", [])) == ["Blend", "Carbon Fiber"]
-    # original_color flows in from the parser's color_name.
-    assert extra.get("original_color") == '"Black"'
+    # original_color flows in from the parser's color_name. Sent raw —
+    # sanitize_outbound_data wraps it because the field is in JSON_STRING_FIELDS.
+    assert extra.get("original_color") == 'Black'
 
     # weight, spool_weight, diameter, density all transitioned from
     # null/0 to silent fills. Existing density=1.20 vs parser=1.18 is

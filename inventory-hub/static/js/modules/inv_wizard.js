@@ -2627,11 +2627,25 @@ window.computeFilamentBackfillDiff = (existing, parsedTemplate, knownAttrs) => {
     // the authoritative source by definition, so prefer it whenever
     // present. Only skip the silent update when the values already match
     // (avoid a no-op PATCH).
+    //
+    // CRITICAL: original_color is in spoolman_api.JSON_STRING_FIELDS, so
+    // sanitize_outbound_data wraps the value via json.dumps before send.
+    // Pre-wrapping here would double-wrap and the literal quote chars
+    // would leak in — every subsequent scan would compare "X" ≠ X and
+    // add ANOTHER layer of quotes. Acceptable canonical forms for the
+    // RAW value (as served by /api/filaments without parse_inbound_data,
+    // OR by /api/filaments/<id> WITH parse_inbound_data) are exactly two:
+    // the JSON-quoted form `"X"` and the raw unwrapped `X`. Anything
+    // else means an earlier buggy version corrupted the field — fire
+    // an update with the clean value to repair it (sanitize wraps once
+    // and we're back to canonical).
     const exOrigColor = exExtra.original_color;
     const scannedOrigColor = tp.color_name;
-    const unwrapOrig = (v) => v === null || v === undefined ? v : String(v).replace(/^"|"$/g, '');
-    if (scannedOrigColor && unwrapOrig(exOrigColor) !== scannedOrigColor) {
-        out.silent['extra.original_color'] = `"${scannedOrigColor}"`;
+    if (scannedOrigColor) {
+        const acceptable = [scannedOrigColor, `"${scannedOrigColor}"`];
+        if (!acceptable.includes(exOrigColor)) {
+            out.silent['extra.original_color'] = scannedOrigColor;
+        }
     }
 
     return out;
