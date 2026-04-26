@@ -144,14 +144,16 @@ def test_per_spool_scan_sends_overrides_and_fills_step2(page: Page):
     overrides = body.get("spool_overrides")
     assert overrides is not None and len(overrides) == 2, body
     assert overrides[0]["initial_weight"] == 998
-    assert overrides[0]["product_url"] == "https://prusament.com/spool/1/aaa/"
-    # Spoolman text-type extras must arrive as JSON-quoted strings — the
-    # value is wrapped in literal quote chars before sending so it survives
-    # sanitize_outbound_data's json.loads round-trip without becoming an int.
+    # product_url lives in extras (Spoolman has no native product_url on
+    # Spool). Wrapped in literal quotes for the text-type validator.
+    assert "product_url" not in overrides[0]
+    assert overrides[0]["extra"]["product_url"] == '"https://prusament.com/spool/1/aaa/"'
+    # Other text-type extras follow the same wrap-in-quotes pattern.
     assert overrides[0]["extra"]["prusament_manufacturing_date"] == '"2026-03-12"'
     assert overrides[0]["extra"]["prusament_length_m"] == '"330"'
     assert overrides[1]["initial_weight"] == 1003
     assert overrides[1]["extra"]["prusament_manufacturing_date"] == '"2026-03-13"'
+    assert overrides[1]["extra"]["product_url"] == '"https://prusament.com/spool/2/bbb/"'
     # Manual mode → filament_data still in the payload (not filament_id).
     assert body.get("filament_data") is not None
     assert not body.get("filament_id")
