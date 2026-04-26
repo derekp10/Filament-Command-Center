@@ -306,10 +306,17 @@ def test_extract_spool_fields_product_url_goes_into_extras_unwrapped(page: Page)
     })""")
     assert 'product_url' not in override, "must NOT be top-level — Spoolman drops it"
     assert override['extra']['product_url'] == 'https://prusament.com/spool/1/aaa/'
-    # purchase_url mirrored from external_link too — the parser doesn't
-    # surface a separate canonical store URL yet, so this is the best
-    # default we can offer to populate the Spool's Purchase Link field.
+    # purchase_url falls back to the per-spool URL only when the parser
+    # didn't surface a canonical store link. With purchase_link present,
+    # that wins instead.
     assert override['extra']['purchase_url'] == 'https://prusament.com/spool/1/aaa/'
+
+    with_store = page.evaluate("""() => window.extractSpoolFieldsFromTemplate({
+        external_link: 'https://prusament.com/spool/1/aaa/',
+        purchase_link: 'https://www.prusa3d.com/product/prusament-pla-pearl-mouse-1kg/'
+    })""")
+    assert with_store['extra']['product_url'] == 'https://prusament.com/spool/1/aaa/'
+    assert with_store['extra']['purchase_url'] == 'https://www.prusa3d.com/product/prusament-pla-pearl-mouse-1kg/'
 
 
 def test_extract_spool_fields_wraps_extras_in_literal_quotes(page: Page):
@@ -461,6 +468,246 @@ def test_lock_clears_on_dirty_input_event(page: Page):
     }""")
     assert state['locked'] is False
     assert state['disabled'] is False
+
+
+# --- computeFilamentBackfillDiff (filament-from-scan backfill) ------------
+
+def test_backfill_diff_silent_fills_when_existing_is_unset(page: Page):
+    """Existing filament has nulls/missing fields the parser knows. Those
+    should land in the silent diff so applyFilamentBackfillSilent can
+    PATCH them in without prompting."""
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {
+            id: 122, material: 'PC', name: 'Black (Carbon Fiber)',
+            density: null, diameter: null,
+            settings_extruder_temp: null, settings_bed_temp: null,
+            spool_weight: 0, weight: 0, color_hex: '2B2B2B',
+            extra: {filament_attributes: ['Carbon Fiber']}
+        },
+        {
+            material: 'PC Blend Carbon Fiber', color_name: 'Black',
+            color_hex: '2B2B2B', density: 1.18, diameter: 1.75,
+            weight: 800, spool_weight: 215,
+            settings_extruder_temp: 215, settings_bed_temp: 60,
+            extra: {nozzle_temp_max: '"225"', bed_temp_max: '"60"'}
+        },
+        ['Carbon Fiber', 'Blend']
+    )""")
+    s = diff['silent']
+    assert s.get('diameter') == 1.75
+    assert s.get('density') == 1.18
+    assert s.get('weight') == 800
+    assert s.get('spool_weight') == 215
+    assert s.get('settings_extruder_temp') == 215
+    assert s.get('settings_bed_temp') == 60
+    assert s.get('extra.nozzle_temp_max') == '"225"'
+    assert s.get('extra.bed_temp_max') == '"60"'
+    # filament_attributes set-union: existing kept, parser-implied added.
+    assert sorted(s.get('extra.filament_attributes', [])) == ['Blend', 'Carbon Fiber']
+    assert s.get('extra.original_color') == '"Black"'
+    # No mismatches because everything was unset OR equal.
+    assert diff['mismatches'] == []
+
+
+def test_backfill_diff_mismatch_when_values_differ(page: Page):
+    """Existing has non-zero, non-null values that disagree with the
+    parser. Those land in the mismatch list (not silent) so the user
+    decides per-field whether to upgrade."""
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {
+            id: 122, material: 'PC', density: 1.20, diameter: 1.75,
+            spool_weight: 215, weight: 865, color_hex: '2B2B2B',
+            settings_extruder_temp: 240, settings_bed_temp: 90,
+            extra: {nozzle_temp_max: '"260"', bed_temp_max: '"100"'}
+        },
+        {
+            material: 'PC Blend Carbon Fiber', color_name: 'Black',
+            color_hex: '868463', density: 1.18, diameter: 1.75,
+            weight: 800, spool_weight: 248,
+            settings_extruder_temp: 215, settings_bed_temp: 60,
+            extra: {nozzle_temp_max: '"225"', bed_temp_max: '"60"'}
+        },
+        ['Carbon Fiber', 'Blend']
+    )""")
+    keys = {m['key']: m for m in diff['mismatches']}
+    # weight differs by 65g — over the 10g threshold.
+    assert 'weight' in keys
+    # spool_weight differs by 33g — should hint NFC in the renderer.
+    assert 'spool_weight' in keys
+    assert keys['spool_weight']['kind'] == 'spool_weight'
+    # color_hex always lands in mismatch when both sides set + differ.
+    assert 'color_hex' in keys
+    assert keys['color_hex']['kind'] == 'color'
+    # Temps differ → mismatch.
+    assert 'settings_extruder_temp' in keys
+    assert 'settings_bed_temp' in keys
+    assert 'extra.nozzle_temp_max' in keys
+    assert 'extra.bed_temp_max' in keys
+    # density differs by 0.02 (under 0.05 threshold) → NOT a mismatch.
+    assert 'density' not in keys
+    # diameter equal → not a mismatch.
+    assert 'diameter' not in keys
+
+
+def test_backfill_diff_material_never_silent_overwrites(page: Page):
+    """When the parser splits to a base that equals the stored material,
+    no mismatch and no silent change. When base differs, mismatch only —
+    never silently overwrite the user's curated material field."""
+    _open_wizard_no_fetches(page)
+    same = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PC', extra: {}},
+        {material: 'PC Blend Carbon Fiber', extra: {}},
+        ['Carbon Fiber', 'Blend']
+    )""")
+    assert 'material' not in same['silent']
+    assert not any(m['key'] == 'material' for m in same['mismatches'])
+
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PETG', extra: {}},
+        {material: 'PC Blend Carbon Fiber', extra: {}},
+        ['Carbon Fiber', 'Blend']
+    )""")
+    assert 'material' not in diff['silent']
+    assert any(m['key'] == 'material' for m in diff['mismatches'])
+
+
+def test_backfill_diff_filament_attributes_handles_string_form(page: Page):
+    """Real-world: /api/filaments doesn't run parse_inbound_data, so the
+    JS receives `filament_attributes` as a JSON-encoded STRING (e.g.
+    '["Carbon Fiber"]') instead of an array. The matcher and diff must
+    transparently parse this so the user's "Blend" can be added to the
+    existing ["Carbon Fiber"] without missing a beat."""
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 122, material: 'PC', extra: {filament_attributes: '["Carbon Fiber"]'}},
+        {material: 'PC Blend Carbon Fiber', extra: {}},
+        ['Carbon Fiber', 'Blend']
+    )""")
+    attrs = diff['silent']['extra.filament_attributes']
+    assert sorted(attrs) == ['Blend', 'Carbon Fiber']
+
+
+def test_backfill_diff_filament_attributes_set_union_no_remove(page: Page):
+    """Existing attrs must always be preserved. Parser-implied attrs that
+    aren't already there get added. If the parser doesn't imply any new
+    attrs, no silent update for the field at all."""
+    _open_wizard_no_fetches(page)
+    no_change = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PC', extra: {filament_attributes: ['Carbon Fiber', 'Blend']}},
+        {material: 'PC Blend Carbon Fiber', extra: {}},
+        ['Carbon Fiber', 'Blend']
+    )""")
+    assert 'extra.filament_attributes' not in no_change['silent']
+
+    additive = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PC', extra: {filament_attributes: ['Custom User Attr']}},
+        {material: 'PC Blend Carbon Fiber', extra: {}},
+        ['Carbon Fiber', 'Blend']
+    )""")
+    attrs = additive['silent']['extra.filament_attributes']
+    assert 'Custom User Attr' in attrs, 'must preserve user-only attrs'
+    assert 'Blend' in attrs
+    assert 'Carbon Fiber' in attrs
+
+
+def test_backfill_diff_original_color_always_overwrites(page: Page):
+    """original_color is the manufacturer-side name slot. Whenever the
+    parser provides one and it differs from what's stored, replace it.
+    This is *not* fill-if-empty — the parser is authoritative for this
+    field by design (user's color_name stays the filter-friendly value)."""
+    _open_wizard_no_fetches(page)
+    overwrite = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', extra: {original_color: '"Black"'}},
+        {material: 'PLA', color_name: 'Pearl Mouse', extra: {}},
+        []
+    )""")
+    assert overwrite['silent']['extra.original_color'] == '"Pearl Mouse"'
+
+    # Same value already stored → no-op (don't fire a useless PATCH).
+    no_change = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', extra: {original_color: '"Pearl Mouse"'}},
+        {material: 'PLA', color_name: 'Pearl Mouse', extra: {}},
+        []
+    )""")
+    assert 'extra.original_color' not in no_change['silent']
+
+
+def test_backfill_diff_color_hex_never_silent(page: Page):
+    """color_hex is user-calibrated. Even when existing is set and the
+    parser disagrees, never silently overwrite — always mismatch panel."""
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', color_hex: '111111', extra: {}},
+        {material: 'PLA', color_hex: '222222', extra: {}},
+        []
+    )""")
+    assert 'color_hex' not in diff['silent']
+    assert any(m['key'] == 'color_hex' and m['kind'] == 'color' for m in diff['mismatches'])
+
+
+def test_backfill_diff_skips_spool_only_extras(page: Page):
+    """prusament_manufacturing_date and prusament_length_m describe a
+    specific box, not a filament product. They MUST never appear in
+    the filament backfill diff — they belong on the spool record."""
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', extra: {}},
+        {material: 'PLA', extra: {
+            prusament_manufacturing_date: '2026-03-12',
+            prusament_length_m: 330
+        }},
+        []
+    )""")
+    assert 'extra.prusament_manufacturing_date' not in diff['silent']
+    assert 'extra.prusament_length_m' not in diff['silent']
+    assert not any('prusament' in m['key'] for m in diff['mismatches'])
+
+
+def test_backfill_diff_color_name_never_appears(page: Page):
+    """color_name is the user's filter-friendly base color (e.g. 'Black')
+    and intentionally differs from the manufacturer's name (e.g. 'Pearl
+    Mouse'). The parser's color_name flows into extra.original_color, never
+    into a top-level mismatch row."""
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', color_name: 'Black', name: 'Black (Pearl Mouse)', extra: {}},
+        {material: 'PLA', color_name: 'Pearl Mouse', name: 'Prusament PLA Pearl Mouse', extra: {}},
+        []
+    )""")
+    assert 'color_name' not in diff['silent']
+    assert 'name' not in diff['silent']
+    assert not any(m['key'] in ('color_name', 'name') for m in diff['mismatches'])
+    # But original_color does flow.
+    assert diff['silent'].get('extra.original_color') == '"Pearl Mouse"'
+
+
+def test_backfill_diff_no_change_when_existing_complete(page: Page):
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {
+            id: 1, material: 'PLA', density: 1.24, diameter: 1.75,
+            weight: 1000, spool_weight: 215,
+            settings_extruder_temp: 215, settings_bed_temp: 60,
+            color_hex: 'AAAAAA',
+            extra: {
+                filament_attributes: ['Carbon Fiber', 'Blend'],
+                nozzle_temp_max: '"225"', bed_temp_max: '"60"',
+                original_color: '"Pearl Mouse"'
+            }
+        },
+        {
+            material: 'PLA Blend Carbon Fiber', color_name: 'Pearl Mouse',
+            color_hex: 'AAAAAA', density: 1.24, diameter: 1.75,
+            weight: 1000, spool_weight: 215,
+            settings_extruder_temp: 215, settings_bed_temp: 60,
+            extra: {nozzle_temp_max: '"225"', bed_temp_max: '"60"'}
+        },
+        ['Carbon Fiber', 'Blend']
+    )""")
+    assert diff['silent'] == {}
+    assert diff['mismatches'] == []
 
 
 def test_wizard_reset_clears_post_success_lock(page: Page):

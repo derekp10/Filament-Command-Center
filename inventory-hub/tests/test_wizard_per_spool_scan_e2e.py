@@ -236,7 +236,10 @@ def test_per_spool_scan_fuzzy_color_match_existing_filament(page: Page):
     assert str(selected_id) == "157"
 
     page.locator("#btn-wiz-submit").click()
-    expect(page.locator("#wiz-status-msg")).to_contain_text("Success!", timeout=5000)
+    # Backfill banner can overwrite "Success!" mid-frame, so wait for the
+    # post-success lock instead — that flag is only set after the create
+    # POST returns success on the wizard's side.
+    page.wait_for_function("() => wizardState.lockedAfterSuccess === true", timeout=5000)
 
     assert len(captured) == 1
     assert str(captured[0].get("filament_id")) == "157"
@@ -375,6 +378,208 @@ def test_per_spool_scan_splits_material_into_base_plus_attribute_chips(page: Pag
     # Attributes flow into the filament's extras as a list (the wizard's
     # existing chip collector at inv_wizard.js:1610).
     assert sorted(fil_data.get("extra", {}).get("filament_attributes", [])) == ["Blend", "Carbon Fiber"]
+
+
+def _route_update_filament(page):
+    """Capture every PATCH the backfill flow sends, return the success
+    response Spoolman would normally return so the wizard can continue."""
+    captured: list[dict] = []
+
+    def _handler(route, request):
+        try:
+            body = request.post_data_json or {}
+        except Exception:
+            body = {}
+        captured.append(body)
+        # Echo the data back as the "filament" so the cache-refresh path
+        # has something to merge.
+        merged = {'id': body.get('id'), **(body.get('data') or {})}
+        route.fulfill(
+            status=200, content_type='application/json',
+            body=json.dumps({'success': True, 'filament': merged}),
+        )
+    page.route('**/api/update_filament', _handler)
+    return captured
+
+
+def test_backfill_silent_patch_fires_on_autoswitch(page: Page):
+    """Real-world filament 122 case: stored as material='PC' with missing
+    temps, missing bed_temp_max/nozzle_temp_max, attrs=['Carbon Fiber'].
+    Scan returns 'PC Blend Carbon Fiber' with full temps. Auto-switch
+    must fire AND a single PATCH must carry the silent backfill diff."""
+    page.route("**/api/filaments", lambda route, req: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"success": True, "filaments": [
+            {
+                "id": 122, "name": "Black (Carbon Fiber)", "material": "PC",
+                "color_hex": "2B2B2B", "density": 1.20, "diameter": None,
+                "weight": 0, "spool_weight": 0,
+                "settings_extruder_temp": None, "settings_bed_temp": None,
+                "vendor": {"name": "Prusament"},
+                "extra": {"filament_attributes": ["Carbon Fiber"]},
+            }
+        ]}),
+    ))
+    _route_external_search(page, lambda q: {
+        "id": "fake", "name": "Prusament PC Blend Carbon Fiber Black",
+        "material": "PC Blend Carbon Fiber",
+        "vendor": {"name": "Prusament"}, "weight": 800, "spool_weight": 215,
+        "diameter": 1.75, "density": 1.18,
+        "color_hex": "2B2B2B", "color_name": "Black",
+        "external_link": "https://prusament.com/spool/9/zzz/",
+        "settings_extruder_temp": 215, "settings_bed_temp": 60,
+        "extra": {"nozzle_temp_max": '"225"', "bed_temp_max": '"60"'},
+    })
+    patches = _route_update_filament(page)
+
+    page.goto("http://localhost:8000")
+    page.get_by_role("button", name=re.compile("ADD INVENTORY")).click()
+    expect(page.locator("#wizardModal")).to_be_visible()
+    page.locator("#btn-type-manual").click()
+
+    rows = page.locator("[data-spool-row-idx]")
+    rows.nth(0).locator("input[type='url']").fill("https://prusament.com/spool/9/zzz/")
+    rows.nth(0).locator("input[type='url']").blur()
+    expect(rows.nth(0).locator(".badge.bg-success")).to_be_visible(timeout=5000)
+
+    # Auto-switch fired — selected filament 122.
+    selected_id = page.evaluate("() => wizardState.selectedFilamentId")
+    assert str(selected_id) == "122"
+
+    # Status banner should have flipped from "Recognized existing" to the
+    # backfill confirmation. Either is acceptable; we only need to confirm
+    # the PATCH was sent.
+    assert len(patches) == 1, f"expected 1 backfill PATCH, got {len(patches)}: {patches}"
+    body = patches[0]
+    assert str(body.get("id")) == "122"
+    data = body.get("data") or {}
+    # Silent fills the parser had and the existing record was missing.
+    assert data.get("spool_weight") == 215
+    assert data.get("settings_extruder_temp") == 215
+    assert data.get("settings_bed_temp") == 60
+    extra = data.get("extra") or {}
+    assert extra.get("nozzle_temp_max") == '"225"'
+    assert extra.get("bed_temp_max") == '"60"'
+    # filament_attributes set-union: existing kept, parser-implied added.
+    assert sorted(extra.get("filament_attributes", [])) == ["Blend", "Carbon Fiber"]
+    # original_color flows in from the parser's color_name.
+    assert extra.get("original_color") == '"Black"'
+
+    # weight, spool_weight, diameter, density all transitioned from
+    # null/0 to silent fills. Existing density=1.20 vs parser=1.18 is
+    # under the 0.05 threshold so no mismatch row. Same with color_hex
+    # (equal in this fixture). Panel should be hidden.
+    assert data.get("diameter") == 1.75
+    assert data.get("weight") == 800
+    panel = page.locator("#wiz-fil-mismatch-panel")
+    expect(panel).not_to_be_visible(timeout=2000)
+
+
+def test_backfill_mismatch_panel_renders_and_opt_in_patches(page: Page):
+    """When the existing record has values that DIFFER from the parser
+    (not just empty), the mismatch panel renders and each [Use Scanned]
+    button fires a one-key PATCH for that field only."""
+    page.route("**/api/filaments", lambda route, req: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"success": True, "filaments": [
+            {
+                "id": 122, "name": "Black (Carbon Fiber)", "material": "PC",
+                "color_hex": "2B2B2B", "density": 1.20, "diameter": 1.75,
+                "weight": 865, "spool_weight": 215,
+                "settings_extruder_temp": 240, "settings_bed_temp": 90,
+                "vendor": {"name": "Prusament"},
+                "extra": {"filament_attributes": ["Carbon Fiber", "Blend"],
+                          "nozzle_temp_max": '"260"', "bed_temp_max": '"100"',
+                          "original_color": '"Black"'},
+            }
+        ]}),
+    ))
+    _route_external_search(page, lambda q: {
+        "id": "fake", "name": "Prusament PC Blend Carbon Fiber Black",
+        "material": "PC Blend Carbon Fiber",
+        "vendor": {"name": "Prusament"}, "weight": 800, "spool_weight": 215,
+        "diameter": 1.75, "density": 1.18,
+        "color_hex": "868463", "color_name": "Black",
+        "external_link": "https://prusament.com/spool/9/zzz/",
+        "settings_extruder_temp": 215, "settings_bed_temp": 60,
+        "extra": {"nozzle_temp_max": '"225"', "bed_temp_max": '"60"'},
+    })
+    patches = _route_update_filament(page)
+
+    page.goto("http://localhost:8000")
+    page.get_by_role("button", name=re.compile("ADD INVENTORY")).click()
+    expect(page.locator("#wizardModal")).to_be_visible()
+    page.locator("#btn-type-manual").click()
+
+    rows = page.locator("[data-spool-row-idx]")
+    rows.nth(0).locator("input[type='url']").fill("https://prusament.com/spool/9/zzz/")
+    rows.nth(0).locator("input[type='url']").blur()
+    expect(rows.nth(0).locator(".badge.bg-success")).to_be_visible(timeout=5000)
+
+    panel = page.locator("#wiz-fil-mismatch-panel")
+    expect(panel).to_be_visible(timeout=5000)
+    # Expected mismatches: weight, color_hex, settings_extruder_temp,
+    # settings_bed_temp, nozzle_temp_max, bed_temp_max. (density gap is
+    # under threshold; diameter equals; spool_weight equals.)
+    rows_in_panel = page.locator("#wiz-fil-mismatch-rows tr[data-mismatch-row]")
+    keys = rows_in_panel.evaluate_all("els => els.map(e => e.getAttribute('data-mismatch-key'))")
+    assert "weight" in keys
+    assert "color_hex" in keys
+    assert "settings_extruder_temp" in keys
+    assert "extra.nozzle_temp_max" in keys
+
+    # No silent backfill should have happened (everything was set already
+    # and either equal or in mismatch panel). So patches list is empty
+    # so far. (filament_attributes set-union didn't fire because parser
+    # implied no NEW attrs beyond what was already there.)
+    assert patches == []
+
+    # Click [Use Scanned] on the weight row.
+    weight_row = page.locator('#wiz-fil-mismatch-rows tr[data-mismatch-key="weight"]')
+    weight_row.locator("button").click()
+    page.wait_for_timeout(300)
+    assert len(patches) == 1, patches
+    assert patches[0]["data"] == {"weight": 800}
+    # Row should have collapsed to a confirmation message.
+    expect(weight_row).to_contain_text("Updated", timeout=2000)
+
+
+def test_backfill_dismiss_closes_panel_without_writes(page: Page):
+    page.route("**/api/filaments", lambda route, req: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"success": True, "filaments": [
+            {"id": 122, "name": "Black", "material": "PC",
+             "color_hex": "111111", "weight": 865, "spool_weight": 215,
+             "diameter": 1.75, "density": 1.20,
+             "settings_extruder_temp": 215, "settings_bed_temp": 60,
+             "vendor": {"name": "Prusament"},
+             "extra": {"filament_attributes": ["Carbon Fiber", "Blend"],
+                       "nozzle_temp_max": '"225"', "bed_temp_max": '"60"',
+                       "original_color": '"Black"'}}
+        ]}),
+    ))
+    _route_external_search(page, lambda q: {
+        "id": "fake", "name": "x", "material": "PC Blend Carbon Fiber",
+        "vendor": {"name": "Prusament"}, "weight": 800, "spool_weight": 215,
+        "diameter": 1.75, "density": 1.18, "color_hex": "222222",
+        "color_name": "Black", "external_link": "https://prusament.com/spool/9/zzz/",
+        "extra": {"nozzle_temp_max": '"225"', "bed_temp_max": '"60"'},
+    })
+    patches = _route_update_filament(page)
+
+    page.goto("http://localhost:8000")
+    page.get_by_role("button", name=re.compile("ADD INVENTORY")).click()
+    page.locator("#btn-type-manual").click()
+    rows = page.locator("[data-spool-row-idx]")
+    rows.nth(0).locator("input[type='url']").fill("https://prusament.com/spool/9/zzz/")
+    rows.nth(0).locator("input[type='url']").blur()
+
+    panel = page.locator("#wiz-fil-mismatch-panel")
+    expect(panel).to_be_visible(timeout=5000)
+    panel.get_by_role("button", name="Dismiss").click()
+    expect(panel).not_to_be_visible(timeout=2000)
+    # Nothing patched (no silent fields, no opt-ins).
+    assert patches == []
 
 
 def test_per_spool_scan_failure_blocks_submit(page: Page):
