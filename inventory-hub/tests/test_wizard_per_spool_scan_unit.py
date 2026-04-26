@@ -131,6 +131,55 @@ def test_find_filament_matches_sorts_by_id_ascending(page: Page):
     assert [m['id'] for m in matches] == [157, 192]
 
 
+def test_find_filament_matches_token_subset_material(page: Page):
+    """Real-world: filament 122 stored with material='PC', Prusament parser
+    returns 'PC Blend Carbon Fiber'. Strict equality missed the match and
+    a duplicate filament got created. Token-subset match handles this."""
+    _open_wizard_no_fetches(page)
+    matches = page.evaluate("""() => {
+        wizardState.allFilaments = [
+            {id: 122, name: 'Black (Carbon Fiber)', color_name: null, material: 'PC', vendor: {name: 'Prusament'}}
+        ];
+        return window.findFilamentMatches({
+            vendor: {name: 'Prusament'}, material: 'PC Blend Carbon Fiber', color_name: 'Black'
+        });
+    }""")
+    assert len(matches) == 1
+    assert matches[0]['id'] == 122
+
+
+def test_find_filament_matches_token_match_does_not_substring_trap(page: Page):
+    """Token-subset must respect word boundaries — 'PE' must NOT match
+    'PETG' just because PE is a substring of PETG. Tokenizer split keeps
+    them as distinct tokens."""
+    _open_wizard_no_fetches(page)
+    matches = page.evaluate("""() => {
+        wizardState.allFilaments = [
+            {id: 1, name: 'Galaxy Black', color_name: null, material: 'PETG', vendor: {name: 'Prusament'}}
+        ];
+        return window.findFilamentMatches({
+            vendor: {name: 'Prusament'}, material: 'PE', color_name: 'Galaxy Black'
+        });
+    }""")
+    assert matches == [], "PE must not match PETG"
+
+
+def test_find_filament_matches_token_match_pla_galaxy(page: Page):
+    """Symmetric case to the PC one: parser returns just 'PLA' but stored
+    filament is 'PLA Galaxy'. Tokenize → {pla} ⊆ {pla, galaxy} → match."""
+    _open_wizard_no_fetches(page)
+    matches = page.evaluate("""() => {
+        wizardState.allFilaments = [
+            {id: 5, name: 'Bright Yellow', color_name: null, material: 'PLA Galaxy', vendor: {name: 'Prusament'}}
+        ];
+        return window.findFilamentMatches({
+            vendor: {name: 'Prusament'}, material: 'PLA', color_name: 'Bright Yellow'
+        });
+    }""")
+    assert len(matches) == 1
+    assert matches[0]['id'] == 5
+
+
 def test_find_filament_matches_case_insensitive(page: Page):
     _open_wizard_no_fetches(page)
     matches = page.evaluate("""() => {
@@ -161,18 +210,23 @@ def test_extract_spool_fields_basic_mapping(page: Page):
     assert override['spool_weight'] == 215
 
 
-def test_extract_spool_fields_product_url_goes_into_extras(page: Page):
+def test_extract_spool_fields_product_url_goes_into_extras_unwrapped(page: Page):
     """Regression: Spoolman has NO native product_url on Spool — it's a
     registered extra. Sending it at top-level made Spoolman silently drop
-    it, so per-spool product links were missing on every created spool.
-    Must land at extras['product_url'] wrapped in literal quotes for the
-    text-type validator."""
+    it. Must land at extras['product_url'] AS-IS (not literal-quote-wrapped)
+    because product_url is in JSON_STRING_FIELDS and sanitize_outbound_data
+    wraps it via json.dumps. Pre-wrapping here would double-wrap and the
+    literal quote chars would leak into the UI on read-back."""
     _open_wizard_no_fetches(page)
     override = page.evaluate("""() => window.extractSpoolFieldsFromTemplate({
         external_link: 'https://prusament.com/spool/1/aaa/'
     })""")
     assert 'product_url' not in override, "must NOT be top-level — Spoolman drops it"
-    assert override['extra']['product_url'] == '"https://prusament.com/spool/1/aaa/"'
+    assert override['extra']['product_url'] == 'https://prusament.com/spool/1/aaa/'
+    # purchase_url mirrored from external_link too — the parser doesn't
+    # surface a separate canonical store URL yet, so this is the best
+    # default we can offer to populate the Spool's Purchase Link field.
+    assert override['extra']['purchase_url'] == 'https://prusament.com/spool/1/aaa/'
 
 
 def test_extract_spool_fields_wraps_extras_in_literal_quotes(page: Page):
@@ -216,6 +270,54 @@ def test_extract_spool_fields_skips_zero_spool_weight(page: Page):
 
 
 # --- wizardResetSpoolRows / lock interaction ------------------------------
+
+def test_badge_update_does_not_destroy_url_inputs(page: Page):
+    """Real-world: rapid blind-scanning of multiple Prusament boxes used to
+    fail because each status transition (pending → ok) called
+    wizardRenderSpoolRows which blew away the entire rows container via
+    innerHTML. The user's in-flight typing into row 2 was lost mid-scan
+    when row 1's fetch completed. Badge-only updates must preserve the
+    input element references and any text the user has typed."""
+    _open_wizard_no_fetches(page)
+    state = page.evaluate("""() => {
+        document.getElementById('wiz-spool-qty').value = 3;
+        window.wizardSyncSpoolRows();
+        // Capture the row 2 input node BEFORE any badge updates.
+        const beforeNode = document.querySelector("[data-spool-row-idx='1'] input[type='url']");
+        // Pretend the user is mid-typing into row 2.
+        beforeNode.value = 'https://prusament.com/spool/9/zzz';
+        // Fire a status update on row 0 — this is what used to nuke row 2.
+        wizardState.spoolRows[0].status = 'pending';
+        window.wizardRenderSpoolRowBadge(0);
+        wizardState.spoolRows[0].status = 'ok';
+        wizardState.spoolRows[0].override = {initial_weight: 998};
+        window.wizardRenderSpoolRowBadge(0);
+        const afterNode = document.querySelector("[data-spool-row-idx='1'] input[type='url']");
+        return {
+            sameNode: beforeNode === afterNode,
+            preservedValue: afterNode.value,
+            row0BadgeText: document.querySelector("[data-spool-row-idx='0'] .badge").innerText
+        };
+    }""")
+    assert state['sameNode'] is True, "row 2's input element must NOT be re-created"
+    assert state['preservedValue'] == 'https://prusament.com/spool/9/zzz'
+    assert '✓' in state['row0BadgeText']
+
+
+def test_badge_update_handles_error_state_outline(page: Page):
+    _open_wizard_no_fetches(page)
+    classes = page.evaluate("""() => {
+        document.getElementById('wiz-spool-qty').value = 1;
+        window.wizardSyncSpoolRows();
+        wizardState.spoolRows[0].status = 'error';
+        wizardState.spoolRows[0].errorMsg = 'bad url';
+        window.wizardRenderSpoolRowBadge(0);
+        const row = document.querySelector("[data-spool-row-idx='0']");
+        return Array.from(row.classList);
+    }""")
+    assert 'border-danger' in classes
+    assert 'border' in classes
+
 
 def test_reset_spool_rows_clears_state_and_re_renders(page: Page):
     _open_wizard_no_fetches(page)
