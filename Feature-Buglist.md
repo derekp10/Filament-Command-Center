@@ -57,6 +57,14 @@
 
 * Need to retool how the location selector works in the add/edit wizzard. It doesn't "Flow" properly. Having to delete the existing text to get the full list to change it is a bit clunky.
 
+
+## Prusament Enhancements ##
+* Product url should be scrapeable from Prusament Spool Based QR codes. We should attempt to see if we can pull that and reliably place it into the product url field in the Add/Edit Filament Wizzard.
+
+* Ability to merge duplicate filaments. Sometimes created when the existing filament card and the one the parcer generates based on prusament filaments don't match exactly.
+
+* **[Cleanup]** Audit the wizard's "Import from External" panel — which parsers actually still work, which are stale, what's the current dropdown showing? The user reported "I've completely forgotten what parcers we have set up there that work" — the Step 2 import-from-external surface needs a documentation pass and probably a deprecation pass. Code lives in `inventory-hub/external_parsers.py` (PrusamentParser, AmazonParser, SpoolmanParser, possibly others) and the dropdown is wired in `templates/components/modals_wizard.html`. As of 2026-04-26, Prusament works (per the per-spool scan flow); Amazon needs BeautifulSoup4 which isn't installed in dev (test_external_parsers.py::test_amazon_parser_matching fails locally for that reason); 3DFP / Spoolman-native should be re-tested. Worth combining with a UX refresh if we're touching that surface.
+
 # **Active Backlog (Organized by Feature Area)**
 
 ## 📋 Activity Log

@@ -131,6 +131,89 @@ def test_find_filament_matches_sorts_by_id_ascending(page: Page):
     assert [m['id'] for m in matches] == [157, 192]
 
 
+# --- splitMaterialAndAttributes -------------------------------------------
+
+def test_split_material_simple_base_only(page: Page):
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => window.splitMaterialAndAttributes('PLA', ['Carbon Fiber', 'Blend', 'Silk'])""")
+    assert result == {'base': 'PLA', 'attrs': []}
+
+
+def test_split_material_pulls_multi_word_attribute_first(page: Page):
+    """'Carbon Fiber' must be matched as a phrase before any single-word
+    attribute steals one of its tokens. Greedy longest-first sort handles
+    this — 'Carbon Fiber' (12 chars) is checked before 'Blend' (5)."""
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => window.splitMaterialAndAttributes(
+        'PC Blend Carbon Fiber',
+        ['Carbon Fiber', 'Blend', 'Silk', 'Matte', 'Glass Fiber']
+    )""")
+    assert result['base'] == 'PC'
+    assert sorted(result['attrs']) == ['Blend', 'Carbon Fiber']
+
+
+def test_split_material_word_boundary_does_not_partial_match(page: Page):
+    """'PE' must NOT pull from 'PETG' just because PE is a substring.
+    Word-boundary regex protects against the substring trap."""
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => window.splitMaterialAndAttributes(
+        'PETG Matte', ['PE', 'Matte']
+    )""")
+    # PE is a known attribute (hypothetically) but should not pull from PETG.
+    assert result['base'] == 'PETG'
+    assert result['attrs'] == ['Matte']
+
+
+def test_split_material_falls_back_when_no_known_list(page: Page):
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => window.splitMaterialAndAttributes('PC Blend Carbon Fiber', [])""")
+    assert result == {'base': 'PC Blend Carbon Fiber', 'attrs': []}
+
+
+def test_split_material_handles_hyphenated_attribute(page: Page):
+    """Spoolman has both 'Carbon Fiber' and 'Carbon-Fiber' in the canonical
+    choices list. Either spelling in the parser output should map to the
+    matching choice."""
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => window.splitMaterialAndAttributes(
+        'PC Carbon-Fiber', ['Carbon-Fiber', 'Carbon Fiber']
+    )""")
+    assert result['base'] == 'PC'
+    assert result['attrs'] == ['Carbon-Fiber']
+
+
+def test_split_material_case_insensitive_match_preserves_canonical_casing(page: Page):
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => window.splitMaterialAndAttributes(
+        'pla galaxy', ['Galaxy', 'Carbon Fiber']
+    )""")
+    assert result['base'] == 'pla'
+    assert result['attrs'] == ['Galaxy']  # canonical casing wins
+
+
+# --- attribute-aware matcher ----------------------------------------------
+
+def test_find_filament_matches_attribute_aware_pc_blend(page: Page):
+    """The user's real bug: filament 122 stored as material='PC' got
+    duplicated when the parser returned 'PC Blend Carbon Fiber' because
+    materials didn't strict-match. With known attributes loaded, the
+    parser side is split to base='PC' and matches stored 'PC' directly."""
+    _open_wizard_no_fetches(page)
+    matches = page.evaluate("""() => {
+        wizardState.extraFields = {filament: [
+            {key: 'filament_attributes', choices: ['Carbon Fiber', 'Blend', 'Matte']}
+        ]};
+        wizardState.allFilaments = [
+            {id: 122, name: 'Black (Carbon Fiber)', color_name: null, material: 'PC', vendor: {name: 'Prusament'}}
+        ];
+        return window.findFilamentMatches({
+            vendor: {name: 'Prusament'}, material: 'PC Blend Carbon Fiber', color_name: 'Black'
+        });
+    }""")
+    assert len(matches) == 1
+    assert matches[0]['id'] == 122
+
+
 def test_find_filament_matches_token_subset_material(page: Page):
     """Real-world: filament 122 stored with material='PC', Prusament parser
     returns 'PC Blend Carbon Fiber'. Strict equality missed the match and
