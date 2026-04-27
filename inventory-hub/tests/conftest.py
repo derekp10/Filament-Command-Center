@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sys
 import typing
+import uuid
 
 import pytest
 import requests
@@ -25,7 +26,54 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 
 DEFAULT_BASE_URL = os.environ.get("INVENTORY_HUB_URL", "http://localhost:8000")
+DEFAULT_DEV_SPOOLMAN = os.environ.get("DEV_SPOOLMAN_URL", "http://192.168.1.29:7913")
 BASELINE_VIEWPORT = {"width": 1600, "height": 1300}
+
+# Prefix used by every record the integration suite creates. The orphan-cleanup
+# fixture relies on this exact prefix to identify records left behind by
+# previous interrupted runs and the per-test teardown looks for it before
+# deleting. Don't change without updating both sides.
+TEST_RECORD_PREFIX = "__fcc_test_"
+
+
+# ---------------------------------------------------------------------------
+# Integration-test gating
+# ---------------------------------------------------------------------------
+
+def pytest_addoption(parser):
+    """Add --run-integration so default `pytest` runs stay fast.
+
+    Integration tests hit the real dev Spoolman at 192.168.1.29:7913 (or
+    whatever DEV_SPOOLMAN_URL points at). Without this flag set, anything
+    decorated `@pytest.mark.integration` is skipped at collection time.
+    Setting RUN_INTEGRATION=1 in the environment is equivalent.
+    """
+    parser.addoption(
+        "--run-integration",
+        action="store_true",
+        default=False,
+        help="Run @pytest.mark.integration tests against the real dev Spoolman.",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip @pytest.mark.integration tests unless explicitly opted in.
+
+    Two opt-in switches: the --run-integration CLI flag OR RUN_INTEGRATION=1
+    in the environment. If neither is set, every integration item gets a
+    skip marker added so the rest of the suite still runs.
+    """
+    opted_in = config.getoption("--run-integration") or os.environ.get(
+        "RUN_INTEGRATION", ""
+    ).lower() in ("1", "true", "yes")
+    if opted_in:
+        return
+    skip_marker = pytest.mark.skip(
+        reason="integration test skipped (opt-in: --run-integration or RUN_INTEGRATION=1)"
+    )
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_marker)
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +369,246 @@ def require_server(api_base_url: str):
     except requests.RequestException as exc:
         pytest.skip(f"Dev server unreachable at {api_base_url}: {exc}")
     return api_base_url
+
+
+# ---------------------------------------------------------------------------
+# Dev Spoolman fixtures (integration tests)
+# ---------------------------------------------------------------------------
+#
+# Centralizes `http://192.168.1.29:7913` so test files don't keep
+# duplicating the constant + a `_sm_ok()` helper. The two existing
+# integration test files (test_backfill_spool_weights.py,
+# test_large_spool_weight_tracking.py) can be migrated to these as a
+# follow-up; for now they keep their inline copies to minimize churn.
+
+@pytest.fixture(scope="session")
+def dev_spoolman_url() -> str:
+    """The URL of the dev Spoolman instance used for integration tests."""
+    return DEFAULT_DEV_SPOOLMAN.rstrip("/")
+
+
+@pytest.fixture(scope="session")
+def require_spoolman(dev_spoolman_url: str) -> str:
+    """Skip the test if the dev Spoolman isn't reachable.
+
+    Pings `<spoolman>/api/v1/health`. Mirrors the shape of
+    `require_server` so opt-in is consistent across the suite.
+    """
+    try:
+        r = requests.get(f"{dev_spoolman_url}/api/v1/health", timeout=3)
+    except requests.RequestException as exc:
+        pytest.skip(f"Dev Spoolman unreachable at {dev_spoolman_url}: {exc}")
+    if not r.ok:
+        pytest.skip(f"Dev Spoolman at {dev_spoolman_url} returned {r.status_code}")
+    return dev_spoolman_url
+
+
+# ---------------------------------------------------------------------------
+# Throwaway record fixtures (Spoolman integration tests)
+# ---------------------------------------------------------------------------
+#
+# Each integration test creates a uniquely-named filament + spool, exercises
+# the path under test, then deletes both in teardown. Names start with
+# TEST_RECORD_PREFIX so the orphan-cleanup hook can pick up anything left
+# behind by an interrupted run.
+
+def _make_test_name(label: str) -> str:
+    """Generate a unique test record name with the canonical prefix."""
+    return f"{TEST_RECORD_PREFIX}{label}_{uuid.uuid4().hex[:8]}"
+
+
+def _delete_record(spoolman_url: str, entity: str, eid) -> None:
+    """Best-effort delete of a Spoolman record. Never raises."""
+    try:
+        requests.delete(f"{spoolman_url}/api/v1/{entity}/{eid}", timeout=5)
+    except requests.RequestException:
+        pass
+
+
+def _ensure_test_vendor(spoolman_url: str) -> typing.Optional[int]:
+    """Find or create a vendor named `__fcc_test_vendor__` to attach test
+    filaments to. Returns the vendor ID or None if Spoolman is unreachable
+    (the integration tests are gated by `require_spoolman`, so this is
+    purely defensive)."""
+    vendor_name = f"{TEST_RECORD_PREFIX}vendor__"
+    try:
+        r = requests.get(f"{spoolman_url}/api/v1/vendor", timeout=5)
+        if r.ok:
+            for v in r.json() or []:
+                if v.get("name") == vendor_name:
+                    return v.get("id")
+        c = requests.post(
+            f"{spoolman_url}/api/v1/vendor",
+            json={"name": vendor_name, "comment": "Auto-created by FCC integration tests"},
+            timeout=5,
+        )
+        if c.ok:
+            return (c.json() or {}).get("id")
+    except requests.RequestException:
+        return None
+    return None
+
+
+@pytest.fixture
+def throwaway_filament(require_spoolman: str):
+    """Function-scope: create a fresh filament on dev Spoolman.
+
+    Yields the filament dict (parsed from Spoolman's POST response). Hard-
+    deletes the record in teardown via DELETE /api/v1/filament/<id>.
+
+    The filament is attached to a long-lived `__fcc_test_vendor__` vendor
+    that's auto-created on first use. Vendor records are cheap and rarely
+    cause Spoolman validation issues, so we don't recreate them per-test.
+    """
+    spoolman_url = require_spoolman
+    vendor_id = _ensure_test_vendor(spoolman_url)
+    name = _make_test_name("filament")
+    payload = {
+        "name": name,
+        "material": "PLA",
+        "color_hex": "AABBCC",
+        "spool_weight": 250,
+        "weight": 1000,
+        "density": 1.24,
+        "diameter": 1.75,
+    }
+    if vendor_id is not None:
+        payload["vendor_id"] = vendor_id
+    r = requests.post(f"{spoolman_url}/api/v1/filament", json=payload, timeout=10)
+    if not r.ok:
+        pytest.skip(f"Could not create throwaway filament: {r.status_code} {r.text}")
+    fil = r.json()
+    fid = fil.get("id")
+    try:
+        yield fil
+    finally:
+        if fid is not None:
+            _delete_record(spoolman_url, "filament", fid)
+
+
+@pytest.fixture
+def throwaway_spool(throwaway_filament, require_spoolman: str):
+    """Function-scope: create a fresh spool attached to a fresh filament.
+
+    The default 1000g initial weight matches the parent filament's weight
+    so weight-related logic (auto-archive on zero, used_weight cap) doesn't
+    fire by accident.
+    """
+    spoolman_url = require_spoolman
+    payload = {
+        "filament_id": throwaway_filament.get("id"),
+        "initial_weight": 1000,
+        "used_weight": 0,
+        "first_used": None,
+        "last_used": None,
+        "comment": f"Created by FCC integration test ({_make_test_name('spool')})",
+    }
+    r = requests.post(f"{spoolman_url}/api/v1/spool", json=payload, timeout=10)
+    if not r.ok:
+        pytest.skip(f"Could not create throwaway spool: {r.status_code} {r.text}")
+    spool = r.json()
+    sid = spool.get("id")
+    try:
+        yield spool
+    finally:
+        if sid is not None:
+            _delete_record(spoolman_url, "spool", sid)
+
+
+@pytest.fixture
+def throwaway_spool_with_extras(throwaway_filament, require_spoolman: str):
+    """Factory fixture: create a spool with a pre-seeded `extra` dict.
+
+    Usage:
+        def test_x(throwaway_spool_with_extras):
+            spool = throwaway_spool_with_extras({
+                "container_slot": "1",
+                "physical_source": "PM-DB-XL-L",
+            })
+
+    The factory wraps each value via json.dumps because Spoolman stores
+    extras as JSON-encoded strings on the wire (see
+    `inventory-hub/spoolman_api.py` `JSON_STRING_FIELDS` for context).
+    Cleanup runs in fixture teardown for every spool created during the
+    test.
+    """
+    import json as _json
+    spoolman_url = require_spoolman
+    created_ids: list[int] = []
+
+    def _make(extras: typing.Optional[dict] = None, **kwargs) -> dict:
+        wire_extras: dict = {}
+        if extras:
+            for k, v in extras.items():
+                if isinstance(v, str):
+                    wire_extras[k] = _json.dumps(v)
+                elif isinstance(v, bool):
+                    wire_extras[k] = "true" if v else "false"
+                else:
+                    wire_extras[k] = _json.dumps(v)
+        payload = {
+            "filament_id": throwaway_filament.get("id"),
+            "initial_weight": 1000,
+            "used_weight": 0,
+            "extra": wire_extras,
+        }
+        payload.update(kwargs)
+        r = requests.post(f"{spoolman_url}/api/v1/spool", json=payload, timeout=10)
+        if not r.ok:
+            pytest.skip(
+                f"Could not create throwaway spool with extras: {r.status_code} {r.text}"
+            )
+        spool = r.json()
+        sid = spool.get("id")
+        if sid is not None:
+            created_ids.append(sid)
+        return spool
+
+    try:
+        yield _make
+    finally:
+        for sid in created_ids:
+            _delete_record(spoolman_url, "spool", sid)
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_orphan_test_records(request):
+    """Best-effort orphan-cleanup before integration tests run.
+
+    Looks for any filament/spool on dev Spoolman whose name or comment
+    starts with `__fcc_test_` and deletes it. Spools are deleted before
+    filaments so the FK constraint doesn't reject the filament delete.
+
+    Runs only when integration tests are opted in (so unit-only test
+    runs don't waste an HTTP roundtrip). Fails-quiet on every error so a
+    transient Spoolman blip doesn't break the whole suite.
+    """
+    opted_in = (
+        request.config.getoption("--run-integration")
+        or os.environ.get("RUN_INTEGRATION", "").lower() in ("1", "true", "yes")
+    )
+    yield
+    if not opted_in:
+        return
+    # Only run the sweep once per session — keyed off a session-scoped flag.
+    sess = request.session
+    if getattr(sess, "_fcc_orphan_sweep_ran", False):
+        return
+    sess._fcc_orphan_sweep_ran = True
+    try:
+        url = DEFAULT_DEV_SPOOLMAN.rstrip("/")
+        spools = requests.get(f"{url}/api/v1/spool", timeout=5).json() or []
+        for s in spools:
+            comment = (s.get("comment") or "")
+            if TEST_RECORD_PREFIX in comment:
+                _delete_record(url, "spool", s.get("id"))
+        fils = requests.get(f"{url}/api/v1/filament", timeout=5).json() or []
+        for f in fils:
+            name = (f.get("name") or "")
+            if name.startswith(TEST_RECORD_PREFIX):
+                _delete_record(url, "filament", f.get("id"))
+    except requests.RequestException:
+        pass
 
 
 # ---------------------------------------------------------------------------

@@ -33,3 +33,42 @@ Prod: Hosted on a TrueNAS server. Keep deployment, storage, and networking sugge
 - **Keyboard nav idiom**: arrow keys move a `.kb-active` class between focusable items (wraps at edges), Enter confirms, Escape cancels or prompts. Auto-focus the primary input when a modal opens. Force Location modal + Quick-Swap grid are reference implementations.
 - **Activity Log + Toasts**: every scan outcome (success, warning, error, partial) writes an Activity Log entry AND raises a toast. Error toasts use ≥7 s durations so blind-scanning failures don't slip past. Success toasts 4 s. `showToast(msg, type, duration)` where `type` is one of `success` / `error` / `warning` / `info`.
 
+## Spool / Filament write surfaces
+
+Every code path that calls `spoolman_api.update_spool` or `update_filament` has the same two failure modes: (1) Spoolman replaces the whole `extra` dict on PATCH so partial payloads silently wipe siblings; (2) on rejection both functions return `None` and most callers don't surface the actual error body. Both are the root of the 2026-04-26 / 2026-04-27 prod outages.
+
+Conventions every write surface MUST follow:
+
+- **Use the helper, not inline diff loops.** `spoolman_api.compute_dirty_extras(existing, requested, system_managed=...)` returns `(dirty_dict, stripped_keys)`. Pass `system_managed=spoolman_api.SYSTEM_MANAGED_EXTRAS` whenever the surface is user-driven editing (wizard, vendor edit modal, manufacturer edit modal, etc.) — that frozenset enumerates the keys owned exclusively by `perform_smart_move` / `perform_smart_eject` (`container_slot`, `physical_source`, `physical_source_slot`).
+- **Surface `LAST_SPOOLMAN_ERROR` on failure.** Both `update_spool` and `update_filament` populate the module-global on every rejection (the symmetry was fixed 2026-04-27 — pre-fix, only `update_filament` did). Read it in your `else:` branch and either (a) write to the activity log via `state.add_log_entry(..., "ERROR", "ff4444")`, or (b) return it in the JSON response so the frontend can `showToast(err, "error", 7000)`.
+- **For high-stakes paths use `_or_raise`.** `update_spool_or_raise` and `update_filament_or_raise` raise `spoolman_api.SpoolmanRejection` instead of returning `None`. Use these on slot assignment, label-confirm scans, force-move, and weigh-out — paths where silent failure left the user with no signal.
+- **Don't add `force_reset=True` to `setup_fields.py` lightly.** A field-schema delete wipes that extra on every record. The existing `migrate_container_slot_to_text()` is the template for any future legitimate type migration: snapshot values, force_reset, restore. Steady-state setup_fields runs MUST be value-preserving.
+
+Inventory of current production write surfaces (keep this list updated when adding new ones):
+
+| File:Line | Endpoint / Function | Notes |
+|-----------|--------------------|-------|
+| `app.py:408` | `api_create_inventory_wizard` auto-unarchive | Logs `LAST_SPOOLMAN_ERROR` on failure; warning level (best-effort). |
+| `app.py:507` | `api_edit_spool_wizard` spool save | Uses `compute_dirty_extras` with SYSTEM_MANAGED_EXTRAS guard. |
+| `app.py:521` | `api_edit_spool_wizard` filament save | Surfaces `LAST_SPOOLMAN_ERROR` in response JSON. |
+| `app.py:555` | `/api/manage_contents` set_meta | Returns `error` field with Spoolman body. |
+| `app.py:1079` | `/api/locations` cascade unassign | Best-effort fire-and-forget; logs each failure. |
+| `app.py:1183` | `/api/update_filament` quick-edit | Reference impl — surfaces error in response JSON. |
+| `app.py:1331` | spool label-confirm scan | Logs ERROR with Spoolman body; emits "already verified" info path. |
+| `app.py:1388` | filament label-confirm scan | Same pattern as spool side. |
+| `app.py:2068` | `/api/print_queue/mark_printed` (spool) | Returns Spoolman error in response. |
+| `app.py:2079` | `/api/print_queue/mark_printed` (filament) | Returns Spoolman error in response. |
+| `app.py:2103` | `/api/print_queue/set_flag` (spool) | Returns Spoolman error in response. |
+| `app.py:2113` | `/api/print_queue/set_flag` (filament) | Returns Spoolman error in response. |
+| `app.py:2359` | `/api/backfill_spool_weights` | Per-spool `errors` list in response. |
+| `app.py:2496` | filabridge auto-deduct | Activity log on failure with Spoolman body. |
+| `app.py:2533` | filabridge manual recovery | Same pattern as auto-deduct. |
+| `app.py:2659` | filabridge auto-recover task (threaded) | Activity log on failure. |
+| `logic.py:432` | `perform_smart_move` unseat existing | Read-merge-write reference impl; logs failure. |
+| `logic.py:484` | `perform_smart_move` toolhead branch | Activity log on failure with Spoolman body. |
+| `logic.py:498` | `perform_smart_move` dryer branch | Activity log on failure. |
+| `logic.py:509` | `perform_smart_move` generic branch | Activity log on failure. |
+| `logic.py:692` | `perform_smart_eject` return-home | Activity log on failure. |
+| `logic.py:714` | `perform_smart_eject` relocate | Activity log on failure. |
+| `logic.py:754` | `perform_force_unassign` | Activity log on failure. |
+

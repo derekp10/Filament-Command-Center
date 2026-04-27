@@ -34,7 +34,19 @@ window.addToQueue = (item) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: item.id, type: item.type })
-        }).catch(e => console.error("Could not set print flag:", e));
+        })
+        .then(r => r.json())
+        .then(data => {
+            // Surface Spoolman rejection so users aren't blind to silent
+            // failures — backend now populates data.msg with the error body.
+            if (!data.success) {
+                showToast(data.msg || data.error || "Failed to flag for label print", "error", 7000);
+            }
+        })
+        .catch(e => {
+            console.error("Could not set print flag:", e);
+            showToast("Could not set print flag (connection error)", "error", 7000);
+        });
     }
 
     labelQueue.push(item);

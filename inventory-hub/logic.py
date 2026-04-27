@@ -429,7 +429,12 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
                     _existing_full = spoolman_api.get_spool(existing['id']) or {}
                     _merged_extra = dict(_existing_full.get('extra') or {})
                     _merged_extra['container_slot'] = ''
-                    spoolman_api.update_spool(existing['id'], {'extra': _merged_extra})
+                    if not spoolman_api.update_spool(existing['id'], {'extra': _merged_extra}):
+                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                        state.add_log_entry(
+                            f"❌ Failed to unseat Spool #{existing['id']} from slot: {err}",
+                            "ERROR", "ff4444"
+                        )
 
             new_extra['container_slot'] = str(target_slot)
         else:
@@ -488,17 +493,31 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
                     state.add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
                 else:
                     state.add_log_entry(f"⚠️ Filabridge map {target} <- #{sid} FAILED: {detail}", "ERROR", "ff4444")
-        
+            else:
+                # Surface Spoolman rejection so slot-assignment failures are
+                # visible. Pre-fix, Spoolman 400s here left the slot stuck
+                # with no user-visible signal — a class of bug behind the
+                # 2026-04-27 outage (Item 2 in Feature-Buglist).
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                state.add_log_entry(
+                    f"❌ Failed to slot Spool #{sid} -> {target}: {err}", "ERROR", "ff4444"
+                )
+
         # DRYER MOVE
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
             new_extra.pop('physical_source', None)
             # [ALEX FIX] Clean up the source slot memory too, since we are home now.
             new_extra.pop('physical_source_slot', None)
-            
+
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 slot_txt = f" [Slot {target_slot}]" if target_slot else ""
                 state.add_log_entry(f"📦 {info['text']} -> Dryer {target}{slot_txt}", "INFO", info['color'])
-            
+            else:
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                state.add_log_entry(
+                    f"❌ Failed to move Spool #{sid} -> Dryer {target}: {err}", "ERROR", "ff4444"
+                )
+
         # GENERIC MOVE
         else:
             # [Universal Fallback Ghost Logic]
@@ -508,6 +527,11 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
+            else:
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                state.add_log_entry(
+                    f"❌ Failed to move Spool #{sid} -> {target}: {err}", "ERROR", "ff4444"
+                )
 
     state.UNDO_STACK.append(undo_record)
 
@@ -692,6 +716,10 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         if spoolman_api.update_spool(spool_id, {"location": saved_source, "extra": extra}):
             state.add_log_entry(f"↩️ Returned #{spool_id} -> {saved_source}", "WARNING")
             return True
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+        state.add_log_entry(
+            f"❌ Failed to return Spool #{spool_id} -> {saved_source}: {err}", "ERROR", "ff4444"
+        )
     else:
         # Normal unslotted eject with Room Fallback
         # [Universal Fallback fix] A printer is not a Room. If ejecting from a printer and missing physical_source, default to Unassigned.
@@ -715,6 +743,10 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
             dest_msg = f" to Room {target_loc}" if target_loc else " (Unassigned)"
             state.add_log_entry(f"⏏️ Ejected #{spool_id}{dest_msg}", "WARNING")
             return True
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+        state.add_log_entry(
+            f"❌ Failed to eject Spool #{spool_id}: {err}", "ERROR", "ff4444"
+        )
     return False
 
 def perform_force_unassign(spool_id, confirm_active_print=False):
@@ -754,6 +786,10 @@ def perform_force_unassign(spool_id, confirm_active_print=False):
     if spoolman_api.update_spool(spool_id, {"location": "", "extra": extra}):
         state.add_log_entry(f"🗑️ Force Unassigned #{spool_id}", "WARNING")
         return True
+    err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+    state.add_log_entry(
+        f"❌ Failed to force-unassign Spool #{spool_id}: {err}", "ERROR", "ff4444"
+    )
     return False
 
 def perform_undo():
