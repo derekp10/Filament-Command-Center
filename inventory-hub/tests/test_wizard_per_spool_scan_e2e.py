@@ -283,23 +283,27 @@ def test_per_spool_scan_fuzzy_color_match_existing_filament(page: Page):
     assert captured[0].get("filament_data") is None
 
 
-def test_per_spool_scan_prefers_oldest_when_multiple_match(page: Page):
-    """If the user already has duplicate Prusament filaments from earlier
-    broken runs, the matcher must auto-switch to the OLDEST (lowest id) —
-    not surface a picker. The picker added complexity and the user kept
-    accidentally creating yet another duplicate. Lowest id wins silently."""
-    # Two filaments both fuzzy-match the scan. 157 is the canonical original;
-    # 192 is the junk duplicate. Wizard must pick 157.
+def test_per_spool_scan_tier1_picks_tagged_over_lowest_id(page: Page):
+    """Replaces the previous "lowest id wins silently" test. With the
+    matcher's Tier-1 product-ID rule, when one of the candidates has its
+    extra.product_url tagged with the same Prusament product (from a
+    prior scan), THAT candidate wins — even when it's the higher id.
+    Definitive match → silent auto-switch, no picker."""
     page.route("**/api/filaments", lambda route, req: route.fulfill(
         status=200, content_type="application/json",
         body=json.dumps({"success": True, "filaments": [
+            # Lower id, no product_url → previously would have won.
             {"id": 99192, "name": "Pearl Mouse", "material": "PLA",
              "vendor": {"name": "Prusament"}},
-            {"id": 99157, "name": "Silver (Pearl Mouse)", "material": "PLA",
-             "vendor": {"name": "Prusament"}},
+            # Higher id, tagged with /spool/1/ matching the scan → Tier-1 wins.
+            {"id": 99257, "name": "Silver (Pearl Mouse)", "material": "PLA",
+             "vendor": {"name": "Prusament"},
+             "extra": {"product_url": '"https://prusament.com/spool/1/d1aa0032a0"'}},
         ]}),
     ))
-    _route_external_search(page, lambda q: _prusament_result(color="Pearl Mouse"))
+    _route_external_search(page, lambda q: _prusament_result(
+        color="Pearl Mouse", external_link="https://prusament.com/spool/1/aaa/"
+    ))
     captured = _capture_create_wizard(page)
 
     page.goto("http://localhost:8000")
@@ -311,19 +315,16 @@ def test_per_spool_scan_prefers_oldest_when_multiple_match(page: Page):
     rows.nth(0).locator("input[type='url']").fill("https://prusament.com/spool/1/aaa/")
     rows.nth(0).locator("input[type='url']").blur()
     expect(rows.nth(0).locator(".badge.bg-success")).to_be_visible(timeout=5000)
-    # Lowest id (157) wins — the duplicate (192) is ignored.
-    # Lowest id (99157) wins. Status text races with the silent backfill
-    # banner — wait for selectedFilamentId to settle instead of polling text.
+
+    # Tier-1 winner (99257) — silent auto-switch, picker never shown.
     page.wait_for_function(
-        "() => String(wizardState.selectedFilamentId) === '99157'",
-        timeout=5000,
+        "() => String(wizardState.selectedFilamentId) === '99257'", timeout=5000
     )
-    selected_id = page.evaluate("() => wizardState.selectedFilamentId")
-    assert str(selected_id) == "99157"
+    expect(page.locator("#wiz-duplicate-picker")).not_to_be_visible()
 
     page.locator("#btn-wiz-submit").click()
-    expect(page.locator("#wiz-status-msg")).to_contain_text("Success!", timeout=5000)
-    assert str(captured[0].get("filament_id")) == "99157"
+    page.wait_for_function("() => wizardState.lockedAfterSuccess === true", timeout=5000)
+    assert str(captured[0].get("filament_id")) == "99257"
 
 
 def test_post_success_lock_blocks_repeat_submit_until_edit(page: Page):
@@ -701,6 +702,111 @@ def test_import_from_external_panel_runs_matcher_and_autoswitches(page: Page):
     # filament_data payload. Without the fix, this would be filament_data.
     assert str(body.get("filament_id")) == "99157"
     assert body.get("filament_data") is None
+
+
+def test_picker_fires_when_matcher_cant_disambiguate(page: Page):
+    """User explicitly asked: when the matcher can't disambiguate after
+    all tiers, fall back to letting the user decide. This pins the picker
+    behavior — two basic-gate matches with no tagged product_url for
+    Tier-1 disambiguation should surface the duplicate picker, not
+    silently pick lowest-id."""
+    page.route("**/api/filaments", lambda route, req: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"success": True, "filaments": [
+            # Material must match _prusament_result()'s "PLA" default for
+            # the basic-gate matcher to pass — otherwise the matcher
+            # returns zero candidates and the picker never fires.
+            {"id": 99121, "name": "Black (Jet Black)", "color_name": None,
+             "material": "PLA", "vendor": {"name": "Prusament"}},
+            {"id": 99122, "name": "Black (Carbon Fiber)", "color_name": None,
+             "material": "PLA", "vendor": {"name": "Prusament"}},
+        ]}),
+    ))
+    _route_external_search(page, lambda q: _prusament_result(color="Black"))
+    captured = _capture_create_wizard(page)
+
+    page.goto("http://localhost:8000")
+    page.get_by_role("button", name=re.compile("ADD INVENTORY")).click()
+    expect(page.locator("#wizardModal")).to_be_visible()
+    page.locator("#btn-type-manual").click()
+
+    rows = page.locator("[data-spool-row-idx]")
+    rows.nth(0).locator("input[type='url']").fill("https://prusament.com/spool/9/zzz/")
+    rows.nth(0).locator("input[type='url']").blur()
+    expect(rows.nth(0).locator(".badge.bg-success")).to_be_visible(timeout=5000)
+
+    # Picker MUST be visible — no Tier-1 winner, multiple basic-gate matches.
+    picker = page.locator("#wiz-duplicate-picker")
+    expect(picker).to_be_visible(timeout=5000)
+    expect(picker).to_contain_text("Multiple existing filaments match")
+
+    # Both candidates listed; user can pick either, or "Create new filament".
+    select_opts = page.locator("#wiz-duplicate-picker-sel option").evaluate_all(
+        "els => els.map(e => e.value)"
+    )
+    assert sorted(select_opts) == ["99121", "99122"]
+    expect(picker.get_by_role("button", name=re.compile("Use selected"))).to_be_visible()
+    expect(picker.get_by_role("button", name=re.compile("Create new filament"))).to_be_visible()
+
+    # Pick 99122 (the canonical-by-the-user's-intent match).
+    page.evaluate("""() => {
+        document.getElementById('wiz-duplicate-picker-sel').value = '99122';
+        window.wizardDuplicatePickerConfirm();
+    }""")
+    expect(picker).not_to_be_visible(timeout=2000)
+
+    # Wizard should have auto-switched to 99122.
+    page.wait_for_function(
+        "() => String(wizardState.selectedFilamentId) === '99122'", timeout=5000
+    )
+
+    page.locator("#btn-wiz-submit").click()
+    page.wait_for_function("() => wizardState.lockedAfterSuccess === true", timeout=5000)
+    assert str(captured[0].get("filament_id")) == "99122"
+
+
+def test_picker_create_new_falls_through_to_fresh_filament(page: Page):
+    """The "Create new filament" button must fully escape the matcher —
+    fill Step 2 from the parser template and let the wizard create a
+    fresh filament record at submit time. Rare but real case: user has
+    fuzzy duplicates and intentionally wants a third record."""
+    page.route("**/api/filaments", lambda route, req: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"success": True, "filaments": [
+            # Material must match _prusament_result()'s "PLA" default for
+            # the basic-gate matcher to fire (otherwise picker never shows).
+            {"id": 99121, "name": "Black (Jet Black)", "material": "PLA",
+             "vendor": {"name": "Prusament"}},
+            {"id": 99122, "name": "Black (Carbon Fiber)", "material": "PLA",
+             "vendor": {"name": "Prusament"}},
+        ]}),
+    ))
+    _route_external_search(page, lambda q: _prusament_result(color="Black"))
+    captured = _capture_create_wizard(page)
+
+    page.goto("http://localhost:8000")
+    page.get_by_role("button", name=re.compile("ADD INVENTORY")).click()
+    page.locator("#btn-type-manual").click()
+
+    rows = page.locator("[data-spool-row-idx]")
+    rows.nth(0).locator("input[type='url']").fill("https://prusament.com/spool/9/zzz/")
+    rows.nth(0).locator("input[type='url']").blur()
+    expect(page.locator("#wiz-duplicate-picker")).to_be_visible(timeout=5000)
+
+    page.evaluate("() => window.wizardDuplicatePickerDismiss()")
+    expect(page.locator("#wiz-duplicate-picker")).not_to_be_visible(timeout=2000)
+
+    # Step 2 should now be filled from the parser template — wizard back
+    # in normal create-new mode. Parser returns material="PLA".
+    expect(page.locator("#wiz-fil-material")).to_have_value("PLA")
+    selected = page.evaluate("() => wizardState.selectedFilamentId")
+    assert not selected, "Create new must NOT bind to either existing match"
+
+    page.locator("#btn-wiz-submit").click()
+    page.wait_for_function("() => wizardState.lockedAfterSuccess === true", timeout=5000)
+    body = captured[0]
+    assert body.get("filament_id") is None, "Create new must not bind filament_id"
+    assert body.get("filament_data") is not None, "Create new must send filament_data"
 
 
 def test_per_spool_scan_failure_blocks_submit(page: Page):
