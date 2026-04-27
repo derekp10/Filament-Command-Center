@@ -572,6 +572,104 @@ def test_badge_update_does_not_destroy_url_inputs(page: Page):
     assert '✓' in state['row0BadgeText']
 
 
+def test_clear_button_hidden_when_row_empty(page: Page):
+    """× clear button should NOT show on a fresh row — there's nothing
+    to clear yet. Pure visual noise otherwise."""
+    _open_wizard_no_fetches(page)
+    visible = page.evaluate("""() => {
+        document.getElementById('wiz-spool-qty').value = 1;
+        window.wizardSyncSpoolRows();
+        const btn = document.querySelector("[data-spool-row-idx='0'] .wiz-row-clear-btn");
+        return btn ? btn.style.display : 'NO_BUTTON';
+    }""")
+    assert visible == 'none', f"× should be hidden on empty row, got display={visible!r}"
+
+
+def test_clear_button_visible_after_successful_scan(page: Page):
+    """× appears once the row has a value — gives the user a one-click
+    way to clear and re-scan if a hardware QR scanner caught the wrong box."""
+    _open_wizard_no_fetches(page)
+    visible = page.evaluate("""() => {
+        document.getElementById('wiz-spool-qty').value = 1;
+        window.wizardSyncSpoolRows();
+        wizardState.spoolRows[0].status = 'ok';
+        wizardState.spoolRows[0].override = {initial_weight: 998};
+        window.wizardRenderSpoolRowBadge(0);
+        const btn = document.querySelector("[data-spool-row-idx='0'] .wiz-row-clear-btn");
+        return btn ? btn.style.display : 'NO_BUTTON';
+    }""")
+    assert visible != 'none', f"× should be visible on ok row, got display={visible!r}"
+
+
+def test_clear_button_visible_on_error(page: Page):
+    """The whole point — failed scans need a fast reset."""
+    _open_wizard_no_fetches(page)
+    visible = page.evaluate("""() => {
+        document.getElementById('wiz-spool-qty').value = 1;
+        window.wizardSyncSpoolRows();
+        wizardState.spoolRows[0].status = 'error';
+        wizardState.spoolRows[0].errorMsg = 'bad url';
+        window.wizardRenderSpoolRowBadge(0);
+        const btn = document.querySelector("[data-spool-row-idx='0'] .wiz-row-clear-btn");
+        return btn ? btn.style.display : 'NO_BUTTON';
+    }""")
+    assert visible != 'none'
+
+
+def test_error_badge_is_clickable_with_clear_handler(page: Page):
+    """The red error badge doubles as a clear affordance for blind-scanning
+    workflows where the user may not aim for the small × button. Tapping
+    the badge fires wizardScanSpoolRow(idx, '') just like the × button."""
+    _open_wizard_no_fetches(page)
+    state = page.evaluate("""() => {
+        document.getElementById('wiz-spool-qty').value = 1;
+        window.wizardSyncSpoolRows();
+        wizardState.spoolRows[0].status = 'error';
+        wizardState.spoolRows[0].url = 'bogus url';
+        wizardState.spoolRows[0].errorMsg = 'Not a Prusament URL';
+        window.wizardRenderSpoolRowBadge(0);
+        const badge = document.querySelector("[data-spool-row-idx='0'] .badge.bg-danger");
+        return {
+            hasOnclick: badge ? badge.hasAttribute('onclick') : false,
+            onclickContains: badge ? badge.getAttribute('onclick') : null,
+            cursor: badge ? badge.style.cursor : null,
+            role: badge ? badge.getAttribute('role') : null,
+        };
+    }""")
+    assert state['hasOnclick'] is True
+    assert state['onclickContains'] and 'wizardScanSpoolRow' in state['onclickContains']
+    assert state['cursor'] == 'pointer'
+    assert state['role'] == 'button'
+
+
+def test_clicking_clear_button_resets_row_to_empty(page: Page):
+    """End-to-end behavior of the × button — fires wizardScanSpoolRow
+    with empty url, row transitions back to empty status, button hides."""
+    _open_wizard_no_fetches(page)
+    state = page.evaluate("""() => {
+        document.getElementById('wiz-spool-qty').value = 1;
+        window.wizardSyncSpoolRows();
+        // Seed a populated row with successful scan state.
+        const inp = document.querySelector("[data-spool-row-idx='0'] input[type='url']");
+        inp.value = 'https://prusament.com/spool/9/zzz/';
+        wizardState.spoolRows[0].url = inp.value;
+        wizardState.spoolRows[0].status = 'ok';
+        wizardState.spoolRows[0].override = {initial_weight: 998};
+        window.wizardRenderSpoolRowBadge(0);
+        // Click the × button.
+        const btn = document.querySelector("[data-spool-row-idx='0'] .wiz-row-clear-btn");
+        btn.click();
+        return {
+            rowStatus: wizardState.spoolRows[0].status,
+            rowUrl: wizardState.spoolRows[0].url,
+            btnHidden: document.querySelector("[data-spool-row-idx='0'] .wiz-row-clear-btn").style.display === 'none',
+        };
+    }""")
+    assert state['rowStatus'] == 'empty'
+    assert state['rowUrl'] == ''
+    assert state['btnHidden'] is True
+
+
 def test_badge_update_handles_error_state_outline(page: Page):
     _open_wizard_no_fetches(page)
     classes = page.evaluate("""() => {
