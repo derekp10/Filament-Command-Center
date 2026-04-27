@@ -156,21 +156,24 @@ def test_find_filament_matches_different_material_no_match(page: Page):
     assert matches == []
 
 
-def test_find_filament_matches_sorts_by_id_ascending(page: Page):
-    """Multi-match: oldest (lowest id) wins. No picker is shown — matches[0]
-    is the canonical filament. User's real bug: with [157, 192] both fuzzy-
-    matching 'Pearl Mouse', the wizard must auto-switch to 157, not 192."""
+def test_find_filament_matches_sorts_by_id_ascending_when_ambiguous(page: Page):
+    """Multi-match without Tier-1 product-ID disambiguation = ambiguous.
+    Caller will surface the picker rather than silently picking lowest-id.
+    The matcher still sorts lowest-id-first so [0] is a sensible default,
+    but `.definitive` is False to signal the caller should defer to user."""
     _open_wizard_no_fetches(page)
-    matches = page.evaluate("""() => {
+    result = page.evaluate("""() => {
         wizardState.allFilaments = [
             {id: 192, name: 'Pearl Mouse', color_name: null, material: 'PLA', vendor: {name: 'Prusament'}},
             {id: 157, name: 'Silver (Pearl Mouse)', color_name: null, material: 'PLA', vendor: {name: 'Prusament'}}
         ];
-        return window.findFilamentMatches({
+        const m = window.findFilamentMatches({
             vendor: {name: 'Prusament'}, material: 'PLA', color_name: 'Pearl Mouse'
         });
+        return {ids: m.map(f => f.id), definitive: m.definitive};
     }""")
-    assert [m['id'] for m in matches] == [157, 192]
+    assert result['ids'] == [157, 192]
+    assert result['definitive'] is False, "ambiguous match must NOT be definitive"
 
 
 # --- splitMaterialAndAttributes -------------------------------------------
@@ -303,6 +306,139 @@ def test_find_filament_matches_token_match_pla_galaxy(page: Page):
     }""")
     assert len(matches) == 1
     assert matches[0]['id'] == 5
+
+
+def test_find_filament_matches_prefers_tagged_product_url_over_lowest_id(page: Page):
+    """User's real bug: spools 252/253 (Prusament PC Blend Carbon Fiber)
+    landed on filament 121 (lowest id) instead of canonical 122. Filament
+    122's extra.product_url already had `/spool/17588/...` from a prior
+    scan — the same product ID as the new scan. Tier 1 must pick 122
+    decisively, return definitive=True."""
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => {
+        wizardState.allFilaments = [
+            // 121: lower id but NO product_url — used to win on lowest-id.
+            {id: 121, name: 'Black (Jet Black)', color_name: null,
+             material: 'PC', vendor: {name: 'Prusament'},
+             extra: {filament_attributes: '["Blend", "Carbon Fiber"]'}},
+            // 122: higher id but already TAGGED with the right product.
+            {id: 122, name: 'Black (Carbon Fiber)', color_name: null,
+             material: 'PC', vendor: {name: 'Prusament'},
+             extra: {product_url: '"https://prusament.com/spool/17588/d1aa0032a0"',
+                     filament_attributes: '["Carbon Fiber"]'}}
+        ];
+        const m = window.findFilamentMatches({
+            vendor: {name: 'Prusament'},
+            material: 'PC Blend Carbon Fiber',
+            color_name: 'Black',
+            external_link: 'https://prusament.com/spool/17588/da3ed46d9b'
+        });
+        return {ids: m.map(f => f.id), definitive: m.definitive};
+    }""")
+    assert result['ids'] == [122], "Tier 1 must pick 122, not lowest-id 121"
+    assert result['definitive'] is True
+
+
+def test_find_filament_matches_falls_back_when_no_url_match(page: Page):
+    """Both candidates lack product_url → no Tier-1 disambiguation.
+    Result is the lowest-id-first list with definitive=False so the
+    caller can surface the picker."""
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => {
+        wizardState.allFilaments = [
+            {id: 121, name: 'Black (Jet Black)', color_name: null,
+             material: 'PC', vendor: {name: 'Prusament'}},
+            {id: 122, name: 'Black (Carbon Fiber)', color_name: null,
+             material: 'PC', vendor: {name: 'Prusament'}}
+        ];
+        const m = window.findFilamentMatches({
+            vendor: {name: 'Prusament'},
+            material: 'PC Blend Carbon Fiber',
+            color_name: 'Black',
+            external_link: 'https://prusament.com/spool/17588/da3ed46d9b'
+        });
+        return {ids: m.map(f => f.id), definitive: m.definitive};
+    }""")
+    assert result['ids'] == [121, 122]
+    assert result['definitive'] is False
+
+
+def test_find_filament_matches_falls_back_when_scan_url_lacks_product_id(page: Page):
+    """If the scan's external_link is missing or non-Prusament, Tier 1
+    can't run — fall through to ambiguous-multi-match behavior."""
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => {
+        wizardState.allFilaments = [
+            {id: 121, name: 'Black (Jet Black)', color_name: null,
+             material: 'PC', vendor: {name: 'Prusament'}},
+            {id: 122, name: 'Black (Carbon Fiber)', color_name: null,
+             material: 'PC', vendor: {name: 'Prusament'},
+             extra: {product_url: '"https://prusament.com/spool/17588/d1aa0032a0"'}}
+        ];
+        const m = window.findFilamentMatches({
+            vendor: {name: 'Prusament'},
+            material: 'PC Blend Carbon Fiber',
+            color_name: 'Black'
+            // no external_link — non-Prusament source
+        });
+        return {ids: m.map(f => f.id), definitive: m.definitive};
+    }""")
+    # 122 has tagged URL but scan can't be product-id matched → ambiguous.
+    assert result['ids'] == [121, 122]
+    assert result['definitive'] is False
+
+
+def test_find_filament_matches_multiple_tagged_falls_to_lowest_id(page: Page):
+    """If TWO candidates both carry the matching product_id (literal
+    duplicates of the same canonical product), tier-1 stays definitive
+    and lowest-id wins within the tagged subset."""
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => {
+        wizardState.allFilaments = [
+            {id: 130, name: 'Black duplicate', color_name: null,
+             material: 'PC', vendor: {name: 'Prusament'},
+             extra: {product_url: '"https://prusament.com/spool/17588/aaa"'}},
+            {id: 122, name: 'Black (Carbon Fiber)', color_name: null,
+             material: 'PC', vendor: {name: 'Prusament'},
+             extra: {product_url: '"https://prusament.com/spool/17588/bbb"'}},
+            // 999 is tagged with a DIFFERENT product — must not be picked.
+            {id: 999, name: 'Black other product', color_name: null,
+             material: 'PC', vendor: {name: 'Prusament'},
+             extra: {product_url: '"https://prusament.com/spool/99999/ccc"'}}
+        ];
+        const m = window.findFilamentMatches({
+            vendor: {name: 'Prusament'},
+            material: 'PC Blend Carbon Fiber',
+            color_name: 'Black',
+            external_link: 'https://prusament.com/spool/17588/da3ed46d9b'
+        });
+        return {ids: m.map(f => f.id), definitive: m.definitive};
+    }""")
+    assert result['ids'] == [122, 130], "tier-1 subset, sorted lowest-id"
+    assert result['definitive'] is True
+
+
+def test_extract_prusament_product_id_strips_quotes(page: Page):
+    """`/api/filaments` doesn't run parse_inbound_data, so text-type extras
+    arrive JSON-quote-wrapped (`"https://..."`). The product-id extractor
+    must strip the outer quotes before matching."""
+    _open_wizard_no_fetches(page)
+    pid = page.evaluate("""() => {
+        wizardState.allFilaments = [
+            {id: 1, name: 'Black', material: 'PC', vendor: {name: 'Prusament'},
+             extra: {product_url: '"https://prusament.com/spool/17588/aaa"'}}
+        ];
+        const m = window.findFilamentMatches({
+            vendor: {name: 'Prusament'}, material: 'PC',
+            color_name: 'Black',
+            external_link: 'https://prusament.com/spool/17588/zzz'
+        });
+        return {ids: m.map(f => f.id), definitive: m.definitive};
+    }""")
+    # Single match always definitive; this confirms the quote-stripping
+    # didn't break the basic case (and the wrapped value matched).
+    assert pid['ids'] == [1]
+    assert pid['definitive'] is True
 
 
 def test_find_filament_matches_case_insensitive(page: Page):
