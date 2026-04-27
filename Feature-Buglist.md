@@ -57,6 +57,20 @@
 
 * Need to retool how the location selector works in the add/edit wizzard. It doesn't "Flow" properly. Having to delete the existing text to get the full list to change it is a bit clunky.
 
+* Failed to verify Filament #126 label after QR code scan of newly printed label. Need to find out why.
+
+* Add Max tempratures to the details modals for spools and filaments. Perferably side by side. Min left of max, should be same row with own titles like the min's currently have.
+
+* A way to delete spools and filaments in the UI. Should be hard to get to, and doubly hard to aprove. Be nice if deleteing one cascaded and deleted all spools attached to the filament.
+
+* I think the add/edit inventory wizard is too complicated, we should definitely do a clean up pass on this and all of it's processes. I like what's here, but it's a lot of data. The functionality is good, but it just really needs some modernization or something. it's very clunky. We should try and make it more intuitive to use.
+
+* [Minor-Bug] Adding location labels to the print queue, doesn't notify user if label already exists in queue (not visually atleast, hidden toast?). This change matches similar notifications around labels already existing in the queue. So User knows its there.
+
+* **[Testing/Infrastructure]** Add Spoolman-touching integration tests so we catch unintended data changes (the kind that wipe `extra` fields on PATCH) before users do. Today every wizard test mocks `/api/filaments` + `/api/update_filament` + `/api/update_spool` — mocks always echo back what we sent, so they can't observe Spoolman-server-side behavior like the recent "PATCH replaces extras instead of merging" issue. Need tests that create a real test filament/spool in Spoolman, exercise the full call chain, read the record back, and assert sibling fields survived. Considerations: (a) dev + prod point at the same Spoolman, so test data is shared — use sentinel names like `PYTEST-INTEGRATION-DELETEME-<uuid>` and aggressive teardown, (b) mark with `pytest.mark.integration` so they only run on demand, (c) maybe a dedicated test-filament fixture that asserts cleanup on every run start. Surfaced 2026-04-26 after the user noticed filament 157 lost `product_url` / `purchase_url` / `original_color` after a "Use Scanned" click on max-temps (the merge fix in `spoolman_api.update_filament` patches the immediate symptom; an integration test would have caught it before it hit users).
+
+* Lagacy QR code scans cause the ? button to engage and pop up the help window. Not sure if theres a good fix for this.
+
 
 ## Prusament Enhancements ##
 * Product url should be scrapeable from Prusament Spool Based QR codes. We should attempt to see if we can pull that and reliably place it into the product url field in the Add/Edit Filament Wizzard.

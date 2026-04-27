@@ -891,6 +891,69 @@ def test_backfill_diff_filament_attributes_set_union_no_remove(page: Page):
     assert 'Carbon Fiber' in attrs
 
 
+def test_backfill_diff_fills_missing_product_and_purchase_urls(page: Page):
+    """Real-world gap (filament 157): the wizard had been creating
+    filaments with product_url + purchase_url tagged, but matched
+    EXISTING filaments never received those URLs from a scan. The
+    matcher's Tier-1 product-ID rule depends on this tag. Silent
+    fill ONLY when the existing field is empty (don't overwrite a
+    user-customized URL)."""
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 157, material: 'PLA', extra: {}},
+        {
+            material: 'PLA', color_name: 'Pearl Mouse',
+            external_link: 'https://prusament.com/spool/17705/abc',
+            purchase_link: 'https://www.prusa3d.com/product/prusament-pla-pearl-mouse-1kg/',
+            extra: {}
+        },
+        []
+    )""")
+    # Sent raw — both keys are in JSON_STRING_FIELDS so the backend's
+    # sanitize_outbound_data wraps them. Pre-wrapping would double-wrap.
+    assert diff['silent']['extra.product_url'] == 'https://prusament.com/spool/17705/abc'
+    assert diff['silent']['extra.purchase_url'] == 'https://www.prusa3d.com/product/prusament-pla-pearl-mouse-1kg/'
+
+
+def test_backfill_diff_does_not_overwrite_existing_urls(page: Page):
+    """If the user has already curated product_url / purchase_url (e.g.
+    pointing at a different URL or a custom note), don't clobber it."""
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', extra: {
+            product_url: '"https://example.com/custom"',
+            purchase_url: '"https://example.com/custom-buy"'
+        }},
+        {
+            material: 'PLA', color_name: 'Pearl Mouse',
+            external_link: 'https://prusament.com/spool/17705/abc',
+            purchase_link: 'https://www.prusa3d.com/product/prusament-pla-pearl-mouse-1kg/',
+            extra: {}
+        },
+        []
+    )""")
+    assert 'extra.product_url' not in diff['silent']
+    assert 'extra.purchase_url' not in diff['silent']
+
+
+def test_backfill_diff_purchase_url_falls_back_to_external_link(page: Page):
+    """If the parser didn't surface a separate purchase_link (e.g. older
+    Prusament page where the store-URL scrape didn't match), fall back
+    to the per-spool URL — better something than nothing."""
+    _open_wizard_no_fetches(page)
+    diff = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', extra: {}},
+        {
+            material: 'PLA', color_name: 'Pearl Mouse',
+            external_link: 'https://prusament.com/spool/17705/abc',
+            extra: {}
+        },
+        []
+    )""")
+    assert diff['silent']['extra.product_url'] == 'https://prusament.com/spool/17705/abc'
+    assert diff['silent']['extra.purchase_url'] == 'https://prusament.com/spool/17705/abc'
+
+
 def test_backfill_diff_original_color_always_overwrites(page: Page):
     """original_color is the manufacturer-side name slot. Whenever the
     parser provides one and it differs from what's stored, replace it.
