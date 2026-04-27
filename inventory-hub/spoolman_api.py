@@ -152,7 +152,19 @@ def update_spool(sid, data):
             except Exception:
                 pass
 
-        clean_data = sanitize_outbound_data(data)
+        # Merge extras with the existing record so Spoolman's REPLACE-on-PATCH
+        # semantics don't wipe siblings. Use the RAW (still-wrapped) form
+        # via _get_raw_extras + pre-sanitize the caller's extras, so the
+        # merged dict is fully wire-form. Skipping the late sanitize on
+        # the merged dict avoids double-wrapping already-wrapped values.
+        if isinstance(data.get('extra'), dict):
+            existing_extras = _get_raw_extras('spool', sid)
+            caller_sanitized = sanitize_outbound_data({'extra': data['extra']}).get('extra', {})
+            data = dict(data)  # don't mutate caller
+            data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized)
+            clean_data = data
+        else:
+            clean_data = sanitize_outbound_data(data)
         r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
         if r.ok: return r.json()
         state.logger.error(f"Failed to update spool {sid}: {r.status_code} - {r.text}")
@@ -183,14 +195,69 @@ def create_spool(data):
         state.logger.error(f"API Error creating spool: {e}")
     return None
 
+def _get_raw_extras(entity, eid):
+    """Fetch existing extras WITHOUT parse_inbound_data unwrapping.
+    Spoolman stores text-type extras as JSON-encoded strings — `"225"`
+    over the wire decodes to the 5-char Python string `"225"` (with
+    quote chars). When we merge those with caller-provided extras and
+    PATCH back, the wrapped form must be preserved so Spoolman's
+    text-type validator accepts them. Calling get_filament() runs
+    parse_inbound_data which strips the outer quotes; the round-trip
+    then sends `225` (parses as int) and Spoolman 400s."""
+    try:
+        sm_url, _ = config_loader.get_api_urls()
+        r = requests.get(f"{sm_url}/api/v1/{entity}/{eid}", timeout=3)
+        if r.ok:
+            return (r.json() or {}).get('extra') or {}
+    except Exception:
+        pass
+    return {}
+
+
+def _merge_extras_with_existing(existing_extras, requested_extras):
+    """Spoolman's PATCH on `extra` REPLACES the entire dict instead of merging.
+    A partial update like `{extra: {nozzle_temp_max: '"225"'}}` therefore wipes
+    every other extra (product_url, purchase_url, original_color, ...). Merge
+    on our side so partial PATCHes preserve siblings. Requested values win on
+    conflict; existing-only keys ride along untouched.
+
+    Existing extras must be the RAW Spoolman form (still-wrapped JSON-encoded
+    strings) — see `_get_raw_extras`. Caller's extras can be either form;
+    sanitize_outbound_data downstream normalizes both."""
+    merged = dict(existing_extras or {})
+    for k, v in (requested_extras or {}).items():
+        merged[k] = v
+    return merged
+
+
 def update_filament(fid, data):
     """Returns the updated filament dict on success, or None on failure.
     The last Spoolman error message is stashed in module-global
     LAST_SPOOLMAN_ERROR for callers that want to surface the actual
-    rejection reason to the UI (see api_update_filament)."""
+    rejection reason to the UI (see api_update_filament).
+
+    When `data['extra']` is a partial dict, we fetch the existing record and
+    merge so Spoolman's REPLACE semantics don't silently nuke unrelated
+    extras. Without this, every partial PATCH was wiping fields the user
+    cared about (the bug behind the spools-252/253 + filament 157 incident
+    where product_url / purchase_url / original_color all disappeared after
+    a single 'Use Scanned' click)."""
     global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
-    sanitized = sanitize_outbound_data(data)
+
+    if isinstance(data.get('extra'), dict):
+        # Sanitize ONLY the caller's extras up-front (canonical wire form).
+        # Then merge against the RAW existing extras which are already in
+        # wire form. Skip the late sanitize on the merged dict — running
+        # it twice on already-wrapped values would double-wrap and the
+        # literal quote chars would leak (the original product_url bug).
+        existing_extras = _get_raw_extras('filament', fid)
+        caller_sanitized = sanitize_outbound_data({'extra': data['extra']}).get('extra', {})
+        data = dict(data)  # don't mutate caller's payload
+        data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized)
+        sanitized = data
+    else:
+        sanitized = sanitize_outbound_data(data)
     try:
         r = requests.patch(f"{sm_url}/api/v1/filament/{fid}", json=sanitized, timeout=2)
         if r.ok:

@@ -536,7 +536,10 @@ def test_backfill_mismatch_panel_renders_and_opt_in_patches(page: Page):
                 "vendor": {"name": "Prusament"},
                 "extra": {"filament_attributes": ["Carbon Fiber", "Blend"],
                           "nozzle_temp_max": '"260"', "bed_temp_max": '"100"',
-                          "original_color": '"Black"'},
+                          "original_color": '"Black"',
+                          # URLs already tagged → no spontaneous URL backfill.
+                          "product_url": '"https://prusament.com/spool/9/already-tagged"',
+                          "purchase_url": '"https://www.prusa3d.com/product/x/"'},
             }
         ]}),
     ))
@@ -601,7 +604,10 @@ def test_backfill_dismiss_closes_panel_without_writes(page: Page):
              "vendor": {"name": "Prusament"},
              "extra": {"filament_attributes": ["Carbon Fiber", "Blend"],
                        "nozzle_temp_max": '"225"', "bed_temp_max": '"60"',
-                       "original_color": '"Black"'}}
+                       "original_color": '"Black"',
+                       # URLs already tagged → no spontaneous backfill.
+                       "product_url": '"https://prusament.com/spool/9/zzz/"',
+                       "purchase_url": '"https://www.prusa3d.com/product/x/"'}}
         ]}),
     ))
     _route_external_search(page, lambda q: {
