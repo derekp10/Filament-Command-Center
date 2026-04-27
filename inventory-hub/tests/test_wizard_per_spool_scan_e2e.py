@@ -586,6 +586,82 @@ def test_backfill_dismiss_closes_panel_without_writes(page: Page):
     assert patches == []
 
 
+def test_import_from_external_panel_runs_matcher_and_autoswitches(page: Page):
+    """Real-world bug the user hit: clicking 'Import from External Database'
+    in Step 1 (which sets wizardState.mode='external') and selecting a
+    pre-searched filament used to skip the duplicate-detect matcher
+    entirely — the gate only fired in 'manual' mode. Result: a duplicate
+    filament got crammed in even though a perfect match existed. Gate
+    must accept both 'manual' AND 'external' modes."""
+    # One existing Pearl Mouse filament that should match the scan.
+    page.route("**/api/filaments", lambda route, req: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"success": True, "filaments": [
+            {"id": 157, "name": "Silver (Pearl Mouse)", "color_name": None,
+             "material": "PLA", "vendor": {"name": "Prusament"},
+             "color_hex": "868463", "weight": 1000, "spool_weight": 215,
+             "diameter": 1.75, "density": 1.18,
+             "settings_extruder_temp": 215, "settings_bed_temp": 60,
+             "extra": {"original_color": '"Pearl Mouse"',
+                       "filament_attributes": '["Carbon Fiber", "Blend"]'}}
+        ]}),
+    ))
+    # External search returns the canonical Prusament template — same as
+    # a per-spool scan would.
+    page.route(
+        "**/api/external/search**",
+        lambda route, req: route.fulfill(
+            status=200, content_type="application/json",
+            body=json.dumps({"success": True, "results": [
+                _prusament_result(color="Pearl Mouse")
+            ]}),
+        ),
+    )
+    captured = _capture_create_wizard(page)
+
+    page.goto("http://localhost:8000")
+    page.get_by_role("button", name=re.compile("ADD INVENTORY")).click()
+    expect(page.locator("#wizardModal")).to_be_visible()
+
+    # Switch to "Import from External Database" mode (sets mode='external').
+    page.locator("#btn-type-external").click()
+
+    # Drive the search panel — paste a Prusament URL into the search box,
+    # set source to prusament, click Search → results dropdown populates.
+    page.evaluate("""() => {
+        document.getElementById('wiz-external-source').value = 'prusament';
+        document.getElementById('wiz-search-external').value = 'https://prusament.com/spool/1/aaa/';
+        window.wizardSearchExternal();
+    }""")
+    # Wait for the results dropdown to populate, then pick the first result.
+    page.wait_for_function(
+        "() => document.getElementById('wiz-external-results').options.length > 0 "
+        "&& document.getElementById('wiz-external-results').options[0].value !== ''",
+        timeout=5000,
+    )
+    page.evaluate("""() => {
+        const sel = document.getElementById('wiz-external-results');
+        sel.selectedIndex = 0;
+        window.wizardExternalSelected();
+    }""")
+
+    # The matcher MUST have fired and auto-switched into existing mode.
+    page.wait_for_function(
+        "() => String(wizardState.selectedFilamentId) === '157'", timeout=5000
+    )
+    assert str(page.evaluate("() => wizardState.selectedFilamentId")) == "157"
+
+    page.locator("#btn-wiz-submit").click()
+    page.wait_for_function("() => wizardState.lockedAfterSuccess === true", timeout=5000)
+
+    assert len(captured) == 1
+    body = captured[0]
+    # CRITICAL: filament_id is 157 (the existing match), NOT a fresh
+    # filament_data payload. Without the fix, this would be filament_data.
+    assert str(body.get("filament_id")) == "157"
+    assert body.get("filament_data") is None
+
+
 def test_per_spool_scan_failure_blocks_submit(page: Page):
     """A failed scan must mark the row red and block submit until the URL
     is cleared. Never silently fall back to defaults."""

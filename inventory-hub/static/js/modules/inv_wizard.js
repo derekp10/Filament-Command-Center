@@ -1501,7 +1501,14 @@ window.wizardExternalSelected = () => {
             // the Step-3 row scan would skip every safeguard we added —
             // duplicate filaments would still get created, existing
             // filaments wouldn't get their missing fields filled in.
-            if (!wizardState.filamentLockedFromScan && wizardState.mode === 'manual') {
+            //
+            // The gate accepts BOTH 'manual' (fresh wizard, user typing a
+            // new filament) AND 'external' (the user clicked "Import from
+            // External Database" — which sets mode='external' via
+            // wizardSelectType). Both paths land here and both can lead
+            // to a duplicate-filament create if we don't run the matcher.
+            const canMatch = (wizardState.mode === 'manual' || wizardState.mode === 'external');
+            if (!wizardState.filamentLockedFromScan && canMatch) {
                 const matches = window.findFilamentMatches(temp);
                 if (matches.length >= 1) {
                     window.wizardAutoSwitchToExisting(matches[0], temp);
@@ -2426,8 +2433,11 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
         // First successful scan in the session: maybe fill Step 2. If any
         // existing filament fuzzy-matches the scan, switch to existing-mode
         // against the oldest match — no picker, no clicks, no chance for
-        // the user to accidentally create another duplicate.
-        if (!wizardState.filamentLockedFromScan && wizardState.mode === 'manual') {
+        // the user to accidentally create another duplicate. Gate accepts
+        // both 'manual' and 'external' (Import from External Database)
+        // since both paths can result in a fresh filament create.
+        const canMatch = (wizardState.mode === 'manual' || wizardState.mode === 'external');
+        if (!wizardState.filamentLockedFromScan && canMatch) {
             const matches = window.findFilamentMatches(temp);
             if (matches.length >= 1) {
                 window.wizardAutoSwitchToExisting(matches[0], temp);
