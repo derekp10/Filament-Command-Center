@@ -5,7 +5,8 @@
       "WebFetch(domain:api.github.com)",
       "Read(//d/My Documents/Documents/3D Printing/Filament Command Center/inventory-hub/static/js/modules/**)",
       "Read(//c/Users/Derek/AppData/Local/Temp/**)",
-      "Read(//d/My Documents/Documents/3D Printing/Filament Command Center/inventory-hub/**)"
+      "Read(//d/My Documents/Documents/3D Printing/Filament Command Center/inventory-hub/**)",
+      "PowerShell($out = & docker ps --format '{{.Names}}|{{.Status}}|{{.Ports}}' 2>&1 | Out-String; if \\([string]::IsNullOrWhiteSpace\\($out\\)\\) { Write-Output \"EMPTY\" } else { Write-Output $out })"
     ]
   }
 }
