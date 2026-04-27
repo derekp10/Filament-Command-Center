@@ -89,26 +89,41 @@ def test_identify_scan_barcode_filament(client):
         assert args[1]['extra']['needs_label_print'] is False
 
 def test_identify_scan_barcode_database_rejection(client):
-    """Test that a failed Spoolman database update logs a warning and blocks ghost success messages"""
+    """A failed Spoolman update on label-confirm scan must surface as ERROR
+    (not WARNING) and include the Spoolman error body so the user can see
+    WHY the update was rejected. The 2026-04-27 prod outage stayed
+    undiagnosed for hours because this used to be a generic warning with
+    no Spoolman body — fixed in Phase B."""
     with patch('logic.resolve_scan') as mock_resolve, patch('spoolman_api.get_spool') as mock_get, patch('spoolman_api.update_spool') as mock_update, patch('state.add_log_entry') as mock_log, patch('spoolman_api.format_spool_display', return_value={'text':'foo', 'color':'#fff'}):
         mock_resolve.return_value = {"type": "spool", "id": 10}
         mock_get.return_value = {"id": 10, "extra": {"needs_label_print": True}}
-        # Simulate Spoolman API rejecting the payload (e.g. 400 Bad Request)
-        mock_update.return_value = None 
-        
-        res = client.post('/api/identify_scan', json={"text": "ID:10", "source": "barcode"})
-        data = res.get_json()
-        assert data['type'] == 'spool'
-        
-        # It should attempt the update
-        mock_update.assert_called_once()
-        
-        # Check failure log 
-        mock_log.assert_called_once()
-        log_msg = mock_log.call_args[0][0]
-        log_level = mock_log.call_args[0][1]
-        assert "Failed to verify" in log_msg
-        assert log_level == "WARNING"
+        # Simulate Spoolman API rejecting the payload (e.g. 400 Bad Request).
+        # In real code, update_spool sets LAST_SPOOLMAN_ERROR before
+        # returning None — patch the attribute so the code path can read it.
+        mock_update.return_value = None
+        import spoolman_api
+        spoolman_api.LAST_SPOOLMAN_ERROR = "HTTP 400: Unknown extra field"
+
+        try:
+            res = client.post('/api/identify_scan', json={"text": "ID:10", "source": "barcode"})
+            data = res.get_json()
+            assert data['type'] == 'spool'
+
+            # It should attempt the update
+            mock_update.assert_called_once()
+
+            # Check failure log: ERROR severity (was WARNING pre-fix), and
+            # message must include the Spoolman error body for diagnosis.
+            mock_log.assert_called_once()
+            log_msg = mock_log.call_args[0][0]
+            log_level = mock_log.call_args[0][1]
+            assert "Failed to verify" in log_msg
+            assert "Unknown extra field" in log_msg, (
+                f"Spoolman error body must be surfaced in the activity log; got: {log_msg!r}"
+            )
+            assert log_level == "ERROR"
+        finally:
+            spoolman_api.LAST_SPOOLMAN_ERROR = None
 
 def test_identify_scan_keyboard_keeps_flag(client):
     """Test that manual keyboard typing does NOT clear the needs_label_print flag"""

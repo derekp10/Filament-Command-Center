@@ -195,12 +195,15 @@ window.markPrinted = (id, type) => {
                 showToast(`Marked ${type} #${id} as printed`, "success");
                 window.fetchBacklog(); // Refresh list
             } else {
-                showToast(data.msg || "Error", "error");
+                // Spoolman error body now arrives in data.msg/data.error;
+                // 7s duration so blind-scanning failures don't slip past
+                // (CLAUDE.md convention).
+                showToast(data.msg || data.error || "Error", "error", 7000);
             }
         })
         .catch(e => {
             setProcessing(false);
-            showToast("Connection Error", "error");
+            showToast("Connection Error", "error", 7000);
             console.error(e);
         });
 };

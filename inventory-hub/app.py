@@ -408,7 +408,10 @@ def api_create_inventory_wizard():
                 if spoolman_api.update_filament(filament_id, {'archived': False}):
                     state.add_log_entry(f"📤 Auto-unarchived Filament #{filament_id} (new spool added)", "INFO")
                 else:
-                    state.logger.warning(f"Failed to auto-unarchive Filament #{filament_id}")
+                    state.logger.warning(
+                        f"Failed to auto-unarchive Filament #{filament_id}: "
+                        f"{spoolman_api.LAST_SPOOLMAN_ERROR}"
+                    )
 
         # Step 2: Create Spool(s)
         if spool_data:
@@ -484,27 +487,43 @@ def api_edit_spool_wizard():
                         if v != original_spool.get('spool_weight'):
                             dirty_spool_data['spool_weight'] = v
                     elif k == 'extra':
-                        # Diff extra fields dict
+                        # Diff extra fields via the shared helper. Strips
+                        # system-managed keys (container_slot,
+                        # physical_source, physical_source_slot) before the
+                        # diff so the wizard CANNOT clobber a slotted
+                        # spool's toolhead assignment regardless of what
+                        # the JS sends — Item 4 fix in Feature-Buglist.
                         original_extra = original_spool.get('extra', {})
-                        dirty_extra = {}
-                        for ek, ev in v.items():
-                            if str(ev) != str(original_extra.get(ek)):
-                                dirty_extra[ek] = ev
+                        dirty_extra, stripped = spoolman_api.compute_dirty_extras(
+                            original_extra, v,
+                            system_managed=spoolman_api.SYSTEM_MANAGED_EXTRAS,
+                        )
+                        if stripped:
+                            state.logger.warning(
+                                f"edit_spool_wizard refused to write system-managed extras "
+                                f"on spool {spool_id}: {stripped}. Use perform_smart_move / "
+                                f"perform_smart_eject for these keys."
+                            )
                         if dirty_extra:
                             dirty_spool_data['extra'] = dirty_extra
                     elif k in original_spool and original_spool[k] != v:
                         dirty_spool_data[k] = v
                     elif k not in original_spool:
                          dirty_spool_data[k] = v
-                
+
                 spool_data = dirty_spool_data
                 state.logger.info(f"DIRTY SPOOL DATA: {dirty_spool_data}")
 
             if spool_data:
                 spool_res = spoolman_api.update_spool(spool_id, spool_data)
                 if not spool_res:
-                    return jsonify({"success": False, "msg": f"Failed to gracefully update Spool {spool_id}."})
-        
+                    err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+                    return jsonify({
+                        "success": False,
+                        "msg": f"Failed to update Spool {spool_id}: {err}",
+                        "error": err,
+                    })
+
         # Update Filament Second (if applicable)
         if filament_id and filament_data:
             # Handle spontaneous vendor generation explicitly
@@ -514,11 +533,16 @@ def api_edit_spool_wizard():
                     new_ven = spoolman_api.create_vendor({"name": external_vendor})
                     if new_ven and 'id' in new_ven:
                         filament_data['vendor_id'] = new_ven['id']
-                    
+
             fil_res = spoolman_api.update_filament(filament_id, filament_data)
             if not fil_res:
-                state.logger.warning(f"Failed to cleanly update Filament {filament_id} during spool edit.")
-                return jsonify({"success": False, "msg": "Filament database update rejected. Check data formats mapping."})
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+                state.logger.warning(f"Failed to cleanly update Filament {filament_id} during spool edit: {err}")
+                return jsonify({
+                    "success": False,
+                    "msg": f"Filament update rejected: {err}",
+                    "error": err,
+                })
 
         return jsonify({"success": True, "spool_id": spool_id})
 
@@ -551,7 +575,8 @@ def api_spool_update():
 
         res = spoolman_api.update_spool(spool_id, updates)
         if not res:
-            return jsonify({"status": "error", "msg": "Failed to update spool"})
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+            return jsonify({"status": "error", "msg": f"Failed to update spool: {err}", "error": err})
 
         post_archived = bool(res.get('archived', False))
         auto_archived = (not pre_archived) and post_archived
@@ -1073,8 +1098,17 @@ def api_delete_location():
     if not target: return jsonify({"success": False})
     try:
         contents = spoolman_api.get_spools_at_location(target)
-        for sid in contents: spoolman_api.update_spool(sid, {"location": ""})
-    except: pass
+        for sid in contents:
+            # Best-effort cascade unassign on location delete. Don't raise
+            # on individual failures — the location is going away regardless,
+            # but log so a user can see partial completion.
+            if not spoolman_api.update_spool(sid, {"location": ""}):
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                state.logger.warning(
+                    f"location delete: failed to unassign Spool #{sid} from {target}: {err}"
+                )
+    except Exception as e:
+        state.logger.warning(f"location delete: cascade unassign failed: {e}")
     
     current = locations_db.load_locations_list()
     new_list = [row for row in current if row['LocationID'] != target]
@@ -1316,16 +1350,31 @@ def api_identify_scan():
         if data:
             if source == 'barcode' and text.strip().upper().startswith('ID:'):
                 extra = data.get('extra', {})
-                dirty = False
-                if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
+                raw_flag = extra.get('needs_label_print')
+                # Spoolman boolean-typed extras may arrive parsed (Python
+                # bool True/False) OR as JSON-stringified booleans
+                # ('true'/'True'/'false'); cover all forms so the dirty-
+                # flag detection survives parse_inbound_data unwrapping
+                # quirks. Item 3 regression check.
+                needs_print = raw_flag is True or raw_flag == 'true' or raw_flag == 'True'
+                if needs_print:
                     extra['needs_label_print'] = False
-                    dirty = True
-                
-                if dirty:
                     if spoolman_api.update_spool(sid, {'extra': extra}):
                         state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
                     else:
-                        state.add_log_entry(f"❌ Failed to verify Spool #{sid} label", "WARNING")
+                        # Surface the actual Spoolman rejection body so the
+                        # user can see WHY (Phase B fix). Without this, the
+                        # 2026-04-27 outage stayed undiagnosed for hours.
+                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                        state.add_log_entry(
+                            f"❌ Failed to verify Spool #{sid} label: {err}", "ERROR", "ff4444"
+                        )
+                else:
+                    # Always give the user feedback on a label scan, even
+                    # when no flag flip was needed. Silence here is the
+                    # symptom that motivated Item 3 — users couldn't tell
+                    # whether the scan was acknowledged at all.
+                    state.add_log_entry(f"ℹ️ Spool #{sid} already verified", "INFO", "00ccff")
             
             info = spoolman_api.format_spool_display(data)
             
@@ -1363,16 +1412,21 @@ def api_identify_scan():
         if data:
             if source == 'barcode' and text.strip().upper().startswith('FIL:'):
                 extra = data.get('extra', {})
-                dirty = False
-                if extra.get('needs_label_print') is True or extra.get('needs_label_print') == 'true' or extra.get('needs_label_print') == 'True':
+                raw_flag = extra.get('needs_label_print')
+                needs_print = raw_flag is True or raw_flag == 'true' or raw_flag == 'True'
+                if needs_print:
                     extra['needs_label_print'] = False
-                    dirty = True
-
-                if dirty:
                     if spoolman_api.update_filament(fid, {'extra': extra}):
                         state.add_log_entry(f"✔️ Filament #{fid} Label & Sample Verified", "SUCCESS", "00ff00")
                     else:
-                        state.add_log_entry(f"❌ Failed to verify Filament #{fid} label", "WARNING")
+                        # Surface Spoolman rejection body — Item 6 regression
+                        # for FIL:126 silent-fail.
+                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                        state.add_log_entry(
+                            f"❌ Failed to verify Filament #{fid} label: {err}", "ERROR", "ff4444"
+                        )
+                else:
+                    state.add_log_entry(f"ℹ️ Filament #{fid} already verified", "INFO", "00ccff")
             
             name = data.get('name', 'Unknown Filament')
             return jsonify({"type": "filament", "id": int(fid), "display": name})
@@ -2041,17 +2095,25 @@ def api_print_queue_mark_printed():
             spool_data = spoolman_api.get_spool(item_id)
             if spool_data:
                 extra = spool_data.get('extra', {})
-                extra['needs_label_print'] = False   
+                extra['needs_label_print'] = False
                 res = spoolman_api.update_spool(item_id, {'extra': extra})
-                if res: return jsonify({"success": True})
+                if res:
+                    return jsonify({"success": True})
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+                state.logger.error(f"mark_printed: spool {item_id} update failed: {err}")
+                return jsonify({"success": False, "msg": err})
         elif item_type == 'filament':
             fil_data = spoolman_api.get_filament(item_id)
             if fil_data:
                 extra = fil_data.get('extra', {})
                 extra['needs_label_print'] = False
                 res = spoolman_api.update_filament(item_id, {'extra': extra})
-                if res: return jsonify({"success": True})
-                
+                if res:
+                    return jsonify({"success": True})
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+                state.logger.error(f"mark_printed: filament {item_id} update failed: {err}")
+                return jsonify({"success": False, "msg": err})
+
         return jsonify({"success": False, "msg": "Item not found or update failed"})
     except Exception as e:
         state.logger.error(f"Error marking {item_type} #{item_id} printed: {e}")
@@ -2062,26 +2124,32 @@ def api_print_queue_set_flag():
     data = request.json
     item_id = data.get('id')
     item_type = data.get('type')
-    
+
     try:
         if item_type == 'spool':
             sd = spoolman_api.get_spool(item_id)
             if sd:
                 ex = sd.get('extra', {})
                 ex['needs_label_print'] = True
-                spoolman_api.update_spool(item_id, {'extra': ex})
-                return jsonify({"success": True})
+                if spoolman_api.update_spool(item_id, {'extra': ex}):
+                    return jsonify({"success": True})
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+                state.logger.error(f"set_flag: spool {item_id} update failed: {err}")
+                return jsonify({"success": False, "msg": err})
         elif item_type == 'filament':
             fd = spoolman_api.get_filament(item_id)
             if fd:
                 ex = fd.get('extra', {})
                 ex['needs_label_print'] = True
-                spoolman_api.update_filament(item_id, {'extra': ex})
-                return jsonify({"success": True})
+                if spoolman_api.update_filament(item_id, {'extra': ex}):
+                    return jsonify({"success": True})
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+                state.logger.error(f"set_flag: filament {item_id} update failed: {err}")
+                return jsonify({"success": False, "msg": err})
         return jsonify({"success": False})
     except Exception as e:
         state.logger.error(f"Error setting needs_label_print: {e}")
-        return jsonify({"success": False})
+        return jsonify({"success": False, "msg": str(e)})
 
 @app.route('/api/print_location_label', methods=['POST'])
 def api_print_location_label():
@@ -2461,7 +2529,12 @@ def api_fb_aggressive_parse():
                         info = spoolman_api.format_spool_display(spool_data)
                         strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
                         state.add_log_entry(f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
-                            
+                    else:
+                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                        state.add_log_entry(
+                            f"❌ Failed to auto-deduct from Spool #{sid}: {err}", "ERROR", "ff4444"
+                        )
+
     # 4. Acknowledge Error
     if spools_updated > 0:
         ack = prusalink_api.acknowledge_filabridge_error(fb_url, error_id)
@@ -2497,6 +2570,11 @@ def api_fb_manual_recovery():
                         spools_updated += 1
                         info = spoolman_api.format_spool_display(spool_data)
                         state.add_log_entry(f"✔️ Manually deducted {w:.1f}g from Spool #{sid}: [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
+                    else:
+                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                        state.add_log_entry(
+                            f"❌ Failed to manually deduct from Spool #{sid}: {err}", "ERROR", "ff4444"
+                        )
         except ValueError:
             pass
             
@@ -2624,6 +2702,12 @@ def api_get_logs_route():
                                                                 inf = spoolman_api.format_spool_display(spool)
                                                                 strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
                                                                 state.add_log_entry(f"✔️ Auto-deducted {w_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_rem:.1f}g remaining]", "SUCCESS", inf['color'])
+                                                            else:
+                                                                err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                                                                state.add_log_entry(
+                                                                    f"❌ Auto-recover failed for Spool #{sid}: {err}",
+                                                                    "ERROR", "ff4444"
+                                                                )
                                             if spools_updated > 0:
                                                 prusalink_api.acknowledge_filabridge_error(fb_url, e_id)
                                                 return # Success
