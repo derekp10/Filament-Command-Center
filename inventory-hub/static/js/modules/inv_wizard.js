@@ -144,6 +144,7 @@ const wizardReset = () => {
 
     if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
     if (window.wizardClearFilamentMismatchPanel) window.wizardClearFilamentMismatchPanel();
+    if (window.wizardClearDuplicatePicker) window.wizardClearDuplicatePicker();
 
     document.getElementById('wiz-spool-used').value = 0;
     
@@ -1510,10 +1511,14 @@ window.wizardExternalSelected = () => {
             const canMatch = (wizardState.mode === 'manual' || wizardState.mode === 'external');
             if (!wizardState.filamentLockedFromScan && canMatch) {
                 const matches = window.findFilamentMatches(temp);
-                if (matches.length >= 1) {
+                if (matches.length === 0) {
+                    window.applyFilamentFieldsFromTemplate(temp);
+                } else if (matches.definitive) {
                     window.wizardAutoSwitchToExisting(matches[0], temp);
                 } else {
-                    window.applyFilamentFieldsFromTemplate(temp);
+                    // Multiple basic-gate matches with no Tier-1 product-ID
+                    // disambiguator — defer to the user via the picker.
+                    window.wizardRenderDuplicatePicker(matches, temp);
                 }
                 wizardState.filamentLockedFromScan = true;
             } else {
@@ -2216,12 +2221,37 @@ const _materialMatches = (storedMat, parsedMat) => {
     return true;
 };
 
+// Pull the Prusament product ID out of a /spool/<product_id>/<serial> URL.
+// Strips any wrapping JSON-encoded quote chars first since /api/filaments
+// doesn't run parse_inbound_data — text-type extras arrive as `"https://..."`
+// (literal quote chars). Same product, different physical box = same id.
+const _extractPrusamentProductId = (url) => {
+    if (!url) return null;
+    const s = String(url).replace(/^"|"$/g, '');
+    const m = s.match(/prusament\.com\/spool\/(\d+)/i);
+    return m ? m[1] : null;
+};
+
+// Returns the matched filament list (sorted with the best pick at [0]).
+// The array carries an extra `.definitive` property:
+//   true  — single match OR a Tier-1 product-ID winner; caller should
+//           silently auto-switch.
+//   false — multiple candidates, ambiguous; caller should surface the
+//           duplicate picker so the user decides rather than gambling
+//           on lowest-id.
+// Returning an array keeps backward compatibility with existing
+// `matches.length` / `matches[0]` consumers; the property is read by
+// the new picker-aware callers.
 window.findFilamentMatches = (temp) => {
+    const _wrap = (arr, definitive) => {
+        arr.definitive = definitive;
+        return arr;
+    };
     const all = wizardState.allFilaments || [];
     const vName = _normalizeStr((temp.vendor && temp.vendor.name) || temp.manufacturer);
     const mat = _normalizeStr(temp.material);
     const parsedColor = _normalizeStr(temp.color_name || temp.name);
-    if (!vName || !mat || !parsedColor) return [];
+    if (!vName || !mat || !parsedColor) return _wrap([], true);
     const matches = all.filter(f => {
         const fv = _normalizeStr(f.vendor && f.vendor.name);
         const fm = _normalizeStr(f.material);
@@ -2242,12 +2272,34 @@ window.findFilamentMatches = (temp) => {
         if (fColorName && parsedColor.includes(fColorName)) return true;
         return false;
     });
-    // Sort by id ascending so the oldest (canonical) filament wins when the
-    // user already has fuzzy duplicates from earlier broken runs. Avoids
-    // forcing a picker on the user — the right answer is almost always
-    // "the one I created first".
+    if (matches.length === 0) return _wrap([], true);
+    if (matches.length === 1) return _wrap(matches, true);
+    // Tier 1: prefer candidates already tagged with the SAME Prusament
+    // product ID as the scan. Same /spool/<id>/ in both URLs means
+    // "same product, different physical box" — the strongest possible
+    // identity signal. Without this, two Prusament PC Black filaments
+    // (one tagged from a prior scan, one a stray duplicate) would tie
+    // on the basic gate and we'd silently pick the wrong one.
+    const parsedProductId = _extractPrusamentProductId(temp.external_link);
+    if (parsedProductId) {
+        const tier1 = matches.filter(f => {
+            const fpid = _extractPrusamentProductId((f.extra || {}).product_url);
+            return fpid === parsedProductId;
+        });
+        if (tier1.length >= 1) {
+            tier1.sort((a, b) => Number(a.id) - Number(b.id));
+            // Definitive even when multiple tier1 hits — those are literal
+            // duplicates of the same canonical product (same product_url),
+            // oldest-wins is the right call within that subset.
+            return _wrap(tier1, true);
+        }
+    }
+    // Multiple basic-gate matches with no Tier-1 disambiguation = truly
+    // ambiguous. Caller should surface the picker so the user decides
+    // rather than gambling on lowest-id. We still sort lowest-id-first
+    // so [0] is a sensible default if the caller chooses not to prompt.
     matches.sort((a, b) => Number(a.id) - Number(b.id));
-    return matches;
+    return _wrap(matches, false);
 };
 
 window.wizardSyncSpoolRows = () => {
@@ -2431,18 +2483,21 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
         row.errorMsg = '';
 
         // First successful scan in the session: maybe fill Step 2. If any
-        // existing filament fuzzy-matches the scan, switch to existing-mode
-        // against the oldest match — no picker, no clicks, no chance for
-        // the user to accidentally create another duplicate. Gate accepts
-        // both 'manual' and 'external' (Import from External Database)
-        // since both paths can result in a fresh filament create.
+        // existing filament fuzzy-matches AND the matcher is confident
+        // (single match OR Tier-1 product-ID winner), silently auto-switch.
+        // If multiple basic-gate matches are ambiguous, surface the picker
+        // so the user picks (or chooses "Create new"). Gate accepts both
+        // 'manual' and 'external' (Import from External Database) since
+        // both paths can result in a fresh filament create.
         const canMatch = (wizardState.mode === 'manual' || wizardState.mode === 'external');
         if (!wizardState.filamentLockedFromScan && canMatch) {
             const matches = window.findFilamentMatches(temp);
-            if (matches.length >= 1) {
+            if (matches.length === 0) {
+                window.applyFilamentFieldsFromTemplate(temp);
+            } else if (matches.definitive) {
                 window.wizardAutoSwitchToExisting(matches[0], temp);
             } else {
-                window.applyFilamentFieldsFromTemplate(temp);
+                window.wizardRenderDuplicatePicker(matches, temp);
             }
             wizardState.filamentLockedFromScan = true;
         }
@@ -2798,6 +2853,76 @@ window.wizardClearFilamentMismatchPanel = () => {
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 }[c]));
+
+// --- Duplicate-filament picker (ambiguous matcher result) ---------------
+// Reinstated after the user's request: when findFilamentMatches returns
+// `definitive: false` (multiple basic-gate candidates with no Tier-1
+// product-ID winner), defer to the user instead of silently picking
+// lowest-id. The user explicitly wanted: "fall back to letting the user
+// decide if we can't after all the matching attempts."
+window.wizardRenderDuplicatePicker = (candidates, parsedTemplate) => {
+    const host = document.getElementById('wiz-duplicate-picker');
+    if (!host) return;
+    if (!candidates || candidates.length === 0) {
+        host.innerHTML = '';
+        host.style.display = 'none';
+        return;
+    }
+    const opts = candidates.map(f => {
+        const v = (f.vendor && f.vendor.name) || 'Generic';
+        const m = f.material || '?';
+        const c = f.color_name || f.name || 'Unknown';
+        return `<option value="${escapeHtml(String(f.id))}">${escapeHtml(`${v} ${m} - ${c} (ID: ${f.id})`)}</option>`;
+    }).join('');
+    host.innerHTML = `
+        <div class="alert alert-warning d-flex flex-column gap-2 my-2">
+            <div><strong>⚠ Multiple existing filaments match this scan</strong> — pick the right one to use, or create a fresh filament if none of these is correct:</div>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+                <select class="form-select form-select-sm bg-dark text-white border-secondary flex-grow-1" id="wiz-duplicate-picker-sel" style="min-width: 200px;">${opts}</select>
+                <button type="button" class="btn btn-sm btn-success" onclick="window.wizardDuplicatePickerConfirm()">✓ Use selected</button>
+                <button type="button" class="btn btn-sm btn-warning" onclick="window.wizardDuplicatePickerDismiss()">+ Create new filament</button>
+            </div>
+        </div>
+    `;
+    host.style.display = 'block';
+    // Stash both candidates and parser template; confirm/dismiss both
+    // need to know which template to feed downstream.
+    wizardState._dupPicker = { candidates, parsedTemplate };
+};
+
+window.wizardDuplicatePickerConfirm = () => {
+    const sel = document.getElementById('wiz-duplicate-picker-sel');
+    const stash = wizardState._dupPicker || {};
+    if (!sel || !stash.candidates) {
+        window.wizardClearDuplicatePicker();
+        return;
+    }
+    const id = sel.value;
+    const match = stash.candidates.find(f => String(f.id) === String(id));
+    if (match) {
+        window.wizardAutoSwitchToExisting(match, stash.parsedTemplate);
+    }
+    window.wizardClearDuplicatePicker();
+};
+
+window.wizardDuplicatePickerDismiss = () => {
+    const stash = wizardState._dupPicker || {};
+    if (stash.parsedTemplate) {
+        // User chose to create new — fill Step 2 from the parser template
+        // so the wizard can proceed in manual create mode.
+        window.applyFilamentFieldsFromTemplate(stash.parsedTemplate);
+    }
+    window.wizardClearDuplicatePicker();
+};
+
+window.wizardClearDuplicatePicker = () => {
+    const host = document.getElementById('wiz-duplicate-picker');
+    if (host) {
+        host.innerHTML = '';
+        host.style.display = 'none';
+    }
+    wizardState._dupPicker = null;
+};
 
 window.wizardResetSpoolRows = () => {
     wizardState.spoolRows = [];
