@@ -2323,6 +2323,10 @@ window.wizardSyncSpoolRows = () => {
 };
 
 // Build the badge HTML for a single row — pure function, no DOM access.
+// Error badges double as a click-to-clear affordance: the user can tap
+// the red badge to reset the row in one click instead of selecting all
+// the failed URL text and deleting. Useful when a hardware QR scanner
+// caught the wrong barcode or got interrupted mid-stream.
 const _spoolRowBadgeHtml = (row) => {
     if (row.status === 'pending') {
         return `<span class="badge bg-secondary">⏳ Scanning…</span>`;
@@ -2339,9 +2343,23 @@ const _spoolRowBadgeHtml = (row) => {
         return `<span class="badge bg-success">✓ ${parts.join(' · ') || 'Scanned'}</span>`;
     }
     if (row.status === 'error') {
-        return `<span class="badge bg-danger">✗ ${row.errorMsg || 'Scan failed'}</span>`;
+        return `<span class="badge bg-danger" role="button" style="cursor: pointer;"
+                       title="Click to clear this row and retry"
+                       onclick="window.wizardScanSpoolRow(${row.idx}, '')">✗ ${row.errorMsg || 'Scan failed'} ✕</span>`;
     }
     return '';
+};
+
+// "Clear this row" button — sits between the URL input and the status
+// badge. Only relevant when the row has a value to clear (status is
+// 'ok' or 'error'); hidden in 'empty' or 'pending' states.
+const _spoolRowClearBtnHtml = (row) => {
+    const visible = (row.status === 'ok' || row.status === 'error');
+    const display = visible ? '' : 'display: none;';
+    return `<button type="button" class="btn btn-sm btn-link p-0 px-1 text-secondary wiz-row-clear-btn"
+                    style="font-size: 1.1em; line-height: 1; ${display}"
+                    title="Clear this row"
+                    onclick="window.wizardScanSpoolRow(${row.idx}, '')">✕</button>`;
 };
 
 const _spoolRowSummaryHtml = () => {
@@ -2365,12 +2383,20 @@ window.wizardRenderSpoolRowBadge = (idx) => {
     const rowEl = document.querySelector(`[data-spool-row-idx="${idx}"]`);
     if (rowEl) {
         // Replace just the trailing badge span (last child) to avoid touching
-        // siblings (label, input). If no badge yet, append one.
+        // siblings (label, input, clear button). If no badge yet, append one.
         const lastChild = rowEl.lastElementChild;
         if (lastChild && lastChild.classList && lastChild.classList.contains('badge')) {
             lastChild.outerHTML = _spoolRowBadgeHtml(row) || '';
         } else {
             rowEl.insertAdjacentHTML('beforeend', _spoolRowBadgeHtml(row));
+        }
+        // Toggle the clear-row × button visibility based on whether the row
+        // currently has a value worth clearing. Don't replace the element —
+        // just flip its display so any focus state stays intact.
+        const clearBtn = rowEl.querySelector('.wiz-row-clear-btn');
+        if (clearBtn) {
+            const visible = (row.status === 'ok' || row.status === 'error');
+            clearBtn.style.display = visible ? '' : 'none';
         }
         // Outline class for error state.
         rowEl.classList.toggle('border', row.status === 'error');
@@ -2400,6 +2426,7 @@ window.wizardRenderSpoolRows = () => {
                 ${valAttr}
                 onblur="window.wizardScanSpoolRow(${row.idx}, this.value)"
                 onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.blur(); }">
+            ${_spoolRowClearBtnHtml(row)}
             ${_spoolRowBadgeHtml(row)}
         </div>`;
     }).join('');
