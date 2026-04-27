@@ -2712,6 +2712,22 @@ window.computeFilamentBackfillDiff = (existing, parsedTemplate, knownAttrs) => {
         out.silent['extra.filament_attributes'] = [...exAttrs, ...newAttrs];
     }
 
+    // product_url + purchase_url — silent fill when the existing record
+    // has no value. Tagging the filament with the canonical Prusament
+    // product link makes the matcher's Tier-1 product-ID rule work on
+    // future scans (otherwise the matcher would only have name + material
+    // + color to disambiguate, which is fuzzy when the user has
+    // accidental duplicates). Sent RAW — both keys are in
+    // spoolman_api.JSON_STRING_FIELDS so sanitize_outbound_data wraps
+    // them via json.dumps. Pre-wrapping would double-wrap.
+    const _isSetUrl = (v) => v !== null && v !== undefined && String(v).replace(/^"|"$/g, '') !== '';
+    if (tp.external_link && !_isSetUrl(exExtra.product_url)) {
+        out.silent['extra.product_url'] = tp.external_link;
+    }
+    if ((tp.purchase_link || tp.external_link) && !_isSetUrl(exExtra.purchase_url)) {
+        out.silent['extra.purchase_url'] = tp.purchase_link || tp.external_link;
+    }
+
     // original_color — silent overwrite when the parser has a value.
     // This field's whole purpose is to capture the manufacturer's name
     // for the filament (e.g. "Pearl Mouse"), distinct from the user's

@@ -218,6 +218,135 @@ def test_spool_overrides_existing_filament(mock_create_spool, mock_create_filame
     assert mock_create_spool.call_args_list[0][0][0]['filament_id'] == 42
     assert mock_create_spool.call_args_list[1][0][0]['initial_weight'] == 1001
 
+def test_update_filament_merges_extras_with_existing(monkeypatch):
+    """Real-world data-loss bug (filament 157): clicking "Use Scanned" on a
+    single mismatch row sent `{extra: {nozzle_temp_max: '"225"'}}` to
+    Spoolman. Spoolman's PATCH REPLACES the entire extra dict instead of
+    merging — every other extra (product_url, purchase_url,
+    original_color, ...) silently disappeared. update_filament must fetch
+    the existing record and merge so siblings survive."""
+    import spoolman_api
+
+    captured = {}
+
+    # The merge uses _get_raw_extras (NOT get_filament) so wrapped
+    # text-type extras keep their JSON-quote form through round-trip.
+    raw_existing = {
+        'product_url': '"https://prusament.com/spool/17588/abc"',
+        'purchase_url': '"https://www.prusa3d.com/product/.../"',
+        'original_color': '"Pearl Mouse"',
+        'nozzle_temp_max': '"260"',  # will be overwritten by the patch
+    }
+
+    def fake_get_raw_extras(entity, eid):
+        captured['get_extras_args'] = (entity, eid)
+        return raw_existing
+
+    class FakeResp:
+        ok = True
+        status_code = 200
+        def json(self):
+            return {'id': 157}
+
+    def fake_patch(url, json=None, **kwargs):
+        captured['payload'] = json
+        return FakeResp()
+
+    monkeypatch.setattr(spoolman_api, '_get_raw_extras', fake_get_raw_extras)
+    monkeypatch.setattr(spoolman_api.requests, 'patch', fake_patch)
+
+    spoolman_api.update_filament(157, {'extra': {'nozzle_temp_max': '"225"'}})
+
+    sent_extras = captured['payload']['extra']
+    # The new value (already pre-wrapped by the JS caller) survives sanitize
+    # as `"225"`, the canonical Spoolman text-type form.
+    assert sent_extras.get('nozzle_temp_max') == '"225"', sent_extras
+    # The siblings survive — this was the whole bug. sanitize wraps the
+    # raw values for transmission, so we expect the JSON-quoted forms here.
+    assert 'product_url' in sent_extras, sent_extras
+    assert 'purchase_url' in sent_extras
+    assert 'original_color' in sent_extras
+    # product_url is in JSON_STRING_FIELDS — sanitize wraps via json.dumps.
+    assert sent_extras['product_url'] == '"https://prusament.com/spool/17588/abc"'
+    assert sent_extras['original_color'] == '"Pearl Mouse"'
+
+
+def test_update_spool_merges_extras_with_existing(monkeypatch):
+    """Same bug, spool side. update_spool already fetches `existing` for
+    used_weight + auto-archive; we just had to add the extras merge."""
+    import spoolman_api
+
+    captured = {}
+
+    # update_spool also uses get_spool for used_weight/auto-archive checks
+    # (parse_inbound form), AND _get_raw_extras for the merge (raw form).
+    def fake_get_spool(sid):
+        return {
+            'id': sid,
+            'initial_weight': 1000,
+            'used_weight': 0,
+        }
+
+    raw_spool_extras = {
+        'product_url': '"https://prusament.com/spool/x/abc"',
+        'purchase_url': '"https://www.prusa3d.com/product/x/"',
+        'needs_label_print': 'true',
+    }
+
+    def fake_get_raw_extras(entity, eid):
+        return raw_spool_extras
+
+    class FakeResp:
+        ok = True
+        status_code = 200
+        def json(self):
+            return {'id': 200}
+
+    def fake_patch(url, json=None, **kwargs):
+        captured['payload'] = json
+        return FakeResp()
+
+    monkeypatch.setattr(spoolman_api, 'get_spool', fake_get_spool)
+    monkeypatch.setattr(spoolman_api, '_get_raw_extras', fake_get_raw_extras)
+    monkeypatch.setattr(spoolman_api.requests, 'patch', fake_patch)
+
+    spoolman_api.update_spool(200, {'extra': {'prusament_manufacturing_date': '"2026-04-26"'}})
+
+    sent_extras = captured['payload']['extra']
+    assert sent_extras.get('prusament_manufacturing_date') == '"2026-04-26"'
+    assert 'product_url' in sent_extras
+    assert 'purchase_url' in sent_extras
+    assert 'needs_label_print' in sent_extras
+
+
+def test_update_filament_without_extras_does_not_fetch_existing(monkeypatch):
+    """Optimization sanity check: when the caller doesn't touch extras,
+    don't bother fetching the existing record. Avoids round-trips for
+    native-only updates."""
+    import spoolman_api
+
+    fetched = {'count': 0}
+
+    def fake_get_raw_extras(entity, eid):
+        fetched['count'] += 1
+        return {}
+
+    class FakeResp:
+        ok = True
+        status_code = 200
+        def json(self):
+            return {'id': 1}
+
+    def fake_patch(url, json=None, **kwargs):
+        return FakeResp()
+
+    monkeypatch.setattr(spoolman_api, '_get_raw_extras', fake_get_raw_extras)
+    monkeypatch.setattr(spoolman_api.requests, 'patch', fake_patch)
+
+    spoolman_api.update_filament(1, {'name': 'New name', 'color_hex': 'AABBCC'})
+    assert fetched['count'] == 0, "no extras in payload → no fetch needed"
+
+
 def test_required_spool_extras_includes_prusament_fields():
     """Without auto-registering these at startup, every per-spool Prusament
     scan submit failed with 400 'Unknown extra field prusament_*'. Pin the
