@@ -12,7 +12,21 @@ Pinned behaviors here are the ones the user has tripped over in real use:
   bug where row reset re-armed submit by re-running wizardValidateSubmit)
 """
 
+import pytest
 from playwright.sync_api import Page, expect
+
+
+# Defense-in-depth: even though unit tests in this file are pure JS calls
+# via page.evaluate (no network), block /api/update_filament so that any
+# future test that accidentally triggers the backfill flow can't reach
+# the real Spoolman. Same pattern as the E2E test file.
+@pytest.fixture(autouse=True)
+def _block_real_update_filament(page):
+    page.route("**/api/update_filament", lambda route, req: route.fulfill(
+        status=200, content_type="application/json",
+        body='{"success": true, "filament": {}}',
+    ))
+    yield
 
 
 def _open_wizard_no_fetches(page: Page):

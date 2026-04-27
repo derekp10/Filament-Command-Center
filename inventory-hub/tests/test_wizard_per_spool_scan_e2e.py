@@ -8,7 +8,27 @@ so no Spoolman state is mutated and no live Prusament HTTP is required."""
 import json
 import re
 
+import pytest
 from playwright.sync_api import Page, expect
+
+
+# --- safety net: NEVER let a test PATCH a real Spoolman record -----------
+# An earlier round of these tests mocked /api/filaments to return fake
+# filaments with IDs 42, 157, 192 — but didn't mock /api/update_filament.
+# When the auto-switch fired the silent backfill, the PATCH leaked through
+# to the real Spoolman and overwrote real filament records with the test
+# fixture's defaults (color_hex=FAFAFA, weight=998, "Galaxy Black", etc.).
+# This autouse fixture makes that impossible: every test in this file gets
+# /api/update_filament intercepted by default. Tests that want to inspect
+# the captured PATCHes can re-route over it; the fulfillment shape stays
+# consistent so they keep working.
+@pytest.fixture(autouse=True)
+def _block_real_update_filament(page):
+    page.route("**/api/update_filament", lambda route, req: route.fulfill(
+        status=200, content_type="application/json",
+        body='{"success": true, "filament": {}}',
+    ))
+    yield
 
 
 # --- canned Prusament parser responses ------------------------------------
@@ -25,7 +45,9 @@ def _prusament_result(initial_weight=998, spool_weight=215, mfg_date="2026-03-12
         "spool_weight": spool_weight,
         "diameter": 1.75,
         "density": 1.24,
-        "color_hex": "111111",
+        # Visually-obvious fake hex — if this ever leaks into a real
+        # Spoolman record, it's instantly recognizable in the activity log.
+        "color_hex": "FAFAFA",
         "color_name": color,
         "external_link": external_link,
         "settings_extruder_temp": 215,
@@ -170,7 +192,7 @@ def test_per_spool_scan_auto_switches_to_existing_filament(page: Page):
     page.route("**/api/filaments", lambda route, req: route.fulfill(
         status=200, content_type="application/json",
         body=json.dumps({"success": True, "filaments": [
-            {"id": 42, "name": "Galaxy Black", "material": "PLA",
+            {"id": 99042, "name": "Galaxy Black", "material": "PLA",
              "color_name": "Galaxy Black", "vendor": {"name": "Prusament"}}
         ]}),
     ))
@@ -188,11 +210,17 @@ def test_per_spool_scan_auto_switches_to_existing_filament(page: Page):
     expect(rows.nth(0).locator(".badge.bg-success")).to_be_visible(timeout=5000)
 
     # Status message should announce the auto-switch.
-    expect(page.locator("#wiz-status-msg")).to_contain_text("Recognized existing", timeout=5000)
+    # The "Recognized existing" status text can be immediately overwritten
+    # by the silent backfill's "Updated existing" banner — wait for the
+    # selectedFilamentId state to flip instead of polling text.
+    page.wait_for_function(
+        "() => wizardState.selectedFilamentId !== null && wizardState.selectedFilamentId !== undefined",
+        timeout=5000,
+    )
 
     # Wizard should be in `existing` mode now — selectedFilamentId set.
     selected_id = page.evaluate("() => wizardState.selectedFilamentId")
-    assert str(selected_id) == "42"
+    assert str(selected_id) == "99042"
 
     page.locator("#btn-wiz-submit").click()
     # Backfill banner can overwrite "Success!" mid-frame, so wait for the
@@ -202,7 +230,7 @@ def test_per_spool_scan_auto_switches_to_existing_filament(page: Page):
 
     assert len(captured) == 1
     body = captured[0]
-    assert str(body.get("filament_id")) == "42"
+    assert str(body.get("filament_id")) == "99042"
     assert body.get("filament_data") is None
     overrides = body.get("spool_overrides")
     assert overrides is not None and len(overrides) == 1
@@ -217,7 +245,7 @@ def test_per_spool_scan_fuzzy_color_match_existing_filament(page: Page):
         status=200, content_type="application/json",
         body=json.dumps({"success": True, "filaments": [
             # Note: no color_name field. Just the parenthesized name.
-            {"id": 157, "name": "Silver (Pearl Mouse)", "material": "PLA",
+            {"id": 99157, "name": "Silver (Pearl Mouse)", "material": "PLA",
              "vendor": {"name": "Prusament"}}
         ]}),
     ))
@@ -233,10 +261,16 @@ def test_per_spool_scan_fuzzy_color_match_existing_filament(page: Page):
     rows.nth(0).locator("input[type='url']").fill("https://prusament.com/spool/1/aaa/")
     rows.nth(0).locator("input[type='url']").blur()
     expect(rows.nth(0).locator(".badge.bg-success")).to_be_visible(timeout=5000)
-    expect(page.locator("#wiz-status-msg")).to_contain_text("Recognized existing", timeout=5000)
+    # The "Recognized existing" status text can be immediately overwritten
+    # by the silent backfill's "Updated existing" banner — wait for the
+    # selectedFilamentId state to flip instead of polling text.
+    page.wait_for_function(
+        "() => wizardState.selectedFilamentId !== null && wizardState.selectedFilamentId !== undefined",
+        timeout=5000,
+    )
 
     selected_id = page.evaluate("() => wizardState.selectedFilamentId")
-    assert str(selected_id) == "157"
+    assert str(selected_id) == "99157"
 
     page.locator("#btn-wiz-submit").click()
     # Backfill banner can overwrite "Success!" mid-frame, so wait for the
@@ -245,7 +279,7 @@ def test_per_spool_scan_fuzzy_color_match_existing_filament(page: Page):
     page.wait_for_function("() => wizardState.lockedAfterSuccess === true", timeout=5000)
 
     assert len(captured) == 1
-    assert str(captured[0].get("filament_id")) == "157"
+    assert str(captured[0].get("filament_id")) == "99157"
     assert captured[0].get("filament_data") is None
 
 
@@ -259,9 +293,9 @@ def test_per_spool_scan_prefers_oldest_when_multiple_match(page: Page):
     page.route("**/api/filaments", lambda route, req: route.fulfill(
         status=200, content_type="application/json",
         body=json.dumps({"success": True, "filaments": [
-            {"id": 192, "name": "Pearl Mouse", "material": "PLA",
+            {"id": 99192, "name": "Pearl Mouse", "material": "PLA",
              "vendor": {"name": "Prusament"}},
-            {"id": 157, "name": "Silver (Pearl Mouse)", "material": "PLA",
+            {"id": 99157, "name": "Silver (Pearl Mouse)", "material": "PLA",
              "vendor": {"name": "Prusament"}},
         ]}),
     ))
@@ -278,13 +312,18 @@ def test_per_spool_scan_prefers_oldest_when_multiple_match(page: Page):
     rows.nth(0).locator("input[type='url']").blur()
     expect(rows.nth(0).locator(".badge.bg-success")).to_be_visible(timeout=5000)
     # Lowest id (157) wins — the duplicate (192) is ignored.
-    expect(page.locator("#wiz-status-msg")).to_contain_text("Filament #157", timeout=5000)
+    # Lowest id (99157) wins. Status text races with the silent backfill
+    # banner — wait for selectedFilamentId to settle instead of polling text.
+    page.wait_for_function(
+        "() => String(wizardState.selectedFilamentId) === '99157'",
+        timeout=5000,
+    )
     selected_id = page.evaluate("() => wizardState.selectedFilamentId")
-    assert str(selected_id) == "157"
+    assert str(selected_id) == "99157"
 
     page.locator("#btn-wiz-submit").click()
     expect(page.locator("#wiz-status-msg")).to_contain_text("Success!", timeout=5000)
-    assert str(captured[0].get("filament_id")) == "157"
+    assert str(captured[0].get("filament_id")) == "99157"
 
 
 def test_post_success_lock_blocks_repeat_submit_until_edit(page: Page):
@@ -414,7 +453,7 @@ def test_backfill_silent_patch_fires_on_autoswitch(page: Page):
         status=200, content_type="application/json",
         body=json.dumps({"success": True, "filaments": [
             {
-                "id": 122, "name": "Black (Carbon Fiber)", "material": "PC",
+                "id": 99122, "name": "Black (Carbon Fiber)", "material": "PC",
                 "color_hex": "2B2B2B", "density": 1.20, "diameter": None,
                 "weight": 0, "spool_weight": 0,
                 "settings_extruder_temp": None, "settings_bed_temp": None,
@@ -445,16 +484,18 @@ def test_backfill_silent_patch_fires_on_autoswitch(page: Page):
     rows.nth(0).locator("input[type='url']").blur()
     expect(rows.nth(0).locator(".badge.bg-success")).to_be_visible(timeout=5000)
 
-    # Auto-switch fired — selected filament 122.
+    # Auto-switch fired — selected fake fixture id 99122 (NOT a real
+    # Spoolman id; the autouse _block_real_update_filament fixture also
+    # intercepts the PATCH so it can never leak even by accident).
     selected_id = page.evaluate("() => wizardState.selectedFilamentId")
-    assert str(selected_id) == "122"
+    assert str(selected_id) == "99122"
 
     # Status banner should have flipped from "Recognized existing" to the
     # backfill confirmation. Either is acceptable; we only need to confirm
     # the PATCH was sent.
     assert len(patches) == 1, f"expected 1 backfill PATCH, got {len(patches)}: {patches}"
     body = patches[0]
-    assert str(body.get("id")) == "122"
+    assert str(body.get("id")) == "99122"
     data = body.get("data") or {}
     # Silent fills the parser had and the existing record was missing.
     assert data.get("spool_weight") == 215
@@ -487,7 +528,7 @@ def test_backfill_mismatch_panel_renders_and_opt_in_patches(page: Page):
         status=200, content_type="application/json",
         body=json.dumps({"success": True, "filaments": [
             {
-                "id": 122, "name": "Black (Carbon Fiber)", "material": "PC",
+                "id": 99122, "name": "Black (Carbon Fiber)", "material": "PC",
                 "color_hex": "2B2B2B", "density": 1.20, "diameter": 1.75,
                 "weight": 865, "spool_weight": 215,
                 "settings_extruder_temp": 240, "settings_bed_temp": 90,
@@ -552,7 +593,7 @@ def test_backfill_dismiss_closes_panel_without_writes(page: Page):
     page.route("**/api/filaments", lambda route, req: route.fulfill(
         status=200, content_type="application/json",
         body=json.dumps({"success": True, "filaments": [
-            {"id": 122, "name": "Black", "material": "PC",
+            {"id": 99122, "name": "Black", "material": "PC",
              "color_hex": "111111", "weight": 865, "spool_weight": 215,
              "diameter": 1.75, "density": 1.20,
              "settings_extruder_temp": 215, "settings_bed_temp": 60,
@@ -597,7 +638,7 @@ def test_import_from_external_panel_runs_matcher_and_autoswitches(page: Page):
     page.route("**/api/filaments", lambda route, req: route.fulfill(
         status=200, content_type="application/json",
         body=json.dumps({"success": True, "filaments": [
-            {"id": 157, "name": "Silver (Pearl Mouse)", "color_name": None,
+            {"id": 99157, "name": "Silver (Pearl Mouse)", "color_name": None,
              "material": "PLA", "vendor": {"name": "Prusament"},
              "color_hex": "868463", "weight": 1000, "spool_weight": 215,
              "diameter": 1.75, "density": 1.18,
@@ -647,18 +688,18 @@ def test_import_from_external_panel_runs_matcher_and_autoswitches(page: Page):
 
     # The matcher MUST have fired and auto-switched into existing mode.
     page.wait_for_function(
-        "() => String(wizardState.selectedFilamentId) === '157'", timeout=5000
+        "() => String(wizardState.selectedFilamentId) === '99157'", timeout=5000
     )
-    assert str(page.evaluate("() => wizardState.selectedFilamentId")) == "157"
+    assert str(page.evaluate("() => wizardState.selectedFilamentId")) == "99157"
 
     page.locator("#btn-wiz-submit").click()
     page.wait_for_function("() => wizardState.lockedAfterSuccess === true", timeout=5000)
 
     assert len(captured) == 1
     body = captured[0]
-    # CRITICAL: filament_id is 157 (the existing match), NOT a fresh
+    # CRITICAL: filament_id is 99157 (the existing match), NOT a fresh
     # filament_data payload. Without the fix, this would be filament_data.
-    assert str(body.get("filament_id")) == "157"
+    assert str(body.get("filament_id")) == "99157"
     assert body.get("filament_data") is None
 
 
