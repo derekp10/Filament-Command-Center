@@ -50,7 +50,33 @@ JSON_STRING_FIELDS = [
 # instead of returning a generic "rejected" message. Reset on each successful
 # call. Kept module-global rather than threaded through every return signature
 # so existing callers (which check `if result:`) keep working unchanged.
+#
+# Populated by BOTH update_filament AND update_spool (the symmetry was
+# fixed 2026-04-27 — previously only update_filament set this, leaving
+# silent-fail callers on the spool side blind to WHY Spoolman rejected
+# their PATCH. Confirmed root cause of the multi-hour 2026-04-27 outage
+# diagnosis lag).
 LAST_SPOOLMAN_ERROR = None
+
+
+class SpoolmanRejection(Exception):
+    """Raised by update_spool_or_raise / update_filament_or_raise when
+    Spoolman returns a non-2xx response. Carries the message that was
+    captured in LAST_SPOOLMAN_ERROR so callers can surface it to the
+    user without an extra global-read.
+
+    Use these variants on paths that genuinely should never silent-fail:
+    slot assignment, label-confirm scans, force-move, weigh-out. Plain
+    update_spool / update_filament remain available for legitimate
+    fire-and-forget callers (e.g. an opportunistic auto-archive that
+    can retry on the next poll).
+    """
+
+    def __init__(self, message=None):
+        # Avoid PEP 604 union syntax (str | None) so this stays
+        # Python 3.9-compatible — the production Docker image runs 3.9-slim.
+        self.message = message or LAST_SPOOLMAN_ERROR or "Spoolman rejected the request"
+        super().__init__(self.message)
 
 def get_spool(sid):
     sm_url, _ = config_loader.get_api_urls()
@@ -152,6 +178,14 @@ def _auto_archive_on_empty(data, existing_initial, existing_used):
 
 
 def update_spool(sid, data):
+    """Returns the updated spool dict on success, or None on failure.
+
+    The last Spoolman error message is stashed in module-global
+    LAST_SPOOLMAN_ERROR so callers can surface the actual rejection
+    reason to the UI. Use update_spool_or_raise for paths that must
+    never silent-fail (slot assignment, label-confirm, force-move).
+    """
+    global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
     try:
         # [ALEX FIX] Intercept "UNASSIGNED" and coerce into empty string for Spoolman API
@@ -196,11 +230,27 @@ def update_spool(sid, data):
         else:
             clean_data = sanitize_outbound_data(data)
         r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
-        if r.ok: return r.json()
-        state.logger.error(f"Failed to update spool {sid}: {r.status_code} - {r.text}")
+        if r.ok:
+            LAST_SPOOLMAN_ERROR = None
+            return r.json()
+        err_body = r.text
+        state.logger.error(f"Failed to update spool {sid}: {r.status_code} - {err_body}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {err_body[:400]}"
     except Exception as e:
         state.logger.error(f"API Error updating spool {sid}: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
     return None
+
+
+def update_spool_or_raise(sid, data):
+    """Same as update_spool but raises SpoolmanRejection on failure.
+
+    Use on paths that genuinely should never silent-fail. Caller is
+    responsible for the try/except + user-facing error surface."""
+    result = update_spool(sid, data)
+    if result is None:
+        raise SpoolmanRejection(LAST_SPOOLMAN_ERROR)
+    return result
 
 def create_spool(data):
     """Creates a new spool via POST to Spoolman."""
@@ -242,6 +292,51 @@ def _get_raw_extras(entity, eid):
     except Exception:
         pass
     return {}
+
+
+# Keys that are owned by perform_smart_move / perform_smart_eject /
+# perform_force_unassign — i.e. mutated as a side-effect of physical
+# location changes. The wizard, quick-edit, and any future "edit
+# spool fields" surface MUST NOT write these directly: doing so
+# silently re-deploys or unseats spools and is the root of Item 4
+# in Feature-Buglist (editing a slotted spool's filament data via
+# the wizard wiped its toolhead assignment).
+SYSTEM_MANAGED_EXTRAS = frozenset({
+    "container_slot",
+    "physical_source",
+    "physical_source_slot",
+})
+
+
+def compute_dirty_extras(existing_extras, requested_extras, *, system_managed=frozenset()):
+    """Returns the subset of requested_extras whose values differ from existing.
+
+    Stripped from the input before diffing:
+      - any key in `system_managed` (regardless of value).
+    Returns a (dirty_dict, stripped_keys_list) tuple so callers can log
+    which system-managed keys the upstream surface tried to send.
+
+    Comparison is string-based (str(a) != str(b)) so wire-form values
+    that arrive as JSON-encoded strings compare equal to their parsed
+    Python forms — sidesteps the parse_inbound_data unwrapping wrinkle
+    callers used to have to remember.
+
+    Used by api_edit_spool_wizard (Item 4 fix). Future write surfaces
+    (vendor edit modal, manufacturer edit modal, etc.) should also
+    funnel through this helper so the system-managed allow-list is
+    enforced uniformly.
+    """
+    existing = existing_extras or {}
+    requested = requested_extras or {}
+    stripped = []
+    dirty = {}
+    for k, v in requested.items():
+        if k in system_managed:
+            stripped.append(k)
+            continue
+        if str(v) != str(existing.get(k)):
+            dirty[k] = v
+    return dirty, stripped
 
 
 def _merge_extras_with_existing(existing_extras, requested_extras):
@@ -300,6 +395,19 @@ def update_filament(fid, data):
         state.logger.error(f"API Error updating filament {fid}: {e}")
         LAST_SPOOLMAN_ERROR = str(e)[:400]
     return None
+
+
+def update_filament_or_raise(fid, data):
+    """Same as update_filament but raises SpoolmanRejection on failure.
+
+    Use on paths that genuinely should never silent-fail (filament
+    label-confirm, manual edit save). Caller handles the try/except
+    + user-facing error surface."""
+    result = update_filament(fid, data)
+    if result is None:
+        raise SpoolmanRejection(LAST_SPOOLMAN_ERROR)
+    return result
+
 
 def create_filament(data):
     """Creates a new filament via POST to Spoolman."""
