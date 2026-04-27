@@ -72,3 +72,10 @@ Inventory of current production write surfaces (keep this list updated when addi
 | `logic.py:714` | `perform_smart_eject` relocate | Activity log on failure. |
 | `logic.py:754` | `perform_force_unassign` | Activity log on failure. |
 
+## Working Groups (Batched Tasks)
+
+Tasks from `Feature-Buglist.md` are organized into batched working groups for efficient execution. Each group bundles related items that share code surfaces.
+
+- **Index:** `docs/agent_docs/working-groups.md` — status table, recommended order, usage instructions.
+- **Task files:** `docs/agent_docs/tasks/01-*.md` through `11-*.md` — self-contained specs per group.
+- **Commands:** `/project:work-group <N>` to start a group, `/project:finish-group` to wrap up, `/project:refresh-groups` to re-analyze the buglist after adding new items.
