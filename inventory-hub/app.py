@@ -1103,15 +1103,20 @@ def api_filament_details():
     return jsonify(spoolman_api.get_filament(fid))
 
 
-def _format_filament_edit_log(fid, before, requested, after):
+def _format_filament_edit_log(fid, before, requested):
     """Build a Filament-edit activity-log line that shows actual before→after
     values per field — both native and extras — so the user has a real
     audit trail rather than just a list of keys.
 
-    `before` and `after` are full filament dicts (from get_filament). `requested`
-    is the partial-update payload the wizard/edit form sent. We diff using
-    `requested.keys()` to only mention what the caller actually intended to
-    change (avoids noisy entries for any computed-side-effect fields)."""
+    `before` is the pre-patch full filament dict (from get_filament).
+    `requested` is the partial-update payload the wizard/edit form sent —
+    the authoritative source for the "new value" since Spoolman's PATCH
+    response doesn't always echo every field.
+
+    Always emits an `old → new` entry for each requested field even when
+    they appear equal — the user explicitly asked for these to be visible
+    so a no-op PATCH still tells the story (rather than collapsing into
+    a bare key list with no values, which the user reported as unhelpful)."""
     parts = []
 
     def _short(v):
@@ -1123,27 +1128,27 @@ def _format_filament_edit_log(fid, before, requested, after):
         return s if len(s) <= 60 else s[:57] + "…"
 
     before_extra = (before.get('extra') if isinstance(before, dict) else {}) or {}
-    after_extra = (after.get('extra') if isinstance(after, dict) else {}) or {}
 
     for key in sorted(requested.keys()):
         if key == 'extra':
             ex_req = requested.get('extra') or {}
             for ek in sorted(ex_req.keys()):
                 old = before_extra.get(ek)
-                new = after_extra.get(ek, ex_req.get(ek))
-                if old != new:
+                new = ex_req.get(ek)
+                if old == new:
+                    parts.append(f"extra.{ek}: {_short(old)} (unchanged)")
+                else:
                     parts.append(f"extra.{ek}: {_short(old)} → {_short(new)}")
             continue
         old = before.get(key) if isinstance(before, dict) else None
-        new = after.get(key, requested.get(key)) if isinstance(after, dict) else requested.get(key)
-        if old != new:
+        new = requested.get(key)
+        if old == new:
+            parts.append(f"{key}: {_short(old)} (unchanged)")
+        else:
             parts.append(f"{key}: {_short(old)} → {_short(new)}")
 
     if not parts:
-        # Fall back to the legacy shape if every requested field happened
-        # to round-trip equal — still log the attempt so the action is
-        # visible.
-        return f"✏️ Filament #{fid} edited ({', '.join(sorted(requested.keys()))})"
+        return f"✏️ Filament #{fid} edited (no fields)"
     return f"✏️ Filament #{fid} edited — " + " · ".join(parts)
 
 
@@ -1175,7 +1180,7 @@ def api_update_filament():
         updated = spoolman_api.update_filament(fid, data)
         if updated:
             state.add_log_entry(
-                _format_filament_edit_log(fid, before, data, updated),
+                _format_filament_edit_log(fid, before, data),
                 "SUCCESS", "00ff00",
             )
             return jsonify({"success": True, "filament": updated})
