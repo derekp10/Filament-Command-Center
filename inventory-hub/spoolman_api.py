@@ -21,9 +21,29 @@ def parse_inbound_data(data):
             parse_inbound_data(data['filament'])
     return data
 
-# Constants for JSON sanitation
-# [ALEX FIX] Added 'physical_source_slot', and 'product_url' to ensure strict JSON string formatting
-JSON_STRING_FIELDS = ["spool_type", "container_slot", "physical_source", "physical_source_slot", "original_color", "spool_temp", "product_url", "purchase_url"]
+# Spoolman extras that are TEXT-typed in the field config and therefore
+# require their wire value to be a JSON-encoded string (e.g. `"225"`,
+# not `225`). When the Python value happens to look like a valid number
+# (`"225"`, `"330"`, etc.) the generic `json.loads(...)` round-trip in
+# sanitize_outbound_data would parse it as an int and Spoolman would
+# reject with "Value is not a string." Listing the key here forces the
+# correct wrap regardless of what the value looks like.
+#
+# 2026-04-27: expanded — was previously missing nozzle_temp_max,
+# bed_temp_max, prusament_length_m, prusament_manufacturing_date, and
+# the filament price/drying/flush keys. Symptom: any update_spool /
+# update_filament that re-sent existing extras for a record carrying
+# one of these fields silently 400'd, leaving slot assignments stuck,
+# label-confirmed notifications missing, force-moves no-ops.
+JSON_STRING_FIELDS = [
+    "spool_type", "container_slot", "physical_source", "physical_source_slot",
+    "original_color", "spool_temp", "product_url", "purchase_url",
+    # Text-type extras that store numeric-looking strings:
+    "nozzle_temp_max", "bed_temp_max", "prusament_length_m",
+    "price_total", "drying_temp", "drying_time", "flush_multiplier",
+    # Text-type extras that store free-form strings (defensive):
+    "prusament_manufacturing_date", "sheet_link", "slicer_profile",
+]
 
 # Captures the last Spoolman non-ok response body so callers like
 # api_update_filament can surface the actual rejection reason to the UI
@@ -71,9 +91,19 @@ def sanitize_outbound_data(data):
             elif val_str.lower() == 'false':
                 clean_extra[key] = "false"
             elif key in JSON_STRING_FIELDS:
-                # [ALEX FIX] bypass json.loads() for specifically strict string fields (like container_slot)
-                # to prevent numbers inside strings like "4" from becoming integer 4 and breaking Spoolman's DB constraints.
-                clean_extra[key] = json.dumps(val_str)
+                # Text-type extras MUST arrive as JSON-encoded strings on the
+                # wire. Idempotent: if val_str already parses as a JSON string
+                # (e.g. JS pre-wrapped it as `"225"`), keep that form so we
+                # don't double-wrap and leak literal quote chars on read-back.
+                # Otherwise wrap the raw value once via json.dumps.
+                try:
+                    decoded = json.loads(val_str)
+                    if isinstance(decoded, str):
+                        clean_extra[key] = val_str  # already canonical
+                    else:
+                        clean_extra[key] = json.dumps(val_str)
+                except ValueError:
+                    clean_extra[key] = json.dumps(val_str)
             else:
                 # [ALEX FIX] Spoolman strictly requires that *all* custom Extra fields, even plain strings, 
                 # be sent as valid JSON strings. This means they must include the literal double-quotes.

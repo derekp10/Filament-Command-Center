@@ -319,6 +319,40 @@ def test_update_spool_merges_extras_with_existing(monkeypatch):
     assert 'needs_label_print' in sent_extras
 
 
+def test_sanitize_does_not_strip_quotes_on_numeric_string_text_extras():
+    """Real-world bug surfaced 2026-04-27: a spool carrying
+    `prusament_length_m: "330"` (text-type extra storing a number-looking
+    string, NOT in JSON_STRING_FIELDS) silently broke every subsequent
+    update_spool. Slot assignments stuck, label-confirmed notifications
+    missing, force-moves no-op. Spoolman 400'd because val_str='330'
+    parsed as int 330 via json.loads, sanitize left it unwrapped, the
+    text-type validator on Spoolman's side rejected the bare int.
+
+    Adding the key to JSON_STRING_FIELDS forces the wrap. Pinning here
+    with several known offenders + sanity-check that an already-wrapped
+    string stays single-wrapped (no double-wrap on idempotent re-send)."""
+    import spoolman_api
+
+    sanitized = spoolman_api.sanitize_outbound_data({'extra': {
+        # Numeric-looking strings — must be wrapped on send
+        'prusament_length_m': '330',
+        'nozzle_temp_max': '225',
+        'bed_temp_max': '60',
+        # Already-wrapped values — must stay single-wrapped
+        'product_url': '"https://prusament.com/spool/x/abc"',
+        'original_color': '"Pearl Mouse"',
+        'nozzle_temp_max_rewrap': '"245"',  # also wrapped, also text-type
+    }})['extra']
+
+    # Numeric-string text fields wrap correctly:
+    assert sanitized['prusament_length_m'] == '"330"'
+    assert sanitized['nozzle_temp_max'] == '"225"'
+    assert sanitized['bed_temp_max'] == '"60"'
+    # Already-wrapped values aren't double-wrapped:
+    assert sanitized['product_url'] == '"https://prusament.com/spool/x/abc"'
+    assert sanitized['original_color'] == '"Pearl Mouse"'
+
+
 def test_update_filament_without_extras_does_not_fetch_existing(monkeypatch):
     """Optimization sanity check: when the caller doesn't touch extras,
     don't bother fetching the existing record. Avoids round-trips for
