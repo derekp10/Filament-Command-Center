@@ -226,6 +226,15 @@ const focusNextInput = (currentInput) => {
 // Expose process scan specific to weigh out to capture commands if we want,
 // but the global processScan handles adding items to state.heldSpools, which triggers the buffer-updated listener!
 
+// Quick-Weigh — Phase 2 (Group 12) is now backed by <WeightEntry>
+// (modules/weight_entry.js). The legacy #quickWeighModal markup is retained
+// as a no-op placeholder until bulk weigh-out and FilaBridge manual recovery
+// also migrate; at that point the markup can be deleted in one sweep.
+//
+// The new component is an inline overlay (no nested Bootstrap modal stacking,
+// no Swal). On submit we hand off to saveSpoolWeight() unchanged so the
+// auto-archive + force-unassign chain and inventory:sync-pulse / buffer-updated
+// dispatches continue to flow through the same authoritative call path.
 window.openQuickWeigh = (spoolId) => {
     setProcessing(true);
     fetch(`/api/spool_details?id=${spoolId}`)
@@ -233,92 +242,48 @@ window.openQuickWeigh = (spoolId) => {
         .then(d => {
             setProcessing(false);
             if (!d || !d.id) { showToast("Spool Not Found", "error"); return; }
-            
-            const rem = d.remaining_weight !== null ? Math.round(d.remaining_weight) : 0;
-            const initial = d.initial_weight || d.filament?.weight || 1000;
-            const empty = d.empty_weight !== null ? d.empty_weight : (d.filament?.spool_weight || 0);
 
-            let safeName = d.filament?.name || 'Unknown';
-            
-            document.getElementById('qw-spool-id').value = d.id;
-            document.getElementById('qw-title').innerText = `ID: ${d.id} - ${safeName}`;
-            document.getElementById('qw-meta-initial').innerText = `${initial}g`;
-            document.getElementById('qw-meta-initial-val').value = initial;
-            document.getElementById('qw-meta-empty').innerText = empty > 0 ? `${empty}g` : 'Unknown';
-            
-            let elRem = document.getElementById('qw-remaining');
-            const newRem = elRem.cloneNode(true);
-            elRem.parentNode.replaceChild(newRem, elRem);
-            
-            let elDeduct = document.getElementById('qw-deduct');
-            const newDeduct = elDeduct.cloneNode(true);
-            elDeduct.parentNode.replaceChild(newDeduct, elDeduct);
-
-            newRem.value = rem;
-            newDeduct.value = "";
-            document.getElementById('qw-auto-archive').checked = true;
-            
-            const originalRem = rem;
-            newDeduct.addEventListener('input', () => {
-                let v = newDeduct.value.trim();
-                if (v === "" || v === "+" || v === "-") {
-                    newRem.value = originalRem;
-                    return;
-                }
-                
-                let isAdd = v.startsWith('+');
-                let amount = parseFloat(v);
-                
-                if (!isNaN(amount)) {
-                    let nr = originalRem;
-                    if (isAdd) {
-                        nr = originalRem + Math.abs(amount); 
-                    } else {
-                        // Whether they type 25 or -25, we treat it as a deduction of Mat.abs(25) = 25.
-                        nr = originalRem - Math.abs(amount);
-                    }
-                    newRem.value = nr >= 0 ? nr : 0;
-                } else {
-                    newRem.value = originalRem;
-                }
-            });
-
-            const handleEnter = (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    window.saveQuickWeigh();
-                }
+            const initial = Number(d.initial_weight) || Number(d.filament?.weight) || 0;
+            const used = Number(d.used_weight) || 0;
+            const cascade = {
+                spoolWt: d.spool_weight,
+                filamentWt: d.filament?.spool_weight,
+                vendor: d.filament?.vendor,
             };
-            
-            newRem.addEventListener('keydown', handleEnter);
-            newDeduct.addEventListener('keydown', handleEnter);
+            const { value: empty, source: emptySource } = window.resolveEmptySpoolWeightSource(cascade);
+            const display = d.filament
+                ? [d.filament.vendor?.name, d.filament.material, d.filament.name]
+                    .filter(Boolean).join(' - ') || (d.filament.name || 'Unknown')
+                : 'Unknown';
+            const colorHex = d.filament?.color_hex || d.color_hex || null;
 
-            // Defeat Bootstrap Focus Trapping on Nested Modals
-            document.querySelectorAll('.modal.show:not(#quickWeighModal)').forEach(m => {
-                m.removeAttribute('tabindex');
-                m.setAttribute('data-fcc-restored-tabindex', 'true');
+            window.WeightEntry.openModal({
+                title: 'Quick Weigh',
+                spool: { id: d.id, initial_weight: initial, used_weight: used,
+                         display, color_hex: colorHex },
+                empty_spool_weight: empty,
+                empty_source: emptySource,
+                cascade,
+                context: {
+                    vendor: d.filament?.vendor?.name || '',
+                    material: d.filament?.material || '',
+                    color: d.filament?.name || '',
+                    color_hex: colorHex,
+                },
+                defaultMode: 'additive',
+                availableModes: ['gross', 'net', 'additive', 'set_used'],
+                showAutoArchive: true,
+                autoArchiveDefault: true,
+                onSubmit: (payload) => {
+                    const updates = { used_weight: payload.used_weight };
+                    // Used == initial means remaining hits zero; auto-archive
+                    // gate matches the legacy behavior (auto-archive only when
+                    // the toggle is on AND the spool emptied).
+                    const autoArchive = !!payload.auto_archive &&
+                        Math.max(0, initial - payload.used_weight) <= 0;
+                    window.saveSpoolWeight(d.id, null, updates, autoArchive);
+                },
             });
-
-            // If modals object doesn't have it explicitly bound, cache it
-            if (!window.qwModalInstance) {
-                window.qwModalInstance = new bootstrap.Modal(document.getElementById('quickWeighModal'), {
-                    focus: true,
-                    backdrop: 'static'
-                });
-                document.getElementById('quickWeighModal').addEventListener('shown.bs.modal', () => {
-                    document.getElementById('qw-deduct').focus();
-                });
-                document.getElementById('quickWeighModal').addEventListener('hidden.bs.modal', () => {
-                    document.querySelectorAll('[data-fcc-restored-tabindex="true"]').forEach(m => {
-                        m.setAttribute('tabindex', '-1');
-                        m.removeAttribute('data-fcc-restored-tabindex');
-                        // Optional: Reset focus to the parent modal if needed
-                        m.focus();
-                    });
-                });
-            }
-            
-            window.qwModalInstance.show();
         })
         .catch(e => {
             setProcessing(false);
@@ -327,23 +292,9 @@ window.openQuickWeigh = (spoolId) => {
         });
 };
 
-window.saveQuickWeigh = () => {
-    const sid = document.getElementById('qw-spool-id').value;
-    const rem = document.getElementById('qw-remaining').value;
-    const isAutoArchive = document.getElementById('qw-auto-archive').checked;
-    
-    if (!sid) return;
-    
-    const updates = {};
-    if (rem !== "") updates.remaining_weight = parseFloat(rem);
-    
-    let autoArchive = false;
-    if (updates.remaining_weight !== undefined && updates.remaining_weight <= 0 && isAutoArchive) {
-        autoArchive = true;
-    }
-    
-    if (window.qwModalInstance) window.qwModalInstance.hide();
-    
-    window.saveSpoolWeight(sid, null, updates, autoArchive);
-};
+// Backwards-compatible no-op kept so the legacy #quickWeighModal "Save Update"
+// button (markup retained until other surfaces migrate) doesn't throw if
+// somehow invoked during the transition. The new <WeightEntry> overlay
+// submits via its own onSubmit handler.
+window.saveQuickWeigh = () => { /* deprecated — superseded by <WeightEntry>.openModal */ };
 
