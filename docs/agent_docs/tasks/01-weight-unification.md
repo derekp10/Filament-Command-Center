@@ -1,5 +1,7 @@
 # Group 1: Weight Handling Unification
 
+> **Status: Phase 1 DONE 2026-04-27** — L34 (wizard auto-prefill + badge) and L46 (post-archive prompt Enter key) shipped on `feature/weight-unification`. L48 was partially addressed (extracted `resolveEmptySpoolWeight` to `weight_utils.js`); the full unification plus L38 (gross-weight workflow) were rolled into **Group 12 — Weight Entry Unified Component (Phase 2)** for a focused design pass. See `tasks/12-weight-entry-component.md` and `completed-archive.md` for details.
+
 **Branch name:** `feature/weight-unification`
 **Estimated effort:** ~3–4 hours
 **Risk:** Medium — touches multiple UI flows but logic is straightforward
