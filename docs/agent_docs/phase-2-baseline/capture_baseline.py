@@ -64,7 +64,12 @@ def _save(page: Page, filename: str, locator: str | None = None) -> None:
 
 
 def capture_bulk_weigh_out(page: Page) -> None:
-    """01 — Bulk Weigh-Out modal with a couple of held spools."""
+    """01 — Bulk Weigh-Out modal with a couple of held spools.
+
+    The module's `state` is a script-scoped `let` (not on window), so we mutate
+    it via bare reference inside page.evaluate — this works because non-module
+    script `let` bindings are reachable from any same-context evaluate.
+    """
     print("Capturing 01 — Bulk Weigh-Out modal")
     _wait_for_dashboard(page)
     _stub_fetch(page, """
@@ -77,22 +82,40 @@ def capture_bulk_weigh_out(page: Page) -> None:
             }), { status: 200, headers: {'Content-Type': 'application/json'} });
         }
     """)
-    # Seed the held-spools state via the same internal API the buffer uses.
+    # Seed buffer with realistic spools. Use bare `state` (script-scoped let).
+    # Field shape matches inv_cmd.js:255 — `display` (formatted vendor-mat-name),
+    # `color` (bare hex), `color_direction`, `remaining_weight`, etc.
     page.evaluate("""() => {
-        window.state = window.state || {};
-        window.state.heldSpools = [
-            { id: 101, color: '#cc3300', name: 'Crimson Red',
-              vendor: 'CC3D', material: 'PLA', remaining: 425 },
-            { id: 102, color: '#2266aa', name: 'Cobalt Blue',
-              vendor: 'Polymaker', material: 'PETG', remaining: 712 },
+        state.heldSpools = [
+            { id: 101, display: 'CC3D - PLA - Crimson Red',
+              color: 'cc3300', color_direction: 'longitudinal',
+              remaining_weight: 425, archived: false, is_ghost: false },
+            { id: 102, display: 'Polymaker - PETG - Cobalt Blue',
+              color: '2266aa', color_direction: 'longitudinal',
+              remaining_weight: 712, archived: false, is_ghost: false },
+            { id: 103, display: 'Sunlu - PLA+ - Forest Green',
+              color: '2d7a3d', color_direction: 'longitudinal',
+              remaining_weight: 188, archived: false, is_ghost: false },
         ];
         window.openWeighOutModal();
     }""")
     page.wait_for_selector("#weighOutModal.show", timeout=5_000)
-    time.sleep(0.4)  # let any animations settle
+    # Wait for at least one spool row to render so we don't snapshot the
+    # "0 Spools Ready / No Spools in Buffer" empty state.
+    try:
+        page.wait_for_function(
+            "document.querySelectorAll('#weighOutModal .modal-body input[type=\"number\"]').length >= 1",
+            timeout=3_000,
+        )
+    except Exception:
+        print("  [warn] No spool rows rendered — capturing whatever state the modal is in")
+    time.sleep(0.4)
     _save(page, "01_bulk_weigh_out.png", locator="#weighOutModal .modal-dialog")
     page.evaluate("() => window.modals?.weighOutModal?.hide()")
-    page.wait_for_selector("#weighOutModal.show", state="detached", timeout=3_000)
+    try:
+        page.wait_for_selector("#weighOutModal.show", state="detached", timeout=3_000)
+    except Exception:
+        pass  # animation overlap is harmless for the next capture
 
 
 def capture_quick_weigh_nested(page: Page) -> None:
@@ -109,10 +132,10 @@ def capture_quick_weigh_nested(page: Page) -> None:
         }
     """)
     page.evaluate("""() => {
-        window.state = window.state || {};
-        window.state.heldSpools = [
-            { id: 101, color: '#cc3300', name: 'Crimson Red',
-              vendor: 'CC3D', material: 'PLA', remaining: 425 },
+        state.heldSpools = [
+            { id: 101, display: 'CC3D - PLA - Crimson Red',
+              color: 'cc3300', color_direction: 'longitudinal',
+              remaining_weight: 425, archived: false, is_ghost: false },
         ];
         window.openWeighOutModal();
     }""")
@@ -179,11 +202,18 @@ def capture_edit_filament_spool_weight(page: Page) -> None:
     }""")
     try:
         page.wait_for_selector("#editFilamentModal.show, .swal2-popup", timeout=5_000)
-        time.sleep(0.5)
-        # Try to crop to just the empty-weight row; fall back to whole modal.
+        time.sleep(0.4)
+        # Navigate to the Specs tab where empty-spool-weight + vendor hint live.
+        # Bootstrap tabs use data-bs-toggle="tab"; click the Specs trigger.
+        try:
+            specs_tab = page.locator("#editFilamentModal button:has-text('Specs')").first
+            specs_tab.click()
+            time.sleep(0.4)
+        except Exception:
+            print("  [warn] Could not navigate to Specs tab — capturing Basic tab")
         try:
             _save(page, "04_edit_filament_spool_weight.png",
-                  locator="#editfil-spool-weight >> xpath=ancestor::div[contains(@class,'row') or contains(@class,'col')][1]")
+                  locator="#editFilamentModal .modal-dialog")
         except Exception:
             _save(page, "04_edit_filament_spool_weight.png")
     except Exception as e:
