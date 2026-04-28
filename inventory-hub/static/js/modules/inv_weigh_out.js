@@ -454,15 +454,12 @@ const focusNextInput = (currentInput) => {
 // Expose process scan specific to weigh out to capture commands if we want,
 // but the global processScan handles adding items to state.heldSpools, which triggers the buffer-updated listener!
 
-// Quick-Weigh — Phase 2 (Group 12) is now backed by <WeightEntry>
-// (modules/weight_entry.js). The legacy #quickWeighModal markup is retained
-// as a no-op placeholder until bulk weigh-out and FilaBridge manual recovery
-// also migrate; at that point the markup can be deleted in one sweep.
-//
-// The new component is an inline overlay (no nested Bootstrap modal stacking,
-// no Swal). On submit we hand off to saveSpoolWeight() unchanged so the
-// auto-archive + force-unassign chain and inventory:sync-pulse / buffer-updated
-// dispatches continue to flow through the same authoritative call path.
+// Quick-Weigh — Phase 2 (Group 12) is backed by <WeightEntry>
+// (modules/weight_entry.js). Renders an inline overlay (no nested Bootstrap
+// modal stacking, no Swal). On submit, hands off to saveSpoolWeight()
+// unchanged so the auto-archive + force-unassign chain and
+// inventory:sync-pulse / buffer-updated dispatches continue to flow through
+// the same authoritative call path.
 window.openQuickWeigh = (spoolId) => {
     setProcessing(true);
     fetch(`/api/spool_details?id=${spoolId}`)
@@ -520,9 +517,4 @@ window.openQuickWeigh = (spoolId) => {
         });
 };
 
-// Backwards-compatible no-op kept so the legacy #quickWeighModal "Save Update"
-// button (markup retained until other surfaces migrate) doesn't throw if
-// somehow invoked during the transition. The new <WeightEntry> overlay
-// submits via its own onSubmit handler.
-window.saveQuickWeigh = () => { /* deprecated — superseded by <WeightEntry>.openModal */ };
 
