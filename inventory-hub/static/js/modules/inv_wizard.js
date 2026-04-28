@@ -19,11 +19,27 @@ let wizardState = {
 // against the global. See weight_utils.js for the cascade rules.
 
 // --- INHERITANCE BADGE FOR wiz-spool-empty_weight FIELD ---
-// L34 (Phase 1): when a wizard open flow inherits the spool's empty weight
-// from the parent filament/vendor, surface a small badge next to the field so
-// the user can see where the value came from and that typing will override it.
-// Setting source='spool' or null hides the badge — only filament/vendor
-// inheritance is worth flagging.
+// Phase 2 (Group 12): the input is now bound to <EmptyWeightField>
+// (modules/empty_weight_field.js) so it shares the auto-clear-on-input
+// behavior with Edit-Filament Specs and the post-archive prompt. The wizard
+// keeps its imperative `wizardSetSpoolEmptyWeightInherited` API — that's
+// what the three wizard open flows already call after running their own
+// cascade resolution, and it stays the simplest direct-DOM path. The shared
+// component only owns the listener that hides the badge as soon as the user
+// types over the inherited value.
+(function () {
+    const inputEl = document.getElementById('wiz-spool-empty_weight');
+    if (!inputEl || typeof window.bindEmptyWeightField !== 'function') return;
+    window.bindEmptyWeightField({
+        input: inputEl,
+        badge: document.getElementById('wiz-spool-empty-inherited-badge'),
+        sourceLabel: document.getElementById('wiz-spool-empty-inherited-source'),
+        // No copyVendorBtn in the wizard — the wizard auto-prefills via the
+        // cascade so the affordance is redundant. The Specs tab in the
+        // edit-filament modal IS the surface that uses copyVendorBtn.
+    });
+})();
+
 window.wizardSetSpoolEmptyWeightInherited = (value, source) => {
     const inputEl = document.getElementById('wiz-spool-empty_weight');
     const badge = document.getElementById('wiz-spool-empty-inherited-badge');
@@ -42,16 +58,6 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
     const badge = document.getElementById('wiz-spool-empty-inherited-badge');
     if (badge) badge.style.display = 'none';
 };
-
-// Auto-clear the badge the moment the user edits the field directly.
-// inv_wizard.js loads after the wizard markup is in the DOM (per scripts.html).
-(function() {
-    const inputEl = document.getElementById('wiz-spool-empty_weight');
-    if (!inputEl) return;
-    inputEl.addEventListener('input', () => {
-        window.wizardClearSpoolEmptyWeightBadge();
-    });
-})();
 
 // --- WIZARD CLOSE → RE-OPEN DETAIL MODAL ---
 // Register immediately — this script loads after the DOM is fully parsed.

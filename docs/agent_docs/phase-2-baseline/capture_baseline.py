@@ -240,32 +240,62 @@ def capture_post_archive_prompt(page: Page) -> None:
 
 
 def capture_filabridge_manual_recovery(page: Page) -> None:
-    """06 — FilaBridge Manual Recovery modal (per-spool weights table)."""
+    """06 — FilaBridge Manual Recovery modal (per-spool weights table).
+
+    The modal element (`#fbRecoveryModal`) is in the DOM on every dashboard
+    load, but its body contents are populated by `window.openFilaBridgeRecovery`
+    after a successful fetch to `/api/fb_recovery_spools`. We stub that fetch
+    and call the entry point directly with a synthetic meta payload so the
+    layout renders deterministically.
+    """
     print("Capturing 06 — FilaBridge Manual Recovery modal")
     _wait_for_dashboard(page)
-    # Open via whatever entry point exists; if none, this surface is captured
-    # at-rest via the modal element itself.
-    has_modal = page.evaluate("""
-        () => !!document.getElementById('filabridgeRecoveryModal') ||
-              !!document.querySelector('[id*="filabridge"]')
+    _stub_fetch(page, """
+        if (u.startsWith('/api/fb_recovery_spools')) {
+            return new Response(JSON.stringify({
+                success: true,
+                spools: [
+                    { id: 101, display: '#101 CC3D - PLA - Crimson Red',
+                      color: 'cc3300' },
+                    { id: 102, display: '#102 Polymaker - PETG - Cobalt Blue',
+                      color: '2266aa' },
+                    { id: 103, display: '#103 Sunlu - PLA+ - Forest Green',
+                      color: '2d7a3d' },
+                ]
+            }), { status: 200, headers: {'Content-Type': 'application/json'} });
+        }
     """)
-    if has_modal:
-        try:
-            # Try to show the modal directly via Bootstrap.
-            page.evaluate("""() => {
-                const el = document.getElementById('filabridgeRecoveryModal') ||
-                           document.querySelector('[id*="filabridge"]');
-                if (el && window.bootstrap) {
-                    const m = new bootstrap.Modal(el);
-                    m.show();
-                }
-            }""")
-            time.sleep(0.5)
-            _save(page, "06_filabridge_manual_recovery.png")
-        except Exception as e:
-            print(f"  [warn] FilaBridge Recovery open failed ({e}); skipping.")
-    else:
-        print("  [warn] No FilaBridge Recovery modal in DOM; skipping (only renders when an error is active).")
+    has_entry = page.evaluate("() => typeof window.openFilaBridgeRecovery === 'function'")
+    if not has_entry:
+        print("  [warn] window.openFilaBridgeRecovery not defined; skipping.")
+        return
+    # Synthesize a realistic error meta payload (URI-encoded JSON, per the
+    # encoding the activity-log "Fix" button uses).
+    meta_js = (
+        "encodeURIComponent(JSON.stringify({"
+        "  printer_name: 'Prusa MK4S',"
+        "  filename: 'lattice_bracket_v3.bgcode',"
+        "  error_id: 'demo-fb-error-001'"
+        "}))"
+    )
+    page.evaluate(f"() => window.openFilaBridgeRecovery({meta_js})")
+    page.wait_for_selector("#fbRecoveryModal.show", timeout=5_000)
+    # Wait for the stubbed spool rows to render in the modal body.
+    try:
+        page.wait_for_function(
+            "document.querySelectorAll('#fb-rec-spools-container .fb-spool-row').length >= 1",
+            timeout=3_000,
+        )
+    except Exception:
+        print("  [warn] No fb-spool-row rendered — capturing whatever state the modal is in")
+    time.sleep(0.4)
+    _save(page, "06_filabridge_manual_recovery.png",
+          locator="#fbRecoveryModal .modal-dialog")
+    page.evaluate("() => window.modals?.fbRecoveryModal?.hide()")
+    try:
+        page.wait_for_selector("#fbRecoveryModal.show", state="detached", timeout=3_000)
+    except Exception:
+        pass
 
 
 # --- Driver -----------------------------------------------------------------

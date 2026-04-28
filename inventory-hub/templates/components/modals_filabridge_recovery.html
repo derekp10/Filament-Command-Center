@@ -74,26 +74,43 @@ window.openFilaBridgeRecovery = function(metaStr) {
                     return;
                 }
                 
-                // Build input forms
-                let html = '<div class="list-group list-group-flush bg-dark">';
+                // Build input forms. Phase 2 (Group 12): each row has a
+                // delta-style input (Additive mode in <WeightEntry> terms)
+                // that accepts +/- prefix syntax for consistency with bulk
+                // weigh-out's Additive mode. A small hint row under the
+                // input previews the resulting used_weight once spool
+                // details have been lazy-fetched.
+                let html = '<div class="text-white-50 small mb-2">' +
+                    'Mode: <span class="badge bg-info-subtle text-info-emphasis">Additive (delta consumed)</span> ' +
+                    '<span class="ms-2">used = current_used + delta</span>' +
+                    '</div>';
+                html += '<div class="list-group list-group-flush bg-dark">';
                 data.spools.forEach(s => {
                     let hex = s.color || "555";
                     let displayName = s.display || `<strong>#${s.id}</strong> Unknown Spool`;
-                    
+
                     html += `
-                    <div class="list-group-item bg-dark text-light border-secondary d-flex justify-content-between align-items-center fb-spool-row" data-sid="${s.id}">
-                        <div>
-                            <span style="display:inline-block;width:15px;height:15px;background-color:#${hex};border-radius:50%;margin-right:8px;border:1px solid #fff;vertical-align:middle;"></span>
-                            ${displayName}
+                    <div class="list-group-item bg-dark text-light border-secondary fb-spool-row" data-sid="${s.id}">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <span style="display:inline-block;width:15px;height:15px;background-color:#${hex};border-radius:50%;margin-right:8px;border:1px solid #fff;vertical-align:middle;"></span>
+                                ${displayName}
+                            </div>
+                            <div class="input-group input-group-sm" style="width: 170px;">
+                                <input type="text" class="form-control bg-secondary text-light border-dark fb-spool-input"
+                                    placeholder="+ delta consumed" data-sid="${s.id}"
+                                    oninput="window.fbUpdateRowPreview(this)">
+                                <span class="input-group-text bg-dark text-light border-secondary">g</span>
+                            </div>
                         </div>
-                        <div class="input-group input-group-sm" style="width: 150px;">
-                            <input type="number" class="form-control bg-secondary text-light border-dark fb-spool-input" placeholder="Grams Used" min="0" step="0.1">
-                            <span class="input-group-text bg-dark text-light border-secondary">g</span>
-                        </div>
+                        <div class="text-info small mt-1 fb-spool-preview" data-sid="${s.id}" style="min-height:1em;"></div>
                     </div>`;
                 });
                 html += '</div>';
                 spoolsContainer.innerHTML = html;
+                if (typeof window.fbPrefetchAllRowDetails === 'function') {
+                    window.fbPrefetchAllRowDetails();
+                }
             })
             .catch(err => {
                 spoolsContainer.innerHTML = `<div class="text-danger">Error loading spools.</div>`;
@@ -189,21 +206,89 @@ window.handleManualGcodeUpload = function(e) {
     reader.readAsText(file);
 };
 
+// Phase 2 (Group 12): FilaBridge recovery uses the unified Additive math.
+// Per-spool details are lazy-fetched on modal render so the per-row preview
+// can show the resulting used_weight before the user submits.
+window._fbDetailsCache = window._fbDetailsCache || new Map();
+
+window.fbPrefetchAllRowDetails = function () {
+    const rows = document.querySelectorAll('.fb-spool-row');
+    rows.forEach(r => {
+        const sid = Number(r.getAttribute('data-sid'));
+        if (!sid || window._fbDetailsCache.has(sid)) return;
+        fetch(`/api/spool_details?id=${sid}`)
+            .then(r => r.json())
+            .then(d => {
+                if (!d || !d.id) return;
+                window._fbDetailsCache.set(d.id, {
+                    initial: Number(d.initial_weight) || Number(d.filament?.weight) || 0,
+                    used: Number(d.used_weight) || 0,
+                });
+                const inp = document.querySelector(`.fb-spool-input[data-sid="${d.id}"]`);
+                if (inp) window.fbUpdateRowPreview(inp);
+            })
+            .catch(() => {});
+    });
+};
+
+window.fbUpdateRowPreview = function (inputEl) {
+    if (!inputEl) return;
+    const sid = Number(inputEl.getAttribute('data-sid'));
+    const previewEl = document.querySelector(`.fb-spool-preview[data-sid="${sid}"]`);
+    if (!previewEl) return;
+    const raw = inputEl.value;
+    if (raw === '' || raw === '+' || raw === '-') {
+        previewEl.innerText = '';
+        return;
+    }
+    const details = window._fbDetailsCache.get(sid);
+    if (!details) { previewEl.innerText = '…'; return; }
+    if (typeof window.parseAdditiveInput !== 'function' ||
+        typeof window.computeUsedWeight !== 'function') {
+        previewEl.innerText = '';
+        return;
+    }
+    const parsed = window.parseAdditiveInput(raw);
+    if (parsed.value === null || Number.isNaN(parsed.value)) {
+        previewEl.innerHTML = '<span style="color:#f88;">Invalid input</span>';
+        return;
+    }
+    const r = window.computeUsedWeight({
+        mode: 'additive',
+        value: parsed.value,
+        initial_weight: details.initial,
+        current_used: details.used,
+    });
+    if (r.error) {
+        previewEl.innerHTML = '<span style="color:#f88;">Invalid input</span>';
+        return;
+    }
+    let cap = '';
+    if (r.capped === 'high') cap = ' <span style="color:#f5b342;">(capped)</span>';
+    else if (r.capped === 'low') cap = ' <span style="color:#f5b342;">(clamped to 0)</span>';
+    previewEl.innerHTML = `→ used <strong>${Math.round(r.used_weight)}g</strong> · remaining <strong>${Math.round(r.remaining)}g</strong>${cap}`;
+};
+
 window.submitManualFilaBridgeRecovery = function() {
     if (!window._currentFbError) return;
-    
+
     const container = document.getElementById('fb-rec-spools-container');
     const rows = container.querySelectorAll('.fb-spool-row');
-    
+
     let updates = {};
     let hasUpdates = false;
-    
+
     rows.forEach(r => {
         const sid = r.getAttribute('data-sid');
         const input = r.querySelector('.fb-spool-input');
         if (input && input.value) {
-            const val = parseFloat(input.value);
-            if (val > 0) {
+            // Parse the +/- delta syntax — bare numbers (e.g. "25") still
+            // submit as positive deltas, matching the legacy behavior.
+            const parsed = (typeof window.parseAdditiveInput === 'function')
+                ? window.parseAdditiveInput(input.value)
+                : { value: parseFloat(input.value) };
+            const val = parsed.value;
+            if (val !== null && !Number.isNaN(val) && val > 0) {
                 updates[sid] = val;
                 hasUpdates = true;
             }

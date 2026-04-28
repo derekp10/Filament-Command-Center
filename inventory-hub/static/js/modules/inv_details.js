@@ -1290,21 +1290,27 @@ const _editfilOpenModal = (fil) => {
         refreshVendorBadge();
     }).catch(() => {});
 
-    // --- Empty-Spool-Wt: copy-from-vendor button on Specs tab ---
-    // Show the ⇩ button when the vendor has a default empty_spool_weight
-    // worth copying over. Clicking it drops the vendor value into the
-    // spool-weight input.
-    const copyVendorWtBtn = document.getElementById('editfil-copy-vendor-wt');
-    if (copyVendorWtBtn) {
-        if (vendorWt) {
-            copyVendorWtBtn.style.display = 'inline-block';
-            copyVendorWtBtn.title = `Copy vendor default empty-spool weight (${vendorWt}g)`;
-            copyVendorWtBtn.onclick = () => {
-                if (spoolWtEl) spoolWtEl.value = String(vendorWt);
-            };
-        } else {
-            copyVendorWtBtn.style.display = 'none';
-            copyVendorWtBtn.onclick = null;
+    // --- Empty-Spool-Wt: bind <EmptyWeightField> on the Specs tab ---
+    // Phase 2 (Group 12): the input + copy-vendor affordance is now owned by
+    // the shared component (modules/empty_weight_field.js). Binding here
+    // wires the auto-clear-on-input behavior (matches the wizard's badge
+    // semantics) and routes the "⇩ Copy Vendor Weight" click through the
+    // component's `copyVendorBtn` handle. Idempotent — re-opening this modal
+    // replaces prior listeners cleanly.
+    if (typeof window.bindEmptyWeightField === 'function' && spoolWtEl) {
+        const field = window.bindEmptyWeightField({
+            input: spoolWtEl,
+            copyVendorBtn: document.getElementById('editfil-copy-vendor-wt'),
+        });
+        if (field) {
+            field.setFromCascade({
+                spoolWt: fil.spool_weight,
+                vendor: fil.vendor,
+            });
+            // The Specs surface lets the user override the resolved value at
+            // any time; the component already clears the (currently absent)
+            // badge on input. setFromCascade also drives the copy-vendor
+            // button's visibility from the cached vendor value.
         }
     }
 

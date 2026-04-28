@@ -31,7 +31,7 @@ Each screenshot shows ONE weight-entry surface in a known state, populated via f
 | `03_wizard_empty_weight.png` | Wizard Spool tab empty-weight area | `inv_wizard.js:openNewSpoolFromFilamentWizard` | **Phase 1 NEW**: shows the "↩ from filament/vendor" badge and pre-filled value. |
 | `04_edit_filament_spool_weight.png` | Edit Filament modal — Specs tab | `inv_details.js:openEditFilamentForm` | Vendor hint badge + "⇩ Copy Vendor Weight" button. |
 | `05_post_archive_prompt.png` | Post-archive empty-weight Swal | `inv_details.js:showArchiveEmptyWeightPrompt` | **Phase 1 FIXED**: Enter key now submits. Vendor/material context display. |
-| `06_filabridge_manual_recovery.png` | FilaBridge Manual Recovery modal | `templates/components/modals_filabridge_recovery.html` | **NOT YET CAPTURED** — modal isn't in the DOM until an active FilaBridge error needs recovery. To capture: trigger a real error on the dev container, or extend `capture_baseline.py` to inject the modal markup + state stub. Phase 2 should add this before adopting the unified component into manual recovery. |
+| `06_filabridge_manual_recovery.png` | FilaBridge Manual Recovery modal | `templates/components/modals_filabridge_recovery.html` | Per-spool delta-input table ("Grams Used") with Auto-Parse / Browse-Local-GCode actions. Captured by stubbing `/api/fb_recovery_spools` and calling `window.openFilaBridgeRecovery` directly with a synthetic error meta. |
 
 ## Re-running the capture
 
