@@ -84,8 +84,13 @@
                 cachedVendor.empty_spool_weight !== undefined &&
                 cachedVendor.empty_spool_weight !== '' &&
                 Number(cachedVendor.empty_spool_weight) > 0;
-            copyVendorBtn.disabled = !has;
-            copyVendorBtn.classList.toggle('disabled', !has);
+            // Hide rather than disable — matches the existing edit-filament
+            // Specs tab affordance ("⇩ Copy" button only appears when the
+            // vendor has a value worth copying).
+            copyVendorBtn.style.display = has ? '' : 'none';
+            if (has) {
+                copyVendorBtn.title = `Copy vendor default empty-spool weight (${cachedVendor.empty_spool_weight}g)`;
+            }
         };
 
         const onInput = () => {
