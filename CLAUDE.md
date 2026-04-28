@@ -72,6 +72,12 @@ Inventory of current production write surfaces (keep this list updated when addi
 | `logic.py:714` | `perform_smart_eject` relocate | Activity log on failure. |
 | `logic.py:754` | `perform_force_unassign` | Activity log on failure. |
 
+### Weight-entry surfaces (known fragmentation hot-spot)
+
+Within the table above, the weight-touching entries are themselves a fragmented sub-system: `app.py:2068` (mark_printed), `app.py:2359` (backfill), `app.py:2496/2533/2659` (filabridge auto/manual/thread), plus the frontend modals (`inv_weigh_out.js` weigh-out, `inv_wizard.js` empty-weight fields, `inv_details.js` post-archive prompt + filament edit). Each accepts a slightly different input form (gross / net / additive / delta / field-only) with inconsistent terminology and inconsistent empty-spool-weight resolution.
+
+Phase 1 (current branch) extracted `resolveEmptySpoolWeight` into `static/js/modules/weight_utils.js` so the cascade has one canonical home. Phase 2 (separate branch — see `Feature-Buglist.md` "Unified weight-entry component") will build a single `<WeightEntry>`-style component reused by every weight surface, with mode-aware input (gross / net / additive / delta), shared missing-empty-weight prompt, and a preview of the computed `used_weight` before submit. **Don't add new weight-entry UI before Phase 2** — feed any new requirements into that design instead.
+
 ## Working Groups (Batched Tasks)
 
 Tasks from `Feature-Buglist.md` are organized into batched working groups for efficient execution. Each group bundles related items that share code surfaces.

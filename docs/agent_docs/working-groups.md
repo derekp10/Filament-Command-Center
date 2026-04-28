@@ -7,7 +7,7 @@
 
 | # | Group | Items | Est. Effort | Status | Task File |
 |---|-------|-------|-------------|--------|-----------|
-| 1 | 🔵 Weight Handling Unification | 4 | ~3–4 hrs | `READY` | [01-weight-unification.md](tasks/01-weight-unification.md) |
+| 1 | 🔵 Weight Handling Unification — Phase 1 | 3 | ~3–4 hrs | `DONE` 2026-04-27 | [01-weight-unification.md](tasks/01-weight-unification.md) |
 | 2 | 🟢 Buffer Cards & Main-Menu Refresh | 3 | ~1.5–2 hrs | `READY` | [02-buffer-cards-refresh.md](tasks/02-buffer-cards-refresh.md) |
 | 3 | 🔴 Print Queue & Label Management | 6 | ~2–3 hrs | `READY` | [03-print-queue-labels.md](tasks/03-print-queue-labels.md) |
 | 4 | 🔶 Archive / Delete / Cleanup Lifecycle | 4 | ~3 hrs | `READY` | [04-archive-delete-lifecycle.md](tasks/04-archive-delete-lifecycle.md) |
@@ -18,6 +18,7 @@
 | 9 | ⬜ Quick-Swap Grid Enhancements | 2 | ~2–3 hrs | `READY` | [09-quickswap-grid.md](tasks/09-quickswap-grid.md) |
 | 10 | 🟠 Add/Edit Wizard UX Overhaul | 8 | ~5–6 hrs | `READY` | [10-wizard-ux-overhaul.md](tasks/10-wizard-ux-overhaul.md) |
 | 11 | ⚫ External Parsers & Prusament Cleanup | 3 | ~3 hrs | `READY` | [11-external-parsers.md](tasks/11-external-parsers.md) |
+| 12 | 🔵 Weight Entry Unified Component — Phase 2 | 2 | ~6–10 hrs | `DONE` 2026-04-27 | [12-weight-entry-component.md](tasks/12-weight-entry-component.md) |
 
 ## Items NOT Grouped (Solo, Deferred, or On Hold)
 
