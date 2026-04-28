@@ -10,11 +10,27 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body text-white" style="background-color: #1a1e23; max-height: 70vh; overflow-y: auto;">
+                <!-- Phase 2 (Group 12): modal-level mode selector. The same value
+                     applies to every row — most users batch-weigh the same way.
+                     Default is Net to preserve historical behavior (input is the
+                     spool's remaining filament weight). Switching to Gross gives
+                     L38 (auto-subtract spool tare). -->
+                <div class="d-flex align-items-center gap-2 mb-3 pb-2 border-bottom border-secondary">
+                    <span class="text-white-50 small">Mode</span>
+                    <div class="btn-group btn-group-sm" role="group" id="weigh-out-mode">
+                        <button type="button" class="btn btn-outline-info" data-mode="gross">Gross</button>
+                        <button type="button" class="btn btn-info" data-mode="net">Net</button>
+                        <button type="button" class="btn btn-outline-info" data-mode="additive">Additive</button>
+                        <button type="button" class="btn btn-outline-info" data-mode="set_used">Set Used</button>
+                    </div>
+                    <span class="text-white-50 small ms-2" id="weigh-out-mode-hint">used = initial − net</span>
+                </div>
+
                 <div id="weigh-out-empty" class="text-center text-white-50 p-4">
                     <h5>No Spools in Buffer</h5>
                     <p>Scan some spools into the buffer first, or scan them now while this window is open!</p>
                 </div>
-                
+
                 <div id="weigh-out-list" class="d-flex flex-column gap-3">
                     <!-- Spool rows will be injected here -->
                 </div>
