@@ -33,15 +33,11 @@
 
 * Weight QR Code on Filament Command Center Main menu is sometimes blocked by searh badge in lower right cortner on certain smaller or windows scaled screens.
 
-* Code behind weight update code attached to the button on the main menu of filament command center doesn't take into account empty spool weight when updating. Total weight then overwrites the current weight, with out taking into account the spools empty weight.
-
 * Location updates are not propagating to the buffer spool cards on the main menu of filament command center. This might be related to the archive status not updating on them as well.
 
 * **[Feature] Manufacturer/Vendor Edit Modal (V1)** — Add an Edit Manufacturer/Vendor modal that mirrors the Edit Filament modal in look and function — same layout patterns, tab structure if applicable, save/cancel behavior, and visual design. **V1 scope is strictly Spoolman-native manufacturer fields only** (name, website, comment/notes — whatever Spoolman exposes for a vendor record by default). No custom `extra` fields, no backfill utility, no external-metadata import in this pass. The goal is a clean, functional edit surface that feels consistent with the filament edit experience. Future stretch goals (backfill, inheritance surfacing, external import, standalone Manufacturer Manager) can be layered on top once V1 is solid.
 
 * Slicer profile information missing from Edit Filament modal.
-
-* 🟡 PARTIAL 2026-04-27 — ~~Unify all the fragmented ways we handle updating spool/filament weights, so we have only one code set to work off of.~~ Phase 1 extracted `resolveEmptySpoolWeight` (and a `…WithSource` variant) into `static/js/modules/weight_utils.js` as the foundation. Full unification deferred to Phase 2 ↓ so it gets its own focused design pass.
 
 * **[Phase 2 — Weight Unification]** Build a unified `<WeightEntry>` component reused by every weight-entry surface (bulk weigh-out, Quick-Weigh nested modal, wizard, edit-filament modal, post-archive prompt, FilaBridge manual recovery). Modes: **gross** / **net** / **additive** / **delta** — selectable inline so the user can enter whatever value they have. Surface the resolved empty-spool-weight inline with a source badge. Show a preview of the computed `used_weight` write before submit so the user always knows what's about to happen. Foundation already in `static/js/modules/weight_utils.js`. Original "Code behind weight update code... doesn't take into account empty spool weight" item (was L38) folds into this as `mode=gross`. Spoolman's UI is one reference but its modes are clunky — pull the best of breed from each of our existing implementations (wizard cascade, Quick-Weigh `+/-` syntax, weigh-out auto-archive toggle, filament edit vendor-hint badge, etc.) into one cohesive component. See `CLAUDE.md` "Weight-entry surfaces" note for design rationale and Phase 2 plan in `C:\Users\Derek\.claude\plans\optimized-skipping-crayon.md`.
 
