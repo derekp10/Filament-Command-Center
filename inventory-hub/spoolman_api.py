@@ -712,8 +712,16 @@ def get_spools_at_location_detailed(loc_name):
 def get_spools_at_location(loc_name):
     return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
 
-def find_spool_by_legacy_id(legacy_id, strict_mode=False):
-    """Finds a spool based on the Filament's legacy ID."""
+def find_spools_by_legacy_id(legacy_id):
+    """Return ALL spools attached to the filament with the given legacy
+    (Spoolman `external_id`) value. Sorted: non-empty (>10g) first, then
+    empty, each group ordered by spool id ascending. Returns [] if no
+    filament matches the legacy id or if the lookup fails.
+
+    Used by `find_spool_by_legacy_id` for backward-compatible
+    single-id callers, and by `resolve_scan` to detect the ambiguous
+    case (same legacy id mapped to multiple spools — Item 3.6).
+    """
     sm_url, _ = config_loader.get_api_urls()
     legacy_id = str(legacy_id).strip()
     try:
@@ -721,26 +729,46 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
         target_filament_id = None
         if fil_resp.ok:
             for fil in parse_inbound_data(fil_resp.json()):
-                ext = str(fil.get('external_id', '')).strip().replace('"','')
+                ext = str(fil.get('external_id', '')).strip().replace('"', '')
                 if ext == legacy_id:
                     target_filament_id = fil['id']
                     break
-        if target_filament_id:
-            spool_resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
-            if spool_resp.ok:
-                candidates = []
-                for spool in parse_inbound_data(spool_resp.json()):
-                    if spool.get('filament', {}).get('id') == target_filament_id:
-                        if (spool.get('remaining_weight') or 0) > 10:
-                            return spool['id']
-                        candidates.append(spool['id'])
-                if candidates: return candidates[0]
-                if strict_mode: return None
-        
-        # FIX: Removed the "Blind Direct ID" check here.
-        # Direct IDs are now handled explicitly in logic.py
-        
-    except Exception as e: state.logger.error(f"Legacy Spool Lookup Error: {e}")
+        if not target_filament_id:
+            return []
+
+        spool_resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
+        if not spool_resp.ok:
+            return []
+
+        non_empty = []
+        empty = []
+        for spool in parse_inbound_data(spool_resp.json()):
+            if spool.get('filament', {}).get('id') == target_filament_id:
+                if (spool.get('remaining_weight') or 0) > 10:
+                    non_empty.append(spool)
+                else:
+                    empty.append(spool)
+        non_empty.sort(key=lambda s: s.get('id', 0))
+        empty.sort(key=lambda s: s.get('id', 0))
+        return non_empty + empty
+    except Exception as e:
+        state.logger.error(f"Legacy Spool Lookup Error: {e}")
+        return []
+
+
+def find_spool_by_legacy_id(legacy_id, strict_mode=False):
+    """Finds a spool based on the Filament's legacy ID. Returns the first
+    candidate (preferring non-empty spools) — for the multi-candidate
+    disambiguation flow, callers should use `find_spools_by_legacy_id`
+    directly so they can detect ambiguity.
+
+    `strict_mode` is preserved for backward compatibility but the function
+    now returns None whenever no filament matches the legacy id, which is
+    the same observable behavior as the strict path."""
+    del strict_mode  # API-stable shim; no behavioral difference any more.
+    spools = find_spools_by_legacy_id(legacy_id)
+    if spools:
+        return spools[0]['id']
     return None
 
 def find_filament_by_legacy_id(legacy_id):

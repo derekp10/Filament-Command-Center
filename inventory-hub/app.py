@@ -389,6 +389,13 @@ def api_create_inventory_wizard():
                 else:
                     return jsonify({"success": False, "msg": f"Failed to create new Vendor '{external_vendor}' in Spoolman."})
 
+            # New filaments auto-flag for label print so they show up in the
+            # Backlog immediately. The user's first physical scan of the new
+            # FIL:NN label flips it to False (positive verification).
+            if 'needs_label_print' not in extra:
+                extra['needs_label_print'] = True
+            filament_data['extra'] = extra
+
             # Create a brand new filament
             new_fil = spoolman_api.create_filament(filament_data)
             if new_fil and 'id' in new_fil:
@@ -416,6 +423,16 @@ def api_create_inventory_wizard():
         # Step 2: Create Spool(s)
         if spool_data:
             spool_data['filament_id'] = filament_id
+
+            # New spools auto-flag for label print (same rationale as new
+            # filaments above). Set on spool_data so per-spool overrides
+            # inherit unless they explicitly override `needs_label_print`.
+            sp_extra = spool_data.get('extra')
+            if sp_extra is None:
+                sp_extra = {}
+                spool_data['extra'] = sp_extra
+            if 'needs_label_print' not in sp_extra:
+                sp_extra['needs_label_print'] = True
 
             # Per-spool override list takes precedence over `quantity` when present.
             # Each entry shallow-merges onto spool_data, with `extra` deep-merged
@@ -1338,7 +1355,24 @@ def api_identify_scan():
         return jsonify({"type": "command", "cmd": "clear"})
 
     if not res: return jsonify({"type": "unknown"})
-    
+
+    # Item 3.6 — multiple spools share this legacy id. Surface the
+    # candidate list to the UI so the user can disambiguate rather than
+    # silently auto-picking. The picker either re-submits with an
+    # explicit `ID:NNN` (continues normal flow) or queues a new label
+    # for the chosen spool (helps unwind the ambiguity over time).
+    if res['type'] == 'ambiguous':
+        state.add_log_entry(
+            f"⚠️ Legacy ID {res.get('legacy_id', '?')} matches "
+            f"{len(res.get('candidates') or [])} spools — pick one to continue",
+            "WARNING", "ffaa00",
+        )
+        return jsonify({
+            "type": "ambiguous",
+            "legacy_id": res.get('legacy_id'),
+            "candidates": res.get('candidates') or [],
+        })
+
     if res['type'] == 'location':
         lid = res['id']; 
         items = spoolman_api.get_spools_at_location_detailed(lid)
@@ -1351,13 +1385,16 @@ def api_identify_scan():
             if source == 'barcode' and text.strip().upper().startswith('ID:'):
                 extra = data.get('extra', {})
                 raw_flag = extra.get('needs_label_print')
-                # Spoolman boolean-typed extras may arrive parsed (Python
-                # bool True/False) OR as JSON-stringified booleans
-                # ('true'/'True'/'false'); cover all forms so the dirty-
-                # flag detection survives parse_inbound_data unwrapping
-                # quirks. Item 3 regression check.
-                needs_print = raw_flag is True or raw_flag == 'true' or raw_flag == 'True'
-                if needs_print:
+                # Tri-state: True = needs print, False = positively verified,
+                # null/missing = unknown (legacy record predating the feature,
+                # or a record created via a path that didn't auto-flag).
+                # A valid scan should verify both True AND null states — only
+                # an explicit False is treated as "already verified" and
+                # short-circuits the flag flip.
+                already_verified = (
+                    raw_flag is False or raw_flag == 'false' or raw_flag == 'False'
+                )
+                if not already_verified:
                     extra['needs_label_print'] = False
                     if spoolman_api.update_spool(sid, {'extra': extra}):
                         state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
@@ -1413,8 +1450,11 @@ def api_identify_scan():
             if source == 'barcode' and text.strip().upper().startswith('FIL:'):
                 extra = data.get('extra', {})
                 raw_flag = extra.get('needs_label_print')
-                needs_print = raw_flag is True or raw_flag == 'true' or raw_flag == 'True'
-                if needs_print:
+                # Tri-state semantics — see spool branch above for rationale.
+                already_verified = (
+                    raw_flag is False or raw_flag == 'false' or raw_flag == 'False'
+                )
+                if not already_verified:
                     extra['needs_label_print'] = False
                     if spoolman_api.update_filament(fid, {'extra': extra}):
                         state.add_log_entry(f"✔️ Filament #{fid} Label & Sample Verified", "SUCCESS", "00ff00")

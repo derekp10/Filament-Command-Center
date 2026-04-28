@@ -57,7 +57,7 @@ window.addToQueue = (item) => {
 // Generic toast wrapper for single adds if needed
 window.addToQueueWithToast = (item) => {
     if (addToQueue(item)) showToast(`Added ${item.type} to Print Queue`);
-    else showToast("⚠️ Already in Queue", "warning");
+    else showToast("Label already in queue", "info", 4000);
 }
 
 window.openQueueModal = () => {
