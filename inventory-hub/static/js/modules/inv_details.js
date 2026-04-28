@@ -774,7 +774,18 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId) => {
         focusConfirm: false,
         didOpen: () => {
             const wtEl = Swal.getPopup().querySelector('#fcc-archive-empty-wt');
-            if (wtEl) wtEl.focus();
+            if (wtEl) {
+                wtEl.focus();
+                // L46: Swal2 doesn't auto-bind Enter to confirm when preConfirm
+                // is wired up — surface our own keydown handler so the user
+                // can submit by pressing Enter from the input.
+                wtEl.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        Swal.clickConfirm();
+                    }
+                });
+            }
         },
         preConfirm: () => {
             const raw = Swal.getPopup().querySelector('#fcc-archive-empty-wt')?.value;

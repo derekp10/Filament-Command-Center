@@ -13,18 +13,45 @@ let wizardState = {
     forceClose: false  // set true to bypass the dirty guard when we want to programmatically close
 };
 
-// Empty-spool-weight inheritance: Spool > Filament > Vendor (manufacturer).
-// Treats null / undefined / 0 as "unset" so the next level in the chain wins.
-// A vendor value entered in Spoolman flows down and auto-populates blank spool
-// and filament fields instead of surfacing as 0.
-function resolveEmptySpoolWeight({ spoolWt, filamentWt, vendor } = {}) {
-    const has = (v) => v !== null && v !== undefined && v !== '' && Number(v) > 0;
-    if (has(spoolWt)) return Number(spoolWt);
-    if (has(filamentWt)) return Number(filamentWt);
-    if (vendor && has(vendor.empty_spool_weight)) return Number(vendor.empty_spool_weight);
-    return null;
-}
-window.resolveEmptySpoolWeight = resolveEmptySpoolWeight;
+// Empty-spool-weight inheritance helper (resolveEmptySpoolWeight) lives in
+// modules/weight_utils.js — loaded before this module in scripts.html and
+// exposed as window.resolveEmptySpoolWeight so the bare calls below resolve
+// against the global. See weight_utils.js for the cascade rules.
+
+// --- INHERITANCE BADGE FOR wiz-spool-empty_weight FIELD ---
+// L34 (Phase 1): when a wizard open flow inherits the spool's empty weight
+// from the parent filament/vendor, surface a small badge next to the field so
+// the user can see where the value came from and that typing will override it.
+// Setting source='spool' or null hides the badge — only filament/vendor
+// inheritance is worth flagging.
+window.wizardSetSpoolEmptyWeightInherited = (value, source) => {
+    const inputEl = document.getElementById('wiz-spool-empty_weight');
+    const badge = document.getElementById('wiz-spool-empty-inherited-badge');
+    const sourceEl = document.getElementById('wiz-spool-empty-inherited-source');
+    if (!inputEl) return;
+    inputEl.value = (value !== null && value !== undefined) ? value : '';
+    if (badge && sourceEl && (source === 'filament' || source === 'vendor')) {
+        sourceEl.textContent = source;
+        badge.style.display = '';
+    } else if (badge) {
+        badge.style.display = 'none';
+    }
+};
+
+window.wizardClearSpoolEmptyWeightBadge = () => {
+    const badge = document.getElementById('wiz-spool-empty-inherited-badge');
+    if (badge) badge.style.display = 'none';
+};
+
+// Auto-clear the badge the moment the user edits the field directly.
+// inv_wizard.js loads after the wizard markup is in the DOM (per scripts.html).
+(function() {
+    const inputEl = document.getElementById('wiz-spool-empty_weight');
+    if (!inputEl) return;
+    inputEl.addEventListener('input', () => {
+        window.wizardClearSpoolEmptyWeightBadge();
+    });
+})();
 
 // --- WIZARD CLOSE → RE-OPEN DETAIL MODAL ---
 // Register immediately — this script loads after the DOM is fully parsed.
@@ -132,6 +159,7 @@ const wizardReset = () => {
     document.querySelectorAll('#wizardModal input[type="text"], #wizardModal input[type="number"]').forEach(i => i.value = '');
     document.querySelectorAll('#wizardModal input[type="checkbox"]').forEach(i => i.checked = false);
     document.querySelectorAll('#wizardModal select').forEach(i => i.selectedIndex = 0);
+    if (window.wizardClearSpoolEmptyWeightBadge) window.wizardClearSpoolEmptyWeightBadge();
 
     // Reset Color UI
     document.getElementById('wiz-fil-color-extra-container').innerHTML = '';
@@ -1859,12 +1887,12 @@ window.openCloneWizard = async (spoolId) => {
             }
             // Spool Weight: walk Spool → Filament → Vendor so a clone picks up whichever level is populated.
             {
-                const resolved = resolveEmptySpoolWeight({
+                const { value, source } = resolveEmptySpoolWeightSource({
                     spoolWt: d.spool_weight,
                     filamentWt: d.filament?.spool_weight,
                     vendor: d.filament?.vendor,
                 });
-                document.getElementById('wiz-spool-empty_weight').value = resolved !== null ? resolved : "";
+                window.wizardSetSpoolEmptyWeightInherited(value, source);
             }
             document.getElementById('wiz-spool-used').value = 0; // Fresh spool is usually 0
             document.getElementById('wiz-spool-comment').value = d.comment || "";
@@ -1925,6 +1953,19 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = false;
             }
+
+            // L34: pre-fill spool empty-weight from filament/vendor cascade on
+            // open. New spools have no spool_weight of their own yet, so the
+            // resolved source will be 'filament' or 'vendor' — show the badge
+            // so the user knows where the value came from.
+            {
+                const { value, source } = resolveEmptySpoolWeightSource({
+                    filamentWt: d.spool_weight,
+                    vendor: d.vendor,
+                });
+                window.wizardSetSpoolEmptyWeightInherited(value, source);
+            }
+
             window.wizardCalcRemainingFromUsed();
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Filament #${filamentId}.</span>`;
@@ -2086,12 +2127,12 @@ window.openEditWizard = async (spoolId) => {
             {
                 // Walk the chain: spool → filament → vendor. A blank spool inherits
                 // from its filament, then its manufacturer's empty_spool_weight.
-                const resolved = resolveEmptySpoolWeight({
+                const { value, source } = resolveEmptySpoolWeightSource({
                     spoolWt: d.spool_weight,
                     filamentWt: d.filament?.spool_weight,
                     vendor: d.filament?.vendor,
                 });
-                document.getElementById('wiz-spool-empty_weight').value = resolved !== null ? resolved : "";
+                window.wizardSetSpoolEmptyWeightInherited(value, source);
             }
             document.getElementById('wiz-spool-initial_weight').value = d.initial_weight !== null ? d.initial_weight : "";
             document.getElementById('wiz-spool-used').value = d.used_weight || 0;

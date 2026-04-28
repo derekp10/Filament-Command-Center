@@ -242,3 +242,80 @@ def test_archive_empty_weight_prompt_validates_weight(page: Page):
     page.locator(".swal2-confirm").click()
     validation = page.locator(".swal2-validation-message")
     expect(validation).to_be_visible()
+
+
+def test_archive_empty_weight_prompt_enter_key_submits(page: Page):
+    """L46: Enter key from the input should submit the prompt (no mouse needed)."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.showArchiveEmptyWeightPrompt === 'function'")
+
+    page.evaluate(
+        """
+        window.__updateFilamentPayload = null;
+        const origFetch = window.fetch;
+        window.fetch = async (url, opts) => {
+            const u = typeof url === 'string' ? url : (url && url.url) || '';
+            if (u.startsWith('/api/filament_details')) {
+                return new Response(JSON.stringify({
+                    id: 7, name: 'Crimson Red', material: 'PLA',
+                    spool_weight: null, vendor: { id: 1, name: 'CC3D' }
+                }), { status: 200, headers: {'Content-Type': 'application/json'} });
+            }
+            if (u === '/api/update_filament') {
+                window.__updateFilamentPayload = JSON.parse(opts.body);
+                return new Response(JSON.stringify({ success: true, filament: { id: 7 } }),
+                    { status: 200, headers: {'Content-Type': 'application/json'} });
+            }
+            return origFetch(url, opts);
+        };
+        """
+    )
+
+    page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 7); }")
+    page.wait_for_selector("#fcc-archive-empty-wt", state="visible", timeout=3_000)
+
+    # Type a weight then submit via Enter — no mouse click on the confirm button.
+    field = page.locator("#fcc-archive-empty-wt")
+    field.fill("168")
+    field.press("Enter")
+
+    page.wait_for_function("window.__updateFilamentPayload !== null", timeout=3_000)
+    payload = page.evaluate("() => window.__updateFilamentPayload")
+    assert payload == {"id": 7, "data": {"spool_weight": 168}}
+
+
+def test_archive_empty_weight_prompt_enter_with_blank_input_validates(page: Page):
+    """L46 corollary: Enter on a blank input must trigger validation, not save."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.showArchiveEmptyWeightPrompt === 'function'")
+
+    page.evaluate(
+        """
+        window.__updateFilamentPayload = null;
+        const origFetch = window.fetch;
+        window.fetch = async (url, opts) => {
+            const u = typeof url === 'string' ? url : (url && url.url) || '';
+            if (u.startsWith('/api/filament_details')) {
+                return new Response(JSON.stringify({ id: 7, name: 'X', material: 'PLA', vendor: {} }),
+                    { status: 200, headers: {'Content-Type': 'application/json'} });
+            }
+            if (u === '/api/update_filament') {
+                window.__updateFilamentPayload = JSON.parse(opts.body);
+                return new Response(JSON.stringify({ success: true }), { status: 200 });
+            }
+            return origFetch(url, opts);
+        };
+        """
+    )
+
+    page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 7); }")
+    page.wait_for_selector("#fcc-archive-empty-wt", state="visible", timeout=3_000)
+
+    # Press Enter without filling — validation should fire and no POST should run.
+    page.locator("#fcc-archive-empty-wt").press("Enter")
+    validation = page.locator(".swal2-validation-message")
+    expect(validation).to_be_visible()
+    payload = page.evaluate("() => window.__updateFilamentPayload")
+    assert payload is None
