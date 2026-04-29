@@ -27,23 +27,23 @@ Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 **What:** If no location is provided, newly created spools should default to "Unassigned" rather than requiring explicit selection.
 
 ### 10.4 — Consolidate duplicate purchase link fields
-**Buglist ref:** L152
+**Buglist ref:** L160
 **What:** Two purchase links exist — one inherited from filament, one on the spool. Need to consolidate to one field or implement smart fallback (prefer spool-specific, fall back to filament). One field doesn't clear between usages.
 
 ### 10.5 — New slicer profile should auto-add to current filament
-**Buglist ref:** L153
+**Buglist ref:** L161
 **What:** Creating a new slicer profile from within the wizard should auto-associate it with the filament being edited.
 
 ### 10.6 — Spoolman field ordering bug
-**Buglist ref:** L154
+**Buglist ref:** L162
 **What:** Custom fields move around when modified or when new items are added. Need to lock down field order.
 
 ### 10.7 — Maintain multi-spool creation ability
-**Buglist ref:** L150
+**Buglist ref:** L158
 **What:** Guard/verify that the ability to add multiple spools of the same type at once still works after any wizard changes.
 
 ### 10.8 — SweetAlert2 nested modal audit
-**Buglist ref:** L155
+**Buglist ref:** L163
 **What:** Audit existing code for nested `Swal.fire()` calls and replace with inline overlay divs per project convention.
 
 **Primary file:** `inventory-hub/static/js/modules/inv_wizard.js` (144KB)
@@ -51,7 +51,7 @@ Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 **Backend:** `inventory-hub/app.py` — wizard endpoints
 
 ### 10.9 — Filament-attributes input validation (prevention guards)
-**Buglist ref:** L211–L229
+**Buglist ref:** L219–L237
 **What:** The filament-attributes choice list has dead/bogus entries (`Tran`, `F`, `Carbon-Fiber`, etc.) created by unchecked input. Spoolman makes new choices permanent — removal requires a destructive snapshot-restore migration. Prevention guards in the wizard's "+ Add new attribute" flow will stop new garbage entries from being created.
 
 **Guards to implement:**
@@ -71,6 +71,19 @@ Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 - [ ] Fuzzy-match prompt fires for near-duplicates
 - [ ] Two-step confirm before a new choice is committed to Spoolman
 - [ ] Existing choices can still be selected without any prompt
+
+### 10.10 — Location search box should show all locations after selection
+**Buglist ref:** L129
+**What:** Once a valid location is selected or loaded in the wizard, the location search/combobox should display the full location list (not filter it down). Same fix should propagate to all other location search text boxes in the app.
+
+**Files:**
+- `inventory-hub/static/js/modules/inv_wizard.js` — wizard location combobox
+- Any other location search/combobox instances
+
+**Acceptance criteria:**
+- [ ] Selecting a location in the wizard doesn't permanently filter the dropdown
+- [ ] Full location list is accessible after a selection is made
+- [ ] Consistent behavior across all location search boxes
 
 ## Dependencies
 

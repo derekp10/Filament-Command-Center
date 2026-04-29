@@ -67,7 +67,7 @@ Close out the unreachable filament-archive feature, add a symmetric spool auto-u
 - [ ] Deleted items are removed from all UI views immediately
 
 ### 4.4 — Clean up filament attributes [DEFERRED 2026-04-28]
-**Buglist ref:** L211 (audit results captured there)
+**Buglist ref:** L219 (audit results captured there)
 **What:** Audit completed; deferred to a follow-up branch. Spoolman blocks per-choice removal via POST (`"Cannot remove existing choices"`), so the cleanup requires the heavy snapshot-restore migration pattern. Cost-vs-benefit favors deferring — the dead choices are unused (no broken data), just dropdown clutter.
 
 **Status:**
