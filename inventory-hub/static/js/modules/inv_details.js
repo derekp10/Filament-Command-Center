@@ -1814,3 +1814,257 @@ window.openEditFilamentForm = (fil) => {
 window.openAddFilamentForm = () => {
     _editfilOpenModal(null);
 };
+
+
+// ----------------------------------------------------------------------
+// Buried delete UI (gear-icon dropdown → inline overlay double-confirm).
+// No nested Swal per CLAUDE.md project conventions.
+// ----------------------------------------------------------------------
+
+const FCC_DELETE_OVERLAY_BASE_STYLE =
+    'position:absolute; inset:0; z-index:1100; ' +
+    'background:rgba(0,0,0,0.92); border-radius:inherit; ' +
+    'display:flex; flex-direction:column; align-items:center; justify-content:center; ' +
+    'gap:14px; padding:32px; text-align:center;';
+
+const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel, onConfirm }) => {
+    overlay.style.cssText = FCC_DELETE_OVERLAY_BASE_STYLE;
+    overlay.style.display = 'flex';
+    const inputId = `${overlay.id}-input`;
+    const errId = `${overlay.id}-err`;
+    overlay.innerHTML = `
+        <div style="font-size:1.3em; font-weight:bold; color:#ff8888;">${title}</div>
+        <div style="color:#ddd; font-size:0.95em; max-width:480px;">${body}</div>
+        ${requireText ? `
+            <div style="display:flex; flex-direction:column; gap:6px; align-items:center;">
+                <label for="${inputId}" style="color:#aaa; font-size:0.85em;">
+                    Type <code style="color:#ffaa55;">${requireText}</code> to confirm:
+                </label>
+                <input id="${inputId}" type="text" autocomplete="off"
+                    style="font-family:monospace; padding:6px 10px; min-width:240px; text-align:center; border:1px solid #555; border-radius:4px; background:#222; color:#fff;" />
+                <div id="${errId}" style="color:#ff5555; font-size:0.8em; min-height:1em;"></div>
+            </div>
+        ` : ''}
+        <div style="display:flex; gap:10px; margin-top:6px;">
+            <button class="btn btn-danger fw-bold" data-fcc-delete-confirm style="min-width:140px;">${confirmLabel}</button>
+            <button class="btn btn-secondary" data-fcc-delete-cancel style="min-width:120px;">Cancel</button>
+        </div>
+    `;
+    const cancelBtn = overlay.querySelector('[data-fcc-delete-cancel]');
+    const confirmBtn = overlay.querySelector('[data-fcc-delete-confirm]');
+    const input = requireText ? overlay.querySelector(`#${inputId}`) : null;
+    const errEl = requireText ? overlay.querySelector(`#${errId}`) : null;
+
+    // Suspend Bootstrap's modal Escape dismiss while the overlay is showing,
+    // so Escape only closes the overlay (not the underlying modal). Restored
+    // in close() below.
+    const modalElForKbd = overlay.closest('.modal');
+    let bsModalInst = null;
+    let bsModalKeyboardWas = null;
+    if (modalElForKbd && typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+        bsModalInst = bootstrap.Modal.getInstance(modalElForKbd);
+        if (bsModalInst && bsModalInst._config) {
+            bsModalKeyboardWas = bsModalInst._config.keyboard;
+            bsModalInst._config.keyboard = false;
+        }
+    }
+    const close = () => {
+        overlay.style.display = 'none';
+        overlay.innerHTML = '';
+        if (bsModalInst && bsModalInst._config && bsModalKeyboardWas !== null) {
+            bsModalInst._config.keyboard = bsModalKeyboardWas;
+        }
+    };
+    cancelBtn.addEventListener('click', close);
+    confirmBtn.addEventListener('click', async () => {
+        if (requireText) {
+            if ((input.value || '').trim() !== requireText) {
+                if (errEl) errEl.textContent = `Doesn't match — type ${requireText} exactly.`;
+                input.focus();
+                input.select();
+                return;
+            }
+        }
+        confirmBtn.disabled = true;
+        cancelBtn.disabled = true;
+        // onConfirm is responsible for closing the overlay on completion.
+        // Some callbacks re-render the overlay (Step 1 → Step 2 transition) —
+        // auto-closing here would nuke the just-rendered next step.
+        await onConfirm();
+    });
+    if (input) {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                confirmBtn.click();
+            }
+        });
+        setTimeout(() => input.focus(), 0);
+    } else {
+        setTimeout(() => cancelBtn.focus(), 0);
+    }
+    // Escape on the overlay also cancels. Register on:
+    //   1. The closest .modal element at capture phase — Bootstrap's modal
+    //      keyboard handler is bound on the modal element itself, so this
+    //      catches Escape before Bootstrap sees it.
+    //   2. document as a fallback for keystrokes that arrive while focus is
+    //      somehow outside the modal.
+    // Both call stopImmediatePropagation so Bootstrap's modal-dismiss path
+    // never runs while the overlay is showing.
+    const modalEl = overlay.closest('.modal');
+    const escHandler = (e) => {
+        if (e.key !== 'Escape') return;
+        if (overlay.style.display === 'none') return;
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        close();
+        if (modalEl) modalEl.removeEventListener('keydown', escHandler, true);
+        document.removeEventListener('keydown', escHandler, true);
+    };
+    if (modalEl) modalEl.addEventListener('keydown', escHandler, true);
+    document.addEventListener('keydown', escHandler, true);
+};
+
+const _showDeleteSpoolFlow = (spoolId) => {
+    const overlay = document.getElementById('fcc-spool-delete-overlay');
+    if (!overlay || !spoolId) return;
+    // Step 1 — broad warning, no type-to-confirm.
+    _renderDeleteOverlay(overlay, {
+        title: '⚠️ Delete this spool?',
+        body: `This will permanently delete <strong>Spool #${spoolId}</strong> from Spoolman. This action cannot be undone.`,
+        requireText: null,
+        confirmLabel: 'Continue →',
+        onConfirm: async () => {
+            // Step 2 — type-the-id confirmation.
+            _renderDeleteOverlay(overlay, {
+                title: '🗑️ Final confirmation',
+                body: `Type the spool ID to confirm permanent deletion of <strong>Spool #${spoolId}</strong>.`,
+                requireText: String(spoolId),
+                confirmLabel: 'Delete forever',
+                onConfirm: async () => {
+                    try {
+                        const r = await fetch(`/api/spool/${spoolId}`, { method: 'DELETE' });
+                        const j = await r.json().catch(() => ({}));
+                        if (!r.ok || !j.success) {
+                            const err = (j && j.error) || `HTTP ${r.status}`;
+                            showToast(`Delete failed: ${err}`, 'error', 7000);
+                            return;
+                        }
+                        showToast(`Spool #${spoolId} deleted`, 'success', 4000);
+                        if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
+                        document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+                    } catch (e) {
+                        showToast(`Delete failed: ${e.message || e}`, 'error', 7000);
+                    }
+                },
+            });
+        },
+    });
+};
+
+const _showDeleteFilamentFlow = (filamentId, childSpoolCount) => {
+    const overlay = document.getElementById('fcc-filament-delete-overlay');
+    if (!overlay || !filamentId) return;
+    const cascadeNote = childSpoolCount > 0
+        ? `<div style="color:#ffaa55; font-weight:bold;">⚠️ This filament has ${childSpoolCount} spool${childSpoolCount === 1 ? '' : 's'}. Deleting it will also permanently delete ${childSpoolCount === 1 ? 'that spool' : 'all of them'}.</div>`
+        : '';
+    _renderDeleteOverlay(overlay, {
+        title: '⚠️ Delete this filament?',
+        body: `${cascadeNote}<div style="margin-top:8px;">This will permanently delete <strong>Filament #${filamentId}</strong> from Spoolman. This action cannot be undone.</div>`,
+        requireText: null,
+        confirmLabel: 'Continue →',
+        onConfirm: async () => {
+            const requireText = childSpoolCount > 0 ? 'CONFIRM' : String(filamentId);
+            _renderDeleteOverlay(overlay, {
+                title: '🗑️ Final confirmation',
+                body: childSpoolCount > 0
+                    ? `Cascade delete will remove <strong>Filament #${filamentId}</strong> and its <strong>${childSpoolCount}</strong> child spool${childSpoolCount === 1 ? '' : 's'}.`
+                    : `Type the filament ID to confirm permanent deletion of <strong>Filament #${filamentId}</strong>.`,
+                requireText,
+                confirmLabel: 'Delete forever',
+                onConfirm: async () => {
+                    try {
+                        const r = await fetch(`/api/filament/${filamentId}`, { method: 'DELETE' });
+                        const j = await r.json().catch(() => ({}));
+                        if (!r.ok || !j.success) {
+                            const err = (j && j.error) || `HTTP ${r.status}`;
+                            showToast(`Delete failed: ${err}`, 'error', 7000);
+                            return;
+                        }
+                        const cascade = (j.deleted_spool_ids || []).length;
+                        const msg = cascade > 0
+                            ? `Filament #${filamentId} deleted (${cascade} child spool${cascade === 1 ? '' : 's'} too)`
+                            : `Filament #${filamentId} deleted`;
+                        showToast(msg, 'success', 4000);
+                        if (typeof modals !== 'undefined' && modals.filamentModal) modals.filamentModal.hide();
+                        document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+                    } catch (e) {
+                        showToast(`Delete failed: ${e.message || e}`, 'error', 7000);
+                    }
+                },
+            });
+        },
+    });
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+    const spoolDel = document.getElementById('btn-spool-delete');
+    if (spoolDel) {
+        spoolDel.addEventListener('click', () => {
+            const sid = (document.getElementById('detail-id') || {}).innerText;
+            if (sid) _showDeleteSpoolFlow(sid);
+        });
+    }
+    const filDel = document.getElementById('btn-fil-delete');
+    if (filDel) {
+        filDel.addEventListener('click', async () => {
+            const fidEl = document.getElementById('fil-detail-id');
+            const fid = fidEl ? (fidEl.innerText || '').trim() : '';
+            if (!fid) return;
+            // Get the truthful child-spool count (including archived) so
+            // the cascade prompt reflects what the backend will actually
+            // delete — not what the "show archived" toggle is currently
+            // showing.
+            let childCount = 0;
+            try {
+                const r = await fetch(`/api/spools_by_filament?id=${fid}&allow_archived=true`);
+                const spools = await r.json();
+                if (Array.isArray(spools)) childCount = spools.length;
+            } catch (_e) {
+                // If the count fetch fails, fall back to the visible badge — the
+                // server will still cascade correctly, the prompt's number is
+                // just informational.
+                const countEl = document.getElementById('fil-spool-count');
+                childCount = countEl ? parseInt(countEl.innerText || '0', 10) || 0 : 0;
+            }
+            _showDeleteFilamentFlow(fid, childCount);
+        });
+    }
+    // Hide overlays when their parent modal closes (prevents stranded
+    // overlay state if the user ⛶ closes the modal mid-flow).
+    // Also re-implement Escape-to-close on the modal here, since the modals
+    // ship with `data-bs-keyboard="false"` to keep Bootstrap from racing
+    // the delete overlay's own Escape handler. When no overlay is showing,
+    // Escape on the modal closes it (preserves the prior UX).
+    ['spoolModal', 'filamentModal'].forEach((mid) => {
+        const m = document.getElementById(mid);
+        if (!m) return;
+        const overlayId = mid === 'spoolModal' ? 'fcc-spool-delete-overlay' : 'fcc-filament-delete-overlay';
+        m.addEventListener('hidden.bs.modal', () => {
+            const ov = document.getElementById(overlayId);
+            if (ov) {
+                ov.style.display = 'none';
+                ov.innerHTML = '';
+            }
+        });
+        m.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            const ov = document.getElementById(overlayId);
+            if (ov && ov.style.display !== 'none') return; // overlay's own handler runs
+            if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                const inst = bootstrap.Modal.getInstance(m);
+                if (inst) inst.hide();
+            }
+        });
+    });
+});

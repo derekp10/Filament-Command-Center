@@ -6,37 +6,41 @@
 
 ## Goal
 
-Fix the broken Spoolman filament archiving, unblock the auto-unarchive feature, add delete capability with safety rails, and clean up duplicate/malformed filament attributes.
+Close out the unreachable filament-archive feature, add a symmetric spool auto-unarchive on weight refill, add delete capability with safety rails, and clean up duplicate/malformed filament attributes.
 
 ## Items to Complete
 
-### 4.1 — [IMPORTANT] Spoolman filament archiving is broken
-**Buglist ref:** L3
-**What:** `PATCH /api/v1/filament/<id>` with `{"archived": true}` returns 200 but the flag is silently dropped. Spoolman never reports `archived: true` on filaments (only spools).
+### 4.1 — Filament archive is a non-feature — remove dead code [DONE 2026-04-28]
+**Buglist ref:** L3 (closed in `completed-archive.md`)
+**What:** Spoolman silently drops `archived: true` on filaments and exposes no UI for filament archiving. Per Derek 2026-04-28, filament-level archiving is not a feature FCC needs (the "0 spools" use case is covered by search).
 
-**Investigation steps:**
-1. Check the installed Spoolman version — does it support filament archival?
-2. If not supported: implement archive tracking via a custom `extra` field (e.g., `extra.fcc_archived`)
-3. If supported on newer version: document the upgrade path
+**Done:**
+- [x] Removed unreachable auto-unarchive branch in `app.py:api_create_inventory_wizard`
+- [x] Deleted always-skipped `test_wizard_ux_polish.py::test_create_spool_auto_unarchives_parent_filament`
+- [x] Closed L3 in `Feature-Buglist.md`; close-out note in `completed-archive.md`
+- [x] Reworded L18 in place to capture the spool-side recovery (4.2 below)
+
+### 4.2 — Spool auto-unarchive on weight refill (re-scoped from L18)
+**Buglist ref:** L18
+**What:** When an archived spool gets a weight write that pushes `remaining_weight` back above 0 (typo recovery, mid-print weigh-out correction, etc.), automatically un-archive the spool. The 0g auto-archive in `spoolman_api._auto_archive_on_empty` already does the inverse direction — this adds the symmetric path so the user never has to bounce into Spoolman to recover.
+
+**Design:**
+- Always-on (no UI toggle) — refilling an archived spool means you want it active.
+- Mirror the shape of `_auto_archive_on_empty`: a sibling `_auto_unarchive_on_refill` that mutates `data` to set `archived: False` when `remaining > 0` AND `existing.archived is True`.
+- If a pre-archive location breadcrumb exists, restore it; otherwise leave at UNASSIGNED. Watch out for hard-unassign code paths that intentionally clear location — those should NOT plant a breadcrumb.
+- Activity log entry mirroring the auto-archive log: `📤 Auto-unarchived Spool #N (weight refilled to Xg)`.
+- Wire-up via `update_spool` so every weight-write surface (weigh-out, wizard, FilaBridge manual recovery, backfill, etc.) inherits the behavior for free.
 
 **Files:**
-- `inventory-hub/spoolman_api.py` — `update_filament()` archive call
-- `inventory-hub/app.py` — `api_create_inventory_wizard` auto-unarchive logic
+- `inventory-hub/spoolman_api.py` — new `_auto_unarchive_on_refill` helper, called from `update_spool` near the existing auto-archive call.
+- `inventory-hub/app.py` — surface the un-archive verdict in the wizard-edit response if useful for toasts.
 
 **Acceptance criteria:**
-- [ ] Filament archive state is trackable (either via native Spoolman or custom extra field)
-- [ ] `test_wizard_ux_polish.py::test_create_spool_auto_unarchives_parent_filament` passes (currently skipped)
-
-### 4.2 — Auto-unarchive when adding filament to archived filament
-**Buglist ref:** L18
-**What:** Adding a spool to an archived filament should automatically unarchive that filament. Code is already in place at `app.py:api_create_inventory_wizard` but is unreachable because of 4.1.
-
-**Blocked by:** 4.1 — once archive tracking works, this should "just work." Verify and test.
-
-**Acceptance criteria:**
-- [ ] Creating a spool under an archived filament auto-unarchives the filament
+- [ ] Setting `used_weight` such that `remaining > 0` on an archived spool flips `archived: false` automatically
 - [ ] Activity log records the auto-unarchive
-- [ ] Toast confirms: "Parent filament was automatically unarchived"
+- [ ] Toast confirms via existing wizard/weigh-out response shape (no new modal needed)
+- [ ] Pre-archive location breadcrumb restored when present; UNASSIGNED otherwise
+- [ ] Auto-archive direction unchanged (regression test)
 
 ### 4.3 — Delete spools and filaments in UI
 **Buglist ref:** L56
@@ -62,18 +66,13 @@ Fix the broken Spoolman filament archiving, unblock the auto-unarchive feature, 
 - [ ] Activity log records deletions
 - [ ] Deleted items are removed from all UI views immediately
 
-### 4.4 — Clean up filament attributes
-**Buglist ref:** L160
-**What:** Duplicate/inconsistent filament attributes exist (e.g., "Carbon-Fiber" vs "Carbon Fiber", "X;Y" items). Requires `setup_fields.py` changes.
+### 4.4 — Clean up filament attributes [DEFERRED 2026-04-28]
+**Buglist ref:** L222 (audit results captured there)
+**What:** Audit completed; deferred to a follow-up branch. Spoolman blocks per-choice removal via POST (`"Cannot remove existing choices"`), so the cleanup requires the heavy snapshot-restore migration pattern. Cost-vs-benefit favors deferring — the dead choices are unused (no broken data), just dropdown clutter.
 
-**Files:**
-- `inventory-hub/setup_fields.py` (or equivalent field configuration)
-- Document current duplicates before fixing
-
-**Acceptance criteria:**
-- [ ] Audit of all filament attribute values completed
-- [ ] Duplicates consolidated (with value migration for existing records)
-- [ ] No data loss during consolidation
+**Status:**
+- [x] Audit of all filament attribute values completed (5 confirmed dead, 1 keep, 2 needing investigation)
+- [ ] Migration deferred — see updated buglist entry for confirmed-safe-to-delete list and the migration template (`migrate_container_slot_to_text`)
 
 ## Testing Checklist
 

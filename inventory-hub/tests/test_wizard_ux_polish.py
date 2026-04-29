@@ -2,12 +2,10 @@
 Tests for the Wizard UX Polish bundle (feature/wizard-ux-polish):
   - FID/SID badges in the modal title + Step 2 / Step 3 headers
   - Vendor and Location searchable combobox (keyboard filter + arrow/Enter)
-  - Auto-unarchive parent filament when a spool is added via
-    /api/create_inventory_wizard
   - Nested Swal replaced by toast in wizardPromptNewChoice
 
-Only hits the API for the auto-unarchive assertion; UI assertions use the
-seeded container.
+UI assertions use the seeded container; a few use the search API to find
+a real spool to drive the edit wizard.
 """
 from __future__ import annotations
 
@@ -150,82 +148,3 @@ def test_location_combobox_enter_selects(page: Page):
     # Visible input should show the matching Name
     expected_label = opts.nth(1).get_attribute("data-label") or ""
     expect(search).to_have_value(expected_label)
-
-
-# --- Auto-unarchive parent filament -----------------------------------------
-
-def test_create_spool_auto_unarchives_parent_filament(api_base_url: str):
-    """POST to /api/create_inventory_wizard with an archived filament_id should
-    auto-unarchive the filament and succeed."""
-    # Find any filament we can test against
-    r = requests.get(f"{api_base_url}/api/filaments", timeout=5)
-    if not r.ok:
-        pytest.skip("filaments API unavailable")
-    payload = r.json()
-    filaments = payload.get("filaments") or []
-    if not filaments:
-        pytest.skip("no filaments to test against")
-    target = filaments[0]
-    fid = target["id"]
-
-    # Drive Spoolman directly for archive/unarchive assertions — inventory-hub
-    # doesn't expose a direct archive toggle. Dev Spoolman per CLAUDE.md:
-    SPOOLMAN = "http://192.168.1.29:7913"
-    # Archive the filament
-    try:
-        arch = requests.patch(
-            f"{SPOOLMAN}/api/v1/filament/{fid}", json={"archived": True}, timeout=5
-        )
-    except requests.exceptions.RequestException:
-        pytest.skip("Spoolman dev instance unreachable")
-    if not arch.ok:
-        pytest.skip(f"couldn't archive test filament: {arch.status_code}")
-
-    try:
-        # Sanity: confirm the archive took. Some Spoolman versions silently drop
-        # the `archived` flag on filaments (only spools are archivable), returning
-        # 200 with no effect. When that happens, skip — auto-unarchive is still
-        # correct code, there's just no way to drive it end-to-end.
-        pre = requests.get(f"{SPOOLMAN}/api/v1/filament/{fid}", timeout=5).json()
-        if not pre.get("archived"):
-            pytest.skip(
-                f"Spoolman {SPOOLMAN} doesn't support filament archiving "
-                "(PATCH archived=True had no effect); auto-unarchive path "
-                "cannot be exercised end-to-end on this instance."
-            )
-
-        # Create a new spool on the archived filament via the wizard endpoint
-        body = {
-            "filament_id": fid,
-            "spool_data": {
-                "used_weight": 0,
-                "location": "",
-            },
-            "quantity": 1,
-        }
-        resp = requests.post(
-            f"{api_base_url}/api/create_inventory_wizard", json=body, timeout=10
-        )
-        assert resp.ok, resp.text
-        result = resp.json()
-        assert result.get("success"), result
-
-        # Filament should now be un-archived. Spoolman returns either
-        # archived=False or omits the field entirely when it's falsy, so accept
-        # both as "unarchived".
-        after = requests.get(f"{SPOOLMAN}/api/v1/filament/{fid}", timeout=5).json()
-        assert not after.get("archived"), (
-            f"Expected filament {fid} to be un-archived after spool add, "
-            f"got archived={after.get('archived')!r}"
-        )
-
-        # Cleanup: delete the spool we just created (best-effort)
-        for sid in result.get("created_spools", []) or []:
-            requests.delete(f"{SPOOLMAN}/api/v1/spool/{sid}", timeout=5)
-    finally:
-        # Restore original archived state (safety net if test bails above)
-        requests.patch(
-            f"{SPOOLMAN}/api/v1/filament/{fid}",
-            json={"archived": bool(target.get("archived", False))},
-            timeout=5,
-        )

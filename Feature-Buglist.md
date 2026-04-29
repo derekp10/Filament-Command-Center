@@ -1,6 +1,8 @@
 # **New and Unsorted Features/Bugs**
 
-* **[IMPORTANT]** Spoolman filament archiving is broken on the installed version — `PATCH /api/v1/filament/<id>` with `{"archived": true}` returns 200 but the flag is silently dropped; subsequent GETs never include the `archived` key on filaments (only spools). Dev and prod point at the same Spoolman. Impact: the wizard's auto-unarchive code (`inventory-hub/app.py` in `api_create_inventory_wizard`, added 2026-04-22) correctly calls `spoolman_api.update_filament(fid, {'archived': False})` whenever the parent filament looks archived — but that branch is effectively unreachable today because Spoolman never reports `archived: true` on a filament. `test_wizard_ux_polish.py::test_create_spool_auto_unarchives_parent_filament` skips on this basis. Next steps: (a) check whether Spoolman supports filament archival on a newer version and upgrade, or (b) track archive state on the filament via a custom `extra` field instead of the native flag. Related active-backlog entry: "Adding filament to an archived filament should automatically unarchive the filament" — code is in place, blocked on Spoolman support.
+
+
+
 
 
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop. _[ON HOLD — OS-level power management, not fixable in app code. Candidate mitigations if we care: Wake Lock API (`navigator.wakeLock.request('screen')`) gated behind a toggle in the nav bar; only works when the tab is foreground. Worth considering if we add a kiosk/shop-floor mode.]_
@@ -14,8 +16,6 @@
 
 * Check why FIL:58 wasn't marked as labeled when scanned. The `label_printed` field was retired in M7 and replaced with `needs_label_print` (boolean) — barcode-scan path now updates this field at `app.py:921-922, 968-969`. The FIL:58 case specifically needs manual repro to see whether the update fires and why Activity Log was silent. Could be because FIL:58 is an old physical swatch with no prior spoolman state. _[ON HOLD — need to locate or reprint the FIL:58 physical label/swatch before repro can be attempted. When found: scan with DevTools open → Network tab → `/api/identify_scan` response + Activity Log ticker.]_
 
-
-* Adding filament to an archived filament should automatically unarchive the filament.
 
 * Sub-bug: "Display modal on Display modal" — suspect this is the filament→spool chain at [inv_details.js:304](inventory-hub/static/js/modules/inv_details.js#L304) interacting with the silent-refresh paths at lines 386/395. Needs its own reproduction trace before fixing. _[NEEDS REPRO — exact trigger scenario is not currently remembered. When encountered again: capture exact click sequence; ideally console.trace wrapper around `openFilamentDetails` and `openSpoolDetails` to see the call stack at the double-open. Video would also help.]_
 
@@ -44,8 +44,6 @@
 * Need to retool how the location selector works in the add/edit wizzard. It doesn't "Flow" properly. Having to delete the existing text to get the full list to change it is a bit clunky.
 
 * Add Max tempratures to the details modals for spools and filaments. Perferably side by side. Min left of max, should be same row with own titles like the min's currently have.
-
-* A way to delete spools and filaments in the UI. Should be hard to get to, and doubly hard to aprove. Be nice if deleteing one cascaded and deleted all spools attached to the filament.
 
 * I think the add/edit inventory wizard is too complicated, we should definitely do a clean up pass on this and all of it's processes. I like what's here, but it's a lot of data. The functionality is good, but it just really needs some modernization or something. it's very clunky. We should try and make it more intuitive to use.
 
@@ -217,7 +215,16 @@ Logs Below from Prod server:
 * Refactor dashboard to be more modular if possible, and reduce token size/context requirements.
 * Make as much of Command Center user configurable as possible, using UI elements and a config import/export feature.
 * When changes are made to Spoolman extra fields, they usually ignore sort order in the database. We need a way to restore sort order.
-* Clean up filament attributes, remove/consolidate (X;Y items and similar items such as Carbon-Fiber & Carbon Fiber). Requires Setup_fields.py changes.
+* **Clean up filament attributes** — remove dead/duplicate entries from the `filament_attributes` choice list. _[2026-04-28 audit: Spoolman is the source of truth (CSVs no longer authoritative). Total 34 choices on the field; 27 actually used across 180 filaments. Spoolman's API rejects choice removal via POST (`400 "Cannot remove existing choices."`), so a true cleanup requires the snapshot-restore migration pattern (template: `migrate_container_slot_to_text` in `setup-and-rebuild/setup_fields.py`): snapshot all filaments' `filament_attributes` values → `force_reset` delete the field schema → recreate with cleaned choices → restore filtered values. Heavy for purely cosmetic dropdown cleanup; deferred until the migration is worth the time.
+
+  **Confirmed safe to delete** (Derek 2026-04-28): `Carbon-Fiber` (dupe of `Carbon Fiber`), `Tran` (truncated), `Transparent; High-Speed` (semicolon-bogus), `Wood` (superseded by `Wood Filled`), `F` (typo).
+  **Keep:** `+` — represents PLA+ filaments (currently displayed as `+ PLA`, but the value itself is intentional). Filament #132 (Creality Rainbow) uses it correctly.
+  **Investigate before deciding:** `For Infill` — was used to flag color-switch / prototype-only filaments not meant for visible prints. Codebase grep confirms no replacement mechanism exists; if Derek wants a different infill-flag UX, that should be a separate item. Otherwise keep.
+  `Matte Pro` — likely orphaned from a prior wipe-and-replace, currently unused. Probably safe to delete but Derek wants to confirm origin first.
+
+  **Bad data to fix** (out of scope for choice cleanup): no orphaned values found in actual records — everything stored references either a still-valid choice or `+` (intentional).
+
+  **Approach when ready:** Write `setup-and-rebuild/migrate_filament_attributes.py` following `migrate_container_slot_to_text` template. Should be runnable from host with config_loader path setup, ask for confirmation, snapshot → force_reset → recreate → restore. Verify against a live Spoolman dev instance with backup before touching prod.]_
 * Continue to support Spoolman's "Import from External" feature for filaments...
     - open-filament-database
     - Prusament spool specific data links
