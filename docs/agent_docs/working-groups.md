@@ -16,7 +16,7 @@
 | 7 | 🧪 Testing Housekeeping | 2 | ~1–1.5 hrs | `READY` | [07-testing-housekeeping.md](tasks/07-testing-housekeeping.md) |
 | 8 | 🟣 Keyboard Navigation & Dialog Polish | 3 | ~3 hrs | `READY` | [08-keyboard-nav-polish.md](tasks/08-keyboard-nav-polish.md) |
 | 9 | ⬜ Quick-Swap Grid Enhancements | 2 | ~2–3 hrs | `READY` | [09-quickswap-grid.md](tasks/09-quickswap-grid.md) |
-| 10 | 🟠 Add/Edit Wizard UX Overhaul | 8 | ~5–6 hrs | `READY` | [10-wizard-ux-overhaul.md](tasks/10-wizard-ux-overhaul.md) |
+| 10 | 🟠 Add/Edit Wizard UX Overhaul | 9 | ~5.5–7 hrs | `READY` | [10-wizard-ux-overhaul.md](tasks/10-wizard-ux-overhaul.md) |
 | 11 | ⚫ External Parsers & Prusament Cleanup | 3 | ~3 hrs | `READY` | [11-external-parsers.md](tasks/11-external-parsers.md) |
 | 12 | 🔵 Weight Entry Unified Component — Phase 2 | 2 | ~6–10 hrs | `DONE` 2026-04-27 | [12-weight-entry-component.md](tasks/12-weight-entry-component.md) |
 
@@ -26,24 +26,24 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 
 | Item | Reason |
 |------|--------|
-| Screen blanking / wake lock (L6) | ON HOLD — OS-level issue |
-| Config system design (L10) | NEEDS DESIGN SESSION — large standalone |
-| Filabridge status light (L12) | ON HOLD — hardware/firmware |
-| FIL:58 label scan (L15) | ON HOLD — needs physical label |
+| Screen blanking / wake lock (L8) | ON HOLD — OS-level issue |
+| Config system design (L12) | NEEDS DESIGN SESSION — large standalone |
+| Filabridge status light (L14) | ON HOLD — hardware/firmware |
+| FIL:58 label scan (L17) | ON HOLD — needs physical label |
 | Frontend lock-up (L22) | ON HOLD — hasn't recurred |
-| Legacy QR → help button (L54) | Small standalone fix |
-| Version number broken (L56) | Small standalone fix |
-| Unknown crash after auto-deduct (L58–L133) | ON HOLD — needs repro; server logs suggest container restart mid-session |
-| Activity Log ubiquity (L151–L156) | Standalone design decision |
-| Location Manager redesign (L184–L210) | IN PROGRESS — multi-phase, separately tracked |
-| Bulk Moves (L212) | Blocked by Location Manager Phase 3+ |
-| Buffer scan assign-all (L215) | Likely already fixed — verify & close |
-| Location Manager cross-browser sync (L216) | ON HOLD — needs SSE/WS |
-| Mobile mode (L233) | Large standalone architectural effort |
-| Dashboard modularization (L234) | Large standalone refactor |
-| Filabridge reconcile utility (L274) | Standalone admin tool |
-| Project Color Loadout (L278) | Blocked by Location Manager Phase 3 |
-| All "On Hold" section items (L253–L260) | ON HOLD |
+| Legacy QR → help button (L43) | Small standalone fix |
+| Version number broken (L45) | Small standalone fix |
+| Unknown crash after auto-deduct (L47–L122) | ON HOLD — needs repro; server logs suggest container restart mid-session |
+| Activity Log ubiquity (L132–L137) | Standalone design decision |
+| Location Manager redesign (L165–L191) | IN PROGRESS — multi-phase, separately tracked |
+| Bulk Moves (L193) | Blocked by Location Manager Phase 3+ |
+| Buffer scan assign-all (L196) | Likely already fixed — verify & close |
+| Location Manager cross-browser sync (L197) | ON HOLD — needs SSE/WS |
+| Mobile mode (L207) | Large standalone architectural effort |
+| Dashboard modularization (L208) | Large standalone refactor |
+| Filabridge reconcile utility (L266) | Standalone admin tool |
+| Project Color Loadout (L270) | Blocked by Location Manager Phase 3 |
+| All "On Hold" section items (L245–L252) | ON HOLD |
 
 ## How to Use
 
