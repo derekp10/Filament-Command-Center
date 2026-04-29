@@ -267,6 +267,22 @@ const processScan = (text, source = 'keyboard') => {
                 if (!res.display) { showToast("Spool ID found but data missing!", "error"); return; }
                 if (state.heldSpools.some(s => s.id === res.id)) showToast("Already in Buffer", "warning");
                 else { state.heldSpools.unshift({ id: res.id, display: res.display, color: res.color, color_direction: res.color_direction, remaining_weight: res.remaining_weight, details: res.details, archived: res.archived, location: res.location, is_ghost: res.is_ghost, slot: res.slot, deployed_to: res.deployed_to }); renderBuffer(); }
+            } else if (res.type === 'ambiguous') {
+                // Item 3.6 — backend found multiple spools attached to this
+                // legacy id. Prompt the user to disambiguate. "Use selected"
+                // re-routes through processScan with explicit ID:NNN so the
+                // normal spool path runs (label-verify, buffer add, etc.).
+                // "Print new label" is handled inside the picker module.
+                if (typeof window.showLegacySpoolPicker === 'function') {
+                    window.showLegacySpoolPicker(res, {
+                        onSelect: (sid) => { processScan(`ID:${sid}`, 'barcode'); },
+                        onAbort: () => { /* user cancelled or chose to re-print */ },
+                    });
+                } else {
+                    // Fallback: log and bail rather than silently auto-pick.
+                    console.warn("[inv_cmd] showLegacySpoolPicker missing; ambiguous scan dropped");
+                    showToast(`Multiple spools share legacy ID ${res.legacy_id} — open Backlog to print fresh labels`, "warning", 6000);
+                }
             } else if (res.type === 'filament') {
                 openFilamentDetails(res.id);
             } else if (res.type === 'error') showToast(res.msg, 'error');

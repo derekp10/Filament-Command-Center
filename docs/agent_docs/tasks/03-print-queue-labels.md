@@ -1,7 +1,7 @@
 # Group 3: Print Queue & Label Management
 
 **Branch name:** `feature/print-queue-labels`
-**Estimated effort:** ~2–3 hours
+**Estimated effort:** ~2.5–3.5 hours
 **Risk:** Low-Medium — print queue is a small module but label status touches scan paths
 
 ## Goal
@@ -78,6 +78,24 @@ Fix print queue state management bugs and enhance label-related workflows.
 - [ ] User can pick the correct one or choose to reprint a new label
 - [ ] Single-match scans continue to work without prompt
 
+### 3.7 — Label not validated during auto-deploy workflow
+**Buglist ref:** L136–L141
+**What:** Spool #229 was auto-deployed via the smart-load path (dryer box → toolhead) but its label was never validated. The logs show auto-deploy + smart-load + spool assignment all fired, but no "Label Verified" entry appears. This suggests the auto-deploy code path in `perform_smart_move` skips the label verification step that the manual scan path performs.
+
+**Reproduce scenario:**
+1. Spool is in a dryer box slot bound to a toolhead
+2. A different spool is scanned into that toolhead → triggers smart-load eject + auto-deploy
+3. Check if the auto-deployed spool gets its `needs_label_print` flag cleared
+
+**Files:**
+- `inventory-hub/logic.py` — `perform_smart_move` auto-deploy branch
+- `inventory-hub/app.py` — label verification in scan/identify paths
+
+**Acceptance criteria:**
+- [ ] Auto-deployed spools get their label validated (same as a direct scan)
+- [ ] Activity log shows "Label Verified" for auto-deployed spools
+- [ ] Manual scan path still works as before
+
 ## Testing Checklist
 
 - [ ] Add a label to queue → add same label again → verify notification
@@ -85,6 +103,7 @@ Fix print queue state management bugs and enhance label-related workflows.
 - [ ] Check print queue after multiple auto-refresh ticks → verify state persists
 - [ ] Test search within print queue
 - [ ] Scan a legacy barcode that maps to 2+ spools → verify prompt
+- [ ] Trigger auto-deploy via dryer-box → toolhead path → verify label validated
 
 ## Dependencies
 

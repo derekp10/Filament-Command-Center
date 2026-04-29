@@ -1,6 +1,9 @@
-<div class="modal fade" id="spoolModal" tabindex="-1">
+<div class="modal fade" id="spoolModal" tabindex="-1" data-bs-keyboard="false">
     <div class="modal-dialog modal-lg modal-dialog-centered">
-        <div class="modal-content border-info">
+        <div class="modal-content border-info" style="position:relative;">
+            <!-- Inline destructive-action overlay (Step 1 then Step 2). Not a
+                 nested Swal per CLAUDE.md project conventions. Hidden by default. -->
+            <div id="fcc-spool-delete-overlay" class="fcc-delete-overlay" style="display:none;"></div>
             <div class="modal-header bg-dark border-bottom border-secondary">
                 <h5 class="modal-title text-info" id="modal-title">Spool Details</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -54,7 +57,14 @@
                     <button type="button" class="btn btn-outline-primary" id="btn-edit-spool"
                         onclick="openEditWizard(document.getElementById('detail-id').innerText)">✏️ Edit</button>
                 </div>
-                <div class="d-flex gap-2">
+                <div class="d-flex gap-2 align-items-center">
+                    <div class="dropdown">
+                        <button type="button" class="btn btn-sm btn-outline-secondary border-0"
+                            data-bs-toggle="dropdown" title="More actions" id="btn-spool-gear">⚙️</button>
+                        <ul class="dropdown-menu dropdown-menu-dark dropdown-menu-end">
+                            <li><button class="dropdown-item text-danger" id="btn-spool-delete">🗑️ Delete this spool…</button></li>
+                        </ul>
+                    </div>
                     <button type="button" class="btn btn-warning fw-bold" id="btn-print-action">➕ Queue Label</button>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 </div>
@@ -63,9 +73,11 @@
     </div>
 </div>
 
-<div class="modal fade" id="filamentModal" tabindex="-1">
+<div class="modal fade" id="filamentModal" tabindex="-1" data-bs-keyboard="false">
     <div class="modal-dialog modal-lg modal-dialog-centered">
-        <div class="modal-content border-success">
+        <div class="modal-content border-success" style="position:relative;">
+            <!-- Inline destructive-action overlay for filament cascade delete. -->
+            <div id="fcc-filament-delete-overlay" class="fcc-delete-overlay" style="display:none;"></div>
             <div class="modal-header bg-dark border-bottom border-success">
                 <h5 class="modal-title text-success">🧬 Filament Definition (Swatch)</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -125,7 +137,14 @@
             </div>
             <div class="modal-footer bg-dark border-top border-secondary justify-content-between">
                 <a href="#" id="btn-fil-open-spoolman" target="_blank" class="btn btn-outline-success">Spoolman ↗️</a>
-                <div class="d-flex gap-2">
+                <div class="d-flex gap-2 align-items-center">
+                    <div class="dropdown">
+                        <button type="button" class="btn btn-sm btn-outline-secondary border-0"
+                            data-bs-toggle="dropdown" title="More actions" id="btn-fil-gear">⚙️</button>
+                        <ul class="dropdown-menu dropdown-menu-dark dropdown-menu-end">
+                            <li><button class="dropdown-item text-danger" id="btn-fil-delete">🗑️ Delete this filament…</button></li>
+                        </ul>
+                    </div>
                     <button type="button" class="btn btn-outline-warning fw-bold" id="btn-fil-edit"
                         title="Edit filament-level data (brand, material, empty weight, temps, notes)">✏️ Edit Filament</button>
                     <button type="button" class="btn btn-outline-primary fw-bold" id="btn-fil-new-spool"

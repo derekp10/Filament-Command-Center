@@ -389,6 +389,13 @@ def api_create_inventory_wizard():
                 else:
                     return jsonify({"success": False, "msg": f"Failed to create new Vendor '{external_vendor}' in Spoolman."})
 
+            # New filaments auto-flag for label print so they show up in the
+            # Backlog immediately. The user's first physical scan of the new
+            # FIL:NN label flips it to False (positive verification).
+            if 'needs_label_print' not in extra:
+                extra['needs_label_print'] = True
+            filament_data['extra'] = extra
+
             # Create a brand new filament
             new_fil = spoolman_api.create_filament(filament_data)
             if new_fil and 'id' in new_fil:
@@ -399,23 +406,19 @@ def api_create_inventory_wizard():
         if not filament_id:
             return jsonify({"success": False, "msg": "Missing Filament ID or valid Filament Data."})
 
-        # If user is adding spool(s) to a pre-existing (possibly archived) filament,
-        # auto-unarchive it so the filament reappears in normal views. Skip when the
-        # filament was just created in Step 1 — new filaments start un-archived.
-        if data.get('filament_id') and spool_data:
-            existing_fil = spoolman_api.get_filament(filament_id)
-            if existing_fil and existing_fil.get('archived'):
-                if spoolman_api.update_filament(filament_id, {'archived': False}):
-                    state.add_log_entry(f"📤 Auto-unarchived Filament #{filament_id} (new spool added)", "INFO")
-                else:
-                    state.logger.warning(
-                        f"Failed to auto-unarchive Filament #{filament_id}: "
-                        f"{spoolman_api.LAST_SPOOLMAN_ERROR}"
-                    )
-
         # Step 2: Create Spool(s)
         if spool_data:
             spool_data['filament_id'] = filament_id
+
+            # New spools auto-flag for label print (same rationale as new
+            # filaments above). Set on spool_data so per-spool overrides
+            # inherit unless they explicitly override `needs_label_print`.
+            sp_extra = spool_data.get('extra')
+            if sp_extra is None:
+                sp_extra = {}
+                spool_data['extra'] = sp_extra
+            if 'needs_label_print' not in sp_extra:
+                sp_extra['needs_label_print'] = True
 
             # Per-spool override list takes precedence over `quantity` when present.
             # Each entry shallow-merges onto spool_data, with `extra` deep-merged
@@ -1116,6 +1119,88 @@ def api_delete_location():
     state.add_log_entry(f"🗑️ Deleted: {target}", "WARNING")
     return jsonify({"success": True})
 
+
+@app.route('/api/spool/<int:sid>', methods=['DELETE'])
+def api_delete_spool(sid):
+    """Hard-delete a spool from Spoolman. Triggered from the buried Delete
+    action in the spool details modal (see inv_details.js). The frontend
+    is responsible for the double-confirm UX (type-the-id pattern); this
+    endpoint trusts the request and just executes the delete."""
+    snapshot = spoolman_api.get_spool(sid) or {}
+    label = f"#{sid}"
+    fil = snapshot.get('filament') or {}
+    if fil.get('name'):
+        label = f"#{sid} ({fil.get('name')})"
+    if not spoolman_api.delete_spool(sid):
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the delete"
+        state.add_log_entry(f"❌ Failed to delete Spool {label}: {err}", "ERROR", "ff4444")
+        return jsonify({"success": False, "error": err}), 502
+    state.add_log_entry(f"🗑️ Deleted Spool {label}", "WARNING", "ff8800")
+    return jsonify({"success": True, "deleted_spool_id": sid})
+
+
+@app.route('/api/filament/<int:fid>', methods=['DELETE'])
+def api_delete_filament(fid):
+    """Cascade-delete a filament: removes every child spool first, then
+    deletes the filament itself. Returns a per-spool error list so the
+    frontend can surface partial failures.
+
+    Spoolman refuses to delete a filament that still has child spools, so
+    cascade is the only correct path from the UI side. Triggered from the
+    buried Delete action in the filament details modal — the frontend
+    enforces the double-confirm and the "type CONFIRM" cascade prompt."""
+    snapshot = spoolman_api.get_filament(fid) or {}
+    fil_label = f"#{fid}"
+    if snapshot.get('name'):
+        fil_label = f"#{fid} ({snapshot.get('name')})"
+
+    children = spoolman_api.get_spools_for_filament(fid)
+    deleted_spool_ids = []
+    spool_errors = []
+    for s in children:
+        sid = s.get('id')
+        if sid is None:
+            continue
+        if spoolman_api.delete_spool(sid):
+            deleted_spool_ids.append(sid)
+        else:
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the delete"
+            state.add_log_entry(f"❌ Cascade delete: failed to delete Spool #{sid} (parent Filament {fil_label}): {err}",
+                                "ERROR", "ff4444")
+            spool_errors.append({"spool_id": sid, "error": err})
+
+    if spool_errors:
+        # Don't try to delete the filament if any child spool failed —
+        # Spoolman will reject it anyway, and partial state is recoverable.
+        return jsonify({
+            "success": False,
+            "error": "Some child spools could not be deleted; filament left in place.",
+            "deleted_spool_ids": deleted_spool_ids,
+            "spool_errors": spool_errors,
+        }), 502
+
+    if not spoolman_api.delete_filament(fid):
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the delete"
+        state.add_log_entry(f"❌ Failed to delete Filament {fil_label}: {err}", "ERROR", "ff4444")
+        return jsonify({
+            "success": False,
+            "error": err,
+            "deleted_spool_ids": deleted_spool_ids,
+        }), 502
+
+    if deleted_spool_ids:
+        state.add_log_entry(
+            f"🗑️ Deleted Filament {fil_label} (cascade: {len(deleted_spool_ids)} child spool(s))",
+            "WARNING", "ff8800",
+        )
+    else:
+        state.add_log_entry(f"🗑️ Deleted Filament {fil_label}", "WARNING", "ff8800")
+    return jsonify({
+        "success": True,
+        "deleted_filament_id": fid,
+        "deleted_spool_ids": deleted_spool_ids,
+    })
+
 @app.route('/api/undo', methods=['POST'])
 def api_undo(): return jsonify(logic.perform_undo())
 
@@ -1338,7 +1423,24 @@ def api_identify_scan():
         return jsonify({"type": "command", "cmd": "clear"})
 
     if not res: return jsonify({"type": "unknown"})
-    
+
+    # Item 3.6 — multiple spools share this legacy id. Surface the
+    # candidate list to the UI so the user can disambiguate rather than
+    # silently auto-picking. The picker either re-submits with an
+    # explicit `ID:NNN` (continues normal flow) or queues a new label
+    # for the chosen spool (helps unwind the ambiguity over time).
+    if res['type'] == 'ambiguous':
+        state.add_log_entry(
+            f"⚠️ Legacy ID {res.get('legacy_id', '?')} matches "
+            f"{len(res.get('candidates') or [])} spools — pick one to continue",
+            "WARNING", "ffaa00",
+        )
+        return jsonify({
+            "type": "ambiguous",
+            "legacy_id": res.get('legacy_id'),
+            "candidates": res.get('candidates') or [],
+        })
+
     if res['type'] == 'location':
         lid = res['id']; 
         items = spoolman_api.get_spools_at_location_detailed(lid)
@@ -1351,13 +1453,16 @@ def api_identify_scan():
             if source == 'barcode' and text.strip().upper().startswith('ID:'):
                 extra = data.get('extra', {})
                 raw_flag = extra.get('needs_label_print')
-                # Spoolman boolean-typed extras may arrive parsed (Python
-                # bool True/False) OR as JSON-stringified booleans
-                # ('true'/'True'/'false'); cover all forms so the dirty-
-                # flag detection survives parse_inbound_data unwrapping
-                # quirks. Item 3 regression check.
-                needs_print = raw_flag is True or raw_flag == 'true' or raw_flag == 'True'
-                if needs_print:
+                # Tri-state: True = needs print, False = positively verified,
+                # null/missing = unknown (legacy record predating the feature,
+                # or a record created via a path that didn't auto-flag).
+                # A valid scan should verify both True AND null states — only
+                # an explicit False is treated as "already verified" and
+                # short-circuits the flag flip.
+                already_verified = (
+                    raw_flag is False or raw_flag == 'false' or raw_flag == 'False'
+                )
+                if not already_verified:
                     extra['needs_label_print'] = False
                     if spoolman_api.update_spool(sid, {'extra': extra}):
                         state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
@@ -1413,8 +1518,11 @@ def api_identify_scan():
             if source == 'barcode' and text.strip().upper().startswith('FIL:'):
                 extra = data.get('extra', {})
                 raw_flag = extra.get('needs_label_print')
-                needs_print = raw_flag is True or raw_flag == 'true' or raw_flag == 'True'
-                if needs_print:
+                # Tri-state semantics — see spool branch above for rationale.
+                already_verified = (
+                    raw_flag is False or raw_flag == 'false' or raw_flag == 'False'
+                )
+                if not already_verified:
                     extra['needs_label_print'] = False
                     if spoolman_api.update_filament(fid, {'extra': extra}):
                         state.add_log_entry(f"✔️ Filament #{fid} Label & Sample Verified", "SUCCESS", "00ff00")

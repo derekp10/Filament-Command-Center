@@ -99,7 +99,7 @@ const SpoolCardBuilder = {
                         ${!isFil && window.processScan ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); processScan('ID:${item.id}', 'search')" title="Add to Buffer/Manage">📥</div>` : ''}
                         <div class="fcc-card-action-btn" onclick="event.stopPropagation(); ${isFil ? `openFilamentDetails(${item.id})` : `openSpoolDetails(${item.id})`}" title="View Details">🔍</div>
                         ${!isFil ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.openEditWizard(${item.id});" title="Edit Spool">✏️</div>` : ''}
-                        ${!isFil && window.addToQueue ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>` : ''}
+                        ${window.addToQueue ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: '${isFil ? 'filament' : 'spool'}', display: '${safeDisplay}' }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>` : ''}
                         ${labelStateIcon}
                     </div>
                 `;

@@ -146,7 +146,7 @@ def sanitize_outbound_data(data):
     data['extra'] = clean_extra
     return data
 
-def _auto_archive_on_empty(data, existing_initial, existing_used):
+def _auto_archive_on_empty(data, existing_initial, existing_used, existing_location=None):
     """Mutates `data` in-place to add {archived: True, location: ''} when the
     post-update state would leave remaining_weight at 0 (or below).
 
@@ -154,6 +154,11 @@ def _auto_archive_on_empty(data, existing_initial, existing_used):
     (weigh-out, wizard edit, slurp-in from CSV, etc.) automatically archives
     and unassigns it — per the user's 2026-04-22 answer of "Auto" on the
     archive-on-zero backlog item.
+
+    When `existing_location` is non-empty, plants it on
+    `extra.fcc_pre_archive_location` as a breadcrumb so a later refill
+    (see `_auto_unarchive_on_refill`) can restore the spool to where it
+    came from instead of stranding it at UNASSIGNED.
 
     The caller's explicit intent always wins: if the payload already sets
     `archived` or `location`, we leave those keys alone.
@@ -174,7 +179,57 @@ def _auto_archive_on_empty(data, existing_initial, existing_used):
     if 'archived' not in data:
         data['archived'] = True
     if 'location' not in data:
+        # Plant a breadcrumb of the pre-archive location so a later refill
+        # can restore it. Skip when there's nothing meaningful to remember
+        # (already at UNASSIGNED) or the caller is bypassing our archive.
+        if existing_location:
+            extra = data.get('extra')
+            if not isinstance(extra, dict):
+                extra = {}
+                data['extra'] = extra
+            extra['fcc_pre_archive_location'] = existing_location
         data['location'] = ''
+
+
+def _auto_unarchive_on_refill(data, existing):
+    """Mutates `data` in-place to set archived=False (and optionally restore
+    the pre-archive location) when:
+      - the existing spool is currently archived, AND
+      - the post-update remaining_weight is > 0.
+
+    Symmetric counterpart to `_auto_archive_on_empty`. If the user mistakenly
+    weighs a spool down to 0 (auto-archiving it) and then corrects the weight
+    via Quick-Weigh / weigh-out / wizard / FilaBridge recovery, we restore the
+    spool to active inventory automatically — the user shouldn't have to bounce
+    into Spoolman to recover from a typo.
+
+    Restores `location` from `existing.extra.fcc_pre_archive_location` when
+    that breadcrumb is present and the caller hasn't already specified a
+    location. When no breadcrumb is available the spool stays at UNASSIGNED
+    (which is where the auto-archive parked it) and the user re-locates
+    manually via the normal scan/move flow.
+
+    The caller's explicit intent always wins: if the payload already sets
+    `archived` or `location`, we leave those keys alone.
+    """
+    if not existing or not existing.get('archived'):
+        return
+    new_used = data.get('used_weight', existing.get('used_weight'))
+    new_initial = data.get('initial_weight', existing.get('initial_weight'))
+    if new_used is None or new_initial is None:
+        return
+    try:
+        remaining = float(new_initial) - float(new_used)
+    except (TypeError, ValueError):
+        return
+    if remaining <= 0:
+        return  # still empty, leave the auto-archive in place
+    if 'archived' not in data:
+        data['archived'] = False
+    if 'location' not in data:
+        prev_loc = (existing.get('extra') or {}).get('fcc_pre_archive_location')
+        if prev_loc:
+            data['location'] = prev_loc
 
 
 def update_spool(sid, data):
@@ -206,11 +261,29 @@ def update_spool(sid, data):
 
         # Auto-archive + unassign when remaining weight hits 0.
         pre_archived = existing.get('archived', False)
-        _auto_archive_on_empty(data, existing.get('initial_weight'), existing.get('used_weight'))
+        _auto_archive_on_empty(
+            data,
+            existing.get('initial_weight'),
+            existing.get('used_weight'),
+            existing_location=existing.get('location'),
+        )
         if data.get('archived') and not pre_archived:
             try:
                 state.add_log_entry(
                     f"📦 Auto-archived Spool #{sid} (remaining weight hit 0) — moved to UNASSIGNED",
+                    "INFO", "00ccff",
+                )
+            except Exception:
+                pass
+
+        # Symmetric auto-unarchive: weight went from 0 back to >0 on an archived
+        # spool. Restores the pre-archive location when the breadcrumb is present.
+        _auto_unarchive_on_refill(data, existing)
+        if pre_archived and data.get('archived') is False:
+            try:
+                restored_to = data.get('location') or 'UNASSIGNED'
+                state.add_log_entry(
+                    f"📤 Auto-unarchived Spool #{sid} (weight refilled) — restored to {restored_to or 'UNASSIGNED'}",
                     "INFO", "00ccff",
                 )
             except Exception:
@@ -305,6 +378,8 @@ SYSTEM_MANAGED_EXTRAS = frozenset({
     "container_slot",
     "physical_source",
     "physical_source_slot",
+    # Owned by _auto_archive_on_empty / _auto_unarchive_on_refill.
+    "fcc_pre_archive_location",
 })
 
 
@@ -415,12 +490,71 @@ def create_filament(data):
     sanitized = sanitize_outbound_data(data)
     try:
         r = requests.post(f"{sm_url}/api/v1/filament", json=sanitized, timeout=5)
-        if r.ok: 
+        if r.ok:
             return r.json()
         state.logger.error(f"Failed to create filament: {r.status_code} - {r.text}")
     except Exception as e:
         state.logger.error(f"API Error creating filament: {e}")
     return None
+
+
+def delete_spool(sid):
+    """Hard-delete a spool from Spoolman. Returns True on success, False on
+    failure. Populates LAST_SPOOLMAN_ERROR with the rejection body on failure
+    so callers can surface the actual reason to the UI."""
+    global LAST_SPOOLMAN_ERROR
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.delete(f"{sm_url}/api/v1/spool/{sid}", timeout=10)
+        if r.ok:
+            LAST_SPOOLMAN_ERROR = None
+            return True
+        state.logger.error(f"Failed to delete spool {sid}: {r.status_code} - {r.text}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {r.text[:400]}"
+    except Exception as e:
+        state.logger.error(f"API Error deleting spool {sid}: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
+    return False
+
+
+def delete_filament(fid):
+    """Hard-delete a filament from Spoolman. Spoolman will refuse to delete
+    a filament that still has child spools (HTTP 409 typical) — callers that
+    want cascade behavior must delete the child spools first. Populates
+    LAST_SPOOLMAN_ERROR on failure."""
+    global LAST_SPOOLMAN_ERROR
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.delete(f"{sm_url}/api/v1/filament/{fid}", timeout=10)
+        if r.ok:
+            LAST_SPOOLMAN_ERROR = None
+            return True
+        state.logger.error(f"Failed to delete filament {fid}: {r.status_code} - {r.text}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {r.text[:400]}"
+    except Exception as e:
+        state.logger.error(f"API Error deleting filament {fid}: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
+    return False
+
+
+def get_spools_for_filament(fid):
+    """Returns all spool dicts whose filament.id matches `fid`. Used by the
+    cascade-delete path so the UI can show the user how many child spools
+    will be deleted alongside the parent filament."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
+        if not r.ok:
+            return []
+        out = []
+        for s in (r.json() or []):
+            if (s.get('filament') or {}).get('id') == fid:
+                out.append(s)
+        return out
+    except Exception as e:
+        state.logger.error(f"API Error listing spools for filament {fid}: {e}")
+        return []
+
 
 def get_vendors():
     """Fetches the list of all vendors from Spoolman."""
@@ -712,8 +846,16 @@ def get_spools_at_location_detailed(loc_name):
 def get_spools_at_location(loc_name):
     return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
 
-def find_spool_by_legacy_id(legacy_id, strict_mode=False):
-    """Finds a spool based on the Filament's legacy ID."""
+def find_spools_by_legacy_id(legacy_id):
+    """Return ALL spools attached to the filament with the given legacy
+    (Spoolman `external_id`) value. Sorted: non-empty (>10g) first, then
+    empty, each group ordered by spool id ascending. Returns [] if no
+    filament matches the legacy id or if the lookup fails.
+
+    Used by `find_spool_by_legacy_id` for backward-compatible
+    single-id callers, and by `resolve_scan` to detect the ambiguous
+    case (same legacy id mapped to multiple spools — Item 3.6).
+    """
     sm_url, _ = config_loader.get_api_urls()
     legacy_id = str(legacy_id).strip()
     try:
@@ -721,26 +863,46 @@ def find_spool_by_legacy_id(legacy_id, strict_mode=False):
         target_filament_id = None
         if fil_resp.ok:
             for fil in parse_inbound_data(fil_resp.json()):
-                ext = str(fil.get('external_id', '')).strip().replace('"','')
+                ext = str(fil.get('external_id', '')).strip().replace('"', '')
                 if ext == legacy_id:
                     target_filament_id = fil['id']
                     break
-        if target_filament_id:
-            spool_resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
-            if spool_resp.ok:
-                candidates = []
-                for spool in parse_inbound_data(spool_resp.json()):
-                    if spool.get('filament', {}).get('id') == target_filament_id:
-                        if (spool.get('remaining_weight') or 0) > 10:
-                            return spool['id']
-                        candidates.append(spool['id'])
-                if candidates: return candidates[0]
-                if strict_mode: return None
-        
-        # FIX: Removed the "Blind Direct ID" check here.
-        # Direct IDs are now handled explicitly in logic.py
-        
-    except Exception as e: state.logger.error(f"Legacy Spool Lookup Error: {e}")
+        if not target_filament_id:
+            return []
+
+        spool_resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
+        if not spool_resp.ok:
+            return []
+
+        non_empty = []
+        empty = []
+        for spool in parse_inbound_data(spool_resp.json()):
+            if spool.get('filament', {}).get('id') == target_filament_id:
+                if (spool.get('remaining_weight') or 0) > 10:
+                    non_empty.append(spool)
+                else:
+                    empty.append(spool)
+        non_empty.sort(key=lambda s: s.get('id', 0))
+        empty.sort(key=lambda s: s.get('id', 0))
+        return non_empty + empty
+    except Exception as e:
+        state.logger.error(f"Legacy Spool Lookup Error: {e}")
+        return []
+
+
+def find_spool_by_legacy_id(legacy_id, strict_mode=False):
+    """Finds a spool based on the Filament's legacy ID. Returns the first
+    candidate (preferring non-empty spools) — for the multi-candidate
+    disambiguation flow, callers should use `find_spools_by_legacy_id`
+    directly so they can detect ambiguity.
+
+    `strict_mode` is preserved for backward compatibility but the function
+    now returns None whenever no filament matches the legacy id, which is
+    the same observable behavior as the strict path."""
+    del strict_mode  # API-stable shim; no behavioral difference any more.
+    spools = find_spools_by_legacy_id(legacy_id)
+    if spools:
+        return spools[0]['id']
     return None
 
 def find_filament_by_legacy_id(legacy_id):

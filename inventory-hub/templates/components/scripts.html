@@ -15,6 +15,10 @@
 
 <script src="{{ url_for('static', filename='js/modules/inv_backlog.js') }}?v=1.1"></script>
 
+<!-- Item 3.6: shared spool-disambiguation picker. Loads after inv_queue.js so
+     the picker's "🖨️ Print new label" path can call window.addToQueue. -->
+<script src="{{ url_for('static', filename='js/modules/duplicate_picker.js') }}?v=1.0"></script>
+
 <script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_search.js') }}?v=1.1"></script>

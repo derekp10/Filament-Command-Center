@@ -132,14 +132,30 @@ class LocationsCorruptError(RuntimeError):
         )
 
 def save_locations_list(new_list):
-    """Saves location configurations to the JSON file."""
+    """Saves location configurations to the JSON file via atomic write.
+
+    Writes to a sibling `.tmp` file, fsyncs the bytes to disk, then `os.replace`s
+    onto the target path — atomic on both POSIX and NTFS. Prevents the
+    "valid content + duplicate tail" corruption seen on dev 2026-04-28, which
+    was caused by the prior `open('w') + json.dump` approach being interrupted
+    or raced by a concurrent writer (truncates immediately, streams content,
+    leaves a half-written file if anything goes wrong).
+    """
     if not new_list: return
+    _ensure_data_dir()
+    tmp_path = JSON_FILE + ".tmp"
     try:
-        _ensure_data_dir()
-        with open(JSON_FILE, 'w', encoding='utf-8') as f:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(new_list, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, JSON_FILE)
         state.logger.info("💾 Locations JSON updated")
     except Exception as e:
+        # Best-effort temp cleanup so we don't leave .tmp turds behind on
+        # repeated failures.
+        try: os.remove(tmp_path)
+        except OSError: pass
         state.logger.error(f"JSON Write Error: {e}")
 
 

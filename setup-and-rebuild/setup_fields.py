@@ -308,6 +308,10 @@ print("\n--- Setting up SPOOL Fields ---")
 create_field("spool", "physical_source", "Physical Source", "text")
 # [ALEX FIX] Register the new Ghost Slot field
 create_field("spool", "physical_source_slot", "Physical Source Slot", "text")
+# Breadcrumb planted by spoolman_api._auto_archive_on_empty so a later refill
+# can restore the spool to its pre-archive location. System-managed; never
+# user-editable. See spoolman_api.SYSTEM_MANAGED_EXTRAS.
+create_field("spool", "fcc_pre_archive_location", "Pre-Archive Location (system)", "text")
 create_field("spool", "needs_label_print", "Needs Label Print", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")

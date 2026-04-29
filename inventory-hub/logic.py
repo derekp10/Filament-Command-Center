@@ -145,6 +145,50 @@ def _spool_brand_color_suffix(sid):
         return ""
 
 
+def _resolve_legacy_spool_lookup(legacy_id):
+    """Item 3.6 — wrap `find_spools_by_legacy_id` so the scan path can
+    surface the ambiguous case to the UI instead of silently picking the
+    first candidate.
+
+    Returns one of:
+      * `None`                                          — no matching spool
+      * `{'type': 'spool', 'id': N}`                    — exactly one match
+      * `{'type': 'ambiguous', 'legacy_id': str,
+          'candidates': [...]}`                         — 2+ matches; UI prompts
+
+    Each candidate dict carries enough display data for a picker without
+    forcing a second round-trip per spool: id, remaining_weight, location,
+    archived, filament_id, plus a flat `display` string that mirrors
+    `format_spool_display`'s text for selector readability.
+    """
+    spools = spoolman_api.find_spools_by_legacy_id(legacy_id)
+    if not spools:
+        return None
+    if len(spools) == 1:
+        return {'type': 'spool', 'id': spools[0]['id']}
+    candidates = []
+    for s in spools:
+        info = {}
+        try:
+            info = spoolman_api.format_spool_display(s) or {}
+        except Exception:
+            info = {}
+        fil = s.get('filament') or {}
+        candidates.append({
+            'id': s.get('id'),
+            'remaining_weight': s.get('remaining_weight'),
+            'location': s.get('location') or '',
+            'archived': bool(s.get('archived')),
+            'filament_id': fil.get('id'),
+            'filament_name': fil.get('name') or '',
+            'material': fil.get('material') or '',
+            'vendor_name': (fil.get('vendor') or {}).get('name') or '',
+            'color_hex': fil.get('color_hex') or '',
+            'display': info.get('text') or info.get('text_short') or f"Spool #{s.get('id')}",
+        })
+    return {'type': 'ambiguous', 'legacy_id': str(legacy_id), 'candidates': candidates}
+
+
 def resolve_scan(text):
     text = text.strip().strip('"').strip("'")
     decoded = urllib.parse.unquote(text)
@@ -199,8 +243,9 @@ def resolve_scan(text):
     # 4. EXPLICIT LEGACY ID (Manual Override)
     if upper_text.startswith("LEGACY:") or upper_text.startswith("LEG:") or upper_text.startswith("OLD:"):
         clean_id = upper_text.split(":")[-1].strip()
-        rid = spoolman_api.find_spool_by_legacy_id(clean_id, strict_mode=True)
-        if rid: return {'type': 'spool', 'id': rid}
+        result = _resolve_legacy_spool_lookup(clean_id)
+        if result is not None:
+            return result
         return {'type': 'error', 'msg': f'Legacy Spool ID {clean_id} not found'}
 
     # 5. DIRECT SPOOL ID
@@ -220,10 +265,12 @@ def resolve_scan(text):
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
         m = re.search(r'range=(\d+)', decoded, re.IGNORECASE)
         if m:
-            rid = spoolman_api.find_spool_by_legacy_id(m.group(1), strict_mode=True)
-            if rid: return {'type': 'spool', 'id': rid}
-        rid = spoolman_api.find_spool_by_legacy_id(text, strict_mode=True)
-        if rid: return {'type': 'spool', 'id': rid}
+            result = _resolve_legacy_spool_lookup(m.group(1))
+            if result is not None:
+                return result
+        result = _resolve_legacy_spool_lookup(text)
+        if result is not None:
+            return result
         return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
     # 7. PURE NUMBER SCAN (Priority Stack)
@@ -239,8 +286,9 @@ def resolve_scan(text):
             return {'type': 'filament', 'id': int(text)}
 
         # Priority 3: Legacy Spool
-        rid = spoolman_api.find_spool_by_legacy_id(text, strict_mode=True)
-        if rid: return {'type': 'spool', 'id': rid}
+        result = _resolve_legacy_spool_lookup(text)
+        if result is not None:
+            return result
         
         # Priority 4: Legacy Filament
         fid = spoolman_api.find_filament_by_legacy_id(text)
