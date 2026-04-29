@@ -542,13 +542,33 @@ const liveRefreshBuffer = () => {
             let changed = false;
             state.heldSpools.forEach(s => {
                 const fresh = data[s.id];
-                if (fresh && (fresh.display !== s.display || fresh.color !== s.color || fresh.remaining_weight !== s.remaining_weight || fresh.color_direction !== s.color_direction || !s.details || fresh.archived !== s.archived)) {
+                if (!fresh) return;
+                // Diff covers every field the buffer card actually renders. Pre-2026-04-28
+                // this list excluded location / is_ghost / slot / deployed_to, so a backend-
+                // driven location move (Location Manager, Quick-Swap, force-unassign,
+                // auto-archive-on-empty) would correctly update `archived` and the weight,
+                // but leave the location badge stale until the user navigated away and
+                // back — root cause of buglist L24 / L40.
+                if (fresh.display !== s.display ||
+                    fresh.color !== s.color ||
+                    fresh.color_direction !== s.color_direction ||
+                    fresh.remaining_weight !== s.remaining_weight ||
+                    !s.details ||
+                    fresh.archived !== s.archived ||
+                    fresh.location !== s.location ||
+                    fresh.is_ghost !== s.is_ghost ||
+                    fresh.slot !== s.slot ||
+                    fresh.deployed_to !== s.deployed_to) {
                     s.display = fresh.display;
                     s.color = fresh.color;
                     s.color_direction = fresh.color_direction;
                     s.remaining_weight = fresh.remaining_weight;
                     s.details = fresh.details;
                     s.archived = fresh.archived;
+                    s.location = fresh.location;
+                    s.is_ghost = fresh.is_ghost;
+                    s.slot = fresh.slot;
+                    s.deployed_to = fresh.deployed_to;
                     changed = true;
                 }
             });
