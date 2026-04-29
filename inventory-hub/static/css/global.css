@@ -810,6 +810,15 @@ body {
     transform: scale(1.1);
 }
 
+/* On pages with the dashboard's bottom-pinned command deck (160px tall),
+ * lift the FAB above the deck so it doesn't obscure the WEIGH QR code on
+ * shorter / scaled viewports. Uses :has() to scope the override only to
+ * pages where the deck actually renders — other pages keep the standard
+ * bottom-right anchor. (buglist L36, fixed 2026-04-28) */
+body:has(.cmd-deck) .fcc-fab-search {
+    bottom: 180px;
+}
+
 .w-90px {
     width: 90px !important;
     min-width: 90px !important;

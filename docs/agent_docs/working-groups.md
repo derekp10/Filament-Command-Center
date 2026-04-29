@@ -8,7 +8,7 @@
 | # | Group | Items | Est. Effort | Status | Task File |
 |---|-------|-------|-------------|--------|-----------|
 | 1 | 🔵 Weight Handling Unification — Phase 1 | 3 | ~3–4 hrs | `DONE` 2026-04-27 | [01-weight-unification.md](tasks/01-weight-unification.md) |
-| 2 | 🟢 Buffer Cards & Main-Menu Refresh | 3 | ~1.5–2 hrs | `READY` | [02-buffer-cards-refresh.md](tasks/02-buffer-cards-refresh.md) |
+| 2 | 🟢 Buffer Cards & Main-Menu Refresh | 3 | ~1.5–2 hrs | `DONE` 2026-04-28 | [02-buffer-cards-refresh.md](tasks/02-buffer-cards-refresh.md) |
 | 3 | 🔴 Print Queue & Label Management | 7 | ~2.5–3.5 hrs | `DONE` 2026-04-28 | [03-print-queue-labels.md](tasks/03-print-queue-labels.md) |
 | 4 | 🔶 Archive / Delete / Cleanup Lifecycle | 4 | ~3 hrs | `PARTIAL` 2026-04-28 (4.4 deferred) | [04-archive-delete-lifecycle.md](tasks/04-archive-delete-lifecycle.md) |
 | 5 | 🟡 Edit Filament & Details Modal (small adds) | 2 | ~3 hrs | `READY` | [05-edit-modal-small.md](tasks/05-edit-modal-small.md) |
