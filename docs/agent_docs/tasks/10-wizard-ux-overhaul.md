@@ -27,23 +27,23 @@ Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 **What:** If no location is provided, newly created spools should default to "Unassigned" rather than requiring explicit selection.
 
 ### 10.4 — Consolidate duplicate purchase link fields
-**Buglist ref:** L160
+**Buglist ref:** L162
 **What:** Two purchase links exist — one inherited from filament, one on the spool. Need to consolidate to one field or implement smart fallback (prefer spool-specific, fall back to filament). One field doesn't clear between usages.
 
 ### 10.5 — New slicer profile should auto-add to current filament
-**Buglist ref:** L161
+**Buglist ref:** L163
 **What:** Creating a new slicer profile from within the wizard should auto-associate it with the filament being edited.
 
 ### 10.6 — Spoolman field ordering bug
-**Buglist ref:** L162
+**Buglist ref:** L164
 **What:** Custom fields move around when modified or when new items are added. Need to lock down field order.
 
 ### 10.7 — Maintain multi-spool creation ability
-**Buglist ref:** L158
+**Buglist ref:** L160
 **What:** Guard/verify that the ability to add multiple spools of the same type at once still works after any wizard changes.
 
 ### 10.8 — SweetAlert2 nested modal audit
-**Buglist ref:** L163
+**Buglist ref:** L165
 **What:** Audit existing code for nested `Swal.fire()` calls and replace with inline overlay divs per project convention.
 
 **Primary file:** `inventory-hub/static/js/modules/inv_wizard.js` (144KB)
@@ -51,7 +51,7 @@ Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 **Backend:** `inventory-hub/app.py` — wizard endpoints
 
 ### 10.9 — Filament-attributes input validation (prevention guards)
-**Buglist ref:** L219–L237
+**Buglist ref:** L221–L239
 **What:** The filament-attributes choice list has dead/bogus entries (`Tran`, `F`, `Carbon-Fiber`, etc.) created by unchecked input. Spoolman makes new choices permanent — removal requires a destructive snapshot-restore migration. Prevention guards in the wizard's "+ Add new attribute" flow will stop new garbage entries from being created.
 
 **Guards to implement:**

@@ -37,16 +37,17 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 | Confirm-change modal blocked during print (L125) | Standalone — scan/smart-move confirm_active_print path |
 | Toolhead scan assigns ALL buffer spools (L127) | Standalone — toolhead must enforce max-1 spool; breaks FilaBridge sync |
 | "Already verified" activity log spam (L131) | Standalone — activity log verbosity / label-verify UX |
-| Activity Log ubiquity (L140–L145) | Standalone design decision |
-| Location Manager redesign (L173–L199) | IN PROGRESS — multi-phase, separately tracked |
-| Bulk Moves (L201) | Blocked by Location Manager Phase 3+ |
-| Buffer scan assign-all (L204) | Likely already fixed — verify & close |
-| Location Manager cross-browser sync (L205) | ON HOLD — needs SSE/WS |
-| Mobile mode (L215) | Large standalone architectural effort |
-| Dashboard modularization (L216) | Large standalone refactor |
-| Filabridge reconcile utility (L274) | Standalone admin tool |
-| Project Color Loadout (L278) | Blocked by Location Manager Phase 3 |
-| All "On Hold" section items (L253–L260) | ON HOLD |
+| Force-location should clear deployed status (L133) | Standalone — force-location handler in details modal |
+| Activity Log ubiquity (L142–L147) | Standalone design decision |
+| Location Manager redesign (L175–L201) | IN PROGRESS — multi-phase, separately tracked |
+| Bulk Moves (L203) | Blocked by Location Manager Phase 3+ |
+| Buffer scan assign-all (L206) | Likely already fixed — verify & close |
+| Location Manager cross-browser sync (L207) | ON HOLD — needs SSE/WS |
+| Mobile mode (L217) | Large standalone architectural effort |
+| Dashboard modularization (L218) | Large standalone refactor |
+| Filabridge reconcile utility (L276) | Standalone admin tool |
+| Project Color Loadout (L280) | Blocked by Location Manager Phase 3 |
+| All "On Hold" section items (L255–L262) | ON HOLD |
 
 ## How to Use
 
