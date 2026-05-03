@@ -36,9 +36,9 @@ Audit and implement consistent keyboard navigation across all interactive UI ele
 - [ ] Escape dismisses the topmost modal/overlay
 - [ ] All new shortcuts registered via `registerShortcut()`
 
-### 8.2 — Missing spool weight dialog Enter key
+### 8.2 — Missing spool weight dialog Enter key  ✅ DONE
 **Buglist ref:** L46
-**Note:** Also listed in Group 1. Fix here if Group 1 hasn't been done yet.
+**Status:** Closed by Group 1 (`feature/weight-unification`, 2026-04-27). The post-archive empty-weight prompt (`showArchiveEmptyWeightPrompt` in `inv_details.js`) now binds Enter via a `didOpen` keydown handler with preConfirm validation. See completed-archive.md "[2026-04-27 Weight Handling Unification — Phase 1]" entry.
 
 ### 8.3 — "Display modal on display modal" stacking bug
 **Buglist ref:** L20
