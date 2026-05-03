@@ -143,6 +143,8 @@ Logs Below from Prod server:
 
 * Location search boxes should also be able to search based on the LOC: Value (LR-MDB-1)
 
+* If possible, set certain text fields to only prompt with auto fill on some (perhaps none) fields. I think this might be a setible somewhere in the code to prevent a list of previously used values for showing up. Most of the time, this is just getting in the way for me.
+
 ## Prusament Enhancements ##
 * Ability to merge duplicate filaments. Sometimes created when the existing filament card and the one the parcer generates based on prusament filaments don't match exactly. _[PARTIAL 2026-04-26 — duplicate **prevention** is in: tier-1 product-id matcher prefers filaments tagged with the same /spool/<id>/ as the scan, plus a duplicate-picker UI when the matcher can't disambiguate so the user picks (or chooses Create new). What's still missing: **merging existing duplicates** — a UI affordance that re-points all spools from one filament to another and archives/deletes the source. The picker prevents you from making MORE duplicates; you still need a way to clean up the ones already in the DB.]_
 
