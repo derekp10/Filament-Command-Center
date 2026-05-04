@@ -15,7 +15,7 @@
 | 6 | 🟡 Edit Filament & Details Modal (new panels) | 2 | ~3 hrs | `READY` | [06-edit-modal-large.md](tasks/06-edit-modal-large.md) |
 | 7 | 🧪 Testing Housekeeping | 2 | ~1–1.5 hrs | `READY` | [07-testing-housekeeping.md](tasks/07-testing-housekeeping.md) |
 | 8 | 🟣 Keyboard Navigation & Dialog Polish | 4 | ~3.5 hrs | `READY` | [08-keyboard-nav-polish.md](tasks/08-keyboard-nav-polish.md) |
-| 9 | ⬜ Quick-Swap Grid Enhancements | 2 | ~2–3 hrs | `READY` | [09-quickswap-grid.md](tasks/09-quickswap-grid.md) |
+| 9 | ⬜ Quick-Swap Grid Enhancements & Printer Status Widget | 3 | ~4–5 hrs | `READY` | [09-quickswap-grid.md](tasks/09-quickswap-grid.md) |
 | 10 | 🟠 Add/Edit Wizard UX Overhaul | 10 | ~6–7.5 hrs | `READY` | [10-wizard-ux-overhaul.md](tasks/10-wizard-ux-overhaul.md) |
 | 11 | ⚫ External Parsers & Prusament Cleanup | 3 | ~3 hrs | `READY` | [11-external-parsers.md](tasks/11-external-parsers.md) |
 | 12 | 🔵 Weight Entry Unified Component — Phase 2 | 2 | ~6–10 hrs | `DONE` 2026-04-27 | [12-weight-entry-component.md](tasks/12-weight-entry-component.md) |
@@ -39,7 +39,7 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 | Toolhead scan assigns ALL buffer spools (L127) | Standalone — toolhead must enforce max-1 spool; breaks FilaBridge sync |
 | "Already verified" activity log spam (L131) | Standalone — activity log verbosity / label-verify UX |
 | Force-location should clear deployed status (L133) | Standalone — force-location handler in details modal |
-| Activity Log ubiquity (L156–L160) | Standalone design decision |
+| Activity Log ubiquity (L158–L162) | Standalone design decision |
 | Location Manager redesign (L175–L201) | IN PROGRESS — multi-phase, separately tracked |
 | Bulk Moves (L203) | Blocked by Location Manager Phase 3+ |
 | Buffer scan assign-all (L206) | Likely already fixed — verify & close |
