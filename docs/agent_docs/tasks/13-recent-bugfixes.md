@@ -16,27 +16,37 @@ Fix four recently-reported bugs surfaced post-quickswap-merge:
 ## Items to Complete
 
 ### 13.1 — Quick-Weigh value field can't receive focus
-**Buglist ref:** L135
+**Buglist ref:** L135 + L150 (additional repro detail)
 **What:** "Quick weight modal that displays when adjusting weights on spools won't let me change the value in the text field, seems that it won't receve focus?"
 
-**Likely surface:** The Phase-2 `<WeightEntry>` overlay (`inventory-hub/static/js/modules/weight_entry.js`). Phase 2 (Group 12) replaced the legacy `#quickWeighModal` Bootstrap markup with an inline overlay; if focus management didn't carry over the user can't type into the value input.
+**Repro narrowed (L150, commit 20df38c):** "the weight update bug (that happens in the dedicated weight modal), the text box un-editable one, seems to occure when accessing from filament cards in location mamanger? Up and down works, but text input directly is impossible for them for some reason."
+
+Key signal: arrow keys (up/down) DO work, but the text input itself rejects keystrokes. That rules out "input is missing entirely" or "wrong element focused" — the input exists and is reachable, but something is intercepting/preventing key events. Strong suspects:
+1. A `keydown` handler higher up in the DOM is calling `e.preventDefault()` or `e.stopPropagation()` on character keys but letting arrow keys through.
+2. The Location Manager modal's keyboard nav scope is swallowing events before the overlay's input sees them — Location Manager's `kb-active` arrow-key handler may not yield to nested overlays.
+3. The Bootstrap modal containing the Location Manager card has `tabindex` / focus-trap behavior that's stealing focus back to the modal on every keystroke.
+
+**Likely surface:** The Phase-2 `<WeightEntry>` overlay (`inventory-hub/static/js/modules/weight_entry.js`) interacting with the Location Manager modal's keyboard scope.
 
 **Investigation steps:**
-- Open Quick-Weigh on a spool in dev (`http://localhost:8000/`).
-- DevTools → Elements panel → confirm overlay opened with the value `<input>`.
-- Check whether `document.activeElement` is the input or something else (overlay container, body, prior trigger).
-- Compare against the Phase-1 reference flow (the wizard `wiz-spool-empty_weight` field auto-focus).
+- Open Quick-Weigh **specifically from a filament card inside Location Manager** in dev (`http://localhost:8000/`) — the dashboard buffer-card path may not reproduce.
+- DevTools → Elements panel → confirm the overlay's value `<input>` is `document.activeElement` after open.
+- Listen on the input: `inp.addEventListener('keydown', e => console.log('keydown', e.key, 'defaultPrevented?', e.defaultPrevented))`. Type a digit. If `defaultPrevented` is true OR the listener never fires, an ancestor handler is the culprit.
+- Inspect Location Manager's keydown handlers (`inv_loc_mgr.js`) and any modal-level keyboard scope; check whether they call `e.preventDefault()` unconditionally or only on arrow/Enter/Escape.
+- Confirm that opening Quick-Weigh from a buffer card on the dashboard does NOT repro — that's the data point that points at Location Manager scope leakage.
 
 **Files:**
 - `inventory-hub/static/js/modules/weight_entry.js` — overlay open + focus logic
-- `inventory-hub/static/js/modules/inv_quickswap.js` and/or `inv_cmd.js` — Quick-Weigh trigger sites
-- `inventory-hub/tests/test_weight_entry_overlay.py` — extend with a focus-after-open assertion
+- `inventory-hub/static/js/modules/inv_loc_mgr.js` — Location Manager keyboard scope; check whether it yields to nested overlays
+- `inventory-hub/static/js/modules/inv_quickswap.js` and/or `inv_cmd.js` — Quick-Weigh trigger sites (note: from-Location-Manager trigger may live in `inv_loc_mgr.js` or `ui_builder.js`)
+- `inventory-hub/tests/test_weight_entry_overlay.py` — extend with a focus + keystroke-passthrough test for the from-LocMgr path
 
 **Acceptance criteria:**
 - [ ] Opening Quick-Weigh focuses the value input automatically
-- [ ] Typing immediately updates the field
-- [ ] Existing overlay tests still pass; new focus-on-open test added
-- [ ] Verified manually with a real spool in browser
+- [ ] Typing digits/`.`/`-`/`+` updates the field — verified in BOTH dashboard-buffer AND Location-Manager-filament-card paths
+- [ ] Arrow keys still work (no regression on the case that already works)
+- [ ] Existing overlay tests still pass; new test asserts keystrokes reach the input from the Location Manager open path
+- [ ] Verified manually in browser from a Location Manager filament card
 
 ### 13.2 — Dryer-box ghost spool after auto-eject (assigned but invisible)
 **Buglist ref:** L137

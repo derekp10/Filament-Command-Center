@@ -39,7 +39,7 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 | Toolhead scan assigns ALL buffer spools (L127) | Standalone — toolhead must enforce max-1 spool; breaks FilaBridge sync |
 | "Already verified" activity log spam (L131) | Standalone — activity log verbosity / label-verify UX |
 | Force-location should clear deployed status (L133) | Standalone — force-location handler in details modal |
-| Activity Log ubiquity (L158–L162) | Standalone design decision |
+| Activity Log ubiquity (L160–L164) | Standalone design decision |
 | Location Manager redesign (L175–L201) | IN PROGRESS — multi-phase, separately tracked |
 | Bulk Moves (L203) | Blocked by Location Manager Phase 3+ |
 | Buffer scan assign-all (L206) | Likely already fixed — verify & close |
