@@ -6,10 +6,11 @@
 
 ## Goal
 
-Fix four recently-reported bugs surfaced post-quickswap-merge:
+Fix five recently-reported bugs surfaced post-quickswap-merge:
 - A focus regression in the unified Quick-Weigh `<WeightEntry>` overlay (13.1)
 - Two dryer-box display bugs around items being assigned but not rendered (13.2, 13.3)
 - LOC: search box matching not fully working despite commit 883f6f4 (13.4 — continuing bug)
+- Remove "ALEX cap" branding from the weight overlay's high-cap warning (13.5 — copy-edit)
 
 13.2 and 13.3 are bundled because they almost certainly share root-cause code in the dryer-box card render path.
 
@@ -128,9 +129,24 @@ Key signal: arrow keys (up/down) DO work, but the text input itself rejects keys
 - [ ] Friendly-name search still works (no regression)
 - [ ] Regression test added covering the LOC: prefix path
 
+### 13.5 — Remove "ALEX cap" branding from weight modal warning
+**Buglist ref:** L152
+**What:** "Remove 'Alex Clamp' text from warning in weight modal when weight is < 0g. This text in the warning doesn't need to be in there. Its just a feature added by another AI."
+
+**Exact location:** [weight_entry.js:272](inventory-hub/static/js/modules/weight_entry.js#L272) — the high-cap branch reads `'⚠ Value clamped to initial_weight (ALEX cap).'`. (Note: Derek said "< 0g" but the only user-visible "(ALEX cap)" string is on the high-cap branch, not the low. The low-cap text at L273 is already clean.) Remove the `(ALEX cap)` parenthetical so the message reads `'⚠ Value clamped to initial_weight.'`.
+
+**Files:**
+- `inventory-hub/static/js/modules/weight_entry.js` line 272 — string edit only
+- Internal `// [ALEX FIX]` comments throughout the codebase are NOT user-visible and out of scope here. Leave those alone.
+
+**Acceptance criteria:**
+- [ ] High-cap warning no longer mentions "ALEX cap"
+- [ ] Existing weight-overlay tests still pass (no test currently asserts the parenthetical text — confirm by grep before changing)
+- [ ] Verified manually by entering a value > initial_weight in the Quick-Weigh overlay
+
 ## Testing Checklist
 
-- [ ] Manual repro and verify all 4 fixes in dev
+- [ ] Manual repro and verify all 5 fixes in dev
 - [ ] Existing Quick-Weigh tests still pass; new focus test added
 - [ ] Existing Location Manager / dryer-box tests still pass; regression tests added for 13.2 + 13.3
 - [ ] Full regression sweep before commit
