@@ -147,6 +147,8 @@ Logs Below from Prod server:
 
 * **[Feature]** Easy way to see what filaments are active on the printers at a glance, and how much filament is left in them. This item could possibly be grouped with the Project Color Loadout, It may contain some over lap with the systems in there. But I'd like to have this sooner, as I keep doing it lately to check to see if I should change spools now, or see if I can fit in one more print.
 
+* Seem sthat the weight update bug (that happens in the dedicated weight modal), the text box un-editable one, seems to occure when accessing from filament cards in location mamanger? Up and down works, but text input directly is impossible for them for some reason.
+
 ## Prusament Enhancements ##
 * Ability to merge duplicate filaments. Sometimes created when the existing filament card and the one the parcer generates based on prusament filaments don't match exactly. _[PARTIAL 2026-04-26 — duplicate **prevention** is in: tier-1 product-id matcher prefers filaments tagged with the same /spool/<id>/ as the scan, plus a duplicate-picker UI when the matcher can't disambiguate so the user picks (or chooses Create new). What's still missing: **merging existing duplicates** — a UI affordance that re-points all spools from one filament to another and archives/deletes the source. The picker prevents you from making MORE duplicates; you still need a way to clean up the ones already in the DB.]_
 
