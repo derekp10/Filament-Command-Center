@@ -1,18 +1,19 @@
 # Group 13: Recent Bugfixes (Weight + Dryer Display)
 
 **Branch name:** `feature/recent-bugfixes-weight-dryer`
-**Estimated effort:** ~3–4 hours
-**Risk:** Low-Medium — focused bug fixes; 13.2/13.3 share dryer-box render surface so verify both together
+**Estimated effort:** ~4–6 hours
+**Risk:** Medium — focused bug fixes; 13.2 / 13.3 / 13.6 all touch the toolhead↔dryer-box binding sync surface so verify them together
 
 ## Goal
 
-Fix five recently-reported bugs surfaced post-quickswap-merge:
+Fix six recently-reported bugs surfaced post-quickswap-merge:
 - A focus regression in the unified Quick-Weigh `<WeightEntry>` overlay (13.1)
 - Two dryer-box display bugs around items being assigned but not rendered (13.2, 13.3)
 - LOC: search box matching not fully working despite commit 883f6f4 (13.4 — continuing bug)
 - Remove "ALEX cap" branding from the weight overlay's high-cap warning (13.5 — copy-edit)
+- Toolhead↔dryer-box binding desync — direct toolhead assignment doesn't propagate to slot, and 0g unassignment leaves stale slot bindings (13.6)
 
-13.2 and 13.3 are bundled because they almost certainly share root-cause code in the dryer-box card render path.
+13.2, 13.3, and 13.6 are bundled because they almost certainly share root-cause code in the dryer-box / toolhead binding-sync layer (`perform_smart_move`, `perform_smart_eject`, and the auto-archive-on-empty path).
 
 ## Items to Complete
 
@@ -144,9 +145,42 @@ Key signal: arrow keys (up/down) DO work, but the text input itself rejects keys
 - [ ] Existing weight-overlay tests still pass (no test currently asserts the parenthetical text — confirm by grep before changing)
 - [ ] Verified manually by entering a value > initial_weight in the Quick-Weigh overlay
 
+### 13.6 — Toolhead ↔ dryer-box binding desync (assign + auto-archive)
+**Buglist ref:** L154
+**What:** "Assigning a spool directly to a toolhead, doens't properly update the slot in the dryerbox. Dryer box has to be updated agagain seperatly. The dryerbox and tool head (slot assignments seem to desync if toolhead is the first target.) Filaments hitting 0 also cause some weird unassignment sync. It will get removed from the slot location in filabrige, but still remain in locations/slots. This whole systenm needs another pass to to work more logically."
+
+Two distinct desync failures, same broken-sync class:
+
+**Part A — Toolhead-first assignment doesn't propagate to slot:**
+When a spool is assigned directly to a toolhead (e.g. via scan + force-move, or dropping into a toolhead-typed location) and the toolhead has a `slot_targets` binding back to a dryer-box slot, the box's slot record never gets the spool. User must manually re-assign on the box for the binding to appear correct. Likely cause: `perform_smart_move`'s toolhead branch only writes the toolhead `location` and skips the symmetric write that would set `container_slot` on the binding-source dryer-box slot.
+
+**Part B — Empty-spool unassignment is asymmetric:**
+When `remaining_weight` hits 0 and auto-archive fires, FilaBridge correctly drops its toolhead → spool mapping, but FCC's spoolman state retains the `container_slot` / dryer-box slot binding. Result: the box still shows the spool occupying a slot in the UI even though FilaBridge has released it. Likely cause: auto-archive's `_auto_archive_on_empty` path moves the spool to UNASSIGNED but doesn't clear the `container_slot` extra (or its parent box's `slot_targets`-driven view of "what's in slot N").
+
+This pairs with **13.2** (ghost spool after auto-eject) — both are facets of the same architectural gap: writes to one side of the toolhead↔box pair don't always propagate to the other.
+
+**Investigation steps:**
+- Reproduce Part A: pick a spool not currently bound, scan/force-move directly to a toolhead with a `slot_targets` binding back to a slot. Read the box record from `/api/locations` and confirm whether the binding-target slot now lists the spool. If it doesn't, that's the bug.
+- Reproduce Part B: drain a spool to 0g (or fake it via `/api/spool/<id>/update_weight` to set used = initial), trigger auto-archive, then read the box record. Confirm `container_slot` on the spool was cleared AND the box's slot view drops it.
+- Audit `perform_smart_move` (`logic.py`) for the symmetric write — does the toolhead-target branch write the binding-source slot? Compare against the dryer-box-target branch (which presumably already does write `container_slot`).
+- Audit `_auto_archive_on_empty` (`spoolman_api.py`) for `container_slot` cleanup parity with the breadcrumb (`extra.fcc_pre_archive_location`) it already plants.
+
+**Files:**
+- `inventory-hub/logic.py` — `perform_smart_move` toolhead branch (Part A); `perform_smart_eject` if it shares this code
+- `inventory-hub/spoolman_api.py` — `_auto_archive_on_empty` cleanup (Part B); `compute_dirty_extras` + `SYSTEM_MANAGED_EXTRAS` ensure the symmetric write isn't blocked
+- `inventory-hub/tests/test_archive_unarchive_helpers.py` — extend with a Part B regression test (slot binding cleared on auto-archive)
+- New test for Part A — toolhead-first assign propagates to box slot — likely `test_dryer_bindings.py` or `test_smart_move_toolhead_to_slot_sync.py`
+
+**Acceptance criteria:**
+- [ ] Part A: Assigning a spool directly to a toolhead with a `slot_targets` binding writes the binding-source slot's `container_slot` in one operation — no manual second update required
+- [ ] Part B: Auto-archive-on-empty clears `container_slot` (and the box's slot view drops the spool) symmetrically with the FilaBridge unmap that already fires
+- [ ] Activity Log entries for both paths describe what was cleared (e.g. `Cleared slot binding LR-MDB-2:SLOT:1 (auto-archive)`)
+- [ ] Regression tests covering both parts; existing 13.2 ghost-spool test continues to pass
+- [ ] Verified manually in dev for both repros
+
 ## Testing Checklist
 
-- [ ] Manual repro and verify all 5 fixes in dev
+- [ ] Manual repro and verify all 6 fixes in dev
 - [ ] Existing Quick-Weigh tests still pass; new focus test added
 - [ ] Existing Location Manager / dryer-box tests still pass; regression tests added for 13.2 + 13.3
 - [ ] Full regression sweep before commit

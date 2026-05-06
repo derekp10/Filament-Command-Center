@@ -19,7 +19,7 @@
 | 10 | 🟠 Add/Edit Wizard UX Overhaul | 10 | ~6–7.5 hrs | `READY` | [10-wizard-ux-overhaul.md](tasks/10-wizard-ux-overhaul.md) |
 | 11 | ⚫ External Parsers & Prusament Cleanup | 3 | ~3 hrs | `READY` | [11-external-parsers.md](tasks/11-external-parsers.md) |
 | 12 | 🔵 Weight Entry Unified Component — Phase 2 | 2 | ~6–10 hrs | `DONE` 2026-04-27 | [12-weight-entry-component.md](tasks/12-weight-entry-component.md) |
-| 13 | 🐛 Recent Bugfixes (Weight + Dryer Display + LOC Search) | 5 | ~3–4 hrs | `READY` | [13-recent-bugfixes.md](tasks/13-recent-bugfixes.md) |
+| 13 | 🐛 Recent Bugfixes (Weight + Dryer Display + LOC Search + Bind Desync) | 6 | ~4–6 hrs | `READY` | [13-recent-bugfixes.md](tasks/13-recent-bugfixes.md) |
 
 ## Items NOT Grouped (Solo, Deferred, or On Hold)
 
@@ -39,7 +39,7 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 | Toolhead scan assigns ALL buffer spools (L127) | Standalone — toolhead must enforce max-1 spool; breaks FilaBridge sync |
 | "Already verified" activity log spam (L131) | Standalone — activity log verbosity / label-verify UX |
 | Force-location should clear deployed status (L133) | Standalone — force-location handler in details modal |
-| Activity Log ubiquity (L162–L166) | Standalone design decision |
+| Activity Log ubiquity (L164–L168) | Standalone design decision |
 | Location Manager redesign (L175–L201) | IN PROGRESS — multi-phase, separately tracked |
 | Bulk Moves (L203) | Blocked by Location Manager Phase 3+ |
 | Buffer scan assign-all (L206) | Likely already fixed — verify & close |
