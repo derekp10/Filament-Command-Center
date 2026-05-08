@@ -13,37 +13,26 @@ funnels through) with both normal and over-deduction scenarios.
 """
 from __future__ import annotations
 
-import os
-import sys
-
 import pytest
 import requests
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import spoolman_api  # noqa: E402
-
-SPOOLMAN = "http://192.168.1.29:7913"
-
-
-def _sm_ok() -> bool:
-    try:
-        return requests.get(f"{SPOOLMAN}/api/v1/health", timeout=3).ok
-    except requests.RequestException:
-        return False
+import spoolman_api
 
 
 @pytest.fixture
-def large_throwaway_spool():
-    if not _sm_ok():
-        pytest.skip("Spoolman dev instance unreachable")
-    v_resp = requests.get(f"{SPOOLMAN}/api/v1/vendor", timeout=5)
+def large_throwaway_spool(require_spoolman: str):
+    """Create a 3kg-spec filament + spool. Local fixture (not the conftest
+    `throwaway_spool`) because the spool needs an `initial_weight` of 3000g
+    rather than the conftest default of 1000g — the whole point of these
+    tests is large-weight tracking."""
+    spoolman_url = require_spoolman
+    v_resp = requests.get(f"{spoolman_url}/api/v1/vendor", timeout=5)
     if not v_resp.ok or not v_resp.json():
         pytest.skip("no vendor in Spoolman")
     vendor_id = v_resp.json()[0]["id"]
 
     fil = requests.post(
-        f"{SPOOLMAN}/api/v1/filament",
+        f"{spoolman_url}/api/v1/filament",
         json={
             "name": "LARGE-SPOOL-TEST",
             "material": "PETG",
@@ -60,7 +49,7 @@ def large_throwaway_spool():
     fid = fil.json()["id"]
 
     sp = requests.post(
-        f"{SPOOLMAN}/api/v1/spool",
+        f"{spoolman_url}/api/v1/spool",
         json={"filament_id": fid, "initial_weight": 3000, "used_weight": 0},
         timeout=5,
     )
@@ -70,8 +59,8 @@ def large_throwaway_spool():
     try:
         yield sid
     finally:
-        requests.delete(f"{SPOOLMAN}/api/v1/spool/{sid}", timeout=5)
-        requests.delete(f"{SPOOLMAN}/api/v1/filament/{fid}", timeout=5)
+        requests.delete(f"{spoolman_url}/api/v1/spool/{sid}", timeout=5)
+        requests.delete(f"{spoolman_url}/api/v1/filament/{fid}", timeout=5)
 
 
 def test_initial_weight_above_1kg_stored_intact(large_throwaway_spool):

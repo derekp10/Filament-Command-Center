@@ -17,9 +17,9 @@
 * Check why FIL:58 wasn't marked as labeled when scanned. The `label_printed` field was retired in M7 and replaced with `needs_label_print` (boolean) — barcode-scan path now updates this field at `app.py:921-922, 968-969`. The FIL:58 case specifically needs manual repro to see whether the update fires and why Activity Log was silent. Could be because FIL:58 is an old physical swatch with no prior spoolman state. _[ON HOLD — need to locate or reprint the FIL:58 physical label/swatch before repro can be attempted. When found: scan with DevTools open → Network tab → `/api/identify_scan` response + Activity Log ticker.]_
 
 
-* Sub-bug: "Display modal on Display modal" — suspect this is the filament→spool chain at [inv_details.js:304](inventory-hub/static/js/modules/inv_details.js#L304) interacting with the silent-refresh paths at lines 386/395. Needs its own reproduction trace before fixing. _[NEEDS REPRO — exact trigger scenario is not currently remembered. When encountered again: capture exact click sequence; ideally console.trace wrapper around `openFilamentDetails` and `openSpoolDetails` to see the call stack at the double-open. Video would also help.]_
+* Sub-bug: "Display modal on Display modal" — suspect this is the filament→spool chain at [inv_details.js:304](inventory-hub/static/js/modules/inv_details.js#L304) interacting with the silent-refresh paths at lines 386/395. Needs its own reproduction trace before fixing. _[PARTIAL REPRO 2026-04-29 — Derek reports the crash appears to happen when the spool/filament details modal and the Add/Edit Wizard are both engaged simultaneously. Observed twice. This is likely the same root cause as the frontend lock-up at L22 below — a modal-on-modal race condition leaving `state.processing` stuck or an unhandled promise rejection. Next occurrence: capture DevTools Console + Network tabs BEFORE refreshing; `console.trace` wrapper around `openFilamentDetails` / `openSpoolDetails` / wizard open to see the call stack at the double-open.]_
 
-* An unknow issue caused the frontend to lock up, causing it to no longer update to take barcodes. A hard refresh (Control shift R and Control F5) fixed it. We need to figure out what caused this, and fix it so it doesn't happen again. This could be related to the eject button issue above. Also seemed to have cause updates to filabridge to stop until the front end was refreshed. _[ON HOLD — has not recurred recently. If it does: DON'T hard-refresh first. Open DevTools → Console and Network tabs, screenshot pending XHRs and any red errors, then refresh. Most likely an unhandled promise rejection leaving `state.processing` stuck true.]_
+* An unknow issue caused the frontend to lock up, causing it to no longer update to take barcodes. A hard refresh (Control shift R and Control F5) fixed it. We need to figure out what caused this, and fix it so it doesn't happen again. This could be related to the eject button issue above. Also seemed to have cause updates to filabridge to stop until the front end was refreshed. _[RECURRED 2026-04-29 — now believed to be the same root cause as the "Display modal on Display modal" bug at L20. Derek observed the crash twice when the details modal and the Add/Edit Wizard were both open. Likely a modal-on-modal race condition (e.g. wizard open fires while details modal's silent-refresh is mid-flight → unhandled promise rejection → `state.processing` stuck true → all barcode input and FilaBridge updates freeze). Next occurrence: DON'T hard-refresh first. Open DevTools → Console and Network tabs, screenshot pending XHRs and any red errors, then refresh.]_
 
 
 
@@ -122,6 +122,37 @@ Logs Below from Prod server:
 2026-04-28 05:48:28.502090+00:002026-04-27 22:48:28,501 - INFO - 🖨️ #246 [Legacy: 137] Stronghero3D PETG (Chameleon Mirror Chrome) -> CORE1-M0
 
 
+* Spools on a toolhead (yes, some how multiple are on there.) Cannot be changed once a print is started becasue the confirm change modal is being blocked, canceled, or hidden, preventing the user from swaping out filaments while a print is warming up. This wasn't intended. As I can easily forget to change a spool out during the begining of a print.
+
+* Scanning a toolhead with multiple filaments in the command center buffer, cause all filaments to be assigned to the toolhead. This shouldn't happen. Only the top most item on the list should be assigned to the toolhead. The rest should stay in the buffer. Scan was the toolhead QR code directly (Core1-M0).
+
+* Location search box should display all locations once a vaild location is selected or loaded in the Add/Edit wizzard. This should be propigated to other location search text boxes, if not already present.
+
+* Constantly being prompted that a filament or spool is verified every scan on the activity log, is a bit much, we need a way to tone that down some, or as I hate to say it, possibly turn it off. We should have another way for the user to verify this. Instead of continuing to notifying them in the Activity Log.
+
+* Forcing a location using the location edit in the spool display modal, should proably update depolyed status to be off, unless the location selected is a toolhead. (Asuming toolheads are a valid target for this location update.)
+
+* Quick weight modal that displays when adjusting weights on spools won't let me change the value in the text field, seems that it won't receve focus?
+
+* A Spool in LR-MDB-2 When auto ejected, was still assigned to the dryer box (2/2) but wasn't visible in the UI. Need to find out why and fix. Had to be found/scanned and force moved to get it fixed.
+[00:11:40] ↩️ Returned #106 -> LR-MDB-2
+[00:11:40] ⚠️ Smart Load: Ejecting #106 from XL-4...
+[00:11:40] 📦 #230 IIID Max PLA (Transition (Color Change)) -> Dryer LR-MDB-2 [Slot 1]
+
+* Seems to be that the unsorted list is missing in dryerbox locations now? anything that seem so fall into this catagory just doesn't show up, even though the box states (5/4) need to investigate whats going on there.
+
+* Location search boxes should also be able to search based on the LOC: Value (LR-MDB-1)
+
+* If possible, set certain text fields to only prompt with auto fill on some (perhaps none) fields. I think this might be a setible somewhere in the code to prevent a list of previously used values for showing up. Most of the time, this is just getting in the way for me.
+
+* **[Feature]** Easy way to see what filaments are active on the printers at a glance, and how much filament is left in them. This item could possibly be grouped with the Project Color Loadout, It may contain some over lap with the systems in there. But I'd like to have this sooner, as I keep doing it lately to check to see if I should change spools now, or see if I can fit in one more print.
+
+* Seem sthat the weight update bug (that happens in the dedicated weight modal), the text box un-editable one, seems to occure when accessing from filament cards in location mamanger? Up and down works, but text input directly is impossible for them for some reason.
+
+* Remove "Alex Clamp" text from warning in weight modal when weight is < 0g. This text in the warning doesn't need to be in there. Its just a feature added by another AI.
+
+* Assigning a spool directly to a toolhead, doens't properly update the slot in the dryerbox. Dryer box has to be updated agagain seperatly. The dryerbox and tool head (slot assignments seem to desync if toolhead is the first target.) Filaments hitting 0 also cause some weird unassignment sync. It will get removed from the slot location in filabrige, but still remain in locations/slots. This whole systenm needs another pass to to work more logically.
+
 ## Prusament Enhancements ##
 * Ability to merge duplicate filaments. Sometimes created when the existing filament card and the one the parcer generates based on prusament filaments don't match exactly. _[PARTIAL 2026-04-26 — duplicate **prevention** is in: tier-1 product-id matcher prefers filaments tagged with the same /spool/<id>/ as the scan, plus a duplicate-picker UI when the matcher can't disambiguate so the user picks (or chooses Create new). What's still missing: **merging existing duplicates** — a UI affordance that re-points all spools from one filament to another and archives/deletes the source. The picker prevents you from making MORE duplicates; you still need a way to clean up the ones already in the DB.]_
 
@@ -200,8 +231,8 @@ Logs Below from Prod server:
 *(Group 3 — Print Queue & Label Management — completed 2026-04-28; see `completed-archive.md` for resolved items.)*
 
 ## 🧪 Testing
-* conftest.py groundwork landed in M0 (`inventory-hub/tests/conftest.py` with page, api_base_url, snapshot, scan, seed_dryer_box, with_held_spool, require_server). Remaining work: migrate existing test files to use these shared fixtures instead of their duplicated setup sequences.
-* `test_return_and_breadcrumb.py::test_return_prefers_physical_source_over_first_binding` is failing with `TypeError: fake_move() got an unexpected keyword argument 'confirm_active_print'`. Found 2026-04-25 during the Phase-1A locations refactor — confirmed pre-existing on `dev` (failure reproduces on a clean checkout, unrelated to that branch's changes). Likely a `confirm_active_print` parameter was added to `logic.perform_smart_move` (or whichever function the test mocks) without updating the mock's signature in this test. Fix: open the test, find the `fake_move` lambda/function, add `confirm_active_print=None` (or `**kwargs`) to its signature so it absorbs the new keyword. Quick — but verify the test then asserts the correct behavior under the new arg, not just stops crashing.
+* `test_quickswap_visual.py::test_visual_quickswap_confirm_overlay[chromium]` — visual baseline mismatch: baseline `quickswap-confirm-overlay.png` is 800×234, actual capture is 800×426. Overlay grew taller (likely the deposit affordance / active-print banner from `feature/dryer-box-machine-quickswap`). Fix: visually verify the new layout is correct, then re-capture with `UPDATE_VISUAL_BASELINES=1 pytest inventory-hub/tests/test_quickswap_visual.py` and commit the updated PNG. Found 2026-05-07 during Group 7 wrap-up regression sweep.
+* `test_ui_details_modal_e2e.py::test_details_modal_interactions[chromium]` — `Page.click(".fcc-card-action-btn[title='View Details']")` times out at 30s because `<div class="offcanvas-backdrop fade show">` (and an `offcanvasSearch` `<select>` underneath) intercepts the click. Same flake class as the test-ordering failures noted Apr 21 (passes in isolation, fails when prior tests leak an open offcanvas). Investigation: identify which test ahead of this one opens an offcanvas / search panel and doesn't close it, or add a defensive offcanvas-close at the start of `test_details_modal_interactions`. Found 2026-05-07.
 
 ## ⚙️ App Flow, Architecture & Database
 * **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements.
