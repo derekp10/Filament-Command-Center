@@ -51,7 +51,7 @@ def test_return_prefers_physical_source_over_first_binding(client):
                   "extra": {"physical_source": "LR-MDB-2", "physical_source_slot": "1"}}
     move_calls = []
 
-    def fake_move(target, spools, target_slot=None, origin=None):
+    def fake_move(target, spools, target_slot=None, origin=None, **kwargs):
         move_calls.append((target, list(spools), target_slot, origin))
         return {"status": "success"}
 

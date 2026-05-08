@@ -19,15 +19,11 @@ Two layers of coverage:
 """
 from __future__ import annotations
 
-import os
 import re
-import sys
 from pathlib import Path
 
 import pytest
 import requests
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 JS_DIR = Path(__file__).resolve().parents[1] / "static" / "js" / "modules"
 
@@ -106,7 +102,7 @@ def test_buffer_assign_dispatches_buffer_updated():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server")
-def test_scan_fires_buffer_updated_event(page, api_base_url, clean_buffer):
+def test_scan_fires_buffer_updated_event(page, api_base_url, clean_buffer, dev_spoolman_url, scan):
     """Live end-to-end check: scan something into the buffer, observe
     the CustomEvent on the page, and verify at least one fired."""
     page.goto(api_base_url)
@@ -125,19 +121,14 @@ def test_scan_fires_buffer_updated_event(page, api_base_url, clean_buffer):
     )
 
     # Pick any existing spool to scan. If Spoolman has nothing, skip.
-    SPOOLMAN = "http://192.168.1.29:7913"
     try:
-        sr = requests.get(f"{SPOOLMAN}/api/v1/spool", timeout=5)
+        sr = requests.get(f"{dev_spoolman_url}/api/v1/spool", timeout=5)
     except requests.RequestException:
         pytest.skip("Spoolman dev instance unreachable")
     if not sr.ok or not sr.json():
         pytest.skip("no spool available to scan")
     spool_id = sr.json()[0]["id"]
-    requests.post(
-        f"{api_base_url}/api/identify_scan",
-        json={"text": f"ID:{spool_id}", "source": "test"},
-        timeout=5,
-    )
+    scan(f"ID:{spool_id}")
 
     # The scan writes to server state; the frontend picks it up on the
     # next poll tick (inv_core.js), which then fires both buffer-updated

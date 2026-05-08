@@ -16,28 +16,23 @@ import pytest
 import requests
 
 
-SPOOLMAN = "http://192.168.1.29:7913"
+def _get_spool(spoolman_url: str, sid: int) -> dict:
+    return requests.get(f"{spoolman_url}/api/v1/spool/{sid}", timeout=5).json()
 
 
-def _get_spool(sid: int) -> dict:
-    return requests.get(f"{SPOOLMAN}/api/v1/spool/{sid}", timeout=5).json()
-
-
-def _patch_spool(sid: int, body: dict) -> requests.Response:
-    return requests.patch(f"{SPOOLMAN}/api/v1/spool/{sid}", json=body, timeout=10)
+def _patch_spool(spoolman_url: str, sid: int, body: dict) -> requests.Response:
+    return requests.patch(f"{spoolman_url}/api/v1/spool/{sid}", json=body, timeout=10)
 
 
 @pytest.fixture
-def spool_with_location():
+def spool_with_location(require_spoolman: str):
     """Locate a usable spool (non-archived, has a real location, has weight
     headroom) and yield its initial snapshot. Restores the spool's
     used_weight, archived state, location, and breadcrumb extra in
     teardown so the test never leaves the dev DB in a weird state.
     """
-    try:
-        r = requests.get(f"{SPOOLMAN}/api/v1/spool", timeout=5)
-    except requests.exceptions.RequestException:
-        pytest.skip("Spoolman dev instance unreachable")
+    spoolman_url = require_spoolman
+    r = requests.get(f"{spoolman_url}/api/v1/spool", timeout=5)
     if not r.ok:
         pytest.skip(f"Spoolman returned {r.status_code} for spool list")
 
@@ -77,7 +72,7 @@ def spool_with_location():
     # Restore original state. Order matters: unarchive first, then move back,
     # then weight last (so auto-archive doesn't fire mid-restore).
     try:
-        _patch_spool(snapshot["id"], {
+        _patch_spool(spoolman_url, snapshot["id"], {
             "archived": snapshot["archived"],
             "location": snapshot["location"],
             "used_weight": float(snapshot["used_weight"]),
@@ -87,16 +82,19 @@ def spool_with_location():
         # we can get to "delete".
         breadcrumb = snapshot["extra_breadcrumb"]
         if breadcrumb is None:
-            _patch_spool(snapshot["id"], {"extra": {"fcc_pre_archive_location": '""'}})
+            _patch_spool(spoolman_url, snapshot["id"], {"extra": {"fcc_pre_archive_location": '""'}})
     except Exception:
         # Best-effort teardown; failures here shouldn't mask test failures.
         pass
 
 
-def test_archive_then_unarchive_restores_location(api_base_url: str, spool_with_location):
+def test_archive_then_unarchive_restores_location(
+    require_server: str, dev_spoolman_url: str, spool_with_location
+):
     """Drain → auto-archive (with breadcrumb) → refill → auto-unarchive
     (location restored from breadcrumb) round-trip via the inventory-hub
     API, exercising the real `update_spool` path."""
+    api_base_url = require_server
     snap = spool_with_location
     sid = snap["id"]
     initial = float(snap["initial_weight"])
@@ -110,7 +108,7 @@ def test_archive_then_unarchive_restores_location(api_base_url: str, spool_with_
     )
     assert drain_resp.ok, drain_resp.text
 
-    after_drain = _get_spool(sid)
+    after_drain = _get_spool(dev_spoolman_url, sid)
     assert after_drain.get("archived") is True, (
         f"expected auto-archive after draining spool #{sid} to 0g, "
         f"got archived={after_drain.get('archived')!r}"
@@ -136,7 +134,7 @@ def test_archive_then_unarchive_restores_location(api_base_url: str, spool_with_
     )
     assert refill_resp.ok, refill_resp.text
 
-    after_refill = _get_spool(sid)
+    after_refill = _get_spool(dev_spoolman_url, sid)
     assert after_refill.get("archived") is False, (
         f"expected auto-unarchive after refilling spool #{sid}, "
         f"got archived={after_refill.get('archived')!r}"
@@ -147,14 +145,15 @@ def test_archive_then_unarchive_restores_location(api_base_url: str, spool_with_
     )
 
 
-def test_unarchive_without_breadcrumb_stays_unassigned(api_base_url: str):
+def test_unarchive_without_breadcrumb_stays_unassigned(
+    require_server: str, require_spoolman: str
+):
     """If a spool was archived (e.g. via Spoolman directly) without a
     breadcrumb planted, refilling should still un-archive but leave the
     spool at UNASSIGNED for the user to relocate manually."""
-    try:
-        r = requests.get(f"{SPOOLMAN}/api/v1/spool", timeout=5)
-    except requests.exceptions.RequestException:
-        pytest.skip("Spoolman dev instance unreachable")
+    api_base_url = require_server
+    spoolman_url = require_spoolman
+    r = requests.get(f"{spoolman_url}/api/v1/spool", timeout=5)
     if not r.ok:
         pytest.skip(f"Spoolman returned {r.status_code} for spool list")
 
@@ -181,11 +180,11 @@ def test_unarchive_without_breadcrumb_stays_unassigned(api_base_url: str):
     try:
         # Move to UNASSIGNED first, THEN archive it directly via Spoolman so no
         # breadcrumb is planted (FCC's auto-archive helper would normally plant one).
-        _patch_spool(sid, {"location": ""})
+        _patch_spool(spoolman_url, sid, {"location": ""})
         # Clear any stale breadcrumb left by a prior FCC archive on this spool
         # (text-typed extras: JSON-empty-string is closest to "absent").
-        _patch_spool(sid, {"extra": {"fcc_pre_archive_location": '""'}})
-        _patch_spool(sid, {"archived": True})
+        _patch_spool(spoolman_url, sid, {"extra": {"fcc_pre_archive_location": '""'}})
+        _patch_spool(spoolman_url, sid, {"archived": True})
 
         # Refill via FCC update — should auto-unarchive but leave at UNASSIGNED.
         refill_resp = requests.post(
@@ -195,7 +194,7 @@ def test_unarchive_without_breadcrumb_stays_unassigned(api_base_url: str):
         )
         assert refill_resp.ok, refill_resp.text
 
-        after = _get_spool(sid)
+        after = _get_spool(spoolman_url, sid)
         assert after.get("archived") is False, (
             f"expected auto-unarchive to fire on breadcrumb-less spool #{sid}"
         )
@@ -205,8 +204,8 @@ def test_unarchive_without_breadcrumb_stays_unassigned(api_base_url: str):
         )
     finally:
         # Restore: unarchive first, then weight + location + archived state.
-        _patch_spool(sid, {"archived": False})
-        _patch_spool(sid, {
+        _patch_spool(spoolman_url, sid, {"archived": False})
+        _patch_spool(spoolman_url, sid, {
             "used_weight": float(original_used),
             "location": original_loc,
             "archived": original_archived,

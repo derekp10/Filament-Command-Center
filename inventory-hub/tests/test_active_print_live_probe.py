@@ -12,21 +12,16 @@ actually active — skips gracefully otherwise.
 """
 from __future__ import annotations
 
-import os
-
 import pytest
 import requests
 from playwright.sync_api import Page
 
 
-BASE_URL = os.environ.get("INVENTORY_HUB_URL", "http://localhost:8000")
-
-
-def _first_active_toolhead():
+def _first_active_toolhead(api_base_url: str):
     """Walk every toolhead in printer_map and return the first one PrusaLink
     reports as PRINTING/PAUSED/BUSY. Returns None if nothing is active."""
     try:
-        pm = requests.get(f"{BASE_URL}/api/printer_map", timeout=5).json().get("printers", {})
+        pm = requests.get(f"{api_base_url}/api/printer_map", timeout=5).json().get("printers", {})
     except requests.RequestException:
         return None
     for entries in pm.values():
@@ -35,7 +30,7 @@ def _first_active_toolhead():
             if not loc:
                 continue
             try:
-                st = requests.get(f"{BASE_URL}/api/printer_state/{loc}", timeout=5).json()
+                st = requests.get(f"{api_base_url}/api/printer_state/{loc}", timeout=5).json()
             except requests.RequestException:
                 continue
             if st.get("known") and st.get("is_active"):
@@ -43,24 +38,24 @@ def _first_active_toolhead():
     return None
 
 
-def test_backend_probe_returns_active_when_printer_is_printing():
+def test_backend_probe_returns_active_when_printer_is_printing(api_base_url: str):
     """Step 1: backend endpoint confirms at least one printer is actively printing."""
-    result = _first_active_toolhead()
+    result = _first_active_toolhead(api_base_url)
     if not result:
         pytest.skip("No printer reports PRINTING/PAUSED/BUSY right now — re-run during a print.")
     assert result["is_active"] is True
     assert result["state"] in {"PRINTING", "PAUSED", "BUSY"}
 
 
-def test_frontend_helper_returns_stateinfo_for_active_toolhead(page: Page):
+def test_frontend_helper_returns_stateinfo_for_active_toolhead(page: Page, api_base_url: str):
     """Step 2: window.fetchPrinterStateForToolhead returns non-null for the
     active toolhead. If this step returns null while step 1 passes, the
     helper's filtering logic is wrong."""
-    active = _first_active_toolhead()
+    active = _first_active_toolhead(api_base_url)
     if not active:
         pytest.skip("No printer reports PRINTING/PAUSED/BUSY right now.")
 
-    page.goto(BASE_URL)
+    page.goto(api_base_url)
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.fetchPrinterStateForToolhead === 'function'")
 
@@ -75,20 +70,20 @@ def test_frontend_helper_returns_stateinfo_for_active_toolhead(page: Page):
     assert result["state"] in {"PRINTING", "PAUSED", "BUSY"}
 
 
-def test_showconfirmoverlay_injects_banner_for_active_toolhead(page: Page):
+def test_showconfirmoverlay_injects_banner_for_active_toolhead(page: Page, api_base_url: str):
     """Step 3: open a Dryer Box, click a Quick-Swap button that targets the
     active toolhead, and confirm the banner HTML lands in the overlay body."""
-    active = _first_active_toolhead()
+    active = _first_active_toolhead(api_base_url)
     if not active:
         pytest.skip("No printer reports PRINTING/PAUSED/BUSY right now.")
 
-    page.goto(BASE_URL)
+    page.goto(api_base_url)
     page.wait_for_selector("#buffer-zone")
 
     # Open any dryer box that has a bound slot feeding the active toolhead.
     # We use the /api/dryer_boxes/slots flat enumeration to pick one.
     try:
-        slots = requests.get(f"{BASE_URL}/api/dryer_boxes/slots", timeout=5).json()
+        slots = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json()
     except requests.RequestException:
         pytest.skip("dryer_boxes/slots endpoint not responding")
     # slots shape: either [{box, slot, target}, ...] OR {slots: [...]} — try both.
