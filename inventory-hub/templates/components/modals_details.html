@@ -19,6 +19,15 @@
                         </p>
                         <p class="mb-1"><strong>Material:</strong> <span id="detail-material"></span></p>
                         <p class="mb-1"><strong>Vendor:</strong> <span id="detail-vendor"></span></p>
+                        <div class="mb-1" style="display:grid; grid-template-columns: max-content max-content max-content max-content max-content; column-gap: 0.6rem; row-gap: 0.15rem; align-items: baseline;">
+                            <strong>🔥 Nozzle:</strong>
+                            <span class="small text-muted">Min:</span><span id="spool-detail-temp-nozzle"></span>
+                            <span class="small text-muted">Max:</span><span id="spool-detail-temp-nozzle-max"></span>
+
+                            <strong>🛏️ Bed:</strong>
+                            <span class="small text-muted">Min:</span><span id="spool-detail-temp-bed"></span>
+                            <span class="small text-muted">Max:</span><span id="spool-detail-temp-bed-max"></span>
+                        </div>
                         <p class="mb-1"><strong>Weight:</strong> <span id="detail-weight"></span></p>
                         <p class="mb-1"><strong>Used:</strong> <span id="detail-used"></span></p>
                         <p class="mb-1"><strong>Remaining:</strong> <span id="detail-remaining"
@@ -90,9 +99,23 @@
                         <p class="mb-1"><strong>Brand:</strong> <span id="fil-detail-vendor"></span></p>
                         <p class="mb-1"><strong>Material:</strong> <span id="fil-detail-material"></span></p>
                         <hr>
-                        <p class="mb-1"><strong>🔥 Nozzle:</strong> <span id="fil-detail-temp-nozzle"></span></p>
-                        <p class="mb-1"><strong>🛏️ Bed:</strong> <span id="fil-detail-temp-bed"></span></p>
+                        <div class="mb-1" style="display:grid; grid-template-columns: max-content max-content max-content max-content max-content; column-gap: 0.6rem; row-gap: 0.15rem; align-items: baseline;">
+                            <strong>🔥 Nozzle:</strong>
+                            <span class="small text-muted">Min:</span><span id="fil-detail-temp-nozzle"></span>
+                            <span class="small text-muted">Max:</span><span id="fil-detail-temp-nozzle-max"></span>
+
+                            <strong>🛏️ Bed:</strong>
+                            <span class="small text-muted">Min:</span><span id="fil-detail-temp-bed"></span>
+                            <span class="small text-muted">Max:</span><span id="fil-detail-temp-bed-max"></span>
+                        </div>
                         <p class="mb-1"><strong>Density:</strong> <span id="fil-detail-density"></span></p>
+                        <p class="mb-1 d-flex align-items-center">
+                            <strong class="me-1">🎚️ Slicer Profile:</strong>
+                            <span id="fil-detail-slicer-profile" class="me-1"></span>
+                            <button class="btn btn-sm btn-outline-secondary py-0 px-1 border-0"
+                                onclick="promptEditSlicerProfile(document.getElementById('fil-detail-id').innerText, document.getElementById('fil-detail-slicer-profile').dataset.value || '')"
+                                title="Change Slicer Profile">✏️</button>
+                        </p>
                     </div>
                     <div class="col-md-6 text-center">
                         <div id="fil-detail-swatch" class="fcc-modal-swatch-square">
@@ -443,6 +466,13 @@
 
                     <!-- ADVANCED -->
                     <div class="tab-pane fade" id="editfil-tab-advanced" role="tabpanel">
+                        <div class="mb-2">
+                            <label class="form-label text-light small mb-1">Slicer Profile</label>
+                            <div class="d-flex gap-2">
+                                <select id="editfil-slicer-profile" class="form-select bg-black text-white border-secondary"></select>
+                                <input type="text" id="editfil-slicer-profile-new" class="form-control bg-black text-white border-secondary d-none" placeholder="New profile name…" autocomplete="off">
+                            </div>
+                        </div>
                         <div class="mb-2">
                             <label class="form-label text-light small mb-1">Product URL</label>
                             <input type="url" id="editfil-product-url" class="form-control bg-black text-white border-secondary" placeholder="https://..." autocomplete="off">

@@ -71,6 +71,7 @@ Inventory of current production write surfaces (keep this list updated when addi
 | `logic.py:692` | `perform_smart_eject` return-home | Activity log on failure. |
 | `logic.py:714` | `perform_smart_eject` relocate | Activity log on failure. |
 | `logic.py:754` | `perform_force_unassign` | Activity log on failure. |
+| `inv_details.js:promptEditSlicerProfile` | Pencil overlay on filament details modal | Client-side merges current `extra` from `/api/filaments/<id>` before POST to `/api/update_filament` so siblings (`nozzle_temp_max`, `sheet_link`, `filament_attributes`, etc.) are preserved. Surfaces error in Swal. Fires `add_choice` POST after successful save when user typed a brand-new profile name. |
 
 ### Weight-entry surfaces (known fragmentation hot-spot)
 

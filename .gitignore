@@ -2,8 +2,9 @@
 __pycache__/
 *.pyc
 inventory-hub/hub.log
-# Claude local settings
+# Claude local settings + runtime locks
 .claude/settings.local.json
+.claude/*.lock
 
 # Secrets & Local Config
 config.json
