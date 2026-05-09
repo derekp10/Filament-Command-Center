@@ -107,7 +107,9 @@ def _stub_editfil_fetches(page: Page):
             if (url === '/api/external/fields') {
                 return new Response(JSON.stringify({success: true, fields: {filament: [
                     {key: 'filament_attributes', field_type: 'choice', multi_choice: true,
-                     choices: ['Silk', 'Matte', 'Carbon Fiber', 'Glow']}
+                     choices: ['Silk', 'Matte', 'Carbon Fiber', 'Glow']},
+                    {key: 'slicer_profile', field_type: 'choice', multi_choice: false,
+                     choices: ['Basic PLA', 'Basic PETG', 'High-Speed PLA']}
                 ], spool: []}}), {status: 200, headers: {'Content-Type': 'application/json'}});
             }
             if (url === '/api/external/fields/add_choice') {
@@ -1235,3 +1237,302 @@ def test_modal_surfaces_spoolman_error_body(page: Page):
     expect(page.locator("#editfil-error")).to_be_visible()
     text = page.locator("#editfil-error").text_content() or ""
     assert "multi_color_direction" in text or "422" in text
+
+
+# --- Slicer profile dropdown (Edit Filament Modal — Advanced tab) ----------
+
+
+def test_edit_modal_slicer_profile_populates(page: Page):
+    """Open Advanced tab — slicer dropdown lists registered choices and pre-selects current value."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 601, "name": "Gold", "material": "PLA",
+           "extra": {"slicer_profile": '"Basic PLA"'}}
+    _open_modal_with(page, fil)
+    # Wait for /api/external/fields to populate the dropdown.
+    page.wait_for_function(
+        "() => document.querySelectorAll('#editfil-slicer-profile option').length >= 5"
+    )
+    page.locator("#editfil-tab-advanced-btn").click()
+    options = page.evaluate(
+        "() => Array.from(document.querySelectorAll('#editfil-slicer-profile option'))"
+        ".map(o => ({value: o.value, text: o.textContent.trim(), selected: o.selected}))"
+    )
+    values = [o["value"] for o in options]
+    assert values[0] == ""           # (none) sentinel
+    assert "Basic PLA" in values
+    assert "Basic PETG" in values
+    assert "High-Speed PLA" in values
+    assert values[-1] == "__new__"   # add-new sentinel
+    selected = next(o for o in options if o["selected"])
+    assert selected["value"] == "Basic PLA"
+
+
+def test_edit_modal_slicer_profile_save_change(page: Page):
+    """Change selection then Save — payload carries new slicer_profile (JSON-quoted)."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 602, "name": "Gold", "material": "PLA",
+           "extra": {"slicer_profile": '"Basic PLA"', "sheet_link": '"https://x"'}}
+    _open_modal_with(page, fil)
+    page.wait_for_function(
+        "() => document.querySelectorAll('#editfil-slicer-profile option').length >= 5"
+    )
+    page.locator("#editfil-tab-advanced-btn").click()
+    page.locator("#editfil-slicer-profile").select_option("Basic PETG")
+    page.locator("#editfil-save").click()
+    page.wait_for_function("() => window.__lastFetchPayload !== null")
+
+    payload = page.evaluate("() => window.__lastFetchPayload")
+    extra = payload["data"]["extra"]
+    assert extra["slicer_profile"] == '"Basic PETG"'
+    # Sibling extras preserved through merge.
+    assert extra.get("sheet_link") == '"https://x"'
+    # No add_choice POST since we picked an existing choice.
+    added = page.evaluate("() => window.__addedChoices")
+    keys = [a.get("key") for a in added]
+    assert "slicer_profile" not in keys
+
+
+def test_edit_modal_slicer_profile_add_new(page: Page):
+    """Pick __new__ → type name → Save: extras carry new value AND add_choice POST fires."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 603, "name": "Gold", "material": "PLA"}
+    _open_modal_with(page, fil)
+    page.wait_for_function(
+        "() => document.querySelectorAll('#editfil-slicer-profile option').length >= 5"
+    )
+    page.locator("#editfil-tab-advanced-btn").click()
+    page.locator("#editfil-slicer-profile").select_option("__new__")
+    expect(page.locator("#editfil-slicer-profile-new")).to_be_visible()
+    page.locator("#editfil-slicer-profile-new").fill("Custom Profile")
+    page.locator("#editfil-save").click()
+    page.wait_for_function("() => window.__lastFetchPayload !== null")
+
+    payload = page.evaluate("() => window.__lastFetchPayload")
+    extra = payload["data"]["extra"]
+    assert extra["slicer_profile"] == '"Custom Profile"'
+    added = page.evaluate("() => window.__addedChoices")
+    slicer_adds = [a for a in added if a.get("key") == "slicer_profile"]
+    assert len(slicer_adds) == 1
+    assert slicer_adds[0]["new_choice"] == "Custom Profile"
+    assert slicer_adds[0]["entity_type"] == "filament"
+
+
+def test_edit_modal_slicer_profile_clear(page: Page):
+    """Pick the (none) option on a filament that had a profile → save clears the field."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
+    _stub_editfil_fetches(page)
+
+    fil = {"id": 604, "name": "Gold", "material": "PLA",
+           "extra": {"slicer_profile": '"Basic PLA"'}}
+    _open_modal_with(page, fil)
+    page.wait_for_function(
+        "() => document.querySelectorAll('#editfil-slicer-profile option').length >= 5"
+    )
+    page.locator("#editfil-tab-advanced-btn").click()
+    page.locator("#editfil-slicer-profile").select_option("")  # (none)
+    page.locator("#editfil-save").click()
+    page.wait_for_function("() => window.__lastFetchPayload !== null")
+
+    payload = page.evaluate("() => window.__lastFetchPayload")
+    extra = payload["data"]["extra"]
+    # Empty string in dirty diff → update-mode merge deletes the key from
+    # mergedExtra, so the merged extras dict carries no slicer_profile.
+    assert "slicer_profile" not in extra
+
+
+# --- Slicer profile fact card + pencil overlay (Filament Details Modal) ----
+
+
+def _stub_filament_details_for_slicer(page: Page, fil: dict):
+    """Stub the network surfaces openFilamentDetails + promptEditSlicerProfile touch.
+
+    /api/filament_details (GET ?id=) — initial details modal load
+    /api/external/fields  (GET) — choice list for the picker
+    /api/filaments/<id>   (GET) — used by promptEditSlicerProfile to read current extras for the merge
+    /api/update_filament  (POST) — captured into window.__sliceUpdatePayload
+    /api/external/fields/add_choice (POST) — captured into window.__sliceAdded
+    """
+    page.evaluate(
+        """
+        ([fil]) => {
+            window.__filamentRecord = fil;
+            window.__sliceUpdatePayload = null;
+            window.__sliceAdded = [];
+            const orig = window.fetch;
+            window.fetch = async (url, opts) => {
+                const u = typeof url === 'string' ? url : (url && url.url) || '';
+                const method = (opts && opts.method) || 'GET';
+                if (u.startsWith('/api/filament_details')) {
+                    return new Response(JSON.stringify(window.__filamentRecord),
+                        { status: 200, headers: {'Content-Type': 'application/json'} });
+                }
+                if (u === '/api/external/fields') {
+                    return new Response(JSON.stringify({success: true, fields: {filament: [
+                        {key: 'slicer_profile', field_type: 'choice', multi_choice: false,
+                         choices: ['Basic PLA', 'Basic PETG', 'High-Speed PLA']}
+                    ], spool: []}}), { status: 200, headers: {'Content-Type': 'application/json'} });
+                }
+                if (u.match(/^\\/api\\/filaments\\/\\d+$/) && method === 'GET') {
+                    return new Response(JSON.stringify({success: true, data: window.__filamentRecord}),
+                        { status: 200, headers: {'Content-Type': 'application/json'} });
+                }
+                if (u === '/api/update_filament' && method === 'POST') {
+                    window.__sliceUpdatePayload = JSON.parse(opts.body);
+                    // Apply the merged extras to the in-memory record so the next
+                    // openFilamentDetails refresh reflects what we just saved.
+                    if (window.__sliceUpdatePayload.data && window.__sliceUpdatePayload.data.extra) {
+                        window.__filamentRecord.extra = window.__sliceUpdatePayload.data.extra;
+                    }
+                    return new Response(JSON.stringify({success: true, filament: window.__filamentRecord}),
+                        { status: 200, headers: {'Content-Type': 'application/json'} });
+                }
+                if (u === '/api/external/fields/add_choice' && method === 'POST') {
+                    window.__sliceAdded.push(JSON.parse(opts.body));
+                    return new Response(JSON.stringify({success: true}),
+                        { status: 200, headers: {'Content-Type': 'application/json'} });
+                }
+                return orig(url, opts);
+            };
+        }
+        """,
+        [fil],
+    )
+
+
+def test_filament_details_slicer_factcard_renders(page: Page):
+    """openFilamentDetails populates the fact card with current value and stashes raw on dataset."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof openFilamentDetails === 'function'")
+    fil = {
+        "id": 701, "name": "Gold", "material": "PLA",
+        "settings_extruder_temp": 200, "settings_bed_temp": 60,
+        "extra": {"slicer_profile": '"Basic PLA"', "nozzle_temp_max": '"230"'},
+    }
+    _stub_filament_details_for_slicer(page, fil)
+    page.evaluate("(fid) => openFilamentDetails(fid)",701)
+    expect(page.locator("#filamentModal.show")).to_have_count(1)
+    # Fact card text + dataset round-trip.
+    expect(page.locator("#fil-detail-slicer-profile")).to_have_text("Basic PLA")
+    raw = page.evaluate("() => document.getElementById('fil-detail-slicer-profile').dataset.value")
+    assert raw == "Basic PLA"
+    # Max temp display also wired up.
+    expect(page.locator("#fil-detail-temp-nozzle-max")).to_have_text("230°C")
+    # Bed max missing → "--".
+    expect(page.locator("#fil-detail-temp-bed-max")).to_have_text("--")
+
+
+def test_filament_details_slicer_factcard_missing_renders_dash(page: Page):
+    """Filament with no slicer_profile shows '--' in the fact card."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof openFilamentDetails === 'function'")
+    fil = {"id": 702, "name": "Gold", "material": "PLA", "extra": {}}
+    _stub_filament_details_for_slicer(page, fil)
+    page.evaluate("(fid) => openFilamentDetails(fid)",702)
+    expect(page.locator("#filamentModal.show")).to_have_count(1)
+    expect(page.locator("#fil-detail-slicer-profile")).to_have_text("--")
+
+
+def test_filament_details_slicer_pencil_changes_profile(page: Page):
+    """Click ✏️ → pick different choice → Save sends merged extras to /api/update_filament."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof openFilamentDetails === 'function'")
+    page.wait_for_function("typeof window.promptEditSlicerProfile === 'function'")
+
+    fil = {
+        "id": 703, "name": "Gold", "material": "PLA",
+        "extra": {
+            "slicer_profile": '"Basic PLA"',
+            "nozzle_temp_max": '"230"',     # sibling that must survive
+            "sheet_link": '"https://x"',    # another sibling
+        },
+    }
+    _stub_filament_details_for_slicer(page, fil)
+    page.evaluate("(fid) => openFilamentDetails(fid)",703)
+    expect(page.locator("#filamentModal.show")).to_have_count(1)
+
+    # Click pencil; Swal opens.
+    page.locator('#filamentModal button[title="Change Slicer Profile"]').click()
+    page.wait_for_selector("#swal-slicer-list", timeout=3_000)
+
+    # Click the "Basic PETG" row.
+    page.locator('.swal-slicer-item[data-id="Basic PETG"]').click()
+    # Confirm.
+    page.locator(".swal2-confirm").click()
+    page.wait_for_function("() => window.__sliceUpdatePayload !== null")
+
+    payload = page.evaluate("() => window.__sliceUpdatePayload")
+    extra = payload["data"]["extra"]
+    assert extra["slicer_profile"] == '"Basic PETG"'
+    # Siblings preserved.
+    assert extra["nozzle_temp_max"] == '"230"'
+    assert extra["sheet_link"] == '"https://x"'
+    # No add_choice POST since we picked an existing choice.
+    added = page.evaluate("() => window.__sliceAdded")
+    assert added == []
+
+
+def test_filament_details_slicer_pencil_add_new(page: Page):
+    """Type a brand-new profile name → Save fires both update_filament AND add_choice."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof openFilamentDetails === 'function'")
+    page.wait_for_function("typeof window.promptEditSlicerProfile === 'function'")
+
+    fil = {"id": 704, "name": "Gold", "material": "PLA", "extra": {}}
+    _stub_filament_details_for_slicer(page, fil)
+    page.evaluate("(fid) => openFilamentDetails(fid)",704)
+    expect(page.locator("#filamentModal.show")).to_have_count(1)
+    page.locator('#filamentModal button[title="Change Slicer Profile"]').click()
+    page.wait_for_selector("#swal-slicer-new", timeout=3_000)
+    page.locator("#swal-slicer-new").fill("Wild Profile")
+    page.locator(".swal2-confirm").click()
+    page.wait_for_function("() => window.__sliceUpdatePayload !== null")
+
+    payload = page.evaluate("() => window.__sliceUpdatePayload")
+    extra = payload["data"]["extra"]
+    assert extra["slicer_profile"] == '"Wild Profile"'
+    added = page.evaluate("() => window.__sliceAdded")
+    slicer_adds = [a for a in added if a.get("key") == "slicer_profile"]
+    assert len(slicer_adds) == 1
+    assert slicer_adds[0]["new_choice"] == "Wild Profile"
+
+
+def test_filament_details_slicer_pencil_clear(page: Page):
+    """Pick (none) on a filament that had a profile → slicer_profile removed from extras."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof openFilamentDetails === 'function'")
+    page.wait_for_function("typeof window.promptEditSlicerProfile === 'function'")
+
+    fil = {"id": 705, "name": "Gold", "material": "PLA",
+           "extra": {"slicer_profile": '"Basic PLA"', "sheet_link": '"https://x"'}}
+    _stub_filament_details_for_slicer(page, fil)
+    page.evaluate("(fid) => openFilamentDetails(fid)",705)
+    expect(page.locator("#filamentModal.show")).to_have_count(1)
+    page.locator('#filamentModal button[title="Change Slicer Profile"]').click()
+    page.wait_for_selector("#swal-slicer-list", timeout=3_000)
+    page.locator('.swal-slicer-item[data-id=""]').click()
+    page.locator(".swal2-confirm").click()
+    page.wait_for_function("() => window.__sliceUpdatePayload !== null")
+
+    payload = page.evaluate("() => window.__sliceUpdatePayload")
+    extra = payload["data"]["extra"]
+    assert "slicer_profile" not in extra
+    assert extra["sheet_link"] == '"https://x"'  # sibling preserved

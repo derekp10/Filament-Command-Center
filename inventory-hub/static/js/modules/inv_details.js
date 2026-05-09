@@ -1,4 +1,15 @@
 /* MODULE: DETAILS (Spool & Filament Modals) */
+
+// Module-scope helper: strip the JSON-quote wrapping Spoolman applies to
+// text-typed extras (e.g. `'"Basic PLA"'` → `'Basic PLA'`). Shared by
+// openSpoolDetails / openFilamentDetails populators, _editfilOpenModal
+// (the Edit Filament form), and promptEditSlicerProfile.
+const unquoteExtra = (v) => {
+    if (v == null) return '';
+    const s = String(v);
+    if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1);
+    return s;
+};
 console.log("🚀 Loaded Module: DETAILS");
 
 const openSpoolDetails = (id, silent = false) => {
@@ -57,6 +68,19 @@ const openSpoolDetails = (id, silent = false) => {
 
             document.getElementById('detail-material').innerText = fil.material || "Unknown";
             document.getElementById('detail-vendor').innerText = fil.vendor?.name || "Unknown";
+
+            // Temperatures (sourced from the parent filament). Min/recommended
+            // live on native Spoolman fields; max temps are text-typed extras.
+            const filExtra = fil.extra || {};
+            const writeSpoolTemp = (id, v) => {
+                const el = document.getElementById(id);
+                if (el) el.innerText = (v != null && v !== '') ? `${v}°C` : "--";
+            };
+            writeSpoolTemp('spool-detail-temp-nozzle',     fil.settings_extruder_temp);
+            writeSpoolTemp('spool-detail-temp-nozzle-max', unquoteExtra(filExtra.nozzle_temp_max));
+            writeSpoolTemp('spool-detail-temp-bed',        fil.settings_bed_temp);
+            writeSpoolTemp('spool-detail-temp-bed-max',    unquoteExtra(filExtra.bed_temp_max));
+
             document.getElementById('detail-weight').innerText = (fil.weight || 0) + "g";
 
             const used = d.used_weight !== null ? d.used_weight : 0;
@@ -183,6 +207,21 @@ const openFilamentDetails = (fid, silent = false) => {
 
             document.getElementById('fil-detail-temp-nozzle').innerText = d.settings_extruder_temp ? `${d.settings_extruder_temp}°C` : "--";
             document.getElementById('fil-detail-temp-bed').innerText = d.settings_bed_temp ? `${d.settings_bed_temp}°C` : "--";
+            // Max temps live in extras (text-typed, JSON-quoted on the wire).
+            const fdExtra = d.extra || {};
+            const fdNozzleMax = unquoteExtra(fdExtra.nozzle_temp_max);
+            const fdBedMax = unquoteExtra(fdExtra.bed_temp_max);
+            document.getElementById('fil-detail-temp-nozzle-max').innerText = fdNozzleMax ? `${fdNozzleMax}°C` : "--";
+            document.getElementById('fil-detail-temp-bed-max').innerText = fdBedMax ? `${fdBedMax}°C` : "--";
+            // Slicer profile fact card (read-only display + ✏️ pencil opens
+            // promptEditSlicerProfile). Stash the raw value on dataset so the
+            // edit dialog gets the actual current value, not the "--" sentinel.
+            const fdSlicer = unquoteExtra(fdExtra.slicer_profile);
+            const fdSlicerEl = document.getElementById('fil-detail-slicer-profile');
+            if (fdSlicerEl) {
+                fdSlicerEl.innerText = fdSlicer || "--";
+                fdSlicerEl.dataset.value = fdSlicer;
+            }
             document.getElementById('fil-detail-density').innerText = d.density ? `${d.density} g/cm³` : "--";
             document.getElementById('fil-detail-comment').value = d.comment || "";
 
@@ -443,6 +482,156 @@ document.addEventListener('inventory:sync-pulse', () => {
         if (fid) openFilamentDetails(fid, true); // Silent Refresh
     }
 });
+
+// --- SLICER PROFILE EDIT (Filament Details Modal Pencil) ---
+// Opens a Swal-style picker over the filament details modal so users can
+// change the slicer_profile without leaving the fact-card view. Stacks
+// inside #filamentModal via Swal `target` (same trick promptEditLocation
+// uses for spoolModal). Sends a fully-merged extras dict to /api/update_filament
+// so siblings (nozzle_temp_max, sheet_link, filament_attributes, etc.) are
+// preserved — Spoolman replaces the whole `extra` dict on PATCH.
+window.promptEditSlicerProfile = (filamentId, currentProfile) => {
+    const escHtml = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    fetch('/api/external/fields')
+        .then(r => r.json())
+        .then(d => {
+            if (!d || !d.success) {
+                Swal.fire({
+                    target: document.getElementById('filamentModal') || document.body,
+                    icon: 'error',
+                    title: 'Could not load profile choices',
+                    background: '#1e1e1e', color: '#fff',
+                });
+                return;
+            }
+            const fields = (d.fields && d.fields.filament) || [];
+            const slicerField = fields.find(f => f.key === 'slicer_profile');
+            const choices = slicerField && Array.isArray(slicerField.choices) ? slicerField.choices : [];
+
+            const items = [{ id: '', name: '-- (none) --' }, ...choices.map(c => ({ id: c, name: c }))];
+            const listHtml = items.map(it => `
+                <div class="swal-slicer-item p-2 border-bottom border-dark cursor-pointer text-light"
+                     data-id="${escHtml(it.id)}"
+                     style="transition:0.2s; ${it.id === currentProfile ? 'background:#444;' : 'background:transparent;'}">
+                    ${escHtml(it.name)}
+                </div>
+            `).join('');
+
+            Swal.fire({
+                target: document.getElementById('filamentModal') || document.body,
+                title: 'Change Slicer Profile',
+                html: `
+                    <div class="text-start">
+                        <label class="form-label text-info small mb-1">Search Profiles</label>
+                        <input type="text" id="swal-slicer-search" class="form-control bg-dark text-white border-info mb-2" placeholder="Type to filter..." autocomplete="off">
+                        <input type="hidden" id="swal-slicer-value" value="${escHtml(currentProfile)}">
+                        <div id="swal-slicer-list" class="border border-secondary rounded mb-2" style="max-height:200px;overflow-y:auto;background:#111;">
+                            ${listHtml}
+                        </div>
+                        <label class="form-label text-info small mb-1">Or add a new profile</label>
+                        <input type="text" id="swal-slicer-new" class="form-control bg-dark text-white border-info" placeholder="New profile name…" autocomplete="off">
+                    </div>
+                `,
+                showCancelButton: true,
+                confirmButtonColor: '#0dcaf0',
+                background: '#1e1e1e',
+                color: '#fff',
+                confirmButtonText: 'Save',
+                allowEscapeKey: true,
+                allowOutsideClick: false,
+                didOpen: () => {
+                    const popup = Swal.getPopup();
+                    const search = popup.querySelector('#swal-slicer-search');
+                    const hidden = popup.querySelector('#swal-slicer-value');
+                    const newInp = popup.querySelector('#swal-slicer-new');
+                    const list   = popup.querySelector('#swal-slicer-list');
+                    if (search) search.focus();
+
+                    if (list) {
+                        list.querySelectorAll('.swal-slicer-item').forEach(el => {
+                            el.addEventListener('click', () => {
+                                hidden.value = el.dataset.id;
+                                if (newInp) newInp.value = '';
+                                list.querySelectorAll('.swal-slicer-item').forEach(o => { o.style.background = 'transparent'; });
+                                el.style.background = '#444';
+                            });
+                        });
+                    }
+                    if (search && list) {
+                        search.addEventListener('input', () => {
+                            const q = search.value.toLowerCase();
+                            list.querySelectorAll('.swal-slicer-item').forEach(el => {
+                                el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none';
+                            });
+                        });
+                    }
+                    if (newInp && list) {
+                        newInp.addEventListener('input', () => {
+                            if (newInp.value.trim()) {
+                                hidden.value = '';
+                                list.querySelectorAll('.swal-slicer-item').forEach(o => { o.style.background = 'transparent'; });
+                            }
+                        });
+                    }
+                },
+                preConfirm: () => {
+                    const popup = Swal.getPopup();
+                    const newVal = (popup.querySelector('#swal-slicer-new')?.value || '').trim();
+                    const selVal = popup.querySelector('#swal-slicer-value')?.value || '';
+                    return { value: newVal || selVal, isNew: !!newVal };
+                }
+            }).then(result => {
+                if (!result.isConfirmed) return;
+                const { value: newProfile, isNew } = result.value;
+                if (newProfile === currentProfile) return;
+
+                fetch(`/api/filaments/${filamentId}`)
+                    .then(r => r.json())
+                    .then(res => {
+                        const filament = res && res.data ? res.data : null;
+                        const merged = { ...((filament && filament.extra) || {}) };
+                        if (newProfile) merged.slicer_profile = `"${newProfile}"`;
+                        else delete merged.slicer_profile;
+                        return fetch('/api/update_filament', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ id: filamentId, data: { extra: merged } }),
+                        }).then(r => r.json());
+                    })
+                    .then(saveRes => {
+                        if (!saveRes || !saveRes.success) {
+                            Swal.fire({
+                                target: document.getElementById('filamentModal') || document.body,
+                                icon: 'error',
+                                title: 'Save failed',
+                                text: (saveRes && saveRes.msg) || 'Spoolman rejected the update',
+                                background: '#1e1e1e', color: '#fff',
+                            });
+                            return;
+                        }
+                        if (isNew && newProfile) {
+                            fetch('/api/external/fields/add_choice', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ entity_type: 'filament', key: 'slicer_profile', new_choice: newProfile }),
+                            }).catch(() => {});
+                        }
+                        if (typeof showToast === 'function') showToast('Slicer profile updated', 'success', 4000);
+                        openFilamentDetails(filamentId, true);
+                    })
+                    .catch(err => {
+                        Swal.fire({
+                            target: document.getElementById('filamentModal') || document.body,
+                            icon: 'error',
+                            title: 'Save failed',
+                            text: (err && err.message) || 'Network error',
+                            background: '#1e1e1e', color: '#fff',
+                        });
+                    });
+            });
+        });
+};
 
 // --- MANUAL LOCATION OVERRIDE ---
 window.promptEditLocation = (spoolId, currentLoc) => {
@@ -837,12 +1026,9 @@ const _editfilOpenModal = (fil) => {
 
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    const unquoteExtra = (v) => {
-        if (v == null) return '';
-        const s = String(v);
-        if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1);
-        return s;
-    };
+    // unquoteExtra is now module-scoped at the top of this file; the local
+    // closure copy was lifted so openSpoolDetails / openFilamentDetails /
+    // promptEditSlicerProfile can share the same helper.
     const parseHexList = (val) => {
         if (!val) return [];
         return String(val)
@@ -868,6 +1054,7 @@ const _editfilOpenModal = (fil) => {
     const currentOriginalColor = unquoteExtra(rawExtra.original_color);
     const currentNozzleMax = unquoteExtra(rawExtra.nozzle_temp_max);
     const currentBedMax = unquoteExtra(rawExtra.bed_temp_max);
+    const currentSlicerProfile = unquoteExtra(rawExtra.slicer_profile);
     let currentAttributes = [];
     const rawAttrs = rawExtra.filament_attributes;
     if (rawAttrs != null && rawAttrs !== '') {
@@ -1322,6 +1509,11 @@ const _editfilOpenModal = (fil) => {
     let attrSelected = currentAttributes.slice(); // Current chips.
     let attrPendingNew = []; // Locally-added names awaiting silent Spoolman-choice registration on save.
 
+    // Slicer profile (single-select choice field). Same fetch as attrChoices,
+    // different shape — multi=False, so dropdown not chips.
+    let slicerChoices = [];
+    let slicerPendingNew = null; // Newly-typed name awaiting add_choice POST on save.
+
     const renderAttrChips = () => {
         if (!attrChipsHost) return;
         attrChipsHost.innerHTML = attrSelected.map((v, i) => `
@@ -1394,13 +1586,51 @@ const _editfilOpenModal = (fil) => {
             }
         };
     }
-    // Load known attribute choices from Spoolman's field schema.
+    // Slicer profile dropdown — populated from /api/external/fields choices.
+    // Empty option + existing choices + "+ Add new..." sentinel; current
+    // value is pre-selected, or appended as an orphan option if the stored
+    // value isn't (yet) in the registered choice list.
+    const slicerSelect = document.getElementById('editfil-slicer-profile');
+    const slicerNewInput = document.getElementById('editfil-slicer-profile-new');
+    const renderSlicerSelect = () => {
+        if (!slicerSelect) return;
+        const opts = ['<option value="">(none)</option>'];
+        for (const c of slicerChoices) {
+            const sel = (c === currentSlicerProfile) ? ' selected' : '';
+            opts.push(`<option value="${esc(c)}"${sel}>${esc(c)}</option>`);
+        }
+        const isOrphan = currentSlicerProfile && !slicerChoices.includes(currentSlicerProfile);
+        if (isOrphan) {
+            opts.push(`<option value="${esc(currentSlicerProfile)}" selected>${esc(currentSlicerProfile)}</option>`);
+        }
+        opts.push('<option value="__new__">+ Add new…</option>');
+        slicerSelect.innerHTML = opts.join('');
+    };
+    if (slicerSelect && slicerNewInput) {
+        slicerSelect.addEventListener('change', () => {
+            if (slicerSelect.value === '__new__') {
+                slicerNewInput.classList.remove('d-none');
+                slicerNewInput.focus();
+            } else {
+                slicerNewInput.classList.add('d-none');
+                slicerNewInput.value = '';
+            }
+        });
+    }
+    renderSlicerSelect();
+
+    // Load known attribute choices (and slicer profile choices) from Spoolman's field schema.
     fetch('/api/external/fields').then(r => r.json()).then(d => {
         if (!d || !d.success) return;
         const filamentFields = (d.fields && d.fields.filament) || [];
         const attrField = filamentFields.find(f => f.key === 'filament_attributes');
         if (attrField && Array.isArray(attrField.choices)) {
             attrChoices = attrField.choices.slice();
+        }
+        const slicerField = filamentFields.find(f => f.key === 'slicer_profile');
+        if (slicerField && Array.isArray(slicerField.choices)) {
+            slicerChoices = slicerField.choices.slice();
+            renderSlicerSelect();
         }
     }).catch(() => {});
     renderAttrChips();
@@ -1507,6 +1737,18 @@ const _editfilOpenModal = (fil) => {
         if (newOriginalColor !== unquoteExtra(rawExtra.original_color)) dirtyExtras.original_color = newOriginalColor;
         if (newNozzleMax !== unquoteExtra(rawExtra.nozzle_temp_max)) dirtyExtras.nozzle_temp_max = newNozzleMax;
         if (newBedMax !== unquoteExtra(rawExtra.bed_temp_max)) dirtyExtras.bed_temp_max = newBedMax;
+        // Slicer profile (single-select choice; "+ Add new…" sentinel routes
+        // typed value through slicerNewInput and queues silent registration).
+        let newSlicerProfile = '';
+        if (slicerSelect) {
+            newSlicerProfile = slicerSelect.value === '__new__'
+                ? (slicerNewInput ? slicerNewInput.value.trim() : '')
+                : slicerSelect.value;
+        }
+        if (newSlicerProfile !== currentSlicerProfile) dirtyExtras.slicer_profile = newSlicerProfile;
+        if (slicerSelect && slicerSelect.value === '__new__' && newSlicerProfile && !slicerChoices.includes(newSlicerProfile)) {
+            slicerPendingNew = newSlicerProfile;
+        }
         const prevAttrsArr = (() => {
             try {
                 const p = typeof rawExtra.filament_attributes === 'string'
@@ -1657,6 +1899,14 @@ const _editfilOpenModal = (fil) => {
                 }).catch(() => {});
             });
             attrPendingNew = [];
+            if (slicerPendingNew) {
+                fetch('/api/external/fields/add_choice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ entity_type: 'filament', key: 'slicer_profile', new_choice: slicerPendingNew }),
+                }).catch(() => {});
+                slicerPendingNew = null;
+            }
 
             if (pendingNewVendorName) {
                 const vr = await fetch('/api/vendors', {
