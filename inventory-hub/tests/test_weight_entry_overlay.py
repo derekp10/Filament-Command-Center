@@ -205,6 +205,252 @@ def test_gross_mode_with_missing_tare_shows_prompt_on_save(page: Page) -> None:
     assert payload["empty_spool_weight"] == 220
 
 
+def test_stored_default_mode_wins_over_caller_default_mode(page: Page) -> None:
+    """13.9 — when the user has clicked "Set as default" on Gross, opening the
+    overlay (even when the caller passes defaultMode: 'additive') should land
+    on Gross. Stored preference > caller option > first available mode."""
+    _open_dashboard(page)
+    page.evaluate(
+        "() => window.localStorage.setItem('fcc.weighEntry.defaultMode', 'gross')"
+    )
+    try:
+        _open_overlay_with(page, """{
+            spool: { id: 101, initial_weight: 1000, used_weight: 575 },
+            empty_spool_weight: 220,
+            defaultMode: 'additive',
+        }""")
+        active = page.evaluate(
+            "() => document.querySelector('.fcc-we-tab.btn-info').dataset.mode"
+        )
+        assert active == "gross", (
+            f"expected stored default 'gross' to win over caller 'additive'; got {active!r}"
+        )
+    finally:
+        page.evaluate(
+            "() => window.localStorage.removeItem('fcc.weighEntry.defaultMode')"
+        )
+
+
+def test_invalid_stored_default_falls_back_to_caller_default(page: Page) -> None:
+    """13.9 — corrupt/unknown stored value silently falls through to the
+    caller's defaultMode instead of breaking the open. Defensive against
+    a future enum change or a user fiddling with devtools."""
+    _open_dashboard(page)
+    page.evaluate(
+        "() => window.localStorage.setItem('fcc.weighEntry.defaultMode', 'nonsense')"
+    )
+    try:
+        _open_overlay_with(page, """{
+            spool: { id: 101, initial_weight: 1000, used_weight: 575 },
+            empty_spool_weight: 220,
+            defaultMode: 'gross',
+        }""")
+        active = page.evaluate(
+            "() => document.querySelector('.fcc-we-tab.btn-info').dataset.mode"
+        )
+        assert active == "gross", (
+            f"corrupt stored value should fall back to caller default 'gross'; got {active!r}"
+        )
+    finally:
+        page.evaluate(
+            "() => window.localStorage.removeItem('fcc.weighEntry.defaultMode')"
+        )
+
+
+def test_set_as_default_button_persists_current_mode(page: Page) -> None:
+    """13.9 — clicking 'Set as default' writes the current mode to localStorage."""
+    _open_dashboard(page)
+    page.evaluate(
+        "() => window.localStorage.removeItem('fcc.weighEntry.defaultMode')"
+    )
+    try:
+        _open_overlay_with(page, """{
+            spool: { id: 101, initial_weight: 1000, used_weight: 575 },
+            empty_spool_weight: 220,
+            defaultMode: 'additive',
+        }""")
+        page.click(".fcc-we-tab[data-mode='gross']")
+        page.click("#fcc-we-set-default")
+        stored = page.evaluate(
+            "() => window.localStorage.getItem('fcc.weighEntry.defaultMode')"
+        )
+        assert stored == "gross", f"expected 'gross' persisted; got {stored!r}"
+    finally:
+        page.evaluate(
+            "() => window.localStorage.removeItem('fcc.weighEntry.defaultMode')"
+        )
+
+
+def test_d_shortcut_sets_current_mode_as_default(page: Page) -> None:
+    """13.9 — pressing D (with focus outside the value input) persists the
+    current mode as the default. Mirrors the 'Set as default' click path."""
+    _open_dashboard(page)
+    page.evaluate(
+        "() => window.localStorage.removeItem('fcc.weighEntry.defaultMode')"
+    )
+    try:
+        _open_overlay_with(page, """{
+            spool: { id: 101, initial_weight: 1000, used_weight: 575 },
+            empty_spool_weight: 220,
+            defaultMode: 'set_used',
+        }""")
+        # Move focus off the value input so D isn't typed into it.
+        page.locator("#fcc-we-title").click()
+        page.keyboard.press("d")
+        stored = page.evaluate(
+            "() => window.localStorage.getItem('fcc.weighEntry.defaultMode')"
+        )
+        assert stored == "set_used", f"expected 'set_used' persisted via D; got {stored!r}"
+    finally:
+        page.evaluate(
+            "() => window.localStorage.removeItem('fcc.weighEntry.defaultMode')"
+        )
+
+
+def test_overlay_mounts_inside_open_bootstrap_modal(page: Page) -> None:
+    """13.1 — When opened while a Bootstrap modal is showing (e.g. Location
+    Manager), the overlay must mount INSIDE that modal so Bootstrap's
+    _enforceFocus focus-trap doesn't yank focus off the input on every
+    keystroke. Mounting at document.body (the prior behavior) made the value
+    field uneditable when Quick-Weigh was opened from a Location Manager
+    filament card; arrow keys still worked because the overlay's own keydown
+    handler re-focused the input, but character keys had no such hook.
+    """
+    _open_dashboard(page)
+    # Stand in a fake Bootstrap modal so we don't have to drive the full
+    # Location Manager open flow to hit the regression — what matters is the
+    # presence of a `.modal.show` element when openModal() runs.
+    page.evaluate(
+        """() => {
+            const m = document.createElement('div');
+            m.id = 'fcc-test-host-modal';
+            m.className = 'modal show';
+            m.setAttribute('tabindex', '-1');
+            m.style.cssText = 'display:block; position:fixed; inset:0;';
+            document.body.appendChild(m);
+        }"""
+    )
+    _open_overlay_with(page, """{
+        spool: { id: 101, initial_weight: 1000, used_weight: 575 },
+        empty_spool_weight: 220,
+    }""")
+    parent_id = page.evaluate(
+        "() => document.getElementById('fcc-weight-entry-overlay').parentElement.id"
+    )
+    assert parent_id == "fcc-test-host-modal", (
+        f"overlay mounted at #{parent_id}; expected to mount inside the open Bootstrap modal"
+    )
+    # Cleanup
+    page.evaluate("() => { document.getElementById('fcc-test-host-modal')?.remove(); }")
+
+
+def test_overlay_falls_back_to_document_body_without_modal(page: Page) -> None:
+    """13.1 sibling — when no Bootstrap modal is open (the dashboard
+    buffer-card path), continue mounting at document.body so the existing
+    flow is untouched."""
+    _open_dashboard(page)
+    _open_overlay_with(page, """{
+        spool: { id: 101, initial_weight: 1000, used_weight: 575 },
+        empty_spool_weight: 220,
+    }""")
+    parent_tag = page.evaluate(
+        "() => document.getElementById('fcc-weight-entry-overlay').parentElement.tagName"
+    )
+    assert parent_tag == "BODY", (
+        f"overlay parent was <{parent_tag}>; expected <BODY> when no modal is open"
+    )
+
+
+def test_value_input_accepts_keystrokes_inside_bootstrap_modal(page: Page) -> None:
+    """13.1 end-to-end — typing digits into the value input updates the field
+    even when the overlay was opened from inside an open Bootstrap modal.
+    Repro for the original bug ("text input directly is impossible").
+    """
+    _open_dashboard(page)
+    page.evaluate(
+        """() => {
+            const m = document.createElement('div');
+            m.id = 'fcc-test-host-modal';
+            m.className = 'modal show';
+            m.setAttribute('tabindex', '-1');
+            m.style.cssText = 'display:block; position:fixed; inset:0;';
+            document.body.appendChild(m);
+        }"""
+    )
+    _open_overlay_with(page, """{
+        spool: { id: 101, initial_weight: 1000, used_weight: 575 },
+        empty_spool_weight: 220,
+        defaultMode: 'gross',
+    }""")
+    # Give the autofocus setTimeout(0) a tick.
+    page.wait_for_timeout(50)
+    page.keyboard.type("645")
+    value = page.locator("#fcc-we-input").input_value()
+    assert value == "645", f"expected input value '645', got {value!r}"
+    # Cleanup
+    page.evaluate("() => { document.getElementById('fcc-test-host-modal')?.remove(); }")
+
+
+def test_gross_mode_missing_tare_skip_submits_as_net(page: Page) -> None:
+    """13.7 — In Gross mode with no resolvable empty weight, the prompt offers
+    a Skip button that downgrades the entry to Net for this submission only.
+    The typed value (645) is then treated as filament remaining, yielding
+    used = initial - net = 1000 - 645 = 355. No tare is persisted (payload's
+    empty_spool_weight stays null) and the reported mode reflects the
+    downgrade so the caller doesn't think Gross math ran.
+    """
+    _open_dashboard(page)
+    page.evaluate("() => { window._fccLastSubmit = null; }")
+    _open_overlay_with(page, """{
+        spool: { id: 101, initial_weight: 1000, used_weight: 0,
+                 color_hex: 'cc3300' },
+        empty_spool_weight: null,
+        defaultMode: 'gross',
+        context: { vendor: 'CC3D', material: 'PLA', color: 'Crimson Red' },
+        onSubmit: (p) => { window._fccLastSubmit = p; },
+    }""")
+    page.fill("#fcc-we-input", "645")
+    page.click("#fcc-we-save")
+    page.wait_for_selector("#fcc-missing-empty-weight-overlay", state="visible", timeout=3_000)
+    # The Skip button is rendered only when allowSkip is true (Gross-mode path).
+    expect(page.locator("#fcc-missing-empty-weight-overlay-skip")).to_be_visible()
+    page.click("#fcc-missing-empty-weight-overlay-skip")
+    page.wait_for_selector("#fcc-weight-entry-overlay", state="detached", timeout=3_000)
+    payload = page.evaluate("() => window._fccLastSubmit")
+    assert payload is not None, "Skip should still submit the overlay"
+    assert payload["mode"] == "net", (
+        f"Skip should downgrade to Net for this submission; got mode={payload['mode']!r}"
+    )
+    assert payload["used_weight"] == 355, (
+        f"used_weight should be initial - net = 1000 - 645 = 355; got {payload['used_weight']}"
+    )
+    assert payload["empty_spool_weight"] is None, (
+        "Skip must not persist a tare to the spool"
+    )
+
+
+def test_post_archive_prompt_has_no_skip_button(page: Page) -> None:
+    """13.7 sibling — the Skip button is gated on allowSkip=true. The
+    post-archive flow (and any other caller that doesn't opt in) must still
+    see only Cancel + Save so users can't accidentally bypass the tare
+    requirement on a path where the tare actually gets persisted.
+    """
+    _open_dashboard(page)
+    page.evaluate(
+        """() => {
+            window._fccTareRes = null;
+            window.promptMissingEmptyWeight({
+                vendor: 'CC3D', material: 'PLA', color: 'Crimson Red'
+            }).then(v => { window._fccTareRes = v; });
+        }"""
+    )
+    page.wait_for_selector("#fcc-missing-empty-weight-overlay", state="visible", timeout=3_000)
+    expect(page.locator("#fcc-missing-empty-weight-overlay-skip")).to_have_count(0)
+    expect(page.locator("#fcc-missing-empty-weight-overlay-cancel")).to_be_visible()
+    expect(page.locator("#fcc-missing-empty-weight-overlay-save")).to_be_visible()
+    page.click("#fcc-missing-empty-weight-overlay-cancel")
+
+
 def test_gross_mode_missing_tare_cancel_keeps_overlay_open(page: Page) -> None:
     _open_dashboard(page)
     _open_overlay_with(page, """{

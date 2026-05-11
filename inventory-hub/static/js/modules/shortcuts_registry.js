@@ -101,6 +101,26 @@
         keys: ['↑', '↓'],
         description: 'Navigate matching locations; Enter selects, Esc prompts before closing.'
     });
+    window.registerShortcut({
+        id: 'weigh-entry-arrows', scope: 'Weigh / Quick-Weigh Overlay',
+        keys: ['←', '→'],
+        description: 'Swap between Gross / Net / Additive / Set Used modes.'
+    });
+    window.registerShortcut({
+        id: 'weigh-entry-enter', scope: 'Weigh / Quick-Weigh Overlay',
+        keys: ['Enter'],
+        description: 'Save the weight update.'
+    });
+    window.registerShortcut({
+        id: 'weigh-entry-escape', scope: 'Weigh / Quick-Weigh Overlay',
+        keys: ['Esc'],
+        description: 'Cancel and close the overlay.'
+    });
+    window.registerShortcut({
+        id: 'weigh-entry-set-default', scope: 'Weigh / Quick-Weigh Overlay',
+        keys: ['D'],
+        description: 'Set the current mode as the default the next time this overlay opens.'
+    });
 
     // Scan-command prefixes you can type into the scan input or encode on QR labels.
     window.registerShortcut({
