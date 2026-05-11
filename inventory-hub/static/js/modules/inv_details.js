@@ -200,7 +200,12 @@ const openFilamentDetails = (fid, silent = false) => {
             if (!skipInfoRender) {
                 // --- Populate Basic Details ---
             document.getElementById('fil-detail-id').innerText = d.id;
-            document.getElementById('fil-detail-vendor').innerText = d.vendor ? d.vendor.name : "Unknown";
+            // Stash vendor.id on the span's dataset so the ✏️ pencil next to
+            // the brand text can read it without a re-fetch — same pattern
+            // used by the slicer-profile pencil below (`dataset.value`).
+            const fdVendorEl = document.getElementById('fil-detail-vendor');
+            fdVendorEl.innerText = d.vendor ? d.vendor.name : "Unknown";
+            fdVendorEl.dataset.vendorId = (d.vendor && d.vendor.id != null) ? String(d.vendor.id) : '';
             document.getElementById('fil-detail-material').innerText = d.material || "Unknown";
             document.getElementById('fil-detail-color-name').innerText = d.name || "Unknown";
             document.getElementById('fil-detail-hex').innerText = (d.color_hex || "").toUpperCase();
@@ -1023,6 +1028,10 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId) => {
 const _editfilOpenModal = (fil) => {
     const isCreate = !fil || !fil.id;
     fil = fil || {};
+    // Group 6.1: stash the editing-target so the Import-from-External
+    // panel (module-scoped functions appended at end of file) can read
+    // the current filament state without requesting it via a prop chain.
+    window._editfilState = { fil: fil, isCreate: isCreate };
 
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1412,18 +1421,23 @@ const _editfilOpenModal = (fil) => {
     const vendorIdEl = document.getElementById('editfil-vendor-id');
     const vendorNewBadge = document.getElementById('editfil-vendor-new-badge');
     const vendorInfoPill = document.getElementById('editfil-vendor-info');
+    // Group 6.2: ✏️ pencil opens the Vendor Edit modal stacked over this one.
+    // Visible only when an EXISTING vendor is selected (mirrors vendorInfoPill).
+    const vendorEditBtn = document.getElementById('editfil-vendor-edit-btn');
     const refreshVendorBadge = () => {
         const typed = (vendorNameEl.value || '').trim();
         if (!typed) {
             vendorIdEl.value = '';
             vendorNewBadge.style.display = 'none';
             if (vendorInfoPill) vendorInfoPill.style.display = 'none';
+            if (vendorEditBtn) vendorEditBtn.style.display = 'none';
             return;
         }
         const match = vendorCache.find(v => (v.name || '').toLowerCase() === typed.toLowerCase());
         if (match) {
             vendorIdEl.value = String(match.id);
             vendorNewBadge.style.display = 'none';
+            if (vendorEditBtn) vendorEditBtn.style.display = 'inline-block';
             // Surface the vendor's data so the user knows what Spoolman has on
             // file. Empty-spool weight is the most useful; extras (if any)
             // are shown in the tooltip.
@@ -1449,6 +1463,7 @@ const _editfilOpenModal = (fil) => {
             vendorIdEl.value = '';
             vendorNewBadge.style.display = 'inline-block';
             if (vendorInfoPill) vendorInfoPill.style.display = 'none';
+            if (vendorEditBtn) vendorEditBtn.style.display = 'none';
         }
     };
     bindComboDropdown({
@@ -1626,6 +1641,10 @@ const _editfilOpenModal = (fil) => {
         const attrField = filamentFields.find(f => f.key === 'filament_attributes');
         if (attrField && Array.isArray(attrField.choices)) {
             attrChoices = attrField.choices.slice();
+            // Group 6.1: surface to module-scoped Import-from-External panel
+            // so its computeFilamentBackfillDiff call can split material+attrs
+            // properly (e.g. parser returns "PLA Silk" → base "PLA", attrs ["Silk"]).
+            window._editfilAttrChoicesCache = attrChoices;
         }
         const slicerField = filamentFields.find(f => f.key === 'slicer_profile');
         if (slicerField && Array.isArray(slicerField.choices)) {
@@ -2318,3 +2337,467 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 });
+
+
+// ============================================================================
+// Group 6.2 — Vendor / Manufacturer Edit Modal V1
+// ============================================================================
+// Two entry points: pencil next to fil-detail-vendor (Filament Details modal),
+// pencil next to editfil-vendor-info (Edit Filament modal — stacks over).
+// V1 fields: name (native), comment (native, labeled "Notes"), website (extra).
+//
+// Save uses PATCH /api/vendors/<id> which calls update_vendor_or_raise — the
+// activity log + toast contract is honored on both success and rejection.
+// On success we dispatch a `vendor:updated` CustomEvent so any open Filament
+// Details / Edit Filament modal can refresh the vendor name/info pill without
+// a full re-fetch path.
+
+// Open in create-mode: vendoredit-id stays empty so vendorEditSave POSTs
+// instead of PATCHes, and vendor:created is dispatched on success. Callers
+// pass an optional prefill object: { name?, website?, comment? }.
+window.openVendorCreateModal = (prefill) => {
+    const errEl = document.getElementById('vendoredit-error');
+    if (errEl) { errEl.classList.add('d-none'); errEl.innerText = ''; }
+    document.getElementById('vendoredit-id').value = '';
+    const p = prefill || {};
+    document.getElementById('vendoredit-name').value = p.name || '';
+    document.getElementById('vendoredit-website').value = p.website || '';
+    document.getElementById('vendoredit-empty-weight').value = '';
+    document.getElementById('vendoredit-external-id').value = '';
+    document.getElementById('vendoredit-comment').value = p.comment || '';
+    const titleEl = document.getElementById('vendorEditModalLabel');
+    if (titleEl) titleEl.innerText = '➕ Add Manufacturer';
+    const regEl = document.getElementById('vendoredit-registered');
+    if (regEl) regEl.innerText = '';
+
+    const modalEl = document.getElementById('vendorEditModal');
+    if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    }
+    // Focus the name field so a one-tap name + Enter shortcut works.
+    setTimeout(() => {
+        const n = document.getElementById('vendoredit-name');
+        if (n) n.focus();
+    }, 100);
+};
+
+window.openVendorEditModal = (vendorId) => {
+    const vid = vendorId == null ? '' : String(vendorId).trim();
+    if (!vid) {
+        showToast('No manufacturer to edit.', 'warning', 4000);
+        return;
+    }
+    const titleEl = document.getElementById('vendorEditModalLabel');
+    if (titleEl) titleEl.innerText = '✏️ Edit Manufacturer';
+    const errEl = document.getElementById('vendoredit-error');
+    if (errEl) { errEl.classList.add('d-none'); errEl.innerText = ''; }
+    document.getElementById('vendoredit-id').value = vid;
+    document.getElementById('vendoredit-name').value = '';
+    document.getElementById('vendoredit-website').value = '';
+    document.getElementById('vendoredit-empty-weight').value = '';
+    document.getElementById('vendoredit-external-id').value = '';
+    document.getElementById('vendoredit-comment').value = '';
+    const regEl = document.getElementById('vendoredit-registered');
+    if (regEl) regEl.innerText = '';
+
+    fetch('/api/vendors')
+        .then(r => r.json())
+        .then(d => {
+            if (!d || !d.success) throw new Error(d && d.msg ? d.msg : 'Vendor lookup failed');
+            const v = (d.vendors || []).find(x => String(x.id) === vid);
+            if (!v) throw new Error(`Vendor #${vid} not found.`);
+            document.getElementById('vendoredit-name').value = v.name || '';
+            document.getElementById('vendoredit-comment').value = v.comment || '';
+            document.getElementById('vendoredit-external-id').value = v.external_id || '';
+            // empty_spool_weight is a number on the wire; render the raw value
+            // so the user sees the same string they'll be editing. Empty/null
+            // → empty input (the user can clear it back to null on save).
+            const wt = v.empty_spool_weight;
+            document.getElementById('vendoredit-empty-weight').value =
+                (wt == null || wt === '') ? '' : String(wt);
+            const ex = v.extra || {};
+            // Website is stored as `extra.website`. Spoolman serves text-type
+            // extras as JSON-encoded strings (`'"https://..."'`); strip the
+            // wrapping quotes for the UI input. unquoteExtra is module-scoped.
+            const site = (typeof unquoteExtra === 'function') ? unquoteExtra(ex.website) : (ex.website || '');
+            document.getElementById('vendoredit-website').value = site || '';
+            // Read-only "member since" footer — Spoolman exposes `registered`
+            // as an ISO timestamp; show only the date portion. Skipped if the
+            // payload is missing it (Spoolman versions before 0.20).
+            if (regEl && v.registered) {
+                regEl.innerText = `Registered ${String(v.registered).slice(0, 10)}`;
+            }
+
+            const modalEl = document.getElementById('vendorEditModal');
+            if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                const inst = bootstrap.Modal.getOrCreateInstance(modalEl);
+                inst.show();
+            }
+        })
+        .catch(e => {
+            showToast(`Failed to open manufacturer: ${e.message || e}`, 'error', 7000);
+        });
+};
+
+window.vendorEditSave = () => {
+    const vid = document.getElementById('vendoredit-id').value;
+    const name = document.getElementById('vendoredit-name').value.trim();
+    const website = document.getElementById('vendoredit-website').value.trim();
+    const externalId = document.getElementById('vendoredit-external-id').value.trim();
+    const emptyWtRaw = document.getElementById('vendoredit-empty-weight').value.trim();
+    const comment = document.getElementById('vendoredit-comment').value;
+    const errEl = document.getElementById('vendoredit-error');
+    const showErr = (msg) => {
+        if (errEl) { errEl.classList.remove('d-none'); errEl.innerText = msg; }
+        showToast(msg, 'error', 7000);
+    };
+    // Empty vid is legitimate — that's create mode (openVendorCreateModal).
+    // Edit mode never opens with an empty vid (openVendorEditModal rejects),
+    // so we don't need to guard against missing-id in this path anymore.
+    if (!name) { showErr('Name is required.'); return; }
+
+    // empty_spool_weight is a Spoolman number field. Empty input → null
+    // (user is clearing the value). Non-numeric → reject up-front so the
+    // user sees a clear message instead of a Spoolman 422.
+    let emptyWt = null;
+    if (emptyWtRaw !== '') {
+        const n = Number(emptyWtRaw);
+        if (!Number.isFinite(n) || n < 0) {
+            showErr('Empty Spool Weight must be a non-negative number.');
+            return;
+        }
+        emptyWt = n;
+    }
+
+    // Build payload: native fields top-level, website wrapped for the
+    // text-type extras contract (JSON_STRING_FIELDS). Backend's
+    // sanitize_outbound_data + _merge_extras_with_existing handle the rest.
+    const data = {
+        name: name,
+        comment: comment,
+        external_id: externalId,
+        empty_spool_weight: emptyWt,
+    };
+    data.extra = { website: website ? `"${website}"` : '' };
+
+    // No `vid` means we're in create mode (opened via openVendorCreateModal).
+    // POST /api/vendors → returns the new vendor body → dispatch
+    // `vendor:created` so listeners (e.g. the wizard's vendor combobox) can
+    // refetch the vendor list and auto-select the new entry.
+    const isCreate = !vid;
+    const url = isCreate ? '/api/vendors' : `/api/vendors/${encodeURIComponent(vid)}`;
+    const method = isCreate ? 'POST' : 'PATCH';
+    fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data }),
+    })
+        .then(r => r.json().then(j => ({ ok: r.ok, body: j })))
+        .then(({ ok, body }) => {
+            if (!ok || !body.success) {
+                throw new Error(body && body.msg ? body.msg : 'Spoolman rejected the request');
+            }
+            const v = body.vendor || null;
+            if (isCreate) {
+                showToast(`Manufacturer created.`, 'success', 4000);
+                document.dispatchEvent(new CustomEvent('vendor:created', {
+                    detail: { id: v && v.id != null ? String(v.id) : '', vendor: v },
+                }));
+            } else {
+                showToast(`Manufacturer updated.`, 'success', 4000);
+                document.dispatchEvent(new CustomEvent('vendor:updated', {
+                    detail: { id: vid, vendor: v },
+                }));
+            }
+            const modalEl = document.getElementById('vendorEditModal');
+            if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                const inst = bootstrap.Modal.getInstance(modalEl);
+                if (inst) inst.hide();
+            }
+        })
+        .catch(e => {
+            showErr(e.message || String(e));
+        });
+};
+
+// `vendor:updated` listener — refresh visible vendor surfaces.
+//   Filament Details modal: brand text on fil-detail-vendor (if its vendorId
+//     dataset matches the edited id).
+//   Edit Filament modal: vendor combobox name + info-pill tooltip (refetch
+//     /api/vendors so the combobox cache is current; the existing
+//     refreshVendorBadge closure inside _editfilOpenModal is not reachable
+//     from here, so we re-trigger it indirectly by setting the input value).
+document.addEventListener('vendor:updated', (e) => {
+    const vid = e.detail && e.detail.id;
+    if (!vid) return;
+    const v = e.detail.vendor;
+
+    const brandEl = document.getElementById('fil-detail-vendor');
+    if (brandEl && brandEl.dataset.vendorId === String(vid) && v) {
+        brandEl.innerText = v.name || brandEl.innerText;
+    }
+
+    // Edit Filament modal — only act when it's actually open, otherwise we'd
+    // touch stale DOM left over from a previous edit session.
+    const editModal = document.getElementById('editFilamentModal');
+    if (editModal && editModal.classList.contains('show') && v) {
+        const nameInput = document.getElementById('editfil-vendor-name');
+        const idInput = document.getElementById('editfil-vendor-id');
+        if (nameInput && idInput && idInput.value === String(vid)) {
+            nameInput.value = v.name || nameInput.value;
+            // Fire input event so bindComboDropdown's onInput handler
+            // re-runs refreshVendorBadge → re-renders the info pill.
+            nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+    }
+});
+
+
+// ============================================================================
+// Group 6.1 — External Import Panel for Edit Filament Modal
+// ============================================================================
+// Reuses the wizard's GET /api/external/search backend (external_parsers.py)
+// and window.computeFilamentBackfillDiff (defined in inv_wizard.js — loaded
+// alongside this module). Renders a per-field checkbox preview classifying
+// each parser-supplied value as silent_fill (current empty) or mismatch
+// (would overwrite). Apply Selected writes form values only — the user
+// clicks the modal's main Save button to persist.
+
+(() => {
+    // Maps from computeFilamentBackfillDiff keys to the matching
+    // #editfil-* form input IDs. Keys prefixed `extra.` write into the
+    // corresponding extra-field input that the Specs / Advanced tabs
+    // expose. Missing keys (not in this map) are silently skipped.
+    const FIELD_TO_INPUT_ID = {
+        'material': 'editfil-material',
+        'diameter': 'editfil-diameter',
+        'density': 'editfil-density',
+        'weight': 'editfil-weight',
+        'spool_weight': 'editfil-spool-weight',
+        'settings_extruder_temp': 'editfil-nozzle',
+        'settings_bed_temp': 'editfil-bed',
+        'color_hex': null,  // color hex requires the color-picker path; skipped in V1
+        'extra.nozzle_temp_max': 'editfil-nozzle-max',
+        'extra.bed_temp_max': 'editfil-bed-max',
+    };
+
+    // Display labels for the preview rows. computeFilamentBackfillDiff
+    // already supplies these for mismatches; silent fills don't, so we
+    // resolve from this table.
+    const FIELD_LABEL = {
+        'material': 'Material',
+        'diameter': 'Diameter (mm)',
+        'density': 'Density (g/cm³)',
+        'weight': 'Weight (g)',
+        'spool_weight': 'Spool weight (g)',
+        'settings_extruder_temp': 'Extruder Temp Min (°C)',
+        'settings_bed_temp': 'Bed Temp Min (°C)',
+        'color_hex': 'Color hex',
+        'extra.nozzle_temp_max': 'Nozzle Temp Max (°C)',
+        'extra.bed_temp_max': 'Bed Temp Max (°C)',
+    };
+
+    const ALL_FIELD_KEYS = Object.keys(FIELD_LABEL);
+
+    // Module-scoped stash for the currently-previewed parser template so
+    // Apply Selected can read it without re-parsing the JSON string.
+    const importState = { template: null, results: [] };
+
+    const $ = (id) => document.getElementById(id);
+    const escHtml = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    const setStatus = (msg) => {
+        const el = $('editfil-external-status');
+        if (el) el.innerText = msg || '';
+    };
+
+    const hidePreview = () => {
+        const p = $('editfil-external-preview');
+        if (p) p.classList.add('d-none');
+        const rows = $('editfil-external-preview-rows');
+        if (rows) rows.innerHTML = '';
+        importState.template = null;
+    };
+
+    window.editfilExternalCancelPreview = hidePreview;
+
+    window.editfilExternalSearch = () => {
+        const sourceEl = $('editfil-external-source');
+        const queryEl = $('editfil-external-query');
+        const resultsEl = $('editfil-external-results');
+        if (!sourceEl || !queryEl || !resultsEl) return;
+        let source = sourceEl.value;
+        let term = (queryEl.value || '').trim();
+        if (term.length < 2) { setStatus('Enter at least 2 characters or paste a URL.'); return; }
+
+        // URL auto-detect mirrors wizardSearchExternal (inv_wizard.js:1338).
+        // Lets the user paste any supported URL into the same input without
+        // needing to switch the source dropdown first.
+        if (term.includes('prusament.com/spool/')) {
+            sourceEl.value = 'prusament'; source = 'prusament';
+        } else if (term.includes('amazon.com') || term.includes('/dp/')) {
+            sourceEl.value = 'amazon'; source = 'amazon';
+        } else if (term.includes('3dfilamentprofiles.com')) {
+            sourceEl.value = '3dfp'; source = '3dfp';
+        }
+
+        hidePreview();
+        resultsEl.classList.add('d-none');
+        resultsEl.innerHTML = '';
+        setStatus(`Querying ${source}…`);
+
+        fetch(`/api/external/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(term)}`)
+            .then(r => r.json())
+            .then(d => {
+                if (!d || !d.success) throw new Error(d && d.msg ? d.msg : 'Search failed');
+                const results = d.results || [];
+                importState.results = results;
+                if (results.length === 0) {
+                    setStatus('No templates found.');
+                    return;
+                }
+                if (results.length === 1) {
+                    setStatus('1 template found — preview below.');
+                    window.editfilExternalRenderPreview(results[0]);
+                    return;
+                }
+                // Multi-result: populate the picker and let the user choose.
+                resultsEl.innerHTML = '';
+                results.forEach((f, i) => {
+                    const brand = (f.vendor && f.vendor.name) || f.manufacturer || 'Generic';
+                    const mat = f.material || '?';
+                    const color = f.color_name || f.name || 'Unknown';
+                    const wt = f.weight ? ` - ${f.weight}g` : '';
+                    const opt = document.createElement('option');
+                    opt.value = String(i);
+                    opt.innerText = `${brand} ${mat} - ${color}${wt}`;
+                    resultsEl.appendChild(opt);
+                });
+                resultsEl.classList.remove('d-none');
+                setStatus(`${results.length} templates — pick one to preview.`);
+            })
+            .catch(e => {
+                setStatus(`Error: ${e.message || e}`);
+            });
+    };
+
+    window.editfilExternalSelected = () => {
+        const sel = $('editfil-external-results');
+        if (!sel) return;
+        const idx = Number(sel.value);
+        const tpl = importState.results[idx];
+        if (tpl) window.editfilExternalRenderPreview(tpl);
+    };
+
+    window.editfilExternalRenderPreview = (template) => {
+        if (!template) { hidePreview(); return; }
+        importState.template = template;
+        const rowsHost = $('editfil-external-preview-rows');
+        const previewEl = $('editfil-external-preview');
+        if (!rowsHost || !previewEl) return;
+
+        const fil = (window._editfilState && window._editfilState.fil) || {};
+        // Need the Filament Attributes set for splitMaterialAndAttributes.
+        const knownAttrs = (window._editfilAttrChoicesCache) || [];
+
+        if (typeof window.computeFilamentBackfillDiff !== 'function') {
+            rowsHost.innerHTML = '<div class="text-warning small">Diff helper not available — wizard module may not be loaded.</div>';
+            previewEl.classList.remove('d-none');
+            return;
+        }
+
+        const diff = window.computeFilamentBackfillDiff(fil, template, knownAttrs);
+        // Build a uniform row list across silent fills and mismatches so the
+        // user can opt out of either category. Default-check silent fills,
+        // default-uncheck mismatches (per spec — opt-in to overwrites).
+        const rows = [];
+        for (const key of ALL_FIELD_KEYS) {
+            if (diff.silent && Object.prototype.hasOwnProperty.call(diff.silent, key)) {
+                rows.push({
+                    key,
+                    label: FIELD_LABEL[key] || key,
+                    stored: '(empty)',
+                    scanned: diff.silent[key],
+                    kind: 'silent',
+                    defaultChecked: true,
+                });
+            }
+        }
+        for (const m of (diff.mismatches || [])) {
+            rows.push({
+                key: m.key,
+                label: m.label || FIELD_LABEL[m.key] || m.key,
+                stored: m.stored,
+                scanned: m.scanned,
+                kind: 'mismatch',
+                defaultChecked: false,
+            });
+        }
+
+        if (rows.length === 0) {
+            rowsHost.innerHTML = '<div class="text-success small">All fields already match — nothing to import.</div>';
+            previewEl.classList.remove('d-none');
+            return;
+        }
+
+        rowsHost.innerHTML = rows.map((r, i) => {
+            const tag = r.kind === 'silent'
+                ? '<span class="badge bg-success text-dark">fill</span>'
+                : '<span class="badge bg-warning text-dark">overwrite</span>';
+            const arrow = r.kind === 'silent'
+                ? `<span class="text-light">${escHtml(r.scanned)}</span>`
+                : `<span class="text-muted">${escHtml(r.stored)}</span> → <span class="text-light">${escHtml(r.scanned)}</span>`;
+            const inputId = FIELD_TO_INPUT_ID[r.key];
+            const disabled = (inputId === null) ? 'disabled' : '';
+            const note = (inputId === null) ? ' <span class="small text-muted">(not yet supported)</span>' : '';
+            return `
+                <label class="d-flex align-items-center gap-2 small ${disabled ? 'text-muted' : 'text-light'}">
+                    <input type="checkbox" class="form-check-input editfil-import-row" data-key="${escHtml(r.key)}" ${r.defaultChecked && !disabled ? 'checked' : ''} ${disabled}>
+                    ${tag}
+                    <span class="fw-bold">${escHtml(r.label)}</span>
+                    ${arrow}${note}
+                </label>
+            `;
+        }).join('');
+
+        previewEl.classList.remove('d-none');
+    };
+
+    window.editfilExternalApplySelected = () => {
+        if (!importState.template) {
+            showToast('Nothing to apply.', 'warning', 4000);
+            return;
+        }
+        const checks = document.querySelectorAll('.editfil-import-row:checked');
+        if (checks.length === 0) {
+            showToast('No fields selected.', 'warning', 4000);
+            return;
+        }
+        const tpl = importState.template;
+        let applied = 0;
+        checks.forEach(cb => {
+            const key = cb.dataset.key;
+            const inputId = FIELD_TO_INPUT_ID[key];
+            if (!inputId) return;  // skipped (color_hex etc.)
+            const inputEl = document.getElementById(inputId);
+            if (!inputEl) return;
+            let val;
+            if (key.startsWith('extra.')) {
+                const ek = key.slice('extra.'.length);
+                const raw = (tpl.extra || {})[ek];
+                // Strip JSON wrapping the parser might have applied so the
+                // input shows a plain value. The save handler re-quotes via
+                // the standard dirtyExtras path.
+                val = (raw == null) ? '' : String(raw).replace(/^"|"$/g, '');
+            } else {
+                val = tpl[key];
+                if (val == null) val = '';
+            }
+            inputEl.value = String(val);
+            applied++;
+        });
+        showToast(`Applied ${applied} field${applied === 1 ? '' : 's'}. Click Save to persist.`, 'success', 4000);
+        hidePreview();
+    };
+})();
