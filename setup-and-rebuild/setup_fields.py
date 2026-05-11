@@ -370,4 +370,17 @@ filament_standards = [
 for key, name, ftype in filament_standards:
     create_field("filament", key, name, ftype)
 
+
+# ==========================================
+# 3. SETUP VENDOR FIELDS
+# ==========================================
+print("\n--- Setting up VENDOR Fields ---")
+# First vendor extras registration in the codebase. Backs the
+# Manufacturer/Vendor Edit modal V1 (Group 6 — Edit Modal new panels).
+# Stored as `vendor.extra.website`; surfaced in the modal as a plain text
+# input. Handled the same way as the spool/filament `*_url` extras
+# (text-typed, JSON-string-wrapped on the wire — see JSON_STRING_FIELDS in
+# spoolman_api.py).
+create_field("vendor", "website", "Vendor Website", "text")
+
 print("\n🎉 All Fields Configured Successfully!")

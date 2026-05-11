@@ -64,6 +64,7 @@ Inventory of current production write surfaces (keep this list updated when addi
 | `app.py:2496` | filabridge auto-deduct | Activity log on failure with Spoolman body. |
 | `app.py:2533` | filabridge manual recovery | Same pattern as auto-deduct. |
 | `app.py:2659` | filabridge auto-recover task (threaded) | Activity log on failure. |
+| `app.py:314` | `PATCH /api/vendors/<id>` Vendor Edit modal save | Uses `update_vendor_or_raise`; merges `extra` against existing record so partial PATCH preserves siblings; activity log on both success and rejection; surfaces Spoolman error body in response JSON for the modal to toast at 7s. |
 | `logic.py:432` | `perform_smart_move` unseat existing | Read-merge-write reference impl; logs failure. |
 | `logic.py:484` | `perform_smart_move` toolhead branch | Activity log on failure with Spoolman body. |
 | `logic.py:498` | `perform_smart_move` dryer branch | Activity log on failure. |

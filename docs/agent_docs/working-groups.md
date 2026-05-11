@@ -12,7 +12,7 @@
 | 3 | 🔴 Print Queue & Label Management | 7 | ~2.5–3.5 hrs | `DONE` 2026-04-28 | [03-print-queue-labels.md](tasks/03-print-queue-labels.md) |
 | 4 | 🔶 Archive / Delete / Cleanup Lifecycle | 4 | ~3 hrs | `PARTIAL` 2026-04-28 (4.4 deferred) | [04-archive-delete-lifecycle.md](tasks/04-archive-delete-lifecycle.md) |
 | 5 | 🟡 Edit Filament & Details Modal (small adds) | 2 | ~3 hrs | `DONE` 2026-05-08 | [05-edit-modal-small.md](tasks/05-edit-modal-small.md) |
-| 6 | 🟡 Edit Filament & Details Modal (new panels) | 2 | ~3 hrs | `READY` | [06-edit-modal-large.md](tasks/06-edit-modal-large.md) |
+| 6 | 🟡 Edit Filament & Details Modal (new panels) | 2 | ~3 hrs | `DONE` 2026-05-11 | [06-edit-modal-large.md](tasks/06-edit-modal-large.md) |
 | 7 | 🧪 Testing Housekeeping | 2 | ~1–1.5 hrs | `DONE` 2026-05-07 | [07-testing-housekeeping.md](tasks/07-testing-housekeeping.md) |
 | 8 | 🟣 Keyboard Navigation & Dialog Polish | 4 | ~3.5 hrs | `READY` | [08-keyboard-nav-polish.md](tasks/08-keyboard-nav-polish.md) |
 | 9 | ⬜ Quick-Swap Grid Enhancements & Printer Status Widget | 3 | ~4–5 hrs | `READY` | [09-quickswap-grid.md](tasks/09-quickswap-grid.md) |

@@ -105,11 +105,23 @@
                                         style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">
                                     </div>
                                 </div>
+                                <!-- ✏️ opens the Vendor Edit modal (Group 6.2). Hidden until an
+                                     existing vendor is selected — toggled by the change-listener
+                                     on wiz-fil-vendor-sel installed in wizardFetchVendors. -->
                                 <button class="btn btn-outline-secondary" type="button"
-                                    onclick="wizardToggleVendorMode()">✏️</button>
+                                    id="wiz-fil-vendor-edit-btn" style="display:none;"
+                                    onclick="openVendorEditModal(document.getElementById('wiz-fil-vendor-sel').value)"
+                                    title="Edit Manufacturer">✏️</button>
+                                <!-- ➕ opens the Vendor Edit modal in create mode, pre-filled with
+                                     whatever's typed in the search input. On save the wizard
+                                     auto-selects the newly created vendor (see vendor:created
+                                     listener wired in wizardFetchVendors). The legacy
+                                     wizardToggleVendorMode flow + extras.external_vendor_name
+                                     hack were retired in this same cleanup. -->
+                                <button class="btn btn-outline-secondary" type="button"
+                                    onclick="openVendorCreateModal({ name: document.getElementById('wiz-fil-vendor-search').value || '' })"
+                                    title="Add New Manufacturer">➕</button>
                             </div>
-                            <input type="text" class="form-control bg-dark text-warning border-secondary mt-1"
-                                id="wiz-fil-vendor-new" placeholder="Or type new vendor..." style="display:none;">
                         </div>
                         <div class="col-md-4">
                             <label class="form-label small text-secondary mb-1">MaterialType*</label>
