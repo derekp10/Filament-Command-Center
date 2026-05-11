@@ -151,6 +151,11 @@ Logs Below from Prod server:
 
 * Quick weight modal, should have a way to set a perfered weighing methiod. I currently use gross more when I'm working on a filament swap than the additive. I'd like to be able to change the default mode, instead of it always defaulting to additive. Not sure how we do this. perhaps added to a general system configuration mode, which has yet to be implemented. 
 
+* These seem interesting, and it would be great to find a way to use this in some fassion. Just putting this here as a future thing, or as something to keep in mind.
+https://github.com/pubeldev/prusa_exporter
+https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
+
+
 ## Prusament Enhancements ##
 * Ability to merge duplicate filaments. Sometimes created when the existing filament card and the one the parcer generates based on prusament filaments don't match exactly. _[PARTIAL 2026-04-26 — duplicate **prevention** is in: tier-1 product-id matcher prefers filaments tagged with the same /spool/<id>/ as the scan, plus a duplicate-picker UI when the matcher can't disambiguate so the user picks (or chooses Create new). What's still missing: **merging existing duplicates** — a UI affordance that re-points all spools from one filament to another and archives/deletes the source. The picker prevents you from making MORE duplicates; you still need a way to clean up the ones already in the DB.]_
 

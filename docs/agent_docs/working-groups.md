@@ -39,7 +39,8 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 | Toolhead scan assigns ALL buffer spools (L119) | Standalone — toolhead must enforce max-1 spool; breaks FilaBridge sync |
 | "Already verified" activity log spam (L123) | Standalone — activity log verbosity / label-verify UX |
 | Force-location should clear deployed status (L125) | Standalone — force-location handler in details modal |
-| Activity Log ubiquity (L162) | Standalone design decision |
+| Activity Log ubiquity (L167) | Standalone design decision |
+| Prusa metrics tooling research (L154) | Research / future inspiration — `prusa_exporter` + Prusa-Firmware-Buddy metrics docs. Could feed 9.3 (Printer Status widget), filabridge reconcile, or richer state probing. Not actionable as a discrete task. |
 | `test_quickswap_visual` baseline mismatch (L232) | Small standalone — re-capture with `UPDATE_VISUAL_BASELINES=1` after verifying the new overlay layout |
 | `test_ui_details_modal_e2e` offcanvas-backdrop flake (L233) | Small standalone — test-isolation audit; same flake class as Apr 21 |
 | Location Manager redesign (L195) | IN PROGRESS — multi-phase, separately tracked |
