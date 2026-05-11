@@ -67,6 +67,35 @@ def _toolhead_of(location_str, printer_map=None):
     return None
 
 
+def _find_box_slot_feeding_toolhead(toolhead_id, loc_list=None):
+    """Reverse-lookup the dryer-box slot that feeds `toolhead_id` via
+    `extra.slot_targets`. Returns (box_loc_id, slot_str) or (None, None).
+
+    Used by `perform_smart_move`'s PRINTER MOVE branch (13.6 Part A) to
+    synthesize a ghost binding when a spool is moved directly to a toolhead
+    that has a reverse-binding back to a dryer-box slot. Without this, the
+    box card never sees the spool and the user has to manually re-assign.
+
+    Multiple boxes pointing the same toolhead is degenerate but tolerated:
+    we return the first match in `locations.json` iteration order.
+    """
+    if not toolhead_id:
+        return (None, None)
+    if loc_list is None:
+        loc_list = locations_db.load_locations_list()
+    target_th = str(toolhead_id).strip().upper()
+    for row in loc_list:
+        if row.get('Type') != 'Dryer Box':
+            continue
+        slot_targets = (row.get('extra') or {}).get('slot_targets') or {}
+        for slot, bound_th in slot_targets.items():
+            if not bound_th:
+                continue
+            if str(bound_th).strip().upper() == target_th:
+                return (row.get('LocationID'), str(slot))
+    return (None, None)
+
+
 def _fb_spool_location(spool_id, fb_url=None):
     """Return (printer_name, toolhead_id) where filabridge currently has
     `spool_id` mapped, or None.
@@ -507,6 +536,27 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
                 new_extra['physical_source'] = current_loc
                 new_extra['physical_source_slot'] = current_extra.get('container_slot')
 
+            # 13.6 Part A — if the destination toolhead is the value of some
+            # dryer-box slot's `extra.slot_targets`, treat the spool as if
+            # it came from that slot so the box card lists it as a ghost in
+            # the bound slot (mirrors the slot→toolhead auto-deploy chain's
+            # forward direction). Only kicks in when there's no genuine
+            # source already (UNASSIGNED, buffer, room, etc.) — preserving
+            # the existing physical_source when the spool actually came
+            # from somewhere meaningful.
+            current_source_meaningful = bool(
+                str(new_extra.get('physical_source') or '').strip().strip('"')
+            )
+            if not current_source_meaningful:
+                bound_box, bound_slot = _find_box_slot_feeding_toolhead(target, loc_list)
+                if bound_box and bound_slot:
+                    new_extra['physical_source'] = bound_box
+                    new_extra['physical_source_slot'] = bound_slot
+                    state.logger.info(
+                        f"🔗 Reverse-binding: toolhead {target} is fed by "
+                        f"{bound_box} slot {bound_slot} — synthesizing ghost source."
+                    )
+
             p = printer_map[target]
             dest_th = (p['printer_name'], p['position'])
 
@@ -747,13 +797,41 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
             saved_source = None
 
     if saved_source:
-        if saved_source.startswith('"'): saved_source = saved_source.strip('"') 
-        
-        # [ALEX FIX] Retain the assignment slot when returning home. 
+        if saved_source.startswith('"'): saved_source = saved_source.strip('"')
+
+        # [ALEX FIX] Retain the assignment slot when returning home.
         # Move the saved slot back into container_slot
         saved_slot = extra.get('physical_source_slot', '')
         if saved_slot:
-            extra['container_slot'] = str(saved_slot).strip('"')
+            saved_slot_clean = str(saved_slot).strip('"')
+            # 13.2 — Don't recreate a slot binding that's already claimed by
+            # another spool (direct OR ghost from a different spool). The
+            # auto-deploy chain can leave a ghost in our former slot moments
+            # before we return; landing on top of it makes a 2/2-but-only-
+            # one-visible collision in the dryer-box grid. When the slot is
+            # already claimed by someone else, land unslotted — the user
+            # can manually re-slot once the binding cycle settles.
+            slot_taken_by_other = False
+            try:
+                here = spoolman_api.get_spools_at_location_detailed(saved_source) or []
+                for other in here:
+                    if int(other.get('id', 0)) == int(spool_id):
+                        continue
+                    if str(other.get('slot', '')).strip('"') == saved_slot_clean:
+                        slot_taken_by_other = True
+                        state.logger.info(
+                            f"🛑 Slot collision: {saved_source} slot {saved_slot_clean} "
+                            f"already claimed by Spool #{other.get('id')} "
+                            f"({'ghost' if other.get('is_ghost') else 'direct'}); "
+                            f"landing #{spool_id} unslotted instead."
+                        )
+                        break
+            except Exception as _slot_check_err:
+                state.logger.warning(f"Slot-collision check failed: {_slot_check_err}")
+            if slot_taken_by_other:
+                extra['container_slot'] = ""
+            else:
+                extra['container_slot'] = saved_slot_clean
             extra['physical_source_slot'] = ""
         else:
             extra['container_slot'] = ""

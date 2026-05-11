@@ -567,3 +567,69 @@ def test_migrate_parent_ids_save_load_round_trip(tmp_locations_file, sample_locs
     by_id = {r["LocationID"]: r for r in reloaded}
     assert by_id["XL-1"]["parent_id"] == "XL"
     assert by_id["CR"]["parent_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# 13.6 Part A — `_find_box_slot_feeding_toolhead` reverse-lookup
+# ---------------------------------------------------------------------------
+
+import logic  # noqa: E402
+
+
+class TestFindBoxSlotFeedingToolhead:
+    """13.6 Part A — the reverse-lookup that lets perform_smart_move
+    synthesize a ghost source when a spool is moved directly to a toolhead
+    that has a dryer-box slot pointing at it."""
+
+    def test_finds_box_slot_for_bound_toolhead(self):
+        locs = [
+            {"LocationID": "PM-DB-XL-L", "Type": "Dryer Box", "Max Spools": "4",
+             "extra": {"slot_targets": {"1": "XL-1", "2": "XL-2", "3": "XL-3", "4": "XL-4"}}},
+        ]
+        box, slot = logic._find_box_slot_feeding_toolhead("XL-3", loc_list=locs)
+        assert box == "PM-DB-XL-L"
+        assert slot == "3"
+
+    def test_returns_none_for_unbound_toolhead(self):
+        locs = [
+            {"LocationID": "PM-DB-XL-L", "Type": "Dryer Box", "Max Spools": "4",
+             "extra": {"slot_targets": {"1": "XL-1", "2": "XL-2"}}},
+        ]
+        box, slot = logic._find_box_slot_feeding_toolhead("XL-9", loc_list=locs)
+        assert box is None
+        assert slot is None
+
+    def test_case_insensitive_match(self):
+        locs = [
+            {"LocationID": "PM-DB-CORE1", "Type": "Dryer Box", "Max Spools": "1",
+             "extra": {"slot_targets": {"1": "core1-m0"}}},
+        ]
+        box, slot = logic._find_box_slot_feeding_toolhead("CORE1-M0", loc_list=locs)
+        assert box == "PM-DB-CORE1"
+        assert slot == "1"
+
+    def test_ignores_non_dryer_boxes(self):
+        """A reverse-binding only makes sense on a Dryer Box. A Cart or Room
+        whose extra contains slot_targets-shaped data shouldn't match."""
+        locs = [
+            {"LocationID": "WEIRD-CART", "Type": "Cart", "Max Spools": "4",
+             "extra": {"slot_targets": {"1": "XL-3"}}},
+            {"LocationID": "PM-DB-XL-L", "Type": "Dryer Box", "Max Spools": "4",
+             "extra": {"slot_targets": {"2": "XL-3"}}},
+        ]
+        box, slot = logic._find_box_slot_feeding_toolhead("XL-3", loc_list=locs)
+        assert box == "PM-DB-XL-L"
+        assert slot == "2"
+
+    def test_handles_box_with_no_slot_targets(self):
+        locs = [
+            {"LocationID": "PM-DB-XL-L", "Type": "Dryer Box", "Max Spools": "4"},
+        ]
+        box, slot = logic._find_box_slot_feeding_toolhead("XL-3", loc_list=locs)
+        assert box is None
+        assert slot is None
+
+    def test_empty_toolhead_id_returns_none(self):
+        box, slot = logic._find_box_slot_feeding_toolhead("", loc_list=[])
+        assert box is None
+        assert slot is None

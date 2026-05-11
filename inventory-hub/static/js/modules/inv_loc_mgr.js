@@ -754,9 +754,18 @@ const renderGrid = (data, max) => {
     grid.innerHTML = ""; un.innerHTML = ""; state.currentGrid = {};
     const unslotted = [];
 
+    // 13.3 — items with slot > max (overflow) used to go into state.currentGrid
+    // at an index the slotIndices loop never reaches → invisible. Route them
+    // into the Unslotted section so the user can see them and re-slot.
+    // Same fix: items that share a slot with another item — only the last
+    // one would render; route earlier collisions into Unslotted too (13.2).
     data.forEach(i => {
-        if (i.slot && parseInt(i.slot) > 0) state.currentGrid[i.slot] = i;
-        else unslotted.push(i);
+        const n = parseInt(i.slot);
+        if (n > 0 && n <= max && !state.currentGrid[n]) {
+            state.currentGrid[n] = i;
+        } else {
+            unslotted.push(i);
+        }
     });
 
     // Read the current location's slot_order preference (rtl reverses the

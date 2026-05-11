@@ -50,7 +50,7 @@ def test_smart_eject_restores_home_slot():
             "container_slot": "1" # Currently in slot 1 of MMU
         }
     }
-    
+
     def fake_update(sid, data):
         # We want to assert the payload 'data' passed to update_spool
         assert data['location'] == "DRYER_BOX"
@@ -64,6 +64,88 @@ def test_smart_eject_restores_home_slot():
             with patch('state.add_log_entry'):
                 res = logic.perform_smart_eject(1)
                 assert res is True
+
+
+def test_smart_eject_lands_unslotted_when_home_slot_already_claimed():
+    """13.2 — if the saved home slot is already occupied by another spool
+    (direct OR ghost from a different spool), perform_smart_eject must land
+    the returning spool unslotted instead of creating a 2-in-1-slot
+    collision that hides one of them in the dryer-box grid.
+
+    Repro: Spool #106 returning to LR-MDB-2 slot 1, but Spool #230's ghost
+    already claims slot 1 (because #230 was just deployed from there to the
+    toolhead). Pre-fix: #106 landed in slot 1, render collision, one spool
+    invisible. Post-fix: #106 lands unslotted in LR-MDB-2."""
+    spool_106 = {
+        "id": 106,
+        "location": "XL-4",
+        "extra": {
+            "physical_source": "LR-MDB-2",
+            "physical_source_slot": "1",
+            "container_slot": "",
+        },
+    }
+    other_at_box = [
+        # Ghost from #230 (deployed to XL-4 but bound to LR-MDB-2 slot 1).
+        {"id": 230, "slot": "1", "is_ghost": True, "location": "LR-MDB-2"},
+    ]
+    captured = {}
+
+    def fake_update(sid, data):
+        captured["sid"] = sid
+        captured["data"] = data
+        return True
+
+    with patch("spoolman_api.get_spool", return_value=spool_106):
+        with patch("spoolman_api.update_spool", side_effect=fake_update):
+            with patch("spoolman_api.get_spools_at_location_detailed",
+                       return_value=other_at_box):
+                with patch("state.add_log_entry"):
+                    with patch("state.logger"):
+                        res = logic.perform_smart_eject(106, confirm_active_print=True)
+                        assert res is True
+    assert captured["sid"] == 106
+    assert captured["data"]["location"] == "LR-MDB-2"
+    # The whole point: slot 1 was taken, so land unslotted.
+    assert captured["data"]["extra"]["container_slot"] == ""
+    assert captured["data"]["extra"]["physical_source_slot"] == ""
+
+
+def test_smart_eject_keeps_slot_when_only_self_claims_it():
+    """13.2 sibling — the collision check must skip the returning spool's
+    OWN ghost listing. Without this guard, a spool with physical_source =
+    its home box would match itself and always land unslotted."""
+    spool_77 = {
+        "id": 77,
+        "location": "XL-2",
+        "extra": {
+            "physical_source": "PM-DB-XL-L",
+            "physical_source_slot": "2",
+            "container_slot": "",
+        },
+    }
+    # Spool 77's OWN ghost is what `get_spools_at_location_detailed` would
+    # return when scanning PM-DB-XL-L — it's the spool we're moving, so it
+    # shouldn't count as a collision.
+    self_ghost = [
+        {"id": 77, "slot": "2", "is_ghost": True, "location": "PM-DB-XL-L"},
+    ]
+    captured = {}
+
+    def fake_update(sid, data):
+        captured["data"] = data
+        return True
+
+    with patch("spoolman_api.get_spool", return_value=spool_77):
+        with patch("spoolman_api.update_spool", side_effect=fake_update):
+            with patch("spoolman_api.get_spools_at_location_detailed",
+                       return_value=self_ghost):
+                with patch("state.add_log_entry"):
+                    with patch("state.logger"):
+                        res = logic.perform_smart_eject(77, confirm_active_print=True)
+                        assert res is True
+    # Slot is restored — only the spool's own ghost was in the way.
+    assert captured["data"]["extra"]["container_slot"] == "2"
 
 def test_get_room_from_location_parsing():
     """Verify get_room_from_location parses parent rooms and filters exclusions."""
