@@ -129,7 +129,11 @@ def test_deposit_confirm_overlay_names_the_spool_and_toolhead(page: Page, base_u
     expect(btn).to_be_visible(timeout=3000)
     btn.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
-    expect(overlay).to_be_visible(timeout=2000)
+    # showConfirmOverlay awaits a 3s active-print probe before mounting; the
+    # overlay can take up to ~3-4s to appear in a dev environment with no
+    # reachable PrusaLink. 6s timeout (was 2s) gives headroom for the probe
+    # plus network overhead. Group 14.2.
+    expect(overlay).to_be_visible(timeout=6000)
     title = page.locator("#fcc-quickswap-confirm-title")
     body = page.locator("#fcc-quickswap-confirm-body")
     expect(title).to_contain_text(box)
