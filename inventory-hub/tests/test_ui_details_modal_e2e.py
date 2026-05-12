@@ -1,7 +1,7 @@
 import pytest
 from playwright.sync_api import Page, expect
 
-def test_details_modal_interactions(page: Page):
+def test_details_modal_interactions(page: Page, reset_dom_state_js: str):
     """
     E2E test verifying:
     1. Spool cards can be clicked to open the Details Modal without JS errors.
@@ -10,34 +10,9 @@ def test_details_modal_interactions(page: Page):
     """
     page.goto("http://localhost:8000")
 
-    # Defensive: close any stale offcanvas / orphan backdrop / focused
-    # dropdown left over from a prior test in the sweep (buglist L233 /
-    # Group 14.3). Two pollution patterns observed:
-    #   - A leftover material-filter <select> in the search offcanvas
-    #     subtree intercepting later clicks on a result card.
-    #   - An orphan .offcanvas-backdrop element persisting after an
-    #     offcanvas was hidden non-cleanly — it intercepts ALL clicks
-    #     under it including the View Details button INSIDE the new
-    #     offcanvas, because the orphan z-index 1040 sits between the
-    #     viewport and the freshly-opened offcanvas content.
-    page.evaluate("""() => {
-        document.querySelectorAll('.offcanvas.show').forEach((el) => {
-            try { bootstrap.Offcanvas.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
-        });
-        // Belt-and-suspenders: remove any orphan offcanvas/modal backdrops
-        // not paired with a visible offcanvas/modal. Bootstrap normally
-        // cleans these up on hide, but a test that crashed mid-flow can
-        // leave one behind.
-        document.querySelectorAll('.offcanvas-backdrop, .modal-backdrop').forEach((bd) => {
-            try { bd.remove(); } catch (_) { /* noop */ }
-        });
-        document.querySelectorAll('#offcanvasSearch select').forEach((s) => {
-            try { s.blur(); } catch (_) { /* noop */ }
-        });
-        if (document.activeElement && document.activeElement.blur) {
-            try { document.activeElement.blur(); } catch (_) { /* noop */ }
-        }
-    }""")
+    # Defensive cross-test pollution teardown — buglist L233 / Group 14.3.
+    # See conftest.RESET_DOM_STATE_JS for the patterns it handles.
+    page.evaluate(reset_dom_state_js)
     page.wait_for_timeout(200)
 
     # 1. Open Search Offcanvas to guarantee spool cards are loaded

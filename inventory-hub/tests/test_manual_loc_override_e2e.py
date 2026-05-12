@@ -11,28 +11,13 @@ from playwright.sync_api import Page, expect
 # search-offcanvas interception issue that sank the legacy version is avoided
 # — we never close the offcanvas; we just click the card directly.
 @pytest.fixture
-def force_location_modal(page: Page):
+def force_location_modal(page: Page, reset_dom_state_js: str):
     """Open the Force Location Override SweetAlert modal on a spool."""
     page.goto("http://localhost:8000")
 
-    # Defensive teardown of cross-test pollution (Group 14.6). Mirrors the
-    # fixture in test_force_location_keyboard_e2e.py — both tests target the
-    # same Force-Location Swal flow and inherit the same pollution profile.
-    page.evaluate("""() => {
-        document.querySelectorAll('.offcanvas.show').forEach((el) => {
-            try { bootstrap.Offcanvas.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
-        });
-        document.querySelectorAll('.modal.show').forEach((el) => {
-            try { bootstrap.Modal.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
-        });
-        document.querySelectorAll('[data-overlay-mount="1"]').forEach((el) => el.remove());
-        if (window.Swal && typeof window.Swal.close === 'function') {
-            try { window.Swal.close(); } catch (_) { /* noop */ }
-        }
-        if (document.activeElement && document.activeElement.blur) {
-            try { document.activeElement.blur(); } catch (_) { /* noop */ }
-        }
-    }""")
+    # Defensive cross-test pollution teardown — Group 14.6. See
+    # conftest.RESET_DOM_STATE_JS for the patterns it handles.
+    page.evaluate(reset_dom_state_js)
     page.wait_for_timeout(200)
 
     page.locator('nav button:has-text("SEARCH")').click()
