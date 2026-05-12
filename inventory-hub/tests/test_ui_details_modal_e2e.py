@@ -24,14 +24,20 @@ def test_details_modal_interactions(page: Page, reset_dom_state_js: str):
     search_input.fill("a")
     
     # Wait for the view details button to appear on a search result card
-    page.wait_for_selector(".fcc-card-action-btn[title='View Details']", timeout=10000)
+    # Scope to inside the offcanvas — page-wide .fcc-card-action-btn matches
+    # both dashboard buffer cards (behind the offcanvas-backdrop at z-index 1040)
+    # and offcanvas search-result cards. .first could pick a dashboard card,
+    # in which case the click is geometrically intercepted by the offcanvas
+    # backdrop. Scoping makes the click land on a real search-result card.
+    # Group 14.3 / 14.6.
+    page.wait_for_selector("#offcanvasSearch .fcc-card-action-btn[title='View Details']", timeout=10000)
     
     # Track console errors to ensure "r is not defined" or similar bugs do not regress
     errors = []
     page.on("pageerror", lambda err: errors.append(err.message))
     
     # 2. Click the first View Details button
-    page.click(".fcc-card-action-btn[title='View Details']")
+    page.click("#offcanvasSearch .fcc-card-action-btn[title='View Details']")
     
     # Wait for the Spool Details modal to become visible
     modal = page.locator("#spoolModal")
@@ -66,7 +72,7 @@ def test_details_modal_interactions(page: Page, reset_dom_state_js: str):
     # We navigate back to the Spool modal if it was closed
     if cursor_style == "pointer":
         page.locator(".btn-close-white", has_text="").last.click() # Close location manager
-        page.click(".fcc-card-action-btn[title='View Details']")
+        page.click("#offcanvasSearch .fcc-card-action-btn[title='View Details']")
         expect(modal).to_be_visible()
 
     buy_more_btn = page.locator("#detail-btn-buy-more")

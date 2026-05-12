@@ -28,8 +28,11 @@ def _open_first_spool_modal(page: Page, reset_js: str) -> None:
     page.locator('nav button:has-text("SEARCH")').click()
     page.wait_for_selector("#offcanvasSearch", timeout=5000)
     page.locator('#global-search-query').fill("a")
-    page.wait_for_selector(".fcc-card-action-btn[title='View Details']", timeout=10000)
-    page.click(".fcc-card-action-btn[title='View Details']")
+    # Scope to inside the offcanvas — see Group 14.3 / 14.6 note in
+    # test_ui_details_modal_e2e.py. .fcc-card-action-btn also matches
+    # dashboard buffer cards, which sit behind the offcanvas-backdrop.
+    page.wait_for_selector("#offcanvasSearch .fcc-card-action-btn[title='View Details']", timeout=10000)
+    page.click("#offcanvasSearch .fcc-card-action-btn[title='View Details']")
     expect(page.locator("#spoolModal")).to_be_visible()
 
 
