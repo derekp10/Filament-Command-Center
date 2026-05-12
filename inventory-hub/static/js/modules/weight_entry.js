@@ -124,10 +124,6 @@
             || (availableModes.includes(defaultMode) ? defaultMode : availableModes[0]);
         let mode = seedMode;
 
-        // Tear down any existing overlay so we don't stack two.
-        const prior = document.getElementById(OVERLAY_ID);
-        if (prior) prior.remove();
-
         const swatch = spool.color_hex
             ? `<span style="display:inline-block;width:14px;height:14px;background:#${String(spool.color_hex).replace(/^#/,'')};border:1px solid #fff;border-radius:50%;vertical-align:middle;margin-right:6px;"></span>`
             : '';
@@ -151,14 +147,7 @@
                </div>`
             : '';
 
-        const overlay = document.createElement('div');
-        overlay.id = OVERLAY_ID;
-        overlay.style.cssText = (
-            'position:fixed;inset:0;background:rgba(0,0,0,0.55);' +
-            'display:flex;align-items:center;justify-content:center;' +
-            'z-index:20000;'
-        );
-        overlay.innerHTML = `
+        const panelHtml = `
             <div role="dialog" aria-modal="true" aria-labelledby="fcc-we-title"
                  style="background:#1f2024;color:#eee;border:1px solid #555;
                         border-radius:8px;padding:0;min-width:380px;
@@ -221,15 +210,18 @@
                 </div>
             </div>
         `;
-        // Mount at document.body so the overlay's z-index sits cleanly above
-        // every other stacking context on the page. 13.1 — opening from
-        // inside an open Bootstrap modal used to mean the modal's
-        // `_enforceFocus` would yank focus off our input on every keystroke;
-        // the focusGuard installed below neutralizes that trap for events
-        // targeting our overlay without changing the overlay's mount point
-        // (mounting INSIDE the modal subtree caused a different Z-order
-        // regression where the overlay rendered below sibling modal chrome).
-        document.body.appendChild(overlay);
+        // Group 15 — canonical mountOverlay() owns the document.body mount,
+        // z-index ladder, and the capture-phase focusGuard that defeats
+        // Bootstrap's `_enforceFocus` (13.1 lesson, commit 89c6f39). Escape
+        // routes through onEscape so callers don't have to special-case it.
+        const overlayHandle = window.mountOverlay({
+            id: OVERLAY_ID,
+            content: panelHtml,
+            focusGuard: true,
+            initialFocus: '#fcc-we-input',
+            onEscape: () => attemptCancel(),
+        });
+        const overlay = overlayHandle.element;
 
         const inputEl = overlay.querySelector('#fcc-we-input');
         const labelEl = overlay.querySelector('#fcc-we-input-label');
@@ -400,33 +392,17 @@
             if (typeof onCancel === 'function') onCancel();
         }
 
-        // 13.1 focusGuard — Bootstrap's modal `_enforceFocus` listens for
-        // `focusin` on document and pulls focus back to the modal whenever a
-        // focused element isn't inside the modal subtree. When our overlay
-        // mounts at document.body (which it must, for z-index sanity), every
-        // attempt to focus the value input would trigger the trap and the
-        // user couldn't type. We install a capture-phase focusin listener
-        // that swallows the event when the target is inside our overlay,
-        // preventing Bootstrap's listener from acting on it. Removed in
-        // cleanup so subsequent modal interactions behave normally.
-        function focusGuard(e) {
-            if (overlay.contains(e.target)) e.stopImmediatePropagation();
-        }
-
         function cleanup() {
             document.removeEventListener('keydown', onKey, true);
-            document.removeEventListener('focusin', focusGuard, true);
-            overlay.remove();
+            overlayHandle.cleanup();
         }
 
         function onKey(e) {
+            // Escape is owned by mountOverlay's onEscape — see openModal caller.
             if (e.key === 'Enter') {
                 if (e.target && e.target.classList && e.target.classList.contains('fcc-we-tab')) return;
                 e.preventDefault();
                 attemptSave();
-            } else if (e.key === 'Escape') {
-                e.preventDefault();
-                attemptCancel();
             } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
                 if (e.target === inputEl) return; // don't steal cursor nav inside input
                 e.preventDefault();
@@ -457,10 +433,9 @@
         closeBtn.addEventListener('click', attemptCancel);
         setDefaultBtn.addEventListener('click', persistCurrentModeAsDefault);
         document.addEventListener('keydown', onKey, true);
-        document.addEventListener('focusin', focusGuard, true);
 
         applyMode(mode);
-        setTimeout(() => inputEl.focus(), 0);
+        // Initial focus is handled by mountOverlay's initialFocus option.
     }
 
     window.WeightEntry = { openModal };

@@ -138,8 +138,15 @@ def test_confirm_overlay_dismisses_when_modal_closes_via_x(page: Page, base_url:
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
     expect(overlay).to_be_visible(timeout=2000)
 
-    # X-close the manage modal (without dismissing the confirm first).
-    page.locator("#manageModal .modal-header .btn-close").click()
+    # Hide the manage modal without dismissing the confirm first.
+    # Group 15 — the confirm overlay's full-screen backdrop now correctly
+    # intercepts pointer events, so a real user can't click the modal X
+    # through it. The behavior under test is "if the modal hides for any
+    # reason, the confirm overlay cleans up too"; we drive the hide
+    # programmatically to match that contract.
+    page.evaluate(
+        "() => bootstrap.Modal.getOrCreateInstance(document.getElementById('manageModal')).hide()"
+    )
     page.wait_for_timeout(500)
     expect(page.locator("#manageModal")).to_be_hidden()
     # The confirm overlay should be hidden too.

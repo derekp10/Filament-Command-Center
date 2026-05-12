@@ -262,15 +262,14 @@
         ]).catch((e) => { dbg('probe error', e); return null; });
     };
 
+    const _escapeHtml = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
     const showConfirmOverlay = async (opts) => {
-        const ov = document.getElementById('fcc-quickswap-confirm-overlay');
-        const title = document.getElementById('fcc-quickswap-confirm-title');
-        const body = document.getElementById('fcc-quickswap-confirm-body');
-        const yes = document.getElementById('fcc-quickswap-yes');
-        const no = document.getElementById('fcc-quickswap-no');
-        if (!ov || !yes || !no) return;
-        // If there's a previous overlay still active (paranoia), tear it
-        // down before replacing its handlers.
+        // If there's a previous overlay still active, tear it down before
+        // replacing its handlers. mountOverlay would also dedupe by id, but
+        // we need to run qrSession cleanup attached to the prior close.
         if (_activeConfirmClose) {
             try { _activeConfirmClose(); } catch (e) { /* noop */ }
         }
@@ -283,49 +282,47 @@
         const stateInfo = await _probeWithTimeout(opts.toolhead);
         const warningBanner = stateInfo
             ? `<div class="alert alert-warning py-2 px-3 mb-2" style="font-size:0.95em;">`
-                + `⚠️ <b>${stateInfo.printer_name} is ${stateInfo.state}</b> — loading a new spool now will disrupt the print.`
+                + `⚠️ <b>${_escapeHtml(stateInfo.printer_name)} is ${_escapeHtml(stateInfo.state)}</b> — loading a new spool now will disrupt the print.`
                 + `</div>`
             : '';
 
-        title.innerText = opts.title || `Swap ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`;
+        const titleText = opts.title || `Swap ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`;
         const defaultBody = 'This moves the spool currently in that slot into the active toolhead. ' +
                             'Any spool already on the toolhead will be auto-ejected back to its source.';
-        body.innerHTML = warningBanner + (opts.body || defaultBody);
-        ov.style.display = 'block';
+        const bodyHtml = warningBanner + (opts.body || defaultBody);
 
-        // Mount QR-confirm pair only when the active-print warning is
-        // showing — Quick-Swap during a normal move doesn't need scan
-        // confirmation since the user already had a card to scan to
-        // initiate the swap. The active-print case is the safety-critical
-        // one that benefits from "scan to confirm I really meant to
-        // disrupt my print."
+        const panelHtml = `
+            <div class="bg-dark border border-info rounded p-4 shadow-lg"
+                 style="min-width:420px;">
+                <div class="text-info fw-bold mb-3" style="font-size:1.25rem;"
+                     id="fcc-quickswap-confirm-title">${_escapeHtml(titleText)}</div>
+                <div class="text-light mb-3" style="font-size:1.05rem;"
+                     id="fcc-quickswap-confirm-body">${bodyHtml}</div>
+                <div class="d-flex gap-2 justify-content-end">
+                    <button type="button" id="fcc-quickswap-no"
+                        class="btn btn-outline-light fw-bold px-3">No, cancel</button>
+                    <button type="button" id="fcc-quickswap-yes"
+                        class="btn btn-info fw-bold px-3">Yes, swap</button>
+                </div>
+            </div>
+        `;
+
         let qrSession = null;
-        if (stateInfo && warningBanner && window.attachConfirmQRs) {
-            qrSession = window.attachConfirmQRs({
-                host: body,
-                onConfirm: () => { opts.onConfirm && opts.onConfirm(); close(); },
-                onCancel: () => { close(); },
-                theme: 'warning',
-            });
-        }
-
         const close = () => {
-            ov.style.display = 'none';
-            yes.onclick = null; no.onclick = null;
             document.removeEventListener('keydown', keyHandler, true);
             if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
+            try { handle.cleanup(); } catch (_) { /* noop */ }
             if (_activeConfirmClose === close) _activeConfirmClose = null;
         };
-        _activeConfirmClose = close;
+
         // Keyboard contract:
-        //   - Escape cancels (unconditional).
+        //   - Escape cancels (owned by mountOverlay's onEscape).
         //   - Enter activates whichever button is focused (yes → confirm+close,
         //     no → close only). Yes is focused by default.
         //   - Tab cycles between the two buttons; focus trap prevents escape
         //     to the page behind (otherwise Tab leaks to the Location
         //     Manager modal behind and eventually the browser chrome).
         const keyHandler = (e) => {
-            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
             if (e.key === 'Enter') {
                 const active = document.activeElement;
                 if (active === yes) {
@@ -357,19 +354,47 @@
                 }
             }
         };
+
+        const handle = window.mountOverlay({
+            id: 'fcc-quickswap-confirm-overlay',
+            content: panelHtml,
+            tier: 'confirm',  // sits above the Location Manager modal
+            focusGuard: true,
+            initialFocus: '#fcc-quickswap-yes',
+            onEscape: close,
+        });
+        const ov = handle.element;
+        const yes = ov.querySelector('#fcc-quickswap-yes');
+        const no = ov.querySelector('#fcc-quickswap-no');
+        const body = ov.querySelector('#fcc-quickswap-confirm-body');
+
+        // Mount QR-confirm pair only when the active-print warning is
+        // showing — Quick-Swap during a normal move doesn't need scan
+        // confirmation since the user already had a card to scan to
+        // initiate the swap. The active-print case is the safety-critical
+        // one that benefits from "scan to confirm I really meant to
+        // disrupt my print."
+        if (stateInfo && warningBanner && window.attachConfirmQRs) {
+            qrSession = window.attachConfirmQRs({
+                host: body,
+                onConfirm: () => { opts.onConfirm && opts.onConfirm(); close(); },
+                onCancel: () => { close(); },
+                theme: 'warning',
+            });
+        }
+
         yes.onclick = () => { opts.onConfirm && opts.onConfirm(); close(); };
         no.onclick = close;
         document.addEventListener('keydown', keyHandler, true);
-        yes.focus();
+        _activeConfirmClose = close;
     };
 
     // Public teardown for the manage modal to call on hide.
     window.closeQuickswapConfirm = () => {
         if (_activeConfirmClose) {
             try { _activeConfirmClose(); } catch (e) { /* noop */ }
-        } else {
-            const ov = document.getElementById('fcc-quickswap-confirm-overlay');
-            if (ov) ov.style.display = 'none';
+        } else if (window.closeOverlay) {
+            window.closeOverlay('fcc-quickswap-confirm-overlay');
         }
     };
 
