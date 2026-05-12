@@ -1418,6 +1418,16 @@ window.openEdit = (id) => {
         document.getElementById('edit-type').value = i.Type;
         document.getElementById('edit-max').value = i['Max Spools'];
         modals.locModal.show();
+        // 8.1 — auto-focus the Friendly Name field (the ID is rarely
+        // edited; matches vendorEditModal pattern). Select-all so the
+        // user can immediately overtype.
+        const locModalEl = document.getElementById('locModal');
+        if (locModalEl) {
+            locModalEl.addEventListener('shown.bs.modal', () => {
+                const n = document.getElementById('edit-name');
+                if (n) { n.focus(); n.select(); }
+            }, { once: true });
+        }
     }
 };
 
@@ -1447,6 +1457,16 @@ window.openAddModal = () => {
     document.getElementById('edit-name').value = "";
     document.getElementById('edit-max').value = "1";
     modals.locModal.show();
+    // 8.1 — auto-focus the Location ID field on Add (this is the
+    // first field the user fills in; Edit focuses Friendly Name
+    // instead since ID is rarely changed).
+    const locModalEl = document.getElementById('locModal');
+    if (locModalEl) {
+        locModalEl.addEventListener('shown.bs.modal', () => {
+            const n = document.getElementById('edit-id');
+            if (n) n.focus();
+        }, { once: true });
+    }
 };
 
 window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, { method: 'DELETE' }).then(fetchLocations));
