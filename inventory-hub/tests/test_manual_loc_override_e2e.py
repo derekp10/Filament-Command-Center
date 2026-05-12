@@ -11,16 +11,23 @@ from playwright.sync_api import Page, expect
 # search-offcanvas interception issue that sank the legacy version is avoided
 # — we never close the offcanvas; we just click the card directly.
 @pytest.fixture
-def force_location_modal(page: Page):
+def force_location_modal(page: Page, reset_dom_state_js: str):
     """Open the Force Location Override SweetAlert modal on a spool."""
     page.goto("http://localhost:8000")
+
+    # Defensive cross-test pollution teardown — Group 14.6. See
+    # conftest.RESET_DOM_STATE_JS for the patterns it handles.
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
 
     page.locator('nav button:has-text("SEARCH")').click()
     page.locator('#global-search-query').fill("a")
     page.locator('label[for="searchTypeSpools"]').click()
     page.wait_for_timeout(1000)
 
-    cards = page.locator('.fcc-spool-card')
+    # Scope to inside the offcanvas — see Group 14.6 comment in
+    # test_force_location_keyboard_e2e.py's force_location_modal fixture.
+    cards = page.locator('#offcanvasSearch .fcc-spool-card')
     if cards.count() == 0:
         pytest.skip("No spool cards rendered in test environment.")
 

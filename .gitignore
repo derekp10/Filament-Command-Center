@@ -1,7 +1,8 @@
 # ... existing ignores ...
 __pycache__/
 *.pyc
-inventory-hub/hub.log
+# Rolling app logs (hub.log + rotated hub.log.N)
+inventory-hub/hub.log*
 # Claude local settings + runtime locks
 .claude/settings.local.json
 .claude/*.lock
@@ -11,7 +12,6 @@ config.json
 .env
 config.dev.json
 config.prod.json
-inventory-hub/hub.log.1
 inventory-hub/out.json
 hub.log
 .config_mtime
@@ -27,4 +27,3 @@ inventory-hub/data/*
 inventory-hub/locations.json
 inventory-hub/locations.json.*.bak
 inventory-hub/data/locations.json.*.bak
-inventory-hub/hub.log.2

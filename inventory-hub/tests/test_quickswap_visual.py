@@ -31,20 +31,32 @@ def bound_slot(api_base_url):
 def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(400)
+    # openManage looks up `state.allLocations` synchronously; if the
+    # locations fetch hasn't resolved yet, the call silently no-ops and
+    # the manage modal never opens. Wait for state.allLocations to be
+    # populated before invoking. Group 14.4.
+    page.wait_for_function(
+        "() => typeof state === 'object' && Array.isArray(state.allLocations) && state.allLocations.length > 0",
+        timeout=10000,
+    )
     page.evaluate(f"window.openManage({loc_id!r})")
     expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
     page.wait_for_timeout(600)
 
 
-@pytest.mark.usefixtures("require_server", "bound_slot")
+@pytest.mark.usefixtures("require_server", "bound_slot", "clean_buffer")
 def test_visual_quickswap_grid(page: Page, base_url: str, snapshot):
+    # A populated buffer turns the empty-slot row into a green "Deposit from
+    # buffer" affordance — visible content that changes the grid's height
+    # (~22px taller per slot row). The baseline is captured with an empty
+    # buffer, so the test pins clean_buffer to keep render reproducible in
+    # the sweep regardless of prior tests' buffer state. Group 14.4.
     _open_manage(page, base_url, TEST_TOOLHEAD)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()
     snapshot(page.locator("#manage-quickswap-section"), "quickswap-grid-default")
 
 
-@pytest.mark.usefixtures("require_server", "bound_slot")
+@pytest.mark.usefixtures("require_server", "bound_slot", "clean_buffer")
 def test_visual_quickswap_kb_active(page: Page, base_url: str, snapshot):
     _open_manage(page, base_url, TEST_TOOLHEAD)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()

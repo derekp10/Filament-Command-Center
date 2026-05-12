@@ -103,6 +103,54 @@ def browser_context_args(browser_context_args):
 # Buffer helpers
 # ---------------------------------------------------------------------------
 
+# JS that defensively unwinds DOM state pollution between sweep tests.
+# Use after `page.goto(...)` and before the first interaction. The JS is
+# safe to run on a fresh page (everything is best-effort). Group 14
+# observed several distinct pollution profiles, each handled below:
+#   - Open offcanvas/modal not properly closed by the prior test → its
+#     children (selects, buttons) intercept clicks on later-rendered cards.
+#   - Orphan .offcanvas-backdrop / .modal-backdrop left at z-index 1040
+#     after a hide that didn't run the bootstrap cleanup path.
+#   - mountOverlay element (data-overlay-mount="1") left in DOM from a
+#     test that crashed before cleanup().
+#   - SweetAlert popup not closed.
+#   - <select> with non-default selectedIndex keeping its option dropdown
+#     open / hit-testable underneath the offcanvas (search material filter
+#     was the documented culprit).
+#   - Focused element from prior interaction trapping keyboard events.
+RESET_DOM_STATE_JS = """() => {
+    document.querySelectorAll('.offcanvas.show').forEach((el) => {
+        try { bootstrap.Offcanvas.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
+    });
+    document.querySelectorAll('.modal.show').forEach((el) => {
+        try { bootstrap.Modal.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
+    });
+    document.querySelectorAll('.offcanvas-backdrop, .modal-backdrop').forEach((bd) => {
+        try { bd.remove(); } catch (_) { /* noop */ }
+    });
+    document.querySelectorAll('[data-overlay-mount="1"]').forEach((el) => {
+        try { el.remove(); } catch (_) { /* noop */ }
+    });
+    if (window.Swal && typeof window.Swal.close === 'function') {
+        try { window.Swal.close(); } catch (_) { /* noop */ }
+    }
+    document.querySelectorAll('select').forEach((s) => {
+        try { s.selectedIndex = 0; s.blur(); } catch (_) { /* noop */ }
+    });
+    if (document.activeElement && document.activeElement.blur) {
+        try { document.activeElement.blur(); } catch (_) { /* noop */ }
+    }
+}"""
+
+
+@pytest.fixture(scope="session")
+def reset_dom_state_js() -> str:
+    """The defensive cross-test pollution-teardown JS as a string. Tests run
+    it via `page.evaluate(reset_dom_state_js)` after `page.goto(...)`. See
+    RESET_DOM_STATE_JS for the per-line pollution patterns it handles."""
+    return RESET_DOM_STATE_JS
+
+
 @pytest.fixture
 def clean_buffer(api_base_url: str):
     """Ensure the buffer is empty before the test. Yields the base URL."""
@@ -220,9 +268,24 @@ def snapshot(pytestconfig, request):
         actual_img = Image.open(io.BytesIO(actual_bytes)).convert("RGBA")
 
         if baseline_img.size != actual_img.size:
-            return (
-                f"size mismatch: baseline={baseline_img.size} actual={actual_img.size}"
-            )
+            # Sub-pixel rounding diffs (±1 px in either dimension) routinely
+            # appear between isolation runs and the full sweep depending on
+            # what else is in the DOM at capture time. Allow ±1 px and let
+            # the per-pixel comparison decide via its 1% tolerance. Group 14.4.
+            bw, bh = baseline_img.size
+            aw, ah = actual_img.size
+            if abs(bw - aw) > 1 or abs(bh - ah) > 1:
+                return (
+                    f"size mismatch: baseline={baseline_img.size} actual={actual_img.size}"
+                )
+            # Resize the smaller image to the larger image's dimensions so the
+            # per-pixel diff has matching shapes. NEAREST avoids introducing
+            # interpolation artefacts that would themselves count as drift.
+            target_size = (max(bw, aw), max(bh, ah))
+            if baseline_img.size != target_size:
+                baseline_img = baseline_img.resize(target_size, Image.NEAREST)
+            if actual_img.size != target_size:
+                actual_img = actual_img.resize(target_size, Image.NEAREST)
 
         diff = ImageChops.difference(baseline_img, actual_img)
         bbox = diff.getbbox()

@@ -29,7 +29,22 @@ Prod: Hosted on a TrueNAS server. Keep deployment, storage, and networking sugge
 
 ## Project Conventions
 
-- **No nested `Swal.fire()`** — use inline overlay divs following the `#fcc-escape-confirm-overlay` / `#fcc-quickswap-confirm-overlay` pattern. Nested Swals don't stack and dismiss each other.
+- **Inline overlays MUST route through `window.mountOverlay()`** (Group 15 — see [docs/agent_docs/tasks/15-canonical-overlay-mount.md](docs/agent_docs/tasks/15-canonical-overlay-mount.md) for the rationale). Don't `createElement` + `document.body.appendChild` + custom `focusin`/`keydown` listeners; the helper owns the z-index ladder, the focus-guard that defeats Bootstrap's `_enforceFocus`, host-close cleanup, occlusion of underlying selects, and idempotent teardown. Reference implementations: [weight_entry.js](inventory-hub/static/js/modules/weight_entry.js), [weight_utils.js](inventory-hub/static/js/modules/weight_utils.js) (missing-tare prompt), [duplicate_picker.js](inventory-hub/static/js/modules/duplicate_picker.js), [inv_quickswap.js](inventory-hub/static/js/modules/inv_quickswap.js) (Quick-Swap confirm), [inv_details.js](inventory-hub/static/js/modules/inv_details.js) (force-location escape-confirm).
+  - **Z-index ladder** (constants on `window.OVERLAY_Z`):
+    - `STANDARD = 20000` — single overlay above any Bootstrap modal/offcanvas. Pass `tier: 'standard'` (default).
+    - `CONFIRM = 20100` — confirm overlay above a standard overlay (e.g. missing-tare prompted from inside WeightEntry). Pass `tier: 'confirm'`.
+    - Toast layer is 11000 — intentionally BELOW overlays so a confirm isn't drowned out by toast noise.
+  - **Focus guard** is the working pattern from `89c6f39`: capture-phase `focusin` listener on `document` that `stopImmediatePropagation`s events targeting the overlay subtree. Mounting INSIDE the modal subtree to escape `_enforceFocus` was tried and reverted (13.1) — it loses the z-index war. Do NOT subtree-mount overlays.
+  - **Escape contract**: `mountOverlay`'s `onEscape` (or default cleanup) uses `stopImmediatePropagation`, so sibling capture-phase listeners on `document` won't fire. Callers must NOT also handle Escape — pass `onEscape: () => yourCancel()` if you need a custom cancel side-effect.
+  - **Host cascade**: pass `host: someBootstrapModalEl` to auto-clean the overlay when the host emits `hidden.bs.modal` / `hidden.bs.offcanvas`. No overlay outlives its parent.
+  - **No nested `Swal.fire()`** — the original prohibition stands. Nested Swals don't stack and dismiss each other; route confirmation dialogs through `mountOverlay` instead.
+  - **Z-order incident symptom checklist** — each symptom maps to a `mountOverlay` behavior; if you see one, suspect a bypassed `mountOverlay`:
+    - Click triggered something but I can't see it → mount target wrong (must be `document.body`).
+    - Overlay rendered behind sibling modal chrome → wrong tier or subtree-mounted.
+    - Brief processing flash then "nothing" → overlay closed itself but parent listener didn't know.
+    - Inline overlay's Escape closes BOTH the overlay and its host modal → caller is also handling Escape; let `mountOverlay` own it.
+    - Overlay lingers after host modal closes → didn't pass `host`.
+    - `<select>` dropdown under the host intercepts overlay clicks → didn't pass `occlude`.
 - **Keyboard nav idiom**: arrow keys move a `.kb-active` class between focusable items (wraps at edges), Enter confirms, Escape cancels or prompts. Auto-focus the primary input when a modal opens. Force Location modal + Quick-Swap grid are reference implementations.
 - **Activity Log + Toasts**: every scan outcome (success, warning, error, partial) writes an Activity Log entry AND raises a toast. Error toasts use ≥7 s durations so blind-scanning failures don't slip past. Success toasts 4 s. `showToast(msg, type, duration)` where `type` is one of `success` / `error` / `warning` / `info`.
 
