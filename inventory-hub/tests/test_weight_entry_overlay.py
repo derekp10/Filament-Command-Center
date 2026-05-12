@@ -307,47 +307,13 @@ def test_d_shortcut_sets_current_mode_as_default(page: Page) -> None:
         )
 
 
-def test_overlay_mounts_inside_open_bootstrap_modal(page: Page) -> None:
-    """13.1 — When opened while a Bootstrap modal is showing (e.g. Location
-    Manager), the overlay must mount INSIDE that modal so Bootstrap's
-    _enforceFocus focus-trap doesn't yank focus off the input on every
-    keystroke. Mounting at document.body (the prior behavior) made the value
-    field uneditable when Quick-Weigh was opened from a Location Manager
-    filament card; arrow keys still worked because the overlay's own keydown
-    handler re-focused the input, but character keys had no such hook.
-    """
-    _open_dashboard(page)
-    # Stand in a fake Bootstrap modal so we don't have to drive the full
-    # Location Manager open flow to hit the regression — what matters is the
-    # presence of a `.modal.show` element when openModal() runs.
-    page.evaluate(
-        """() => {
-            const m = document.createElement('div');
-            m.id = 'fcc-test-host-modal';
-            m.className = 'modal show';
-            m.setAttribute('tabindex', '-1');
-            m.style.cssText = 'display:block; position:fixed; inset:0;';
-            document.body.appendChild(m);
-        }"""
-    )
-    _open_overlay_with(page, """{
-        spool: { id: 101, initial_weight: 1000, used_weight: 575 },
-        empty_spool_weight: 220,
-    }""")
-    parent_id = page.evaluate(
-        "() => document.getElementById('fcc-weight-entry-overlay').parentElement.id"
-    )
-    assert parent_id == "fcc-test-host-modal", (
-        f"overlay mounted at #{parent_id}; expected to mount inside the open Bootstrap modal"
-    )
-    # Cleanup
-    page.evaluate("() => { document.getElementById('fcc-test-host-modal')?.remove(); }")
-
-
-def test_overlay_falls_back_to_document_body_without_modal(page: Page) -> None:
-    """13.1 sibling — when no Bootstrap modal is open (the dashboard
-    buffer-card path), continue mounting at document.body so the existing
-    flow is untouched."""
+def test_overlay_mounts_at_document_body(page: Page) -> None:
+    """13.1 — Overlay always mounts at document.body so its z-index sits
+    cleanly above every other stacking context. Mounting INSIDE a parent
+    modal caused a Z-order regression where the overlay rendered below
+    sibling modal chrome; the focusGuard installed in openModal handles
+    the focus-trap problem that originally motivated the mount-inside
+    approach."""
     _open_dashboard(page)
     _open_overlay_with(page, """{
         spool: { id: 101, initial_weight: 1000, used_weight: 575 },
@@ -357,14 +323,16 @@ def test_overlay_falls_back_to_document_body_without_modal(page: Page) -> None:
         "() => document.getElementById('fcc-weight-entry-overlay').parentElement.tagName"
     )
     assert parent_tag == "BODY", (
-        f"overlay parent was <{parent_tag}>; expected <BODY> when no modal is open"
+        f"overlay parent was <{parent_tag}>; must be <BODY> for z-index sanity"
     )
 
 
 def test_value_input_accepts_keystrokes_inside_bootstrap_modal(page: Page) -> None:
-    """13.1 end-to-end — typing digits into the value input updates the field
-    even when the overlay was opened from inside an open Bootstrap modal.
-    Repro for the original bug ("text input directly is impossible").
+    """13.1 end-to-end — typing digits into the value input updates the
+    field even when a Bootstrap modal is open. The focusGuard prevents
+    Bootstrap's `_enforceFocus` from yanking focus off the overlay's input.
+    Pre-fix the value input was uneditable from any Location Manager
+    filament card (text key events never reached the input).
     """
     _open_dashboard(page)
     page.evaluate(
@@ -374,6 +342,16 @@ def test_value_input_accepts_keystrokes_inside_bootstrap_modal(page: Page) -> No
             m.className = 'modal show';
             m.setAttribute('tabindex', '-1');
             m.style.cssText = 'display:block; position:fixed; inset:0;';
+            // Real Bootstrap modals install an enforceFocus listener that
+            // refocuses the modal whenever focusin fires outside it. Stand
+            // in for that listener so the test exercises the actual focusGuard
+            // behavior, not just a plain DOM with no trap.
+            const enforceFocus = (e) => {
+                if (!m.contains(e.target)) m.focus();
+            };
+            m.tabIndex = -1;
+            document.addEventListener('focusin', enforceFocus, false);
+            m._cleanup = () => document.removeEventListener('focusin', enforceFocus, false);
             document.body.appendChild(m);
         }"""
     )
@@ -388,7 +366,38 @@ def test_value_input_accepts_keystrokes_inside_bootstrap_modal(page: Page) -> No
     value = page.locator("#fcc-we-input").input_value()
     assert value == "645", f"expected input value '645', got {value!r}"
     # Cleanup
-    page.evaluate("() => { document.getElementById('fcc-test-host-modal')?.remove(); }")
+    page.evaluate(
+        """() => {
+            const m = document.getElementById('fcc-test-host-modal');
+            if (m) { try { m._cleanup && m._cleanup(); } catch(_){} m.remove(); }
+        }"""
+    )
+
+
+def test_value_input_has_autocomplete_off(page: Page) -> None:
+    """Browser-autocomplete dropdowns of past entries (+25, -50, etc.) used
+    to clutter the Quick-Weigh value input. Confirm autocomplete='off' (plus
+    the related anti-autofill attributes) on the input element."""
+    _open_dashboard(page)
+    _open_overlay_with(page, """{
+        spool: { id: 101, initial_weight: 1000, used_weight: 575 },
+        empty_spool_weight: 220,
+    }""")
+    attrs = page.evaluate(
+        """() => {
+            const inp = document.getElementById('fcc-we-input');
+            return {
+                autocomplete: inp.getAttribute('autocomplete'),
+                autocorrect: inp.getAttribute('autocorrect'),
+                autocapitalize: inp.getAttribute('autocapitalize'),
+                spellcheck: inp.getAttribute('spellcheck'),
+            };
+        }"""
+    )
+    assert attrs["autocomplete"] == "off", f"autocomplete must be 'off'; got {attrs['autocomplete']!r}"
+    assert attrs["autocorrect"] == "off"
+    assert attrs["autocapitalize"] == "off"
+    assert attrs["spellcheck"] == "false"
 
 
 def test_gross_mode_missing_tare_skip_submits_as_net(page: Page) -> None:

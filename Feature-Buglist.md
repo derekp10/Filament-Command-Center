@@ -1,6 +1,26 @@
 # **New and Unsorted Features/Bugs**
 
 
+* **[RECURRING — squash for good] Modal / overlay Z-ordering keeps biting us.** Every few weeks a new modal-on-modal or overlay-on-modal flow lands its top layer BELOW the host modal or backdrop, manifesting as "click triggered something, but I can't see it" — most recently 2026-05-11 when Group 13's 13.1 fix mounted `<WeightEntry>` inside the open Bootstrap modal subtree to defeat its focus-trap and inherited a worse problem (overlay rendered behind sibling modal chrome). Reverted to the body-mount + focusin-guard approach. Prior incidents are scattered through commit history (escape-confirm overlay, nested-Swal kills, quickswap confirm overlay z-index bumps). We need a **single canonical overlay-mount helper** that every inline overlay (`<WeightEntry>`, force-location, escape-confirm, quickswap-confirm, missing-tare prompt, delete-confirm, force-eject confirm, etc.) uses, with a documented z-index ladder above Bootstrap's modal stack and a focus-guard pattern that doesn't depend on DOM-subtree mounting. Out-of-scope items uncovered while writing this entry that the helper must also handle: Bootstrap `_enforceFocus` neutralization (today's 13.1 lesson), backdrop occlusion on `<select>` and offcanvas-search elements (see `test_ui_details_modal_e2e` flake at L233), `data-bs-keyboard="false"` parent modal interplay so Escape doesn't get double-handled (see Group 4 delete-modal escape work), and a uniform cleanup-on-host-close so an overlay never outlives the modal that spawned it.
+
+  **Symptom checklist for "is this another Z-order incident":**
+  - Click registers (toast/log fires) but expected overlay isn't visible.
+  - Closing the host modal "reveals" the overlay where it was hiding underneath.
+  - Tab/keyboard focus lands on elements behind a visually-foregrounded overlay.
+  - Click on overlay does nothing because a backdrop ate the pointer event.
+  - Two overlays both think they're "on top" and dismiss each other.
+
+  **Acceptance for the canonical helper (when picked up):**
+  1. Single `mountOverlay({ id, html, onClose, allowEscape, allowBackdropClick })` entry point in a new `static/js/modules/overlay_mount.js`.
+  2. Mounts at `document.body`, z-index above Bootstrap's modal (1055) but below toast/snackbar tier (today nothing uses higher than ~9999; the new convention should be 20000-29999 for inline overlays).
+  3. Focus-guard helper that neutralizes Bootstrap's `_enforceFocus` for events targeting our overlay (capture-phase `focusin` + `stopImmediatePropagation`).
+  4. Auto-cleanup on `hidden.bs.modal` of the topmost host modal, so closing the LocMgr modal also tears down any inline overlay that LocMgr spawned (today this is ad-hoc — closeQuickswapConfirm exists, but every overlay has its own pattern).
+  5. Each call returns a handle with `close()` + a `dismissed` promise so call sites can `await` user resolution without nesting callbacks.
+  6. Existing overlays migrated one at a time; the helper coexists with raw-DOM overlays during transition.
+
+  Worth scheduling as its own design session — this is a coordination problem more than a code problem. Document the z-index ladder in CLAUDE.md when the helper lands.
+
+
 * **[RECURRING — needs deeper fix] `data/locations.json` corruption: "valid content + duplicate tail" pattern.** First seen 2026-04-28 (fixed in commit `8430d81` Group 4 — `locations_db.save_locations_list` switched to atomic `.tmp` + `fsync` + `os.replace`, dev file repaired). **Recurred 2026-05-11 during Group 13 Phase C** with the SAME fingerprint: file ends in `]` (valid JSON) followed by a stray partial-record tail (e.g. `] "Yes",\n        "parent_id": "XL"\n    }\n]`). Dev `/api/locations` endpoint returned a `locations_corrupt` error and ~29 UI/integration tests cascaded into ERRORs due to fixture failures. Repaired in-place by truncating to the first balanced `]` from the right; pre-repair backup at `data/locations.json.pre-13.x-repair-*.bak`.
 
   **Investigation findings (Group 13 Phase C, 2026-05-11):**

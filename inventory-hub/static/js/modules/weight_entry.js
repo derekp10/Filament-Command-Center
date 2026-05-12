@@ -200,7 +200,8 @@
                            class="form-label small text-light mb-1"></label>
                     <div class="input-group input-group-sm" style="margin-bottom:6px;">
                         <input id="fcc-we-input" class="form-control bg-dark text-white border-secondary"
-                               style="font-size:1.15rem;" />
+                               style="font-size:1.15rem;"
+                               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
                     </div>
                     <div id="fcc-we-hint" style="color:#888;font-size:0.78rem;margin-bottom:12px;
@@ -220,12 +221,15 @@
                 </div>
             </div>
         `;
-        // Mount inside an open Bootstrap modal when present so its focus-trap
-        // (.modal[tabindex=-1] _enforceFocus) doesn't yank focus off our input
-        // every time we try to type. Dashboard-buffer-card path has no open
-        // modal and falls back to document.body unchanged.
-        const hostModal = document.querySelector('.modal.show');
-        (hostModal || document.body).appendChild(overlay);
+        // Mount at document.body so the overlay's z-index sits cleanly above
+        // every other stacking context on the page. 13.1 — opening from
+        // inside an open Bootstrap modal used to mean the modal's
+        // `_enforceFocus` would yank focus off our input on every keystroke;
+        // the focusGuard installed below neutralizes that trap for events
+        // targeting our overlay without changing the overlay's mount point
+        // (mounting INSIDE the modal subtree caused a different Z-order
+        // regression where the overlay rendered below sibling modal chrome).
+        document.body.appendChild(overlay);
 
         const inputEl = overlay.querySelector('#fcc-we-input');
         const labelEl = overlay.querySelector('#fcc-we-input-label');
@@ -396,8 +400,22 @@
             if (typeof onCancel === 'function') onCancel();
         }
 
+        // 13.1 focusGuard — Bootstrap's modal `_enforceFocus` listens for
+        // `focusin` on document and pulls focus back to the modal whenever a
+        // focused element isn't inside the modal subtree. When our overlay
+        // mounts at document.body (which it must, for z-index sanity), every
+        // attempt to focus the value input would trigger the trap and the
+        // user couldn't type. We install a capture-phase focusin listener
+        // that swallows the event when the target is inside our overlay,
+        // preventing Bootstrap's listener from acting on it. Removed in
+        // cleanup so subsequent modal interactions behave normally.
+        function focusGuard(e) {
+            if (overlay.contains(e.target)) e.stopImmediatePropagation();
+        }
+
         function cleanup() {
             document.removeEventListener('keydown', onKey, true);
+            document.removeEventListener('focusin', focusGuard, true);
             overlay.remove();
         }
 
@@ -439,6 +457,7 @@
         closeBtn.addEventListener('click', attemptCancel);
         setDefaultBtn.addEventListener('click', persistCurrentModeAsDefault);
         document.addEventListener('keydown', onKey, true);
+        document.addEventListener('focusin', focusGuard, true);
 
         applyMode(mode);
         setTimeout(() => inputEl.focus(), 0);
