@@ -13,6 +13,13 @@ const unquoteExtra = (v) => {
 console.log("🚀 Loaded Module: DETAILS");
 
 const openSpoolDetails = (id, silent = false) => {
+    // 8.3 — Prevent details-on-details stacking. A user-initiated open
+    // forcibly closes the sibling details modal before this one shows;
+    // silent=true (sync-pulse refresh) leaves visibility alone so it
+    // only refreshes whichever modal is currently visible.
+    if (!silent && typeof modals !== 'undefined' && modals.filamentModal) {
+        modals.filamentModal.hide();
+    }
     if (!silent) setProcessing(true);
     fetch(`/api/spool_details?id=${id}`)
         .then(r => r.json())
@@ -180,6 +187,10 @@ const openSpoolDetails = (id, silent = false) => {
 };
 
 const openFilamentDetails = (fid, silent = false) => {
+    // 8.3 — see openSpoolDetails for rationale; mirrored sibling-close.
+    if (!silent && typeof modals !== 'undefined' && modals.spoolModal) {
+        modals.spoolModal.hide();
+    }
     if (!silent) setProcessing(true);
     // 1. Fetch Filament Details
     fetch(`/api/filament_details?id=${fid}`)
