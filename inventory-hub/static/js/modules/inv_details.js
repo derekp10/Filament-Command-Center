@@ -12,14 +12,28 @@ const unquoteExtra = (v) => {
 };
 console.log("🚀 Loaded Module: DETAILS");
 
+// 8.3 — Hide a sibling details modal robustly. BS5's modal silently
+// ignores .hide() while the modal is in mid-fade-in transition (its
+// `_isTransitioning` flag short-circuits the call), so a single .hide()
+// can leave the sibling visible if the user opens both back-to-back.
+// Issue the hide immediately AND retry once after the fade should have
+// settled (BS5 modal transition is 300ms; 400ms gives slack). Checks
+// the DOM .show class rather than the private _isShown flag.
+const _hideSiblingDetailsModal = (key) => {
+    if (typeof modals === 'undefined' || !modals[key]) return;
+    modals[key].hide();
+    setTimeout(() => {
+        const el = document.getElementById(key);
+        if (el && el.classList.contains('show')) modals[key].hide();
+    }, 400);
+};
+
 const openSpoolDetails = (id, silent = false) => {
     // 8.3 — Prevent details-on-details stacking. A user-initiated open
     // forcibly closes the sibling details modal before this one shows;
     // silent=true (sync-pulse refresh) leaves visibility alone so it
     // only refreshes whichever modal is currently visible.
-    if (!silent && typeof modals !== 'undefined' && modals.filamentModal) {
-        modals.filamentModal.hide();
-    }
+    if (!silent) _hideSiblingDetailsModal('filamentModal');
     if (!silent) setProcessing(true);
     fetch(`/api/spool_details?id=${id}`)
         .then(r => r.json())
@@ -188,9 +202,7 @@ const openSpoolDetails = (id, silent = false) => {
 
 const openFilamentDetails = (fid, silent = false) => {
     // 8.3 — see openSpoolDetails for rationale; mirrored sibling-close.
-    if (!silent && typeof modals !== 'undefined' && modals.spoolModal) {
-        modals.spoolModal.hide();
-    }
+    if (!silent) _hideSiblingDetailsModal('spoolModal');
     if (!silent) setProcessing(true);
     // 1. Fetch Filament Details
     fetch(`/api/filament_details?id=${fid}`)
