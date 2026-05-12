@@ -20,8 +20,8 @@
 | 11 | ⚫ External Parsers & Prusament Cleanup | 3 | ~3 hrs | `READY` | [11-external-parsers.md](tasks/11-external-parsers.md) |
 | 12 | 🔵 Weight Entry Unified Component — Phase 2 | 2 | ~6–10 hrs | `DONE` 2026-04-27 | [12-weight-entry-component.md](tasks/12-weight-entry-component.md) |
 | 13 | 🐛 Recent Bugfixes (Weight + Dryer Display + LOC Search + Bind Desync + Eject) | 9 | ~6–8 hrs | `DONE` 2026-05-11 | [13-recent-bugfixes.md](tasks/13-recent-bugfixes.md) |
-| 14 | 🧪 Test-Sweep Flake Stabilization | 6 | ~3–5 hrs | `READY` ⭐ **PRIORITY** | [14-test-sweep-flake-stabilization.md](tasks/14-test-sweep-flake-stabilization.md) |
-| 15 | 🪟 Canonical Overlay-Mount Helper | 3 | ~5–7 hrs | `READY` | [15-canonical-overlay-mount.md](tasks/15-canonical-overlay-mount.md) |
+| 14 | 🧪 Test-Sweep Flake Stabilization | 6 | ~3–5 hrs | `DONE` 2026-05-12 | [14-test-sweep-flake-stabilization.md](tasks/14-test-sweep-flake-stabilization.md) |
+| 15 | 🪟 Canonical Overlay-Mount Helper | 3 | ~5–7 hrs | `DONE` 2026-05-11 (Path A — 5 inline overlays migrated; 4 non-inline surfaces deferred) | [15-canonical-overlay-mount.md](tasks/15-canonical-overlay-mount.md) |
 
 ## Items NOT Grouped (Solo, Deferred, or On Hold)
 
@@ -29,7 +29,7 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 
 | Item | Reason |
 |------|--------|
-| `locations.json` corruption recurring (L37) | RECURRING — needs deeper investigation. Atomic writes in `save_locations_list` are correct, so source of "valid content + duplicate tail" is elsewhere. Investigation-heavy, unclear scope until root cause identified. |
+| `locations.json` corruption recurring (L37) | `PARTIAL` 2026-05-12 — Hardening (1) per-call unique temp filename + (2) verify-after-write tripwire shipped on `feature/locations-json-write-hardening`. Monitor prod hub.log for `verify-after-write FAILED` critical lines. (3) explicit truncate + (4) Docker named volume deferred pending recurrence signal. |
 | Screen blanking / wake lock (L57) | ON HOLD — OS-level issue |
 | Config system design (L58) | NEEDS DESIGN SESSION — large standalone (touches Group 13.9's localStorage preference key once it lands) |
 | Filabridge status light (L60) | ON HOLD — hardware/firmware |
@@ -54,7 +54,7 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 | Project Color Loadout (L330) | Blocked by Location Manager Phase 3 |
 | All "On Hold" section items (L305+) | ON HOLD |
 
-**Note on test flakes:** The `test_quickswap_visual` baseline mismatch (L263), `test_ui_details_modal_e2e` offcanvas-backdrop flake (L264), and `test_amazon_parser_matching` BS4-missing issue (L307) are now absorbed into Group 14 (14.4 / 14.3 / 14.5 respectively). The buglist entries remain as detailed references; Group 14's task file is the action plan.
+**Note on test flakes:** The `test_quickswap_visual` baseline mismatch, `test_ui_details_modal_e2e` offcanvas-backdrop flake, and `test_amazon_parser_matching` BS4-missing issue were all closed by Group 14 (14.4 / 14.3 / 14.5 respectively). Detailed write-up in `completed-archive.md`.
 
 ## How to Use
 
