@@ -177,9 +177,6 @@ function promptMissingEmptyWeight({
     allowSkip = false,
 } = {}) {
     return new Promise((resolve) => {
-        const existing = document.getElementById(overlayId);
-        if (existing) existing.remove();
-
         const swatch = color_hex
             ? `<span style="display:inline-block;width:14px;height:14px;background:#${String(color_hex).replace(/^#/,'')};border:1px solid #fff;border-radius:50%;vertical-align:middle;margin-right:6px;"></span>`
             : '';
@@ -188,14 +185,11 @@ function promptMissingEmptyWeight({
             ? `<div style="margin:4px 0 14px 0; color:#bbb; font-size:0.9rem;">${swatch}${ctxBits}</div>`
             : '';
 
-        const overlay = document.createElement('div');
-        overlay.id = overlayId;
-        overlay.style.cssText = (
-            'position:fixed;inset:0;background:rgba(0,0,0,0.55);' +
-            'display:flex;align-items:center;justify-content:center;' +
-            'z-index:20000;'
-        );
-        overlay.innerHTML = `
+        // Nested-prompt support: if WeightEntry is open, mount this prompt on
+        // the CONFIRM tier so it sits above the WeightEntry overlay.
+        const tier = document.getElementById('fcc-weight-entry-overlay') ? 'confirm' : 'standard';
+
+        const panelHtml = `
             <div role="dialog" aria-modal="true" aria-labelledby="${overlayId}-title"
                  style="background:#1f2024;color:#eee;border:1px solid #555;
                         border-radius:8px;padding:18px 20px;min-width:320px;
@@ -207,7 +201,7 @@ function promptMissingEmptyWeight({
                     <input type="number" min="0" step="0.1" inputmode="decimal"
                            id="${overlayId}-input"
                            class="form-control bg-secondary text-light border-dark"
-                           placeholder="Empty spool weight" autofocus>
+                           placeholder="Empty spool weight">
                     <span class="input-group-text bg-dark text-light border-secondary">g</span>
                 </div>
                 <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
@@ -218,36 +212,46 @@ function promptMissingEmptyWeight({
                 </div>
             </div>
         `;
-        document.body.appendChild(overlay);
+
+        let resolved = false;
+        const finish = (value) => {
+            if (resolved) return;
+            resolved = true;
+            document.removeEventListener('keydown', onKey, true);
+            handle.cleanup();
+            resolve(value);
+        };
+        const submit = () => {
+            const v = Number(input.value);
+            if (!(v > 0)) { input.focus(); return; }
+            finish(v);
+        };
+        const cancel = () => finish(null);
+        const skip = () => finish(PROMPT_SKIP_TARE);
+        const onKey = (e) => {
+            // Escape routes through mountOverlay's onEscape; only Enter here.
+            if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        };
+
+        const handle = window.mountOverlay({
+            id: overlayId,
+            content: panelHtml,
+            tier,
+            focusGuard: true,
+            initialFocus: `#${overlayId}-input`,
+            onEscape: cancel,
+        });
+        const overlay = handle.element;
 
         const input = overlay.querySelector(`#${overlayId}-input`);
         const saveBtn = overlay.querySelector(`#${overlayId}-save`);
         const cancelBtn = overlay.querySelector(`#${overlayId}-cancel`);
         const skipBtn = overlay.querySelector(`#${overlayId}-skip`);
 
-        const cleanup = () => {
-            document.removeEventListener('keydown', onKey, true);
-            overlay.remove();
-        };
-        const submit = () => {
-            const v = Number(input.value);
-            if (!(v > 0)) { input.focus(); return; }
-            cleanup();
-            resolve(v);
-        };
-        const cancel = () => { cleanup(); resolve(null); };
-        const skip = () => { cleanup(); resolve(PROMPT_SKIP_TARE); };
-        const onKey = (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); submit(); }
-            else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
-        };
-
         saveBtn.addEventListener('click', submit);
         cancelBtn.addEventListener('click', cancel);
         if (skipBtn) skipBtn.addEventListener('click', skip);
         document.addEventListener('keydown', onKey, true);
-        // Defer focus so the overlay paints before we steal focus.
-        setTimeout(() => input.focus(), 0);
     });
 }
 window.promptMissingEmptyWeight = promptMissingEmptyWeight;
