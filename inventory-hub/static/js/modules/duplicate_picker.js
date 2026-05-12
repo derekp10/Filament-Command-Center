@@ -23,9 +23,6 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         return;
     }
 
-    let ov = document.getElementById('fcc-legacy-picker-overlay');
-    if (ov) ov.remove();
-
     const escapeHtml = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -42,10 +39,7 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         return `<option value="${c.id}">${escapeHtml(label)}</option>`;
     }).join('');
 
-    ov = document.createElement('div');
-    ov.id = 'fcc-legacy-picker-overlay';
-    ov.style.cssText = 'position:fixed; inset:0; z-index:20000; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center;';
-    ov.innerHTML = `
+    const panelHtml = `
         <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; max-width:600px; width:92%;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ Multiple spools share Legacy ID ${escapeHtml(legacy_id || '?')}</div>
             <div style="color:#ffc; margin-bottom:14px;">
@@ -59,15 +53,23 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
             </div>
         </div>
     `;
-    document.body.appendChild(ov);
 
     let cleaned = false;
     const cleanup = () => {
         if (cleaned) return;
         cleaned = true;
-        try { ov.remove(); } catch (_) { /* noop */ }
         document.removeEventListener('keydown', keyHandler, true);
+        try { handle.cleanup(); } catch (_) { /* noop */ }
     };
+
+    const handle = window.mountOverlay({
+        id: 'fcc-legacy-picker-overlay',
+        content: panelHtml,
+        focusGuard: true,
+        initialFocus: '#fcc-legacy-picker-use',
+        onEscape: () => { cleanup(); onAbort(); },
+    });
+    const ov = handle.element;
 
     const sel = () => document.getElementById('fcc-legacy-picker-sel');
     const chosenId = () => {
@@ -111,7 +113,7 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
     const onCancelClick = () => { cleanup(); onAbort(); };
 
     const keyHandler = (e) => {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onCancelClick(); return; }
+        // Escape is owned by mountOverlay's onEscape.
         if (e.key === 'Enter') {
             const active = document.activeElement;
             if (active && active.id === 'fcc-legacy-picker-print') { e.preventDefault(); e.stopPropagation(); onPrintClick(); }
@@ -120,14 +122,10 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         }
     };
 
-    document.getElementById('fcc-legacy-picker-cancel').onclick = onCancelClick;
-    document.getElementById('fcc-legacy-picker-print').onclick = onPrintClick;
-    document.getElementById('fcc-legacy-picker-use').onclick = onUseClick;
+    ov.querySelector('#fcc-legacy-picker-cancel').onclick = onCancelClick;
+    ov.querySelector('#fcc-legacy-picker-print').onclick = onPrintClick;
+    ov.querySelector('#fcc-legacy-picker-use').onclick = onUseClick;
     document.addEventListener('keydown', keyHandler, true);
-    setTimeout(() => {
-        try {
-            const useBtn = document.getElementById('fcc-legacy-picker-use');
-            if (useBtn) useBtn.focus();
-        } catch (_) { /* noop */ }
-    }, 0);
+    // Initial focus on the "Use selected" button is handled by mountOverlay's
+    // initialFocus option.
 };
