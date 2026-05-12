@@ -173,32 +173,9 @@ Logs Below from Prod server:
 
 * Forcing a location using the location edit in the spool display modal, should proably update depolyed status to be off, unless the location selected is a toolhead. (Asuming toolheads are a valid target for this location update.)
 
-* Quick weight modal that displays when adjusting weights on spools won't let me change the value in the text field, seems that it won't receve focus?
-
-* A Spool in LR-MDB-2 When auto ejected, was still assigned to the dryer box (2/2) but wasn't visible in the UI. Need to find out why and fix. Had to be found/scanned and force moved to get it fixed.
-[00:11:40] ↩️ Returned #106 -> LR-MDB-2
-[00:11:40] ⚠️ Smart Load: Ejecting #106 from XL-4...
-[00:11:40] 📦 #230 IIID Max PLA (Transition (Color Change)) -> Dryer LR-MDB-2 [Slot 1]
-
-* Seems to be that the unsorted list is missing in dryerbox locations now? anything that seem so fall into this catagory just doesn't show up, even though the box states (5/4) need to investigate whats going on there.
-
-* Location search boxes should also be able to search based on the LOC: Value (LR-MDB-1)
-
-* If possible, set certain text fields to only prompt with auto fill on some (perhaps none) fields. I think this might be a setible somewhere in the code to prevent a list of previously used values for showing up. Most of the time, this is just getting in the way for me.
+* If possible, set certain text fields to only prompt with auto fill on some (perhaps none) fields. I think this might be a setible somewhere in the code to prevent a list of previously used values for showing up. Most of the time, this is just getting in the way for me. _[PARTIAL — Group 13 added `autocomplete="off"` to the Quick-Weigh value input (the worst offender — previously typed `+25` / `-50` deltas were cluttering the dropdown). Broader global pass to identify and decorate other dynamic-overlay inputs still pending.]_
 
 * **[Feature]** Easy way to see what filaments are active on the printers at a glance, and how much filament is left in them. This item could possibly be grouped with the Project Color Loadout, It may contain some over lap with the systems in there. But I'd like to have this sooner, as I keep doing it lately to check to see if I should change spools now, or see if I can fit in one more print.
-
-* Seem sthat the weight update bug (that happens in the dedicated weight modal), the text box un-editable one, seems to occure when accessing from filament cards in location mamanger? Up and down works, but text input directly is impossible for them for some reason.
-
-* Remove "Alex Clamp" text from warning in weight modal when weight is < 0g. This text in the warning doesn't need to be in there. Its just a feature added by another AI.
-
-* Assigning a spool directly to a toolhead, doens't properly update the slot in the dryerbox. Dryer box has to be updated agagain seperatly. The dryerbox and tool head (slot assignments seem to desync if toolhead is the first target.) Filaments hitting 0 also cause some weird unassignment sync. It will get removed from the slot location in filabrige, but still remain in locations/slots. This whole systenm needs another pass to to work more logically.
-
-* Forcing a empty spool weight fill in when updating a spool that doesn't have an empty spool weight, when using the gross function sholdn't prevent the user from entering a weight if the don't know, or can't find the empty spool weight. We need to check if this is the case, and if so, give the user the option to skip adding an empty spool weight. This is preventing me from updating the weight on a spool. This is while in the quick weight modal.
-
-* Ejecting from main menu while the printer is in a non idle state causes the location to not be updated/removed from the toolhead. I was in the process of preping to insert another new filament into the printer. This shouldn't be a blocking move. Also the modal to aprove came up twice, and did nothing when selecting yes. So theres that too.
-
-* Quick weight modal, should have a way to set a perfered weighing methiod. I currently use gross more when I'm working on a filament swap than the additive. I'd like to be able to change the default mode, instead of it always defaulting to additive. Not sure how we do this. perhaps added to a general system configuration mode, which has yet to be implemented. 
 
 * These seem interesting, and it would be great to find a way to use this in some fassion. Just putting this here as a future thing, or as something to keep in mind.
 https://github.com/pubeldev/prusa_exporter
