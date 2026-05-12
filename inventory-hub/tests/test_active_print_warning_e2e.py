@@ -120,7 +120,9 @@ def test_showconfirmoverlay_prepends_banner_when_printer_active(page: Page):
     # This test is therefore a pending marker; the API-level behavior is
     # covered by test_printer_state_api.py and the JS unit behavior by
     # test_fetch_printer_state_returns_info_for_active_printer above.
-    # Smoke-test that the overlay DOM node exists so future real-browser
-    # tests have something to assert against.
-    overlay_count = page.locator('#fcc-quickswap-confirm-overlay').count()
-    assert overlay_count >= 1, "Quick-Swap confirm overlay DOM must exist on dashboard"
+    # Group 15 — the confirm overlay is now mounted dynamically via
+    # window.mountOverlay (no static DOM node at page-load). Smoke-test
+    # that the public teardown surface exists so future real-browser tests
+    # can drive it.
+    has_close = page.evaluate("typeof window.closeQuickswapConfirm")
+    assert has_close == "function", "window.closeQuickswapConfirm must be exposed for manage-modal teardown"

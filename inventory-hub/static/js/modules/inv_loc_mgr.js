@@ -221,8 +221,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Overlays carve-out: if an inline overlay is visible anywhere,
         // let its own listener handle Escape first.
-        const confirmOv = document.getElementById('fcc-quickswap-confirm-overlay');
-        if (confirmOv && confirmOv.style.display === 'block') return;
+        // Group 15 — any mountOverlay-mounted element is only in DOM while open;
+        // its presence alone is the carve-out signal. Pre-Group-15 overlays
+        // (bind-picker, shortcuts) still rely on display:block.
+        if (document.querySelector('[data-overlay-mount="1"]')) return;
         const pickerOv = document.getElementById('fcc-bind-picker-overlay');
         if (pickerOv && pickerOv.style.display === 'block') return;
         const shortcutsOv = document.getElementById('fcc-shortcuts-overlay');
