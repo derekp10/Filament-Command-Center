@@ -293,16 +293,27 @@
 
         const panelHtml = `
             <div class="bg-dark border border-info rounded p-4 shadow-lg"
-                 style="min-width:420px;">
+                 style="min-width:420px; max-width:540px;">
                 <div class="text-info fw-bold mb-3" style="font-size:1.25rem;"
                      id="fcc-quickswap-confirm-title">${_escapeHtml(titleText)}</div>
                 <div class="text-light mb-3" style="font-size:1.05rem;"
                      id="fcc-quickswap-confirm-body">${bodyHtml}</div>
-                <div class="d-flex gap-2 justify-content-end">
-                    <button type="button" id="fcc-quickswap-no"
-                        class="btn btn-outline-light fw-bold px-3">No, cancel</button>
-                    <button type="button" id="fcc-quickswap-yes"
-                        class="btn btn-info fw-bold px-3">Yes, swap</button>
+                <!-- Buttons mirror the QR row's flex layout exactly (gap:14px;
+                     justify-content:center; from attachConfirmQRs in
+                     inv_core.js). The CONFIRM QR's "📷 SCAN TO CONFIRM"
+                     label is ~10px wider than CANCEL's, making the QR
+                     columns asymmetric. Measured widths: CONFIRM ≈ 133px,
+                     CANCEL ≈ 123px. We mirror those exactly so each
+                     button center lands under its QR center. -->
+                <div style="display:flex; gap:14px; justify-content:center; margin-top:14px;">
+                    <div style="width:133px; display:flex; justify-content:center;">
+                        <button type="button" id="fcc-quickswap-yes"
+                            class="btn btn-info fw-bold w-100">Yes, swap</button>
+                    </div>
+                    <div style="width:123px; display:flex; justify-content:center;">
+                        <button type="button" id="fcc-quickswap-no"
+                            class="btn btn-outline-light fw-bold w-100">No, cancel</button>
+                    </div>
                 </div>
             </div>
         `;

@@ -130,11 +130,23 @@ def test_quickswap_refreshes_manage_view_after_yes(page: Page, base_url: str, ap
     btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     expect(btn).to_be_visible(timeout=3000)
     btn.click()
-    expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=2000)
+    # showConfirmOverlay's 3s active-print probe runs first — overlay can take
+    # up to ~3-4s to mount in a dev environment with no reachable PrusaLink.
+    # Group 14.2.
+    expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=6000)
     page.locator("#fcc-quickswap-yes").click()
 
-    # Wait for the follow-up refresh (immediate + 450 ms delayed).
-    page.wait_for_timeout(1200)
+    # Wait for the follow-up refresh — the backend swap + Spoolman PATCH +
+    # client refreshAfterMove() chain can take several seconds in a dev env
+    # with a slow Spoolman. Poll for the sentinel disappearing instead of
+    # a fixed sleep so we're robust to varying backend latency. Group 14.2.
+    try:
+        page.wait_for_function(
+            "() => !document.querySelector('.fcc-test-preswap')",
+            timeout=8000,
+        )
+    except Exception:
+        pass  # fall through to the assertion for a clear failure message
 
     # Any sentinel surviving means the containers weren't re-rendered, so
     # the user would have had to close + reopen to see the new state.

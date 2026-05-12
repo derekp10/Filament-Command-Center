@@ -17,13 +17,22 @@ import requests
 from playwright.sync_api import Page, expect
 
 
-def _open_first_spool_modal(page: Page) -> None:
+def _open_first_spool_modal(page: Page, reset_js: str) -> None:
     page.goto("http://localhost:8000")
+
+    # Defensive cross-test pollution teardown — Group 14.1. See
+    # conftest.RESET_DOM_STATE_JS for the patterns it handles.
+    page.evaluate(reset_js)
+    page.wait_for_timeout(200)
+
     page.locator('nav button:has-text("SEARCH")').click()
     page.wait_for_selector("#offcanvasSearch", timeout=5000)
     page.locator('#global-search-query').fill("a")
-    page.wait_for_selector(".fcc-card-action-btn[title='View Details']", timeout=10000)
-    page.click(".fcc-card-action-btn[title='View Details']")
+    # Scope to inside the offcanvas — see Group 14.3 / 14.6 note in
+    # test_ui_details_modal_e2e.py. .fcc-card-action-btn also matches
+    # dashboard buffer cards, which sit behind the offcanvas-backdrop.
+    page.wait_for_selector("#offcanvasSearch .fcc-card-action-btn[title='View Details']", timeout=10000)
+    page.click("#offcanvasSearch .fcc-card-action-btn[title='View Details']")
     expect(page.locator("#spoolModal")).to_be_visible()
 
 
@@ -57,8 +66,8 @@ def _pick_filament_with_spools(api_base_url: str):
 # Spool delete flow
 # ---------------------------------------------------------------------------
 
-def test_spool_gear_dropdown_exposes_delete(page: Page):
-    _open_first_spool_modal(page)
+def test_spool_gear_dropdown_exposes_delete(page: Page, reset_dom_state_js: str):
+    _open_first_spool_modal(page, reset_dom_state_js)
     # Gear button + dropdown item are present and the item is text-danger styled.
     gear = page.locator("#btn-spool-gear")
     expect(gear).to_be_visible()
@@ -70,8 +79,8 @@ def test_spool_gear_dropdown_exposes_delete(page: Page):
     assert "text-danger" in classes, f"Expected text-danger styling, got: {classes}"
 
 
-def test_spool_delete_step1_renders_warning(page: Page):
-    _open_first_spool_modal(page)
+def test_spool_delete_step1_renders_warning(page: Page, reset_dom_state_js: str):
+    _open_first_spool_modal(page, reset_dom_state_js)
     page.locator("#btn-spool-gear").click()
     page.locator("#btn-spool-delete").click()
     overlay = page.locator("#fcc-spool-delete-overlay")
@@ -87,8 +96,8 @@ def test_spool_delete_step1_renders_warning(page: Page):
     expect(page.locator("#spoolModal")).to_be_visible()
 
 
-def test_spool_delete_step2_requires_id_match(page: Page):
-    _open_first_spool_modal(page)
+def test_spool_delete_step2_requires_id_match(page: Page, reset_dom_state_js: str):
+    _open_first_spool_modal(page, reset_dom_state_js)
     sid = (page.locator("#detail-id").inner_text() or "").strip()
     assert sid, "spool details modal didn't render an ID"
     page.locator("#btn-spool-gear").click()
@@ -110,8 +119,8 @@ def test_spool_delete_step2_requires_id_match(page: Page):
     expect(page.locator("#spoolModal")).to_be_visible()
 
 
-def test_spool_delete_escape_closes_overlay(page: Page):
-    _open_first_spool_modal(page)
+def test_spool_delete_escape_closes_overlay(page: Page, reset_dom_state_js: str):
+    _open_first_spool_modal(page, reset_dom_state_js)
     page.locator("#btn-spool-gear").click()
     page.locator("#btn-spool-delete").click()
     overlay = page.locator("#fcc-spool-delete-overlay")
@@ -133,8 +142,8 @@ def test_spool_delete_escape_closes_overlay(page: Page):
     expect(page.locator("#spoolModal")).to_be_visible()
 
 
-def test_spool_delete_overlay_clears_when_modal_closes(page: Page):
-    _open_first_spool_modal(page)
+def test_spool_delete_overlay_clears_when_modal_closes(page: Page, reset_dom_state_js: str):
+    _open_first_spool_modal(page, reset_dom_state_js)
     page.locator("#btn-spool-gear").click()
     page.locator("#btn-spool-delete").click()
     overlay = page.locator("#fcc-spool-delete-overlay")
@@ -143,7 +152,7 @@ def test_spool_delete_overlay_clears_when_modal_closes(page: Page):
     page.evaluate("modals.spoolModal && modals.spoolModal.hide()")
     expect(page.locator("#spoolModal")).to_be_hidden()
     # Re-open — overlay should NOT be re-rendered with stale state.
-    _open_first_spool_modal(page)
+    _open_first_spool_modal(page, reset_dom_state_js)
     expect(page.locator("#fcc-spool-delete-overlay")).not_to_be_visible()
 
 
