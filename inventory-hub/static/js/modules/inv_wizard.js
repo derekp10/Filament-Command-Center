@@ -766,8 +766,16 @@ const wizardFetchLocations = () => {
                 return true;
             });
             wizardState.locations = valid;
+            // 13.4 — include LocationID in the visible label so typing a LOC
+            // value (e.g. "LR-MDB-1") matches via wizardBindCombobox's
+            // label-substring filter. Mirrors the force-location modal's
+            // `Name (LocationID)` convention so the dashboard's location
+            // pickers stay visually consistent.
             const items = [{ value: '', label: '-- Unassigned --' }].concat(
-                valid.map(loc => ({ value: loc.LocationID, label: loc.Name }))
+                valid.map(loc => ({
+                    value: loc.LocationID,
+                    label: loc.Name ? `${loc.Name} (${loc.LocationID})` : loc.LocationID,
+                }))
             );
             window.wizardBindCombobox({
                 searchId: 'wiz-spool-location-search',
@@ -1971,7 +1979,10 @@ window.openCloneWizard = async (spoolId) => {
             {
                 const locId = d.location || "";
                 const locRec = (wizardState.locations || []).find(l => l.LocationID === locId);
-                window.wizardComboboxSet('wiz-spool-location-search', 'wiz-spool-location', locId, locRec ? locRec.Name : locId);
+                window.wizardComboboxSet(
+                    'wiz-spool-location-search', 'wiz-spool-location', locId,
+                    locRec ? (locRec.Name ? `${locRec.Name} (${locRec.LocationID})` : locRec.LocationID) : locId
+                );
             }
             // Spool Weight: walk Spool → Filament → Vendor so a clone picks up whichever level is populated.
             {
@@ -2212,7 +2223,10 @@ window.openEditWizard = async (spoolId) => {
             {
                 const locId = d.location || "";
                 const locRec = (wizardState.locations || []).find(l => l.LocationID === locId);
-                window.wizardComboboxSet('wiz-spool-location-search', 'wiz-spool-location', locId, locRec ? locRec.Name : locId);
+                window.wizardComboboxSet(
+                    'wiz-spool-location-search', 'wiz-spool-location', locId,
+                    locRec ? (locRec.Name ? `${locRec.Name} (${locRec.LocationID})` : locRec.LocationID) : locId
+                );
             }
             {
                 // Walk the chain: spool → filament → vendor. A blank spool inherits

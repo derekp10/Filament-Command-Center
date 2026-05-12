@@ -80,6 +80,14 @@ Within the table above, the weight-touching entries are themselves a fragmented 
 
 Phase 1 (current branch) extracted `resolveEmptySpoolWeight` into `static/js/modules/weight_utils.js` so the cascade has one canonical home. Phase 2 (separate branch — see `Feature-Buglist.md` "Unified weight-entry component") will build a single `<WeightEntry>`-style component reused by every weight surface, with mode-aware input (gross / net / additive / delta), shared missing-empty-weight prompt, and a preview of the computed `used_weight` before submit. **Don't add new weight-entry UI before Phase 2** — feed any new requirements into that design instead.
 
+## User preferences (pre-Config-system)
+
+Until the Config system (Feature-Buglist.md L9) lands, a small number of user preferences are persisted client-side in `localStorage` so the user doesn't have to re-pick them every session. When the Config system arrives, these keys should be migrated into its schema as routine value-moves; no architectural decisions live in here.
+
+| Key | Type | Values | Owner |
+|-----|------|--------|-------|
+| `fcc.weighEntry.defaultMode` | string | `gross` / `net` / `additive` / `set_used` | `<WeightEntry>` overlay — last mode the user clicked "Set as default" on (or `D` shortcut). Read on overlay open, falls through to the caller-supplied `defaultMode` option when unset/invalid. |
+
 ## Working Groups (Batched Tasks)
 
 Tasks from `Feature-Buglist.md` are organized into batched working groups for efficient execution. Each group bundles related items that share code surfaces.

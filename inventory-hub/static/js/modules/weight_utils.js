@@ -161,6 +161,11 @@ window.computeUsedWeight = computeUsedWeight;
 //
 // Context block shows vendor / material / color so the user has enough to
 // recognize the spool without leaving the active flow.
+// Resolution sentinel returned when the user clicks Skip. Callers that pass
+// `allowSkip: true` must check for this value to distinguish "no tare, treat
+// input as Net for this submission" from a real numeric tare.
+const PROMPT_SKIP_TARE = 'skip';
+
 function promptMissingEmptyWeight({
     vendor = '',
     material = '',
@@ -169,6 +174,7 @@ function promptMissingEmptyWeight({
     title = 'Empty spool weight is missing',
     helper = 'Place the empty spool on the scale and enter the reading. We’ll use it as the tare for this and future weigh-ins.',
     overlayId = 'fcc-missing-empty-weight-overlay',
+    allowSkip = false,
 } = {}) {
     return new Promise((resolve) => {
         const existing = document.getElementById(overlayId);
@@ -206,6 +212,8 @@ function promptMissingEmptyWeight({
                 </div>
                 <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
                     <button type="button" id="${overlayId}-cancel" class="btn btn-sm btn-secondary">Cancel</button>
+                    ${allowSkip ? `<button type="button" id="${overlayId}-skip" class="btn btn-sm btn-warning"
+                        title="Treat your input as the filament remaining (Net), without persisting a tare for this spool.">Skip &mdash; save as Used Weight</button>` : ''}
                     <button type="button" id="${overlayId}-save" class="btn btn-sm btn-primary">Save &amp; Continue</button>
                 </div>
             </div>
@@ -215,6 +223,7 @@ function promptMissingEmptyWeight({
         const input = overlay.querySelector(`#${overlayId}-input`);
         const saveBtn = overlay.querySelector(`#${overlayId}-save`);
         const cancelBtn = overlay.querySelector(`#${overlayId}-cancel`);
+        const skipBtn = overlay.querySelector(`#${overlayId}-skip`);
 
         const cleanup = () => {
             document.removeEventListener('keydown', onKey, true);
@@ -227,6 +236,7 @@ function promptMissingEmptyWeight({
             resolve(v);
         };
         const cancel = () => { cleanup(); resolve(null); };
+        const skip = () => { cleanup(); resolve(PROMPT_SKIP_TARE); };
         const onKey = (e) => {
             if (e.key === 'Enter') { e.preventDefault(); submit(); }
             else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
@@ -234,9 +244,11 @@ function promptMissingEmptyWeight({
 
         saveBtn.addEventListener('click', submit);
         cancelBtn.addEventListener('click', cancel);
+        if (skipBtn) skipBtn.addEventListener('click', skip);
         document.addEventListener('keydown', onKey, true);
         // Defer focus so the overlay paints before we steal focus.
         setTimeout(() => input.focus(), 0);
     });
 }
 window.promptMissingEmptyWeight = promptMissingEmptyWeight;
+window.PROMPT_SKIP_TARE = PROMPT_SKIP_TARE;

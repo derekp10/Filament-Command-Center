@@ -120,9 +120,14 @@ def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
     unreachable (offline, networked elsewhere, cold-rebooting, etc.).
 
     `is_active` is true only when PrusaLink reports a state in which a spool
-    swap would physically disrupt the print. Finished/stopped/idle states do
-    not trigger the warning.
+    swap would physically disrupt the print: PRINTING, PAUSING, RESUMING.
+    PAUSED, BUSY (heating/homing/prep), Operational, Idle, Finished, and
+    Stopped all read as not-active so eject/swap operations can proceed —
+    those are exactly the moments the user wants to swap filament (13.8).
     """
+    # PrusaLink states classified as "active print" — anything outside this
+    # set is fair game for eject / smart-move / quick-swap.
+    _ACTIVE_PRINT_STATES = {"PRINTING", "PAUSING", "RESUMING"}
     creds = fetch_printer_credentials(filabridge_url, printer_name)
     if not creds or not creds.get("ip_address"):
         return None
@@ -138,7 +143,7 @@ def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
             printer = body.get("printer") or {}
             state_str = str(printer.get("state", "")).upper()
             if state_str:
-                return {"state": state_str, "is_active": state_str in {"PRINTING", "PAUSED", "BUSY"}}
+                return {"state": state_str, "is_active": state_str in _ACTIVE_PRINT_STATES}
     except Exception:
         pass
 
@@ -149,7 +154,12 @@ def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
             body = r.json() or {}
             flags = (body.get("state") or {}).get("flags") or {}
             state_text = str((body.get("state") or {}).get("text", "")).upper()
-            is_active = bool(flags.get("printing") or flags.get("paused"))
+            # Legacy /api/printer only exposes `printing` and `paused` flags
+            # — there's no "pausing/resuming" distinction. Per 13.8 we drop
+            # the paused-blocks-eject behavior; mid-print pause is exactly
+            # when a user wants to swap filament. Block only on the active
+            # printing flag.
+            is_active = bool(flags.get("printing")) or state_text in _ACTIVE_PRINT_STATES
             if state_text:
                 return {"state": state_text, "is_active": is_active}
     except Exception:

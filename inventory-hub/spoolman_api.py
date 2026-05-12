@@ -191,6 +191,20 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
                 data['extra'] = extra
             extra['fcc_pre_archive_location'] = existing_location
         data['location'] = ''
+        # 13.6 Part B — symmetrically clear the slot binding so the box's
+        # slot view drops this spool when FilaBridge unmaps it. Previously
+        # auto-archive moved location → '' but left container_slot and the
+        # ghost source fields intact, so the dryer-box card kept rendering
+        # the spool in its old slot. The unarchive path (refill) already
+        # uses fcc_pre_archive_location to restore the location; it doesn't
+        # need container_slot to come back, so dropping it here is safe.
+        extra = data.get('extra')
+        if not isinstance(extra, dict):
+            extra = {}
+            data['extra'] = extra
+        extra['container_slot'] = ''
+        extra['physical_source'] = ''
+        extra['physical_source_slot'] = ''
 
 
 def _auto_unarchive_on_refill(data, existing):

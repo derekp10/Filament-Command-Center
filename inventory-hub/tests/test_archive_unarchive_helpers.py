@@ -51,13 +51,18 @@ class TestAutoArchiveOnEmpty:
         # Archive still happens, but no breadcrumb is planted (nothing to remember).
         assert data["archived"] is True
         assert data["location"] == ""
-        assert "extra" not in data
+        # 13.6 Part B — slot binding cleanup fires regardless; defensive
+        # against a stale container_slot on a spool that landed at
+        # UNASSIGNED with leftover bindings from a manual edit.
+        assert "fcc_pre_archive_location" not in data["extra"]
+        assert data["extra"]["container_slot"] == ""
 
     def test_skips_breadcrumb_when_existing_location_none(self):
         data = {"used_weight": 1000, "initial_weight": 1000}
         sm._auto_archive_on_empty(data, 1000, 0, existing_location=None)
         assert data["archived"] is True
-        assert "extra" not in data
+        assert "fcc_pre_archive_location" not in data["extra"]
+        assert data["extra"]["container_slot"] == ""
 
     def test_does_not_archive_when_remaining_above_zero(self):
         data = {"used_weight": 500, "initial_weight": 1000}
@@ -93,6 +98,85 @@ class TestAutoArchiveOnEmpty:
         sm._auto_archive_on_empty(data, 1000, 0, existing_location="PM-XL-Buffer-1")
         assert data["extra"]["some_key"] == "some_value"
         assert data["extra"]["fcc_pre_archive_location"] == "PM-XL-Buffer-1"
+
+
+# ---------------------------------------------------------------------------
+# 13.6 Part B — auto-archive slot binding cleanup
+# ---------------------------------------------------------------------------
+
+class TestAutoArchiveClearsSlotBindings:
+    """13.6 Part B — auto-archive must clear container_slot and the ghost
+    source fields so the dryer-box card drops the spool symmetrically with
+    the FilaBridge unmap. Previously these lingered, leaving the box's slot
+    view showing a spool that FilaBridge had already released."""
+
+    def test_clears_container_slot_on_archive(self):
+        data = {"used_weight": 1000, "initial_weight": 1000}
+        sm._auto_archive_on_empty(
+            data, 1000, 0, existing_location="PM-DB-XL-L"
+        )
+        assert data["extra"]["container_slot"] == ""
+
+    def test_clears_physical_source_on_archive(self):
+        data = {"used_weight": 1000, "initial_weight": 1000}
+        sm._auto_archive_on_empty(
+            data, 1000, 0, existing_location="XL-1"
+        )
+        # Ghost source fields cleared so a stale ghost binding doesn't make
+        # the dryer box think the archived spool is still feeding a toolhead.
+        assert data["extra"]["physical_source"] == ""
+        assert data["extra"]["physical_source_slot"] == ""
+
+    def test_preserves_breadcrumb_alongside_slot_clear(self):
+        """fcc_pre_archive_location is still planted; only the slot+ghost
+        keys get the new cleanup."""
+        data = {"used_weight": 1000, "initial_weight": 1000}
+        sm._auto_archive_on_empty(
+            data, 1000, 0, existing_location="PM-DB-XL-L"
+        )
+        assert data["extra"]["fcc_pre_archive_location"] == "PM-DB-XL-L"
+        assert data["extra"]["container_slot"] == ""
+
+    def test_merges_with_caller_extras(self):
+        """Caller extras (e.g. user-set sheet_link from a wizard edit) must
+        survive the auto-archive slot cleanup."""
+        data = {
+            "used_weight": 1000,
+            "initial_weight": 1000,
+            "extra": {"sheet_link": "https://example.com/sheet"},
+        }
+        sm._auto_archive_on_empty(
+            data, 1000, 0, existing_location="PM-DB-XL-L"
+        )
+        assert data["extra"]["sheet_link"] == "https://example.com/sheet"
+        assert data["extra"]["container_slot"] == ""
+
+    def test_no_slot_clear_when_remaining_above_zero(self):
+        """The cleanup only fires when auto-archive actually triggers."""
+        data = {"used_weight": 500, "initial_weight": 1000}
+        sm._auto_archive_on_empty(
+            data, 1000, 500, existing_location="PM-DB-XL-L"
+        )
+        # No archive → no slot cleanup; data is left untouched.
+        assert data.get("archived") is None
+        assert "extra" not in data
+
+    def test_no_slot_clear_when_caller_overrides_location(self):
+        """If the caller has its own `location` plan, we don't plant
+        breadcrumb OR clear slot — the caller is taking over the move."""
+        data = {
+            "used_weight": 1000,
+            "initial_weight": 1000,
+            "location": "PM-XL-Buffer-2",
+        }
+        sm._auto_archive_on_empty(
+            data, 1000, 0, existing_location="PM-DB-XL-L"
+        )
+        # archived still added (caller didn't override that), but the
+        # extras-touching branch is short-circuited by the caller's location.
+        assert data["archived"] is True
+        assert data["location"] == "PM-XL-Buffer-2"
+        assert "extra" not in data
 
 
 # ---------------------------------------------------------------------------
