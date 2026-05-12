@@ -19,6 +19,28 @@ from playwright.sync_api import Page, expect
 
 def _open_first_spool_modal(page: Page) -> None:
     page.goto("http://localhost:8000")
+
+    # Defensive cross-test pollution teardown (Group 14.1 — same pattern as
+    # 14.3 / 14.6). All 6 tests in this file pass in isolation but error in
+    # the full sweep when the SEARCH click below is intercepted by a stale
+    # offcanvas / focused dropdown left by a predecessor.
+    page.evaluate("""() => {
+        document.querySelectorAll('.offcanvas.show').forEach((el) => {
+            try { bootstrap.Offcanvas.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
+        });
+        document.querySelectorAll('.modal.show').forEach((el) => {
+            try { bootstrap.Modal.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
+        });
+        document.querySelectorAll('[data-overlay-mount="1"]').forEach((el) => el.remove());
+        if (window.Swal && typeof window.Swal.close === 'function') {
+            try { window.Swal.close(); } catch (_) { /* noop */ }
+        }
+        if (document.activeElement && document.activeElement.blur) {
+            try { document.activeElement.blur(); } catch (_) { /* noop */ }
+        }
+    }""")
+    page.wait_for_timeout(200)
+
     page.locator('nav button:has-text("SEARCH")').click()
     page.wait_for_selector("#offcanvasSearch", timeout=5000)
     page.locator('#global-search-query').fill("a")
