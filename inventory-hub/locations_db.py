@@ -2,6 +2,7 @@ import os
 import json
 import csv
 import shutil
+import tempfile
 import state  # type: ignore
 
 # Runtime state lives under `data/` so a broad .gitignore rule keeps it
@@ -131,32 +132,125 @@ class LocationsCorruptError(RuntimeError):
             f"(line {decode_error.lineno}, col {decode_error.colno}): {decode_error.msg}"
         )
 
-def save_locations_list(new_list):
-    """Saves location configurations to the JSON file via atomic write.
+def _write_locations_atomic(new_list):
+    """Inner write helper — performs ONE atomic write attempt. Returns the
+    path actually written to (i.e. JSON_FILE on success). Raises on failure.
 
-    Writes to a sibling `.tmp` file, fsyncs the bytes to disk, then `os.replace`s
-    onto the target path — atomic on both POSIX and NTFS. Prevents the
-    "valid content + duplicate tail" corruption seen on dev 2026-04-28, which
-    was caused by the prior `open('w') + json.dump` approach being interrupted
-    or raced by a concurrent writer (truncates immediately, streams content,
-    leaves a half-written file if anything goes wrong).
+    Two hardening notes vs. the previous fixed `.tmp` approach (L37):
+
+    (1) Per-call unique temp filename via `tempfile.NamedTemporaryFile`
+        instead of `JSON_FILE + ".tmp"`. Flask is multi-threaded; two
+        concurrent writers sharing the same `.tmp` would corrupt each
+        other's pending content before `os.replace`. A unique temp name
+        per call eliminates that race.
+
+    (2) Post-write read-back-and-verify (in `save_locations_list` below):
+        after `os.replace`, immediately re-open + `json.loads` the
+        target. If parsing fails, the caller logs critical and retries
+        once. The previous corruption ("valid content + duplicate tail")
+        could occur without raising on write — verify-after-write is the
+        tripwire that would catch it.
     """
-    if not new_list: return
     _ensure_data_dir()
-    tmp_path = JSON_FILE + ".tmp"
+    parent_dir = os.path.dirname(JSON_FILE) or '.'
+    # delete=False so we manage the lifecycle (rename or unlink); mode='w'
+    # + encoding='utf-8' matches the prior text-write behaviour.
+    tmp = tempfile.NamedTemporaryFile(
+        mode='w', encoding='utf-8',
+        dir=parent_dir, prefix='locations.', suffix='.tmp',
+        delete=False,
+    )
+    tmp_path = tmp.name
     try:
-        with open(tmp_path, 'w', encoding='utf-8') as f:
-            json.dump(new_list, f, indent=4)
-            f.flush()
-            os.fsync(f.fileno())
+        try:
+            json.dump(new_list, tmp, indent=4)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        finally:
+            tmp.close()
         os.replace(tmp_path, JSON_FILE)
-        state.logger.info("💾 Locations JSON updated")
+        return JSON_FILE
+    except Exception:
+        # Clean up the temp file if it survived the attempt (os.replace
+        # would have consumed it on success; on failure it may still exist).
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _verify_locations_file(expected_list):
+    """Re-read JSON_FILE and confirm it parses to a list. Returns
+    (ok: bool, detail: str). On parse failure, detail is the underlying
+    error message + a short prefix of the on-disk bytes for diagnosis.
+    """
+    try:
+        with open(JSON_FILE, 'r', encoding='utf-8') as f:
+            content = f.read()
+        parsed = json.loads(content)
+        if not isinstance(parsed, list):
+            return False, f"parsed value is not a list (got {type(parsed).__name__})"
+        return True, "ok"
+    except (OSError, json.JSONDecodeError) as e:
+        # Capture the first ~4KB so we can see WHERE the file went bad
+        # without flooding the log on a multi-megabyte runaway.
+        try:
+            with open(JSON_FILE, 'rb') as f:
+                snippet = f.read(4096).decode('utf-8', errors='replace')
+        except OSError:
+            snippet = '(could not re-read file)'
+        return False, f"{e!r} — file prefix: {snippet!r}"
+
+
+def save_locations_list(new_list):
+    """Saves location configurations to the JSON file via atomic write
+    with a verify-after-write tripwire.
+
+    Writes a per-call uniquely-named temp file in the same directory,
+    fsyncs, then `os.replace`s onto JSON_FILE (atomic on POSIX and NTFS).
+    Immediately re-reads + `json.loads`es the result; on parse failure
+    (the "valid content + duplicate tail" symptom seen on dev 2026-04-28),
+    logs critical and retries the write ONCE. After the retry, surfaces a
+    final critical log if it still fails — the caller already got
+    "success" by then, so we don't raise.
+    """
+    if not new_list:
+        return
+    try:
+        _write_locations_atomic(new_list)
     except Exception as e:
-        # Best-effort temp cleanup so we don't leave .tmp turds behind on
-        # repeated failures.
-        try: os.remove(tmp_path)
-        except OSError: pass
-        state.logger.error(f"JSON Write Error: {e}")
+        state.logger.error(f"JSON Write Error (atomic-replace failed): {e}")
+        return
+
+    ok, detail = _verify_locations_file(new_list)
+    if ok:
+        state.logger.info("💾 Locations JSON updated")
+        return
+
+    # Tripwire — the file replaced cleanly but the on-disk content doesn't
+    # parse. Log critical with diagnostics, then retry the write once.
+    state.logger.critical(
+        f"locations.json verify-after-write FAILED at {JSON_FILE!r}: {detail}. "
+        f"Retrying once."
+    )
+    try:
+        _write_locations_atomic(new_list)
+    except Exception as e:
+        state.logger.critical(
+            f"locations.json verify-after-write retry ALSO failed (atomic-replace error): {e}"
+        )
+        return
+
+    ok2, detail2 = _verify_locations_file(new_list)
+    if ok2:
+        state.logger.warning("locations.json verify-after-write recovered on retry.")
+    else:
+        state.logger.critical(
+            f"locations.json verify-after-write retry STILL failed: {detail2}. "
+            f"On-disk state may be corrupt — operator inspection required."
+        )
 
 
 # ---------------------------------------------------------------------------

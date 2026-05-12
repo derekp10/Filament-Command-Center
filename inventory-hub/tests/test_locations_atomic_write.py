@@ -115,19 +115,25 @@ def test_tmp_file_is_in_same_directory_as_target(temp_locations):
     """os.replace is atomic only when source and dest are on the same
     filesystem. Putting the tmp file in the same directory as the target
     is the simplest way to guarantee that — pin this so a future refactor
-    doesn't accidentally move it to /tmp or similar."""
+    doesn't accidentally move it to /tmp or similar.
+
+    L37-hardening note: save_locations_list now uses
+    `tempfile.NamedTemporaryFile` (per-call unique name) instead of
+    builtins.open on a fixed `.tmp` path, so this test spies on
+    NamedTemporaryFile to capture the temp path.
+    """
     locations_db, target, initial = temp_locations
 
     captured = {}
-    real_open = open
+    real_named = locations_db.tempfile.NamedTemporaryFile
 
-    def spy_open(path, *args, **kwargs):
-        if str(path).endswith(".tmp"):
-            captured["tmp_path"] = str(path)
-        return real_open(path, *args, **kwargs)
+    def spy_named(*args, **kwargs):
+        f = real_named(*args, **kwargs)
+        captured["tmp_path"] = f.name
+        return f
 
-    with patch("builtins.open", side_effect=spy_open):
+    with patch.object(locations_db.tempfile, "NamedTemporaryFile", side_effect=spy_named):
         locations_db.save_locations_list([{"LocationID": "Z", "Type": "Buffer"}])
 
-    assert "tmp_path" in captured, "expected a .tmp write during save"
+    assert "tmp_path" in captured, "expected a NamedTemporaryFile during save"
     assert os.path.dirname(captured["tmp_path"]) == os.path.dirname(str(target))
