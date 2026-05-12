@@ -9,6 +9,31 @@ def force_location_modal(page: Page):
     # Navigate to Dashboard
     page.goto("http://localhost:8000")
 
+    # Defensive teardown of any cross-test pollution that would block the
+    # subsequent click chain (Group 14.6). All 7 tests in this file pass in
+    # isolation but error in the full sweep because a predecessor leaves the
+    # search offcanvas / a focused <select> / a stale modal in a state that
+    # makes elements unclickable. Reset the playing field before opening
+    # SEARCH below.
+    page.evaluate("""() => {
+        document.querySelectorAll('.offcanvas.show').forEach((el) => {
+            try { bootstrap.Offcanvas.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
+        });
+        document.querySelectorAll('.modal.show').forEach((el) => {
+            try { bootstrap.Modal.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
+        });
+        // Drop any pre-existing inline overlay (mountOverlay sets data-overlay-mount).
+        document.querySelectorAll('[data-overlay-mount="1"]').forEach((el) => el.remove());
+        // Close any open SweetAlert popups left behind.
+        if (window.Swal && typeof window.Swal.close === 'function') {
+            try { window.Swal.close(); } catch (_) { /* noop */ }
+        }
+        if (document.activeElement && document.activeElement.blur) {
+            try { document.activeElement.blur(); } catch (_) { /* noop */ }
+        }
+    }""")
+    page.wait_for_timeout(200)
+
     # Open Search to guarantee at least one spool card renders
     page.locator('nav button:has-text("SEARCH")').click()
     page.locator('#global-search-query').fill("a")
