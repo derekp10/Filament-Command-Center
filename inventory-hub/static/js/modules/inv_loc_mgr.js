@@ -1312,16 +1312,43 @@ window.ejectSpool = (sid, loc, pickup) => {
     }
 };
 
-window.doEject = (sid, loc, isConfirmed = false) => {
+window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => {
     setProcessing(true);
-    fetch('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'remove', location: loc, spool_id: sid, confirmed: isConfirmed }) })
+    fetch('/api/manage_contents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            action: 'remove',
+            location: loc,
+            spool_id: sid,
+            confirmed: isConfirmed,
+            confirm_active_print: confirmActivePrint,
+        }),
+    })
         .then(r => r.json())
         .then((res) => {
             setProcessing(false);
-            
+
+            // 13.8 — distinguish active-print confirm (Printing/Pausing/
+            // Resuming) from the "true unassign in a room" confirm so
+            // the retry call carries the right flag. Pre-fix the eject
+            // path lumped both into `confirmed_unassign` so clicking Yes
+            // on the active-print modal retried with confirmed_unassign
+            // but no confirm_active_print, which made the backend re-flag
+            // the same active-print state → the modal popped up again
+            // and Yes appeared to "do nothing".
+            if (res.require_confirm && res.confirm_type === 'active_print') {
+                const stateInfo = res.active_print || { printer_name: loc, state: 'ACTIVE' };
+                requestConfirmation(
+                    res.msg
+                        || `${stateInfo.printer_name} is ${stateInfo.state} — ejecting will disrupt the print. Continue anyway?`,
+                    () => window.doEject(sid, loc, isConfirmed, true)
+                );
+                return;
+            }
             if (res.require_confirm) {
                 requestConfirmation(res.msg || `True Unassign spool #${sid}? It is currently floating in a room.`, () => {
-                    window.doEject(sid, loc, true);
+                    window.doEject(sid, loc, true, confirmActivePrint);
                 });
                 return;
             }
@@ -1329,10 +1356,10 @@ window.doEject = (sid, loc, isConfirmed = false) => {
                 showToast(res.msg || "Failed to eject spool", "error");
                 return;
             }
-            
+
             showToast("Ejected");
             if (loc !== "Scan") {
-                // [ALEX FIX] Force a re-render by clearing the hash. 
+                // [ALEX FIX] Force a re-render by clearing the hash.
                 // This ensures the UI updates to "Empty" even if the API data is cached/similar.
                 state.lastLocRenderHash = null;
                 if (window.fetchLocations) window.fetchLocations();

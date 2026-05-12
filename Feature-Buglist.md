@@ -1,6 +1,22 @@
 # **New and Unsorted Features/Bugs**
 
 
+* **[RECURRING — needs deeper fix] `data/locations.json` corruption: "valid content + duplicate tail" pattern.** First seen 2026-04-28 (fixed in commit `8430d81` Group 4 — `locations_db.save_locations_list` switched to atomic `.tmp` + `fsync` + `os.replace`, dev file repaired). **Recurred 2026-05-11 during Group 13 Phase C** with the SAME fingerprint: file ends in `]` (valid JSON) followed by a stray partial-record tail (e.g. `] "Yes",\n        "parent_id": "XL"\n    }\n]`). Dev `/api/locations` endpoint returned a `locations_corrupt` error and ~29 UI/integration tests cascaded into ERRORs due to fixture failures. Repaired in-place by truncating to the first balanced `]` from the right; pre-repair backup at `data/locations.json.pre-13.x-repair-*.bak`.
+
+  **Investigation findings (Group 13 Phase C, 2026-05-11):**
+  - EVERY Python writer of `locations.json` goes through `save_locations_list` ([inventory-hub/locations_db.py:134](inventory-hub/locations_db.py#L134)) which uses the atomic pattern correctly. Confirmed by grep: only `open(JSON_FILE, 'w')` references are the migration-from-CSV path (one-time, never executes after first install) and the load-side `open(JSON_FILE, 'r')` reader.
+  - No test fixture writes the real file — all test fixtures monkeypatch `locations_db.JSON_FILE` to a `tmp_path`. The `DumpExploder` "JSON Write Error" entries in `hub.log` are red herrings: they're test fixtures that share `state.logger` but redirect their file writes via monkeypatch.
+  - The `seed_dryer_box` conftest fixture DOES write the real container file (PUT `/api/dryer_box/<id>/bindings`), but goes through `set_dryer_box_bindings` → `save_locations_list` so it's atomic.
+  - **Leading hypothesis: Docker Desktop on Windows bind-mount filesystem mediation quirk.** When the container's `os.replace(tmp, JSON_FILE)` runs against a host NTFS file via the gRPCfuse/9P-style sharing layer, truncation of the host file may not always propagate when new content is shorter than the old. The Linux container sees the replaced file at the correct size; the host file retains stale bytes past the new EOF. This is consistent with the observed "valid content + duplicate tail" fingerprint (the new write ends in `]`; the stale bytes are leftover from a longer prior file).
+  - Cannot prove the Docker hypothesis without `docker exec` access or a reproducible test against the bind-mount.
+
+  **Candidate hardening (not yet implemented):**
+  1. **Defensive read-back-and-verify** in `save_locations_list`: after `os.replace`, re-read the file and `json.loads()`. If parsing fails, log critical + attempt one more atomic write of the same content. Logs and re-tries are cheap; silent corruption is expensive.
+  2. **Unique temp filename per call** (`tempfile.NamedTemporaryFile(dir=DATA_DIR, prefix='locations.', suffix='.tmp', delete=False)`) instead of fixed `JSON_FILE + ".tmp"`. Eliminates the theoretical race where two concurrent writers share the same `.tmp` (Flask is multi-threaded; the fixed name is a footgun).
+  3. **Post-write explicit truncate** of the host file to the written byte count. Belt-and-suspenders against any rename-doesn't-propagate-truncation behavior.
+  4. **Move runtime state out of the bind-mounted directory** — mount `data/` as a named Docker volume instead of a host bind. Trades easy-host-inspection for filesystem correctness. Probably the cleanest long-term answer for prod (TrueNAS) too.
+
+  **When picked up:** Implement (1) + (2) as a tight pair (cheap, defensible, low blast radius). (3) is optional belt-and-suspenders. (4) is a separate config change worth weighing once dev/prod hygiene is stable.
 
 
 
