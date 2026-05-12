@@ -31,7 +31,14 @@ def bound_slot(api_base_url):
 def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(400)
+    # openManage looks up `state.allLocations` synchronously; if the
+    # locations fetch hasn't resolved yet, the call silently no-ops and
+    # the manage modal never opens. Wait for state.allLocations to be
+    # populated before invoking. Group 14.4.
+    page.wait_for_function(
+        "() => typeof state === 'object' && Array.isArray(state.allLocations) && state.allLocations.length > 0",
+        timeout=10000,
+    )
     page.evaluate(f"window.openManage({loc_id!r})")
     expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
     page.wait_for_timeout(600)
