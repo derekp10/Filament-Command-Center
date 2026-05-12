@@ -12,3 +12,8 @@ Pillow>=10.0
 # what the Dockerfile installs for production.
 flask>=2.0
 requests>=2.28
+
+# Parsers — Amazon order-page parser uses BeautifulSoup4. The runtime
+# module guards the import so the prod image (which doesn't ship bs4)
+# falls back gracefully; pinning it here keeps test_external_parsers green.
+beautifulsoup4>=4.12
