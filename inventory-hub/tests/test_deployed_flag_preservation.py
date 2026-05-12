@@ -227,6 +227,107 @@ def test_perform_smart_move_overwrites_source_when_moving_to_a_different_toolhea
 
 
 # ---------------------------------------------------------------------------
+# 13.6 Part A — toolhead-direct assign synthesizes ghost binding
+# ---------------------------------------------------------------------------
+
+def test_smart_move_to_bound_toolhead_synthesizes_ghost_when_source_unknown():
+    """13.6 Part A — when a spool is moved DIRECTLY to a toolhead (e.g.
+    scan from buffer / force-move) and that toolhead is the target of some
+    dryer-box slot's slot_targets, the spool's physical_source /
+    physical_source_slot must be set to that box+slot so the box card
+    renders the spool as a ghost in the bound slot.
+
+    Pre-fix: a fresh spool deployed to XL-3 left physical_source='' (came
+    from UNASSIGNED) so the box never showed it. User had to manually
+    re-assign on the box for the binding to appear correct."""
+    printer_map = {"XL-3": {"printer_name": "🦝 XL", "position": 2}}
+    loc_list = [
+        {"LocationID": "PM-DB-XL-L", "Type": "Dryer Box", "Max Spools": "4",
+         "extra": {"slot_targets": {"1": "XL-1", "2": "XL-2", "3": "XL-3"}}},
+        {"LocationID": "XL-3", "Type": "Tool Head", "Max Spools": "1"},
+    ]
+    # Spool currently UNASSIGNED — no meaningful physical_source.
+    spool_data = {"id": 42, "location": "", "extra": {}}
+    captured = {}
+    ctx = _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured)
+    for m in ctx: m.start()
+    try:
+        logic.perform_smart_move("XL-3", [42], target_slot=None, origin="test")
+    finally:
+        for m in reversed(ctx): m.stop()
+
+    _, patch_data = captured['update']
+    # Without 13.6 Part A: physical_source would be '' (the spool's prior
+    # location, UNASSIGNED). With the reverse-binding synthesis, it's the
+    # box+slot that feeds the destination toolhead.
+    assert patch_data["extra"]["physical_source"] == "PM-DB-XL-L"
+    assert patch_data["extra"]["physical_source_slot"] == "3"
+
+
+def test_smart_move_to_bound_toolhead_preserves_real_source():
+    """13.6 Part A guard — when the spool already has a meaningful
+    physical_source (e.g. it came from a different box), the reverse-
+    binding synthesis must NOT clobber it. The existing source wins so
+    Return-to-Slot still sends the spool home, not to the synthesized
+    box+slot of the destination toolhead."""
+    printer_map = {
+        "XL-3": {"printer_name": "🦝 XL", "position": 2},
+        "XL-5": {"printer_name": "🦝 XL", "position": 4},
+    }
+    loc_list = [
+        {"LocationID": "PM-DB-XL-L", "Type": "Dryer Box", "Max Spools": "4",
+         "extra": {"slot_targets": {"3": "XL-3"}}},
+        {"LocationID": "LR-MDB-2", "Type": "Dryer Box", "Max Spools": "2",
+         "extra": {"slot_targets": {"1": "XL-5"}}},
+        {"LocationID": "XL-3", "Type": "Tool Head", "Max Spools": "1"},
+        {"LocationID": "XL-5", "Type": "Tool Head", "Max Spools": "1"},
+    ]
+    # Spool currently at LR-MDB-2 (real source).
+    spool_data = {
+        "id": 88, "location": "LR-MDB-2",
+        "extra": {"container_slot": "1"},
+    }
+    captured = {}
+    ctx = _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured)
+    for m in ctx: m.start()
+    try:
+        logic.perform_smart_move("XL-3", [88], target_slot=None, origin="test")
+    finally:
+        for m in reversed(ctx): m.stop()
+
+    _, patch_data = captured['update']
+    # Real source preserved — Return-to-Slot will send it back to LR-MDB-2.
+    assert patch_data["extra"]["physical_source"] == "LR-MDB-2"
+    assert patch_data["extra"]["physical_source_slot"] == "1"
+
+
+def test_smart_move_to_unbound_toolhead_no_ghost_synthesis():
+    """13.6 Part A complement — if the destination toolhead has no
+    reverse-binding from any dryer-box slot, the spool's physical_source
+    stays at its actual prior location (which for an UNASSIGNED spool is
+    just '')."""
+    printer_map = {"XL-9": {"printer_name": "🦝 XL", "position": 8}}
+    loc_list = [
+        # No slot_targets entry points to XL-9.
+        {"LocationID": "PM-DB-XL-L", "Type": "Dryer Box", "Max Spools": "4",
+         "extra": {"slot_targets": {"1": "XL-1"}}},
+        {"LocationID": "XL-9", "Type": "Tool Head", "Max Spools": "1"},
+    ]
+    spool_data = {"id": 42, "location": "", "extra": {}}
+    captured = {}
+    ctx = _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured)
+    for m in ctx: m.start()
+    try:
+        logic.perform_smart_move("XL-9", [42], target_slot=None, origin="test")
+    finally:
+        for m in reversed(ctx): m.stop()
+
+    _, patch_data = captured['update']
+    # No reverse binding to synthesize — physical_source stays empty.
+    assert patch_data["extra"].get("physical_source", "") == ""
+
+
+# ---------------------------------------------------------------------------
 # Quick-Swap grid — spool info on each button
 # ---------------------------------------------------------------------------
 

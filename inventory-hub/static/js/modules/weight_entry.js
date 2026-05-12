@@ -34,6 +34,20 @@
 
 (function () {
     const OVERLAY_ID = 'fcc-weight-entry-overlay';
+    // 13.9 — user preference shortcut, persisted client-side until the
+    // Config system (Feature-Buglist.md L9) lands and absorbs it.
+    const DEFAULT_MODE_KEY = 'fcc.weighEntry.defaultMode';
+
+    function readStoredDefaultMode(availableModes) {
+        try {
+            const v = window.localStorage.getItem(DEFAULT_MODE_KEY);
+            return (v && availableModes.includes(v)) ? v : null;
+        } catch (e) { return null; }
+    }
+    function writeStoredDefaultMode(modeName) {
+        try { window.localStorage.setItem(DEFAULT_MODE_KEY, modeName); }
+        catch (e) { /* private mode / quota — ignore */ }
+    }
 
     const MODE_DEFS = {
         gross: {
@@ -102,7 +116,13 @@
         let currentEmpty = (empty_spool_weight !== null && empty_spool_weight !== '' &&
                              Number(empty_spool_weight) > 0) ? Number(empty_spool_weight) : null;
         let currentSource = empty_source;
-        let mode = availableModes.includes(defaultMode) ? defaultMode : availableModes[0];
+        // 13.9 — Stored preference wins over caller's defaultMode so the
+        // user's "Set as default" choice persists across sessions and
+        // surfaces (Quick-Weigh today; later FilaBridge / bulk weigh-out).
+        const storedDefault = readStoredDefaultMode(availableModes);
+        const seedMode = storedDefault
+            || (availableModes.includes(defaultMode) ? defaultMode : availableModes[0]);
+        let mode = seedMode;
 
         // Tear down any existing overlay so we don't stack two.
         const prior = document.getElementById(OVERLAY_ID);
@@ -165,14 +185,23 @@
                         <span>Initial weight: <strong style="color:#eee;">${fmtG(initial)}</strong>
                               &nbsp;·&nbsp; Currently used: <strong style="color:#eee;">${fmtG(currentUsed)}</strong></span>
                     </div>
-                    <div style="margin-bottom:6px;color:#bbb;font-size:0.82rem;">Mode</div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <span style="color:#bbb;font-size:0.82rem;">Mode</span>
+                        <button type="button" id="fcc-we-set-default"
+                                class="btn btn-link btn-sm p-0"
+                                style="color:#9fd6e6;font-size:0.78rem;text-decoration:none;"
+                                title="Use the current mode as the default the next time this overlay opens. Shortcut: D">
+                            Set as default
+                        </button>
+                    </div>
                     <div id="fcc-we-tabs" style="margin-bottom:12px;">${tabsHtml}</div>
 
                     <label id="fcc-we-input-label" for="fcc-we-input"
                            class="form-label small text-light mb-1"></label>
                     <div class="input-group input-group-sm" style="margin-bottom:6px;">
                         <input id="fcc-we-input" class="form-control bg-dark text-white border-secondary"
-                               style="font-size:1.15rem;" />
+                               style="font-size:1.15rem;"
+                               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
                     </div>
                     <div id="fcc-we-hint" style="color:#888;font-size:0.78rem;margin-bottom:12px;
@@ -192,6 +221,14 @@
                 </div>
             </div>
         `;
+        // Mount at document.body so the overlay's z-index sits cleanly above
+        // every other stacking context on the page. 13.1 — opening from
+        // inside an open Bootstrap modal used to mean the modal's
+        // `_enforceFocus` would yank focus off our input on every keystroke;
+        // the focusGuard installed below neutralizes that trap for events
+        // targeting our overlay without changing the overlay's mount point
+        // (mounting INSIDE the modal subtree caused a different Z-order
+        // regression where the overlay rendered below sibling modal chrome).
         document.body.appendChild(overlay);
 
         const inputEl = overlay.querySelector('#fcc-we-input');
@@ -207,6 +244,19 @@
         const cancelBtn = overlay.querySelector('#fcc-we-cancel');
         const closeBtn = overlay.querySelector('#fcc-we-close');
         const autoArchiveEl = overlay.querySelector('#fcc-we-auto-archive');
+        const setDefaultBtn = overlay.querySelector('#fcc-we-set-default');
+
+        function persistCurrentModeAsDefault() {
+            writeStoredDefaultMode(mode);
+            // Quick visual confirmation that the click registered.
+            const original = setDefaultBtn.textContent;
+            setDefaultBtn.textContent = `✓ ${MODE_DEFS[mode].label} is default`;
+            setDefaultBtn.disabled = true;
+            setTimeout(() => {
+                setDefaultBtn.textContent = original;
+                setDefaultBtn.disabled = false;
+            }, 1200);
+        }
 
         function applyMode(newMode) {
             if (!availableModes.includes(newMode)) return;
@@ -269,7 +319,7 @@
                 `Used <strong>${fmtG(r.used_weight)}</strong> &nbsp;·&nbsp; ` +
                 `Remaining <strong>${fmtG(r.remaining)}</strong>`;
             previewEl.style.color = '#cfd';
-            if (r.capped === 'high') warnEl.textContent = '⚠ Value clamped to initial_weight (ALEX cap).';
+            if (r.capped === 'high') warnEl.textContent = '⚠ Value clamped to initial_weight.';
             else if (r.capped === 'low') warnEl.textContent = '⚠ Value clamped to 0 (cannot go negative).';
             else warnEl.textContent = '';
         }
@@ -291,20 +341,32 @@
             if (r.error) { warnEl.textContent = `Invalid input (${r.error}).`; return; }
             if (r.requires_empty) {
                 // Mode is gross + tare is unset — shared prompt.
+                // allowSkip lets the user submit their input as Net (treat
+                // the typed value as filament remaining) without persisting a
+                // tare. 13.7 — see Feature-Buglist.md.
                 const promptCtx = context || {};
                 const tare = await window.promptMissingEmptyWeight({
                     vendor: promptCtx.vendor || '',
                     material: promptCtx.material || '',
                     color: promptCtx.color || '',
                     color_hex: promptCtx.color_hex || spool.color_hex || null,
+                    allowSkip: true,
                 });
                 if (tare === null) return;  // user cancelled
-                currentEmpty = Number(tare);
-                tareValEl.textContent = fmtG(currentEmpty);
-                if (tareBadgeEl) tareBadgeEl.style.display = 'none';
+                let effectiveMode = mode;
+                if (tare === window.PROMPT_SKIP_TARE) {
+                    // Downgrade Gross → Net for this submission only. No tare
+                    // is persisted; the typed value is treated as filament
+                    // remaining (used = initial − net).
+                    effectiveMode = 'net';
+                } else {
+                    currentEmpty = Number(tare);
+                    tareValEl.textContent = fmtG(currentEmpty);
+                    if (tareBadgeEl) tareBadgeEl.style.display = 'none';
+                }
                 // Re-resolve.
                 r = window.computeUsedWeight({
-                    mode,
+                    mode: effectiveMode,
                     value: v,
                     initial_weight: initial,
                     current_used: currentUsed,
@@ -314,6 +376,9 @@
                     warnEl.textContent = 'Could not compute used_weight.';
                     return;
                 }
+                // Report the mode that actually computed used_weight so the
+                // caller's payload reflects the Skip downgrade.
+                mode = effectiveMode;
             }
 
             const payload = {
@@ -335,8 +400,22 @@
             if (typeof onCancel === 'function') onCancel();
         }
 
+        // 13.1 focusGuard — Bootstrap's modal `_enforceFocus` listens for
+        // `focusin` on document and pulls focus back to the modal whenever a
+        // focused element isn't inside the modal subtree. When our overlay
+        // mounts at document.body (which it must, for z-index sanity), every
+        // attempt to focus the value input would trigger the trap and the
+        // user couldn't type. We install a capture-phase focusin listener
+        // that swallows the event when the target is inside our overlay,
+        // preventing Bootstrap's listener from acting on it. Removed in
+        // cleanup so subsequent modal interactions behave normally.
+        function focusGuard(e) {
+            if (overlay.contains(e.target)) e.stopImmediatePropagation();
+        }
+
         function cleanup() {
             document.removeEventListener('keydown', onKey, true);
+            document.removeEventListener('focusin', focusGuard, true);
             overlay.remove();
         }
 
@@ -356,6 +435,14 @@
                     ? availableModes[(idx + 1) % availableModes.length]
                     : availableModes[(idx - 1 + availableModes.length) % availableModes.length];
                 applyMode(next);
+            } else if ((e.key === 'd' || e.key === 'D') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                // 13.9 — bind D to "Set current mode as default". The value
+                // input takes most chars but its inputmode is decimal-only,
+                // so D is unused there; still, don't hijack when focus is on
+                // the input mid-edit.
+                if (e.target === inputEl) return;
+                e.preventDefault();
+                persistCurrentModeAsDefault();
             }
         }
 
@@ -368,7 +455,9 @@
         saveBtn.addEventListener('click', attemptSave);
         cancelBtn.addEventListener('click', attemptCancel);
         closeBtn.addEventListener('click', attemptCancel);
+        setDefaultBtn.addEventListener('click', persistCurrentModeAsDefault);
         document.addEventListener('keydown', onKey, true);
+        document.addEventListener('focusin', focusGuard, true);
 
         applyMode(mode);
         setTimeout(() => inputEl.focus(), 0);

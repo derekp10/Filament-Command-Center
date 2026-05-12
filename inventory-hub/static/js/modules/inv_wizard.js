@@ -203,14 +203,16 @@ const wizardReset = () => {
     // Reset View
     wizardSelectType('manual');
     document.getElementById('wiz-status-msg').innerText = "";
-    // Reset vendor combobox (visible search field + hidden id + wrapper visibility).
-    const vGrp = document.getElementById('wiz-fil-vendor-group');
-    if (vGrp) vGrp.style.display = 'flex';
+    // Reset vendor combobox (visible search field + hidden id).
     const vSearch = document.getElementById('wiz-fil-vendor-search');
     if (vSearch) vSearch.value = '';
     const vSel = document.getElementById('wiz-fil-vendor-sel');
-    if (vSel) vSel.value = '';
-    document.getElementById('wiz-fil-vendor-new').style.display = 'none';
+    if (vSel) {
+        vSel.value = '';
+        // Non-bubbling so the dirty-flag tracker doesn't pick up this
+        // programmatic reset (matches wizardComboboxSet's policy).
+        vSel.dispatchEvent(new Event('change', { bubbles: false }));
+    }
     // Reset location combobox too — its hidden id field is cleared by the select
     // loop above but the visible search text needs its own clear.
     const lSearch = document.getElementById('wiz-spool-location-search');
@@ -380,7 +382,17 @@ window.wizardComboboxSet = (searchId, hiddenId, value, label) => {
     const s = document.getElementById(searchId);
     const h = document.getElementById(hiddenId);
     if (s) s.value = label || '';
-    if (h) h.value = value == null ? '' : value;
+    if (h) {
+        h.value = value == null ? '' : value;
+        // Fire a NON-BUBBLING change event so direct listeners (the vendor
+        // edit-button visibility hook installed in wizardFetchVendors)
+        // refresh — but the wizard-level dirty-flag tracker (which listens
+        // on the wizardModal wrapper) does NOT mistake this programmatic
+        // write for user input. Clone / edit / external-import auto-fill
+        // all funnel through this function and the dirty-flag spuriously
+        // flipping to true was making Cancel pop the unsaved-changes Swal.
+        h.dispatchEvent(new Event('change', { bubbles: false }));
+    }
 };
 
 window.wizardAutoUpdateDensity = () => {
@@ -659,9 +671,86 @@ const wizardFetchVendors = () => {
                     items,
                     placeholder: '-- Generic --'
                 });
+                // Group 6.2: show ✏️ (open Vendor Edit modal) only when an
+                // existing vendor is selected; the ➕ (toggle add-new mode)
+                // button stays visible always. wizardBindCombobox + the change
+                // dispatch added to wizardComboboxSet both fire on the hidden
+                // input, so a single listener covers user picks AND
+                // programmatic writes (external import, edit-mode auto-fill,
+                // clone). The hidden input survives wizardBindCombobox's clone
+                // dance (only wiz-fil-vendor-search is cloned), so this
+                // listener stays bound across re-fetches.
+                _wizardBindVendorEditBtn();
             }
         });
 };
+
+const _wizardBindVendorEditBtn = () => {
+    const hidden = document.getElementById('wiz-fil-vendor-sel');
+    const editBtn = document.getElementById('wiz-fil-vendor-edit-btn');
+    if (!hidden || !editBtn) return;
+    const refresh = () => {
+        editBtn.style.display = hidden.value ? 'inline-block' : 'none';
+    };
+    if (!hidden.dataset.editBtnBound) {
+        hidden.addEventListener('change', refresh);
+        hidden.dataset.editBtnBound = '1';
+    }
+    refresh();
+};
+
+// Push the vendor's empty_spool_weight into the wizard's filament empty-weight
+// input when it's currently blank. wizardSetupFieldSync mirrors any input
+// change into wiz-spool-empty_weight, so this single dispatch propagates all
+// the way through to the spool field too. Skipped when the user has typed
+// over the value already — never clobber user input.
+const _wizardCascadeVendorEmptyWeight = (vendor) => {
+    if (!vendor || vendor.empty_spool_weight == null || vendor.empty_spool_weight === '') return;
+    const filEmptyEl = document.getElementById('wiz-fil-empty_weight');
+    if (!filEmptyEl || filEmptyEl.value) return;
+    filEmptyEl.value = String(vendor.empty_spool_weight);
+    filEmptyEl.dispatchEvent(new Event('input', { bubbles: true }));
+};
+
+// `vendor:created` listener — the Vendor Edit modal's create mode dispatches
+// this after a successful POST /api/vendors. The wizard refetches its
+// dropdown source so the new vendor shows in the combobox, auto-selects it,
+// AND propagates its empty_spool_weight into the filament/spool cascade so
+// the user doesn't have to retype the weight they just set on the vendor.
+// Skipped if the wizard isn't open.
+document.addEventListener('vendor:created', (e) => {
+    const v = e.detail && e.detail.vendor;
+    if (!v || v.id == null) return;
+    const wizModalEl = document.getElementById('wizardModal');
+    const wizardOpen = wizModalEl && wizModalEl.classList.contains('show');
+    if (!wizardOpen) return;
+    wizardFetchVendors().then(() => {
+        window.wizardComboboxSet(
+            'wiz-fil-vendor-search', 'wiz-fil-vendor-sel',
+            String(v.id), v.name || ''
+        );
+        _wizardCascadeVendorEmptyWeight(v);
+    });
+});
+
+// `vendor:updated` listener — if the user edited the CURRENTLY-SELECTED
+// vendor (e.g. changed its empty_spool_weight from inside the wizard), the
+// stale value in wizardState.vendors would otherwise drive the cascade on
+// the next spool step. Refetch + re-cascade so the wizard sees the updated
+// data. Skipped when the wizard isn't open or a different vendor was edited.
+document.addEventListener('vendor:updated', (e) => {
+    const vid = e.detail && e.detail.id;
+    const v = e.detail && e.detail.vendor;
+    if (!vid || !v) return;
+    const wizModalEl = document.getElementById('wizardModal');
+    const wizardOpen = wizModalEl && wizModalEl.classList.contains('show');
+    if (!wizardOpen) return;
+    const selectedId = document.getElementById('wiz-fil-vendor-sel');
+    if (!selectedId || selectedId.value !== String(vid)) return;
+    wizardFetchVendors().then(() => {
+        _wizardCascadeVendorEmptyWeight(v);
+    });
+});
 
 const wizardFetchLocations = () => {
     return fetch('/api/locations')
@@ -677,8 +766,16 @@ const wizardFetchLocations = () => {
                 return true;
             });
             wizardState.locations = valid;
+            // 13.4 — include LocationID in the visible label so typing a LOC
+            // value (e.g. "LR-MDB-1") matches via wizardBindCombobox's
+            // label-substring filter. Mirrors the force-location modal's
+            // `Name (LocationID)` convention so the dashboard's location
+            // pickers stay visually consistent.
             const items = [{ value: '', label: '-- Unassigned --' }].concat(
-                valid.map(loc => ({ value: loc.LocationID, label: loc.Name }))
+                valid.map(loc => ({
+                    value: loc.LocationID,
+                    label: loc.Name ? `${loc.Name} (${loc.LocationID})` : loc.LocationID,
+                }))
             );
             window.wizardBindCombobox({
                 searchId: 'wiz-spool-location-search',
@@ -1470,12 +1567,19 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
         const match = (wizardState.vendors || []).find(v => (v.name || '').toLowerCase() === vName.toLowerCase());
         if (match) {
             window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', String(match.id), match.name);
-            document.getElementById('wiz-fil-vendor-group').style.display = 'flex';
-            document.getElementById('wiz-fil-vendor-new').style.display = 'none';
         } else {
-            document.getElementById('wiz-fil-vendor-group').style.display = 'none';
-            document.getElementById('wiz-fil-vendor-new').style.display = 'block';
-            document.getElementById('wiz-fil-vendor-new').value = vName;
+            // Parser returned a vendor we don't have yet. Leave the name in the
+            // search input so the user can either pick a close match from the
+            // dropdown or click ➕ (the create button pre-fills from this
+            // input's value). The legacy add-new toggle path was retired
+            // with the Group 6.2 cleanup.
+            const searchEl = document.getElementById('wiz-fil-vendor-search');
+            if (searchEl) searchEl.value = vName;
+            const hidden = document.getElementById('wiz-fil-vendor-sel');
+            if (hidden) {
+                hidden.value = '';
+                hidden.dispatchEvent(new Event('change', { bubbles: true }));
+            }
         }
     }
 };
@@ -1568,20 +1672,6 @@ window.wizardExternalSelected = () => {
 
             wizardValidateSubmit();
         } catch (e) { console.error("Could not parse external data payload", e); }
-    }
-};
-
-window.wizardToggleVendorMode = () => {
-    // Toggle the search-combobox wrapper against the "new vendor" text field.
-    const grp = document.getElementById('wiz-fil-vendor-group');
-    const txt = document.getElementById('wiz-fil-vendor-new');
-    if (grp.style.display !== 'none') {
-        grp.style.display = 'none';
-        txt.style.display = 'block';
-        txt.focus();
-    } else {
-        txt.style.display = 'none';
-        grp.style.display = 'flex';
     }
 };
 
@@ -1717,13 +1807,13 @@ window.wizardSubmit = async () => {
                 f_payload.extra[key].push(val);
             });
 
-            // "New vendor" mode is indicated by the combobox wrapper being hidden
-            // (wizardToggleVendorMode flips the group's display, not the hidden id input).
-            const isNewVendor = document.getElementById('wiz-fil-vendor-group').style.display === 'none';
-            if (!isNewVendor && getVal('wiz-fil-vendor-sel')) {
+            // Vendor selection. The ➕ button now opens the Vendor Edit modal
+            // in create mode and auto-selects the new vendor on save, so by the
+            // time the user reaches submit there's always either a real
+            // vendor_id selected or nothing (deliberate Generic). The legacy
+            // extras.external_vendor_name path was retired in Group 6.2.
+            if (getVal('wiz-fil-vendor-sel')) {
                 f_payload.vendor_id = parseInt(getVal('wiz-fil-vendor-sel'));
-            } else if (isNewVendor && getVal('wiz-fil-vendor-new')) {
-                f_payload.extra['external_vendor_name'] = getVal('wiz-fil-vendor-new');
             }
 
             if (wizardState.mode === 'external' && wizardState.externalMetaData) {
@@ -1889,7 +1979,10 @@ window.openCloneWizard = async (spoolId) => {
             {
                 const locId = d.location || "";
                 const locRec = (wizardState.locations || []).find(l => l.LocationID === locId);
-                window.wizardComboboxSet('wiz-spool-location-search', 'wiz-spool-location', locId, locRec ? locRec.Name : locId);
+                window.wizardComboboxSet(
+                    'wiz-spool-location-search', 'wiz-spool-location', locId,
+                    locRec ? (locRec.Name ? `${locRec.Name} (${locRec.LocationID})` : locRec.LocationID) : locId
+                );
             }
             // Spool Weight: walk Spool → Filament → Vendor so a clone picks up whichever level is populated.
             {
@@ -2045,12 +2138,14 @@ window.openEditWizard = async (spoolId) => {
                 const match = (wizardState.vendors || []).find(v => (v.name || '').toLowerCase() === (f.vendor.name || '').toLowerCase());
                 if (match) {
                     window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', String(match.id), match.name);
-                    document.getElementById('wiz-fil-vendor-group').style.display = 'flex';
-                    document.getElementById('wiz-fil-vendor-new').style.display = 'none';
                 } else {
-                    document.getElementById('wiz-fil-vendor-group').style.display = 'none';
-                    document.getElementById('wiz-fil-vendor-new').style.display = 'block';
-                    document.getElementById('wiz-fil-vendor-new').value = f.vendor.name;
+                    // Vendor on the source record isn't in the local cache.
+                    // Leave the name in the search box so the user can either
+                    // pick a close match or click ➕ to create. (Legacy
+                    // add-new toggle was retired with Group 6.2 cleanup.)
+                    const searchEl = document.getElementById('wiz-fil-vendor-search');
+                    if (searchEl) searchEl.value = f.vendor.name || '';
+                    window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', '', f.vendor.name || '');
                 }
             } else {
                 window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', '', '');
@@ -2128,7 +2223,10 @@ window.openEditWizard = async (spoolId) => {
             {
                 const locId = d.location || "";
                 const locRec = (wizardState.locations || []).find(l => l.LocationID === locId);
-                window.wizardComboboxSet('wiz-spool-location-search', 'wiz-spool-location', locId, locRec ? locRec.Name : locId);
+                window.wizardComboboxSet(
+                    'wiz-spool-location-search', 'wiz-spool-location', locId,
+                    locRec ? (locRec.Name ? `${locRec.Name} (${locRec.LocationID})` : locRec.LocationID) : locId
+                );
             }
             {
                 // Walk the chain: spool → filament → vendor. A blank spool inherits

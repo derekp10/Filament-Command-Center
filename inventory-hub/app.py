@@ -267,24 +267,98 @@ def api_create_filament():
 
 @app.route('/api/vendors', methods=['POST'])
 def api_create_vendor():
-    """Create a vendor in Spoolman. Body: {"name": "<vendor name>"}.
+    """Create a vendor in Spoolman.
 
-    Used by the Edit Filament form when the user types a vendor name that
-    doesn't match any existing vendor — the frontend POSTs here first, then
-    PATCHes the filament with the new vendor_id. Returns {success, vendor}.
+    Two accepted body shapes for back-compat with the Edit Filament inline
+    "+ Create vendor" affordance, which still sends `{name: "..."}`:
+      - `{"name": "..."}` — legacy short form, name-only create
+      - `{"data": {...vendor fields and/or extra...}}` — full-form payload
+        from the Vendor Edit modal's create mode (Group 6.2 cleanup).
+
+    Returns {success, vendor}. Activity log records the create.
     """
     payload = request.json or {}
-    name = str(payload.get('name') or '').strip()
+    # Resolve the data dict from either shape.
+    if isinstance(payload.get('data'), dict):
+        data = dict(payload['data'])
+    else:
+        data = {"name": str(payload.get('name') or '').strip()}
+    name = str(data.get('name') or '').strip()
     if not name:
         return jsonify({"success": False, "msg": "Vendor name required."}), 400
+    data['name'] = name
     try:
-        created = spoolman_api.create_vendor({"name": name})
+        created = spoolman_api.create_vendor(data)
         if created and created.get('id') is not None:
             state.add_log_entry(f"➕ Vendor '{name}' created", "SUCCESS", "00ff00")
             return jsonify({"success": True, "vendor": created})
-        return jsonify({"success": False, "msg": "Spoolman rejected the vendor create."}), 500
+        # Surface Spoolman's rejection body when create_vendor returned None.
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the vendor create."
+        return jsonify({"success": False, "msg": err}), 500
     except Exception as e:
         state.logger.error(f"Failed to create vendor '{name}': {e}")
+        return jsonify({"success": False, "msg": str(e)}), 500
+
+
+def _format_vendor_edit_log(vid, before, data):
+    """Build a per-field before→after activity log line for a vendor edit.
+    Mirrors `_format_filament_edit_log` so the Vendor Edit modal save path
+    leaves the same kind of audit trail (user can see what value the field
+    actually changed from/to, not just which keys were dirty)."""
+    parts = []
+    before = before or {}
+    before_extra = before.get('extra') or {}
+    for key, value in (data or {}).items():
+        if key == 'extra':
+            for ek, ev in (value or {}).items():
+                old = before_extra.get(ek, '')
+                if str(old) != str(ev):
+                    parts.append(f"extra.{ek}: {old or '(empty)'} → {ev or '(empty)'}")
+            continue
+        old = before.get(key, '')
+        if str(old) != str(value):
+            parts.append(f"{key}: {old or '(empty)'} → {value or '(empty)'}")
+    if not parts:
+        return f"✏️ Vendor #{vid} edited (no fields)"
+    return f"✏️ Vendor #{vid} edited — " + " · ".join(parts)
+
+
+@app.route('/api/vendors/<int:vid>', methods=['PATCH'])
+def api_update_vendor(vid):
+    """Edit a vendor in Spoolman. Body: {"data": {...vendor fields and/or extra...}}.
+
+    Backs the Manufacturer/Vendor Edit modal V1 (Group 6 — Edit Modal new
+    panels). Uses update_vendor_or_raise on the high-stakes user-driven
+    save path so silent failure can't strand the user without a signal.
+    Surfaces the actual Spoolman rejection body in the response so the
+    modal can toast it at 7s duration per the activity-log + toast contract.
+
+    Vendor has no system-managed extras today (SYSTEM_MANAGED_EXTRAS is
+    spool-only), so compute_dirty_extras isn't needed here — but the
+    `extra` payload is still merged with the existing record inside
+    update_vendor() so partial PATCHes preserve sibling extras.
+    """
+    payload = request.json or {}
+    data = payload.get('data') or {}
+    if not isinstance(data, dict) or not data:
+        return jsonify({"success": False, "msg": "No fields to update."}), 400
+    before = spoolman_api.get_vendor(vid) or {}
+    try:
+        updated = spoolman_api.update_vendor_or_raise(vid, data)
+        state.add_log_entry(
+            _format_vendor_edit_log(vid, before, data),
+            "SUCCESS", "00ff00",
+        )
+        return jsonify({"success": True, "vendor": updated})
+    except spoolman_api.SpoolmanRejection as e:
+        err = str(e) or "Spoolman rejected the vendor edit."
+        state.add_log_entry(
+            f"❌ Vendor #{vid} edit rejected — {err}",
+            "ERROR", "ff4444",
+        )
+        return jsonify({"success": False, "msg": err}), 400
+    except Exception as e:
+        state.logger.error(f"Failed to update vendor #{vid}: {e}")
         return jsonify({"success": False, "msg": str(e)}), 500
 
 @app.route('/api/materials', methods=['GET'])
@@ -379,19 +453,10 @@ def api_create_inventory_wizard():
     try:
         # Step 1: Resolve Filament
         if not filament_id and filament_data:
-            # Check if a new vendor needs to be created
-            extra = filament_data.get('extra', {})
-            external_vendor = extra.pop('external_vendor_name', None)
-            if external_vendor:
-                new_ven = spoolman_api.create_vendor({"name": external_vendor})
-                if new_ven and 'id' in new_ven:
-                    filament_data['vendor_id'] = new_ven['id']
-                else:
-                    return jsonify({"success": False, "msg": f"Failed to create new Vendor '{external_vendor}' in Spoolman."})
-
             # New filaments auto-flag for label print so they show up in the
             # Backlog immediately. The user's first physical scan of the new
             # FIL:NN label flips it to False (positive verification).
+            extra = filament_data.get('extra', {})
             if 'needs_label_print' not in extra:
                 extra['needs_label_print'] = True
             filament_data['extra'] = extra
@@ -529,14 +594,6 @@ def api_edit_spool_wizard():
 
         # Update Filament Second (if applicable)
         if filament_id and filament_data:
-            # Handle spontaneous vendor generation explicitly
-            if 'extra' in filament_data:
-                external_vendor = filament_data['extra'].pop('external_vendor_name', None)
-                if external_vendor:
-                    new_ven = spoolman_api.create_vendor({"name": external_vendor})
-                    if new_ven and 'id' in new_ven:
-                        filament_data['vendor_id'] = new_ven['id']
-
             fil_res = spoolman_api.update_filament(filament_id, filament_data)
             if not fil_res:
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"

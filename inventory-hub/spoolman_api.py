@@ -43,6 +43,8 @@ JSON_STRING_FIELDS = [
     "price_total", "drying_temp", "drying_time", "flush_multiplier",
     # Text-type extras that store free-form strings (defensive):
     "prusament_manufacturing_date", "sheet_link", "slicer_profile",
+    # Vendor extras (Group 6 — Edit Modal new panels):
+    "website",
 ]
 
 # Captures the last Spoolman non-ok response body so callers like
@@ -189,6 +191,20 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
                 data['extra'] = extra
             extra['fcc_pre_archive_location'] = existing_location
         data['location'] = ''
+        # 13.6 Part B — symmetrically clear the slot binding so the box's
+        # slot view drops this spool when FilaBridge unmaps it. Previously
+        # auto-archive moved location → '' but left container_slot and the
+        # ghost source fields intact, so the dryer-box card kept rendering
+        # the spool in its old slot. The unarchive path (refill) already
+        # uses fcc_pre_archive_location to restore the location; it doesn't
+        # need container_slot to come back, so dropping it here is safe.
+        extra = data.get('extra')
+        if not isinstance(extra, dict):
+            extra = {}
+            data['extra'] = extra
+        extra['container_slot'] = ''
+        extra['physical_source'] = ''
+        extra['physical_source_slot'] = ''
 
 
 def _auto_unarchive_on_refill(data, existing):
@@ -583,17 +599,86 @@ def get_materials() -> list[str]:
     return sorted(list(materials))
 
 def create_vendor(data):
-    """Creates a brand new vendor via POST to Spoolman."""
+    """Creates a brand new vendor via POST to Spoolman.
+
+    Populates LAST_SPOOLMAN_ERROR on rejection so callers (e.g. the wizard's
+    create-from-modal flow added in Group 6.2 cleanup) can surface the actual
+    rejection body to the user instead of an opaque "rejected" message."""
+    global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
     sanitized = sanitize_outbound_data(data)
     try:
         r = requests.post(f"{sm_url}/api/v1/vendor", json=sanitized, timeout=5)
         if r.ok:
+            LAST_SPOOLMAN_ERROR = None
             return r.json()
-        state.logger.error(f"Failed to create vendor: {r.status_code} - {r.text}")
+        err_body = r.text
+        state.logger.error(f"Failed to create vendor: {r.status_code} - {err_body}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {err_body[:400]}"
     except Exception as e:
         state.logger.error(f"API Error creating vendor: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
     return None
+
+
+def get_vendor(vid):
+    """Returns the vendor dict for `vid`, or None on miss/error."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.get(f"{sm_url}/api/v1/vendor/{vid}", timeout=5)
+        if r.ok:
+            return r.json()
+    except Exception as e:
+        state.logger.error(f"API Error fetching vendor {vid}: {e}")
+    return None
+
+
+def update_vendor(vid, data):
+    """Returns the updated vendor dict on success, or None on failure.
+    Mirrors update_filament: stashes Spoolman's rejection body in
+    LAST_SPOOLMAN_ERROR so callers can surface it to the UI, and merges
+    partial `extra` payloads against the existing record so Spoolman's
+    REPLACE-on-PATCH semantics don't wipe sibling extras.
+
+    Backs the Manufacturer/Vendor Edit modal V1 (Group 6 — Edit Modal new
+    panels). Vendor has no system-managed extras today (SYSTEM_MANAGED_EXTRAS
+    is spool-only), but the merge guarantee still matters because we'll
+    eventually add vendor-level extras beyond `website` and partial PATCHes
+    must not silently drop them."""
+    global LAST_SPOOLMAN_ERROR
+    sm_url, _ = config_loader.get_api_urls()
+
+    if isinstance(data.get('extra'), dict):
+        existing_extras = _get_raw_extras('vendor', vid)
+        caller_sanitized = sanitize_outbound_data({'extra': data['extra']}).get('extra', {})
+        data = dict(data)  # don't mutate caller's payload
+        data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized)
+        sanitized = data
+    else:
+        sanitized = sanitize_outbound_data(data)
+    try:
+        r = requests.patch(f"{sm_url}/api/v1/vendor/{vid}", json=sanitized, timeout=2)
+        if r.ok:
+            LAST_SPOOLMAN_ERROR = None
+            return r.json()
+        err_body = r.text
+        state.logger.error(f"Failed to update vendor {vid}: {r.status_code} - {err_body}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {err_body[:400]}"
+    except Exception as e:
+        state.logger.error(f"API Error updating vendor {vid}: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
+    return None
+
+
+def update_vendor_or_raise(vid, data):
+    """Same as update_vendor but raises SpoolmanRejection on failure.
+
+    Use on the Vendor Edit modal save path — silent failure there leaves
+    the user with no signal that their edit was rejected."""
+    result = update_vendor(vid, data)
+    if result is None:
+        raise SpoolmanRejection(LAST_SPOOLMAN_ERROR)
+    return result
 
 def ensure_extra_field(entity_type, key, name, field_type="text", choices=None, multi=False):
     """Idempotent register-if-missing for a Spoolman extra field schema.
@@ -656,16 +741,26 @@ REQUIRED_SPOOL_EXTRAS = [
     ("prusament_length_m", "Prusament Length (m)", "text"),
 ]
 
+# Vendor extras the Manufacturer/Vendor Edit modal V1 writes (Group 6.2).
+# First vendor-extras registration in the codebase. Kept here so app startup
+# self-heals a Spoolman that's missing them — otherwise the modal save 400s
+# until the user re-runs setup_fields.py against prod.
+REQUIRED_VENDOR_EXTRAS = [
+    ("website", "Vendor Website", "text"),
+]
+
 
 def ensure_required_extras():
-    """Register any missing Edit-Filament + per-spool-scan extras with
-    Spoolman. Called once at Flask startup. Failures log a warning but
+    """Register any missing Edit-Filament + per-spool-scan + vendor extras
+    with Spoolman. Called once at Flask startup. Failures log a warning but
     don't block the app — the same fields will keep silently failing to
     write, but the app stays up so the user can fix Spoolman directly."""
     for key, name, ftype in REQUIRED_FILAMENT_EXTRAS:
         ensure_extra_field("filament", key, name, ftype)
     for key, name, ftype in REQUIRED_SPOOL_EXTRAS:
         ensure_extra_field("spool", key, name, ftype)
+    for key, name, ftype in REQUIRED_VENDOR_EXTRAS:
+        ensure_extra_field("vendor", key, name, ftype)
 
 
 def update_extra_field_choices(entity_type, key, new_choices):

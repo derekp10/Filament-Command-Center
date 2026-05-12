@@ -64,6 +64,7 @@ Inventory of current production write surfaces (keep this list updated when addi
 | `app.py:2496` | filabridge auto-deduct | Activity log on failure with Spoolman body. |
 | `app.py:2533` | filabridge manual recovery | Same pattern as auto-deduct. |
 | `app.py:2659` | filabridge auto-recover task (threaded) | Activity log on failure. |
+| `app.py:314` | `PATCH /api/vendors/<id>` Vendor Edit modal save | Uses `update_vendor_or_raise`; merges `extra` against existing record so partial PATCH preserves siblings; activity log on both success and rejection; surfaces Spoolman error body in response JSON for the modal to toast at 7s. |
 | `logic.py:432` | `perform_smart_move` unseat existing | Read-merge-write reference impl; logs failure. |
 | `logic.py:484` | `perform_smart_move` toolhead branch | Activity log on failure with Spoolman body. |
 | `logic.py:498` | `perform_smart_move` dryer branch | Activity log on failure. |
@@ -78,6 +79,14 @@ Inventory of current production write surfaces (keep this list updated when addi
 Within the table above, the weight-touching entries are themselves a fragmented sub-system: `app.py:2068` (mark_printed), `app.py:2359` (backfill), `app.py:2496/2533/2659` (filabridge auto/manual/thread), plus the frontend modals (`inv_weigh_out.js` weigh-out, `inv_wizard.js` empty-weight fields, `inv_details.js` post-archive prompt + filament edit). Each accepts a slightly different input form (gross / net / additive / delta / field-only) with inconsistent terminology and inconsistent empty-spool-weight resolution.
 
 Phase 1 (current branch) extracted `resolveEmptySpoolWeight` into `static/js/modules/weight_utils.js` so the cascade has one canonical home. Phase 2 (separate branch — see `Feature-Buglist.md` "Unified weight-entry component") will build a single `<WeightEntry>`-style component reused by every weight surface, with mode-aware input (gross / net / additive / delta), shared missing-empty-weight prompt, and a preview of the computed `used_weight` before submit. **Don't add new weight-entry UI before Phase 2** — feed any new requirements into that design instead.
+
+## User preferences (pre-Config-system)
+
+Until the Config system (Feature-Buglist.md L9) lands, a small number of user preferences are persisted client-side in `localStorage` so the user doesn't have to re-pick them every session. When the Config system arrives, these keys should be migrated into its schema as routine value-moves; no architectural decisions live in here.
+
+| Key | Type | Values | Owner |
+|-----|------|--------|-------|
+| `fcc.weighEntry.defaultMode` | string | `gross` / `net` / `additive` / `set_used` | `<WeightEntry>` overlay — last mode the user clicked "Set as default" on (or `D` shortcut). Read on overlay open, falls through to the caller-supplied `defaultMode` option when unset/invalid. |
 
 ## Working Groups (Batched Tasks)
 

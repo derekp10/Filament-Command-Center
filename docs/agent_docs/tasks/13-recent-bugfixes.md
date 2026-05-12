@@ -1,19 +1,23 @@
 # Group 13: Recent Bugfixes (Weight + Dryer Display)
 
 **Branch name:** `feature/recent-bugfixes-weight-dryer`
-**Estimated effort:** ~4–6 hours
-**Risk:** Medium — focused bug fixes; 13.2 / 13.3 / 13.6 all touch the toolhead↔dryer-box binding sync surface so verify them together
+**Estimated effort:** ~6–8 hours
+**Risk:** Medium — bug fixes span weight-overlay, dryer-box binding-sync, search/filter, and eject paths; 13.2 / 13.3 / 13.6 all touch the toolhead↔dryer-box binding sync surface so verify them together
 
 ## Goal
 
-Fix six recently-reported bugs surfaced post-quickswap-merge:
+Fix nine recently-reported bugs surfaced post-quickswap-merge:
 - A focus regression in the unified Quick-Weigh `<WeightEntry>` overlay (13.1)
 - Two dryer-box display bugs around items being assigned but not rendered (13.2, 13.3)
 - LOC: search box matching not fully working despite commit 883f6f4 (13.4 — continuing bug)
 - Remove "ALEX cap" branding from the weight overlay's high-cap warning (13.5 — copy-edit)
 - Toolhead↔dryer-box binding desync — direct toolhead assignment doesn't propagate to slot, and 0g unassignment leaves stale slot bindings (13.6)
+- Gross-mode in the Quick-Weigh overlay shouldn't hard-block when empty-spool weight is missing — needs a skip path (13.7)
+- Main-menu eject shouldn't be blocking on non-idle printer state, plus duplicate confirm modal that does nothing on Yes (13.8)
+- Quick-Weigh default-mode preference — let user pick Gross / Additive / Net / Set Used as the on-open default (13.9)
 
 13.2, 13.3, and 13.6 are bundled because they almost certainly share root-cause code in the dryer-box / toolhead binding-sync layer (`perform_smart_move`, `perform_smart_eject`, and the auto-archive-on-empty path).
+13.1, 13.5, 13.7, 13.9 all live in the `<WeightEntry>` overlay (`weight_entry.js`) so they ship together with shared regression testing.
 
 ## Items to Complete
 
@@ -178,9 +182,76 @@ This pairs with **13.2** (ghost spool after auto-eject) — both are facets of t
 - [ ] Regression tests covering both parts; existing 13.2 ghost-spool test continues to pass
 - [ ] Verified manually in dev for both repros
 
+### 13.7 — Gross-mode shouldn't hard-block on missing empty-spool weight
+**Buglist ref:** L148
+**What:** "Forcing a empty spool weight fill in when updating a spool that doesn't have an empty spool weight, when using the gross function sholdn't prevent the user from entering a weight if the don't know, or can't find the empty spool weight. We need to check if this is the case, and if so, give the user the option to skip adding an empty spool weight. This is preventing me from updating the weight on a spool. This is while in the quick weight modal."
+
+**Surface:** The `<WeightEntry>` overlay's Gross mode path (`weight_entry.js`). When the resolved empty-spool weight is missing, the existing preConfirm in `showArchiveEmptyWeightPrompt` (or the inline equivalent in the overlay) blocks save until the user fills it in. Derek hit this when he didn't know the tare and just wanted to record what he could.
+
+**Approach:**
+- When Gross mode is selected AND no empty weight resolves through the cascade (spool → filament → vendor), surface the "Empty-spool weight is missing — we'll ask you for it on Save" preview (already in `weight_entry.js:263`) and add a **third button option** alongside "Provide weight" and "Cancel": **"Skip — save as Used Weight"**.
+- "Skip" downgrades the entry from Gross to Net for this submission only (no persistence change to the spool's stored tare). The math becomes `used_weight = initial_weight - net_weight` where net = the user's input treated as already-tared.
+- Either that, OR display the `(none)` tare as 0 with a non-blocking warning banner. Pick whichever has less ambiguity for the user — the Skip-with-mode-downgrade is more accurate but more explanation; the warning-banner approach is simpler. Recommend the Skip path with a tooltip explaining the downgrade.
+- Make sure the "missing tare" prompt for the cascade write path (where the user IS asked for the empty weight on save and the value is then persisted to the spool) stays available as the primary option. The skip is the escape hatch, not the default.
+
+**Files:**
+- `inventory-hub/static/js/modules/weight_entry.js` — overlay's missing-tare prompt + Save handler
+- `inventory-hub/static/js/modules/inv_details.js` — `showArchiveEmptyWeightPrompt` (related but legacy; verify the overlay-path is the active one for Quick-Weigh)
+- `inventory-hub/tests/test_weight_entry_overlay.py` — extend with a Skip-path test
+
+**Acceptance criteria:**
+- [ ] In Gross mode with no resolvable empty weight, Save offers three options: Provide weight (existing), Skip (new), Cancel (existing)
+- [ ] Skip submits the value as Net (no Gross math applied; no tare persisted to the spool)
+- [ ] The default flow (provide weight + save) still writes the tare to the spool extra
+- [ ] Regression test for the Skip path; existing missing-tare-prompt test still passes
+
+### 13.8 — Main-menu eject shouldn't block when printer is non-idle (+ duplicate confirm modal no-op)
+**Buglist ref:** L150
+**What:** "Ejecting from main menu while the printer is in a non idle state causes the location to not be updated/removed from the toolhead. I was in the process of preping to insert another new filament into the printer. This shouldn't be a blocking move. Also the modal to aprove came up twice, and did nothing when selecting yes. So theres that too."
+
+Two compounding bugs:
+
+**Part A — Eject blocks on non-idle state.** When the printer is mid-prep (heating, homing, anything not strictly idle), the eject path no-ops without surfacing why. Derek's case: he was prepping for a filament swap, eject is exactly the right operation at that moment. The `confirm_active_print` gate that landed during the locations refactor is over-broad — it should only block when an actual print is running and the spool's used_weight could still grow, not when the printer is in any non-idle state.
+
+**Part B — Confirm modal shows twice + selecting Yes does nothing.** Indicates a duplicate listener / event-dispatch race — the confirm-overlay is being opened twice (likely once by the eject button handler, once by the smart-move path's own confirm), and the inner one's Yes handler is wired to a stale reference. Same family as the past nested-Swal bugs documented in CLAUDE.md.
+
+**Files:**
+- `inventory-hub/logic.py` — `perform_smart_eject` + `perform_smart_move` `confirm_active_print` gate
+- `inventory-hub/static/js/modules/inv_cmd.js` — main-menu eject button handler (search for the eject command-deck button)
+- `inventory-hub/static/js/modules/inv_details.js` — any eject confirm overlay shared with the main-menu button
+- `inventory-hub/tests/test_force_eject_keyboard_e2e.py` or similar — extend with a non-idle-state eject test
+
+**Acceptance criteria:**
+- [ ] Eject from main menu succeeds when printer is non-idle but not actively printing (heating, prep, paused)
+- [ ] Confirm modal shows exactly once on eject
+- [ ] Selecting Yes on the confirm modal completes the eject and clears the toolhead binding
+- [ ] PrusaLink state probe (see memory `reference_prusalink_state_probe.md`) classifies "active print" precisely — only `Printing` / `Pausing` / `Resuming` should trigger the block, not `Heating` / `Homing` / `Operational`
+- [ ] Regression test covers each printer state classification
+
+### 13.9 — Quick-Weigh default mode preference
+**Buglist ref:** L152
+**What:** "Quick weight modal, should have a way to set a perfered weighing methiod. I currently use gross more when I'm working on a filament swap than the additive. I'd like to be able to change the default mode, instead of it always defaulting to additive. Not sure how we do this. perhaps added to a general system configuration mode, which has yet to be implemented."
+
+**Approach (ship now, surface later in Config):**
+Use `localStorage` for the preference key `fcc.weighEntry.defaultMode` (one of `gross` / `additive` / `net` / `set`). On `<WeightEntry>` overlay open, read the key and select that mode tab. Add a small "Set as default" affordance (link or button next to the mode tabs) that writes the current mode to localStorage.
+
+This is intentionally a *user-preference shortcut* rather than waiting on the Config system (L12, still NEEDS DESIGN). When the Config system lands, this preference can be migrated to its config schema as a routine value-move; no architectural decision is being made here that would block that migration. Document the key in CLAUDE.md so the Config-system design picks it up.
+
+**Files:**
+- `inventory-hub/static/js/modules/weight_entry.js` — read/write the preference, default selection on open
+- `inventory-hub/static/js/modules/shortcuts_registry.js` — possibly register `D` (or similar) to "Set current mode as default" inside the overlay
+- `CLAUDE.md` — note the localStorage key under a "User preferences (pre-Config-system)" subsection
+- `inventory-hub/tests/test_weight_entry_overlay.py` — preference-persistence test
+
+**Acceptance criteria:**
+- [ ] Overlay opens to the last-selected default mode (not always Additive)
+- [ ] "Set as default" persists the current mode for next open
+- [ ] localStorage key documented so Config-system migration knows where to look
+- [ ] Default-on-open fallback when localStorage is unavailable / corrupted
+
 ## Testing Checklist
 
-- [ ] Manual repro and verify all 6 fixes in dev
+- [ ] Manual repro and verify all 9 fixes in dev
 - [ ] Existing Quick-Weigh tests still pass; new focus test added
 - [ ] Existing Location Manager / dryer-box tests still pass; regression tests added for 13.2 + 13.3
 - [ ] Full regression sweep before commit
