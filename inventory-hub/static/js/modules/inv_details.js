@@ -1220,7 +1220,7 @@ const _editfilOpenModal = (fil) => {
             row.innerHTML = `
                 <span class="badge bg-info text-dark" style="min-width:36px;" data-role="num">${i + 1}</span>
                 <input type="color" id="editfil-color-picker-${idx}" value="${hexInit}" class="form-control form-control-color bg-black border-secondary" style="width:50px; padding:2px;">
-                <input type="text" id="editfil-color-hex-${idx}" class="form-control bg-black text-white border-secondary" value="${hexInit}" placeholder="#rrggbb" maxlength="7" style="flex:1;">
+                <input type="text" id="editfil-color-hex-${idx}" class="form-control bg-black text-white border-secondary" value="${hexInit}" placeholder="#rrggbb" maxlength="7" autocomplete="off" style="flex:1;">
                 <button type="button" class="btn btn-outline-secondary btn-sm" data-role="up" title="Move up">▲</button>
                 <button type="button" class="btn btn-outline-secondary btn-sm" data-role="down" title="Move down">▼</button>
                 <button type="button" class="btn btn-outline-danger btn-sm" data-role="remove" title="Remove">🗑️</button>

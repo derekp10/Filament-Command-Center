@@ -397,7 +397,7 @@
                         <div class="d-flex align-items-center gap-2 mb-2" id="editfil-color-row-primary">
                             <span class="badge bg-warning text-dark" style="min-width:36px;" data-role="num">1</span>
                             <input type="color" id="editfil-color-picker" class="form-control form-control-color bg-black border-secondary" style="width:50px; padding:2px;">
-                            <input type="text" id="editfil-color-hex" class="form-control bg-black text-white border-secondary" placeholder="#rrggbb" maxlength="7" style="flex:1;">
+                            <input type="text" id="editfil-color-hex" class="form-control bg-black text-white border-secondary" placeholder="#rrggbb" maxlength="7" autocomplete="off" style="flex:1;">
                             <button type="button" class="btn btn-outline-secondary btn-sm" data-role="up" title="Move up" disabled>▲</button>
                             <button type="button" class="btn btn-outline-secondary btn-sm" data-role="down" title="Move down">▼</button>
                         </div>
@@ -537,6 +537,7 @@
                                 <div class="input-group input-group-sm mb-2">
                                     <input type="text" class="form-control bg-dark text-white border-secondary"
                                         id="editfil-external-query" placeholder="e.g. Hatchbox PLA Black, or paste a Prusament URL"
+                                        autocomplete="off"
                                         onkeypress="if(event.key==='Enter') { event.preventDefault(); editfilExternalSearch(); }">
                                     <button class="btn btn-outline-info" type="button" onclick="editfilExternalSearch()">Parse</button>
                                 </div>
