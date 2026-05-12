@@ -85,6 +85,24 @@ Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 - [ ] Full location list is accessible after a selection is made
 - [ ] Consistent behavior across all location search boxes
 
+### 10.11 — Wizard close opens details modal even when search was the source
+**Buglist ref:** L14
+**What:** "Details/display modal pops up after editing a spool from the global search, even though search was the source." Repro: Search for a spool via the global search FAB → click the **Edit** button on a search result → wizard opens → cancel the wizard → the spool's details modal loads in place.
+
+**Likely cause:** The wizard's close path (`onCancel` / `onClose`) unconditionally calls `openSpoolDetails` / `openFilamentDetails`, regardless of where the edit was initiated from. Should restore focus to the launch surface (search results panel in this case), not always fall back to details.
+
+**Related but probably distinct from** the "Display modal on Display modal" simultaneous-modal-stack bug (Group 8.3) — keep that entry as-is in case the underlying race is the same.
+
+**Files:**
+- `inventory-hub/static/js/modules/inv_wizard.js` — the `onCancel` / `onClose` handler; gate the `openSpoolDetails` / `openFilamentDetails` call on a `wizardLaunchedFromDetails`-style state flag
+- Wizard-launch sites that should clear that flag: search FAB results, location-manager Edit buttons, anywhere else that launches the wizard from non-details context
+
+**Acceptance criteria:**
+- [ ] Search → Edit → Cancel returns to search results, no details modal
+- [ ] Details-modal → Edit → Cancel returns to details modal (existing behavior preserved)
+- [ ] Location-manager → Edit → Cancel returns to Location Manager (existing behavior preserved)
+- [ ] Regression test covering each launch source × Cancel combination
+
 ## Dependencies
 
 - Ideally do after Group 1 (Weight Unification) so weight fields in the wizard use the unified path.
