@@ -722,46 +722,58 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                         }
                     };
 
-                    // Escape confirmation overlay (inline, avoids nested Swal z-index issues)
-                    const overlay = document.createElement('div');
-                    overlay.id = 'fcc-escape-confirm-overlay';
-                    overlay.style.cssText = 'display:none; position:absolute; inset:0; z-index:10; background:rgba(0,0,0,0.85); border-radius:inherit; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:24px; text-align:center;';
-                    overlay.innerHTML = `
-                        <div style="font-size:1.2em; font-weight:bold; color:#fff;">Cancel Override?</div>
-                        <div style="color:#ccc; font-size:0.9em;">Are you sure you want to close without saving?</div>
-                        <div style="display:flex; gap:10px; margin-top:8px;">
-                            <button id="fcc-escape-yes" class="btn btn-danger btn-sm" style="min-width:100px;">Yes, close</button>
-                            <button id="fcc-escape-no" class="btn btn-secondary btn-sm" style="min-width:100px;">No, go back</button>
-                        </div>
-                    `;
-                    popup.style.position = 'relative';
-                    popup.appendChild(overlay);
-
-                    let confirmShowing = false;
-                    const showConfirmOverlay = () => {
-                        confirmShowing = true;
-                        overlay.style.display = 'flex';
-                        popup.querySelector('#fcc-escape-no').focus();
-                    };
+                    // Escape confirmation overlay — Group 15: routed through
+                    // window.mountOverlay (tier 'confirm' so it sits above the
+                    // host Swal). The OLD implementation appended a div inside
+                    // popup with z-index:10; the new version creates a
+                    // full-screen confirm overlay on demand and cleans up via
+                    // handle.cleanup(). Same #fcc-escape-confirm-overlay /
+                    // #fcc-escape-yes / #fcc-escape-no IDs are preserved for
+                    // existing tests + selectors.
+                    let confirmHandle = null;
                     const hideConfirmOverlay = () => {
-                        confirmShowing = false;
-                        overlay.style.display = 'none';
-                        searchInput.focus();
-                    };
-
-                    const escYes = popup.querySelector('#fcc-escape-yes');
-                    const escNo = popup.querySelector('#fcc-escape-no');
-                    escYes.addEventListener('click', () => Swal.close());
-                    escNo.addEventListener('click', () => hideConfirmOverlay());
-
-                    // Arrow keys and Tab switch focus between Yes/No buttons
-                    overlay.addEventListener('keydown', (e) => {
-                        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Tab') {
-                            e.preventDefault();
-                            const target = document.activeElement === escYes ? escNo : escYes;
-                            target.focus();
+                        if (confirmHandle) {
+                            try { confirmHandle.cleanup(); } catch (_) { /* noop */ }
+                            confirmHandle = null;
                         }
-                    });
+                        if (searchInput) searchInput.focus();
+                    };
+                    const showConfirmOverlay = () => {
+                        if (confirmHandle) return;
+                        confirmHandle = window.mountOverlay({
+                            id: 'fcc-escape-confirm-overlay',
+                            tier: 'confirm',
+                            focusGuard: true,
+                            initialFocus: '#fcc-escape-no',
+                            onEscape: hideConfirmOverlay,
+                            content: `
+                                <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; text-align:center;">
+                                    <div style="font-size:1.2em; font-weight:bold; color:#fff; margin-bottom:6px;">Cancel Override?</div>
+                                    <div style="color:#ccc; font-size:0.9em; margin-bottom:12px;">Are you sure you want to close without saving?</div>
+                                    <div style="display:flex; gap:10px; margin-top:8px; justify-content:center;">
+                                        <button id="fcc-escape-yes" class="btn btn-danger btn-sm" style="min-width:100px;">Yes, close</button>
+                                        <button id="fcc-escape-no" class="btn btn-secondary btn-sm" style="min-width:100px;">No, go back</button>
+                                    </div>
+                                </div>
+                            `,
+                        });
+                        const ov = confirmHandle.element;
+                        const escYes = ov.querySelector('#fcc-escape-yes');
+                        const escNo = ov.querySelector('#fcc-escape-no');
+                        escYes.addEventListener('click', () => Swal.close());
+                        escNo.addEventListener('click', hideConfirmOverlay);
+                        // Arrow keys and Tab switch focus between Yes/No buttons
+                        ov.addEventListener('keydown', (e) => {
+                            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Tab') {
+                                e.preventDefault();
+                                const target = document.activeElement === escYes ? escNo : escYes;
+                                target.focus();
+                            }
+                        });
+                    };
+                    // Back-compat: existing keydown branches below still consult
+                    // confirmShowing — read from the handle's existence.
+                    const confirmShowing = () => confirmHandle !== null;
 
                     searchInput.addEventListener('input', (e) => {
                         const term = e.target.value.toLowerCase();
@@ -788,7 +800,7 @@ window.promptEditLocation = (spoolId, currentLoc) => {
 
                     // Keyboard navigation on search input
                     searchInput.addEventListener('keydown', (e) => {
-                        if (confirmShowing) return;
+                        if (confirmShowing()) return;
                         const visible = getVisibleItems();
 
                         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -820,19 +832,26 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                     // SweetAlert2's focus-trap handler, which otherwise stops propagation
                     // between window and document when focus lands on overlay buttons.
                     // Bubble-phase listeners on the popup never see the second Escape in
-                    // that state.
+                    // that state. Group 15 — when the mountOverlay confirm is up,
+                    // its own onEscape (document-capture) handles the close; we let
+                    // the event through by returning early so mountOverlay sees it.
                     const escKeyHandler = (e) => {
                         if (e.key !== 'Escape') return;
+                        // If the confirm overlay is already up, let mountOverlay's
+                        // onEscape take it (it uses stopImmediatePropagation).
+                        if (confirmShowing()) return;
                         e.preventDefault();
                         e.stopImmediatePropagation();
-                        if (confirmShowing) {
-                            hideConfirmOverlay();
-                        } else {
-                            showConfirmOverlay();
-                        }
+                        showConfirmOverlay();
                     };
                     window.addEventListener('keydown', escKeyHandler, true);
-                    popup.__fccEscCleanup = () => window.removeEventListener('keydown', escKeyHandler, true);
+                    popup.__fccEscCleanup = () => {
+                        window.removeEventListener('keydown', escKeyHandler, true);
+                        if (confirmHandle) {
+                            try { confirmHandle.cleanup(); } catch (_) { /* noop */ }
+                            confirmHandle = null;
+                        }
+                    };
 
                     // Guard the Cancel button with the same confirmation
                     const cancelBtn = popup.querySelector('.swal2-cancel');
