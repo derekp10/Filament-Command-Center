@@ -37,14 +37,19 @@ def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
     page.wait_for_timeout(600)
 
 
-@pytest.mark.usefixtures("require_server", "bound_slot")
+@pytest.mark.usefixtures("require_server", "bound_slot", "clean_buffer")
 def test_visual_quickswap_grid(page: Page, base_url: str, snapshot):
+    # A populated buffer turns the empty-slot row into a green "Deposit from
+    # buffer" affordance — visible content that changes the grid's height
+    # (~22px taller per slot row). The baseline is captured with an empty
+    # buffer, so the test pins clean_buffer to keep render reproducible in
+    # the sweep regardless of prior tests' buffer state. Group 14.4.
     _open_manage(page, base_url, TEST_TOOLHEAD)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()
     snapshot(page.locator("#manage-quickswap-section"), "quickswap-grid-default")
 
 
-@pytest.mark.usefixtures("require_server", "bound_slot")
+@pytest.mark.usefixtures("require_server", "bound_slot", "clean_buffer")
 def test_visual_quickswap_kb_active(page: Page, base_url: str, snapshot):
     _open_manage(page, base_url, TEST_TOOLHEAD)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()

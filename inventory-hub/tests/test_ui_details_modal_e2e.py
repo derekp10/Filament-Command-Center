@@ -10,19 +10,27 @@ def test_details_modal_interactions(page: Page):
     """
     page.goto("http://localhost:8000")
 
-    # Defensive: close any stale offcanvas / open <select> dropdown left over
-    # from a prior test in the sweep (buglist L233 / Group 14.3). When the
-    # sweep clicks SEARCH below, a leftover material-filter <select> in the
-    # search offcanvas subtree was intercepting later clicks on the result
-    # card's "View Details" button. In isolation the test passes; in the
-    # sweep we have to start clean.
+    # Defensive: close any stale offcanvas / orphan backdrop / focused
+    # dropdown left over from a prior test in the sweep (buglist L233 /
+    # Group 14.3). Two pollution patterns observed:
+    #   - A leftover material-filter <select> in the search offcanvas
+    #     subtree intercepting later clicks on a result card.
+    #   - An orphan .offcanvas-backdrop element persisting after an
+    #     offcanvas was hidden non-cleanly — it intercepts ALL clicks
+    #     under it including the View Details button INSIDE the new
+    #     offcanvas, because the orphan z-index 1040 sits between the
+    #     viewport and the freshly-opened offcanvas content.
     page.evaluate("""() => {
-        // Hide any currently-shown Bootstrap offcanvas.
         document.querySelectorAll('.offcanvas.show').forEach((el) => {
             try { bootstrap.Offcanvas.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
         });
-        // Clear any inline-filter <select> values that could keep a dropdown
-        // open or steal pointer events.
+        // Belt-and-suspenders: remove any orphan offcanvas/modal backdrops
+        // not paired with a visible offcanvas/modal. Bootstrap normally
+        // cleans these up on hide, but a test that crashed mid-flow can
+        // leave one behind.
+        document.querySelectorAll('.offcanvas-backdrop, .modal-backdrop').forEach((bd) => {
+            try { bd.remove(); } catch (_) { /* noop */ }
+        });
         document.querySelectorAll('#offcanvasSearch select').forEach((s) => {
             try { s.blur(); } catch (_) { /* noop */ }
         });
