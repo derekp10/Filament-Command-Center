@@ -25,7 +25,9 @@ def force_location_modal(page: Page, reset_dom_state_js: str):
     page.locator('label[for="searchTypeSpools"]').click()
     page.wait_for_timeout(1000)
 
-    cards = page.locator('.fcc-spool-card')
+    # Scope to inside the offcanvas — see Group 14.6 comment in
+    # test_force_location_keyboard_e2e.py's force_location_modal fixture.
+    cards = page.locator('#offcanvasSearch .fcc-spool-card')
     if cards.count() == 0:
         pytest.skip("No spool cards rendered in test environment.")
 

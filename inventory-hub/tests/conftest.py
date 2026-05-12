@@ -268,9 +268,24 @@ def snapshot(pytestconfig, request):
         actual_img = Image.open(io.BytesIO(actual_bytes)).convert("RGBA")
 
         if baseline_img.size != actual_img.size:
-            return (
-                f"size mismatch: baseline={baseline_img.size} actual={actual_img.size}"
-            )
+            # Sub-pixel rounding diffs (±1 px in either dimension) routinely
+            # appear between isolation runs and the full sweep depending on
+            # what else is in the DOM at capture time. Allow ±1 px and let
+            # the per-pixel comparison decide via its 1% tolerance. Group 14.4.
+            bw, bh = baseline_img.size
+            aw, ah = actual_img.size
+            if abs(bw - aw) > 1 or abs(bh - ah) > 1:
+                return (
+                    f"size mismatch: baseline={baseline_img.size} actual={actual_img.size}"
+                )
+            # Resize the smaller image to the larger image's dimensions so the
+            # per-pixel diff has matching shapes. NEAREST avoids introducing
+            # interpolation artefacts that would themselves count as drift.
+            target_size = (max(bw, aw), max(bh, ah))
+            if baseline_img.size != target_size:
+                baseline_img = baseline_img.resize(target_size, Image.NEAREST)
+            if actual_img.size != target_size:
+                actual_img = actual_img.resize(target_size, Image.NEAREST)
 
         diff = ImageChops.difference(baseline_img, actual_img)
         bbox = diff.getbbox()

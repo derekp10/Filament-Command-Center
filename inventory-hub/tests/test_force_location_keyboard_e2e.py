@@ -20,7 +20,14 @@ def force_location_modal(page: Page, reset_dom_state_js: str):
     page.locator('label[for="searchTypeSpools"]').click()
     page.wait_for_timeout(1000)
 
-    cards = page.locator('.fcc-spool-card')
+    # Scope cards to inside the search offcanvas — Group 14.6. The
+    # dashboard also renders .fcc-spool-card elements (buffer / deployment
+    # lists) that sit underneath the offcanvas after it slides in. Page-wide
+    # `.first` could pick one of those, in which case the click is geometrically
+    # intercepted by the offcanvas's filter row above it (specifically the
+    # material <select>). Scoping to #offcanvasSearch guarantees the click
+    # lands on a search-result card the offcanvas just rendered.
+    cards = page.locator('#offcanvasSearch .fcc-spool-card')
     if cards.count() == 0:
         pytest.skip("No spool cards rendered in test environment.")
 
