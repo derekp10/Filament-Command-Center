@@ -9,7 +9,29 @@ def test_details_modal_interactions(page: Page):
     3. The filament swatch correctly applies solid colors without glossy button gradients.
     """
     page.goto("http://localhost:8000")
-    
+
+    # Defensive: close any stale offcanvas / open <select> dropdown left over
+    # from a prior test in the sweep (buglist L233 / Group 14.3). When the
+    # sweep clicks SEARCH below, a leftover material-filter <select> in the
+    # search offcanvas subtree was intercepting later clicks on the result
+    # card's "View Details" button. In isolation the test passes; in the
+    # sweep we have to start clean.
+    page.evaluate("""() => {
+        // Hide any currently-shown Bootstrap offcanvas.
+        document.querySelectorAll('.offcanvas.show').forEach((el) => {
+            try { bootstrap.Offcanvas.getOrCreateInstance(el).hide(); } catch (_) { /* noop */ }
+        });
+        // Clear any inline-filter <select> values that could keep a dropdown
+        // open or steal pointer events.
+        document.querySelectorAll('#offcanvasSearch select').forEach((s) => {
+            try { s.blur(); } catch (_) { /* noop */ }
+        });
+        if (document.activeElement && document.activeElement.blur) {
+            try { document.activeElement.blur(); } catch (_) { /* noop */ }
+        }
+    }""")
+    page.wait_for_timeout(200)
+
     # 1. Open Search Offcanvas to guarantee spool cards are loaded
     page.locator('nav button:has-text("SEARCH")').click()
     page.wait_for_selector("#offcanvasSearch", timeout=5000)
