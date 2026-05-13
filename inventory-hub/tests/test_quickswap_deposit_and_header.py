@@ -15,16 +15,6 @@ from playwright.sync_api import Page, expect
 TEST_TOOLHEAD = "XL-1"
 
 
-def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
-    page.goto(base_url)
-    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_function("() => typeof window.openManage === 'function'", timeout=5000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({loc_id!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=8000)
-    page.wait_for_timeout(700)
-
-
 def _find_empty_bound_slot(api_base_url):
     """Return (box, slot, toolhead) for a slot that is bound but empty in
     the current dev state."""
@@ -60,12 +50,12 @@ def _find_spool_for_buffer(api_base_url):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server", "clean_buffer")
-def test_empty_slot_disabled_when_buffer_empty(page: Page, base_url: str, api_base_url):
+def test_empty_slot_disabled_when_buffer_empty(page: Page, open_manage_modal, api_base_url):
     hit = _find_empty_bound_slot(api_base_url)
     if not hit:
         pytest.skip("No bound + empty slot in the current dev state.")
     box, slot, toolhead = hit
-    _open_manage(page, base_url, toolhead)
+    open_manage_modal(toolhead)
     # Make absolutely sure no spool is in the buffer (past test bleed).
     page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")
     page.wait_for_timeout(500)
@@ -76,7 +66,7 @@ def test_empty_slot_disabled_when_buffer_empty(page: Page, base_url: str, api_ba
 
 
 @pytest.mark.usefixtures("require_server")
-def test_empty_slot_becomes_deposit_target_when_buffer_has_spool(page: Page, base_url: str, api_base_url):
+def test_empty_slot_becomes_deposit_target_when_buffer_has_spool(page: Page, open_manage_modal, api_base_url):
     hit = _find_empty_bound_slot(api_base_url)
     if not hit:
         pytest.skip("No bound + empty slot in the current dev state.")
@@ -85,7 +75,7 @@ def test_empty_slot_becomes_deposit_target_when_buffer_has_spool(page: Page, bas
     if not spool_id:
         pytest.skip("No unassigned spool to park in the buffer for this test.")
 
-    _open_manage(page, base_url, toolhead)
+    open_manage_modal(toolhead)
 
     # Put a spool in the buffer via the same path the scan handler uses,
     # then wait for the Quick-Swap grid to re-render via the
@@ -108,7 +98,7 @@ def test_empty_slot_becomes_deposit_target_when_buffer_has_spool(page: Page, bas
 
 
 @pytest.mark.usefixtures("require_server")
-def test_deposit_confirm_overlay_names_the_spool_and_toolhead(page: Page, base_url: str, api_base_url):
+def test_deposit_confirm_overlay_names_the_spool_and_toolhead(page: Page, open_manage_modal, api_base_url):
     hit = _find_empty_bound_slot(api_base_url)
     if not hit:
         pytest.skip("No bound + empty slot in the current dev state.")
@@ -117,7 +107,7 @@ def test_deposit_confirm_overlay_names_the_spool_and_toolhead(page: Page, base_u
     if not spool_id:
         pytest.skip("No unassigned spool to park in the buffer for this test.")
 
-    _open_manage(page, base_url, toolhead)
+    open_manage_modal(toolhead)
     page.evaluate(f"""
         () => {{
             state.heldSpools = [{{id: {spool_id}, display: 'Confirm Body Spool', color: 'abcdef'}}];
@@ -148,7 +138,7 @@ def test_deposit_confirm_overlay_names_the_spool_and_toolhead(page: Page, base_u
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server")
-def test_clicking_box_header_opens_manage_on_that_box(page: Page, base_url: str, api_base_url):
+def test_clicking_box_header_opens_manage_on_that_box(page: Page, open_manage_modal, api_base_url):
     # Any bound slot works — we just need a box label to click.
     payload = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json()
     bound = next((e for e in payload.get("slots", []) if e.get("target")), None)
@@ -156,7 +146,7 @@ def test_clicking_box_header_opens_manage_on_that_box(page: Page, base_url: str,
         pytest.skip("No bindings in current dev state to render a header.")
     box, toolhead = bound["box"], bound["target"]
 
-    _open_manage(page, base_url, toolhead)
+    open_manage_modal(toolhead)
     # Click the dotted-underline anchor inside the grid.
     link = page.locator(f"#quickswap-grid a[onclick*=\"openManage('{box}')\"]").first
     expect(link).to_be_visible(timeout=3000)
