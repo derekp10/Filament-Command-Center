@@ -158,21 +158,12 @@ def bindings_for_breadcrumb(api_base_url):
     )
 
 
-def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
-    page.goto(base_url)
-    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({loc_id!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
-    page.wait_for_timeout(600)
-
-
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
-def test_close_manage_after_edit_full_bindings_returns_to_toolhead(page: Page, base_url: str):
+def test_close_manage_after_edit_full_bindings_returns_to_toolhead(page: Page, open_manage_modal):
     """Open toolhead XL-1 → click Edit Full Bindings (navigates to some
     bound box) → click the manage-modal Close button → should pop back
     to XL-1, not close the modal entirely."""
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+    open_manage_modal(TEST_TOOLHEAD)
     # Edit Full Bindings only navigates when a QuickSwap button exists;
     # otherwise it falls back to opening the Locations modal (a different
     # flow). Wait for the fixture-seeded binding to render as a button
@@ -196,22 +187,22 @@ def test_close_manage_after_edit_full_bindings_returns_to_toolhead(page: Page, b
 
 
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
-def test_close_manage_from_top_of_stack_closes_modal(page: Page, base_url: str):
+def test_close_manage_from_top_of_stack_closes_modal(page: Page, open_manage_modal):
     """No breadcrumb → Close button should actually close the modal."""
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+    open_manage_modal(TEST_TOOLHEAD)
     page.locator("#manageModal .modal-header .btn-close").click()
     page.wait_for_timeout(600)
     expect(page.locator("#manageModal")).to_be_hidden()
 
 
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
-def test_escape_key_pops_breadcrumb_instead_of_closing(page: Page, base_url: str):
+def test_escape_key_pops_breadcrumb_instead_of_closing(page: Page, open_manage_modal):
     """Regression guard: pressing Escape while inside a chained manage view
     (e.g. Edit Full Bindings jumped you from XL-1 to PM-DB-1) must pop the
     breadcrumb back to XL-1, NOT let Bootstrap dismiss the modal entirely.
     Before this fix, Escape routed straight to Bootstrap's hide handler
     and the hidden.bs.modal listener wiped the stack."""
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+    open_manage_modal(TEST_TOOLHEAD)
     try:
         expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=3000)
     except AssertionError:
@@ -289,22 +280,22 @@ def test_escape_key_walks_out_of_three_level_stack(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
-def test_escape_key_from_top_of_stack_closes_modal(page: Page, base_url: str):
+def test_escape_key_from_top_of_stack_closes_modal(page: Page, open_manage_modal):
     """Escape with no breadcrumb to pop should still close the modal
     (same as the X button's behavior on an empty stack). Press from
     <body> to verify the handler fires regardless of focus location."""
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+    open_manage_modal(TEST_TOOLHEAD)
     page.locator("body").press("Escape")
     page.wait_for_timeout(700)
     expect(page.locator("#manageModal")).to_be_hidden()
 
 
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
-def test_edit_full_bindings_auto_expands_feeds_section(page: Page, base_url: str):
+def test_edit_full_bindings_auto_expands_feeds_section(page: Page, open_manage_modal):
     """When the user clicks Edit Full Bindings from a toolhead view, the
     destination Feeds section should come up already expanded — otherwise
     they have to click Show to even see the editor they were sent to."""
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+    open_manage_modal(TEST_TOOLHEAD)
     # Before: Feeds is a dryer-box-only section, invisible here.
     expect(page.locator("#manage-feeds-section")).to_be_hidden()
     page.locator("#quickswap-edit-bindings-btn").click()
@@ -318,13 +309,13 @@ def test_edit_full_bindings_auto_expands_feeds_section(page: Page, base_url: str
 
 
 @pytest.mark.usefixtures("require_server")
-def test_close_then_open_unrelated_then_close_does_not_resurrect(page: Page, base_url: str):
+def test_close_then_open_unrelated_then_close_does_not_resurrect(page: Page, open_manage_modal):
     """Regression: user reported that opening the XL virtual printer, closing
     it with X, opening a toolhead, then closing THAT with X was popping the
     virtual printer back up. Breadcrumb state must not leak between
     independent sessions."""
     # First session: open XL, close.
-    _open_manage(page, base_url, VIRTUAL_PRINTER)
+    open_manage_modal(VIRTUAL_PRINTER)
     page.locator("#manageModal .modal-header .btn-close").click()
     page.wait_for_timeout(600)
     expect(page.locator("#manageModal")).to_be_hidden()
@@ -345,8 +336,8 @@ def test_close_then_open_unrelated_then_close_does_not_resurrect(page: Page, bas
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server")
-def test_bind_picker_shows_toolhead_select_on_virtual_printer(page: Page, base_url: str):
-    _open_manage(page, base_url, VIRTUAL_PRINTER)
+def test_bind_picker_shows_toolhead_select_on_virtual_printer(page: Page, open_manage_modal):
+    open_manage_modal(VIRTUAL_PRINTER)
     page.locator("#quickswap-bind-slot-btn").click()
     expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
     # Virtual printer has 5 toolheads → selector should be visible.
@@ -358,16 +349,16 @@ def test_bind_picker_shows_toolhead_select_on_virtual_printer(page: Page, base_u
 
 
 @pytest.mark.usefixtures("require_server")
-def test_bind_picker_hides_toolhead_select_on_specific_toolhead(page: Page, base_url: str):
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+def test_bind_picker_hides_toolhead_select_on_specific_toolhead(page: Page, open_manage_modal):
+    open_manage_modal(TEST_TOOLHEAD)
     page.locator("#quickswap-bind-slot-btn").click()
     expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
     expect(page.locator("#fcc-bind-picker-toolhead-row")).to_be_hidden()
 
 
 @pytest.mark.usefixtures("require_server")
-def test_bind_picker_virtual_printer_selector_changes_target(page: Page, base_url: str):
-    _open_manage(page, base_url, VIRTUAL_PRINTER)
+def test_bind_picker_virtual_printer_selector_changes_target(page: Page, open_manage_modal):
+    open_manage_modal(VIRTUAL_PRINTER)
     page.locator("#quickswap-bind-slot-btn").click()
     expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
     label = page.locator("#fcc-bind-picker-toolhead")

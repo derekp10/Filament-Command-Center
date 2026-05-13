@@ -20,10 +20,14 @@ from playwright.sync_api import Page, expect
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _goto_dashboard(page: Page, base_url: str) -> None:
+def _goto_dashboard(page: Page, base_url: str, reset_js: str = "") -> None:
     page.goto(base_url)
     # Dashboard deck is the earliest stable anchor.
     page.wait_for_selector(".deck-btn, #live-activity, #command-buffer", timeout=10000)
+    # Defensive cross-test pollution teardown (Group 16.3).
+    if reset_js:
+        page.evaluate(reset_js)
+        page.wait_for_timeout(200)
     # Let the initial 5-second tick settle so cards stop shifting.
     page.wait_for_timeout(1500)
 
@@ -52,14 +56,14 @@ def _dismiss_any_open_modal(page: Page) -> None:
 # Baselines
 # ---------------------------------------------------------------------------
 
-def test_baseline_dashboard(page: Page, base_url: str, snapshot, require_server):
+def test_baseline_dashboard(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
     """Dashboard with empty buffer — the default landing surface."""
-    _goto_dashboard(page, base_url)
+    _goto_dashboard(page, base_url, reset_dom_state_js)
     snapshot(page, "dashboard-default")
 
 
-def test_baseline_search_offcanvas(page: Page, base_url: str, snapshot, require_server):
-    _goto_dashboard(page, base_url)
+def test_baseline_search_offcanvas(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
+    _goto_dashboard(page, base_url, reset_dom_state_js)
     btn = page.locator('nav button:has-text("SEARCH")')
     if btn.count() == 0:
         pytest.skip("Search nav button not present in current UI")
@@ -69,8 +73,8 @@ def test_baseline_search_offcanvas(page: Page, base_url: str, snapshot, require_
     snapshot(page, "search-offcanvas-empty")
 
 
-def test_baseline_locations_modal(page: Page, base_url: str, snapshot, require_server):
-    _goto_dashboard(page, base_url)
+def test_baseline_locations_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
+    _goto_dashboard(page, base_url, reset_dom_state_js)
     page.evaluate("window.openLocationsModal && window.openLocationsModal()")
     try:
         page.wait_for_selector("#locationsModal, .modal.show", timeout=5000)
@@ -80,8 +84,8 @@ def test_baseline_locations_modal(page: Page, base_url: str, snapshot, require_s
     snapshot(page, "locations-modal-default")
 
 
-def test_baseline_queue_modal(page: Page, base_url: str, snapshot, require_server):
-    _goto_dashboard(page, base_url)
+def test_baseline_queue_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
+    _goto_dashboard(page, base_url, reset_dom_state_js)
     page.evaluate("window.openQueueModal && window.openQueueModal()")
     try:
         page.wait_for_selector("#queueModal, .modal.show", timeout=5000)
@@ -91,8 +95,8 @@ def test_baseline_queue_modal(page: Page, base_url: str, snapshot, require_serve
     snapshot(page, "queue-modal-default")
 
 
-def test_baseline_wizard_modal(page: Page, base_url: str, snapshot, require_server):
-    _goto_dashboard(page, base_url)
+def test_baseline_wizard_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
+    _goto_dashboard(page, base_url, reset_dom_state_js)
     page.evaluate("window.openWizardModal && window.openWizardModal()")
     try:
         page.wait_for_selector("#wizardModal, .modal.show", timeout=5000)
@@ -102,8 +106,8 @@ def test_baseline_wizard_modal(page: Page, base_url: str, snapshot, require_serv
     snapshot(page, "wizard-modal-step1")
 
 
-def test_baseline_backlog_modal(page: Page, base_url: str, snapshot, require_server):
-    _goto_dashboard(page, base_url)
+def test_baseline_backlog_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
+    _goto_dashboard(page, base_url, reset_dom_state_js)
     page.evaluate("window.openBacklogModal && window.openBacklogModal()")
     try:
         page.wait_for_selector("#backlogModal, .modal.show", timeout=5000)
@@ -113,8 +117,8 @@ def test_baseline_backlog_modal(page: Page, base_url: str, snapshot, require_ser
     snapshot(page, "backlog-modal-default")
 
 
-def test_baseline_weigh_out_modal(page: Page, base_url: str, snapshot, require_server):
-    _goto_dashboard(page, base_url)
+def test_baseline_weigh_out_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
+    _goto_dashboard(page, base_url, reset_dom_state_js)
     # Requires at least one spool on a printer — may not be present in every dev state.
     page.evaluate("window.openWeighOutModal && window.openWeighOutModal()")
     # Weigh-out may pop SweetAlert or a custom modal depending on printer state.
@@ -126,8 +130,8 @@ def test_baseline_weigh_out_modal(page: Page, base_url: str, snapshot, require_s
     snapshot(page, "weigh-out-modal-default")
 
 
-def test_baseline_spool_details_modal(page: Page, base_url: str, snapshot, require_server):
-    _goto_dashboard(page, base_url)
+def test_baseline_spool_details_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
+    _goto_dashboard(page, base_url, reset_dom_state_js)
     # Open Search to surface spool cards reliably, then close the offcanvas
     # so it doesn't intercept the View Details click.
     page.locator('nav button:has-text("SEARCH")').click()

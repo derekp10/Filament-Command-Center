@@ -1,12 +1,15 @@
 import re
 from playwright.sync_api import Page, expect
 
-def test_filament_new_spool_wizard(page: Page):
+def test_filament_new_spool_wizard(page: Page, reset_dom_state_js: str):
     """
     E2E test verifying that clicking 'New Spool' from the Filament details modal
     correctly launches the wizard, pre-filled in 'Existing' mode.
     """
     page.goto("http://localhost:8000")
+    # Defensive cross-test pollution teardown (Group 16.3).
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
 
     # 1. Open Search Offcanvas
     page.locator('nav button:has-text("SEARCH")').click()

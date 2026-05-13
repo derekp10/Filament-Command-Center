@@ -152,6 +152,43 @@ def reset_dom_state_js() -> str:
 
 
 @pytest.fixture
+def open_manage_modal(page, base_url):
+    """Open the Location Manager modal for ``loc_id`` with the right
+    readiness waits baked in.
+
+    Consolidates the ``_open_manage`` helper that was duplicated across 10+
+    e2e tests (Group 16.2, 2026-05-12). The crucial bit is the
+    ``state.allLocations.length > 0`` wait — ``window.openManage`` looks up
+    that array synchronously and silently no-ops when it's still empty, so
+    tests that opened the modal too early would flake whenever sweep order
+    pushed the locations fetch out past the fixed sleep (Group 14.4).
+
+    Usage::
+
+        def test_x(open_manage_modal):
+            open_manage_modal("XL-1")
+            ...
+    """
+    from playwright.sync_api import expect as _expect
+
+    def _open(loc_id: str) -> None:
+        page.goto(base_url)
+        page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+        # Wait for state.allLocations to populate so openManage doesn't no-op.
+        page.wait_for_function(
+            "() => typeof state === 'object' "
+            "&& Array.isArray(state.allLocations) "
+            "&& state.allLocations.length > 0",
+            timeout=10000,
+        )
+        page.evaluate(f"window.openManage({loc_id!r})")
+        _expect(page.locator("#manageModal")).to_be_visible(timeout=8000)
+        page.wait_for_timeout(600)
+
+    return _open
+
+
+@pytest.fixture
 def clean_buffer(api_base_url: str):
     """Ensure the buffer is empty before the test. Yields the base URL."""
     try:

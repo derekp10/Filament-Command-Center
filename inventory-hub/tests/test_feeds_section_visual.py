@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 import requests
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page
 
 TEST_BOX = "PM-DB-1"
 
@@ -26,24 +26,15 @@ def restore_bindings(api_base_url):
     )
 
 
-def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
-    page.goto(base_url)
-    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(400)
-    page.evaluate(f"window.openManage({loc_id!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
-    page.wait_for_timeout(600)
-
-
 @pytest.mark.usefixtures("require_server", "restore_bindings")
-def test_visual_feeds_section_collapsed(page: Page, base_url: str, snapshot):
-    _open_manage(page, base_url, TEST_BOX)
+def test_visual_feeds_section_collapsed(page: Page, open_manage_modal, snapshot):
+    open_manage_modal(TEST_BOX)
     snapshot(page.locator("#manage-feeds-section"), "feeds-section-collapsed")
 
 
 @pytest.mark.usefixtures("require_server", "restore_bindings")
-def test_visual_feeds_section_expanded(page: Page, base_url: str, snapshot):
-    _open_manage(page, base_url, TEST_BOX)
+def test_visual_feeds_section_expanded(page: Page, open_manage_modal, snapshot):
+    open_manage_modal(TEST_BOX)
     page.locator("#feeds-toggle-btn").click()
     page.wait_for_timeout(400)
     snapshot(page.locator("#manage-feeds-section"), "feeds-section-expanded")

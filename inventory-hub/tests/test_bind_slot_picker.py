@@ -176,18 +176,9 @@ def bound_slot(api_base_url):
     )
 
 
-def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
-    page.goto(base_url)
-    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({loc_id!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
-    page.wait_for_timeout(600)
-
-
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_bind_picker_opens_from_quickswap_header(page: Page, base_url: str):
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+def test_bind_picker_opens_from_quickswap_header(page: Page, open_manage_modal):
+    open_manage_modal(TEST_TOOLHEAD)
     page.locator("#quickswap-bind-slot-btn").click()
     overlay = page.locator("#fcc-bind-picker-overlay")
     expect(overlay).to_be_visible(timeout=3000)
@@ -195,8 +186,8 @@ def test_bind_picker_opens_from_quickswap_header(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_bind_picker_search_filters_list(page: Page, base_url: str):
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+def test_bind_picker_search_filters_list(page: Page, open_manage_modal):
+    open_manage_modal(TEST_TOOLHEAD)
     page.locator("#quickswap-bind-slot-btn").click()
     expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
     page.locator("#fcc-bind-picker-search").fill("PM-DB-2")
@@ -209,8 +200,8 @@ def test_bind_picker_search_filters_list(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_bind_picker_escape_closes(page: Page, base_url: str):
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+def test_bind_picker_escape_closes(page: Page, open_manage_modal):
+    open_manage_modal(TEST_TOOLHEAD)
     page.locator("#quickswap-bind-slot-btn").click()
     expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
     page.locator("#fcc-bind-picker-search").press("Escape")
@@ -218,7 +209,7 @@ def test_bind_picker_escape_closes(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_bind_picker_unbind_button_clears_binding_and_keeps_picker_open(page: Page, base_url: str, api_base_url):
+def test_bind_picker_unbind_button_clears_binding_and_keeps_picker_open(page: Page, open_manage_modal, api_base_url):
     """Inline Unbind button on a bound row should clear the slot and
     refresh the listing in place — no trip to the full Feeds editor
     required, no closing the picker."""
@@ -232,7 +223,7 @@ def test_bind_picker_unbind_button_clears_binding_and_keeps_picker_open(page: Pa
         timeout=5,
     )
     try:
-        _open_manage(page, base_url, TEST_TOOLHEAD)
+        open_manage_modal(TEST_TOOLHEAD)
         page.locator("#quickswap-bind-slot-btn").click()
         expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
         page.locator("#fcc-bind-picker-search").fill(victim)
@@ -255,7 +246,7 @@ def test_bind_picker_unbind_button_clears_binding_and_keeps_picker_open(page: Pa
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_bind_picker_rebind_overwrites_existing_target(page: Page, base_url: str, api_base_url):
+def test_bind_picker_rebind_overwrites_existing_target(page: Page, open_manage_modal, api_base_url):
     """Clicking a slot already bound to a DIFFERENT toolhead should rewrite
     the binding to the current target — no manual unbind-first required."""
     victim = "PM-DB-5"
@@ -268,7 +259,7 @@ def test_bind_picker_rebind_overwrites_existing_target(page: Page, base_url: str
         timeout=5,
     )
     try:
-        _open_manage(page, base_url, TEST_TOOLHEAD)
+        open_manage_modal(TEST_TOOLHEAD)
         page.locator("#quickswap-bind-slot-btn").click()
         expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
         page.locator("#fcc-bind-picker-search").fill(victim)
@@ -290,7 +281,7 @@ def test_bind_picker_rebind_overwrites_existing_target(page: Page, base_url: str
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_bind_picker_enter_commits_new_binding(page: Page, base_url: str, api_base_url):
+def test_bind_picker_enter_commits_new_binding(page: Page, open_manage_modal, api_base_url):
     """Search for an unbound PM-DB slot, hit Enter, verify the binding
     persisted server-side and the Quick-Swap grid picks it up."""
     # Snapshot bindings for a slot we're going to mutate, restore after.
@@ -298,7 +289,7 @@ def test_bind_picker_enter_commits_new_binding(page: Page, base_url: str, api_ba
     snap = requests.get(f"{api_base_url}/api/dryer_box/{victim}/bindings", timeout=5).json()
     original = snap.get("slot_targets", {})
     try:
-        _open_manage(page, base_url, TEST_TOOLHEAD)
+        open_manage_modal(TEST_TOOLHEAD)
         page.locator("#quickswap-bind-slot-btn").click()
         expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
         page.locator("#fcc-bind-picker-search").fill(victim)

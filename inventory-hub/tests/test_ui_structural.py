@@ -101,17 +101,21 @@ def execute_global_scanner(page: Page, context_name: str):
 # =====================================================================
 # GLOBAL SWEEP TESTS (Catch-all)
 # =====================================================================
-def test_structural_global_dashboard(page: Page):
+def test_structural_global_dashboard(page: Page, reset_dom_state_js: str):
     """Verifies ALL elements on the main dashboard default view using JS Scanner."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     page.wait_for_selector('.fcc-spool-card, nav', state='visible')
     page.wait_for_timeout(1000)
     execute_global_scanner(page, "Main Dashboard")
 
 
-def test_structural_global_modals(page: Page):
+def test_structural_global_modals(page: Page, reset_dom_state_js: str):
     """Verifies ALL elements inside Modals/Overlays using JS Scanner."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     
     page.locator('nav button:has-text("SEARCH")').click()
     page.wait_for_timeout(1000)
@@ -136,9 +140,11 @@ def test_structural_global_modals(page: Page):
 # =====================================================================
 # EXPLICIT COMPONENT TESTS (Specific Element Bounds)
 # =====================================================================
-def test_structural_navbar(page: Page):
+def test_structural_navbar(page: Page, reset_dom_state_js: str):
     """Verifies the global Navigation Bar maintains a sensible height and isn't squished."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     navbar = page.locator('nav.navbar').first
     expect(navbar).to_be_visible()
     
@@ -147,9 +153,11 @@ def test_structural_navbar(page: Page):
     assert box['height'] >= 45, f"Navbar is vertically squished, height: {box['height']}px (expected >= 45px)"
 
 
-def test_structural_qr_codes(page: Page):
+def test_structural_qr_codes(page: Page, reset_dom_state_js: str):
     """Verifies that generated QR codes maintain exactly the expected rendering dimensions."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     qr_audit = page.locator('#qr-audit')
     expect(qr_audit).to_be_visible()
     
@@ -163,9 +171,11 @@ def test_structural_qr_codes(page: Page):
     assert 80 <= box['height'] <= 90, f"Audit QR height changed to {box['height']}, expected ~85px"
 
 
-def test_structural_spool_cards(page: Page):
+def test_structural_spool_cards(page: Page, reset_dom_state_js: str):
     """Verifies Spool/Filament cards maintain dimension and highly specific gradient CSS structures."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     page.locator('nav button:has-text("SEARCH")').click()
     page.wait_for_timeout(500)
     page.locator('#global-search-query').fill("a")
@@ -198,9 +208,11 @@ def test_structural_spool_cards(page: Page):
             continue  # Spool with no color data assigned — skip structural check
 
 
-def test_structural_card_action_buttons(page: Page):
+def test_structural_card_action_buttons(page: Page, reset_dom_state_js: str):
     """Verifies the buttons on the spool cards don't suffer from generic text overflow/squishing."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     page.locator('nav button:has-text("SEARCH")').click()
     page.wait_for_timeout(500)
     page.locator('#global-search-query').fill("a")
@@ -215,9 +227,11 @@ def test_structural_card_action_buttons(page: Page):
         assert not is_overflowing, "Action button content is overflowing its container!"
 
 
-def test_structural_search_offcanvas(page: Page):
+def test_structural_search_offcanvas(page: Page, reset_dom_state_js: str):
     """Verifies the Global Search offcanvas structure maintains appropriate overlay width."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     
     page.locator('nav button:has-text("SEARCH")').click()
     offcanvas = page.locator('#offcanvasSearch')
@@ -227,9 +241,11 @@ def test_structural_search_offcanvas(page: Page):
     assert box['width'] >= 300, f"Search offcanvas width squished to {box['width']}px"
 
 
-def test_structural_wizard_modal(page: Page):
+def test_structural_wizard_modal(page: Page, reset_dom_state_js: str):
     """Verifies the 'Add Inventory' wizard respects minimum standard modal sizing constraints."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     
     page.get_by_role("button", name="ADD INVENTORY").click()
     modal_dialog = page.locator('#wizardModal .modal-dialog')
@@ -238,9 +254,11 @@ def test_structural_wizard_modal(page: Page):
     box = modal_dialog.bounding_box()
     assert box['width'] >= 400, f"Wizard Modal squished horizontally to {box['width']}px"
 
-def test_structural_archived_badges(page: Page):
+def test_structural_archived_badges(page: Page, reset_dom_state_js: str):
     """Verifies that all variations of 'Archived' badges across the UI consistently use the hazard red (text-bg-danger) class and reject warning/yellow versions."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     
     # Open global search to ensure some spool cards might render (if database populated)
     page.locator('nav button:has-text("SEARCH")').click()
@@ -265,9 +283,11 @@ def test_structural_archived_badges(page: Page):
     assert name_line_badges.count() == 0, "Archived badge found on color name line — should only appear in Row 3!"
 
 
-def test_structural_buffer_location_badge(page: Page):
+def test_structural_buffer_location_badge(page: Page, reset_dom_state_js: str):
     """Verifies that every spool card in the main buffer displays a location badge (Row 1.5)."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     page.wait_for_selector('.fcc-spool-card, nav', state='visible')
     page.wait_for_timeout(1000)
 
@@ -283,10 +303,12 @@ def test_structural_buffer_location_badge(page: Page):
         assert loc_badge.count() > 0, f"Buffer card #{i} is missing a location badge in Row 1.5!"
 
 
-def test_wizard_escape_warns_when_dirty(page: Page):
+def test_wizard_escape_warns_when_dirty(page: Page, reset_dom_state_js: str):
     """Escape on a dirty wizard shows unsaved-changes Swal; 'Keep Editing' leaves modal open;
     'Discard & Close' closes it cleanly."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     page.get_by_role("button", name="ADD INVENTORY").click()
     expect(page.locator("#wizardModal")).to_be_visible()
     page.wait_for_timeout(500)
@@ -316,9 +338,11 @@ def test_wizard_escape_warns_when_dirty(page: Page):
     expect(page.locator("#wizardModal")).not_to_be_visible()
 
 
-def test_wizard_escape_no_warning_when_clean(page: Page):
+def test_wizard_escape_no_warning_when_clean(page: Page, reset_dom_state_js: str):
     """Escape on an untouched wizard closes it immediately with no Swal dialog."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     page.get_by_role("button", name="ADD INVENTORY").click()
     expect(page.locator("#wizardModal")).to_be_visible()
     page.wait_for_timeout(500)
