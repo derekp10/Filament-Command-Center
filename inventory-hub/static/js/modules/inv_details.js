@@ -12,7 +12,28 @@ const unquoteExtra = (v) => {
 };
 console.log("🚀 Loaded Module: DETAILS");
 
+// 8.3 — Hide a sibling details modal robustly. BS5's modal silently
+// ignores .hide() while the modal is in mid-fade-in transition (its
+// `_isTransitioning` flag short-circuits the call), so a single .hide()
+// can leave the sibling visible if the user opens both back-to-back.
+// Issue the hide immediately AND retry once after the fade should have
+// settled (BS5 modal transition is 300ms; 400ms gives slack). Checks
+// the DOM .show class rather than the private _isShown flag.
+const _hideSiblingDetailsModal = (key) => {
+    if (typeof modals === 'undefined' || !modals[key]) return;
+    modals[key].hide();
+    setTimeout(() => {
+        const el = document.getElementById(key);
+        if (el && el.classList.contains('show')) modals[key].hide();
+    }, 400);
+};
+
 const openSpoolDetails = (id, silent = false) => {
+    // 8.3 — Prevent details-on-details stacking. A user-initiated open
+    // forcibly closes the sibling details modal before this one shows;
+    // silent=true (sync-pulse refresh) leaves visibility alone so it
+    // only refreshes whichever modal is currently visible.
+    if (!silent) _hideSiblingDetailsModal('filamentModal');
     if (!silent) setProcessing(true);
     fetch(`/api/spool_details?id=${id}`)
         .then(r => r.json())
@@ -180,6 +201,8 @@ const openSpoolDetails = (id, silent = false) => {
 };
 
 const openFilamentDetails = (fid, silent = false) => {
+    // 8.3 — see openSpoolDetails for rationale; mirrored sibling-close.
+    if (!silent) _hideSiblingDetailsModal('spoolModal');
     if (!silent) setProcessing(true);
     // 1. Fetch Filament Details
     fetch(`/api/filament_details?id=${fid}`)
@@ -1220,7 +1243,7 @@ const _editfilOpenModal = (fil) => {
             row.innerHTML = `
                 <span class="badge bg-info text-dark" style="min-width:36px;" data-role="num">${i + 1}</span>
                 <input type="color" id="editfil-color-picker-${idx}" value="${hexInit}" class="form-control form-control-color bg-black border-secondary" style="width:50px; padding:2px;">
-                <input type="text" id="editfil-color-hex-${idx}" class="form-control bg-black text-white border-secondary" value="${hexInit}" placeholder="#rrggbb" maxlength="7" style="flex:1;">
+                <input type="text" id="editfil-color-hex-${idx}" class="form-control bg-black text-white border-secondary" value="${hexInit}" placeholder="#rrggbb" maxlength="7" autocomplete="off" style="flex:1;">
                 <button type="button" class="btn btn-outline-secondary btn-sm" data-role="up" title="Move up">▲</button>
                 <button type="button" class="btn btn-outline-secondary btn-sm" data-role="down" title="Move down">▼</button>
                 <button type="button" class="btn btn-outline-danger btn-sm" data-role="remove" title="Remove">🗑️</button>

@@ -48,7 +48,7 @@
                             </div>
                             <input type="text" class="form-control bg-dark text-white border-secondary mb-2 mt-2"
                                 id="wiz-search-existing" placeholder="Type to search your database..."
-                                onkeyup="wizardSearchExisting()">
+                                autocomplete="off" onkeyup="wizardSearchExisting()">
                             <select class="form-select bg-dark text-white border-secondary" id="wiz-existing-results"
                                 size="3" onchange="wizardExistingSelected()">
                                 <!-- Populated dynamically -->
@@ -69,6 +69,7 @@
                             <div class="input-group mb-2">
                                 <input type="text" class="form-control bg-dark text-white border-secondary"
                                     id="wiz-search-external" placeholder="e.g. Hatchbox PLA Black"
+                                    autocomplete="off"
                                     onkeypress="if(event.key==='Enter') wizardSearchExternal()">
                                 <button class="btn btn-outline-info" onclick="wizardSearchExternal()">Search</button>
                             </div>
@@ -141,7 +142,7 @@
                         <div class="col-md-4">
                             <label class="form-label small text-secondary mb-1">Color Name</label>
                             <input type="text" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-fil-color_name" placeholder="e.g. Galaxy Black">
+                                id="wiz-fil-color_name" placeholder="e.g. Galaxy Black" autocomplete="off">
                         </div>
 
                         <div class="col-md-4">
@@ -153,6 +154,7 @@
                                 <input type="text"
                                     class="form-control bg-dark text-white border-secondary font-monospace"
                                     placeholder="#FFFFFF" value="#FFFFFF" id="wiz-fil-color_hex_0"
+                                    autocomplete="off"
                                     oninput="this.previousElementSibling.value = (this.value.startsWith('#') ? this.value : '#' + this.value).padEnd(7, '0').substring(0,7)">
                                 <button class="btn btn-outline-secondary" type="button" onclick="wizardAddColorHex()"
                                     title="Add another color for gradients">➕</button>
