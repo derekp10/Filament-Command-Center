@@ -23,7 +23,7 @@
 * Check why FIL:58 wasn't marked as labeled when scanned. The `label_printed` field was retired in M7 and replaced with `needs_label_print` (boolean) — barcode-scan path now updates this field at `app.py:921-922, 968-969`. The FIL:58 case specifically needs manual repro to see whether the update fires and why Activity Log was silent. Could be because FIL:58 is an old physical swatch with no prior spoolman state. _[ON HOLD — need to locate or reprint the FIL:58 physical label/swatch before repro can be attempted. When found: scan with DevTools open → Network tab → `/api/identify_scan` response + Activity Log ticker.]_
 
 
-* Sub-bug: "Display modal on Display modal" — suspect this is the filament→spool chain at [inv_details.js:304](inventory-hub/static/js/modules/inv_details.js#L304) interacting with the silent-refresh paths at lines 386/395. Needs its own reproduction trace before fixing. _[PARTIAL REPRO 2026-04-29 — Derek reports the crash appears to happen when the spool/filament details modal and the Add/Edit Wizard are both engaged simultaneously. Observed twice. This is likely the same root cause as the frontend lock-up at L22 below — a modal-on-modal race condition leaving `state.processing` stuck or an unhandled promise rejection. Next occurrence: capture DevTools Console + Network tabs BEFORE refreshing; `console.trace` wrapper around `openFilamentDetails` / `openSpoolDetails` / wizard open to see the call stack at the double-open.]_
+* Sub-bug: "Display modal on Display modal" — suspect this is the filament→spool chain at [inv_details.js:304](inventory-hub/static/js/modules/inv_details.js#L304) interacting with the silent-refresh paths at lines 386/395. Needs its own reproduction trace before fixing. _[PARTIAL FIX 2026-05-12 (Group 8.3 / `feature/keyboard-nav-polish`) — `openSpoolDetails` and `openFilamentDetails` now route through `_hideSiblingDetailsModal` at function entry, which forcibly closes the sibling details modal (with a 400ms retry to defeat BS5's mid-fade-in `.hide()` ignore). The silent-refresh path (`silent=true`) is intentionally exempt so sync-pulse only repaints the active modal. Covers details↔details stacking. Wizard↔details stacking (Derek's 2026-04-29 repro) is a separate path and remains open — needs the same sibling-close pattern at wizard entry points + tracing for the leftover `state.processing` lock-up at L22.]_
 
 * An unknow issue caused the frontend to lock up, causing it to no longer update to take barcodes. A hard refresh (Control shift R and Control F5) fixed it. We need to figure out what caused this, and fix it so it doesn't happen again. This could be related to the eject button issue above. Also seemed to have cause updates to filabridge to stop until the front end was refreshed. _[RECURRED 2026-04-29 — now believed to be the same root cause as the "Display modal on Display modal" bug at L20. Derek observed the crash twice when the details modal and the Add/Edit Wizard were both open. Likely a modal-on-modal race condition (e.g. wizard open fires while details modal's silent-refresh is mid-flight → unhandled promise rejection → `state.processing` stuck true → all barcode input and FilaBridge updates freeze). Next occurrence: DON'T hard-refresh first. Open DevTools → Console and Network tabs, screenshot pending XHRs and any red errors, then refresh.]_
 
@@ -133,7 +133,7 @@ Logs Below from Prod server:
 
 * Forcing a location using the location edit in the spool display modal, should proably update depolyed status to be off, unless the location selected is a toolhead. (Asuming toolheads are a valid target for this location update.)
 
-* If possible, set certain text fields to only prompt with auto fill on some (perhaps none) fields. I think this might be a setible somewhere in the code to prevent a list of previously used values for showing up. Most of the time, this is just getting in the way for me. _[PARTIAL — Group 13 added `autocomplete="off"` to the Quick-Weigh value input (the worst offender — previously typed `+25` / `-50` deltas were cluttering the dropdown). Broader global pass to identify and decorate other dynamic-overlay inputs still pending.]_
+* If possible, set certain text fields to only prompt with auto fill on some (perhaps none) fields. I think this might be a setible somewhere in the code to prevent a list of previously used values for showing up. Most of the time, this is just getting in the way for me. _[DONE 2026-05-12 (Group 8.4 / `feature/keyboard-nav-polish`) — Quick-Weigh suppression from Group 13 extended to 14 more inputs across 6 files: location ID/name, manual spool ID, wizard search/external/color, edit-filament hex/external query, global search/color, FilaBridge recovery delta. Free-form notes (`editfil-comment`, `vendoredit-comment`, `wiz-spool-comment`) deliberately left as default — history may help there. Regression coverage in `test_keyboard_nav_polish.py::test_autofill_suppressed_on_internal_inputs` and `test_freeform_comments_keep_browser_autofill`.]_
 
 * **[Feature]** Easy way to see what filaments are active on the printers at a glance, and how much filament is left in them. This item could possibly be grouped with the Project Color Loadout, It may contain some over lap with the systems in there. But I'd like to have this sooner, as I keep doing it lately to check to see if I should change spools now, or see if I can fit in one more print.
 
@@ -141,6 +141,31 @@ Logs Below from Prod server:
 https://github.com/pubeldev/prusa_exporter
 https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
+
+There continues to be inconsistency with switching out spools when a box slot is attached to a head, either ejecting doesn't fully clear all values, or only pulls it from the box, but not the toolhead. I have to take the new spool, assigne it to the box, remove the old spool from the box, and manually assign it to the toolhead directly. So we need to deep dive into that whole system and find out why this is still a problem. I've included the logs below to try and out line the the flow better than me trying to type it.
+[17:02:49] 🗑️ Force Unassigned #240
+[17:02:48] 📦 Auto-archived Spool #240 (remaining weight hit 0) — moved to UNASSIGNED
+[17:01:11] ⏏️ Ejected #240 to Room LR
+[17:00:46] ℹ️ Spool #240 already verified
+[16:55:56] ⚡ Auto-deployed Spool #241 — Jessie Premium PETG (Transition Spool) → XL-3 (source: LR-MDB-1:SLOT:3)
+[16:55:56] 🖨️ #241 Jessie Premium PETG (Transition Spool) -> XL-3
+[16:55:53] 📦 #241 Jessie Premium PETG (Transition Spool) -> Dryer LR-MDB-1 [Slot 3]
+[16:55:48] ℹ️ Spool #241 already verified
+[16:54:09] 🖨️ #241 Jessie Premium PETG (Transition Spool) -> XL-3
+[16:54:04] ℹ️ Spool #241 already verified
+[16:54:00] ↩️ Returned #240 -> LR-MDB-1
+[16:53:25] ✅ Spool #240 → LR-MDB-1:SLOT:3 → XL-3
+[16:53:25] ⚡ Auto-deployed Spool #240 — Jessie Premium PETG (Transition Spool) → XL-3 (source: LR-MDB-1:SLOT:3)
+[16:53:25] 🖨️ #240 Jessie Premium PETG (Transition Spool) -> XL-3
+[16:53:23] 📦 #240 Jessie Premium PETG (Transition Spool) -> Dryer LR-MDB-1 [Slot 3]
+[16:53:11] ⏏️ Ejected #241 to Room CR
+[16:53:11] ✔️ Spool #241 Label Verified
+[16:52:59] ⏏️ Ejected #240 to Room LR
+[16:52:59] ℹ️ Spool #240 already verified
+[16:52:55] ℹ️ Spool #240 already verified
+[16:52:48] ↩️ Returned #240 -> LR-MDB-1
+[16:52:48] ℹ️ Spool #240 already verified
+[16:52:44] ℹ️ Spool #240 already verified
 
 ## Prusament Enhancements ##
 * Ability to merge duplicate filaments. Sometimes created when the existing filament card and the one the parcer generates based on prusament filaments don't match exactly. _[PARTIAL 2026-04-26 — duplicate **prevention** is in: tier-1 product-id matcher prefers filaments tagged with the same /spool/<id>/ as the scan, plus a duplicate-picker UI when the matcher can't disambiguate so the user picks (or chooses Create new). What's still missing: **merging existing duplicates** — a UI affordance that re-points all spools from one filament to another and archives/deletes the source. The picker prevents you from making MORE duplicates; you still need a way to clean up the ones already in the DB.]_
@@ -163,7 +188,7 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
 
 ## ⌨️ Keyboard Navigation
-* Audit and implement consistent keyboard navigation across the entire UI. Currently only the force location modal and wizard material/multiselect dropdowns support arrow keys, Enter, and Escape. Every modal, dropdown, list, and interactive element should have a unified keyboard interaction pattern: arrow keys to navigate, Enter to select/confirm, Escape to dismiss/go back, Tab to move between controls, and auto-focus on the primary input when a modal opens.
+* Audit and implement consistent keyboard navigation across the entire UI. Currently only the force location modal and wizard material/multiselect dropdowns support arrow keys, Enter, and Escape. Every modal, dropdown, list, and interactive element should have a unified keyboard interaction pattern: arrow keys to navigate, Enter to select/confirm, Escape to dismiss/go back, Tab to move between controls, and auto-focus on the primary input when a modal opens. _[PARTIAL 2026-05-12 (Group 8.1 / `feature/keyboard-nav-polish`) — full audit of 24 modals/overlays completed. Reference impls (mountOverlay-based, e.g. `weight_entry.js`, the bind-picker feeds combobox in `inv_loc_mgr.js`) already have full kb-active arrow-nav + Enter + Escape + auto-focus. `vendorEditModal` already auto-focuses on both Add and Edit paths. Delete overlays' Cancel-on-Enter (broad warning step) + Confirm-on-Enter (type-the-id step) is intentional UX. Only `locModal` actually lacked auto-focus — added: Add path focuses `#edit-id`, Edit path focuses + select()s `#edit-name`. Confirmed by `test_loc_modal_add_focuses_id_field` and `test_loc_modal_edit_focuses_name_field_and_selects`. **Focus-trap follow-up audit (2026-05-12, same session)**: Derek raised concern that Tab could leak from a modal into background modals or browser chrome. Probed every modal in single, stacked, and modal-on-offcanvas configurations (incl. `spoolModal` / `filamentModal` with their custom Escape handler bypassing `data-bs-keyboard`). All 16 surfaces correctly trap Tab and Shift+Tab via Bootstrap's `_enforceFocus`; topmost modal owns focus when stacked; Escape dismisses every surface. Could NOT reproduce the leak Derek saw — possible explanations: fixed by inv_core.js z-index stacking work, browser-specific (probe is Chromium), or a browser-level shortcut (Ctrl+Tab) that Playwright's `Tab` doesn't simulate. Locked the current correct behavior in with `test_modal_focus_trap.py` (19 tests covering single-modal trap, modal-on-modal stacking, modal-on-offcanvas, custom-Escape paths, auto-focus landing target). If the leak resurfaces, capture exact key combo + which modals are open before refreshing.]_
 
 ## 🗂️ Modals & Add Inventory Wizard
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
