@@ -39,9 +39,14 @@ _BS_MODAL_FADE_MS = 500
 _TAB_SWEEP = 30
 
 
-def _wait_app_ready(page: Page) -> None:
+def _wait_app_ready(page: Page, reset_js: str = "") -> None:
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
+    # Defensive cross-test pollution teardown (Group 16.3). Optional so old
+    # callers stay compatible during the migration window.
+    if reset_js:
+        page.evaluate(reset_js)
+        page.wait_for_timeout(200)
     page.wait_for_function("typeof bootstrap !== 'undefined'")
     page.wait_for_function("typeof window.openAddModal === 'function'")
     page.wait_for_function("typeof window.openVendorCreateModal === 'function'")
@@ -135,8 +140,8 @@ _SINGLE_MODAL_CASES = [
 
 
 @pytest.mark.parametrize("modal_id,opener", _SINGLE_MODAL_CASES, ids=[c[0] for c in _SINGLE_MODAL_CASES])
-def test_single_modal_traps_tab(page: Page, modal_id: str, opener: str):
-    _wait_app_ready(page)
+def test_single_modal_traps_tab(page: Page, modal_id: str, opener: str, reset_dom_state_js: str):
+    _wait_app_ready(page, reset_dom_state_js)
     if opener == "_open_via_bootstrap":
         _open_via_bootstrap(page, modal_id)
     elif opener == "openAddModal":
@@ -171,17 +176,17 @@ _DETAILS_STUB = """() => {
 }"""
 
 
-def _wait_details_ready(page: Page) -> None:
-    _wait_app_ready(page)
+def _wait_details_ready(page: Page, reset_js: str = "") -> None:
+    _wait_app_ready(page, reset_js)
     page.wait_for_function("typeof openSpoolDetails === 'function'")
     page.wait_for_function("typeof openFilamentDetails === 'function'")
     page.evaluate(_DETAILS_STUB)
 
 
-def test_spool_modal_traps_tab_and_escape_dismisses(page: Page):
+def test_spool_modal_traps_tab_and_escape_dismisses(page: Page, reset_dom_state_js: str):
     """spoolModal has data-bs-keyboard='false'; relies on the custom
     Escape handler in inv_details.js DOMContentLoaded block."""
-    _wait_details_ready(page)
+    _wait_details_ready(page, reset_dom_state_js)
     page.evaluate("(id) => openSpoolDetails(id)", 9001)
     page.wait_for_selector("#spoolModal.show", timeout=5_000)
     page.wait_for_timeout(_BS_MODAL_FADE_MS)
@@ -189,8 +194,8 @@ def test_spool_modal_traps_tab_and_escape_dismisses(page: Page):
     _assert_escape_dismisses(page, "spoolModal")
 
 
-def test_filament_modal_traps_tab_and_escape_dismisses(page: Page):
-    _wait_details_ready(page)
+def test_filament_modal_traps_tab_and_escape_dismisses(page: Page, reset_dom_state_js: str):
+    _wait_details_ready(page, reset_dom_state_js)
     page.evaluate("(fid) => openFilamentDetails(fid)", 8001)
     page.wait_for_selector("#filamentModal.show", timeout=5_000)
     page.wait_for_timeout(_BS_MODAL_FADE_MS)
@@ -203,10 +208,10 @@ def test_filament_modal_traps_tab_and_escape_dismisses(page: Page):
 # ---------------------------------------------------------------------------
 
 
-def test_stacked_locmgr_then_locmodal_traps_in_top(page: Page):
+def test_stacked_locmgr_then_locmodal_traps_in_top(page: Page, reset_dom_state_js: str):
     """Open locMgrModal, then openAddModal stacks locModal on top.
     Tab must stay inside locModal, not leak back to locMgrModal."""
-    _wait_app_ready(page)
+    _wait_app_ready(page, reset_dom_state_js)
     _open_via_bootstrap(page, "locMgrModal")
     page.evaluate("() => window.openAddModal()")
     page.wait_for_selector("#locModal.show", timeout=5_000)
@@ -214,17 +219,17 @@ def test_stacked_locmgr_then_locmodal_traps_in_top(page: Page):
     _assert_tab_trapped(page, "#locModal")
 
 
-def test_stacked_queue_then_clear_confirm_traps_in_top(page: Page):
-    _wait_app_ready(page)
+def test_stacked_queue_then_clear_confirm_traps_in_top(page: Page, reset_dom_state_js: str):
+    _wait_app_ready(page, reset_dom_state_js)
     _open_via_bootstrap(page, "queueModal")
     _open_via_bootstrap(page, "clearQueueConfirmModal")
     _assert_tab_trapped(page, "#clearQueueConfirmModal")
 
 
-def test_filament_modal_then_edit_filament_modal_stacked(page: Page):
+def test_filament_modal_then_edit_filament_modal_stacked(page: Page, reset_dom_state_js: str):
     """Edit Filament opens via the pencil button inside Filament Details —
     a real-app stacking case for the data-bs-keyboard='false' modals."""
-    _wait_details_ready(page)
+    _wait_details_ready(page, reset_dom_state_js)
     page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
     page.evaluate("(fid) => openFilamentDetails(fid)", 8001)
     page.wait_for_selector("#filamentModal.show", timeout=5_000)
@@ -242,19 +247,19 @@ def test_filament_modal_then_edit_filament_modal_stacked(page: Page):
 # ---------------------------------------------------------------------------
 
 
-def test_offcanvas_search_alone_traps_tab(page: Page):
-    _wait_app_ready(page)
+def test_offcanvas_search_alone_traps_tab(page: Page, reset_dom_state_js: str):
+    _wait_app_ready(page, reset_dom_state_js)
     page.locator('nav button:has-text("SEARCH")').click()
     page.wait_for_selector("#offcanvasSearch.show")
     page.wait_for_timeout(_BS_MODAL_FADE_MS)
     _assert_tab_trapped(page, "#offcanvasSearch")
 
 
-def test_modal_opened_from_offcanvas_keeps_focus_in_modal(page: Page):
+def test_modal_opened_from_offcanvas_keeps_focus_in_modal(page: Page, reset_dom_state_js: str):
     """Open Search offcanvas → click View Details on a result → Spool
     Details modal opens on top. Tab must stay inside the modal, not
     leak back into the offcanvas."""
-    _wait_app_ready(page)
+    _wait_app_ready(page, reset_dom_state_js)
     page.locator('nav button:has-text("SEARCH")').click()
     page.wait_for_selector("#offcanvasSearch.show")
     page.locator("#global-search-query").fill("a")
@@ -273,12 +278,12 @@ def test_modal_opened_from_offcanvas_keeps_focus_in_modal(page: Page):
 
 
 @pytest.mark.parametrize("modal_id", ["confirmModal", "backlogModal", "queueModal", "manageModal", "vendorEditModal", "locModal"])
-def test_auto_focus_lands_inside_modal(page: Page, modal_id: str):
+def test_auto_focus_lands_inside_modal(page: Page, modal_id: str, reset_dom_state_js: str):
     """Bootstrap focuses the modal element itself on .show (the
     tabindex='-1' makes this possible). Custom openers (locModal,
     vendorEditModal) focus a specific input. Either way, focus must
     be inside the modal subtree before the user presses any key."""
-    _wait_app_ready(page)
+    _wait_app_ready(page, reset_dom_state_js)
     if modal_id == "locModal":
         page.evaluate("() => window.openAddModal()")
     elif modal_id == "vendorEditModal":

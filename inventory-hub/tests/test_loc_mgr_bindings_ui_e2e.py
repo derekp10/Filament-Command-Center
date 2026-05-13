@@ -28,25 +28,16 @@ def restore_bindings(api_base_url):
     )
 
 
-def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
-    page.goto(base_url)
-    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({loc_id!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
-    page.wait_for_timeout(600)
-
-
 @pytest.mark.usefixtures("require_server")
-def test_feeds_section_hidden_for_non_dryer_box(page: Page, base_url: str):
-    _open_manage(page, base_url, NON_DRYER_LOC)
+def test_feeds_section_hidden_for_non_dryer_box(page: Page, open_manage_modal):
+    open_manage_modal(NON_DRYER_LOC)
     section = page.locator("#manage-feeds-section")
     expect(section).to_be_hidden()
 
 
 @pytest.mark.usefixtures("require_server", "restore_bindings")
-def test_feeds_section_visible_for_dryer_box(page: Page, base_url: str):
-    _open_manage(page, base_url, TEST_BOX)
+def test_feeds_section_visible_for_dryer_box(page: Page, open_manage_modal):
+    open_manage_modal(TEST_BOX)
     section = page.locator("#manage-feeds-section")
     expect(section).to_be_visible()
     # Body starts collapsed.
@@ -55,8 +46,8 @@ def test_feeds_section_visible_for_dryer_box(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server", "restore_bindings")
-def test_feeds_section_toggles_open(page: Page, base_url: str):
-    _open_manage(page, base_url, TEST_BOX)
+def test_feeds_section_toggles_open(page: Page, open_manage_modal):
+    open_manage_modal(TEST_BOX)
     page.locator("#feeds-toggle-btn").click()
     expect(page.locator("#feeds-body")).to_be_visible()
     expect(page.locator("#feeds-toggle-btn")).to_contain_text("Hide")
@@ -66,8 +57,8 @@ def test_feeds_section_toggles_open(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server", "restore_bindings")
-def test_feeds_section_save_round_trip(page: Page, base_url: str, api_base_url):
-    _open_manage(page, base_url, TEST_BOX)
+def test_feeds_section_save_round_trip(page: Page, open_manage_modal, api_base_url):
+    open_manage_modal(TEST_BOX)
     page.locator("#feeds-toggle-btn").click()
     page.wait_for_timeout(300)
     # The Feeds editor is now a searchable combobox — write directly to the
@@ -87,9 +78,9 @@ def test_feeds_section_save_round_trip(page: Page, base_url: str, api_base_url):
 
 
 @pytest.mark.usefixtures("require_server", "restore_bindings")
-def test_feeds_section_save_with_some_slots_none(page: Page, base_url: str, api_base_url):
+def test_feeds_section_save_with_some_slots_none(page: Page, open_manage_modal, api_base_url):
     """User asked to support split/partial use — some slots bound, some left None."""
-    _open_manage(page, base_url, TEST_BOX)
+    open_manage_modal(TEST_BOX)
     page.locator("#feeds-toggle-btn").click()
     page.wait_for_timeout(300)
     selects = page.locator("select.feeds-select")
@@ -113,11 +104,11 @@ def test_feeds_section_save_with_some_slots_none(page: Page, base_url: str, api_
 
 
 @pytest.mark.usefixtures("require_server", "restore_bindings")
-def test_feeds_combobox_exposes_printer_sentinel_options(page: Page, base_url: str):
+def test_feeds_combobox_exposes_printer_sentinel_options(page: Page, open_manage_modal):
     """The searchable combobox should expose PRINTER:<id> sentinel options
     alongside the per-toolhead ones, so the user can bind a slot to a
     printer pool without picking a specific toolhead."""
-    _open_manage(page, base_url, TEST_BOX)
+    open_manage_modal(TEST_BOX)
     page.locator("#feeds-toggle-btn").click()
     page.wait_for_timeout(300)
     # The hidden <select> holds every option the combobox offers.
@@ -130,10 +121,10 @@ def test_feeds_combobox_exposes_printer_sentinel_options(page: Page, base_url: s
 
 
 @pytest.mark.usefixtures("require_server", "restore_bindings")
-def test_feeds_save_round_trip_with_printer_sentinel(page: Page, base_url: str, api_base_url):
+def test_feeds_save_round_trip_with_printer_sentinel(page: Page, open_manage_modal, api_base_url):
     """Saving a slot with a PRINTER:<id> sentinel value should round-trip
     through the bindings API exactly as-written (no coercion to null / blank)."""
-    _open_manage(page, base_url, TEST_BOX)
+    open_manage_modal(TEST_BOX)
     page.locator("#feeds-toggle-btn").click()
     page.wait_for_timeout(300)
 

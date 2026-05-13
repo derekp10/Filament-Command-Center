@@ -53,18 +53,9 @@ def _find_loaded_bound_slot(api_base_url):
     return None
 
 
-def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
-    page.goto(base_url)
-    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({loc_id!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
-    page.wait_for_timeout(600)
-
-
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_quickswap_grid_visible_on_bound_toolhead(page: Page, base_url: str):
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+def test_quickswap_grid_visible_on_bound_toolhead(page: Page, open_manage_modal):
+    open_manage_modal(TEST_TOOLHEAD)
     section = page.locator("#manage-quickswap-section")
     expect(section).to_be_visible()
     # With the fixture binding in place, at least one slot button renders.
@@ -73,15 +64,15 @@ def test_quickswap_grid_visible_on_bound_toolhead(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_quickswap_grid_hidden_on_dryer_box(page: Page, base_url: str):
-    _open_manage(page, base_url, NON_TOOLHEAD_LOC)
+def test_quickswap_grid_hidden_on_dryer_box(page: Page, open_manage_modal):
+    open_manage_modal(NON_TOOLHEAD_LOC)
     expect(page.locator("#manage-quickswap-section")).to_be_hidden()
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_quickswap_keyboard_q_focuses_first_slot(page: Page, base_url: str):
+def test_quickswap_keyboard_q_focuses_first_slot(page: Page, open_manage_modal):
     import re
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+    open_manage_modal(TEST_TOOLHEAD)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()
     page.keyboard.press("q")
     page.wait_for_timeout(200)
@@ -91,12 +82,12 @@ def test_quickswap_keyboard_q_focuses_first_slot(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_quickswap_tap_opens_confirm_overlay(page: Page, base_url: str, api_base_url):
+def test_quickswap_tap_opens_confirm_overlay(page: Page, open_manage_modal, api_base_url):
     hit = _find_loaded_bound_slot(api_base_url)
     if not hit:
         pytest.skip("No bound-and-loaded slot available in dev state.")
     box, slot, toolhead = hit
-    _open_manage(page, base_url, toolhead)
+    open_manage_modal(toolhead)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()
     test_btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     expect(test_btn).to_be_visible(timeout=3000)
@@ -107,8 +98,8 @@ def test_quickswap_tap_opens_confirm_overlay(page: Page, base_url: str, api_base
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_quickswap_confirm_overlay_cancel_dismisses(page: Page, base_url: str):
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+def test_quickswap_confirm_overlay_cancel_dismisses(page: Page, open_manage_modal):
+    open_manage_modal(TEST_TOOLHEAD)
     page.locator(".fcc-qs-slot").first.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
     expect(overlay).to_be_visible(timeout=2000)
@@ -117,7 +108,7 @@ def test_quickswap_confirm_overlay_cancel_dismisses(page: Page, base_url: str):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_quickswap_confirm_yes_actually_performs_swap(page: Page, base_url: str, api_base_url):
+def test_quickswap_confirm_yes_actually_performs_swap(page: Page, open_manage_modal, api_base_url):
     """Regression guard: a duplicate window.quickSwapTap definition was
     overriding the real handler, so clicking Yes did nothing. This test
     catches that class of bug by watching the /api/quickswap request
@@ -126,7 +117,7 @@ def test_quickswap_confirm_yes_actually_performs_swap(page: Page, base_url: str,
     if not hit:
         pytest.skip("No bound-and-loaded slot available in dev state.")
     box, slot, toolhead = hit
-    _open_manage(page, base_url, toolhead)
+    open_manage_modal(toolhead)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible()
     test_btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     expect(test_btn).to_be_visible(timeout=3000)
@@ -145,8 +136,8 @@ def test_quickswap_confirm_yes_actually_performs_swap(page: Page, base_url: str,
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_quickswap_escape_in_overlay_closes_overlay_only(page: Page, base_url: str):
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+def test_quickswap_escape_in_overlay_closes_overlay_only(page: Page, open_manage_modal):
+    open_manage_modal(TEST_TOOLHEAD)
     page.locator(".fcc-qs-slot").first.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
     expect(overlay).to_be_visible(timeout=2000)

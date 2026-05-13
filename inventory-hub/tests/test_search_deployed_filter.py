@@ -146,7 +146,7 @@ def test_live_search_endpoint_accepts_deployed_param():
 # Frontend: Reset button clears the deployment filter.
 # ---------------------------------------------------------------------------
 
-def test_reset_button_clears_deployed_filter(page):
+def test_reset_button_clears_deployed_filter(page, reset_dom_state_js: str):
     """The search offcanvas Reset 🗑️ button should also zero out the
     deployment select — without this, a stale filter lingers and keeps
     filtering subsequent searches after the user explicitly asked to
@@ -155,6 +155,9 @@ def test_reset_button_clears_deployed_filter(page):
     assert isinstance(page, Page)
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
+    # Defensive cross-test pollution teardown (Group 16.3).
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
 
     # Open the search offcanvas.
     page.locator('nav button:has-text("SEARCH")').click()

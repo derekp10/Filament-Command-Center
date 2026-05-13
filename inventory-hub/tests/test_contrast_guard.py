@@ -42,25 +42,15 @@ def bound_slot(api_base_url):
     )
 
 
-def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
-    page.goto(base_url)
-    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_function("() => typeof window.openManage === 'function'", timeout=5000)
-    page.wait_for_timeout(400)
-    page.evaluate(f"window.openManage({loc_id!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=8000)
-    page.wait_for_timeout(700)
-
-
 # ---------------------------------------------------------------------------
 # Bind picker — the immediate offender that prompted this fix
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_bind_picker_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
+def test_bind_picker_has_no_gray_on_gray_text(page: Page, open_manage_modal, assert_contrast):
     """The exact surface the user reported. Opens the picker, asserts
     every slot-row label meets AA contrast."""
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+    open_manage_modal(TEST_TOOLHEAD)
     page.locator("#quickswap-bind-slot-btn").click()
     overlay = page.locator("#fcc-bind-picker-overlay")
     expect(overlay).to_be_visible(timeout=3000)
@@ -74,8 +64,8 @@ def test_bind_picker_has_no_gray_on_gray_text(page: Page, base_url: str, assert_
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_quickswap_section_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+def test_quickswap_section_has_no_gray_on_gray_text(page: Page, open_manage_modal, assert_contrast):
+    open_manage_modal(TEST_TOOLHEAD)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=3000)
     assert_contrast(page.locator("#manage-quickswap-section"))
 
@@ -85,8 +75,8 @@ def test_quickswap_section_has_no_gray_on_gray_text(page: Page, base_url: str, a
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_feeds_section_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
-    _open_manage(page, base_url, TEST_BOX)
+def test_feeds_section_has_no_gray_on_gray_text(page: Page, open_manage_modal, assert_contrast):
+    open_manage_modal(TEST_BOX)
     # Feeds starts collapsed; open it so the rows render and get asserted.
     page.locator("#feeds-toggle-btn").click()
     page.wait_for_timeout(400)
@@ -98,8 +88,8 @@ def test_feeds_section_has_no_gray_on_gray_text(page: Page, base_url: str, asser
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_quickswap_confirm_overlay_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
-    _open_manage(page, base_url, TEST_TOOLHEAD)
+def test_quickswap_confirm_overlay_has_no_gray_on_gray_text(page: Page, open_manage_modal, assert_contrast):
+    open_manage_modal(TEST_TOOLHEAD)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=3000)
     # Return-to-Slot opens the confirm overlay without needing a loaded spool
     # (it'll land on "nothing to return" if the toolhead is empty, which

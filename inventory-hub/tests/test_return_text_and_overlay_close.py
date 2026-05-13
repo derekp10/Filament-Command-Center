@@ -13,17 +13,6 @@ from playwright.sync_api import Page, expect
 VIRTUAL_PRINTER = "XL"
 
 
-def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
-    page.goto(base_url)
-    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    # Make sure the JS module exposing openManage has booted before we call it.
-    page.wait_for_function("() => typeof window.openManage === 'function'", timeout=5000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({loc_id!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=8000)
-    page.wait_for_timeout(600)
-
-
 def _find_loaded_toolhead(api_base_url, prefix):
     pm = requests.get(f"{api_base_url}/api/printer_map", timeout=5).json().get("printers", {})
     for entries in pm.values():
@@ -43,7 +32,7 @@ def _find_loaded_toolhead(api_base_url, prefix):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server")
-def test_return_overlay_shows_concrete_box_and_slot(page: Page, base_url: str, api_base_url):
+def test_return_overlay_shows_concrete_box_and_slot(page: Page, open_manage_modal, api_base_url):
     loaded_th = _find_loaded_toolhead(api_base_url, VIRTUAL_PRINTER)
     if not loaded_th:
         pytest.skip(f"No toolhead on {VIRTUAL_PRINTER}- currently loaded.")
@@ -54,7 +43,7 @@ def test_return_overlay_shows_concrete_box_and_slot(page: Page, base_url: str, a
     reported_box = str(resident.get("location", "")).upper()
     reported_slot = str(resident.get("slot", "")).replace('"', '').strip() or None
 
-    _open_manage(page, base_url, loaded_th)
+    open_manage_modal(loaded_th)
     page.locator("#quickswap-return-btn").click()
     expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=4000)
     body = page.locator("#fcc-quickswap-confirm-body")
@@ -78,7 +67,7 @@ def test_return_overlay_shows_concrete_box_and_slot(page: Page, base_url: str, a
 
 
 @pytest.mark.usefixtures("require_server")
-def test_return_overlay_flags_missing_origin_explicitly(page: Page, base_url: str, api_base_url):
+def test_return_overlay_flags_missing_origin_explicitly(page: Page, open_manage_modal, api_base_url):
     """If there's no spool at all, the overlay should clearly say nothing
     can be returned rather than rendering a confirm prompt."""
     # Find a toolhead that is DEFINITELY empty.
@@ -96,7 +85,7 @@ def test_return_overlay_flags_missing_origin_explicitly(page: Page, base_url: st
     if not empty_toolhead:
         pytest.skip("No empty toolhead available for this test case.")
 
-    _open_manage(page, base_url, empty_toolhead)
+    open_manage_modal(empty_toolhead)
     page.locator("#quickswap-return-btn").click()
     expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=4000)
     body = page.locator("#fcc-quickswap-confirm-body")
@@ -125,14 +114,14 @@ def _find_bound_and_loaded(api_base_url):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_confirm_overlay_dismisses_when_modal_closes_via_x(page: Page, base_url: str, api_base_url):
+def test_confirm_overlay_dismisses_when_modal_closes_via_x(page: Page, open_manage_modal, api_base_url):
     """Open a confirm, X-close the manage modal. Re-opening the same
     toolhead must not inherit the stale confirm overlay."""
     hit = _find_bound_and_loaded(api_base_url)
     if not hit:
         pytest.skip("No bound+loaded slot available to open a confirm against.")
     box, slot, toolhead = hit
-    _open_manage(page, base_url, toolhead)
+    open_manage_modal(toolhead)
     btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     btn.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
@@ -160,13 +149,13 @@ def test_confirm_overlay_dismisses_when_modal_closes_via_x(page: Page, base_url:
 
 
 @pytest.mark.usefixtures("require_server")
-def test_bind_picker_dismisses_when_modal_closes_via_x(page: Page, base_url: str, api_base_url):
+def test_bind_picker_dismisses_when_modal_closes_via_x(page: Page, open_manage_modal, api_base_url):
     """Same discipline for the Bind-a-Slot picker."""
     hit = _find_bound_and_loaded(api_base_url)
     if not hit:
         pytest.skip("No bound+loaded slot available to open the picker against.")
     _, _, toolhead = hit
-    _open_manage(page, base_url, toolhead)
+    open_manage_modal(toolhead)
     page.locator("#quickswap-bind-slot-btn").click()
     picker = page.locator("#fcc-bind-picker-overlay")
     expect(picker).to_be_visible(timeout=3000)

@@ -15,15 +15,6 @@ from playwright.sync_api import Page, expect
 VIRTUAL_PRINTER = "XL"
 
 
-def _open_manage(page: Page, base_url: str, loc_id: str) -> None:
-    page.goto(base_url)
-    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({loc_id!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
-    page.wait_for_timeout(600)
-
-
 def _find_loaded_toolhead_on_printer(api_base_url: str, prefix: str):
     pm = requests.get(f"{api_base_url}/api/printer_map", timeout=5).json().get("printers", {})
     for entries in pm.values():
@@ -42,14 +33,14 @@ def _find_loaded_toolhead_on_printer(api_base_url: str, prefix: str):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server")
-def test_return_overlay_names_specific_toolhead_on_virtual_printer(page: Page, base_url: str, api_base_url):
+def test_return_overlay_names_specific_toolhead_on_virtual_printer(page: Page, open_manage_modal, api_base_url):
     """From the XL virtual-printer view, clicking Return to Slot should
     resolve and display the concrete toolhead that'll be acted on — not
     the ambiguous 'XL' prefix."""
     loaded = _find_loaded_toolhead_on_printer(api_base_url, VIRTUAL_PRINTER)
     if not loaded:
         pytest.skip(f"No toolhead under {VIRTUAL_PRINTER}- currently has a spool loaded.")
-    _open_manage(page, base_url, VIRTUAL_PRINTER)
+    open_manage_modal(VIRTUAL_PRINTER)
     page.locator("#quickswap-return-btn").click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
     expect(overlay).to_be_visible(timeout=4000)
@@ -62,14 +53,14 @@ def test_return_overlay_names_specific_toolhead_on_virtual_printer(page: Page, b
 
 
 @pytest.mark.usefixtures("require_server")
-def test_return_overlay_explains_when_virtual_printer_has_no_loaded_toolhead(page: Page, base_url: str, api_base_url):
+def test_return_overlay_explains_when_virtual_printer_has_no_loaded_toolhead(page: Page, open_manage_modal, api_base_url):
     """If nothing is loaded on any toolhead of the virtual printer, the
     overlay should say so explicitly instead of pretending there's
     something to return."""
     loaded = _find_loaded_toolhead_on_printer(api_base_url, VIRTUAL_PRINTER)
     if loaded:
         pytest.skip(f"{VIRTUAL_PRINTER}- has a loaded toolhead; can't test the empty case.")
-    _open_manage(page, base_url, VIRTUAL_PRINTER)
+    open_manage_modal(VIRTUAL_PRINTER)
     page.locator("#quickswap-return-btn").click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
     expect(overlay).to_be_visible(timeout=4000)
@@ -96,7 +87,7 @@ def _find_bound_and_loaded(api_base_url):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_quickswap_refreshes_manage_view_after_yes(page: Page, base_url: str, api_base_url):
+def test_quickswap_refreshes_manage_view_after_yes(page: Page, open_manage_modal, api_base_url):
     """After confirming a swap, the manage view should re-render on its own
     without the user closing and reopening the modal. We verify by asserting
     that the list/grid section inside the modal gets a fresh render after
@@ -108,7 +99,7 @@ def test_quickswap_refreshes_manage_view_after_yes(page: Page, base_url: str, ap
         pytest.skip("No bound+loaded slot available to exercise the swap.")
     box, slot, toolhead, spool_id = hit
 
-    _open_manage(page, base_url, toolhead)
+    open_manage_modal(toolhead)
 
     # Plant a sentinel in whichever render container is currently visible.
     # refreshManageView rewrites that container's innerHTML when a move
