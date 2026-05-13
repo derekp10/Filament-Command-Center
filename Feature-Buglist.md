@@ -142,6 +142,31 @@ https://github.com/pubeldev/prusa_exporter
 https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
 
+There continues to be inconsistency with switching out spools when a box slot is attached to a head, either ejecting doesn't fully clear all values, or only pulls it from the box, but not the toolhead. I have to take the new spool, assigne it to the box, remove the old spool from the box, and manually assign it to the toolhead directly. So we need to deep dive into that whole system and find out why this is still a problem. I've included the logs below to try and out line the the flow better than me trying to type it.
+[17:02:49] 🗑️ Force Unassigned #240
+[17:02:48] 📦 Auto-archived Spool #240 (remaining weight hit 0) — moved to UNASSIGNED
+[17:01:11] ⏏️ Ejected #240 to Room LR
+[17:00:46] ℹ️ Spool #240 already verified
+[16:55:56] ⚡ Auto-deployed Spool #241 — Jessie Premium PETG (Transition Spool) → XL-3 (source: LR-MDB-1:SLOT:3)
+[16:55:56] 🖨️ #241 Jessie Premium PETG (Transition Spool) -> XL-3
+[16:55:53] 📦 #241 Jessie Premium PETG (Transition Spool) -> Dryer LR-MDB-1 [Slot 3]
+[16:55:48] ℹ️ Spool #241 already verified
+[16:54:09] 🖨️ #241 Jessie Premium PETG (Transition Spool) -> XL-3
+[16:54:04] ℹ️ Spool #241 already verified
+[16:54:00] ↩️ Returned #240 -> LR-MDB-1
+[16:53:25] ✅ Spool #240 → LR-MDB-1:SLOT:3 → XL-3
+[16:53:25] ⚡ Auto-deployed Spool #240 — Jessie Premium PETG (Transition Spool) → XL-3 (source: LR-MDB-1:SLOT:3)
+[16:53:25] 🖨️ #240 Jessie Premium PETG (Transition Spool) -> XL-3
+[16:53:23] 📦 #240 Jessie Premium PETG (Transition Spool) -> Dryer LR-MDB-1 [Slot 3]
+[16:53:11] ⏏️ Ejected #241 to Room CR
+[16:53:11] ✔️ Spool #241 Label Verified
+[16:52:59] ⏏️ Ejected #240 to Room LR
+[16:52:59] ℹ️ Spool #240 already verified
+[16:52:55] ℹ️ Spool #240 already verified
+[16:52:48] ↩️ Returned #240 -> LR-MDB-1
+[16:52:48] ℹ️ Spool #240 already verified
+[16:52:44] ℹ️ Spool #240 already verified
+
 ## Prusament Enhancements ##
 * Ability to merge duplicate filaments. Sometimes created when the existing filament card and the one the parcer generates based on prusament filaments don't match exactly. _[PARTIAL 2026-04-26 — duplicate **prevention** is in: tier-1 product-id matcher prefers filaments tagged with the same /spool/<id>/ as the scan, plus a duplicate-picker UI when the matcher can't disambiguate so the user picks (or chooses Create new). What's still missing: **merging existing duplicates** — a UI affordance that re-points all spools from one filament to another and archives/deletes the source. The picker prevents you from making MORE duplicates; you still need a way to clean up the ones already in the DB.]_
 
