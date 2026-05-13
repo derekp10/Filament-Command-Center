@@ -1,9 +1,11 @@
 import re
 from playwright.sync_api import Page, expect
 
-def test_global_search_offcanvas_visibility(page: Page):
+def test_global_search_offcanvas_visibility(page: Page, reset_dom_state_js: str):
     """Verifies the Search Offcanvas wrapper opens successfully via the Navigation bar."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     
     # Check for the SEARCH button in the nav and click it
     search_btn = page.locator('nav button:has-text("SEARCH")')
@@ -22,9 +24,11 @@ def test_global_search_offcanvas_visibility(page: Page):
     page.wait_for_timeout(500)  # Wait for animation
     expect(offcanvas).not_to_be_visible()
 
-def test_global_search_realtime_typing(page: Page):
+def test_global_search_realtime_typing(page: Page, reset_dom_state_js: str):
     """Verifies that typing inside the search box triggers the SearchEngine loader and renders results."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     page.locator('nav button:has-text("SEARCH")').click()
     
     # Type a query
@@ -41,9 +45,11 @@ def test_global_search_realtime_typing(page: Page):
     # (Checking for specific text might flap on empty DBs, but 💬 disappearing is a solid reactive signal)
     expect(results_box).not_to_contain_text("💬")
 
-def test_global_search_js_callback_mode(page: Page):
+def test_global_search_js_callback_mode(page: Page, reset_dom_state_js: str):
     """Verifies that the generic fallback mode triggers appropriate contextual UI hints."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     
     # Force open the search engine via JS with a mock callback
     page.evaluate("SearchEngine.open({ callback: (id) => window._testSelectedId = id })")
@@ -56,9 +62,11 @@ def test_global_search_js_callback_mode(page: Page):
     # Close it out safely
     page.locator('#offcanvasSearch .btn-close').click()
 
-def test_global_search_clear_color(page: Page):
+def test_global_search_clear_color(page: Page, reset_dom_state_js: str):
     """Verifies the clear color button resets the color hex input field."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     page.locator('nav button:has-text("SEARCH")').click()
     
     # Wait for the panel to be visible to ensure elements are intractable
@@ -71,9 +79,11 @@ def test_global_search_clear_color(page: Page):
     page.locator('#global-search-clear-color').click()
     expect(hex_input).to_have_value("")
 
-def test_global_search_type_toggle(page: Page):
+def test_global_search_type_toggle(page: Page, reset_dom_state_js: str):
     """Verifies that the target type toggle successfully switches between Spool and Filament states."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     page.locator('nav button:has-text("SEARCH")').click()
     
     # Wait for the panel to be visible
@@ -91,9 +101,11 @@ def test_global_search_type_toggle(page: Page):
     
     expect(fil_radio).to_be_checked()
 
-def test_global_search_material_dropdown(page: Page):
+def test_global_search_material_dropdown(page: Page, reset_dom_state_js: str):
     """Verifies that the material dropdown dynamically populates from /api/materials on open."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     page.locator('nav button:has-text("SEARCH")').click()
     
     expect(page.locator('#offcanvasSearch')).to_be_visible()
@@ -108,9 +120,11 @@ def test_global_search_material_dropdown(page: Page):
     count = mat_select.locator('option').count()
     assert count > 1
 
-def test_wizard_advanced_search_integration(page: Page):
+def test_wizard_advanced_search_integration(page: Page, reset_dom_state_js: str):
     """Verifies that the 'Advanced Search' button in the Wizard opens the Offcanvas globally."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
     
     # Open Wizard
     page.locator('button:has-text("ADD INVENTORY")').click()
@@ -132,12 +146,14 @@ def test_wizard_advanced_search_integration(page: Page):
     expect(fil_radio).to_be_checked()
 
 
-def test_search_offcanvas_does_not_intercept_clicks_after_close(page: Page):
+def test_search_offcanvas_does_not_intercept_clicks_after_close(page: Page, reset_dom_state_js: str):
     """Regression: after opening and closing #offcanvasSearch, the hidden offcanvas subtree
     (including #global-search-material) must not grab pointer events on content behind it.
     Bootstrap uses `visibility: hidden` to hide the offcanvas, which does not block pointer
     events by itself. Fix: `.fcc-offcanvas-search:not(.show) { pointer-events: none; }`."""
     page.goto("http://localhost:8000")
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_timeout(200)
 
     # Open and immediately close the Search offcanvas
     page.locator('nav button:has-text("SEARCH")').click()
