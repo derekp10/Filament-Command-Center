@@ -44,15 +44,16 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 | "Already verified" activity log spam (L132) | Standalone — activity log verbosity / label-verify UX |
 | Force-location should clear deployed status (L134) | Standalone — force-location handler in details modal |
 | Prusa metrics tooling research (L141) | Research / future inspiration — `prusa_exporter` + Prusa-Firmware-Buddy metrics docs. Could feed 9.3 (Printer Status widget), filabridge reconcile, or richer state probing. Not actionable as a discrete task. |
-| Activity Log ubiquity (L155) | Standalone design decision |
-| Location Manager redesign (L188) | IN PROGRESS — multi-phase, separately tracked |
-| Bulk Moves (L215) | Blocked by Location Manager Phase 3+ |
-| Buffer scan assign-all (L218) | Likely already fixed — verify & close |
-| Location Manager cross-browser sync (L219) | ON HOLD — needs SSE/WS |
-| Mobile mode (L244) | Large standalone architectural effort |
-| Dashboard modularization (L245) | Large standalone refactor |
-| Filabridge reconcile utility (L303) | Standalone admin tool |
-| Project Color Loadout (L307) | Blocked by Location Manager Phase 3 |
+| Box-slot ↔ toolhead spool-switching inconsistency (L145) | **NEEDS INVESTIGATION** — continuing-bug observation 2026-05-12: eject doesn't fully clear toolhead bind when box slot is bound to a toolhead. Despite Group 13.6 (toolhead-first assign + auto-archive cleanup), the eject path still leaves stale state. 10 min of Activity Log capture included as raw data for diagnosis. Likely a new flavor of the same architectural gap — different code path than 13.6 covered. |
+| Activity Log ubiquity (L178) | Standalone design decision |
+| Location Manager redesign (L211) | IN PROGRESS — multi-phase, separately tracked |
+| Bulk Moves (L238) | Blocked by Location Manager Phase 3+ |
+| Buffer scan assign-all (L241) | Likely already fixed — verify & close |
+| Location Manager cross-browser sync (L242) | ON HOLD — needs SSE/WS |
+| Mobile mode (L267) | Large standalone architectural effort |
+| Dashboard modularization (L268) | Large standalone refactor |
+| Filabridge reconcile utility (L326) | Standalone admin tool |
+| Project Color Loadout (L330) | Blocked by Location Manager Phase 3 |
 | All "On Hold" section items | ON HOLD |
 
 **Note on test flakes:** The `test_quickswap_visual` baseline mismatch, `test_ui_details_modal_e2e` offcanvas-backdrop flake, and `test_amazon_parser_matching` BS4-missing issue were all closed by Group 14 (14.4 / 14.3 / 14.5 respectively). Detailed write-up in `completed-archive.md`. Post-Group-14 follow-ups (parallel `tests/` directory, `_open_manage` consolidation, `reset_dom_state_js` audit, Windows pip footgun) are bundled into Group 16.
