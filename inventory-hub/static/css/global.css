@@ -1250,3 +1250,288 @@ body:has(.cmd-deck) .fcc-fab-search {
     color: #ffcccc !important;
     text-shadow: 1px 1px 2px #000;
 }
+
+/* ============================================================
+   Printer Status Widget (Group 9.3)
+   At-a-glance per-printer toolhead schematic on the dashboard.
+   ============================================================ */
+.fcc-ps-widget {
+    background: linear-gradient(to bottom, rgba(15,15,20,0.95), rgba(5,5,10,0.95));
+    border-bottom: 2px solid rgba(13,202,240,0.35);
+    padding: 0.5rem 1rem 0.75rem;
+    color: #fff;
+}
+.fcc-ps-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    user-select: none;
+    flex-wrap: wrap;
+}
+.fcc-ps-header-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.fcc-ps-toggle {
+    color: #0dcaf0;
+    font-size: 0.9rem;
+    width: 1rem;
+    text-align: center;
+}
+.fcc-ps-title {
+    font-weight: bold;
+    color: #0dcaf0;
+    font-size: 1rem;
+}
+.fcc-ps-hint {
+    /* Explicit color, not text-muted — Bootstrap text-muted (#6c757d) at
+       opacity 0.6 dropped to ~1.4:1 contrast against the dark widget bg. */
+    font-size: 0.78rem;
+    margin-left: 0.5rem;
+    color: rgba(255,255,255,0.55);
+}
+.fcc-ps-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding-top: 0.4rem;
+}
+.fcc-ps-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    /* Horizontal divider between printer rows so the eye can quickly
+       trace which toolheads belong to which printer name on the left. */
+    padding: 0.5rem 0;
+    border-top: 1px solid rgba(255,255,255,0.35);
+}
+.fcc-ps-row:first-child {
+    border-top: none;
+    padding-top: 0;
+}
+.fcc-ps-row:last-child {
+    padding-bottom: 0;
+}
+.fcc-ps-name-col {
+    /* Fixed width on the whole left column (reorder arrows + name) keeps
+       every printer's toolhead row aligned vertically. Long names wrap
+       within the column instead of pushing the row right. */
+    flex: 0 0 200px;
+    width: 200px;
+}
+.fcc-ps-name {
+    font-size: 1rem;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    line-height: 1.2;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.fcc-ps-reorder-stack {
+    width: 18px;
+    flex: 0 0 18px;
+}
+.fcc-ps-reorder {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.18);
+    color: rgba(13,202,240,0.7);
+    border-radius: 3px;
+    padding: 0;
+    width: 18px;
+    height: 16px;
+    font-size: 0.65rem;
+    line-height: 1;
+    cursor: pointer;
+    margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.fcc-ps-reorder:last-child { margin-bottom: 0; }
+.fcc-ps-reorder:hover {
+    background: rgba(13,202,240,0.2);
+    color: #fff;
+    border-color: rgba(13,202,240,0.7);
+}
+.fcc-ps-reorder-placeholder {
+    width: 18px;
+    height: 16px;
+    margin-bottom: 2px;
+    display: block;
+}
+.fcc-ps-reorder-placeholder:last-child { margin-bottom: 0; }
+.fcc-ps-toolheads {
+    flex-grow: 1;
+}
+.fcc-ps-th {
+    display: flex;
+    flex-direction: column;
+    width: 168px;
+    /* No outer fill — let the colored body inside dominate the block.
+       The dark gray frame this used to have wasn't carrying any meaning
+       and just shrank the visible color area. Border alone defines edges. */
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 6px;
+    padding: 0;
+    overflow: hidden;
+    transition: transform 0.15s, border-color 0.15s;
+}
+.fcc-ps-th:hover {
+    transform: translateY(-1px);
+    border-color: rgba(13,202,240,0.7);
+}
+.fcc-ps-th-bar {
+    width: 100%;
+    height: 6px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+.fcc-ps-th-bar-fill {
+    height: 100%;
+    background: #0dcaf0;
+    transition: width 0.25s;
+}
+.fcc-ps-th-body {
+    border-radius: 4px;
+    padding: 4px 6px;
+    margin-bottom: 4px;
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    background: linear-gradient(to bottom, rgba(255,255,255,0.08), rgba(0,0,0,0.25));
+}
+.fcc-ps-th-body-empty {
+    background: repeating-linear-gradient(
+        45deg,
+        rgba(255,255,255,0.06),
+        rgba(255,255,255,0.06) 6px,
+        rgba(255,255,255,0.02) 6px,
+        rgba(255,255,255,0.02) 12px
+    );
+}
+.fcc-ps-th-label {
+    font-weight: 900;
+    font-size: 0.85rem;
+    color: #fff;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
+}
+.fcc-ps-th-id {
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.85);
+    font-weight: bold;
+    max-width: 96px;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
+}
+.fcc-ps-th-chip {
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.6);
+    text-align: center;
+}
+.fcc-ps-chip {
+    font-size: 0.82rem;
+}
+/* Default (expanded) view: per-printer rows with full schematic blocks;
+   the inline header chip strip is hidden. */
+.fcc-ps-header-chips { display: none !important; }
+/* Collapsed view: hide the per-printer body entirely; the chip strip in
+   the header IS the collapsed view. All toolheads inline next to the
+   "Printer Status" title in printer-order. */
+.fcc-ps-widget.collapsed .fcc-ps-body { display: none !important; }
+.fcc-ps-widget.collapsed .fcc-ps-header-chips { display: flex !important; }
+.fcc-ps-widget.collapsed .fcc-ps-hint { display: none; }
+.fcc-ps-widget.collapsed { padding-bottom: 0.4rem; }
+
+/* Quick-Swap card kb-active focus visual (Q key + arrow nav). The
+   variant card is a div, so it doesn't get Bootstrap's default focus
+   ring — without explicit styling, pressing Q looked like nothing
+   happened even though kb-active was being added correctly. */
+.fcc-qs-slot.kb-active {
+    outline: 3px solid #0dcaf0;
+    outline-offset: 2px;
+    box-shadow: 0 0 12px rgba(13,202,240,0.6);
+}
+.fcc-qs-card.kb-active {
+    border-color: #0dcaf0 !important;
+}
+/* Loading skeleton — visible until the first successful aggregate render
+   replaces it. Keeps the layout reserved so the widget doesn't pop in. */
+.fcc-ps-skeleton {
+    opacity: 0.7;
+    font-style: italic;
+    font-size: 0.95rem;
+    color: rgba(255,255,255,0.6) !important;
+}
+.fcc-ps-widget:not(.fcc-ps-loading) .fcc-ps-skeleton { display: none; }
+
+/* Compact mini-chip: swatch + ID + weight inline, click-to-quickswap. */
+.fcc-ps-mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 2px 8px;
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 12px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+.fcc-ps-mini:hover {
+    border-color: rgba(13,202,240,0.7);
+    background: rgba(13,202,240,0.1);
+}
+.fcc-ps-mini-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.4);
+    flex-shrink: 0;
+}
+.fcc-ps-mini-swatch-empty {
+    background: repeating-linear-gradient(
+        45deg,
+        rgba(255,255,255,0.18),
+        rgba(255,255,255,0.18) 2px,
+        rgba(0,0,0,0.4) 2px,
+        rgba(0,0,0,0.4) 4px
+    );
+}
+.fcc-ps-mini-id {
+    color: rgba(255,255,255,0.9);
+    font-weight: bold;
+    font-size: 0.8rem;
+}
+.fcc-ps-mini-weight {
+    font-weight: bold;
+    font-size: 0.85rem;
+}
+.fcc-ps-mini-empty .fcc-ps-mini-weight { font-weight: normal; }
+/* Group each printer's chips together with a vertical divider between
+   groups so the user can see at a glance which chips belong to which
+   printer in the collapsed strip. */
+.fcc-ps-printer-group {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding-left: 0.75rem;
+    margin-left: 0.5rem;
+    border-left: 2px solid rgba(255,255,255,0.45);
+}
+.fcc-ps-printer-group:first-child {
+    padding-left: 0;
+    margin-left: 0;
+    border-left: none;
+}

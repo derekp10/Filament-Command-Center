@@ -53,7 +53,9 @@ def test_bind_picker_has_no_gray_on_gray_text(page: Page, open_manage_modal, ass
     open_manage_modal(TEST_TOOLHEAD)
     page.locator("#quickswap-bind-slot-btn").click()
     overlay = page.locator("#fcc-bind-picker-overlay")
-    expect(overlay).to_be_visible(timeout=3000)
+    # Bind picker fetches /api/dryer_boxes/slots before opening; 8s gives
+    # headroom under sweep load, same pattern as other Group 9 timeouts.
+    expect(overlay).to_be_visible(timeout=8000)
     # Let the slots list populate.
     expect(page.locator(".fcc-bind-picker-item").first).to_be_visible(timeout=3000)
     assert_contrast(overlay)
@@ -66,7 +68,7 @@ def test_bind_picker_has_no_gray_on_gray_text(page: Page, open_manage_modal, ass
 @pytest.mark.usefixtures("require_server", "bound_slot")
 def test_quickswap_section_has_no_gray_on_gray_text(page: Page, open_manage_modal, assert_contrast):
     open_manage_modal(TEST_TOOLHEAD)
-    expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=3000)
+    expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=8000)
     assert_contrast(page.locator("#manage-quickswap-section"))
 
 
@@ -90,13 +92,15 @@ def test_feeds_section_has_no_gray_on_gray_text(page: Page, open_manage_modal, a
 @pytest.mark.usefixtures("require_server", "bound_slot")
 def test_quickswap_confirm_overlay_has_no_gray_on_gray_text(page: Page, open_manage_modal, assert_contrast):
     open_manage_modal(TEST_TOOLHEAD)
-    expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=3000)
+    expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=8000)
     # Return-to-Slot opens the confirm overlay without needing a loaded spool
     # (it'll land on "nothing to return" if the toolhead is empty, which
     # still renders the same overlay shell we want to check).
     page.locator("#quickswap-return-btn").click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
-    expect(overlay).to_be_visible(timeout=3000)
+    # Overlay mount awaits a 3s active-print probe; 8s gives headroom
+    # under sweep load (same fix as Group 14.2).
+    expect(overlay).to_be_visible(timeout=8000)
     assert_contrast(overlay)
 
 
@@ -112,3 +116,40 @@ def test_shortcuts_overlay_has_no_gray_on_gray_text(page: Page, base_url: str, a
     overlay = page.locator("#fcc-shortcuts-overlay")
     expect(overlay).to_be_visible(timeout=3000)
     assert_contrast(overlay)
+
+
+# ---------------------------------------------------------------------------
+# Printer Status widget (Group 9.3) — both expanded and collapsed views
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usefixtures("require_server", "bound_slot")
+def test_printer_status_widget_expanded_has_no_gray_on_gray_text(
+    page: Page, base_url: str, assert_contrast
+):
+    page.goto(base_url)
+    page.wait_for_selector("#buffer-zone", timeout=10000)
+    page.wait_for_function(
+        "() => document.querySelector('#printer-status-widget .fcc-ps-th')",
+        timeout=8000,
+    )
+    assert_contrast(page.locator("#printer-status-widget"))
+
+
+@pytest.mark.usefixtures("require_server", "bound_slot")
+def test_printer_status_widget_collapsed_has_no_gray_on_gray_text(
+    page: Page, base_url: str, assert_contrast
+):
+    """Collapsed strip recurringly hits the text-muted footgun — pinned
+    here so it can't slip back in. Empty toolheads' "empty" label is a
+    common offender (Bootstrap text-muted is too dark for our bg)."""
+    page.goto(base_url)
+    page.wait_for_selector("#buffer-zone", timeout=10000)
+    page.wait_for_function(
+        "() => document.querySelector('#printer-status-widget .fcc-ps-th')",
+        timeout=8000,
+    )
+    page.locator("#printer-status-widget .fcc-ps-header-bar").click()
+    expect(page.locator("#printer-status-widget .fcc-ps-header-chips")).to_be_visible(
+        timeout=2000
+    )
+    assert_contrast(page.locator("#printer-status-widget"))

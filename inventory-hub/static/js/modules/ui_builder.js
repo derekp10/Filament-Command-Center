@@ -238,6 +238,110 @@ const SpoolCardBuilder = {
                 </div>`;
             }
         }
+        else if (mode === 'printer-status') {
+            // Printer Status widget variant — passive, single-line "chip"
+            // showing a color swatch + filament name + weight metric. No
+            // actions; the click handler is owned by the parent SVG/row in
+            // inv_printer_status.js so the whole toolhead block (chip +
+            // schematic) is a single tap target. Returns plain HTML — no
+            // wrapper div with cursor or tabindex of its own.
+            const swatch = window.makeSwatchHtml(item.color, item.color_direction, {
+                size: 12,
+                borderColor: 'rgba(255,255,255,0.4)',
+            });
+            const weightStr = (item.remaining_weight !== undefined && item.remaining_weight !== null)
+                ? `${Math.round(item.remaining_weight)}g`
+                : (item.remaining != null && item.remaining !== '---' ? `${Math.round(item.remaining)}g` : '---');
+            const weightNum = (item.remaining_weight !== undefined && item.remaining_weight !== null)
+                ? Number(item.remaining_weight)
+                : (typeof item.remaining === 'number' ? item.remaining : null);
+            // Low-stock visual cue: <100g amber, 0g red. Threshold matches
+            // the Printer Status acceptance criteria (Group 9.3).
+            let weightColor = '#fff';
+            if (weightNum != null) {
+                if (weightNum <= 0) weightColor = '#ff6b6b';
+                else if (weightNum < 100) weightColor = '#ffc107';
+            }
+            const compactName = info.line3
+                || (item.display || '').replace(/^#\d+\s*/, '').replace(/^\[.*?\]\s*/, '');
+            return `
+                <div class="fcc-ps-chip d-flex align-items-center gap-2" style="font-size:0.85rem; line-height:1.2;">
+                    ${swatch}
+                    <span class="text-light fw-bold text-truncate" style="max-width:140px;">${compactName}</span>
+                    <span class="ms-auto fw-bold" style="color:${weightColor};">${weightStr}</span>
+                </div>
+            `;
+        }
+        else if (mode === 'quickswap') {
+            // Quick-Swap variant — compact card for the dryer-box → toolhead
+            // grid in the Location Manager. Outer is a focusable <div> (NOT
+            // a <button>) so the action footer can host real interactive
+            // elements without nested-button HTML errors. Keyboard nav in
+            // inv_quickswap.js focuses these via tabindex=0 and calls
+            // quickSwapTap()/quickSwapDeposit() with the element directly,
+            // so click semantics don't have to come from a real <button>.
+            //
+            // Required passthroughs (the swap/deposit handlers + Playwright
+            // selectors all read these): .fcc-qs-slot class, data-box,
+            // data-slot, data-toolhead, data-spool-label.
+            const box = options.box || '';
+            const slot = options.slot || '';
+            const toolhead = options.toolhead || '';
+            const handler = options.handler || 'window.quickSwapTap(this)';
+            const titleAttr = (options.titleAttr || '').replace(/"/g, '&quot;');
+            const safeLabel = (item.display || `#${item.id}`).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            const swatch = window.makeSwatchHtml(item.color, item.color_direction, { size: 14 });
+            const weightStr = (item.remaining_weight !== undefined && item.remaining_weight !== null)
+                ? `${Math.round(item.remaining_weight)}g`
+                : (item.remaining != null && item.remaining !== '---' ? `${Math.round(item.remaining)}g` : '---');
+            const thLine = options.showToolhead && toolhead
+                ? `<div class="text-warning small text-end" style="font-size:0.8rem;">→ ${toolhead}</div>`
+                : '';
+            const printHover = window.addToQueue
+                ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');`
+                : '';
+            // Compact name: prefer color name, falling back to display minus #ID.
+            const compactName = info.line3
+                || (item.display || '').replace(/^#\d+\s*/, '').replace(/^\[.*?\]\s*/, '');
+            // Single continuous gradient over the filament color so the
+            // action footer doesn't render as a darker stripe (the seam was
+            // visible at the boundary between two stacked backgrounds).
+            const innerBg = `background: linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.15) 100%), ${styles.frame}; border-radius: 5px;`;
+            return `
+                <div class="fcc-qs-slot fcc-qs-card fw-bold d-flex flex-column"
+                     data-box="${box}" data-slot="${slot}" data-toolhead="${toolhead}"
+                     data-spool-id="${item.id}" data-spool-label="${safeLabel}"
+                     tabindex="0" role="button"
+                     style="min-width:240px; max-width:260px; padding:0; cursor:pointer; background: ${styles.frame}; border-radius:6px; border: 1px solid rgba(13,202,240,0.55);"
+                     onclick="${handler}"
+                     title="${titleAttr}">
+                    <div style="${innerBg}">
+                        <div class="px-2 pt-2 pb-1">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <div class="text-warning fw-bold" style="font-size:0.95rem;">Slot ${slot}</div>
+                                <div class="text-light" style="font-size:0.78rem; opacity:0.75;">#${item.id}</div>
+                            </div>
+                            <div class="d-flex align-items-center" style="font-size:0.95rem;">
+                                ${swatch}
+                                <span class="text-light fw-bold text-truncate" style="max-width:200px;">${compactName}</span>
+                            </div>
+                            <div class="text-light" style="font-size:0.8rem; opacity:0.8;">${info.line2}</div>
+                            <div class="d-flex justify-content-between align-items-center mt-1" style="font-size:0.9rem;">
+                                <div class="text-light fw-bold">⚖️ ${weightStr}</div>
+                                ${thLine}
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-around align-items-center px-2 py-1 mt-1"
+                             style="border-top: 1px solid rgba(255,255,255,0.18); gap:4px;">
+                            <div class="fcc-card-action-btn" style="font-size:1.1rem !important;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})" title="View Details">🔍</div>
+                            <div class="fcc-card-action-btn" style="font-size:1.1rem !important;" onclick="event.stopPropagation(); typeof openEditWizard !== 'undefined' && openEditWizard(${item.id});" title="Edit Spool">✏️</div>
+                            <div class="fcc-card-action-btn" style="font-size:1.1rem !important;" onclick="${printHover}" title="Add to Print Queue">🖨️</div>
+                            <div class="fcc-card-action-btn" style="font-size:1.1rem !important;" onclick="event.stopPropagation(); typeof ejectSpool !== 'undefined' && ejectSpool(${item.id}, '${box}', false)" title="Eject Spool">⏏️</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
         else if (mode === 'buffer') {
             outerClasses += `buffer-item ${options.isFirst ? 'active-item' : ''} `;
             actionTarget = `openSpoolDetails(${item.id})`;
