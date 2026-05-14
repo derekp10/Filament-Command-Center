@@ -89,24 +89,33 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
             if (wizardState.forceClose) { wizardState.forceClose = false; return; }
             if (wizardState.isDirty) {
                 event.preventDefault();
-                Swal.fire({
-                    target: wizEl,
-                    title: 'Unsaved Changes',
-                    text: 'You have unsaved changes. Discard them and close?',
-                    icon: 'warning',
-                    showCancelButton: true,
-                    confirmButtonText: 'Discard & Close',
-                    confirmButtonColor: '#dc3545',
-                    cancelButtonText: 'Keep Editing',
-                    background: '#1e1e1e',
-                    color: '#fff'
-                }).then(result => {
-                    if (result.isConfirmed) {
-                        wizardState.isDirty = false;
-                        wizardState.forceClose = true;
-                        window.modals.wizardModal.hide();
-                    }
+                // Group 10.8 — was nested Swal.fire; now routed through
+                // mountOverlay so the .cmd-deck scrollbar-comp shift goes away
+                // and the overlay survives Bootstrap's focus trap.
+                const panelHtml = `
+                    <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:460px; width:92%;">
+                        <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ Unsaved Changes</div>
+                        <div style="color:#ffc; margin-bottom:16px;">You have unsaved changes. Discard them and close?</div>
+                        <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
+                            <button id="fcc-wiz-dirty-cancel" class="btn btn-secondary btn-sm" style="min-width:120px;">Keep Editing</button>
+                            <button id="fcc-wiz-dirty-confirm" class="btn btn-danger btn-sm" style="min-width:140px;">Discard &amp; Close</button>
+                        </div>
+                    </div>
+                `;
+                const handle = window.mountOverlay({
+                    id: 'fcc-wiz-unsaved-changes',
+                    content: panelHtml,
+                    host: wizEl,
+                    initialFocus: '#fcc-wiz-dirty-cancel',
+                    // Escape = keep editing (default cleanup is sufficient).
                 });
+                handle.element.querySelector('#fcc-wiz-dirty-confirm')?.addEventListener('click', () => {
+                    handle.cleanup();
+                    wizardState.isDirty = false;
+                    wizardState.forceClose = true;
+                    window.modals.wizardModal.hide();
+                });
+                handle.element.querySelector('#fcc-wiz-dirty-cancel')?.addEventListener('click', () => handle.cleanup());
             }
         });
 
@@ -153,6 +162,31 @@ window.openWizardModal = async () => {
     if (window.wizardSyncSpoolRows) window.wizardSyncSpoolRows();
 };
 
+// Group 10.4 — populates the spool's purchase_url input with the smart-fallback
+// pattern: if the spool already has its own URL, fill the input. If not, leave
+// it empty and surface the filament-inherited URL as ghost placeholder text so
+// the user can see what details modal will fall back to without unintentionally
+// upgrading the inherited link to a spool-level override.
+const wizardApplyPurchaseLinkFallback = (spoolUrl, filamentUrl) => {
+    const el = document.getElementById('wiz-spool-purchase_url');
+    if (!el) return;
+    const stripQuotes = (s) => typeof s === 'string' ? s.replace(/^"|"$/g, '') : '';
+    const sUrl = stripQuotes(spoolUrl).trim();
+    const fUrl = stripQuotes(filamentUrl).trim();
+    if (sUrl) {
+        el.value = sUrl;
+        el.placeholder = 'https://...';
+    } else {
+        el.value = '';
+        if (fUrl) {
+            const truncated = fUrl.length > 40 ? fUrl.slice(0, 37) + '…' : fUrl;
+            el.placeholder = `${truncated} (inherited from filament)`;
+        } else {
+            el.placeholder = 'https://...';
+        }
+    }
+};
+
 const wizardReset = () => {
     wizardState.mode = 'manual';
     wizardState.selectedFilamentId = null;
@@ -161,9 +195,15 @@ const wizardReset = () => {
     // Note: returnToSpoolId is NOT cleared here — it persists across reset so that
     // after a clone/edit completes, the original spool detail modal can re-open.
 
-    // Clear Form
-    document.querySelectorAll('#wizardModal input[type="text"], #wizardModal input[type="number"]').forEach(i => i.value = '');
+    // Clear Form. `input[type="url"]` was missing here, which caused
+    // wiz-spool-purchase_url to bleed between wizard sessions (Group 10.4).
+    document.querySelectorAll('#wizardModal input[type="text"], #wizardModal input[type="number"], #wizardModal input[type="url"]').forEach(i => i.value = '');
     document.querySelectorAll('#wizardModal input[type="checkbox"]').forEach(i => i.checked = false);
+    // Reset the spool purchase_url placeholder to its static default — clone
+    // and edit flows mutate it to advertise the inherited filament URL, and
+    // we don't want that to bleed into the next session either.
+    const purchUrlReset = document.getElementById('wiz-spool-purchase_url');
+    if (purchUrlReset) purchUrlReset.placeholder = 'https://...';
     document.querySelectorAll('#wizardModal select').forEach(i => i.selectedIndex = 0);
     if (window.wizardClearSpoolEmptyWeightBadge) window.wizardClearSpoolEmptyWeightBadge();
 
@@ -838,8 +878,14 @@ const wizardFetchExtraFields = () => {
                         // and #wiz-fil-bed_temp_max) so a second dynamic input would
                         // race the static one on save and re-send a raw numeric value
                         // that Spoolman rejects.
+                        // Group 10.4 — purchase_url is intentionally hidden from
+                        // the wizard's filament tab. The user edits the spool's
+                        // purchase_url instead, which falls back to the filament's
+                        // value on read when blank (inv_details.js:168). To edit
+                        // the filament-level value directly, use the Edit
+                        // Filament modal.
                         if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed', 'needs_label_print',
-                             'nozzle_temp_max', 'bed_temp_max'].includes(field.key)) return;
+                             'nozzle_temp_max', 'bed_temp_max', 'purchase_url'].includes(field.key)) return;
 
                         let html = wizardGenerateFieldHTML(field, 'fil');
                         if (html) fContainer.innerHTML += html;
@@ -990,29 +1036,46 @@ window.wizardPromptFieldSync = (spoolKey) => {
         });
     }
 
-    Swal.fire({
-        target: document.getElementById('wizardModal') || document.body,
-        title: 'Link Field',
-        text: 'Select a Filament field to synchronize with this Spool field:',
-        input: 'select',
-        inputOptions: inputOptions,
-        inputPlaceholder: '-- Select a Field --',
-        showCancelButton: true,
-        background: '#1e1e1e',
-        color: '#fff',
-        customClass: {
-            input: 'bg-dark text-white border-secondary'
-        }
-    }).then((result) => {
-        if (result.isConfirmed && result.value) {
-            const btn = document.querySelector(`.wizard-sync-btn[data-sync-target="${spoolKey}"]`);
-            if (btn) {
-                btn.setAttribute('data-linked-fil-key', result.value);
-                // Call toggle to actually enable it
-                window.wizardToggleFieldSync(spoolKey);
-            }
-        }
+    // Group 10.8 — was nested Swal.fire; now mountOverlay so it survives
+    // Bootstrap's focus trap and doesn't shift the wizard scrollbar comp.
+    const wizModalEl = document.getElementById('wizardModal');
+    const optsHtml = Object.entries(inputOptions)
+        .map(([k, v]) => `<option value="${String(k).replace(/"/g, '&quot;')}">${String(v).replace(/</g, '&lt;')}</option>`)
+        .join('');
+    const panelHtml = `
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #17a2b8; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;">
+            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">🔗 Link Field</div>
+            <div style="color:#ffc; margin-bottom:12px;">Select a Filament field to synchronize with this Spool field:</div>
+            <select id="fcc-wiz-fieldsync-sel" class="form-select form-select-sm bg-dark text-white border-secondary mb-3" style="width:100%;">
+                <option value="" disabled selected>-- Select a Field --</option>
+                ${optsHtml}
+            </select>
+            <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
+                <button id="fcc-wiz-fieldsync-cancel" class="btn btn-secondary btn-sm" style="min-width:100px;">Cancel</button>
+                <button id="fcc-wiz-fieldsync-confirm" class="btn btn-info btn-sm" style="min-width:120px;">Link</button>
+            </div>
+        </div>
+    `;
+    const handle = window.mountOverlay({
+        id: 'fcc-wiz-fieldsync',
+        content: panelHtml,
+        host: wizModalEl,
+        initialFocus: '#fcc-wiz-fieldsync-sel',
     });
+    const sel = handle.element.querySelector('#fcc-wiz-fieldsync-sel');
+    const commit = () => {
+        const val = sel?.value;
+        handle.cleanup();
+        if (!val) return;
+        const btn = document.querySelector(`.wizard-sync-btn[data-sync-target="${spoolKey}"]`);
+        if (btn) {
+            btn.setAttribute('data-linked-fil-key', val);
+            window.wizardToggleFieldSync(spoolKey);
+        }
+    };
+    handle.element.querySelector('#fcc-wiz-fieldsync-confirm')?.addEventListener('click', commit);
+    handle.element.querySelector('#fcc-wiz-fieldsync-cancel')?.addEventListener('click', () => handle.cleanup());
+    sel?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
 };
 
 const wizardGenerateFieldHTML = (field, entityType) => {
@@ -1105,11 +1168,41 @@ window.wizardAddMultiChoiceChip = (entityType, key, directVal = null) => {
     const inputId = `wiz_${entityType}_ef_${key}`;
     const input = document.getElementById(inputId);
     if (!input) return;
-    const val = (directVal !== null ? directVal : input.value).trim();
-    if (!val) return;
+    const rawVal = (directVal !== null ? directVal : input.value).trim();
+    if (!rawVal) return;
 
     const container = document.getElementById(`chip-container-${entityType}-${key}`);
-    // Check if chip is already in the list to prevent duplicates
+    const apiEntity = entityType === 'fil' ? 'filament' : 'spool';
+    const schemas = wizardState.extraFields?.[apiEntity];
+    const fieldObj = schemas?.find(f => f.key === key);
+    const existingChoices = fieldObj?.choices || [];
+    const isExistingExact = existingChoices.includes(rawVal);
+
+    // Group 10.9 — gate new (unknown) values through validateNewChoice.
+    // Direct picks from the dropdown bypass the gate (directVal !== null) so
+    // existing-choice selections always go through unimpeded.
+    let val = rawVal;
+    if (directVal === null && !isExistingExact && typeof window.validateNewChoice === 'function') {
+        const result = window.validateNewChoice(rawVal, existingChoices);
+        if (!result.ok) {
+            if (typeof showToast === 'function') {
+                showToast(result.error || 'Invalid value', 'warning', 5000);
+            }
+            return;
+        }
+        if (result.suggestion) {
+            // Silent path (blur/Enter on multiselect) — surface as toast and
+            // refuse to commit; user can click the suggested existing choice
+            // from the dropdown or use the +Add modal for explicit confirm.
+            if (typeof showToast === 'function') {
+                showToast(`Did you mean "${result.suggestion}"? — pick it from the list, or use the ➕ button to add "${result.canonical}" as a new value.`, 'info', 7000);
+            }
+            return;
+        }
+        val = result.canonical;
+    }
+
+    // Duplicate-chip guard after normalization.
     const escapedVal = CSS.escape(val);
     if (container.querySelector(`[data-value="${escapedVal}"]`)) {
         input.value = '';
@@ -1117,28 +1210,21 @@ window.wizardAddMultiChoiceChip = (entityType, key, directVal = null) => {
     }
     wizardState.isDirty = true;
 
-    // Check if it's a known choice, or if we need to silently permanently add it to the Spoolman DB
-    let isKnown = false;
-    const schemas = wizardState.extraFields[entityType === 'fil' ? 'filament' : 'spool'];
-    if (schemas) {
-        const fieldObj = schemas.find(f => f.key === key);
-        if (fieldObj && fieldObj.choices.includes(val)) isKnown = true;
-    }
-
+    const isKnown = existingChoices.includes(val) || isExistingExact;
     if (!isKnown) {
-        // Silently push new choice to Spoolman backend config
+        // Silently push new choice to Spoolman backend config.
         fetch('/api/external/fields/add_choice', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ entity_type: entityType === 'fil' ? 'filament' : 'spool', key: key, new_choice: val })
+            body: JSON.stringify({ entity_type: apiEntity, key: key, new_choice: val })
         });
         // We do NOT call wizardFetchExtraFields() here because it would wipe the unsaved modal DOM. The chip is already visually rendering below!
     }
 
     // Append Chip visually
-    const chipHtml = `<span class="badge rounded-pill text-bg-primary border border-primary cursor-pointer dynamic-chip" 
-                           onclick="this.remove()" 
-                           data-key="${key}" 
+    const chipHtml = `<span class="badge rounded-pill text-bg-primary border border-primary cursor-pointer dynamic-chip"
+                           onclick="this.remove()"
+                           data-key="${key}"
                            data-selected="true"
                            data-value="${val}">${val} &times;</span>`;
     container.insertAdjacentHTML('beforeend', chipHtml);
@@ -1146,6 +1232,82 @@ window.wizardAddMultiChoiceChip = (entityType, key, directVal = null) => {
 
     // Reset Filtering
     if (window.wizardMultiselectFilter) window.wizardMultiselectFilter(entityType, key);
+};
+
+// --- Group 10.5: when the user adds a new single-choice value (e.g. slicer
+// profile) from inside the wizard, auto-select it on the currently-edited
+// filament/spool so they don't have to re-pick it after the schema refresh.
+// Also handles the "Use existing" branch from the suggestion swap (wasNew=false).
+window.wizardOnNewChoiceAdded = (apiEntity, key, value, info) => {
+    const entityPrefix = apiEntity === 'filament' ? 'fil' : 'spool';
+    const inputId = `wiz_${entityPrefix}_ef_${key}`;
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    if (input.tagName === 'SELECT') {
+        // wizardFetchExtraFields just re-rendered this select; the new value
+        // is already in the option list. Pick it and trigger change so
+        // dirty-tracking / sync handlers fire.
+        input.value = value;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        wizardState.isDirty = true;
+    } else if (input.tagName === 'INPUT' && info && info.wasNew) {
+        // Multi-choice path (chips) — wizardAddMultiChoiceChip already handles
+        // chip creation, so nothing to do here. Kept as a no-op branch for
+        // future expansion.
+    }
+};
+
+// --- Group 10.9: stateful content swaps inside the SAME add-new overlay.
+// We avoid nested overlays because nested mountOverlay handles compete for
+// Escape in capture-phase registration order (oldest wins), so the inner
+// overlay can't reliably reclaim Escape. Swapping content inside the existing
+// overlay sidesteps the race and keeps the workflow visually continuous.
+// `wizardSwapNewChoiceTo*` are called by wizardPromptNewChoice's commit path.
+window.wizardSwapNewChoiceToSuggestion = (handle, suggestion, canonical, fieldLabel, callbacks) => {
+    const cb = callbacks || {};
+    const safeSugg = String(suggestion).replace(/</g, '&lt;');
+    const safeCanon = String(canonical).replace(/</g, '&lt;');
+    const safeLabel = String(fieldLabel || 'value').replace(/</g, '&lt;');
+    handle.element.dataset.stage = 'suggestion';
+    handle.setContent(`
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;" data-stage-panel="suggestion">
+            <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">🤔 Did you mean <span style="color:#ffd700;">${safeSugg}</span>?</div>
+            <div style="color:#ffc; margin-bottom:14px;">A similar ${safeLabel} already exists. Pick the existing one (recommended) or add "<strong>${safeCanon}</strong>" as a brand-new value.</div>
+            <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
+                <button id="fcc-wiz-sugg-add" class="btn btn-outline-warning btn-sm" style="min-width:160px;">Add "${safeCanon}" as new</button>
+                <button id="fcc-wiz-sugg-use" class="btn btn-success btn-sm" style="min-width:160px;">Use "${safeSugg}"</button>
+            </div>
+        </div>
+    `);
+    handle.element.querySelector('#fcc-wiz-sugg-use')?.addEventListener('click', () => {
+        handle.cleanup();
+        if (typeof cb.useExisting === 'function') cb.useExisting();
+    });
+    handle.element.querySelector('#fcc-wiz-sugg-add')?.addEventListener('click', () => {
+        if (typeof cb.addAnyway === 'function') cb.addAnyway();
+    });
+    setTimeout(() => handle.element.querySelector('#fcc-wiz-sugg-use')?.focus(), 0);
+};
+
+window.wizardSwapNewChoiceToConfirm = (handle, canonical, fieldLabel, onConfirm) => {
+    const safeCanon = String(canonical).replace(/</g, '&lt;');
+    const safeLabel = String(fieldLabel || 'value').replace(/</g, '&lt;');
+    handle.element.dataset.stage = 'confirm';
+    handle.setContent(`
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;" data-stage-panel="confirm">
+            <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">⚠️ Add permanent new ${safeLabel}?</div>
+            <div style="color:#ffc; margin-bottom:14px;">Add "<strong>${safeCanon}</strong>" as a permanent new ${safeLabel}? Spoolman doesn't expose UI to remove choices once added.</div>
+            <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
+                <button id="fcc-wiz-addnew-cancel" class="btn btn-secondary btn-sm" style="min-width:100px;">Cancel</button>
+                <button id="fcc-wiz-addnew-confirm" class="btn btn-danger btn-sm" style="min-width:160px;">Add Permanently</button>
+            </div>
+        </div>
+    `);
+    handle.element.querySelector('#fcc-wiz-addnew-confirm')?.addEventListener('click', () => {
+        if (typeof onConfirm === 'function') onConfirm();
+    });
+    handle.element.querySelector('#fcc-wiz-addnew-cancel')?.addEventListener('click', () => handle.cleanup());
+    setTimeout(() => handle.element.querySelector('#fcc-wiz-addnew-cancel')?.focus(), 0);
 };
 
 // --- CHIP MULTISELECT LOGIC ---
@@ -1258,46 +1420,145 @@ window.wizardPromptNewChoice = (entityType, key) => {
     // Determine the absolute entity mapping Spoolman uses ('filament' or 'spool')
     const apiEntity = entityType === 'fil' ? 'filament' : 'spool';
 
-    Swal.fire({
-        target: document.getElementById('wizardModal') || document.body,
-        title: 'Add New Option',
-        text: 'Enter the new value to permanently add it to the Spoolman database.',
-        input: 'text',
-        inputAttributes: { autocapitalize: 'off', required: 'true' },
-        showCancelButton: true,
-        confirmButtonText: 'Add Option',
-        confirmButtonColor: '#28a745',
-        background: '#1e1e1e',
-        color: '#fff',
-        showLoaderOnConfirm: true,
-        preConfirm: (newChoice) => {
-            if (!newChoice.trim()) return Swal.showValidationMessage("Cannot be empty");
-            return fetch('/api/external/fields/add_choice', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ entity_type: apiEntity, key: key, new_choice: newChoice.trim() })
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (!data.success) throw new Error(data.msg);
-                    return newChoice.trim();
-                })
-                .catch(error => {
-                    Swal.showValidationMessage(`Request failed: ${error}`);
-                });
-        },
-        allowOutsideClick: () => !Swal.isLoading()
-    }).then((result) => {
-        if (result.isConfirmed) {
-            // Toast instead of nested Swal.fire() — SweetAlert2 can't stack modals,
-            // and the wizard itself may still need a Swal for later validation.
-            if (typeof showToast === 'function') {
-                showToast(`"${result.value}" added to the database.`, 'success', 3000);
-            }
-            // Instantly refresh the schema arrays to pull down the newly added entry into the UI!
-            wizardFetchExtraFields();
+    // Group 10.8 — was nested Swal.fire; now mountOverlay.
+    // Group 10.9 hooks `validateNewChoice` into the submit path for length /
+    // punctuation / fuzzy-duplicate guards. Group 10.5 hooks the post-success
+    // auto-assign for `slicer_profile`.
+    const wizModalEl = document.getElementById('wizardModal');
+    const existingChoices = (() => {
+        const list = wizardState.extraFields?.[apiEntity] || [];
+        const field = list.find((f) => f.key === key);
+        const raw = field?.choices;
+        if (Array.isArray(raw)) return raw;
+        if (typeof raw === 'string') {
+            try { const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; }
+            catch (_) { return raw.replace(/[\[\]"]/g, '').split(',').map(s => s.trim()).filter(Boolean); }
         }
+        return [];
+    })();
+    const fieldLabel = (() => {
+        const list = wizardState.extraFields?.[apiEntity] || [];
+        const field = list.find((f) => f.key === key);
+        return field?.name || key;
+    })();
+
+    const panelHtml = `
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #28a745; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;">
+            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">➕ Add New ${String(fieldLabel).replace(/</g, '&lt;')}</div>
+            <div style="color:#ffc; margin-bottom:10px;">Enter the new value to permanently add it to the Spoolman database.</div>
+            <input id="fcc-wiz-newchoice-input" type="text" class="form-control form-control-sm bg-dark text-white border-secondary mb-2" autocomplete="off" autocapitalize="off" spellcheck="false" />
+            <div id="fcc-wiz-newchoice-preview" style="color:#9cf; font-size:0.85em; min-height:1.2em; margin-bottom:4px;"></div>
+            <div id="fcc-wiz-newchoice-msg" style="color:#ff8080; font-size:0.9em; min-height:1.2em; margin-bottom:10px;"></div>
+            <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
+                <button id="fcc-wiz-newchoice-cancel" class="btn btn-secondary btn-sm" style="min-width:100px;">Cancel</button>
+                <button id="fcc-wiz-newchoice-confirm" class="btn btn-success btn-sm" style="min-width:120px;">Add Option</button>
+            </div>
+        </div>
+    `;
+    const handle = window.mountOverlay({
+        id: 'fcc-wiz-newchoice',
+        content: panelHtml,
+        host: wizModalEl,
+        initialFocus: '#fcc-wiz-newchoice-input',
     });
+    handle.element.dataset.stage = 'input';
+    const input = handle.element.querySelector('#fcc-wiz-newchoice-input');
+    const preview = handle.element.querySelector('#fcc-wiz-newchoice-preview');
+    const msg = handle.element.querySelector('#fcc-wiz-newchoice-msg');
+    const confirmBtn = handle.element.querySelector('#fcc-wiz-newchoice-confirm');
+    const cancelBtn = handle.element.querySelector('#fcc-wiz-newchoice-cancel');
+
+    const validate = (raw) => {
+        if (typeof window.validateNewChoice === 'function') {
+            return window.validateNewChoice(raw, existingChoices);
+        }
+        // Fallback: legacy minimum (non-empty after trim).
+        const t = String(raw || '').trim();
+        return t ? { ok: true, canonical: t } : { ok: false, canonical: '', error: 'Cannot be empty' };
+    };
+
+    const renderPreview = () => {
+        const v = validate(input.value);
+        preview.textContent = v.canonical && v.canonical !== input.value
+            ? `Stored as: ${v.canonical}`
+            : '';
+        msg.textContent = '';
+    };
+    input?.addEventListener('input', renderPreview);
+
+    const commit = async () => {
+        if (!input || (confirmBtn && confirmBtn.disabled)) return;
+        const v = validate(input.value);
+        if (!v.ok) {
+            const liveMsg = handle.element.querySelector('#fcc-wiz-newchoice-msg');
+            if (liveMsg) liveMsg.textContent = v.error || 'Invalid value';
+            return;
+        }
+        if (v.suggestion) {
+            // 10.9 fuzzy-match path: swap the overlay's content to a
+            // suggestion panel. Single overlay = Escape-race-free.
+            window.wizardSwapNewChoiceToSuggestion?.(handle, v.suggestion, v.canonical, fieldLabel, {
+                useExisting: () => {
+                    if (typeof window.wizardOnNewChoiceAdded === 'function') {
+                        window.wizardOnNewChoiceAdded(apiEntity, key, v.suggestion, { wasNew: false });
+                    }
+                },
+                addAnyway: () => {
+                    window.wizardSwapNewChoiceToConfirm?.(handle, v.canonical, fieldLabel,
+                        () => doSubmitFromStage(v.canonical));
+                },
+            });
+            return;
+        }
+        // 10.9 two-step confirm for clean new values:
+        if (typeof window.wizardSwapNewChoiceToConfirm === 'function') {
+            window.wizardSwapNewChoiceToConfirm(handle, v.canonical, fieldLabel,
+                () => doSubmitFromStage(v.canonical));
+        } else {
+            doSubmit(v.canonical);
+        }
+    };
+
+    // Stage-agnostic submit: disables whatever buttons currently exist on the
+    // active panel (input / suggestion / confirm) and surfaces errors inline.
+    const doSubmitFromStage = (canonical) => doSubmit(canonical);
+
+    const doSubmit = (canonical) => {
+        const buttons = handle.element.querySelectorAll('button');
+        buttons.forEach(b => { b.disabled = true; });
+        fetch('/api/external/fields/add_choice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entity_type: apiEntity, key: key, new_choice: canonical })
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) throw new Error(data.msg || 'Add failed');
+                handle.cleanup();
+                if (typeof showToast === 'function') {
+                    showToast(`"${canonical}" added to the database.`, 'success', 3000);
+                }
+                // Refresh the field schema THEN fire the auto-assign hook —
+                // the select gets re-rendered by wizardFetchExtraFields, so
+                // we have to wait for the new <option> to exist before we
+                // can select it (Group 10.5).
+                return Promise.resolve(wizardFetchExtraFields()).then(() => {
+                    if (typeof window.wizardOnNewChoiceAdded === 'function') {
+                        window.wizardOnNewChoiceAdded(apiEntity, key, canonical, { wasNew: true });
+                    }
+                });
+            })
+            .catch(err => {
+                buttons.forEach(b => { b.disabled = false; });
+                if (typeof showToast === 'function') {
+                    showToast(`Add failed: ${err.message || err}`, 'error', 7000);
+                }
+            });
+    };
+
+    confirmBtn?.addEventListener('click', commit);
+    cancelBtn?.addEventListener('click', () => handle.cleanup());
+    input?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
 };
 
 // --- COLOR GRADIENT LOGIC ---
@@ -1590,8 +1851,16 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
         if (filUrlNode) filUrlNode.value = temp.external_link;
     }
     if (temp.purchase_link) {
-        const filPurchaseNode = document.getElementById('wiz_fil_ef_purchase_url');
-        if (filPurchaseNode) filPurchaseNode.value = temp.purchase_link;
+        // Group 10.4 — purchase_url is no longer rendered on the filament
+        // tab. Preload the spool's purchase_url input instead so the user
+        // sees the parser-scraped URL and can edit / clear it before save.
+        // (The filament-side silent fill on save in computeFilamentSilentExtras
+        // also handles the filament-level persist; this just adds the UI side.)
+        const spPurchaseNode = document.getElementById('wiz-spool-purchase_url');
+        if (spPurchaseNode) {
+            spPurchaseNode.value = temp.purchase_link;
+            spPurchaseNode.placeholder = 'https://...';
+        }
     }
 
     const vName = temp.manufacturer || temp.vendor?.name;
@@ -2040,9 +2309,12 @@ window.openCloneWizard = async (spoolId) => {
             if (d.price !== null && d.price !== undefined) {
                 document.getElementById('wiz-spool-price').value = d.price;
             }
-            const clonePurchaseUrl = d.extra?.purchase_url || d.filament?.extra?.purchase_url || "";
-            const purchUrlEl = document.getElementById('wiz-spool-purchase_url');
-            if (purchUrlEl) purchUrlEl.value = typeof clonePurchaseUrl === 'string' ? clonePurchaseUrl.replace(/^"|"$/g, '') : "";
+            // Group 10.4 smart fallback: only prefill with the spool's OWN
+            // purchase_url. If the spool has none but the filament does,
+            // surface the filament URL as ghost placeholder text — saving
+            // without typing leaves the spool override blank so the details
+            // modal continues to fall back to the filament's value.
+            wizardApplyPurchaseLinkFallback(d.extra?.purchase_url, d.filament?.extra?.purchase_url);
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = false;
             }
@@ -2303,9 +2575,8 @@ window.openEditWizard = async (spoolId) => {
             if (d.price !== null && d.price !== undefined) {
                 document.getElementById('wiz-spool-price').value = d.price;
             }
-            const editPurchaseUrl = d.extra?.purchase_url || d.filament?.extra?.purchase_url || "";
-            const editPurchUrlEl = document.getElementById('wiz-spool-purchase_url');
-            if (editPurchUrlEl) editPurchUrlEl.value = typeof editPurchaseUrl === 'string' ? editPurchaseUrl.replace(/^"|"$/g, '') : "";
+            // Group 10.4 smart fallback (same as clone path above).
+            wizardApplyPurchaseLinkFallback(d.extra?.purchase_url, d.filament?.extra?.purchase_url);
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = d.archived || false;
             }
