@@ -252,6 +252,19 @@ window.wizardApplyCollapseDefaults = (context) => {
 const _wizEscape = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const _wizSectionSummarizers = {
+    'wiz-fil-physical-panel': () => {
+        const v = (id) => (document.getElementById(id)?.value || '').trim();
+        const dia = v('wiz-fil-diameter');
+        const den = v('wiz-fil-density');
+        const wt = v('wiz-fil-weight');
+        const empty = v('wiz-fil-empty_weight');
+        const parts = [];
+        if (dia) parts.push(`${dia}mm Ø`);
+        if (den) parts.push(`${den} g/cm³`);
+        if (wt) parts.push(`${wt}g net`);
+        if (empty) parts.push(`${empty}g tare`);
+        return parts.join(' · ');
+    },
     'wiz-fil-color-panel': () => {
         const name = (document.getElementById('wiz-fil-color_name')?.value || '').trim();
         const hex0 = (document.getElementById('wiz-fil-color_hex_0')?.value || '').trim();
@@ -333,16 +346,12 @@ window.wizardRefreshSectionSummary = (panelId) => {
     if (!btn) return;
     const summarySpan = btn.querySelector('.fcc-wiz-section-summary');
     if (!summarySpan) return;
-    const isExpanded = btn.getAttribute('aria-expanded') === 'true';
-    if (isExpanded) {
-        // While open, hide the summary so the toggle line stays clean.
-        summarySpan.innerHTML = '';
-        summarySpan.style.display = 'none';
-    } else {
-        const html = gen();
-        summarySpan.innerHTML = html ? '▸ ' + html : '';
-        summarySpan.style.display = html ? '' : 'none';
-    }
+    // Chips render regardless of expanded state — they're a glance-able
+    // summary of the section's values, so they should also be visible
+    // while the user is editing (and confirm the values they just typed).
+    const html = gen();
+    summarySpan.innerHTML = html || '';
+    summarySpan.style.display = html ? '' : 'none';
 };
 
 window.wizardRefreshAllSectionSummaries = () => {
@@ -359,6 +368,20 @@ window.wizardRefreshAllSectionSummaries = () => {
     panelIds.forEach(id => {
         const panel = document.getElementById(id);
         if (!panel) return;
+        // Bootstrap's default Enter/Space-clicks-focused-button behavior
+        // isn't firing for these toggles (verified — locator.click() opens
+        // the panel but locator.press('Enter') does not). Add an explicit
+        // keydown handler that synthesizes a click on Enter or Space so
+        // keyboard nav works as expected.
+        const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
+        if (btn) {
+            btn.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                    e.preventDefault();
+                    btn.click();
+                }
+            });
+        }
         panel.addEventListener('shown.bs.collapse', (e) => {
             if (e.target !== panel) return;
             window.wizardRefreshSectionSummary(id);
@@ -394,16 +417,11 @@ window.wizardRefreshAllSectionSummaries = () => {
     // expanded ones (then re-collapses them).
     const wizEl = document.getElementById('wizardModal');
     if (wizEl) {
-        const refreshClosed = () => {
-            panelIds.forEach(id => {
-                const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
-                if (btn && btn.getAttribute('aria-expanded') === 'false') {
-                    window.wizardRefreshSectionSummary(id);
-                }
-            });
+        const refreshAll = () => {
+            panelIds.forEach(id => window.wizardRefreshSectionSummary(id));
         };
-        wizEl.addEventListener('input', refreshClosed);
-        wizEl.addEventListener('change', refreshClosed);
+        wizEl.addEventListener('input', refreshAll);
+        wizEl.addEventListener('change', refreshAll);
     }
 })();
 
@@ -498,7 +516,11 @@ window.wizardCollapseAllSections = () => {
         }
     });
     // Register with the shortcuts registry so the `?` overlay shows them.
-    if (typeof window.registerShortcut === 'function') {
+    // The registry script (shortcuts_registry.js) is loaded AFTER this
+    // wizard module in scripts.html, so window.registerShortcut may not
+    // exist yet. Poll briefly until it shows up.
+    const _registerWizardShortcuts = () => {
+        if (typeof window.registerShortcut !== 'function') return false;
         window.registerShortcut({
             id: 'wizard-expand-all',
             scope: 'Wizard',
@@ -511,6 +533,16 @@ window.wizardCollapseAllSections = () => {
             keys: ['Shift', 'C'],
             description: 'Collapse all optional sections in the wizard',
         });
+        return true;
+    };
+    if (!_registerWizardShortcuts()) {
+        const start = Date.now();
+        const tick = () => {
+            if (_registerWizardShortcuts()) return;
+            if (Date.now() - start > 5000) return;  // give up after 5s
+            setTimeout(tick, 100);
+        };
+        setTimeout(tick, 100);
     }
 })();
 
@@ -569,6 +601,12 @@ const wizardReset = () => {
     if (dirWrap) dirWrap.style.display = 'none';
 
     document.getElementById('wiz-spool-qty').value = 1;
+    // Restore HTML factory defaults that the type=number bulk-wipe above
+    // cleared. Without this, the Physical Specs chip has nothing to show
+    // on a fresh wizard open even though the HTML <input value="..."> would
+    // normally populate them. (Group 10.1 SC round-3 fix.)
+    document.getElementById('wiz-fil-diameter').value = '1.75';
+    document.getElementById('wiz-fil-density').value = '1.24';
 
     if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
     if (window.wizardClearFilamentMismatchPanel) window.wizardClearFilamentMismatchPanel();

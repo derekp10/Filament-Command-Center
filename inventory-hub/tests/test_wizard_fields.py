@@ -49,7 +49,17 @@ def test_wizard_field_sync(page: Page):
         
         fil_input = page.locator(f"#wiz_fil_ef_{field_key}")
         spool_input = page.locator(f"#wiz_spool_ef_{field_key}")
-        
+
+        # Group 10.1: dynamic-extras panels (Custom Filament / Spool
+        # Attributes) default collapsed in create mode — expand both
+        # before visibility assertions.
+        page.evaluate(
+            "() => { ['wiz-fil-extras-panel', 'wiz-spool-extras-panel'].forEach(id => {"
+            " const el = document.getElementById(id);"
+            " if (el && !el.classList.contains('show'))"
+            " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }); }"
+        )
+
         expect(fil_input).to_be_visible()
         expect(spool_input).to_be_visible()
         expect(btn).to_have_class(re.compile(r"active-sync"))

@@ -840,6 +840,11 @@ body {
 }
 .fcc-modal-wizard-dialog {
     z-index: 1061;
+    /* Group 10.1 SC round-3 fix: was modal-dialog-centered, which re-centered
+       the modal vertically every time a collapse panel expanded/shrunk,
+       jumping the entire frame. Pin to top with a fixed margin instead so
+       only the BOTTOM of the modal moves when content size changes. */
+    margin-top: 1.5rem;
 }
 .fcc-wizard-dynamic-area {
     background: rgba(0,0,0,0.3) !important;
