@@ -208,7 +208,216 @@ window.wizardApplyCollapseDefaults = (context) => {
         }
         if (open) inst.show(); else inst.hide();
     });
+    // Summaries are updated by the shown.bs.collapse / hidden.bs.collapse
+    // listeners as the animations finish; calling refreshAll here makes
+    // the initial state right immediately (especially for create mode
+    // where everything just collapsed and no animation actually fired
+    // because the panels started without .show).
+    if (window.wizardRefreshAllSectionSummaries) {
+        // Slight delay so any in-flight Bootstrap animations finish first.
+        setTimeout(() => window.wizardRefreshAllSectionSummaries(), 50);
+    }
 };
+
+// Group 10.1 (Session C polish) — section-summary rendering for collapsed
+// panels. The collapsed toggle button shows a compact preview of the
+// section's values (color swatch + name, weight chain, price, etc.) so the
+// user can see what's filled in without expanding. Templated on the
+// printer-status toolhead card pattern (uses getFilamentStyle/makeSwatchHtml
+// for color rendering so multi-color gradients render correctly).
+//
+// Also handles two related UX behaviors:
+//   - Auto-scroll: on `shown.bs.collapse`, scrolls the section toggle into
+//     view at the top of the modal-body so the user sees the section they
+//     just opened.
+//   - Clears the summary span when expanded; re-renders when collapsed.
+const _wizEscape = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const _wizSectionSummarizers = {
+    'wiz-fil-color-panel': () => {
+        const name = (document.getElementById('wiz-fil-color_name')?.value || '').trim();
+        const hex0 = (document.getElementById('wiz-fil-color_hex_0')?.value || '').trim();
+        const extras = Array.from(document.querySelectorAll('#wiz-fil-color-extra-container input[type="text"]'))
+            .map(el => (el.value || '').trim()).filter(Boolean);
+        const allHexes = [hex0, ...extras].filter(h => h && h !== '#FFFFFF');
+        if (!name && allHexes.length === 0) return '';
+        const dir = document.getElementById('wiz-fil-color-direction')?.value || 'longitudinal';
+        const colorStr = allHexes.length > 0 ? allHexes.join(',') : (hex0 || '#FFFFFF');
+        const swatch = window.makeSwatchHtml
+            ? window.makeSwatchHtml(colorStr, dir, { size: 16, marginRight: 6 })
+            : '';
+        const label = name || (allHexes[0] || hex0 || '');
+        const hexTag = allHexes.length > 1
+            ? ` <span class="font-monospace text-info">${allHexes.length} colors</span>`
+            : (allHexes[0] ? ` <span class="font-monospace text-muted">${allHexes[0]}</span>` : '');
+        return `<span class="d-inline-flex align-items-center">${swatch}<span class="text-light">${_wizEscape(label)}</span>${hexTag}</span>`;
+    },
+    'wiz-fil-temps-panel': () => {
+        const v = (id) => (document.getElementById(id)?.value || '').trim();
+        const nMin = v('wiz-fil-settings_extruder_temp'), nMax = v('wiz-fil-nozzle_temp_max');
+        const bMin = v('wiz-fil-settings_bed_temp'),     bMax = v('wiz-fil-bed_temp_max');
+        const parts = [];
+        if (nMin || nMax) parts.push(`Nozzle ${nMin || '?'}–${nMax || '?'}°`);
+        if (bMin || bMax) parts.push(`Bed ${bMin || '?'}–${bMax || '?'}°`);
+        return parts.join(' · ');
+    },
+    'wiz-fil-extras-panel': () => {
+        const inputs = document.querySelectorAll('#wiz-fil-dynamic-extra-fields input, #wiz-fil-dynamic-extra-fields select, #wiz-fil-dynamic-extra-fields textarea');
+        let filled = 0;
+        inputs.forEach(el => {
+            if (el.type === 'checkbox' || el.type === 'radio') { if (el.checked) filled++; }
+            else if ((el.value || '').toString().trim() !== '') filled++;
+        });
+        return filled === 0 ? '' : `${filled} field${filled === 1 ? '' : 's'} set`;
+    },
+    'wiz-spool-weight-panel': () => {
+        const v = (id) => (document.getElementById(id)?.value || '').trim();
+        const empty = v('wiz-spool-empty_weight');
+        const initial = v('wiz-spool-initial_weight');
+        const remaining = v('wiz-spool-remaining');
+        const used = v('wiz-spool-used');
+        const parts = [];
+        if (remaining) parts.push(`<span class="text-success">${remaining}g left</span>`);
+        if (used && used !== '0') parts.push(`${used}g used`);
+        if (initial) parts.push(`net ${initial}g`);
+        if (empty) parts.push(`tare ${empty}g`);
+        return parts.join(' · ');
+    },
+    'wiz-spool-metadata-panel': () => {
+        const v = (id) => (document.getElementById(id)?.value || '').trim();
+        const price = v('wiz-spool-price');
+        const comment = v('wiz-spool-comment');
+        const url = v('wiz-spool-purchase_url');
+        const archived = document.getElementById('wiz-spool-archived')?.checked;
+        const parts = [];
+        if (price) parts.push(`$${price}`);
+        if (archived) parts.push('<span class="text-warning">archived</span>');
+        if (url) parts.push('<span class="text-info">🔗 link</span>');
+        if (comment) parts.push(`💬 ${_wizEscape(comment.slice(0, 28))}${comment.length > 28 ? '…' : ''}`);
+        return parts.join(' · ');
+    },
+    'wiz-spool-extras-panel': () => {
+        const inputs = document.querySelectorAll('#wiz-spool-dynamic-extra-fields input, #wiz-spool-dynamic-extra-fields select, #wiz-spool-dynamic-extra-fields textarea');
+        let filled = 0;
+        inputs.forEach(el => {
+            if (el.type === 'checkbox' || el.type === 'radio') { if (el.checked) filled++; }
+            else if ((el.value || '').toString().trim() !== '') filled++;
+        });
+        return filled === 0 ? '' : `${filled} field${filled === 1 ? '' : 's'} set`;
+    },
+    // Physical Specs is always-open; no summary needed.
+};
+
+window.wizardRefreshSectionSummary = (panelId) => {
+    const gen = _wizSectionSummarizers[panelId];
+    if (!gen) return;
+    const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${panelId}"]`);
+    if (!btn) return;
+    const summarySpan = btn.querySelector('.fcc-wiz-section-summary');
+    if (!summarySpan) return;
+    const isExpanded = btn.getAttribute('aria-expanded') === 'true';
+    if (isExpanded) {
+        // While open, hide the summary so the toggle line stays clean.
+        summarySpan.innerHTML = '';
+        summarySpan.style.display = 'none';
+    } else {
+        const html = gen();
+        summarySpan.innerHTML = html ? '▸ ' + html : '';
+        summarySpan.style.display = html ? '' : 'none';
+    }
+};
+
+window.wizardRefreshAllSectionSummaries = () => {
+    Object.keys(_wizSectionSummarizers).forEach(id => window.wizardRefreshSectionSummary(id));
+};
+
+// One-shot wiring at script load: every collapsible panel gets listeners
+// for show/hide so summaries refresh and the modal scrolls to the toggle
+// the user just clicked. Idempotent — runs once.
+(function() {
+    if (window._wizCollapseWired) return;
+    window._wizCollapseWired = true;
+    const panelIds = Object.keys(_wizSectionSummarizers);
+    panelIds.forEach(id => {
+        const panel = document.getElementById(id);
+        if (!panel) return;
+        panel.addEventListener('shown.bs.collapse', (e) => {
+            if (e.target !== panel) return;
+            window.wizardRefreshSectionSummary(id);
+            // Auto-scroll: bring the toggle button into view inside modal-body.
+            // Use `block: 'start'` so the section header (with summary)
+            // sits near the top, exposing the just-opened content below.
+            const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
+            if (btn && btn.scrollIntoView) {
+                btn.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+        panel.addEventListener('hidden.bs.collapse', (e) => {
+            if (e.target !== panel) return;
+            window.wizardRefreshSectionSummary(id);
+        });
+    });
+    // Refresh all CLOSED-section summaries on any input/change inside the
+    // modal so collapsed sections stay accurate as the user types in
+    // expanded ones (then re-collapses them).
+    const wizEl = document.getElementById('wizardModal');
+    if (wizEl) {
+        const refreshClosed = () => {
+            panelIds.forEach(id => {
+                const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
+                if (btn && btn.getAttribute('aria-expanded') === 'false') {
+                    window.wizardRefreshSectionSummary(id);
+                }
+            });
+        };
+        wizEl.addEventListener('input', refreshClosed);
+        wizEl.addEventListener('change', refreshClosed);
+    }
+})();
+
+// Group 10.1 (Session C polish) — Original Color routing. The
+// `original_color` extra field is logically a Color field, not a Custom
+// Filament Attribute. wizardFetchExtraFields normally renders it into
+// `#wiz-fil-dynamic-extra-fields`; this helper moves it into the Color
+// panel's dedicated slot if present. Called from wizardFetchExtraFields
+// after the dynamic-extras grid is built.
+window.wizardRelocateOriginalColorField = () => {
+    const slot = document.getElementById('wiz-fil-original-color-slot');
+    if (!slot) return;
+    const extrasGrid = document.getElementById('wiz-fil-dynamic-extra-fields');
+    if (!extrasGrid) return;
+    const col = extrasGrid.querySelector('[data-extra-key="original_color"]');
+    if (col && col.parentElement === extrasGrid) {
+        slot.appendChild(col);
+        col.className = 'col-md-12';
+    }
+};
+
+// Group 10.1 (Session C polish) — TPU-only shore_hardness. Hide the
+// shore_hardness extra unless the material is TPU-family. Wires a listener
+// on the material input + an initial sync, and is re-run after every
+// extras render. Material list as of 2026-05: TPU, TPE, TPC are the
+// common shore-hardness-relevant flexibles.
+const _TPU_FAMILY = ['TPU', 'TPE', 'TPC', 'FLEX'];
+window.wizardApplyShoreHardnessGate = () => {
+    const matEl = document.getElementById('wiz-fil-material');
+    const target = document.querySelector('[data-extra-key="shore_hardness"]');
+    if (!target) return;
+    const mat = (matEl?.value || '').trim().toUpperCase();
+    const isTpu = _TPU_FAMILY.some(prefix => mat.startsWith(prefix));
+    target.style.display = isTpu ? '' : 'none';
+};
+
+(function() {
+    if (window._wizTpuGateWired) return;
+    window._wizTpuGateWired = true;
+    const matEl = document.getElementById('wiz-fil-material');
+    if (matEl) {
+        ['input', 'change', 'blur'].forEach(evt => {
+            matEl.addEventListener(evt, () => window.wizardApplyShoreHardnessGate());
+        });
+    }
+})();
 
 // Group 10.4 — populates the spool's purchase_url input with the smart-fallback
 // pattern: if the spool already has its own URL, fill the input. If not, leave
@@ -260,7 +469,9 @@ const wizardReset = () => {
     document.getElementById('wiz-fil-color_hex_0').value = '#FFFFFF';
     document.getElementById('wiz-fil-color_hex_0').previousElementSibling.value = '#FFFFFF';
     const dirEl = document.getElementById('wiz-fil-color-direction');
-    if (dirEl) dirEl.style.display = 'none';
+    if (dirEl) dirEl.value = 'longitudinal';
+    const dirWrap = document.getElementById('wiz-fil-color-direction-wrapper');
+    if (dirWrap) dirWrap.style.display = 'none';
 
     document.getElementById('wiz-spool-qty').value = 1;
 
@@ -958,6 +1169,11 @@ const wizardFetchExtraFields = () => {
 
                 // 🌟 After DOM generation, initialize the live Sync Bindings
                 wizardSetupFieldSync();
+                // Group 10.1 Session C polish: move original_color into the
+                // Color panel and hide shore_hardness unless material is TPU.
+                if (window.wizardRelocateOriginalColorField) window.wizardRelocateOriginalColorField();
+                if (window.wizardApplyShoreHardnessGate) window.wizardApplyShoreHardnessGate();
+                if (window.wizardRefreshAllSectionSummaries) window.wizardRefreshAllSectionSummaries();
             }
         });
 };
@@ -1150,7 +1366,10 @@ const wizardGenerateFieldHTML = (field, entityType) => {
         }
     }
 
-    let html = `<div class="col-md-6 mb-2"><label class="form-label small text-secondary mb-1 d-flex align-items-center">${field.name}${syncHtml}</label>`;
+    // data-extra-key lets the Session-C polish hooks (TPU gate on
+    // shore_hardness, original_color relocation into the Color panel) find
+    // the wrapper without grepping the inner input id.
+    let html = `<div class="col-md-6 mb-2" data-extra-key="${field.key}"><label class="form-label small text-secondary mb-1 d-flex align-items-center">${field.name}${syncHtml}</label>`;
     const dataClass = entityType === 'fil' ? 'dynamic-extra-field' : 'dynamic-extra-spool-field';
     // Add an ID for easy targeting by the sync logic
     const inputId = `wiz_${entityType}_ef_${field.key}`;
@@ -1617,11 +1836,12 @@ window.wizardAddColorHex = () => {
         <div class="input-group input-group-sm mb-1 mt-1">
             <input type="color" class="form-control form-control-color bg-dark border-secondary px-1" value="#000000" oninput="this.nextElementSibling.value = this.value.toUpperCase()">
             <input type="text" class="form-control bg-dark text-white border-secondary font-monospace pb-wiz-color" placeholder="#Hex" value="#000000" id="wiz-fil-color_hex_${idx}" autocomplete="off" oninput="this.previousElementSibling.value = (this.value.startsWith('#') ? this.value : '#' + this.value).padEnd(7, '0').substring(0,7)">
-            <button class="btn btn-outline-danger" type="button" onclick="this.parentElement.remove(); if(document.getElementById('wiz-fil-color-extra-container').children.length === 0) document.getElementById('wiz-fil-color-direction').style.display='none';" title="Remove color">🗑️</button>
+            <button class="btn btn-outline-danger" type="button" onclick="this.parentElement.remove(); if(document.getElementById('wiz-fil-color-extra-container').children.length === 0) { const w = document.getElementById('wiz-fil-color-direction-wrapper'); if (w) w.style.display='none'; }" title="Remove color">🗑️</button>
         </div>
     `;
     container.insertAdjacentHTML('beforeend', html);
-    document.getElementById('wiz-fil-color-direction').style.display = 'block';
+    const dirWrap = document.getElementById('wiz-fil-color-direction-wrapper');
+    if (dirWrap) dirWrap.style.display = 'block';
 };
 
 window.wizardPopulateColors = (hexString, direction) => {
@@ -1629,10 +1849,9 @@ window.wizardPopulateColors = (hexString, direction) => {
     container.innerHTML = '';
     
     const dirEl = document.getElementById('wiz-fil-color-direction');
-    if (dirEl) {
-        dirEl.style.display = 'none';
-        dirEl.value = direction || 'longitudinal';
-    }
+    if (dirEl) dirEl.value = direction || 'longitudinal';
+    const dirWrap = document.getElementById('wiz-fil-color-direction-wrapper');
+    if (dirWrap) dirWrap.style.display = 'none';
 
     if (!hexString) {
         document.getElementById('wiz-fil-color_hex_0').value = '#FFFFFF';
@@ -1663,8 +1882,11 @@ window.wizardPopulateColors = (hexString, direction) => {
         }
     }
 
-    if (hexes.length > 1 && dirEl) {
-        dirEl.style.display = 'block';
+    if (hexes.length > 1) {
+        // wizardAddColorHex already shows the wrapper, but be defensive
+        // in case populateColors is called without any wizardAddColorHex
+        // invocation (e.g. legacy single-call paths).
+        if (dirWrap) dirWrap.style.display = 'block';
     }
 };
 

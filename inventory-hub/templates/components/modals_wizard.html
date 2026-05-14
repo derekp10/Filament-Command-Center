@@ -151,6 +151,7 @@
                         aria-expanded="false" aria-controls="wiz-fil-color-panel">
                         <span class="fcc-wiz-section-title">Color</span>
                         <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
                         <span class="fcc-wiz-section-chevron">▾</span>
                     </button>
                     <div id="wiz-fil-color-panel" class="collapse">
@@ -175,12 +176,24 @@
                                         title="Add another color for gradients">➕</button>
                                 </div>
                                 <div id="wiz-fil-color-extra-container"></div>
-                                <select class="form-select form-select-sm bg-dark text-white border-secondary mt-1"
-                                    id="wiz-fil-color-direction" style="display: none;">
-                                    <option value="coaxial">Coextruded (Multi-Color)</option>
-                                    <option value="longitudinal">Longitudinal (Gradient)</option>
-                                </select>
+                                <div id="wiz-fil-color-direction-wrapper" style="display: none;" class="mt-1">
+                                    <label class="form-label small text-secondary mb-1 d-block"
+                                        title="Only meaningful when multiple hex colors are set above. Coextruded prints two colors side-by-side; Longitudinal cycles down the spool.">
+                                        Multi-color print direction
+                                        <span class="text-info fcc-wiz-hint">(only with 2+ colors above)</span>
+                                    </label>
+                                    <select class="form-select form-select-sm bg-dark text-white border-secondary"
+                                        id="wiz-fil-color-direction">
+                                        <option value="coaxial">Coextruded (Multi-Color)</option>
+                                        <option value="longitudinal">Longitudinal (Gradient)</option>
+                                    </select>
+                                </div>
                             </div>
+                            <!-- Original Color slot — wizardFetchExtraFields routes the
+                                 original_color dynamic extra here so it lives with the
+                                 other color fields instead of the Custom Filament Attributes
+                                 block. (Group 10.1 Session C polish.) -->
+                            <div class="col-md-12" id="wiz-fil-original-color-slot"></div>
                         </div>
                     </div>
 
@@ -189,6 +202,7 @@
                         data-bs-toggle="collapse" data-bs-target="#wiz-fil-physical-panel"
                         aria-expanded="true" aria-controls="wiz-fil-physical-panel">
                         <span class="fcc-wiz-section-title">Physical Specs</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
                         <span class="fcc-wiz-section-chevron">▾</span>
                     </button>
                     <div id="wiz-fil-physical-panel" class="collapse show">
@@ -223,6 +237,7 @@
                         aria-expanded="false" aria-controls="wiz-fil-temps-panel">
                         <span class="fcc-wiz-section-title">Print Temperatures</span>
                         <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
                         <span class="fcc-wiz-section-chevron">▾</span>
                     </button>
                     <div id="wiz-fil-temps-panel" class="collapse">
@@ -260,6 +275,7 @@
                         aria-expanded="false" aria-controls="wiz-fil-extras-panel">
                         <span class="fcc-wiz-section-title">Custom Filament Attributes</span>
                         <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
                         <span class="fcc-wiz-section-chevron">▾</span>
                     </button>
                     <div id="wiz-fil-extras-panel" class="collapse">
@@ -337,6 +353,7 @@
                         aria-expanded="false" aria-controls="wiz-spool-weight-panel">
                         <span class="fcc-wiz-section-title">Weight &amp; Scale</span>
                         <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
                         <span class="fcc-wiz-section-chevron">▾</span>
                     </button>
                     <div id="wiz-spool-weight-panel" class="collapse">
@@ -395,6 +412,7 @@
                         aria-expanded="false" aria-controls="wiz-spool-metadata-panel">
                         <span class="fcc-wiz-section-title">Pricing &amp; Metadata</span>
                         <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
                         <span class="fcc-wiz-section-chevron">▾</span>
                     </button>
                     <div id="wiz-spool-metadata-panel" class="collapse">
@@ -431,6 +449,7 @@
                         aria-expanded="false" aria-controls="wiz-spool-extras-panel">
                         <span class="fcc-wiz-section-title">Custom Spool Attributes</span>
                         <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
                         <span class="fcc-wiz-section-chevron">▾</span>
                     </button>
                     <div id="wiz-spool-extras-panel" class="collapse">
