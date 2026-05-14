@@ -194,10 +194,15 @@ window.wizardApplyCollapseDefaults = (context) => {
         ['wiz-spool-metadata-panel', 'optional'],
         ['wiz-spool-extras-panel',   'optional'],
     ];
+    // Suppress the shown.bs.collapse scroll-into-view side effect while
+    // we batch-apply panel state — otherwise an edit-mode wizard with
+    // 5+ panels to expand cascades through scroll animations, jumping
+    // the view around. The flag is cleared right after the loop.
+    window._wizSuppressScroll = true;
     sections.forEach(([id, kind]) => {
         const panelEl = document.getElementById(id);
         if (!panelEl) return;
-        const inst = bootstrap.Collapse.getOrCreateInstance(panelEl, { toggle: false });
+        const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
         let open;
         if (kind === 'always-open') {
             open = true;
@@ -206,17 +211,30 @@ window.wizardApplyCollapseDefaults = (context) => {
         } else {
             open = false;
         }
-        if (open) inst.show(); else inst.hide();
+        // Apply state synchronously WITHOUT triggering Bootstrap's animation
+        // (and thus without the shown/hidden events that would re-fire scroll
+        // logic). Direct class manipulation matches what Bootstrap ends up
+        // with after the transition finishes.
+        panelEl.classList.remove('collapsing');
+        if (open) {
+            panelEl.classList.add('show');
+            panelEl.style.height = '';
+            if (btn) btn.setAttribute('aria-expanded', 'true');
+        } else {
+            panelEl.classList.remove('show');
+            panelEl.style.height = '';
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+        }
     });
-    // Summaries are updated by the shown.bs.collapse / hidden.bs.collapse
-    // listeners as the animations finish; calling refreshAll here makes
-    // the initial state right immediately (especially for create mode
-    // where everything just collapsed and no animation actually fired
-    // because the panels started without .show).
+    window._wizSuppressScroll = false;
+    // Refresh summaries now that aria-expanded / .show are settled.
     if (window.wizardRefreshAllSectionSummaries) {
-        // Slight delay so any in-flight Bootstrap animations finish first.
-        setTimeout(() => window.wizardRefreshAllSectionSummaries(), 50);
+        window.wizardRefreshAllSectionSummaries();
     }
+    // Reset the modal-body's scroll position to the top so the user always
+    // lands at Step 1 regardless of how the previous session left it.
+    const modalBody = document.querySelector('#wizardModal .modal-body');
+    if (modalBody) modalBody.scrollTop = 0;
 };
 
 // Group 10.1 (Session C polish) — section-summary rendering for collapsed
@@ -344,11 +362,25 @@ window.wizardRefreshAllSectionSummaries = () => {
         panel.addEventListener('shown.bs.collapse', (e) => {
             if (e.target !== panel) return;
             window.wizardRefreshSectionSummary(id);
-            // Auto-scroll: bring the toggle button into view inside modal-body.
-            // Use `block: 'start'` so the section header (with summary)
-            // sits near the top, exposing the just-opened content below.
+            // Suppress when wizardApplyCollapseDefaults is batch-applying —
+            // it sets state synchronously and doesn't need the scroll.
+            if (window._wizSuppressScroll) return;
+            // Smart-scroll: only scroll if the expansion pushed the panel's
+            // bottom below the visible modal-body viewport. If the section
+            // already fits entirely on screen, leave the user's scroll
+            // position alone (per user feedback — only scroll if the
+            // expansion would otherwise be invisible).
+            const modalBody = document.querySelector('#wizardModal .modal-body');
             const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
-            if (btn && btn.scrollIntoView) {
+            if (!modalBody || !btn) return;
+            const modalRect = modalBody.getBoundingClientRect();
+            const panelRect = panel.getBoundingClientRect();
+            // Bottom-of-panel below bottom-of-modal? Or top-of-toggle
+            // already above top-of-modal? Either way, scroll the toggle
+            // to the top so the panel becomes fully visible.
+            const overflowsBottom = panelRect.bottom > modalRect.bottom - 4;
+            const togglesOffTop = btn.getBoundingClientRect().top < modalRect.top + 4;
+            if (overflowsBottom || togglesOffTop) {
                 btn.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
         });
@@ -384,6 +416,11 @@ window.wizardRefreshAllSectionSummaries = () => {
 window.wizardRelocateOriginalColorField = () => {
     const slot = document.getElementById('wiz-fil-original-color-slot');
     if (!slot) return;
+    // Clear any prior render: wizardFetchExtraFields runs on every wizard
+    // open AND on schema refresh, so without this the slot accumulated a
+    // new copy each time (original_color appeared 2x, 3x, ... after
+    // multiple opens in the same page session).
+    slot.innerHTML = '';
     const extrasGrid = document.getElementById('wiz-fil-dynamic-extra-fields');
     if (!extrasGrid) return;
     const col = extrasGrid.querySelector('[data-extra-key="original_color"]');
@@ -415,6 +452,64 @@ window.wizardApplyShoreHardnessGate = () => {
     if (matEl) {
         ['input', 'change', 'blur'].forEach(evt => {
             matEl.addEventListener(evt, () => window.wizardApplyShoreHardnessGate());
+        });
+    }
+})();
+
+// Group 10.1 (Session C polish) — Expand / collapse all wizard sections.
+// Bound to Shift+E / Shift+C while the wizard modal is open. Registered
+// via the shortcuts registry so it appears in the global `?` overlay.
+window.wizardExpandAllSections = () => {
+    Object.keys(_wizSectionSummarizers).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || !window.bootstrap || !window.bootstrap.Collapse) return;
+        bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).show();
+    });
+};
+window.wizardCollapseAllSections = () => {
+    Object.keys(_wizSectionSummarizers).forEach(id => {
+        // Physical Specs is the only always-open panel — skip it.
+        if (id === 'wiz-fil-physical-panel') return;
+        const el = document.getElementById(id);
+        if (!el || !window.bootstrap || !window.bootstrap.Collapse) return;
+        bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).hide();
+    });
+};
+
+(function() {
+    if (window._wizExpandShortcutWired) return;
+    window._wizExpandShortcutWired = true;
+    const wizEl = document.getElementById('wizardModal');
+    if (!wizEl) return;
+    // Modal-scoped capture listener: only fires when the wizard is shown.
+    wizEl.addEventListener('keydown', (e) => {
+        if (!wizEl.classList.contains('show')) return;
+        // Skip if the user is typing into an input/textarea/select — Shift+E
+        // is a perfectly valid character keystroke in those contexts.
+        const tag = (document.activeElement?.tagName || '').toUpperCase();
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+        if (!e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+        if (e.key === 'E' || e.key === 'e') {
+            e.preventDefault();
+            window.wizardExpandAllSections();
+        } else if (e.key === 'C' || e.key === 'c') {
+            e.preventDefault();
+            window.wizardCollapseAllSections();
+        }
+    });
+    // Register with the shortcuts registry so the `?` overlay shows them.
+    if (typeof window.registerShortcut === 'function') {
+        window.registerShortcut({
+            id: 'wizard-expand-all',
+            scope: 'Wizard',
+            keys: ['Shift', 'E'],
+            description: 'Expand all collapsed sections in the wizard',
+        });
+        window.registerShortcut({
+            id: 'wizard-collapse-all',
+            scope: 'Wizard',
+            keys: ['Shift', 'C'],
+            description: 'Collapse all optional sections in the wizard',
         });
     }
 })();

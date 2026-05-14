@@ -619,36 +619,37 @@ body {
     max-width: 100%;
     box-sizing: border-box;
     /* Override Bootstrap .btn horizontal padding so child flex items have full width. */
-    padding: 0.4rem 0 !important;
+    padding: 0.5rem 0 !important;
     text-align: left;
-    color: #adb5bd;
+    color: #00d4ff;  /* Cyan to match other wizard section headers (h5/h6) */
     background: transparent;
     border: none !important;
-    border-bottom: 1px solid #343a40 !important;
+    border-bottom: 1px solid #2a4a5a !important;
     border-radius: 0 !important;
     margin-top: 1rem;
     margin-bottom: 0.25rem;
     font-family: var(--bs-font-monospace, monospace);
     text-transform: uppercase;
-    font-size: 0.85rem;
-    letter-spacing: 0.02em;
+    font-size: 1rem;  /* Was 0.85rem — bumped per Session C feedback round 2 */
+    font-weight: 600;
+    letter-spacing: 0.04em;
     cursor: pointer;
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     overflow: hidden;
 }
 .fcc-wiz-section-toggle:hover {
-    background: rgba(0, 212, 255, 0.06);
+    background: rgba(0, 212, 255, 0.10);
     border-bottom-color: #00d4ff;
-    color: #00d4ff;
+    color: #66e7ff;
 }
 .fcc-wiz-section-toggle:focus-visible {
     /* Keyboard focus ring — needs to be obvious so Tab nav is discoverable.
        Use an inset box-shadow rather than outline so the ring respects
        border-radius and doesn't get clipped by overflow:hidden. */
-    background: rgba(0, 212, 255, 0.06);
+    background: rgba(0, 212, 255, 0.12);
     border-bottom-color: #00d4ff;
-    color: #00d4ff;
-    box-shadow: inset 0 0 0 2px #00d4ff;
+    color: #ffffff;
+    box-shadow: inset 0 0 0 2px #00d4ff, 0 0 8px rgba(0, 212, 255, 0.4);
     outline: none;
 }
 .fcc-wiz-section-title {
@@ -664,12 +665,15 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #adb5bd;
+    color: #d0d0d0;
     font-family: var(--bs-font-monospace, monospace);
-    font-size: 0.8rem;
+    font-size: 0.9rem;
+    font-weight: 400;
     text-transform: none;
     letter-spacing: 0;
-    line-height: 1;
+    line-height: 1.2;
+    padding-left: 0.5rem;
+    border-left: 1px solid #2a4a5a;
 }
 .fcc-wiz-section-summary .text-light { color: #fff; }
 .fcc-wiz-section-summary .text-muted { color: #6c757d; }
