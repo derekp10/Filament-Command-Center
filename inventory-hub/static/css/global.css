@@ -616,12 +616,16 @@ body {
     align-items: center;
     gap: 0.5rem;
     width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    /* Override Bootstrap .btn horizontal padding so child flex items have full width. */
+    padding: 0.4rem 0 !important;
     text-align: left;
     color: #adb5bd;
     background: transparent;
-    border: none;
-    border-bottom: 1px solid #343a40;
-    padding: 0.4rem 0;
+    border: none !important;
+    border-bottom: 1px solid #343a40 !important;
+    border-radius: 0 !important;
     margin-top: 1rem;
     margin-bottom: 0.25rem;
     font-family: var(--bs-font-monospace, monospace);
@@ -630,6 +634,7 @@ body {
     letter-spacing: 0.02em;
     cursor: pointer;
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    overflow: hidden;
 }
 .fcc-wiz-section-toggle:hover,
 .fcc-wiz-section-toggle:focus-visible {
@@ -639,7 +644,11 @@ body {
     outline: none;
 }
 .fcc-wiz-section-title {
-    flex: 1 1 auto;
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .fcc-wiz-section-chevron {
     display: inline-block;

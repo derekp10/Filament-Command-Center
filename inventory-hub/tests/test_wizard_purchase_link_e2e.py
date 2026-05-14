@@ -19,6 +19,14 @@ def _open_wizard_fresh(page: Page) -> None:
     page.wait_for_selector("#buffer-zone")
     page.evaluate("window.openWizardModal && window.openWizardModal()")
     expect(page.locator("#wizardModal")).to_be_visible()
+    # Group 10.1: Pricing & Metadata panel defaults collapsed in create mode —
+    # this test file exclusively edits #wiz-spool-purchase_url, so expand once
+    # here rather than at every fill site.
+    page.evaluate(
+        "() => { const el = document.getElementById('wiz-spool-metadata-panel');"
+        " if (el && !el.classList.contains('show'))"
+        " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }"
+    )
 
 
 def _force_close_wizard(page: Page) -> None:

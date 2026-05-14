@@ -160,6 +160,54 @@ window.openWizardModal = async () => {
         wizardFetchMaterials()
     ]);
     if (window.wizardSyncSpoolRows) window.wizardSyncSpoolRows();
+    if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('create');
+};
+
+// Group 10.1 (Session C) — applies the wizard's section-collapse defaults.
+// Called from openWizardModal with 'create' (collapse all optional panels),
+// and from each edit-context entry point (openEditWizard, openCloneWizard,
+// openNewSpoolFromFilamentWizard) with 'edit' after the prefill chain has
+// filled the form — sections with any user-entered data auto-expand so the
+// user sees what's actually filled in without clicking each toggle.
+window.wizardApplyCollapseDefaults = (context) => {
+    if (!window.bootstrap || !window.bootstrap.Collapse) return;
+    const hasAnyValue = (panelEl) => {
+        if (!panelEl) return false;
+        const inputs = panelEl.querySelectorAll('input, select, textarea');
+        for (const el of inputs) {
+            if (el.type === 'checkbox' || el.type === 'radio') {
+                if (el.checked) return true;
+            } else if ((el.value == null ? '' : String(el.value)).trim() !== '') {
+                return true;
+            }
+        }
+        return false;
+    };
+    // 'always-open' stays expanded in both contexts; 'optional' obeys the
+    // create=collapsed / edit=smart-on-content rule.
+    const sections = [
+        ['wiz-fil-color-panel',      'optional'],
+        ['wiz-fil-physical-panel',   'always-open'],
+        ['wiz-fil-temps-panel',      'optional'],
+        ['wiz-fil-extras-panel',     'optional'],
+        ['wiz-spool-weight-panel',   'optional'],
+        ['wiz-spool-metadata-panel', 'optional'],
+        ['wiz-spool-extras-panel',   'optional'],
+    ];
+    sections.forEach(([id, kind]) => {
+        const panelEl = document.getElementById(id);
+        if (!panelEl) return;
+        const inst = bootstrap.Collapse.getOrCreateInstance(panelEl, { toggle: false });
+        let open;
+        if (kind === 'always-open') {
+            open = true;
+        } else if (context === 'edit') {
+            open = hasAnyValue(panelEl);
+        } else {
+            open = false;
+        }
+        if (open) inst.show(); else inst.hide();
+    });
 };
 
 // Group 10.4 — populates the spool's purchase_url input with the smart-fallback
@@ -2321,6 +2369,7 @@ window.openCloneWizard = async (spoolId) => {
             window.wizardCalcRemainingFromUsed();
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Spool #${spoolId}.</span>`;
+            if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('edit');
         })
         .catch(err => {
             console.error("Clone Wizard Error:", err);
@@ -2381,6 +2430,7 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
             window.wizardCalcRemainingFromUsed();
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Filament #${filamentId}.</span>`;
+            if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('edit');
         })
         .catch(err => {
             console.error("New Spool from Filament Wizard Error:", err);
@@ -2598,6 +2648,7 @@ window.openEditWizard = async (spoolId) => {
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Editing Spool #${spoolId}.</span>`;
             submitBtn.disabled = false;
+            if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('edit');
         })
         .catch(err => {
             console.error("Edit Wizard Error:", err);

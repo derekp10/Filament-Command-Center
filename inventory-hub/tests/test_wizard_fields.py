@@ -89,6 +89,13 @@ def test_wizard_max_temp_inputs_exist_and_round_trip(page: Page):
     modal = page.locator("#wizardModal")
     expect(modal).to_be_visible()
 
+    # Group 10.1: Print Temperatures panel defaults collapsed in create mode — expand before assertions.
+    page.evaluate(
+        "() => { const el = document.getElementById('wiz-fil-temps-panel');"
+        " if (el && !el.classList.contains('show'))"
+        " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }"
+    )
+
     nozzle_max = page.locator("#wiz-fil-nozzle_temp_max")
     bed_max = page.locator("#wiz-fil-bed_temp_max")
     expect(nozzle_max).to_be_visible()
@@ -149,6 +156,13 @@ def test_wizard_save_quotes_max_temp_extras_for_spoolman(page: Page):
     expect(modal).to_be_visible()
 
     # Fill the minimum the wizard accepts so the Save handler runs:
+    # Group 10.1: Color + Print Temperatures panels default collapsed in create mode — expand before fill.
+    page.evaluate(
+        "() => { ['wiz-fil-color-panel', 'wiz-fil-temps-panel'].forEach(id => {"
+        " const el = document.getElementById(id);"
+        " if (el && !el.classList.contains('show'))"
+        " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }); }"
+    )
     page.locator("#wiz-fil-color_name").fill("BUG1-REGRESSION")
     page.locator("#wiz-fil-nozzle_temp_max").fill("245")
     page.locator("#wiz-fil-bed_temp_max").fill("75")
@@ -194,6 +208,13 @@ def test_wizard_does_not_render_duplicate_max_temp_dynamic_inputs(page: Page):
 
     # Wait for dynamic extras to render (they're fetched async on open).
     page.wait_for_timeout(800)
+
+    # Group 10.1: Print Temperatures panel defaults collapsed in create mode — expand before assertions.
+    page.evaluate(
+        "() => { const el = document.getElementById('wiz-fil-temps-panel');"
+        " if (el && !el.classList.contains('show'))"
+        " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }"
+    )
 
     # Static inputs: present.
     expect(page.locator("#wiz-fil-nozzle_temp_max")).to_be_visible()
