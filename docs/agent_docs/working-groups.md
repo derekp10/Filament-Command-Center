@@ -45,17 +45,17 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 | Force-location should clear deployed status (L134) | Standalone — force-location handler in details modal |
 | Prusa metrics tooling research (L141) | Research / future inspiration — `prusa_exporter` + Prusa-Firmware-Buddy metrics docs. Could feed 9.3 (Printer Status widget), filabridge reconcile, or richer state probing. Not actionable as a discrete task. |
 | Box-slot ↔ toolhead spool-switching inconsistency (L145) | **NEEDS INVESTIGATION** — continuing-bug observation 2026-05-12: eject doesn't fully clear toolhead bind when box slot is bound to a toolhead. Despite Group 13.6 (toolhead-first assign + auto-archive cleanup), the eject path still leaves stale state. 10 min of Activity Log capture included as raw data for diagnosis. Likely a new flavor of the same architectural gap — different code path than 13.6 covered. |
-| Activity Log ubiquity (L178) | Standalone design decision |
-| Slot-render-order arrows inconsistent (L210) | 5-min polish — pick a single consistent arrow convention in `modals_loc_mgr.html:243-245` Feeds editor |
-| Shortcuts overlay click-through (L212) | Natural deferred-Group-15 follow-up — `mountOverlay()` is the reference pattern; touches `dashboard.html` `#fcc-shortcuts-overlay` + `shortcuts_registry.js` toggle |
-| Location Manager redesign (L215) | IN PROGRESS — multi-phase, separately tracked |
-| Bulk Moves (L242) | Blocked by Location Manager Phase 3+ |
-| Buffer scan assign-all (L245) | Likely already fixed — verify & close |
-| Location Manager cross-browser sync (L246) | ON HOLD — needs SSE/WS |
-| Mobile mode (L259) | Large standalone architectural effort |
-| Dashboard modularization (L260) | Large standalone refactor |
-| Filabridge reconcile utility (L318) | Standalone admin tool |
-| Project Color Loadout (L322) | Blocked by Location Manager Phase 3 |
+| Activity Log ubiquity (L173) | Standalone design decision |
+| Slot-render-order arrows inconsistent (L205) | 5-min polish — pick a single consistent arrow convention in `modals_loc_mgr.html:243-245` Feeds editor |
+| Shortcuts overlay click-through (L207) | Natural deferred-Group-15 follow-up — `mountOverlay()` is the reference pattern; touches `dashboard.html` `#fcc-shortcuts-overlay` + `shortcuts_registry.js` toggle |
+| Location Manager redesign (L210) | IN PROGRESS — multi-phase, separately tracked |
+| Bulk Moves (L237) | Blocked by Location Manager Phase 3+ |
+| Buffer scan assign-all (L240) | Likely already fixed — verify & close |
+| Location Manager cross-browser sync (L241) | ON HOLD — needs SSE/WS |
+| Mobile mode (L254) | Large standalone architectural effort |
+| Dashboard modularization (L255) | Large standalone refactor |
+| Filabridge reconcile utility (L313) | Standalone admin tool |
+| Project Color Loadout (L317) | Blocked by Location Manager Phase 3 |
 | All "On Hold" section items | ON HOLD |
 
 **Note on test flakes:** The `test_quickswap_visual` baseline mismatch, `test_ui_details_modal_e2e` offcanvas-backdrop flake, and `test_amazon_parser_matching` BS4-missing issue were all closed by Group 14 (14.4 / 14.3 / 14.5 respectively). Detailed write-up in `completed-archive.md`. Post-Group-14 follow-ups (parallel `tests/` directory, `_open_manage` consolidation, `reset_dom_state_js` audit, Windows pip footgun) are bundled into Group 16.
