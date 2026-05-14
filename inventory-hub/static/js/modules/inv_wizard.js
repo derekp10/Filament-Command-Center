@@ -300,16 +300,25 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     }[c]));
 
-    const render = () => {
-        const qs = freshSearch.value.toLowerCase();
+    // Group 10.2/10.10: on focus (re-entry into an already-populated combobox)
+    // render the FULL list and highlight the current selection — without this,
+    // the typed query (which is the previously-selected label) filters the
+    // list down to one item and the user has to delete text to see anything
+    // else. When the user actually types, the input handler swaps to filtered
+    // render. `forceAll=true` is passed by focus/keydown-when-closed paths.
+    const render = (forceAll = false) => {
+        const qs = forceAll ? '' : freshSearch.value.toLowerCase();
         const filtered = qs
             ? items.filter(it => (it.label || '').toLowerCase().includes(qs))
             : items;
-        dropdown.innerHTML = filtered.map(it =>
-            `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option"
+        const currentVal = hidden.value;
+        dropdown.innerHTML = filtered.map(it => {
+            const selectedCls = (forceAll && currentVal && String(it.value) === String(currentVal))
+                ? ' active bg-primary' : '';
+            return `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option${selectedCls}"
                   data-value="${escape(it.value)}"
-                  data-label="${escape(it.label)}">${escape(it.label)}</div>`
-        ).join('');
+                  data-label="${escape(it.label)}">${escape(it.label)}</div>`;
+        }).join('');
         dropdown.querySelectorAll('.autocomplete-option').forEach(opt => {
             opt.addEventListener('mousedown', (e) => {
                 e.preventDefault();
@@ -320,9 +329,32 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
                 hidden.dispatchEvent(new Event('change', { bubbles: true }));
             });
         });
+        // If the currently-selected row is rendered, scroll it into view so the
+        // user can see (and hit Enter to confirm) without scrolling manually.
+        if (forceAll && currentVal) {
+            const sel = dropdown.querySelector('.autocomplete-option.active');
+            if (sel) {
+                const dr = dropdown.getBoundingClientRect();
+                const sr = sel.getBoundingClientRect();
+                if (sr.bottom > dr.bottom) dropdown.scrollTop += (sr.bottom - dr.bottom);
+                else if (sr.top < dr.top) dropdown.scrollTop -= (dr.top - sr.top);
+            }
+        }
     };
 
-    freshSearch.addEventListener('focus', () => { render(); dropdown.style.display = 'block'; });
+    freshSearch.addEventListener('focus', () => { render(true); dropdown.style.display = 'block'; });
+    // Group 10.2/10.10: also handle click-while-already-focused. After
+    // picking an option, mousedown.preventDefault keeps focus on the input,
+    // so a subsequent click never fires `focus` again. Without this, the
+    // user has to blur and re-focus to see the full list. Only re-opens the
+    // dropdown when it's hidden — a click during active filtering shouldn't
+    // wipe the typed query.
+    freshSearch.addEventListener('click', () => {
+        if (dropdown.style.display === 'none') {
+            render(true);
+            dropdown.style.display = 'block';
+        }
+    });
     freshSearch.addEventListener('blur', () => {
         // Short delay so mousedown on a list item can fire before we tear it down.
         setTimeout(() => { dropdown.style.display = 'none'; }, 150);
@@ -339,7 +371,7 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
     });
     freshSearch.addEventListener('keydown', (e) => {
         if (dropdown.style.display === 'none') {
-            if (e.key === 'ArrowDown') { render(); dropdown.style.display = 'block'; }
+            if (e.key === 'ArrowDown') { render(true); dropdown.style.display = 'block'; }
             return;
         }
         const visible = Array.from(dropdown.children);
@@ -782,7 +814,7 @@ const wizardFetchLocations = () => {
                 hiddenId: 'wiz-spool-location',
                 dropdownId: 'dropdown-location',
                 items,
-                placeholder: '-- Unassigned --'
+                placeholder: 'Unassigned (default)'
             });
         });
 };
@@ -1934,16 +1966,25 @@ window.wizardSubmit = async () => {
 
 // --- SPOOL CLONE LOGIC ---
 window.openCloneWizard = async (spoolId) => {
-    // Detect context: if filament modal is open, return there instead of spool
+    // Group 10.11: source-aware return-id — only set when an actual details
+    // modal is visible at launch. Clone launched from search/grid/loc-mgr
+    // leaves return-ids null so the wizard closes silently on cancel rather
+    // than popping an unexpected details modal.
     const filModal = document.getElementById('filamentModal');
-    if (filModal && filModal.classList.contains('show')) {
+    const spoolModal = document.getElementById('spoolModal');
+    const filVisible = filModal && filModal.classList.contains('show');
+    const spoolVisible = spoolModal && spoolModal.classList.contains('show');
+    if (filVisible) {
         const fid = document.getElementById('fil-detail-id')?.innerText;
         if (fid) {
             wizardState.returnToFilamentId = fid;
             wizardState.returnToSpoolId = null;
         }
-    } else {
+    } else if (spoolVisible) {
         wizardState.returnToSpoolId = spoolId;
+        wizardState.returnToFilamentId = null;
+    } else {
+        wizardState.returnToSpoolId = null;
         wizardState.returnToFilamentId = null;
     }
 
@@ -2078,16 +2119,27 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
 
 // --- SPOOL EDIT LOGIC ---
 window.openEditWizard = async (spoolId) => {
-    // Detect context: if filament modal is open, return there instead of spool
+    // Group 10.11: only re-open a details modal on cancel/close if one was
+    // ACTUALLY visible at launch. Previously the `else` branch set
+    // returnToSpoolId unconditionally — so launching the wizard from the
+    // search FAB or Location Manager (no details modal open) still popped the
+    // spool details modal on cancel. Now we leave both return-ids null when
+    // there's no source details modal to return to.
     const filModal = document.getElementById('filamentModal');
-    if (filModal && filModal.classList.contains('show')) {
+    const spoolModal = document.getElementById('spoolModal');
+    const filVisible = filModal && filModal.classList.contains('show');
+    const spoolVisible = spoolModal && spoolModal.classList.contains('show');
+    if (filVisible) {
         const fid = document.getElementById('fil-detail-id')?.innerText;
         if (fid) {
             wizardState.returnToFilamentId = fid;
             wizardState.returnToSpoolId = null;
         }
-    } else {
+    } else if (spoolVisible) {
         wizardState.returnToSpoolId = spoolId;
+        wizardState.returnToFilamentId = null;
+    } else {
+        wizardState.returnToSpoolId = null;
         wizardState.returnToFilamentId = null;
     }
 
