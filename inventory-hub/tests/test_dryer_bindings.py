@@ -322,7 +322,29 @@ def test_reverse_lookup_empty_toolheads_render_as_empty_lists(sample_locs, print
 def test_reverse_lookup_unknown_printer_returns_empty_toolheads(tmp_locations_file, printer_map):
     locations_db.save_locations_list([])
     result = locations_db.get_bindings_for_machine("nonexistent", printer_map)
-    assert result == {"printer_name": "nonexistent", "toolheads": {}}
+    assert result == {"printer_name": "nonexistent", "toolheads": {}, "printer_pool": []}
+
+
+def test_reverse_lookup_printer_pool_aggregation(sample_locs, printer_map, tmp_locations_file):
+    # PRINTER:<id> sentinel bindings should surface in `printer_pool` so
+    # Quick-Swap can render a separate row for staging slots that aren't
+    # bound to a specific toolhead.
+    sample_locs[0]["extra"] = {"slot_targets": {"1": "XL-1", "4": "PRINTER:XL"}}
+    sample_locs[1]["extra"] = {"slot_targets": {"2": "PRINTER:XL"}}
+    sample_locs[2]["extra"] = {"slot_targets": {"1": "PRINTER:CORE1"}}
+    locations_db.save_locations_list(sample_locs)
+
+    xl_result = locations_db.get_bindings_for_machine("🦝 XL", printer_map)
+    # Toolheads still aggregate as before.
+    assert xl_result["toolheads"]["XL-1"] == [{"box": "PM-DB-XL-L", "slot": "1"}]
+    # Pool collects every PRINTER:XL sentinel regardless of source box.
+    pool = {(e["box"], e["slot"]) for e in xl_result["printer_pool"]}
+    assert pool == {("PM-DB-XL-L", "4"), ("PM-DB-XL-R", "2")}
+    # PRINTER:CORE1 doesn't leak into XL's pool.
+    assert all(e["box"] != "PM-DB-CORE1" for e in xl_result["printer_pool"])
+
+    core_result = locations_db.get_bindings_for_machine("🦝 Core One", printer_map)
+    assert core_result["printer_pool"] == [{"box": "PM-DB-CORE1", "slot": "1"}]
 
 
 def test_reverse_lookup_multiple_sources_per_toolhead(sample_locs, printer_map, tmp_locations_file):

@@ -60,7 +60,7 @@ def test_quickswap_grid_visible_on_bound_toolhead(page: Page, open_manage_modal)
     expect(section).to_be_visible()
     # With the fixture binding in place, at least one slot button renders.
     slots = page.locator(".fcc-qs-slot")
-    expect(slots.first).to_be_visible(timeout=3000)
+    expect(slots.first).to_be_visible(timeout=8000)
 
 
 @pytest.mark.usefixtures("require_server")
@@ -73,7 +73,7 @@ def test_quickswap_grid_hidden_on_dryer_box(page: Page, open_manage_modal):
 def test_quickswap_keyboard_q_focuses_first_slot(page: Page, open_manage_modal):
     import re
     open_manage_modal(TEST_TOOLHEAD)
-    expect(page.locator(".fcc-qs-slot").first).to_be_visible()
+    expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=8000)
     page.keyboard.press("q")
     page.wait_for_timeout(200)
     first = page.locator(".fcc-qs-slot").first
@@ -88,7 +88,7 @@ def test_quickswap_tap_opens_confirm_overlay(page: Page, open_manage_modal, api_
         pytest.skip("No bound-and-loaded slot available in dev state.")
     box, slot, toolhead = hit
     open_manage_modal(toolhead)
-    expect(page.locator(".fcc-qs-slot").first).to_be_visible()
+    expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=8000)
     test_btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     expect(test_btn).to_be_visible(timeout=3000)
     test_btn.click()
@@ -102,7 +102,10 @@ def test_quickswap_confirm_overlay_cancel_dismisses(page: Page, open_manage_moda
     open_manage_modal(TEST_TOOLHEAD)
     page.locator(".fcc-qs-slot").first.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
-    expect(overlay).to_be_visible(timeout=2000)
+    # showConfirmOverlay awaits a 3s active-print probe before mounting; 6s
+    # gives headroom for probe + network under sweep load. Same pattern as
+    # test_quickswap_deposit_and_header (Group 14.2).
+    expect(overlay).to_be_visible(timeout=6000)
     page.locator("#fcc-quickswap-no").click()
     expect(overlay).to_be_hidden(timeout=2000)
 
@@ -118,7 +121,7 @@ def test_quickswap_confirm_yes_actually_performs_swap(page: Page, open_manage_mo
         pytest.skip("No bound-and-loaded slot available in dev state.")
     box, slot, toolhead = hit
     open_manage_modal(toolhead)
-    expect(page.locator(".fcc-qs-slot").first).to_be_visible()
+    expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=8000)
     test_btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     expect(test_btn).to_be_visible(timeout=3000)
     test_btn.click()

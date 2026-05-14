@@ -358,6 +358,33 @@ const getFilamentStyle = (colorStr, direction = 'longitudinal') => {
 
     return { frame: frameGrad, inner: innerGrad, border: borderStyle, base: colors[0], isSolid: isSolid };
 };
+window.getFilamentStyle = getFilamentStyle;
+
+// Render a small color swatch <span> that respects multi-color filaments
+// (CSV / JSON list / coaxial). Routes through getFilamentStyle so the
+// gradient logic is the SAME as the cards' frame backgrounds — fixes the
+// "split(',')[0]" bug class where coextruded spools showed only the first
+// component color in chips/swatches. Use this helper for any new swatch
+// rather than inlining `background:#${color.split(',')[0]}`.
+const makeSwatchHtml = (color, direction = 'longitudinal', opts = {}) => {
+    const size = opts.size || 14;
+    const borderColor = opts.borderColor || '#fff';
+    const borderWidth = opts.borderWidth != null ? opts.borderWidth : 1;
+    const margin = opts.marginRight != null ? opts.marginRight : 4;
+    const extra = opts.extraStyle || '';
+    let bg;
+    try {
+        bg = getFilamentStyle(color, direction).frame;
+    } catch (e) {
+        // getFilamentStyle handles every reasonable input; this catch is
+        // a belt-and-suspenders fallback for truly malformed colors so a
+        // single bad row never breaks an entire grid render.
+        const safe = String(color || '555555').split(',')[0].replace(/[^a-fA-F0-9]/g, '') || '555555';
+        bg = '#' + safe;
+    }
+    return `<span style="display:inline-block;width:${size}px;height:${size}px;border-radius:50%;background:${bg};border:${borderWidth}px solid ${borderColor};vertical-align:middle;margin-right:${margin}px;flex-shrink:0;${extra}"></span>`;
+};
+window.makeSwatchHtml = makeSwatchHtml;
 
 const hexToRgb = (hex) => {
     if (!hex) return { r: '', g: '', b: '' };

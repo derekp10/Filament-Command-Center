@@ -121,7 +121,13 @@
                         });
                     }
 
-                    if (!entries.length) {
+                    // Printer Pool: dryer-box slots bound to PRINTER:<id>
+                    // sentinel that affiliates with this printer. Surfaced
+                    // separately so users can deposit from the toolhead view
+                    // even when the destination slot isn't toolhead-bound.
+                    const printerPool = body.printer_pool || [];
+
+                    if (!entries.length && !printerPool.length) {
                         empty.style.display = 'block';
                         return;
                     }
@@ -130,7 +136,10 @@
                     // Fetch live contents for each unique source box so the
                     // button can show WHAT spool is currently sitting in that
                     // slot. Without this, tapping "Slot 4" is a leap of faith.
-                    const uniqueBoxes = [...new Set(entries.map(e => e.box))];
+                    const uniqueBoxes = [...new Set([
+                        ...entries.map(e => e.box),
+                        ...printerPool.map(p => p.box),
+                    ])];
                     Promise.all(uniqueBoxes.map(b =>
                         fetch(`/api/get_contents?id=${encodeURIComponent(b)}`)
                             .then(r => r.ok ? r.json() : [])
@@ -174,32 +183,30 @@
                                     : '';
                                 let contentLines, borderCls, handler, titleAttr, disabledAttr;
                                 if (item) {
-                                    // Slot has a spool — tap loads it into the toolhead.
-                                    const short = String(item.display || `#${item.id}`).replace(/"/g, '&quot;');
-                                    const weight = item.remaining_weight != null
-                                        ? `<div class="text-light small" style="font-size:0.9rem;">⚖️ ${Math.round(item.remaining_weight)}g</div>`
-                                        : '';
-                                    const swatch = item.color
-                                        ? `<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#${String(item.color).split(',')[0]};border:1px solid #fff;vertical-align:middle;margin-right:6px;"></span>`
-                                        : '';
-                                    contentLines = `
-                                        <div class="fw-bold" style="font-size:0.95rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                                            ${swatch}${short}
-                                        </div>
-                                        ${weight}`;
-                                    borderCls = 'btn-outline-info';
-                                    handler = 'window.quickSwapTap(this)';
-                                    titleAttr = `Load ${item.display || `#${item.id}`} from ${e.box} slot ${e.slot} into ${th}`;
-                                    disabledAttr = '';
+                                    // Slot has a spool — render via SpoolCardBuilder's
+                                    // 'quickswap' variant so the user sees a real
+                                    // filament card (color, brand, name, weight,
+                                    // action footer) instead of a bare button.
+                                    // The card returns its own HTML; skip the
+                                    // shared button wrapper below by appending
+                                    // here and continuing the loop.
+                                    const titleText = `Load ${item.display || `#${item.id}`} from ${e.box} slot ${e.slot} into ${th}`;
+                                    html += window.SpoolCardBuilder.buildCard(item, 'quickswap', {
+                                        box: e.box,
+                                        slot: e.slot,
+                                        toolhead: th,
+                                        showToolhead: isPrinter,
+                                        handler: 'window.quickSwapTap(this)',
+                                        titleAttr: titleText,
+                                    });
+                                    return;  // forEach callback — skip the button wrapper
                                 } else if (bufferTopSpool) {
                                     // Empty slot + buffered spool — tap DEPOSITS
                                     // the buffered spool into the slot. Reuses
                                     // the scan-flow backend so auto-deploy to
                                     // the bound toolhead kicks in too.
                                     const bsDisplay = String(bufferTopSpool.display || `#${bufferTopSpool.id}`).replace(/"/g, '&quot;');
-                                    const bsSwatch = bufferTopSpool.color
-                                        ? `<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#${String(bufferTopSpool.color).split(',')[0]};border:1px solid #fff;vertical-align:middle;margin-right:6px;"></span>`
-                                        : '';
+                                    const bsSwatch = window.makeSwatchHtml(bufferTopSpool.color, bufferTopSpool.color_direction, { size: 14, marginRight: 6 });
                                     contentLines = `
                                         <div class="text-success fw-bold" style="font-size:0.9rem;">⬇️ Deposit from buffer:</div>
                                         <div class="text-light" style="font-size:0.9rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
@@ -231,6 +238,70 @@
                                     </button>`;
                             });
                         });
+
+                        // Printer Pool section — staging slots bound to the
+                        // PRINTER:<id> sentinel for this printer. Visually
+                        // distinct from toolhead rows (yellow/amber theming
+                        // vs. cyan) so users immediately see "this is a
+                        // staging slot, not a feed."
+                        if (printerPool.length) {
+                            html += `<div class="w-100 mt-4 mb-1 fw-bold" style="font-size:1.1rem; border-top: 1px solid rgba(255,193,7,0.4); padding-top: 0.75rem;">` +
+                                    `<span class="text-warning">🏭 Printer Pool</span>` +
+                                    `<span class="text-light small ms-2" style="font-size:0.85rem; opacity:0.8;">staging / drying — not bound to a toolhead</span>` +
+                                    `</div>`;
+                            printerPool
+                                .slice()
+                                .sort((a, b) => (a.box + a.slot).localeCompare(b.box + b.slot))
+                                .forEach(p => {
+                                    const item = slotMap[`${p.box}|${p.slot}`];
+                                    if (item) {
+                                        // Filled pool slot — show the spool
+                                        // card. Tap opens the spool's details
+                                        // (no toolhead to swap into).
+                                        const titleText = `${item.display || `#${item.id}`} in ${p.box} slot ${p.slot} — printer pool (no toolhead bound)`;
+                                        html += window.SpoolCardBuilder.buildCard(item, 'quickswap', {
+                                            box: p.box,
+                                            slot: p.slot,
+                                            toolhead: '',
+                                            showToolhead: false,
+                                            handler: `event.stopPropagation(); openSpoolDetails(${item.id})`,
+                                            titleAttr: titleText,
+                                        });
+                                    } else if (bufferTopSpool) {
+                                        // Empty pool slot + buffered spool — deposit.
+                                        const bsDisplay = String(bufferTopSpool.display || `#${bufferTopSpool.id}`).replace(/"/g, '&quot;');
+                                        const bsSwatch = window.makeSwatchHtml(bufferTopSpool.color, bufferTopSpool.color_direction, { size: 14, marginRight: 6 });
+                                        html += `
+                                            <button type="button" class="fcc-qs-slot fcc-qs-pool btn btn-outline-success fw-bold d-flex flex-column align-items-start"
+                                                data-box="${p.box}" data-slot="${p.slot}"
+                                                data-toolhead=""
+                                                data-pool="1"
+                                                style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
+                                                onclick="window.quickSwapDeposit(this)"
+                                                title="Drop the buffered spool into ${p.box} slot ${p.slot} (printer pool — no toolhead auto-deploy)">
+                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:0.75rem;">${p.box}</span></div>
+                                                <div class="text-success fw-bold" style="font-size:0.9rem;">⬇️ Deposit from buffer:</div>
+                                                <div class="text-light" style="font-size:0.9rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                                    ${bsSwatch}${bsDisplay}
+                                                </div>
+                                            </button>`;
+                                    } else {
+                                        // Empty pool slot + empty buffer — inert.
+                                        html += `
+                                            <button type="button" class="fcc-qs-slot fcc-qs-pool btn btn-outline-warning fw-bold d-flex flex-column align-items-start"
+                                                data-box="${p.box}" data-slot="${p.slot}"
+                                                data-toolhead=""
+                                                data-pool="1"
+                                                style="min-width:240px; font-size:1.05rem; padding:10px 14px; opacity:0.7;"
+                                                disabled
+                                                title="${p.box} slot ${p.slot} is empty — scan a spool into the buffer to deposit here">
+                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:0.75rem;">${p.box}</span></div>
+                                                <div class="text-muted small fw-bold" style="font-size:0.9rem;">◦ empty staging slot</div>
+                                            </button>`;
+                                    }
+                                });
+                        }
+
                         grid.innerHTML = html;
                     });
                 });
@@ -572,8 +643,14 @@
         // Pull the display label from the button so the confirm overlay names
         // the specific spool. Ask-before-you-commit matters more when the
         // button text tells you what you're committing to.
-        const labelEl = btn.querySelector('.fw-bold + .fw-bold, div.fw-bold:nth-child(2)');
-        const spoolLabel = labelEl ? labelEl.innerText.trim() : '';
+        // The 'quickswap' SpoolCardBuilder variant stores it on data-spool-label.
+        // Older button-style cells (empty-slot fallbacks) carry the label in
+        // their inner HTML — fall back to the DOM query for those.
+        let spoolLabel = btn.dataset.spoolLabel || '';
+        if (!spoolLabel) {
+            const labelEl = btn.querySelector('.fw-bold + .fw-bold, div.fw-bold:nth-child(2)');
+            spoolLabel = labelEl ? labelEl.innerText.trim() : '';
+        }
         // Active-print banner is handled inside showConfirmOverlay itself
         // now (covers all 4 call sites). No pre-probe wrapper here.
         showConfirmOverlay({
@@ -1086,8 +1163,15 @@
         const currentIdx = buttons.findIndex(b => b.classList.contains('kb-active'));
 
         if (e.key === 'q' || e.key === 'Q') {
-            // Jump focus into the grid on Q.
+            // Jump focus into the grid on Q. Scroll the section into view
+            // first — Quick-Swap often sits below the fold when a toolhead
+            // also has a long Feeds editor / contents list above it. Without
+            // the scroll the cyan kb-active focus glow appears off-screen.
             e.preventDefault();
+            const section = document.getElementById('manage-quickswap-section');
+            if (section && section.scrollIntoView) {
+                section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
             focusSlot(buttons[0]);
         } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
             if (currentIdx === -1) return focusSlot(buttons[0]);

@@ -15,7 +15,7 @@
 | 6 | 🟡 Edit Filament & Details Modal (new panels) | 2 | ~3 hrs | `DONE` 2026-05-11 | [06-edit-modal-large.md](tasks/06-edit-modal-large.md) |
 | 7 | 🧪 Testing Housekeeping | 2 | ~1–1.5 hrs | `DONE` 2026-05-07 | [07-testing-housekeeping.md](tasks/07-testing-housekeeping.md) |
 | 8 | 🟣 Keyboard Navigation & Dialog Polish | 4 | ~3.5 hrs | `DONE` 2026-05-12 (8.1 partial — 12 button-only modals deferred as Bootstrap-default-acceptable) | [08-keyboard-nav-polish.md](tasks/08-keyboard-nav-polish.md) |
-| 9 | ⬜ Quick-Swap Grid Enhancements & Printer Status Widget | 3 | ~4–5 hrs | `READY` | [09-quickswap-grid.md](tasks/09-quickswap-grid.md) |
+| 9 | 🟢 Quick-Swap Grid Enhancements & Printer Status Widget | 3 | ~4–5 hrs | `DONE` 2026-05-13 | [09-quickswap-grid.md](tasks/09-quickswap-grid.md) |
 | 10 | 🟠 Add/Edit Wizard UX Overhaul | 11 | ~6.5–8 hrs | `READY` | [10-wizard-ux-overhaul.md](tasks/10-wizard-ux-overhaul.md) |
 | 11 | ⚫ External Parsers & Prusament Cleanup | 3 | ~3 hrs | `READY` | [11-external-parsers.md](tasks/11-external-parsers.md) |
 | 12 | 🔵 Weight Entry Unified Component — Phase 2 | 2 | ~6–10 hrs | `DONE` 2026-04-27 | [12-weight-entry-component.md](tasks/12-weight-entry-component.md) |
