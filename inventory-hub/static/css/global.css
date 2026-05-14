@@ -610,6 +610,58 @@ body {
     font-weight: 600;
 }
 
+/* Wizard collapse section toggles (Group 10.1) */
+.fcc-wiz-section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    text-align: left;
+    color: #adb5bd;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #343a40;
+    padding: 0.4rem 0;
+    margin-top: 1rem;
+    margin-bottom: 0.25rem;
+    font-family: var(--bs-font-monospace, monospace);
+    text-transform: uppercase;
+    font-size: 0.85rem;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.fcc-wiz-section-toggle:hover,
+.fcc-wiz-section-toggle:focus-visible {
+    background: rgba(0, 212, 255, 0.06);
+    border-bottom-color: #00d4ff;
+    color: #00d4ff;
+    outline: none;
+}
+.fcc-wiz-section-title {
+    flex: 1 1 auto;
+}
+.fcc-wiz-section-chevron {
+    display: inline-block;
+    transition: transform 0.2s ease;
+    color: #6c757d;
+    font-size: 0.85rem;
+    line-height: 1;
+}
+.fcc-wiz-section-toggle:hover .fcc-wiz-section-chevron,
+.fcc-wiz-section-toggle:focus-visible .fcc-wiz-section-chevron {
+    color: #00d4ff;
+}
+.fcc-wiz-section-toggle[aria-expanded="false"] .fcc-wiz-section-chevron {
+    transform: rotate(-90deg);
+}
+.fcc-wiz-section-toggle[aria-expanded="true"] .fcc-wiz-section-chevron {
+    transform: rotate(0deg);
+}
+.fcc-wiz-section-panel {
+    padding-top: 0.5rem;
+}
+
 /* Dark Mode UI Contrast Fixes */
 .btn-outline-secondary {
     color: #ccc;
