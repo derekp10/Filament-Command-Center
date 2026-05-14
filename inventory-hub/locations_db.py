@@ -558,19 +558,36 @@ def get_bindings_for_machine(printer_name, printer_map):
       "toolheads": {
         "XL-1": [{"box": "PM-DB-XL-L", "slot": "1"}, ...],
         ...
-      }
+      },
+      "printer_pool": [
+        {"box": "PM-DB-XL-L", "slot": "4"},  # PRINTER:XL sentinel slots
+        ...
+      ]
     }
 
     Toolheads with zero bindings get an empty list so the frontend can
     render "Link a slot…" placeholders without a separate lookup.
+
+    `printer_pool` is the set of dryer-box slots bound to the
+    `PRINTER:<id>` sentinel that affiliates with this printer (i.e. its
+    LocationID prefix). Pool slots are staging/drying slots — they don't
+    feed a specific toolhead, but Quick-Swap surfaces them so users can
+    deposit buffered spools without leaving the toolhead view.
     """
     loc_list = load_locations_list()
     # Collect every toolhead location ID that belongs to this printer.
-    toolheads = {
-        loc_id.upper(): []
-        for loc_id, cfg in (printer_map or {}).items()
+    machine_toolhead_ids = [
+        loc_id.upper() for loc_id, cfg in (printer_map or {}).items()
         if cfg.get('printer_name') == printer_name
+    ]
+    toolheads = {th_id: [] for th_id in machine_toolhead_ids}
+    # The printer's PRINTER:<id> prefix matches every toolhead's prefix
+    # (XL-1 / XL-2 / … all share "XL"). Mirror _known_printer_prefixes.
+    machine_prefixes = {
+        (th_id.split('-', 1)[0] if '-' in th_id else th_id)
+        for th_id in machine_toolhead_ids
     }
+    printer_pool = []
     for row in loc_list:
         if row.get('Type') != DRYER_BOX_TYPE:
             continue
@@ -581,4 +598,13 @@ def get_bindings_for_machine(printer_name, printer_map):
             target_up = target.strip().upper()
             if target_up in toolheads:
                 toolheads[target_up].append({"box": box_id, "slot": slot})
-    return {"printer_name": printer_name, "toolheads": toolheads}
+                continue
+            if is_printer_sentinel(target_up):
+                suffix = target_up.split(':', 1)[1]
+                if suffix in machine_prefixes:
+                    printer_pool.append({"box": box_id, "slot": slot})
+    return {
+        "printer_name": printer_name,
+        "toolheads": toolheads,
+        "printer_pool": printer_pool,
+    }

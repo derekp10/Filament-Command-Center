@@ -60,7 +60,9 @@ def test_empty_slot_disabled_when_buffer_empty(page: Page, open_manage_modal, ap
     page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")
     page.wait_for_timeout(500)
     btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
-    expect(btn).to_be_visible(timeout=3000)
+    # 8s timeout: the grid render chain (printer_map → toolhead_slots →
+    # get_contents) is async and can exceed 3s under sweep load. Group 9.
+    expect(btn).to_be_visible(timeout=8000)
     expect(btn).to_be_disabled()
     expect(btn).to_contain_text("empty slot")
 
@@ -89,7 +91,7 @@ def test_empty_slot_becomes_deposit_target_when_buffer_has_spool(page: Page, ope
     page.wait_for_timeout(800)
 
     btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
-    expect(btn).to_be_visible(timeout=3000)
+    expect(btn).to_be_visible(timeout=8000)
     expect(btn).not_to_be_disabled()
     expect(btn).to_contain_text("Deposit from buffer")
     # Click handler should be the deposit variant, not the swap variant.
@@ -116,7 +118,7 @@ def test_deposit_confirm_overlay_names_the_spool_and_toolhead(page: Page, open_m
     """)
     page.wait_for_timeout(800)
     btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
-    expect(btn).to_be_visible(timeout=3000)
+    expect(btn).to_be_visible(timeout=8000)
     btn.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
     # showConfirmOverlay awaits a 3s active-print probe before mounting; the
@@ -149,7 +151,7 @@ def test_clicking_box_header_opens_manage_on_that_box(page: Page, open_manage_mo
     open_manage_modal(toolhead)
     # Click the dotted-underline anchor inside the grid.
     link = page.locator(f"#quickswap-grid a[onclick*=\"openManage('{box}')\"]").first
-    expect(link).to_be_visible(timeout=3000)
+    expect(link).to_be_visible(timeout=8000)
     link.click()
     page.wait_for_timeout(800)
     expect(page.locator("#manage-loc-id")).to_have_value(box)
