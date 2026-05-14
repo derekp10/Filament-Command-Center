@@ -17,7 +17,7 @@
 | 8 | 🟣 Keyboard Navigation & Dialog Polish | 4 | ~3.5 hrs | `DONE` 2026-05-12 (8.1 partial — 12 button-only modals deferred as Bootstrap-default-acceptable) | [08-keyboard-nav-polish.md](tasks/08-keyboard-nav-polish.md) |
 | 9 | 🟢 Quick-Swap Grid Enhancements & Printer Status Widget | 3 | ~4–5 hrs | `DONE` 2026-05-13 | [09-quickswap-grid.md](tasks/09-quickswap-grid.md) |
 | 10 | 🟠 Add/Edit Wizard UX Overhaul | 11 | ~6.5–8 hrs | `READY` | [10-wizard-ux-overhaul.md](tasks/10-wizard-ux-overhaul.md) |
-| 11 | ⚫ External Parsers & Prusament Cleanup | 3 | ~3 hrs | `READY` | [11-external-parsers.md](tasks/11-external-parsers.md) |
+| 11 | ⚫ External Parsers & Prusament Cleanup | 3 | ~3 hrs | `DONE` 2026-05-13 | [11-external-parsers.md](tasks/11-external-parsers.md) |
 | 12 | 🔵 Weight Entry Unified Component — Phase 2 | 2 | ~6–10 hrs | `DONE` 2026-04-27 | [12-weight-entry-component.md](tasks/12-weight-entry-component.md) |
 | 13 | 🐛 Recent Bugfixes (Weight + Dryer Display + LOC Search + Bind Desync + Eject) | 9 | ~6–8 hrs | `DONE` 2026-05-11 | [13-recent-bugfixes.md](tasks/13-recent-bugfixes.md) |
 | 14 | 🧪 Test-Sweep Flake Stabilization | 6 | ~3–5 hrs | `DONE` 2026-05-12 | [14-test-sweep-flake-stabilization.md](tasks/14-test-sweep-flake-stabilization.md) |

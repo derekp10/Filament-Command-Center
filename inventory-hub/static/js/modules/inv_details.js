@@ -2273,6 +2273,258 @@ const _showDeleteSpoolFlow = (spoolId) => {
     });
 };
 
+// Group 11.2 — Merge duplicate filaments. Routes the user through a
+// target-picker → preview-and-confirm flow, then POSTs to the merge
+// endpoint that re-parents all child spools and deletes the source.
+// Routed through window.mountOverlay() per project convention so it
+// composes correctly with the filament details modal underneath.
+const _showMergeFilamentFlow = async (sourceFilamentId) => {
+    const srcId = String(sourceFilamentId || '').trim();
+    if (!srcId) return;
+    const filamentModalEl = document.getElementById('filamentModal');
+
+    // Fetch the full filament list + the source's own details up front. Two
+    // round-trips because the list endpoint doesn't return nested vendor
+    // labels in the same shape as filament_details, and we want the source
+    // label in the picker / confirm prompt to read identically to what the
+    // user sees on the details modal title.
+    let allFilaments = [];
+    let srcSpoolCount = 0;
+    try {
+        const [filRes, spoolRes] = await Promise.all([
+            fetch('/api/filaments'),
+            fetch(`/api/spools_by_filament?id=${encodeURIComponent(srcId)}&allow_archived=true`),
+        ]);
+        const filJson = await filRes.json();
+        if (filJson && filJson.success && Array.isArray(filJson.filaments)) {
+            allFilaments = filJson.filaments;
+        }
+        const spoolsJson = await spoolRes.json();
+        if (Array.isArray(spoolsJson)) srcSpoolCount = spoolsJson.length;
+    } catch (e) {
+        showToast(`Could not load filament list: ${e.message || e}`, 'error', 7000);
+        return;
+    }
+
+    const fmtFilament = (f) => {
+        const id = f && f.id != null ? `#${f.id}` : '#?';
+        const brand = (f && (f.vendor && f.vendor.name)) || 'Generic';
+        const mat = (f && f.material) || '?';
+        const name = (f && f.name) || '';
+        return `${id} — ${brand} ${mat}${name ? ' ' + name : ''}`;
+    };
+
+    const srcFilament = allFilaments.find(f => String(f.id) === srcId);
+    const srcLabel = srcFilament ? fmtFilament(srcFilament) : `#${srcId}`;
+
+    // Eligible targets = everything except the source itself. Sort by id
+    // descending so the most recently created filaments (the more likely
+    // "canonical" version of a duplicate pair) bubble to the top.
+    const targets = allFilaments
+        .filter(f => String(f.id) !== srcId)
+        .sort((a, b) => (b.id || 0) - (a.id || 0));
+
+    if (!targets.length) {
+        showToast('No other filaments exist to merge into.', 'warning', 5000);
+        return;
+    }
+
+    const datalistOpts = targets.map(f => {
+        // <option value="#42 — Hatchbox PLA Galaxy Black"> — datalist matches
+        // against the visible value, so the prefix #id makes id-search fast.
+        return `<option value="${fmtFilament(f).replace(/"/g, '&quot;')}"></option>`;
+    }).join('');
+
+    const inputId = 'fcc-merge-target-input';
+    const errId = 'fcc-merge-target-err';
+    const datalistId = 'fcc-merge-target-list';
+    const continueBtnId = 'fcc-merge-continue';
+    const cancelBtnId = 'fcc-merge-cancel';
+
+    const pickerHtml = `
+        <div style="background:#222; color:#fff; border:1px solid #555; border-radius:8px;
+                    padding:20px 22px; min-width:420px; max-width:560px;
+                    box-shadow:0 8px 32px rgba(0,0,0,0.55);">
+            <h5 style="margin:0 0 8px; color:#5dd0ff;">🔗 Merge filament</h5>
+            <div style="color:#ccc; font-size:0.9em; margin-bottom:12px;">
+                Re-parent all spools from <strong>${srcLabel}</strong>
+                (<strong>${srcSpoolCount}</strong> spool${srcSpoolCount === 1 ? '' : 's'},
+                incl. archived) onto another filament, then delete this filament.
+            </div>
+            <label for="${inputId}" style="display:block; font-size:0.85em; color:#aaa; margin-bottom:4px;">
+                Target filament (start typing brand / material / color or <code>#id</code>):
+            </label>
+            <input id="${inputId}" type="text" list="${datalistId}" autocomplete="off"
+                placeholder="e.g. #42 or Hatchbox PLA"
+                style="width:100%; padding:8px 10px; background:#111; color:#fff;
+                       border:1px solid #555; border-radius:4px; font-family:monospace;" />
+            <datalist id="${datalistId}">${datalistOpts}</datalist>
+            <div id="${errId}" style="color:#ff5555; font-size:0.85em; min-height:1.1em; margin-top:6px;"></div>
+            <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
+                <button id="${cancelBtnId}" class="btn btn-secondary" style="min-width:110px;">Cancel</button>
+                <button id="${continueBtnId}" class="btn btn-primary fw-bold" style="min-width:140px;">Continue →</button>
+            </div>
+        </div>
+    `;
+
+    const handle = window.mountOverlay({
+        id: 'fcc-merge-filament-overlay',
+        content: pickerHtml,
+        tier: 'standard',
+        host: filamentModalEl,
+        initialFocus: `#${inputId}`,
+        // Datalist <select> dropdowns sometimes get pointer-events trapped by
+        // the host modal; occlude them so the picker stays interactive.
+        occlude: ['.fcc-offcanvas-search'],
+    });
+
+    const input = handle.panel.querySelector(`#${inputId}`);
+    const errEl = handle.panel.querySelector(`#${errId}`);
+    const continueBtn = handle.panel.querySelector(`#${continueBtnId}`);
+    const cancelBtn = handle.panel.querySelector(`#${cancelBtnId}`);
+
+    const resolveTarget = () => {
+        const raw = (input.value || '').trim();
+        if (!raw) return null;
+        // Allow direct "#42" or "42" entry
+        const idMatch = raw.match(/^#?(\d+)\b/);
+        if (idMatch) {
+            const idNum = parseInt(idMatch[1], 10);
+            return targets.find(f => f.id === idNum) || null;
+        }
+        // Otherwise match against the exact rendered label (the datalist
+        // option the user picked).
+        return targets.find(f => fmtFilament(f) === raw) || null;
+    };
+
+    cancelBtn.addEventListener('click', () => handle.cleanup());
+    continueBtn.addEventListener('click', () => {
+        const tgt = resolveTarget();
+        if (!tgt) {
+            errEl.textContent = 'Pick a filament from the list (or type its #id).';
+            input.focus();
+            return;
+        }
+        if (String(tgt.id) === srcId) {
+            errEl.textContent = "Target can't be the same filament.";
+            return;
+        }
+        _showMergeConfirmStep(srcId, srcLabel, tgt, srcSpoolCount, filamentModalEl);
+        handle.cleanup();
+    });
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            continueBtn.click();
+        }
+    });
+};
+
+// Step 2 of the merge flow — type-CONFIRM gate + actual POST. Split out so
+// the picker overlay can fully cleanup before the confirm overlay mounts
+// (no nested overlays, no state held across steps).
+const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl) => {
+    const tgtLabel = (() => {
+        const id = `#${target.id}`;
+        const brand = (target.vendor && target.vendor.name) || 'Generic';
+        const mat = target.material || '?';
+        const name = target.name || '';
+        return `${id} — ${brand} ${mat}${name ? ' ' + name : ''}`;
+    })();
+
+    const confirmInputId = 'fcc-merge-confirm-input';
+    const errId = 'fcc-merge-confirm-err';
+    const cancelBtnId = 'fcc-merge-confirm-cancel';
+    const goBtnId = 'fcc-merge-confirm-go';
+
+    const html = `
+        <div style="background:#222; color:#fff; border:1px solid #ff9955; border-radius:8px;
+                    padding:20px 22px; min-width:420px; max-width:560px;
+                    box-shadow:0 8px 32px rgba(0,0,0,0.55);">
+            <h5 style="margin:0 0 8px; color:#ffaa55;">⚠️ Confirm merge</h5>
+            <div style="color:#ddd; font-size:0.92em; margin-bottom:10px;">
+                <strong>${spoolCount}</strong> spool${spoolCount === 1 ? '' : 's'}
+                (including archived) will move from
+                <div style="margin:6px 0;">
+                    <span style="color:#ff8866;">${srcLabel}</span><br>
+                    <span style="color:#aaa;">→</span>
+                    <span style="color:#88ffaa;">${tgtLabel}</span>
+                </div>
+                Then <strong>${srcLabel}</strong> will be <strong>permanently deleted</strong>.
+                This cannot be undone.
+            </div>
+            <label for="${confirmInputId}" style="display:block; font-size:0.85em; color:#aaa; margin-bottom:4px;">
+                Type <code style="color:#ffaa55;">MERGE</code> to confirm:
+            </label>
+            <input id="${confirmInputId}" type="text" autocomplete="off"
+                style="width:100%; padding:8px 10px; background:#111; color:#fff;
+                       border:1px solid #555; border-radius:4px;
+                       font-family:monospace; text-align:center;" />
+            <div id="${errId}" style="color:#ff5555; font-size:0.85em; min-height:1.1em; margin-top:6px;"></div>
+            <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
+                <button id="${cancelBtnId}" class="btn btn-secondary" style="min-width:110px;">Cancel</button>
+                <button id="${goBtnId}" class="btn btn-danger fw-bold" style="min-width:160px;">Merge forever</button>
+            </div>
+        </div>
+    `;
+
+    const handle = window.mountOverlay({
+        id: 'fcc-merge-confirm-overlay',
+        content: html,
+        tier: 'confirm',
+        host: hostModalEl,
+        initialFocus: `#${confirmInputId}`,
+    });
+
+    const input = handle.panel.querySelector(`#${confirmInputId}`);
+    const errEl = handle.panel.querySelector(`#${errId}`);
+    const goBtn = handle.panel.querySelector(`#${goBtnId}`);
+    const cancelBtn = handle.panel.querySelector(`#${cancelBtnId}`);
+
+    cancelBtn.addEventListener('click', () => handle.cleanup());
+    goBtn.addEventListener('click', async () => {
+        if ((input.value || '').trim() !== 'MERGE') {
+            errEl.textContent = "Type MERGE exactly to confirm.";
+            input.focus();
+            input.select();
+            return;
+        }
+        goBtn.disabled = true;
+        cancelBtn.disabled = true;
+        try {
+            const r = await fetch(`/api/filament/${srcId}/merge_into/${target.id}`, {
+                method: 'POST',
+            });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.success) {
+                const err = (j && j.error) || `HTTP ${r.status}`;
+                showToast(`Merge failed: ${err}`, 'error', 7000);
+                goBtn.disabled = false;
+                cancelBtn.disabled = false;
+                return;
+            }
+            const n = (j.reparented_spool_ids || []).length;
+            showToast(
+                `Merged ${srcLabel} → ${tgtLabel} (${n} spool${n === 1 ? '' : 's'} re-parented)`,
+                'success', 4000,
+            );
+            handle.cleanup();
+            if (typeof modals !== 'undefined' && modals.filamentModal) modals.filamentModal.hide();
+            document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+        } catch (e) {
+            showToast(`Merge failed: ${e.message || e}`, 'error', 7000);
+            goBtn.disabled = false;
+            cancelBtn.disabled = false;
+        }
+    });
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            goBtn.click();
+        }
+    });
+};
+
 const _showDeleteFilamentFlow = (filamentId, childSpoolCount) => {
     const overlay = document.getElementById('fcc-filament-delete-overlay');
     if (!overlay || !filamentId) return;
@@ -2324,6 +2576,15 @@ document.addEventListener('DOMContentLoaded', () => {
         spoolDel.addEventListener('click', () => {
             const sid = (document.getElementById('detail-id') || {}).innerText;
             if (sid) _showDeleteSpoolFlow(sid);
+        });
+    }
+    const filMerge = document.getElementById('btn-fil-merge');
+    if (filMerge) {
+        filMerge.addEventListener('click', () => {
+            const fidEl = document.getElementById('fil-detail-id');
+            const fid = fidEl ? (fidEl.innerText || '').trim() : '';
+            if (!fid) return;
+            _showMergeFilamentFlow(fid);
         });
     }
     const filDel = document.getElementById('btn-fil-delete');
