@@ -1,3 +1,56 @@
+"""External Source Plugins for "Import from External" in the wizard.
+
+Each parser implements `BaseParser.search(query)` and returns a list of dicts
+in a standardized schema (see `BaseParser.search` docstring). The wizard
+auto-detects URLs and routes to the appropriate parser; free-form keyword
+search currently only flows through Spoolman.
+
+Status as of 2026-05-13 (Group 11):
+
+    spoolman      ✅ Works.  Free-form keyword search against Spoolman's own
+                            `/api/v1/external/filament` aggregated DB. Listed
+                            in the wizard dropdown as the default.
+    prusament     ✅ Works.  URL-driven (https://prusament.com/spool/<id>/...).
+                            Auto-detected by `wizardSearchExternal` and also
+                            drives the per-spool scan flow in Step 3 of the
+                            wizard (see `inv_wizard.js` per-spool scan).
+    amazon        ⚠️ Conditional.  Requires SCRAPER_API_KEY in config.json/ENV
+                            *and* beautifulsoup4 to be importable. BS4 is not
+                            in the dev Docker image; without it the parser
+                            short-circuits to empty. Listed in the dropdown
+                            but will silently no-op if either dep is missing.
+    3dfp          ⚠️ Untested.  Scraper exists for 3dfilamentprofiles.com URLs
+                            but their DOM has not been re-validated since
+                            this was first authored. Listed but disabled in
+                            the dropdown until verified.
+    open_filament 🔲 Stub.   Placeholder for open-filament-database support.
+                            Returns []. Tracked in Feature-Buglist "Continue
+                            to support External Import" section.
+
+Currently supported external sources (data Derek can actually feed in):
+  ✅ Spoolman aggregated DB (keyword search)
+  ✅ Prusament per-spool URLs   (full per-spool data: weight, mfg date, etc.)
+  ⚠️ Amazon product /dp/<ASIN>  (requires ScraperAPI + bs4 — title-only NLP)
+  ⚠️ 3dfilamentprofiles.com URLs (scraper exists, untested)
+
+Gaps tracked for future work:
+  🔲 open-filament-database  — community DB, no parser yet
+  🔲 Open Print Tags         — NFC tag init/read/write, no parser yet
+  🔲 Onlyspoolz.com          — vendor pages, no parser yet
+  🔲 Purchase emails         — order-confirmation scrape, no parser yet
+  🔲 Vendor product pages    — generic scrape, no parser yet
+
+Adding a new parser:
+  1. Subclass BaseParser, implement get_source_id() and search(query).
+  2. Register the class in the PARSERS dict at the bottom of this file.
+  3. If URL-driven, add an auto-detect branch in `wizardSearchExternal`
+     (`inv_wizard.js`) so a paste of the URL routes correctly without the
+     user picking the source from the dropdown.
+  4. Add an <option> in the wizard dropdown
+     (`templates/components/modals_wizard.html` → `#wiz-external-source`).
+  5. Add coverage in `tests/test_external_parsers.py`.
+"""
+
 import requests
 import re
 import json

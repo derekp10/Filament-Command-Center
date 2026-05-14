@@ -1258,6 +1258,105 @@ def api_delete_filament(fid):
         "deleted_spool_ids": deleted_spool_ids,
     })
 
+
+@app.route('/api/filament/<int:src_fid>/merge_into/<int:dst_fid>', methods=['POST'])
+def api_merge_filament(src_fid, dst_fid):
+    """Merge `src_fid` into `dst_fid`: re-parent every spool from source to
+    target, then delete the now-orphan source filament. Used by the
+    "Merge into another filament…" action on the Filament Details modal
+    to clean up duplicates that pre-date the tier-1 product-id matcher
+    (Group 11.2). Atomic-ish: if any spool re-parent fails, we abort
+    before deleting the source so partial state stays recoverable.
+    """
+    if src_fid == dst_fid:
+        return jsonify({
+            "success": False,
+            "error": "Source and target filaments must differ.",
+        }), 400
+
+    src = spoolman_api.get_filament(src_fid)
+    if not src:
+        return jsonify({
+            "success": False,
+            "error": f"Source filament #{src_fid} not found.",
+        }), 404
+    dst = spoolman_api.get_filament(dst_fid)
+    if not dst:
+        return jsonify({
+            "success": False,
+            "error": f"Target filament #{dst_fid} not found.",
+        }), 404
+
+    src_label = f"#{src_fid}" + (f" ({src.get('name')})" if src.get('name') else "")
+    dst_label = f"#{dst_fid}" + (f" ({dst.get('name')})" if dst.get('name') else "")
+
+    # Include archived — they're owned by the source filament too and have to
+    # follow it to the target so we can safely delete the source.
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.get(
+            f"{sm_url}/api/v1/spool?filament_id={src_fid}&allow_archived=true",
+            timeout=5,
+        )
+        children = r.json() if r.ok else []
+    except Exception as e:
+        state.logger.error(f"Merge: failed to enumerate spools for filament {src_fid}: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"Could not list source spools: {e}",
+        }), 502
+
+    reparented_spool_ids = []
+    spool_errors = []
+    for s in children:
+        sid = s.get('id')
+        if sid is None:
+            continue
+        try:
+            spoolman_api.update_spool_or_raise(sid, {"filament_id": dst_fid})
+            reparented_spool_ids.append(sid)
+        except spoolman_api.SpoolmanRejection as e:
+            err = str(e) or "Spoolman rejected the re-parent"
+            state.add_log_entry(
+                f"❌ Merge {src_label} → {dst_label}: failed to re-parent Spool #{sid}: {err}",
+                "ERROR", "ff4444",
+            )
+            spool_errors.append({"spool_id": sid, "error": err})
+
+    if spool_errors:
+        # Abort — leave source intact so the user can retry / inspect.
+        return jsonify({
+            "success": False,
+            "error": "Some spools could not be re-parented; source filament left in place.",
+            "reparented_spool_ids": reparented_spool_ids,
+            "spool_errors": spool_errors,
+        }), 502
+
+    if not spoolman_api.delete_filament(src_fid):
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the delete"
+        state.add_log_entry(
+            f"❌ Merge {src_label} → {dst_label}: spools re-parented but source delete failed: {err}",
+            "ERROR", "ff4444",
+        )
+        return jsonify({
+            "success": False,
+            "error": f"Spools re-parented, but source filament delete failed: {err}",
+            "reparented_spool_ids": reparented_spool_ids,
+        }), 502
+
+    n = len(reparented_spool_ids)
+    state.add_log_entry(
+        f"🔗 Merged Filament {src_label} → {dst_label} ({n} spool{'' if n == 1 else 's'} re-parented; source deleted)",
+        "INFO", "00ccff",
+    )
+    return jsonify({
+        "success": True,
+        "source_filament_id": src_fid,
+        "target_filament_id": dst_fid,
+        "reparented_spool_ids": reparented_spool_ids,
+    })
+
+
 @app.route('/api/undo', methods=['POST'])
 def api_undo(): return jsonify(logic.perform_undo())
 

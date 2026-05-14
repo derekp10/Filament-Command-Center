@@ -60,10 +60,12 @@
                             <div class="d-flex justify-content-between align-items-center mb-1">
                                 <label class="form-label text-info mb-0">Search External Databases</label>
                                 <select class="form-select form-select-sm bg-dark text-white border-secondary w-auto"
-                                    id="wiz-external-source">
+                                    id="wiz-external-source"
+                                    title="Source plugin used for the search/URL paste. URLs are auto-routed regardless of this picker.">
                                     <option value="spoolman">Spoolman Native DB</option>
-                                    <option value="amazon">Amazon Product Pages</option>
-                                    <option value="3dfp" disabled>3DFilamentProfiles (Coming Soon)</option>
+                                    <option value="prusament">Prusament URL</option>
+                                    <option value="amazon">Amazon Product Pages (needs API key)</option>
+                                    <option value="3dfp" disabled>3DFilamentProfiles (untested)</option>
                                 </select>
                             </div>
                             <div class="input-group mb-2">

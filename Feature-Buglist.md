@@ -167,11 +167,6 @@ There continues to be inconsistency with switching out spools when a box slot is
 [16:52:48] ℹ️ Spool #240 already verified
 [16:52:44] ℹ️ Spool #240 already verified
 
-## Prusament Enhancements ##
-* Ability to merge duplicate filaments. Sometimes created when the existing filament card and the one the parcer generates based on prusament filaments don't match exactly. _[PARTIAL 2026-04-26 — duplicate **prevention** is in: tier-1 product-id matcher prefers filaments tagged with the same /spool/<id>/ as the scan, plus a duplicate-picker UI when the matcher can't disambiguate so the user picks (or chooses Create new). What's still missing: **merging existing duplicates** — a UI affordance that re-points all spools from one filament to another and archives/deletes the source. The picker prevents you from making MORE duplicates; you still need a way to clean up the ones already in the DB.]_
-
-* **[Cleanup]** Audit the wizard's "Import from External" panel — which parsers actually still work, which are stale, what's the current dropdown showing? The user reported "I've completely forgotten what parcers we have set up there that work" — the Step 2 import-from-external surface needs a documentation pass and probably a deprecation pass. Code lives in `inventory-hub/external_parsers.py` (PrusamentParser, AmazonParser, SpoolmanParser, possibly others) and the dropdown is wired in `templates/components/modals_wizard.html`. As of 2026-04-26, Prusament works (per the per-spool scan flow); Amazon needs BeautifulSoup4 which isn't installed in dev (test_external_parsers.py::test_amazon_parser_matching fails locally for that reason); 3DFP / Spoolman-native should be re-tested. Worth combining with a UX refresh if we're touching that surface.
-
 # **Active Backlog (Organized by Feature Area)**
 
 ## 📋 Activity Log
@@ -279,7 +274,7 @@ There continues to be inconsistency with switching out spools when a box slot is
   **Bad data to fix** (out of scope for choice cleanup): no orphaned values found in actual records — everything stored references either a still-valid choice or `+` (intentional).
 
   **Approach when ready:** Write `setup-and-rebuild/migrate_filament_attributes.py` following `migrate_container_slot_to_text` template. Should be runnable from host with config_loader path setup, ask for confirmation, snapshot → force_reset → recreate → restore. Verify against a live Spoolman dev instance with backup before touching prod.]_
-* Continue to support Spoolman's "Import from External" feature for filaments...
+* Continue to support Spoolman's "Import from External" feature for filaments... _[Status of existing parsers + a gap list of unimplemented sources lives in the module docstring at the top of `inventory-hub/external_parsers.py` as of 2026-05-13 (Group 11). The audit + dropdown cleanup landed; the items below are the still-unimplemented sources.]_
     - open-filament-database
     - Prusament spool specific data links
     - Open Print Tags (Initialize, Read, and Write)
