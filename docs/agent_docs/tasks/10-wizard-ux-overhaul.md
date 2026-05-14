@@ -8,16 +8,17 @@
 
 Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 
-> ⚠️ **This is the highest-risk group.** Split executed: Session A (flow & defaults) shipped 2026-05-14 on `feature/wizard-ux-overhaul`. Session B (field fixes, cleanup pass, nested-Swal audit) remains.
+> ⚠️ **This is the highest-risk group.** Split executed: Session A (flow & defaults) shipped 2026-05-14 on `feature/wizard-ux-overhaul`. Session B (field fixes + nested-Swal audit) shipped 2026-05-14 on `feature/wizard-session-b`. Session C (aggressive cleanup pass — 10.1 only) deferred to its own branch.
 
 ## Session status
 
 | Session | Items | Status | Branch |
 |---------|-------|--------|--------|
 | **A** — Flow & defaults | 10.2, 10.3, 10.7, 10.10, 10.11 | ✅ DONE 2026-05-14 | `feature/wizard-ux-overhaul` |
-| **B** — Fields, cleanup, audit | 10.1, 10.4, 10.5, 10.6, 10.8, 10.9 | ⏳ READY | (next branch) |
+| **B** — Fields, validation, nested-Swal audit | 10.4, 10.5, 10.6, 10.8, 10.9 | ✅ DONE 2026-05-14 | `feature/wizard-session-b` |
+| **C** — Aggressive cleanup pass | 10.1 | ⏳ READY | `feature/wizard-cleanup-aggressive` (new) |
 
-When resuming, `/work-group 10` should focus on the Session B items below — items marked ✅ DONE are already shipped on `dev`.
+When resuming, `/work-group 10` should focus on the Session C item below (10.1) — all others are shipped on `dev`.
 
 ## Items to Complete
 
@@ -37,15 +38,18 @@ When resuming, `/work-group 10` should focus on the Session B items below — it
 **Shipped:** Defensive empty-location coercion in `api_create_inventory_wizard` ([app.py](../../../inventory-hub/app.py)) and placeholder copy now reads "Unassigned (default)" to advertise the no-pick default.
 **What:** If no location is provided, newly created spools should default to "Unassigned" rather than requiring explicit selection.
 
-### 10.4 — Consolidate duplicate purchase link fields  ⏳ Session B
+### 10.4 — Consolidate duplicate purchase link fields  ✅ Session B (2026-05-14)
+**Shipped:** Single spool-tab `wiz-spool-purchase_url` with smart fallback via `wizardApplyPurchaseLinkFallback`; `wizardReset` extended to clear `input[type="url"]` and reset placeholder (the "doesn't clear between usages" bug).
 **Buglist ref:** L162
 **What:** Two purchase links exist — one inherited from filament, one on the spool. Need to consolidate to one field or implement smart fallback (prefer spool-specific, fall back to filament). One field doesn't clear between usages.
 
-### 10.5 — New slicer profile should auto-add to current filament  ⏳ Session B
+### 10.5 — New slicer profile should auto-add to current filament  ✅ Session B (2026-05-14)
+**Shipped:** `window.wizardOnNewChoiceAdded` hook fires after `wizardFetchExtraFields()` re-renders the schema and selects the new value on the working filament's `<select>`. Mirrors `inv_details.js:promptEditSlicerProfile`.
 **Buglist ref:** L163
 **What:** Creating a new slicer profile from within the wizard should auto-associate it with the filament being edited.
 
-### 10.6 — Spoolman field ordering bug  ⏳ Session B
+### 10.6 — Spoolman field ordering bug  ✅ Session B (2026-05-14)
+**Shipped:** `FIELD_ORDER` constant + `_enrich_field_order` helper in `app.py` stamp each field with a canonical `order` index; the wizard's existing sort step actually works now. Unknown keys pin to 9999.
 **Buglist ref:** L164
 **What:** Custom fields move around when modified or when new items are added. Need to lock down field order.
 
@@ -54,7 +58,8 @@ When resuming, `/work-group 10` should focus on the Session B items below — it
 **Shipped:** No code change required — confirmed via existing `test_wizard_per_spool_scan_e2e.py` + `test_wizard_per_spool_scan_unit.py` that the quantity-driven row sync still produces N spools after the combobox / cancel-restore changes.
 **What:** Guard/verify that the ability to add multiple spools of the same type at once still works after any wizard changes.
 
-### 10.8 — SweetAlert2 nested modal audit  ⏳ Session B
+### 10.8 — SweetAlert2 nested modal audit  ✅ Session B (2026-05-14)
+**Shipped:** All three `Swal.fire` sites in `inv_wizard.js` migrated to `window.mountOverlay()`. The unsaved-changes prompt uses stateful in-place content swaps (`data-stage="input|suggestion|confirm"`) to dodge the capture-phase Escape race when nesting overlays. Regression-guard test in `test_wizard_overlay_migration.py` fails loudly on any future `Swal.fire` reintroduction.
 **Buglist ref:** L165
 **Known symptom:** the unsaved-changes Swal at [inv_wizard.js:92](../../../inventory-hub/static/js/modules/inv_wizard.js#L92) shifts the `.cmd-deck` bottom bar down — Bootstrap's `.modal-open` and SweetAlert's `.swal2-shown` body classes both compensate for the scrollbar independently and the body's effective height changes. Migrating to `mountOverlay` fixes the shift as a side effect.
 **What:** Audit existing code for nested `Swal.fire()` calls and replace with inline overlay divs per project convention.
@@ -63,7 +68,8 @@ When resuming, `/work-group 10` should focus on the Session B items below — it
 **Template:** `inventory-hub/templates/components/modals_wizard.html`
 **Backend:** `inventory-hub/app.py` — wizard endpoints
 
-### 10.9 — Filament-attributes input validation (prevention guards)  ⏳ Session B
+### 10.9 — Filament-attributes input validation (prevention guards)  ✅ Session B (2026-05-14)
+**Shipped:** Shared `choice_validation.js` module with all 5 guards (min length, leading/trailing punctuation, fuzzy/prefix/normalized-key match, two-step confirm, live canonical preview). Hooked into `wizardPromptNewChoice`, `wizardAddMultiChoiceChip` blur-commit, and `inv_details.js:addAttrChip` for parity. Bulk-cleanup migration for the existing dead choices remains deferred — prevention shipped first.
 **Buglist ref:** L221–L239
 **What:** The filament-attributes choice list has dead/bogus entries (`Tran`, `F`, `Carbon-Fiber`, etc.) created by unchecked input. Spoolman makes new choices permanent — removal requires a destructive snapshot-restore migration. Prevention guards in the wizard's "+ Add new attribute" flow will stop new garbage entries from being created.
 
