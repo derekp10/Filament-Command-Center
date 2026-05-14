@@ -807,6 +807,18 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                         clearKbHighlight();
                     });
 
+                    // Group 10.2/10.10 parity with wizardBindCombobox: if the
+                    // user re-focuses the search input (e.g. after typing,
+                    // clicking an item, then coming back to pick a different
+                    // one), reveal the full list again — don't keep the prior
+                    // filter applied to a no-longer-relevant query.
+                    searchInput.addEventListener('focus', () => {
+                        if (searchInput.value === '') return; // nothing to clear
+                        searchInput.value = '';
+                        items.forEach(item => { item.style.display = 'block'; });
+                        clearKbHighlight();
+                    });
+
                     items.forEach(item => {
                         item.addEventListener('click', () => {
                             clearKbHighlight();

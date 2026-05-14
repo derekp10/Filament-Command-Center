@@ -485,6 +485,14 @@ def api_create_inventory_wizard():
             if 'needs_label_print' not in sp_extra:
                 sp_extra['needs_label_print'] = True
 
+            # Group 10.3: explicit default-to-Unassigned. The wizard already
+            # sends `location: ''` when the user leaves the combobox blank, but
+            # if a future caller drops the field entirely or sends None,
+            # fall through to '' so spoolman_api.create_spool's UNASSIGNED-coerce
+            # path receives a string rather than letting Spoolman invent state.
+            if spool_data.get('location') is None:
+                spool_data['location'] = ''
+
             # Per-spool override list takes precedence over `quantity` when present.
             # Each entry shallow-merges onto spool_data, with `extra` deep-merged
             # so per-spool fields (e.g. prusament_manufacturing_date) don't clobber
