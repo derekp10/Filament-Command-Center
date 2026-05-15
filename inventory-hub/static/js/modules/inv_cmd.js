@@ -331,13 +331,15 @@ const processScan = (text, source = 'keyboard') => {
 // visual pattern as Location Manager's _confirmActivePrintAssign (no nested
 // Swal). Mounts into body so it floats above the scan UI and any open modal.
 const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
-    let ov = document.getElementById('fcc-active-print-scan-overlay');
-    if (ov) ov.remove();
-    ov = document.createElement('div');
-    ov.id = 'fcc-active-print-scan-overlay';
-    ov.style.cssText = 'position:fixed; inset:0; z-index:20000; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center;';
+    // L122 fix: previously rolled its own overlay (createElement +
+    // appendChild + document keydown). Migrated to window.mountOverlay()
+    // so it inherits the canonical z-index ladder, focus guard, and
+    // host-close discipline documented in CLAUDE.md "Project Conventions".
+    // The previous implementation could end up blocked/hidden behind
+    // certain modal stacks (the buglist L122 symptom: "confirm change
+    // modal is being blocked, canceled, or hidden").
     const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
-    ov.innerHTML = `
+    const content = `
         <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:460px; text-align:center;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${escapeHtml(stateInfo.printer_name)} is ${escapeHtml(stateInfo.state)}</div>
             <div style="color:#ffc; margin-bottom:14px;">
@@ -349,25 +351,29 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
             </div>
         </div>
     `;
-    document.body.appendChild(ov);
-    const dialogBox = ov.querySelector('div');
+    let handle = null;
     let qrSession = null;
     const cleanup = () => {
-        try { ov.remove(); } catch (_) { /* noop */ }
-        document.removeEventListener('keydown', keyHandler, true);
+        if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
         if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
     };
     const proceed = () => { cleanup(); onConfirm(); };
+    handle = window.mountOverlay({
+        id: 'fcc-active-print-scan-overlay',
+        content,
+        tier: 'confirm',
+        initialFocus: '#fcc-aps-yes',
+        onEscape: cleanup,
+    });
+    const ov = handle.element;
+    const yesBtn = ov.querySelector('#fcc-aps-yes');
+    const noBtn = ov.querySelector('#fcc-aps-no');
+    if (yesBtn) yesBtn.onclick = proceed;
+    if (noBtn) noBtn.onclick = cleanup;
     // Keyboard contract (matches _confirmActivePrintAssign in inv_loc_mgr):
-    // Enter activates whichever button is focused — Continue is focused
-    // by default so Enter accepts; Tab + Enter cancels; Escape always
-    // cancels. Explicitly routing to the focused button (rather than
-    // relying on native <button> activation) keeps behavior consistent
-    // across the document-level capture handler.
+    // Enter activates the focused button (Yes/No); Tab cycles between
+    // them; Escape always cancels (owned by mountOverlay's onEscape).
     const keyHandler = (e) => {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
-        const yesBtn = document.getElementById('fcc-aps-yes');
-        const noBtn = document.getElementById('fcc-aps-no');
         if (e.key === 'Enter') {
             const active = document.activeElement;
             if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
@@ -375,9 +381,6 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
             return;
         }
         if (e.key === 'Tab') {
-            // Focus trap (see inv_loc_mgr.js _confirmActivePrintAssign for
-            // the full rationale). Tab cycles between the two buttons;
-            // prevents escape to the page behind the overlay.
             const focusables = [yesBtn, noBtn].filter(Boolean);
             if (focusables.length === 0) return;
             const active = document.activeElement;
@@ -396,13 +399,10 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
             }
         }
     };
-    document.getElementById('fcc-aps-no').onclick = cleanup;
-    document.getElementById('fcc-aps-yes').onclick = proceed;
-    document.addEventListener('keydown', keyHandler, true);
-    document.getElementById('fcc-aps-yes').focus();
-    if (window.attachConfirmQRs && dialogBox) {
+    ov.addEventListener('keydown', keyHandler, true);
+    if (window.attachConfirmQRs && ov) {
         qrSession = window.attachConfirmQRs({
-            host: dialogBox,
+            host: ov,
             onConfirm: proceed,
             onCancel: cleanup,
             theme: 'warning',
