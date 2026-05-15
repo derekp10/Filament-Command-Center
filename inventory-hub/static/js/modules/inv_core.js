@@ -120,13 +120,27 @@ const setProcessing = (s) => {
     state.processing = s; ov.style.display = s ? 'block' : 'none';
 };
 
+// L286: distinguish *transient* hover-pause from a *sticky* user-toggled
+// pause so the cursor moving away from the log box doesn't unstick a
+// user who explicitly paused via the indicator click. window.logsStickyPaused
+// is the manual lock; pauseLogs() arg is the hover signal — sticky wins.
+window.logsStickyPaused = false;
 const pauseLogs = (isPaused) => {
-    state.logsPaused = isPaused;
+    const effective = isPaused || window.logsStickyPaused;
+    state.logsPaused = effective;
     const el = document.getElementById('log-status');
     if (el) {
-        if (isPaused) { el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-light'); }
-        else { el.innerText = "Auto-Refresh ON"; el.style.color = "#0f0"; el.classList.remove('text-light'); }
+        if (window.logsStickyPaused) { el.innerText = "PAUSED ⏸ (click to resume)"; el.style.color = "#fc0"; el.classList.remove('text-light'); }
+        else if (isPaused) { el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-light'); }
+        else { el.innerText = "Auto-Refresh ON (click to pause)"; el.style.color = "#0f0"; el.classList.remove('text-light'); }
     }
+};
+
+// Click-to-toggle the sticky pause from the log-status indicator.
+window.toggleLogsStickyPause = () => {
+    window.logsStickyPaused = !window.logsStickyPaused;
+    // Re-run with the current hover signal so the label updates correctly.
+    pauseLogs(window.logsStickyPaused);
 };
 
 // --- GRAPHICS HELPERS ---

@@ -248,7 +248,7 @@ There continues to be inconsistency with switching out spools when a box slot is
 * 🔄 **Bulk Moves**: The ability to scan Box A (Source) and Shelf B (Destination) and say "Move EVERYTHING from Box A to Shelf B."
 * Shapeshifting QR Codes in more places (like Audit button).
 
-* Scanning a storage location (Any, dryerbox, Cart, etc) doesn't assign all items in the buffer to that cart, it requires you to scan the location multiple times in order to assign them all to it. _[LIKELY ALREADY FIXED — `performContextAssign` at inv_cmd.js:270 and `/api/smart_move` both accept a `spools[]` list and iterate the entire buffer. See the `[ALEX FIX] Bulk Assign` comment on inv_cmd.js:272. On next occurrence, capture the Network tab's `/api/smart_move` POST payload to confirm only one spool id was sent — if so the bug is upstream of the payload construction, in the buffer state. Otherwise close this out.]_
+*(L251 — Buffer-scan assign-all-at-once — VERIFIED + CLOSED 2026-05-14 via `feature/buglist-sweep-2026-05-14`. `test_toolhead_scan_single_spool.py::test_multispool_dryer_box_scan_still_sends_full_buffer` directly asserts that scanning a multi-spool destination (dryer box / shelf / cart) sends the entire buffer in a single `/api/smart_move` POST. The new L124 toolhead branch is the only single-spool carve-out; everything else preserves the legacy bulk-assign behavior. No new repros needed.)*
 * Location Manager not syncing status across browser instances? _[ON HOLD — requires a real-time transport (SSE / WebSocket) on the backend. Current architecture is pull-only via `/api/locations` polling. Non-trivial; revisit after mobile mode since that work will establish the multi-client baseline anyway.]_
 
 ## 🎟️ Print Queue, Labels & Filament Usage
@@ -283,7 +283,7 @@ There continues to be inconsistency with switching out spools when a box slot is
     - Prusament spool specific data links
     - Open Print Tags (Initialize, Read, and Write)
 * Maybe we should figure out a way to set up a dev version for Spoolman and filabridge.
-* Change auto refresh to be a pause button instead for live activity.
+*(L286 — Auto-refresh pause button — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14`. `#log-status` indicator is now click-to-toggle a sticky pause. Mouse-hover transient pause still works as before (handy for glancing at the log without committing); a sticky click locks it until clicked again so the cursor moving away can't unstick. Indicator label updates: "Auto-Refresh ON (click to pause)" → "PAUSED ⏸ (click to resume)". `window.logsStickyPaused` is the new manual lock; `pauseLogs()` ORs it with the hover signal. Regression coverage in `test_log_sticky_pause.py`.)*
 * Need to add a routine to clean up the logs after a while.
 * Refactoring setup code to be dynamic. On brand new installs, maintain existing code to get it started.
 * Continue to support Spoolman's ability to pull data from the vendor up to filament (Empty Weight), and from Filament to Spool (price, etc.)
