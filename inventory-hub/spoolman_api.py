@@ -1085,7 +1085,7 @@ def get_best_color_distance(target_hex, compare_hex_csv):
         return float('inf')
     return min(distances)
 
-def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", deployed_state=""):
+def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", max_weight="", deployed_state=""):
     """
     Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
     Returns a sorted list of dictionaries matching the criteria.
@@ -1170,6 +1170,10 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 if min_weight:
                     try:
                         if rem < float(min_weight): continue
+                    except: pass
+                if max_weight:
+                    try:
+                        if rem > float(max_weight): continue
                     except: pass
 
                 # 2b. Deployment filter (spool-only). A spool counts as

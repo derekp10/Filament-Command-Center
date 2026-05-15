@@ -206,7 +206,7 @@ There continues to be inconsistency with switching out spools when a box slot is
 *(L165 — SweetAlert2 nested modal audit — DONE 2026-05-14 via Group 10 Session B (item 10.8). All three `Swal.fire` sites in `inv_wizard.js` (unsaved-changes confirm, field-sync picker, add-new-choice prompt) migrated to `window.mountOverlay()`. Closes the `.cmd-deck` scrollbar-shift symptom on the unsaved-changes prompt. See `completed-archive.md`.)*
 
 ## 🔍 Search, Display & Filtering
-* Search by and filter by remaining weight.
+*(L209 — Search by remaining weight — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14`. `min_weight` was already wired up (offcanvas-search + `search_inventory`). Added the symmetric `max_weight` filter — new input next to Min g in `offcanvas_search.html`, propagated through `inv_search.js` (trigger list, executeSearch, clear-all, has-state checks) and `app.py:/api/search` into `spoolman_api.search_inventory`. Regression coverage in `test_search_max_weight.py` (3 tests — both backend bounds + frontend input wiring).)*
 
 
 

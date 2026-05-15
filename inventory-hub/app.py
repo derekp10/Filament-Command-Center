@@ -797,6 +797,7 @@ def api_search_inventory():
     only_in_stock = request.args.get('in_stock', 'false').lower() == 'true'
     empty = request.args.get('empty', 'false').lower() == 'true'
     min_weight = request.args.get('min_weight', '')
+    max_weight = request.args.get('max_weight', '')
     target_type = request.args.get('type', 'spool')
     # Deployment status filter: '' | 'any' = no filter, 'deployed' = toolhead/ghost only,
     # 'undeployed' = not on a toolhead. Filaments ignore this.
@@ -812,6 +813,7 @@ def api_search_inventory():
             empty=empty,
             target_type=target_type,
             min_weight=min_weight,
+            max_weight=max_weight,
             deployed_state=deployed_state,
         )
         return jsonify({"success": True, "results": results})

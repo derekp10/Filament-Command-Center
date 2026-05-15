@@ -14,7 +14,7 @@ const SearchEngine = {
             this.offcanvas = new bootstrap.Offcanvas(el, { backdrop: true });
 
             // Attach UI listeners
-            const trig = ['global-search-query', 'global-search-color-hex', 'global-search-material', 'global-search-min-weight'];
+            const trig = ['global-search-query', 'global-search-color-hex', 'global-search-material', 'global-search-min-weight', 'global-search-max-weight'];
             trig.forEach(id => {
                 const node = document.getElementById(id);
                 if (node) {
@@ -63,6 +63,7 @@ const SearchEngine = {
                     const m = document.getElementById('global-search-material');
                     const c = document.getElementById('global-search-color-picker');
                     const mw = document.getElementById('global-search-min-weight');
+                    const mxw = document.getElementById('global-search-max-weight');
                     const s = document.getElementById('global-search-in-stock');
                     const dep = document.getElementById('global-search-deployed');
 
@@ -71,6 +72,7 @@ const SearchEngine = {
                     if (m) m.value = '';
                     if (c) c.value = '#000000';
                     if (mw) mw.value = '';
+                    if (mxw) mxw.value = '';
                     if (s) s.checked = true;
                     if (dep) dep.value = '';
 
@@ -124,7 +126,8 @@ const SearchEngine = {
                     const colorInput = document.getElementById('global-search-color-hex');
                     const matInput = document.getElementById('global-search-material');
                     const mwInput = document.getElementById('global-search-min-weight');
-                    if (queryInput.value || colorInput.value || matInput.value || mwInput.value) {
+                    const mxwInput = document.getElementById('global-search-max-weight');
+                    if (queryInput.value || colorInput.value || matInput.value || mwInput.value || (mxwInput && mxwInput.value)) {
                         this.executeSearch(true); // pass true for silent search
                     }
                 }
@@ -149,7 +152,8 @@ const SearchEngine = {
         const colorInput = document.getElementById('global-search-color-hex');
         const matInput = document.getElementById('global-search-material');
         const mwInput = document.getElementById('global-search-min-weight');
-        const hasState = queryInput.value || colorInput.value || matInput.value || mwInput.value;
+        const mxwInput = document.getElementById('global-search-max-weight');
+        const hasState = queryInput.value || colorInput.value || matInput.value || mwInput.value || (mxwInput && mxwInput.value);
 
         if (!hasState) {
             document.getElementById('global-search-in-stock').checked = true;
@@ -190,6 +194,8 @@ const SearchEngine = {
         const material = document.getElementById('global-search-material').value;
         const colorHex = document.getElementById('global-search-color-hex').value.trim();
         const minWeight = document.getElementById('global-search-min-weight').value;
+        const maxWeightEl = document.getElementById('global-search-max-weight');
+        const maxWeight = maxWeightEl ? maxWeightEl.value : '';
         const inStock = document.getElementById('global-search-in-stock').checked;
         const tgtTypeNode = document.querySelector('input[name="global-search-type"]:checked');
         const targetType = tgtTypeNode ? tgtTypeNode.value : 'spool';
@@ -200,7 +206,7 @@ const SearchEngine = {
         const resBox = document.getElementById('global-search-results');
 
         // If nothing is typed, don't execute a massive search, just show empty state
-        if (!query && !material && !colorHex && !minWeight && !deployed) {
+        if (!query && !material && !colorHex && !minWeight && !maxWeight && !deployed) {
             resBox.innerHTML = `
                 <div class="text-center text-light mt-5">
                     <h1 class="opacity-25 mb-3">💬</h1>
@@ -218,6 +224,7 @@ const SearchEngine = {
                 material: material,
                 hex: colorHex,
                 min_weight: minWeight,
+                max_weight: maxWeight,
                 in_stock: inStock,
                 type: targetType,
                 deployed: deployed,
