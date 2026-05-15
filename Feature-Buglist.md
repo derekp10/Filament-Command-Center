@@ -37,7 +37,7 @@
 *(L37/L39 — Default-Unassigned + location selector "Flow" cleanup — DONE 2026-05-14 via Group 10 Session A (items 10.3 + 10.2). Wizard combobox now shows full list on focus, highlights current selection, and placeholder advertises Unassigned default. See `completed-archive.md`.)*
 
 
-* Lagacy QR code scans cause the ? button to engage and pop up the help window. Not sure if theres a good fix for this.
+*(L40 — Legacy QR code scans triggering the help overlay — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14`. `shortcuts_registry.js` capture-phase `?` handler now detects an in-flight scan (non-empty `state.scanBuffer` + `state.scanStartTime` within 500ms) and lets `?` flow through to the scan accumulator instead of popping the overlay. Regression coverage in `test_quickswap_ui_e2e.py::test_shortcuts_overlay_question_mark_mid_scan_does_not_trigger`.)*
 
 * Fix version number that no longer gets updated. (Remove, or find a way to update it when we do updates.)
 
@@ -215,7 +215,7 @@ There continues to be inconsistency with switching out spools when a box slot is
 
 * **[Polish] Slot-render-order radio button arrows are inconsistent and confusing.** In the Feeds editor for a Dryer Box ([modals_loc_mgr.html:243-245](inventory-hub/templates/components/modals_loc_mgr.html#L243)) the two radio buttons read `← Left → Right` (one arrow each side, pointing different directions) and `Right → Left →` (both arrows pointing right). The asymmetry and conflicting directions make it hard to glance at and know which option is currently selected vs. what the other does. Suggested cleanup: pick a single consistent pattern, e.g. `→ Left to Right` and `← Right to Left` (one arrow per button, pointing in the visual direction of slot numbering). Or drop arrows entirely and just use `1 → N` / `N → 1`. Five-minute fix; just needs a design call on which form reads cleanest.
 
-* **[UX] Shortcuts overlay (`?` help) doesn't block clicks behind it.** Clicking outside the help overlay falls through to whatever's underneath — observed dismissing the Location Manager modal while the help overlay stayed open. Either the overlay should consume outside clicks (close itself, swallow the event) or it should sit above a transparent backdrop so clicks land on the backdrop instead of pass through. Lives in `templates/dashboard.html` (the `#fcc-shortcuts-overlay` element) and the toggle handler in `static/js/modules/shortcuts_registry.js`. Pattern reference: `mountOverlay` already solves this for confirm overlays — could reuse the same helper here.
+*(L218 — Shortcuts overlay click-through — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14`. Added `#fcc-shortcuts-overlay-backdrop` sibling at z-index 10000 (just below the panel's 10001) with `onclick="toggleShortcutsOverlay()"`. `toggleShortcutsOverlay` shows/hides both elements together. Regression coverage in `test_quickswap_ui_e2e.py::test_shortcuts_overlay_backdrop_dismisses_overlay`. Existing button + `?`-key toggle tests still pass.)*
 
 ## 📍 Location Management & Scanning
 * **[CRITICAL DESIGN — blocks Project Color Loadout]** Make the Location Manager less brittle and more concrete. The current model is held together by string-prefix tricks and synthesis heuristics, not real entity relationships:

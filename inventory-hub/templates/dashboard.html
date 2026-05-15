@@ -53,7 +53,15 @@
         </div>
     </nav>
 
-    <!-- Shortcuts overlay — populated by shortcuts_registry.js at runtime. -->
+    <!-- Shortcuts overlay — populated by shortcuts_registry.js at runtime.
+         L218 fix: the panel previously sat alone with no backdrop, so outside
+         clicks fell through and dismissed whatever modal was underneath. The
+         backdrop sibling below catches outside clicks (closes the overlay) so
+         click-through is impossible. -->
+    <div id="fcc-shortcuts-overlay-backdrop"
+        class="position-fixed top-0 start-0 w-100 h-100"
+        style="display:none; z-index:10000; background:rgba(0,0,0,0.45);"
+        onclick="window.toggleShortcutsOverlay()"></div>
     <div id="fcc-shortcuts-overlay"
         class="position-fixed top-50 start-50 translate-middle bg-dark border border-info rounded p-4 shadow-lg"
         style="display:none; z-index:10001; min-width:640px; max-width:95vw; max-height:85vh; overflow-y:auto;">

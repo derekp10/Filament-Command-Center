@@ -174,3 +174,43 @@ def test_shortcuts_overlay_toggles_via_question_mark_key(page: Page, base_url: s
     expect(overlay).to_be_visible(timeout=2000)
     page.keyboard.press("Escape")
     expect(overlay).to_be_hidden(timeout=2000)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_shortcuts_overlay_question_mark_mid_scan_does_not_trigger(page: Page, base_url: str):
+    """L40 — a legacy QR scan with `?` mid-stream should NOT pop the help overlay."""
+    page.goto(base_url)
+    page.wait_for_selector("#btn-shortcuts-help", timeout=10000)
+    page.locator("body").click()
+    # Simulate a scanner streaming characters into the document at high speed:
+    # several chars first (populates state.scanBuffer + sets scanStartTime),
+    # then `?` arrives mid-stream. The overlay must stay hidden.
+    page.evaluate(
+        """() => {
+            // Seed the scan buffer the way scripts.html's keydown listener does:
+            // first character sets scanStartTime, subsequent chars append.
+            // `state` is a script-scope `let` in inv_core.js — accessible globally
+            // in non-module scripts but NOT bound to window.
+            state.scanBuffer = 'https://legacy.example/spool';
+            state.scanStartTime = Date.now();
+            document.dispatchEvent(new KeyboardEvent('keydown', {key: '?', bubbles: true}));
+        }"""
+    )
+    overlay = page.locator("#fcc-shortcuts-overlay")
+    expect(overlay).to_be_hidden(timeout=1000)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_shortcuts_overlay_backdrop_dismisses_overlay(page: Page, base_url: str):
+    """L218 — clicking outside the help overlay should dismiss it, not fall through."""
+    page.goto(base_url)
+    page.wait_for_selector("#btn-shortcuts-help", timeout=10000)
+    page.locator("#btn-shortcuts-help").click()
+    overlay = page.locator("#fcc-shortcuts-overlay")
+    backdrop = page.locator("#fcc-shortcuts-overlay-backdrop")
+    expect(overlay).to_be_visible()
+    expect(backdrop).to_be_visible()
+    # Click the backdrop (top-left corner is safe — well outside the centered panel).
+    backdrop.click(position={"x": 10, "y": 10})
+    expect(overlay).to_be_hidden(timeout=2000)
+    expect(backdrop).to_be_hidden(timeout=2000)

@@ -51,9 +51,11 @@
     window.toggleShortcutsOverlay = function () {
         const ov = document.getElementById('fcc-shortcuts-overlay');
         if (!ov) return;
+        const bd = document.getElementById('fcc-shortcuts-overlay-backdrop');
         const hidden = ov.style.display === 'none' || !ov.style.display;
         renderList();  // refresh in case new shortcuts were registered post-load
         ov.style.display = hidden ? 'block' : 'none';
+        if (bd) bd.style.display = hidden ? 'block' : 'none';
     };
 
     // Bind `?` globally + `Escape` to close the overlay.
@@ -66,6 +68,17 @@
         const tag = (e.target && e.target.tagName) || '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
         if (e.key === '?') {
+            // L40 fix: legacy QR labels often encode a URL with a `?` separator.
+            // The barcode scanner streams characters into the document keydown
+            // accumulator (scripts.html). When `?` arrives mid-stream the help
+            // overlay used to pop. Detect an in-flight fast scan via the buffer
+            // state and let the `?` flow through to the scan accumulator instead.
+            const st = (typeof state !== 'undefined') ? state : window.state;
+            const scanInFlight = st && typeof st.scanBuffer === 'string'
+                && st.scanBuffer.length > 0
+                && st.scanStartTime
+                && (Date.now() - st.scanStartTime) < 500;
+            if (scanInFlight) return;
             e.preventDefault();
             window.toggleShortcutsOverlay();
         } else if (e.key === 'Escape' && ov.style.display === 'block') {
