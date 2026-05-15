@@ -28,15 +28,17 @@ def _find_filament_with_spool(api_base_url: str):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_queue_all_active_spools_does_not_auto_open_queue_modal(page: Page, base_url: str, api_base_url: str):
+def test_queue_all_active_spools_does_not_auto_open_queue_modal(page: Page, base_url: str, api_base_url: str, reset_dom_state_js: str):
     fid = _find_filament_with_spool(api_base_url)
     if not fid:
         pytest.skip("No filaments with at least one spool in dev environment.")
 
     page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    page.evaluate(reset_dom_state_js)
     # openFilamentDetails is declared `const` at script scope in inv_details.js,
     # not on window — same shape as `state`. Reach it by bare name.
-    page.wait_for_function("typeof openFilamentDetails === 'function'", timeout=10000)
+    page.wait_for_function("typeof openFilamentDetails === 'function' && modals && modals.filamentModal", timeout=10000)
 
     # Spy on openQueueModal so we can prove it was NOT invoked.
     page.evaluate(

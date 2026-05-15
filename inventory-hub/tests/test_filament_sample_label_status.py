@@ -23,14 +23,16 @@ def _find_any_filament(api_base_url: str):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_filament_details_renders_sample_and_label_status_rows(page: Page, base_url: str, api_base_url: str):
+def test_filament_details_renders_sample_and_label_status_rows(page: Page, base_url: str, api_base_url: str, reset_dom_state_js: str):
     fil = _find_any_filament(api_base_url)
     if not fil:
         pytest.skip("No filaments in dev environment.")
     fid = fil.get('id')
 
     page.goto(base_url)
-    page.wait_for_function("typeof openFilamentDetails === 'function'", timeout=10000)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_function("typeof openFilamentDetails === 'function' && modals && modals.filamentModal", timeout=10000)
     page.evaluate(f"openFilamentDetails({fid})")
     expect(page.locator("#filamentModal")).to_be_visible(timeout=5000)
 

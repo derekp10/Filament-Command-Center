@@ -17,6 +17,7 @@ from playwright.sync_api import Page
 @pytest.mark.usefixtures("require_server")
 def test_toolhead_scan_with_multi_spool_buffer_sends_only_topmost(page: Page, base_url: str):
     page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
     page.wait_for_function("typeof window.processScan === 'function'", timeout=10000)
     # Wait until allLocations is populated so the LOC type lookup hits.
     page.wait_for_function(
@@ -98,6 +99,7 @@ def test_multispool_dryer_box_scan_still_sends_full_buffer(page: Page, base_url:
     should still get the entire buffer in one call — the L124 fix is scoped
     to single-occupancy targets only."""
     page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
     page.wait_for_function("typeof window.processScan === 'function'", timeout=10000)
     page.wait_for_function(
         "Array.isArray(state.allLocations) && state.allLocations.some(l => parseInt(l['Max Spools']||'0') > 1)",
