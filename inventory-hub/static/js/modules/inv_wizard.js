@@ -1366,7 +1366,17 @@ const wizardFetchExtraFields = () => {
                         // value on read when blank (inv_details.js:168). To edit
                         // the filament-level value directly, use the Edit
                         // Filament modal.
-                        if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed', 'needs_label_print',
+                        //
+                        // L144 / 17.1 round 2: `needs_label_print` UN-hidden so it
+                        // surfaces alongside `sample_printed` as a boolean checkbox
+                        // in the wizard's Filament Extras section. Both flags are
+                        // already registered in setup_fields.py (filament_standards)
+                        // so the dynamic-field renderer turns them into proper
+                        // toggle inputs without bespoke per-field UI. The display
+                        // side (badges on Filament Details modal) shipped in
+                        // 17.1 round 1. `label_printed` (the legacy retired key)
+                        // stays hidden — it's gone in M7+ data.
+                        if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed',
                              'nozzle_temp_max', 'bed_temp_max', 'purchase_url'].includes(field.key)) return;
 
                         let html = wizardGenerateFieldHTML(field, 'fil');

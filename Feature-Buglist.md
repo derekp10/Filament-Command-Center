@@ -25,7 +25,30 @@
 
 * Sub-bug: "Display modal on Display modal" — _[PARTIAL FIX 2026-05-12 (Group 8.3 / `feature/keyboard-nav-polish`) — `openSpoolDetails` and `openFilamentDetails` now route through `_hideSiblingDetailsModal` at function entry, which forcibly closes the sibling details modal (with a 400ms retry to defeat BS5's mid-fade-in `.hide()` ignore). The silent-refresh path (`silent=true`) is intentionally exempt so sync-pulse only repaints the active modal. Covers details↔details stacking.]_ _[FOLLOW-UP 2026-05-14 via `feature/buglist-sweep-2026-05-14` — Wizard↔details stacking now also closes the sibling pair: `_hideSiblingDetailsModal` is exposed as `window.hideAllDetailsModals` and `openWizardModal()` calls it before launching. Covers the 2026-04-29 lock-up where wizard-on-top-of-details triggered a `state.processing` race. Regression coverage in `test_wizard_closes_details_siblings.py` (2 tests — filament-details closes on wizard open + helper-exposure smoke). The leftover frontend-freeze symptom at L28 should be retested with the same scenario.]_
 
-* An unknow issue caused the frontend to lock up, causing it to no longer update to take barcodes. A hard refresh (Control shift R and Control F5) fixed it. We need to figure out what caused this, and fix it so it doesn't happen again. This could be related to the eject button issue above. Also seemed to have cause updates to filabridge to stop until the front end was refreshed. _[RECURRED 2026-04-29 — now believed to be the same root cause as the "Display modal on Display modal" bug at L20. Derek observed the crash twice when the details modal and the Add/Edit Wizard were both open. Likely a modal-on-modal race condition (e.g. wizard open fires while details modal's silent-refresh is mid-flight → unhandled promise rejection → `state.processing` stuck true → all barcode input and FilaBridge updates freeze). Next occurrence: DON'T hard-refresh first. Open DevTools → Console and Network tabs, screenshot pending XHRs and any red errors, then refresh.]_
+* An unknow issue caused the frontend to lock up, causing it to no longer update to take barcodes. A hard refresh (Control shift R and Control F5) fixed it. We need to figure out what caused this, and fix it so it doesn't happen again. This could be related to the eject button issue above. Also seemed to have cause updates to filabridge to stop until the front end was refreshed. _[RECURRED 2026-04-29 — now believed to be the same root cause as the "Display modal on Display modal" bug at L20. Derek observed the crash twice when the details modal and the Add/Edit Wizard were both open. Likely a modal-on-modal race condition (e.g. wizard open fires while details modal's silent-refresh is mid-flight → unhandled promise rejection → `state.processing` stuck true → all barcode input and FilaBridge updates freeze).]_
+
+  **🔬 NEXT REPRO — capture before refresh (Derek, this is the note to come back to — joint with L122)**
+
+  The L26 follow-up landed 2026-05-14 (wizard now closes details siblings on open via `window.hideAllDetailsModals`, see `test_wizard_closes_details_siblings.py`) which should kill the most-likely root cause. If the freeze RECURS after that fix, the capture below tells us which path to investigate next. Pairs with L122 (active-print confirm overlay "blocked / cancelled / hidden") — the symptoms can overlap, and the same DevTools capture answers both.
+
+  **Don't hard-refresh first.** When you notice the freeze (scans not registering / FilaBridge updates stopped) OR the active-print overlay misbehaves, do this:
+
+  1. Press F12 to open DevTools.
+  2. Console tab → screenshot any **red** errors. Scroll up — the FIRST error is usually the root cause; later ones are downstream noise.
+  3. Network tab → screenshot any rows in red (failed) OR rows still in "Pending" state. Right-click → "Save all as HAR" if you can; that captures the full request/response timeline.
+  4. Take a screenshot of the dashboard showing which modals are open AND the state of the buffer / activity log.
+  5. Note from memory:
+       - What were you doing in the last 30 seconds? (Scan? Open a modal? Click a button?)
+       - Did the freeze happen instantly or did the UI feel slow before locking?
+       - For L122 specifically: did the active-print confirm overlay try to appear and get dismissed by something? Was it during a scan flow (top-bar input) or while clicking a slot inside the Location Manager modal? The answer tells us which overlay was at fault.
+  6. NOW you can hard-refresh.
+  7. Dump everything into a new comment under this item (or paste into chat).
+
+  Fix-path implications based on what the capture shows:
+   - Pending `/api/identify_scan` or `/api/smart_move` XHR → backend Spoolman write hung; check Spoolman + filabridge connectivity.
+   - Red `state.processing` reference in console → the modal-on-modal race wasn't fully fixed by L26; need to find the remaining path that sets it without a finally-clearing it.
+   - L122 symptom on a SCAN flow → likely fixed already (`_confirmActivePrintScan` migrated to `mountOverlay` in `feature/buglist-sweep-2026-05-14`). If it still happens, the migration may need a different tier or focus-guard option.
+   - L122 symptom on a SLOT CLICK inside Location Manager → `_confirmActivePrintAssign` in `inv_loc_mgr.js` (still hand-rolled). Migration is a ~30-line copy of the scan-side fix.
 
 
 
@@ -141,7 +164,7 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
 * Need to add an unknow location to the location list. I tried to add one manually, but it was a bit weird in how it displayed. I need a place to put spools that I just can't find, because they aren't where there location tag seays they are.
 
-*(L144 — Filament sample + label-confirmed status on Display modal — PARTIAL 2026-05-14 via `feature/buglist-sweep-2026-05-14` (Group 17.1 display side). Two new fact-card rows on the Filament Details modal: "🎨 Swatch Printed" (reads `extra.sample_printed` → ✅ Yes / No / unknown) and "🏷️ Label Confirmed" (reads `extra.needs_label_print` tri-state → ✅ Confirmed / 🖨️ Needs print / unknown). Helps trace legacy labels that need re-printing. Regression coverage in `test_filament_sample_label_status.py`. _[NEEDS INPUT — Edit-modal toggle side deferred: the Edit Filament modal already renders Spoolman extras dynamically (sample_printed exists as a Spoolman field, so it surfaces today). Question for next session: should we add explicit user-facing toggles for these two flags in a dedicated "Verification" panel of the Edit modal, or rely on the existing dynamic-field rendering? The latter is the path of least resistance but less discoverable.]_)*
+*(L144 — Filament sample + label-confirmed status on Display modal — DONE 2026-05-14, EDIT-SIDE 2026-05-15 via `feature/buglist-sweep-2026-05-14` (Group 17.1 both halves). Display side: two new fact-card rows on the Filament Details modal — "🎨 Swatch Printed" (reads `extra.sample_printed` → ✅ Yes / No / unknown) and "🏷️ Label Confirmed" (reads `extra.needs_label_print` tri-state → ✅ Confirmed / 🖨️ Needs print / unknown). Edit side (Derek's pick: option b — surface via existing dynamic-field rendering): both flags were already registered in `setup_fields.py:filament_standards` as boolean fields; only `needs_label_print` was in the wizard's hide list (line 1369). Un-hidden, so both now surface as native checkbox inputs in the wizard's Filament Extras section (`#wiz-fil-dynamic-extra-fields`) when editing a filament. Regression coverage in `test_filament_sample_label_status.py` (display) + `test_wizard_surfaces_label_and_sample_flags.py` (edit). Spool-level `needs_label_print` stays filtered out on the spool tab — it's system-managed by the create-new flow and shouldn't be hand-toggled.)*
 
 *(L146 — Filament-modal "Queue all active spools" should NOT auto-open the Print Queue modal — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14` (Group 17.2). Handler in `inv_details.js:413` no longer calls `window.openQueueModal()` after success; instead toasts "Queued N labels — open Print Queue to review" (4 s). Users can keep queuing labels from other filaments/spools without dismissing the panel each time. Regression coverage in `test_filament_queue_all_no_auto_open.py`.)*
 
@@ -158,6 +181,8 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 * Scann prusament data link into the search field in spool section fails to grab all available data and add it to the available fields in the UI of Add/Edit Wizzard, on an existing spool in the system. Scanning that data should update/add those fields. Except being if the current weight of the spool doesn't match the weight on the data card, implying that it was used, in those cases, current weights should be left alown, but total weight, and other elements should be updateable. (Basically perserve current usage amount, but update all other fields.)
 
 * Edit filament - Advanced tab - Import from external section, when expanded then condensed, a bit of the source dropdown box still shows after colapsing.
+
+* Setting a dryerbox slot that's attached to a toolhead to empty, doesn't propagate an empty field setting to filabridge. It thinks the old spool is still in that slot.
 
 There continues to be inconsistency with switching out spools when a box slot is attached to a head, either ejecting doesn't fully clear all values, or only pulls it from the box, but not the toolhead. I have to take the new spool, assigne it to the box, remove the old spool from the box, and manually assign it to the toolhead directly. So we need to deep dive into that whole system and find out why this is still a problem. I've included the logs below to try and out line the the flow better than me trying to type it.
 [17:02:49] 🗑️ Force Unassigned #240
