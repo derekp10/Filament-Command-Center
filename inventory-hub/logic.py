@@ -327,11 +327,12 @@ def resolve_scan(text):
         
     # 8. LEGACY LOCATION FALLBACK (Len > 2)
     # Only accepts a "random string" if it matches a known location in DB.
-    if len(text) > 2: 
+    if len(text) > 2:
         loc_list = locations_db.load_locations_list()
         valid_ids = {row['LocationID'].upper() for row in loc_list}
         valid_ids.add("UNASSIGNED") # [ALEX FIX] Allow the virtual Unassigned bucket
-        
+        valid_ids.add("UNKNOWN")    # 18.1 — virtual UNKNOWN bucket (physically lost)
+
         if text.upper() in valid_ids:
             return {'type': 'location', 'id': text.upper()}
         else:

@@ -1160,8 +1160,9 @@ def api_get_locations():
             
     csv_rows = list(local_map.values())
     occupancy_map: dict[str, int] = {}
-    unassigned_count: int = 0 
-    
+    unassigned_count: int = 0
+    unknown_count: int = 0  # 18.1 — spools sitting at the virtual UNKNOWN bucket
+
     sm_url, _ = config_loader.get_api_urls()
     try:
         resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
@@ -1172,13 +1173,17 @@ def api_get_locations():
                 if loc == 'UNASSIGNED': loc = "" # Coerce to true blank
                 extra = s.get('extra')
                 if not isinstance(extra, dict): extra = {}
-                
-                if loc: 
+
+                if loc == 'UNKNOWN':
+                    unknown_count += 1
+                    # Don't add UNKNOWN to occupancy_map — it's a virtual
+                    # bucket with no on-disk row to attach to.
+                elif loc:
                     if loc not in occupancy_map:
                         occupancy_map[loc] = 1
                     else:
                         occupancy_map[loc] += 1
-                else: 
+                else:
                     unassigned_count += 1 # type: ignore # pyre-ignore
                 
                 # [ALEX FIX] Ghost Occupancy Count
@@ -1314,8 +1319,24 @@ def api_get_locations():
             row['OccupancyRaw'] = curr_val 
             if max_val > 0: row['Occupancy'] = f"{curr_val}/{max_val}"
             else: row['Occupancy'] = f"{curr_val} items"
-            
+
         final_list.append(row)
+
+    # 18.1 — virtual UNKNOWN bucket, pinned to the BOTTOM of the list
+    # (Derek's pick: bottom over top because spools land here when they're
+    # physically misplaced; finding them is the goal, so they shouldn't
+    # crowd the top of the manager). Distinct from Unassigned (which is
+    # "deliberately on the workbench, awaiting a destination"); Unknown
+    # is "we don't know where it actually is — it's not at the location
+    # its tag claims." Riff on Unassigned visual treatment but yellow
+    # to flag as a caution state. The frontend renders the badge.
+    final_list.append({
+        "LocationID": "UNKNOWN",
+        "Name": "❓ Unknown (Physically Lost)",
+        "Type": "Unknown",
+        "Occupancy": f"{unknown_count} items",
+        "Max Spools": 0,
+    })
     return jsonify(final_list)
 
 @app.route('/api/locations', methods=['POST'])
