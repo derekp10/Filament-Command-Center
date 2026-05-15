@@ -622,6 +622,15 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             if is_toolhead:
                  new_extra['physical_source'] = current_loc
                  new_extra['physical_source_slot'] = current_extra.get('container_slot')
+            else:
+                # L130 fix: when forcing a spool to a Room/Cart/Shelf
+                # (the typical Force-Location destinations), clear any
+                # stale ghost trail so the "deployed" indicator computed
+                # from physical_source (spoolman_api.search_inventory)
+                # doesn't keep flagging the spool as still on a toolhead.
+                # Mirrors the DRYER MOVE branch's pop() above.
+                new_extra.pop('physical_source', None)
+                new_extra.pop('physical_source_slot', None)
 
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
