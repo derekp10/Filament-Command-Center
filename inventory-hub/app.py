@@ -1703,6 +1703,7 @@ def api_identify_scan():
         
     if res['type'] == 'spool':
         sid = res['id']; data = spoolman_api.get_spool(sid)
+        label_already_verified = False  # response flag — see L128 below
         if data:
             if source == 'barcode' and text.strip().upper().startswith('ID:'):
                 extra = data.get('extra', {})
@@ -1729,11 +1730,15 @@ def api_identify_scan():
                             f"❌ Failed to verify Spool #{sid} label: {err}", "ERROR", "ff4444"
                         )
                 else:
-                    # Always give the user feedback on a label scan, even
-                    # when no flag flip was needed. Silence here is the
-                    # symptom that motivated Item 3 — users couldn't tell
-                    # whether the scan was acknowledged at all.
-                    state.add_log_entry(f"ℹ️ Spool #{sid} already verified", "INFO", "00ccff")
+                    # L128 fix: blind-scanning a stack of already-verified
+                    # spools used to spam the Activity Log with an
+                    # "ℹ️ Spool #N already verified" line per scan, drowning
+                    # out genuinely useful events. Silence the log here and
+                    # let the frontend toast a brief acknowledgment using
+                    # the `label_already_verified` response field. The
+                    # original silent-on-no-flip bug (Item 3) is still
+                    # addressed because the toast preserves per-scan feedback.
+                    label_already_verified = True
             
             info = spoolman_api.format_spool_display(data)
             
@@ -1751,9 +1756,9 @@ def api_identify_scan():
                 final_slot = ghost_slot
 
             return jsonify({
-                "type": "spool", 
-                "id": int(sid), 
-                "display": info['text'], 
+                "type": "spool",
+                "id": int(sid),
+                "display": info['text'],
                 "color": info['color'],
                 "color_direction": info.get("color_direction", "longitudinal"),
                 "remaining_weight": data.get("remaining_weight"),
@@ -1762,12 +1767,14 @@ def api_identify_scan():
                 "location": p_source if is_ghost else sloc,
                 "is_ghost": is_ghost,
                 "slot": final_slot,
-                "deployed_to": sloc if is_ghost else None
+                "deployed_to": sloc if is_ghost else None,
+                "label_already_verified": label_already_verified
             })
             
     if res['type'] == 'filament':
         fid = res['id']
         data = spoolman_api.get_filament(fid)
+        label_already_verified = False  # response flag — see L128 (spool branch)
         if data:
             if source == 'barcode' and text.strip().upper().startswith('FIL:'):
                 extra = data.get('extra', {})
@@ -1788,10 +1795,12 @@ def api_identify_scan():
                             f"❌ Failed to verify Filament #{fid} label: {err}", "ERROR", "ff4444"
                         )
                 else:
-                    state.add_log_entry(f"ℹ️ Filament #{fid} already verified", "INFO", "00ccff")
-            
+                    # L128 fix — same rationale as spool branch above:
+                    # signal via response field, no Activity Log entry.
+                    label_already_verified = True
+
             name = data.get('name', 'Unknown Filament')
-            return jsonify({"type": "filament", "id": int(fid), "display": name})
+            return jsonify({"type": "filament", "id": int(fid), "display": name, "label_already_verified": label_already_verified})
 
     # --- SLOT ASSIGNMENT (Phase 1) ---
     # LOC:X:SLOT:Y scans mean "drop the buffered spool into slot Y of location X".
