@@ -1732,14 +1732,14 @@ def api_identify_scan():
                             f"❌ Failed to verify Spool #{sid} label: {err}", "ERROR", "ff4444"
                         )
                 else:
-                    # L128 fix: blind-scanning a stack of already-verified
-                    # spools used to spam the Activity Log with an
-                    # "ℹ️ Spool #N already verified" line per scan, drowning
-                    # out genuinely useful events. Silence the log here and
-                    # let the frontend toast a brief acknowledgment using
-                    # the `label_already_verified` response field. The
-                    # original silent-on-no-flip bug (Item 3) is still
-                    # addressed because the toast preserves per-scan feedback.
+                    # L128 follow-up (2026-05-15): toast-only ack felt
+                    # noisier than the log line it replaced, so revert
+                    # to writing to the Activity Log. The log is bounded
+                    # at 50 entries server-side and the user can pause
+                    # it via the click-to-pause indicator — both better
+                    # mitigations for blind-scan volume than a 1.5s
+                    # toast for every scan.
+                    state.add_log_entry(f"ℹ️ Spool #{sid} already verified", "INFO", "00ccff")
                     label_already_verified = True
             
             info = spoolman_api.format_spool_display(data)
@@ -1797,8 +1797,11 @@ def api_identify_scan():
                             f"❌ Failed to verify Filament #{fid} label: {err}", "ERROR", "ff4444"
                         )
                 else:
-                    # L128 fix — same rationale as spool branch above:
-                    # signal via response field, no Activity Log entry.
+                    # L128 follow-up (2026-05-15): see spool branch — reverted
+                    # to Activity Log entry. Response flag still emitted in case
+                    # any future surface needs the signal, but the toast on the
+                    # frontend has been removed.
+                    state.add_log_entry(f"ℹ️ Filament #{fid} already verified", "INFO", "00ccff")
                     label_already_verified = True
 
             name = data.get('name', 'Unknown Filament')

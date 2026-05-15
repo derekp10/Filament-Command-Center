@@ -64,9 +64,9 @@ def test_wizard_success_state_renders_queue_label_chips(page: Page, base_url: st
 
     # Fire submit — should hit our mocked endpoint and run my chip render.
     page.evaluate("window.wizardSubmit()")
-    page.wait_for_function("() => document.querySelectorAll('#wiz-status-msg .fcc-wiz-queue-label').length === 2", timeout=5000)
+    page.wait_for_function("() => document.querySelectorAll('#wiz-postcreate-actions .fcc-wiz-queue-label').length === 2", timeout=5000)
 
-    chips = page.locator("#wiz-status-msg .fcc-wiz-queue-label")
+    chips = page.locator("#wiz-postcreate-actions .fcc-wiz-queue-label")
     expect(chips).to_have_count(2)
     ids = sorted(int(c.get_attribute("data-spool-id")) for c in chips.element_handles())
     assert ids == [9991, 9992], f"expected chips for [9991, 9992], got {ids}"
@@ -82,5 +82,5 @@ def test_wizard_success_state_renders_queue_label_chips(page: Page, base_url: st
     assert 9991 in queued, f"chip click should enqueue the spool; got {queued}"
 
     # Chip should be disabled and re-styled to indicate "done".
-    first = page.locator("#wiz-status-msg .fcc-wiz-queue-label").first
+    first = page.locator("#wiz-postcreate-actions .fcc-wiz-queue-label").first
     expect(first).to_be_disabled()

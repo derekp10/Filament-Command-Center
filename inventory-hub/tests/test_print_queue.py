@@ -173,12 +173,13 @@ def test_identify_scan_clears_null_flag_spool(client):
 
 def test_identify_scan_skips_when_explicitly_false_spool(client):
     """A spool already marked False (positively verified) should NOT trigger
-    another update — the only short-circuit case in the new tri-state logic.
+    another update — the only short-circuit case in the tri-state logic.
 
-    L128: the "already verified" signal moved from the Activity Log to a
-    response field (`label_already_verified: true`) so blind-scanning a
-    stack of verified spools doesn't flood the log. The frontend toasts
-    the acknowledgment instead."""
+    L128 history: first iteration moved the "already verified" feedback
+    from the Activity Log to a 1.5s toast (response field
+    label_already_verified). Reverted 2026-05-15 — the toast turned out
+    noisier than the log line. Activity Log entry is back; the response
+    field is preserved for any future surface that wants the signal."""
     with patch('logic.resolve_scan') as mock_resolve, patch('spoolman_api.get_spool') as mock_get, patch('spoolman_api.update_spool') as mock_update, patch('state.add_log_entry') as mock_log, patch('spoolman_api.format_spool_display', return_value={'text':'foo', 'color':'#fff'}):
         mock_resolve.return_value = {"type": "spool", "id": 12}
         mock_get.return_value = {"id": 12, "extra": {"needs_label_print": False}}
@@ -186,14 +187,13 @@ def test_identify_scan_skips_when_explicitly_false_spool(client):
         res = client.post('/api/identify_scan', json={"text": "ID:12", "source": "barcode"})
         body = res.get_json()
         assert body['type'] == 'spool'
+        # Response flag preserved even though the toast was removed.
         assert body['label_already_verified'] is True
 
         mock_update.assert_not_called()
-        # L128: no Activity Log entry for already-verified scans.
-        for call in mock_log.call_args_list:
-            assert "already verified" not in call.args[0], (
-                f"Activity Log should be quiet on already-verified scans, got: {call.args[0]}"
-            )
+        # Activity Log entry is back (post-revert).
+        mock_log.assert_called_once()
+        assert "already verified" in mock_log.call_args[0][0]
 
 
 @pytest.mark.parametrize("flag_value", ['false', 'False'])

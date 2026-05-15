@@ -461,6 +461,12 @@
 
             <div class="modal-footer border-secondary flex-column align-items-stretch fcc-modal-footer">
                 <div id="wiz-status-msg" class="text-info small font-monospace text-break text-start mb-2 w-100"></div>
+                <!-- 17.3 follow-up: queue-label chips live on their own
+                     dedicated row alongside Cancel / Create Inventory so
+                     a `wiz-status-msg` overwrite (e.g. the post-success
+                     "Make a change to add more..." auto-prompt) can't
+                     clobber them before the user clicks. -->
+                <div id="wiz-postcreate-actions" class="d-flex flex-wrap align-items-center justify-content-end w-100 gap-2"></div>
                 <div class="d-flex justify-content-end w-100">
                     <button class="btn btn-outline-danger me-2" data-bs-dismiss="modal">Cancel</button>
                     <button class="btn btn-success fw-bold px-4 shadow" id="btn-wiz-submit" onclick="wizardSubmit()"

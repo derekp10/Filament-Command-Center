@@ -292,12 +292,11 @@ const processScan = (text, source = 'keyboard') => {
 
                 state.lastScannedLoc = null;
                 if (!res.display) { showToast("Spool ID found but data missing!", "error"); return; }
-                // L128: backend signals already-verified label scans via this
-                // flag instead of writing to the Activity Log. Toast preserves
-                // per-scan feedback for blind scanning without piling up logs.
-                if (res.label_already_verified) {
-                    showToast(`Spool #${res.id} already verified`, "info", 1500);
-                }
+                // L128 follow-up (2026-05-15): the "already verified"
+                // toast was MORE noisy than the log line it replaced —
+                // reverted to writing to Activity Log only. The
+                // label_already_verified flag is still emitted for any
+                // future surface that needs it; we just don't toast.
                 if (state.heldSpools.some(s => s.id === res.id)) showToast("Already in Buffer", "warning");
                 else { state.heldSpools.unshift({ id: res.id, display: res.display, color: res.color, color_direction: res.color_direction, remaining_weight: res.remaining_weight, details: res.details, archived: res.archived, location: res.location, is_ghost: res.is_ghost, slot: res.slot, deployed_to: res.deployed_to }); renderBuffer(); }
             } else if (res.type === 'ambiguous') {
@@ -317,10 +316,8 @@ const processScan = (text, source = 'keyboard') => {
                     showToast(`Multiple spools share legacy ID ${res.legacy_id} — open Backlog to print fresh labels`, "warning", 6000);
                 }
             } else if (res.type === 'filament') {
-                // L128: same toast path as the spool branch for filament scans.
-                if (res.label_already_verified) {
-                    showToast(`Filament #${res.id} already verified`, "info", 1500);
-                }
+                // L128 follow-up (2026-05-15): see spool branch — reverted
+                // to Activity Log only; no per-scan toast.
                 openFilamentDetails(res.id);
             } else if (res.type === 'error') showToast(res.msg, 'error');
         })
