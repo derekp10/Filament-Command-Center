@@ -153,6 +153,29 @@ window.openWizardModal = async () => {
         window.modals.wizardModal = m;
         m.show();
     }
+    // Group 10.1 SC round-6: when the wizard launches on top of another
+    // modal (spool/filament details), focus stays on the launching button
+    // and Bootstrap's keyboard-dismiss handler (bound to the modal
+    // element) never receives Escape until the user clicks the wizard
+    // first. Force focus into the wizard after show finishes so Escape
+    // works immediately.
+    const _wizModalEl = document.getElementById('wizardModal');
+    if (_wizModalEl) {
+        const _focusFirst = () => {
+            const focusables = _wizModalEl.querySelectorAll(
+                'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]),'
+                + ' select:not([disabled]), textarea:not([disabled]),'
+                + ' [tabindex]:not([tabindex="-1"])'
+            );
+            for (const el of focusables) {
+                if (el.offsetParent !== null) { el.focus(); return; }
+            }
+            _wizModalEl.focus();
+        };
+        // shown.bs.modal fires once Bootstrap finishes its own focus
+        // management — override after that so we win the focus war.
+        _wizModalEl.addEventListener('shown.bs.modal', _focusFirst, { once: true });
+    }
     await Promise.all([
         wizardFetchVendors(),
         wizardFetchLocations(),
@@ -160,7 +183,424 @@ window.openWizardModal = async () => {
         wizardFetchMaterials()
     ]);
     if (window.wizardSyncSpoolRows) window.wizardSyncSpoolRows();
+    if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('create');
 };
+
+// Group 10.1 (Session C) — applies the wizard's section-collapse defaults.
+// Called from openWizardModal with 'create' (collapse all optional panels),
+// and from each edit-context entry point (openEditWizard, openCloneWizard,
+// openNewSpoolFromFilamentWizard) with 'edit' after the prefill chain has
+// filled the form — sections with any user-entered data auto-expand so the
+// user sees what's actually filled in without clicking each toggle.
+window.wizardApplyCollapseDefaults = (context) => {
+    if (!window.bootstrap || !window.bootstrap.Collapse) return;
+    const hasAnyValue = (panelEl) => {
+        if (!panelEl) return false;
+        const inputs = panelEl.querySelectorAll('input, select, textarea');
+        for (const el of inputs) {
+            if (el.type === 'checkbox' || el.type === 'radio') {
+                if (el.checked) return true;
+            } else if ((el.value == null ? '' : String(el.value)).trim() !== '') {
+                return true;
+            }
+        }
+        return false;
+    };
+    // 'always-open' stays expanded in both contexts; 'optional' obeys the
+    // create=collapsed / edit=smart-on-content rule.
+    const sections = [
+        // Group 10.1 SC round-6: Physical Specs is collapsible like the
+        // others. Chip shows the defaults at a glance so user can verify
+        // by expanding only when they need to deviate from 1.75mm / 1.24.
+        ['wiz-fil-color-panel',      'optional'],
+        ['wiz-fil-physical-panel',   'optional'],
+        ['wiz-fil-temps-panel',      'optional'],
+        ['wiz-fil-extras-panel',     'optional'],
+        ['wiz-spool-weight-panel',   'optional'],
+        ['wiz-spool-metadata-panel', 'optional'],
+        ['wiz-spool-extras-panel',   'optional'],
+    ];
+    // Suppress the shown.bs.collapse scroll-into-view side effect while
+    // we batch-apply panel state — otherwise an edit-mode wizard with
+    // 5+ panels to expand cascades through scroll animations, jumping
+    // the view around. The flag is cleared right after the loop.
+    window._wizSuppressScroll = true;
+    sections.forEach(([id, kind]) => {
+        const panelEl = document.getElementById(id);
+        if (!panelEl) return;
+        const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
+        let open;
+        if (kind === 'always-open') {
+            open = true;
+        } else {
+            // Both 'create' and 'edit' now default to collapsed for optional
+            // panels. The summary chips show what's filled in already, so
+            // the user can expand only what they actually want to change.
+            // Smart-expand-on-edit was dropped per Session C round-4 feedback —
+            // it caused too many panels to fan open at once, with cascading
+            // scrolls. Chips give the at-a-glance view that auto-expand was
+            // trying to provide.
+            open = false;
+        }
+        // Apply state synchronously WITHOUT triggering Bootstrap's animation
+        // (and thus without the shown/hidden events that would re-fire scroll
+        // logic). Direct class manipulation matches what Bootstrap ends up
+        // with after the transition finishes.
+        panelEl.classList.remove('collapsing');
+        if (open) {
+            panelEl.classList.add('show');
+            panelEl.style.height = '';
+            if (btn) btn.setAttribute('aria-expanded', 'true');
+        } else {
+            panelEl.classList.remove('show');
+            panelEl.style.height = '';
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+        }
+    });
+    window._wizSuppressScroll = false;
+    // Refresh summaries now that aria-expanded / .show are settled.
+    if (window.wizardRefreshAllSectionSummaries) {
+        window.wizardRefreshAllSectionSummaries();
+    }
+    // Reset the modal-body's scroll position to the top so the user always
+    // lands at Step 1 regardless of how the previous session left it.
+    const modalBody = document.querySelector('#wizardModal .modal-body');
+    if (modalBody) modalBody.scrollTop = 0;
+};
+
+// Group 10.1 (Session C polish) — section-summary rendering for collapsed
+// panels. The collapsed toggle button shows a compact preview of the
+// section's values (color swatch + name, weight chain, price, etc.) so the
+// user can see what's filled in without expanding. Templated on the
+// printer-status toolhead card pattern (uses getFilamentStyle/makeSwatchHtml
+// for color rendering so multi-color gradients render correctly).
+//
+// Also handles two related UX behaviors:
+//   - Auto-scroll: on `shown.bs.collapse`, scrolls the section toggle into
+//     view at the top of the modal-body so the user sees the section they
+//     just opened.
+//   - Clears the summary span when expanded; re-renders when collapsed.
+const _wizEscape = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const _wizSectionSummarizers = {
+    'wiz-fil-physical-panel': () => {
+        const v = (id) => (document.getElementById(id)?.value || '').trim();
+        const dia = v('wiz-fil-diameter');
+        const den = v('wiz-fil-density');
+        const wt = v('wiz-fil-weight');
+        const empty = v('wiz-fil-empty_weight');
+        const parts = [];
+        if (dia) parts.push(`${dia}mm Ø`);
+        if (den) parts.push(`${den} g/cm³`);
+        if (wt) parts.push(`${wt}g net`);
+        if (empty) parts.push(`${empty}g tare`);
+        return parts.join(' · ');
+    },
+    'wiz-fil-color-panel': () => {
+        const name = (document.getElementById('wiz-fil-color_name')?.value || '').trim();
+        const hex0 = (document.getElementById('wiz-fil-color_hex_0')?.value || '').trim();
+        const extras = Array.from(document.querySelectorAll('#wiz-fil-color-extra-container input[type="text"]'))
+            .map(el => (el.value || '').trim()).filter(Boolean);
+        const allHexes = [hex0, ...extras].filter(h => h && h !== '#FFFFFF');
+        if (!name && allHexes.length === 0) return '';
+        const dir = document.getElementById('wiz-fil-color-direction')?.value || 'longitudinal';
+        const colorStr = allHexes.length > 0 ? allHexes.join(',') : (hex0 || '#FFFFFF');
+        const swatch = window.makeSwatchHtml
+            ? window.makeSwatchHtml(colorStr, dir, { size: 16, marginRight: 6 })
+            : '';
+        const label = name || (allHexes[0] || hex0 || '');
+        const hexTag = allHexes.length > 1
+            ? ` <span class="font-monospace text-info">${allHexes.length} colors</span>`
+            : (allHexes[0] ? ` <span class="font-monospace text-muted">${allHexes[0]}</span>` : '');
+        return `<span class="d-inline-flex align-items-center">${swatch}<span class="text-light">${_wizEscape(label)}</span>${hexTag}</span>`;
+    },
+    'wiz-fil-temps-panel': () => {
+        const v = (id) => (document.getElementById(id)?.value || '').trim();
+        const nMin = v('wiz-fil-settings_extruder_temp'), nMax = v('wiz-fil-nozzle_temp_max');
+        const bMin = v('wiz-fil-settings_bed_temp'),     bMax = v('wiz-fil-bed_temp_max');
+        const parts = [];
+        if (nMin || nMax) parts.push(`Nozzle ${nMin || '?'}–${nMax || '?'}°`);
+        if (bMin || bMax) parts.push(`Bed ${bMin || '?'}–${bMax || '?'}°`);
+        return parts.join(' · ');
+    },
+    'wiz-fil-extras-panel': () => {
+        const inputs = document.querySelectorAll('#wiz-fil-dynamic-extra-fields input, #wiz-fil-dynamic-extra-fields select, #wiz-fil-dynamic-extra-fields textarea');
+        let filled = 0;
+        inputs.forEach(el => {
+            if (el.type === 'checkbox' || el.type === 'radio') { if (el.checked) filled++; }
+            else if ((el.value || '').toString().trim() !== '') filled++;
+        });
+        return filled === 0 ? '' : `${filled} field${filled === 1 ? '' : 's'} set`;
+    },
+    'wiz-spool-weight-panel': () => {
+        const v = (id) => (document.getElementById(id)?.value || '').trim();
+        const empty = v('wiz-spool-empty_weight');
+        const initial = v('wiz-spool-initial_weight');
+        const remaining = v('wiz-spool-remaining');
+        const used = v('wiz-spool-used');
+        const parts = [];
+        if (remaining) parts.push(`<span class="text-success">${remaining}g left</span>`);
+        if (used && used !== '0') parts.push(`${used}g used`);
+        if (initial) parts.push(`net ${initial}g`);
+        if (empty) parts.push(`tare ${empty}g`);
+        return parts.join(' · ');
+    },
+    'wiz-spool-metadata-panel': () => {
+        const v = (id) => (document.getElementById(id)?.value || '').trim();
+        const price = v('wiz-spool-price');
+        const comment = v('wiz-spool-comment');
+        const url = v('wiz-spool-purchase_url');
+        const archived = document.getElementById('wiz-spool-archived')?.checked;
+        const parts = [];
+        if (price) parts.push(`$${price}`);
+        if (archived) parts.push('<span class="text-warning">archived</span>');
+        if (url) parts.push('<span class="text-info">🔗 link</span>');
+        if (comment) parts.push(`💬 ${_wizEscape(comment.slice(0, 28))}${comment.length > 28 ? '…' : ''}`);
+        return parts.join(' · ');
+    },
+    'wiz-spool-extras-panel': () => {
+        const inputs = document.querySelectorAll('#wiz-spool-dynamic-extra-fields input, #wiz-spool-dynamic-extra-fields select, #wiz-spool-dynamic-extra-fields textarea');
+        let filled = 0;
+        inputs.forEach(el => {
+            if (el.type === 'checkbox' || el.type === 'radio') { if (el.checked) filled++; }
+            else if ((el.value || '').toString().trim() !== '') filled++;
+        });
+        return filled === 0 ? '' : `${filled} field${filled === 1 ? '' : 's'} set`;
+    },
+    // Physical Specs is always-open; no summary needed.
+};
+
+window.wizardRefreshSectionSummary = (panelId) => {
+    const gen = _wizSectionSummarizers[panelId];
+    if (!gen) return;
+    const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${panelId}"]`);
+    if (!btn) return;
+    const summarySpan = btn.querySelector('.fcc-wiz-section-summary');
+    if (!summarySpan) return;
+    // Chips render regardless of expanded state — they're a glance-able
+    // summary of the section's values, so they should also be visible
+    // while the user is editing (and confirm the values they just typed).
+    const html = gen();
+    summarySpan.innerHTML = html || '';
+    summarySpan.style.display = html ? '' : 'none';
+};
+
+window.wizardRefreshAllSectionSummaries = () => {
+    Object.keys(_wizSectionSummarizers).forEach(id => window.wizardRefreshSectionSummary(id));
+};
+
+// One-shot wiring at script load: every collapsible panel gets listeners
+// for show/hide so summaries refresh and the modal scrolls to the toggle
+// the user just clicked. Idempotent — runs once.
+(function() {
+    if (window._wizCollapseWired) return;
+    window._wizCollapseWired = true;
+    const panelIds = Object.keys(_wizSectionSummarizers);
+    panelIds.forEach(id => {
+        const panel = document.getElementById(id);
+        if (!panel) return;
+        // Bootstrap's default Enter/Space-clicks-focused-button behavior
+        // doesn't reliably fire for these toggles, so we synthesize a click
+        // on keydown. BUT the browser sometimes ALSO dispatches a native
+        // click on keyup (Space) or independently (Enter), causing a
+        // expand+collapse double-fire — user has to press twice to land
+        // on "expanded". Fix: track the last keyboard-induced click and
+        // suppress any native click that arrives within 300ms.
+        const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
+        if (btn) {
+            let lastKbAt = 0;
+            // Group 10.1 SC round-5: toggle Bootstrap's Collapse instance
+            // directly instead of synthesizing btn.click(). The click()
+            // path goes through Bootstrap's data-bs-toggle handler — and
+            // the browser ALSO dispatches a native click on keyup (Space)
+            // or shortly after (Enter), causing intermittent double-fire
+            // even with the round-4 debounce. Going through the API
+            // directly bypasses the click handler entirely; even if a
+            // native click leaks through, Bootstrap's own _isTransitioning
+            // lock blocks the redundant toggle.
+            btn.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const now = Date.now();
+                    if (now - lastKbAt < 400) return;
+                    lastKbAt = now;
+                    if (window.bootstrap && window.bootstrap.Collapse) {
+                        bootstrap.Collapse.getOrCreateInstance(panel, { toggle: false }).toggle();
+                    }
+                }
+            });
+            // Backstop: drop any native click that arrives within 400ms of a
+            // keyboard toggle. Covers the (rare) case where the browser's
+            // synthesized click still reaches Bootstrap despite preventDefault.
+            btn.addEventListener('click', (e) => {
+                if (e.isTrusted && (Date.now() - lastKbAt < 400)) {
+                    e.stopImmediatePropagation();
+                    e.preventDefault();
+                }
+            }, true);
+        }
+        panel.addEventListener('shown.bs.collapse', (e) => {
+            if (e.target !== panel) return;
+            window.wizardRefreshSectionSummary(id);
+            // Suppress when wizardApplyCollapseDefaults is batch-applying —
+            // it sets state synchronously and doesn't need the scroll.
+            if (window._wizSuppressScroll) return;
+            // Smart-scroll: only scroll if the expansion pushed the panel's
+            // bottom below the visible modal-body viewport. If the section
+            // already fits entirely on screen, leave the user's scroll
+            // position alone (per user feedback — only scroll if the
+            // expansion would otherwise be invisible).
+            const modalBody = document.querySelector('#wizardModal .modal-body');
+            const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
+            if (!modalBody || !btn) return;
+            const modalRect = modalBody.getBoundingClientRect();
+            const panelRect = panel.getBoundingClientRect();
+            // Bottom-of-panel below bottom-of-modal? Or top-of-toggle
+            // already above top-of-modal? Either way, scroll the toggle
+            // to the top so the panel becomes fully visible.
+            const overflowsBottom = panelRect.bottom > modalRect.bottom - 4;
+            const togglesOffTop = btn.getBoundingClientRect().top < modalRect.top + 4;
+            if (overflowsBottom || togglesOffTop) {
+                btn.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+        panel.addEventListener('hidden.bs.collapse', (e) => {
+            if (e.target !== panel) return;
+            window.wizardRefreshSectionSummary(id);
+        });
+    });
+    // Refresh all CLOSED-section summaries on any input/change inside the
+    // modal so collapsed sections stay accurate as the user types in
+    // expanded ones (then re-collapses them).
+    const wizEl = document.getElementById('wizardModal');
+    if (wizEl) {
+        const refreshAll = () => {
+            panelIds.forEach(id => window.wizardRefreshSectionSummary(id));
+        };
+        wizEl.addEventListener('input', refreshAll);
+        wizEl.addEventListener('change', refreshAll);
+    }
+})();
+
+// Group 10.1 (Session C polish) — Original Color routing. The
+// `original_color` extra field is logically a Color field, not a Custom
+// Filament Attribute. wizardFetchExtraFields normally renders it into
+// `#wiz-fil-dynamic-extra-fields`; this helper moves it into the Color
+// panel's dedicated slot if present. Called from wizardFetchExtraFields
+// after the dynamic-extras grid is built.
+window.wizardRelocateOriginalColorField = () => {
+    const slot = document.getElementById('wiz-fil-original-color-slot');
+    if (!slot) return;
+    // Clear any prior render: wizardFetchExtraFields runs on every wizard
+    // open AND on schema refresh, so without this the slot accumulated a
+    // new copy each time (original_color appeared 2x, 3x, ... after
+    // multiple opens in the same page session).
+    slot.innerHTML = '';
+    const extrasGrid = document.getElementById('wiz-fil-dynamic-extra-fields');
+    if (!extrasGrid) return;
+    const col = extrasGrid.querySelector('[data-extra-key="original_color"]');
+    if (col && col.parentElement === extrasGrid) {
+        slot.appendChild(col);
+        col.className = 'col-md-12';
+    }
+};
+
+// Group 10.1 (Session C polish) — TPU-only shore_hardness. Hide the
+// shore_hardness extra unless the material is TPU-family. Wires a listener
+// on the material input + an initial sync, and is re-run after every
+// extras render. Material list as of 2026-05: TPU, TPE, TPC are the
+// common shore-hardness-relevant flexibles.
+const _TPU_FAMILY = ['TPU', 'TPE', 'TPC', 'FLEX'];
+window.wizardApplyShoreHardnessGate = () => {
+    const matEl = document.getElementById('wiz-fil-material');
+    const target = document.querySelector('[data-extra-key="shore_hardness"]');
+    if (!target) return;
+    const mat = (matEl?.value || '').trim().toUpperCase();
+    const isTpu = _TPU_FAMILY.some(prefix => mat.startsWith(prefix));
+    target.style.display = isTpu ? '' : 'none';
+};
+
+(function() {
+    if (window._wizTpuGateWired) return;
+    window._wizTpuGateWired = true;
+    const matEl = document.getElementById('wiz-fil-material');
+    if (matEl) {
+        ['input', 'change', 'blur'].forEach(evt => {
+            matEl.addEventListener(evt, () => window.wizardApplyShoreHardnessGate());
+        });
+    }
+})();
+
+// Group 10.1 (Session C polish) — Expand / collapse all wizard sections.
+// Bound to Shift+E / Shift+C while the wizard modal is open. Registered
+// via the shortcuts registry so it appears in the global `?` overlay.
+window.wizardExpandAllSections = () => {
+    Object.keys(_wizSectionSummarizers).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || !window.bootstrap || !window.bootstrap.Collapse) return;
+        bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).show();
+    });
+};
+window.wizardCollapseAllSections = () => {
+    Object.keys(_wizSectionSummarizers).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || !window.bootstrap || !window.bootstrap.Collapse) return;
+        bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).hide();
+    });
+};
+
+(function() {
+    if (window._wizExpandShortcutWired) return;
+    window._wizExpandShortcutWired = true;
+    const wizEl = document.getElementById('wizardModal');
+    if (!wizEl) return;
+    // Modal-scoped capture listener: only fires when the wizard is shown.
+    wizEl.addEventListener('keydown', (e) => {
+        if (!wizEl.classList.contains('show')) return;
+        // Skip if the user is typing into an input/textarea/select — Shift+E
+        // is a perfectly valid character keystroke in those contexts.
+        const tag = (document.activeElement?.tagName || '').toUpperCase();
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+        if (!e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+        if (e.key === 'E' || e.key === 'e') {
+            e.preventDefault();
+            window.wizardExpandAllSections();
+        } else if (e.key === 'C' || e.key === 'c') {
+            e.preventDefault();
+            window.wizardCollapseAllSections();
+        }
+    });
+    // Register with the shortcuts registry so the `?` overlay shows them.
+    // The registry script (shortcuts_registry.js) is loaded AFTER this
+    // wizard module in scripts.html, so window.registerShortcut may not
+    // exist yet. Poll briefly until it shows up.
+    const _registerWizardShortcuts = () => {
+        if (typeof window.registerShortcut !== 'function') return false;
+        window.registerShortcut({
+            id: 'wizard-expand-all',
+            scope: 'Wizard',
+            keys: ['Shift', 'E'],
+            description: 'Expand all collapsed sections in the wizard',
+        });
+        window.registerShortcut({
+            id: 'wizard-collapse-all',
+            scope: 'Wizard',
+            keys: ['Shift', 'C'],
+            description: 'Collapse all optional sections in the wizard',
+        });
+        return true;
+    };
+    if (!_registerWizardShortcuts()) {
+        const start = Date.now();
+        const tick = () => {
+            if (_registerWizardShortcuts()) return;
+            if (Date.now() - start > 5000) return;  // give up after 5s
+            setTimeout(tick, 100);
+        };
+        setTimeout(tick, 100);
+    }
+})();
 
 // Group 10.4 — populates the spool's purchase_url input with the smart-fallback
 // pattern: if the spool already has its own URL, fill the input. If not, leave
@@ -212,9 +652,38 @@ const wizardReset = () => {
     document.getElementById('wiz-fil-color_hex_0').value = '#FFFFFF';
     document.getElementById('wiz-fil-color_hex_0').previousElementSibling.value = '#FFFFFF';
     const dirEl = document.getElementById('wiz-fil-color-direction');
-    if (dirEl) dirEl.style.display = 'none';
+    if (dirEl) dirEl.value = 'longitudinal';
+    const dirWrap = document.getElementById('wiz-fil-color-direction-wrapper');
+    if (dirWrap) dirWrap.style.display = 'none';
 
     document.getElementById('wiz-spool-qty').value = 1;
+    // Restore HTML factory defaults that the type=number bulk-wipe above
+    // cleared. Without this, the Physical Specs chip has nothing to show
+    // on a fresh wizard open even though the HTML <input value="..."> would
+    // normally populate them. (Group 10.1 SC round-3 fix.)
+    document.getElementById('wiz-fil-diameter').value = '1.75';
+    document.getElementById('wiz-fil-density').value = '1.24';
+
+    // Group 10.1 SC round-5: reset collapse-panel classes to HTML defaults
+    // so prior-session expand/collapse state doesn't bleed into the new
+    // modal session. Previously, pressing Shift+E to expand all sections
+    // then closing the wizard left the .show classes on those panels;
+    // re-opening flashed them visible until wizardApplyCollapseDefaults
+    // ran (which is async, after Promise.all of fetches — ~500ms+ later).
+    const _wizOptionalPanels = [
+        'wiz-fil-color-panel', 'wiz-fil-physical-panel', 'wiz-fil-temps-panel',
+        'wiz-fil-extras-panel', 'wiz-spool-weight-panel',
+        'wiz-spool-metadata-panel', 'wiz-spool-extras-panel',
+    ];
+    _wizOptionalPanels.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.classList.remove('show', 'collapsing');
+            el.style.height = '';
+            const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+        }
+    });
 
     if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
     if (window.wizardClearFilamentMismatchPanel) window.wizardClearFilamentMismatchPanel();
@@ -910,6 +1379,11 @@ const wizardFetchExtraFields = () => {
 
                 // 🌟 After DOM generation, initialize the live Sync Bindings
                 wizardSetupFieldSync();
+                // Group 10.1 Session C polish: move original_color into the
+                // Color panel and hide shore_hardness unless material is TPU.
+                if (window.wizardRelocateOriginalColorField) window.wizardRelocateOriginalColorField();
+                if (window.wizardApplyShoreHardnessGate) window.wizardApplyShoreHardnessGate();
+                if (window.wizardRefreshAllSectionSummaries) window.wizardRefreshAllSectionSummaries();
             }
         });
 };
@@ -1102,7 +1576,10 @@ const wizardGenerateFieldHTML = (field, entityType) => {
         }
     }
 
-    let html = `<div class="col-md-6 mb-2"><label class="form-label small text-secondary mb-1 d-flex align-items-center">${field.name}${syncHtml}</label>`;
+    // data-extra-key lets the Session-C polish hooks (TPU gate on
+    // shore_hardness, original_color relocation into the Color panel) find
+    // the wrapper without grepping the inner input id.
+    let html = `<div class="col-md-6 mb-2" data-extra-key="${field.key}"><label class="form-label small text-secondary mb-1 d-flex align-items-center">${field.name}${syncHtml}</label>`;
     const dataClass = entityType === 'fil' ? 'dynamic-extra-field' : 'dynamic-extra-spool-field';
     // Add an ID for easy targeting by the sync logic
     const inputId = `wiz_${entityType}_ef_${field.key}`;
@@ -1569,11 +2046,12 @@ window.wizardAddColorHex = () => {
         <div class="input-group input-group-sm mb-1 mt-1">
             <input type="color" class="form-control form-control-color bg-dark border-secondary px-1" value="#000000" oninput="this.nextElementSibling.value = this.value.toUpperCase()">
             <input type="text" class="form-control bg-dark text-white border-secondary font-monospace pb-wiz-color" placeholder="#Hex" value="#000000" id="wiz-fil-color_hex_${idx}" autocomplete="off" oninput="this.previousElementSibling.value = (this.value.startsWith('#') ? this.value : '#' + this.value).padEnd(7, '0').substring(0,7)">
-            <button class="btn btn-outline-danger" type="button" onclick="this.parentElement.remove(); if(document.getElementById('wiz-fil-color-extra-container').children.length === 0) document.getElementById('wiz-fil-color-direction').style.display='none';" title="Remove color">🗑️</button>
+            <button class="btn btn-outline-danger" type="button" onclick="this.parentElement.remove(); if(document.getElementById('wiz-fil-color-extra-container').children.length === 0) { const w = document.getElementById('wiz-fil-color-direction-wrapper'); if (w) w.style.display='none'; }" title="Remove color">🗑️</button>
         </div>
     `;
     container.insertAdjacentHTML('beforeend', html);
-    document.getElementById('wiz-fil-color-direction').style.display = 'block';
+    const dirWrap = document.getElementById('wiz-fil-color-direction-wrapper');
+    if (dirWrap) dirWrap.style.display = 'block';
 };
 
 window.wizardPopulateColors = (hexString, direction) => {
@@ -1581,10 +2059,9 @@ window.wizardPopulateColors = (hexString, direction) => {
     container.innerHTML = '';
     
     const dirEl = document.getElementById('wiz-fil-color-direction');
-    if (dirEl) {
-        dirEl.style.display = 'none';
-        dirEl.value = direction || 'longitudinal';
-    }
+    if (dirEl) dirEl.value = direction || 'longitudinal';
+    const dirWrap = document.getElementById('wiz-fil-color-direction-wrapper');
+    if (dirWrap) dirWrap.style.display = 'none';
 
     if (!hexString) {
         document.getElementById('wiz-fil-color_hex_0').value = '#FFFFFF';
@@ -1615,8 +2092,11 @@ window.wizardPopulateColors = (hexString, direction) => {
         }
     }
 
-    if (hexes.length > 1 && dirEl) {
-        dirEl.style.display = 'block';
+    if (hexes.length > 1) {
+        // wizardAddColorHex already shows the wrapper, but be defensive
+        // in case populateColors is called without any wizardAddColorHex
+        // invocation (e.g. legacy single-call paths).
+        if (dirWrap) dirWrap.style.display = 'block';
     }
 };
 
@@ -2321,6 +2801,7 @@ window.openCloneWizard = async (spoolId) => {
             window.wizardCalcRemainingFromUsed();
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Spool #${spoolId}.</span>`;
+            if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('edit');
         })
         .catch(err => {
             console.error("Clone Wizard Error:", err);
@@ -2381,6 +2862,7 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
             window.wizardCalcRemainingFromUsed();
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Filament #${filamentId}.</span>`;
+            if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('edit');
         })
         .catch(err => {
             console.error("New Spool from Filament Wizard Error:", err);
@@ -2598,6 +3080,7 @@ window.openEditWizard = async (spoolId) => {
 
             document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Editing Spool #${spoolId}.</span>`;
             submitBtn.disabled = false;
+            if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('edit');
         })
         .catch(err => {
             console.error("Edit Wizard Error:", err);

@@ -20,9 +20,15 @@ def test_wizard_manual_creation(page: Page):
     page.locator("#btn-type-manual").click()
 
     # 5. Fill out Filament details (Step 2)
+    # Group 10.1: Color panel defaults collapsed in create mode — expand before fill.
+    page.evaluate(
+        "() => { const el = document.getElementById('wiz-fil-color-panel');"
+        " if (el && !el.classList.contains('show'))"
+        " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }"
+    )
     page.fill("#wiz-fil-material", "Pytest-PLA")
     page.fill("#wiz-fil-color_name", "E2E Ruby Red")
-    
+
     # Locate the first wizard color hex input
     page.locator("#wiz-fil-color_hex_0").fill("#FF0044")
     

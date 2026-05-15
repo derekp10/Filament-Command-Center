@@ -37,8 +37,6 @@
 *(L37/L39 — Default-Unassigned + location selector "Flow" cleanup — DONE 2026-05-14 via Group 10 Session A (items 10.3 + 10.2). Wizard combobox now shows full list on focus, highlights current selection, and placeholder advertises Unassigned default. See `completed-archive.md`.)*
 
 
-* I think the add/edit inventory wizard is too complicated, we should definitely do a clean up pass on this and all of it's processes. I like what's here, but it's a lot of data. The functionality is good, but it just really needs some modernization or something. it's very clunky. We should try and make it more intuitive to use.
-
 * Lagacy QR code scans cause the ? button to engage and pop up the help window. Not sure if theres a good fix for this.
 
 * Fix version number that no longer gets updated. (Remove, or find a way to update it when we do updates.)
@@ -141,6 +139,19 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
 * Only one of the printers (XL) is loading into the printer status section on live. Works fine on dev.
 
+* Need to add an unknow location to the location list. I tried to add one manually, but it was a bit weird in how it displayed. I need a place to put spools that I just can't find, because they aren't where there location tag seays they are.
+
+* Add filament sample status to the display modal, as well as the edit section. So that I can easily see if a swatch has be created for an item. Perhaps also include if a label print has been confirmed, to help trace down lagacy labels that need to be updated.
+
+* I don't think the queue all active spools in the Filament Display modal should automatically open the print queue window, it causes firction if I also need to print a new label for the filament, or need to queue up more labels from other filaments/spools.
+
+* Add a queue labe for a spool that was just created. in the bottom section, that becomes visible once it's created. So that I can easily queue a label from there with out having to find it in the filament spool list.
+
+* Multiple spools share Legacy ID XX, should have an add new button if one isn't sure if any of the items on the list are the correct one.
+
+* Back fill weight from filament modal button should show the empty spool weight being use for back fill, or we should just add that to the filament details modal. So the user doesn't have to load up the edit modal to see what the value is.
+
+* Audit mode needs refinement possibly using the new unknow location for anything not scanned and confirmed to be in that locaiton. Also needs to be smart about virtual locations like carts where theres a cart location that contains sever shelves, as an example.
 
 There continues to be inconsistency with switching out spools when a box slot is attached to a head, either ejecting doesn't fully clear all values, or only pulls it from the box, but not the toolhead. I have to take the new spool, assigne it to the box, remove the old spool from the box, and manually assign it to the toolhead directly. So we need to deep dive into that whole system and find out why this is still a problem. I've included the logs below to try and out line the the flow better than me trying to type it.
 [17:02:49] 🗑️ Force Unassigned #240

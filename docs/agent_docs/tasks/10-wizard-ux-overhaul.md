@@ -16,13 +16,14 @@ Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 |---------|-------|--------|--------|
 | **A** — Flow & defaults | 10.2, 10.3, 10.7, 10.10, 10.11 | ✅ DONE 2026-05-14 | `feature/wizard-ux-overhaul` |
 | **B** — Fields, validation, nested-Swal audit | 10.4, 10.5, 10.6, 10.8, 10.9 | ✅ DONE 2026-05-14 | `feature/wizard-session-b` |
-| **C** — Aggressive cleanup pass | 10.1 | ⏳ READY | `feature/wizard-cleanup-aggressive` (new) |
+| **C** — Aggressive cleanup pass | 10.1 | ✅ DONE 2026-05-14 (9 commits, 6 feedback rounds) | `feature/wizard-cleanup-aggressive` |
 
 When resuming, `/work-group 10` should focus on the Session C item below (10.1) — all others are shipped on `dev`.
 
 ## Items to Complete
 
-### 10.1 — Wizard UX cleanup pass  ⏳ Session B
+### 10.1 — Wizard UX cleanup pass  ✅ Session C (2026-05-14)
+**Shipped:** 7 collapsible Bootstrap `.collapse` panels (Color, Physical Specs, Print Temperatures, Custom Filament Attributes, Weight & Scale, Pricing & Metadata, Custom Spool Attributes) — all default-collapsed in create AND edit mode. Always-visible summary chips on each toggle use `getFilamentStyle` / `makeSwatchHtml` (printer-status toolhead pattern) so multi-color swatches render as gradients. `Shift+E` / `Shift+C` expand-all / collapse-all keyboard shortcuts registered under "Wizard" scope in the `?` overlay. `original_color` relocated into the Color panel; `shore_hardness` gated to TPU-family materials; Prusament-prefixed labels renamed to generic. Modal pinned to top (no more recenter-on-expand). Wizard auto-focuses on `shown.bs.modal` so Escape works immediately when launched from spool/filament details. Six feedback rounds — see [completed-archive.md](../../../completed-archive.md) for the per-round breakdown.
 **Buglist ref:** L41
 **What:** The wizard is functional but clunky — too much data shown at once, not intuitive. Needs modernization without losing functionality.
 
