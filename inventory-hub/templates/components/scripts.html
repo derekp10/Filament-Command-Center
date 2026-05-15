@@ -41,17 +41,28 @@
 
         // L42 — Replace server-rendered UTC build stamp with a local-time
         // version so users in PDT/EST/etc don't see "tomorrow's date" when
-        // the container clock is UTC.
+        // the container clock is UTC. Round 2 also threads the commit SHA
+        // (when known) into the badge so the dashboard advertises the
+        // actual git revision that's running, not just a freshness mtime.
         const verEl = document.getElementById('fcc-build-version');
         if (verEl) {
-            const mt = parseFloat(verEl.dataset.buildMtime || '0');
-            if (mt > 0) {
-                const d = new Date(mt * 1000);
-                const pad = (n) => String(n).padStart(2, '0');
-                const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-                verEl.textContent = `build ${local}`;
-                // Keep the UTC value in the tooltip so it's still recoverable.
+            const pad = (n) => String(n).padStart(2, '0');
+            const fmt = (unix) => {
+                const d = new Date(unix * 1000);
+                return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+            };
+            const sha = (verEl.dataset.buildCommitSha || '').trim();
+            const commitTs = parseInt(verEl.dataset.buildCommitTs || '0', 10);
+            const mtime = parseFloat(verEl.dataset.buildMtime || '0');
+            // Prefer the commit-aware label when the server resolved one.
+            if (sha) {
+                let label = `commit ${sha}`;
+                if (commitTs > 0) label += ` • ${fmt(commitTs)}`;
+                verEl.textContent = label;
+            } else if (mtime > 0) {
+                verEl.textContent = `build ${fmt(mtime)}`;
             }
+            // Keep the original (UTC) text in the tooltip so it's recoverable.
         }
 
         // Initialize Modals

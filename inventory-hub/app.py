@@ -34,6 +34,10 @@ def _compute_build_mtime():
             for name in filenames:
                 if name.endswith(('.pyc', '.pyo', '.log', '.bak')):
                     continue
+                # Skip self-rewriting artifacts so the build-info refresh
+                # doesn't pump the mtime forward and falsely trigger "+local".
+                if name in ('.build_info',):
+                    continue
                 try:
                     mt = os.path.getmtime(os.path.join(dirpath, name))
                     if mt > newest:
@@ -43,8 +47,77 @@ def _compute_build_mtime():
     return newest
 
 
+def _load_build_commit():
+    """L42 round 2: opportunistically resolve the current git commit so the
+    dashboard badge shows the actual version running.
+
+    Strategy:
+      1. If .git is reachable from this file (host or .git-bind-mounted
+         container), regenerate `inventory-hub/.build_info` so it's always
+         fresh. Done via the standalone `_gen_build_info` helper so the
+         same code path is usable from a git post-commit hook or a CI step.
+      2. Read `.build_info` if present. Either way (we just wrote it, or
+         it was baked into the prod image), parse SHA + optional unix ts.
+      3. Return (sha, ts) or (None, None) — caller falls back to mtime.
+
+    No git binary required; the helper parses .git/HEAD + logs/HEAD
+    directly. Failures are silent — version-badge freshness shouldn't
+    crash the server.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    info_path = os.path.join(here, '.build_info')
+    try:
+        import _gen_build_info  # type: ignore
+        _gen_build_info.write_build_info(info_path)
+    except Exception:
+        # Helper missing or .git unreachable — fine, fall through to
+        # whatever (if anything) was previously baked in.
+        pass
+    if not os.path.isfile(info_path):
+        return None, None
+    try:
+        with open(info_path, 'r', encoding='utf-8') as f:
+            line = f.read().strip()
+    except OSError:
+        return None, None
+    if not line:
+        return None, None
+    parts = line.split('|', 1)
+    sha = parts[0].strip() or None
+    ts = None
+    if len(parts) > 1:
+        try:
+            ts = int(parts[1].strip())
+        except (ValueError, TypeError):
+            ts = None
+    return sha, ts
+
+
 BUILD_MTIME = _compute_build_mtime()
-VERSION = "build " + (__import__('time').strftime('%Y-%m-%d %H:%M UTC', __import__('time').gmtime(BUILD_MTIME)) if BUILD_MTIME else "?")
+BUILD_COMMIT_SHA, BUILD_COMMIT_TS = _load_build_commit()
+
+
+def _format_version():
+    """Compose the dashboard badge string. Prefer commit info when we have
+    it; fall back to the mtime stamp.
+
+    Note: a `+local` suffix for uncommitted edits was considered but
+    dropped — prod pulls reset file mtimes to the pull time, which
+    would false-trigger on every deploy. Users who want to see dirty
+    state can `git status` directly.
+    """
+    import time as _time
+    if BUILD_COMMIT_SHA:
+        label = f"commit {BUILD_COMMIT_SHA}"
+        if BUILD_COMMIT_TS:
+            label += " • " + _time.strftime('%Y-%m-%d %H:%M UTC', _time.gmtime(BUILD_COMMIT_TS))
+        return label
+    if BUILD_MTIME:
+        return "build " + _time.strftime('%Y-%m-%d %H:%M UTC', _time.gmtime(BUILD_MTIME))
+    return "build ?"
+
+
+VERSION = _format_version()
 app = Flask(__name__)
 
 # One-time feeder_map → slot_targets migration. Kept behind an explicit
@@ -125,7 +198,16 @@ def dashboard():
     fb_ui_url = fb_api_url.replace('/api', '')
     buy_more_url_template = cfg.get('buy_more_url_template', '')
     
-    return render_template('dashboard.html', version=VERSION, build_mtime=BUILD_MTIME, spoolman_url=sm_url, filabridge_url=fb_ui_url, buy_more_template=buy_more_url_template)
+    return render_template(
+        'dashboard.html',
+        version=VERSION,
+        build_mtime=BUILD_MTIME,
+        build_commit_sha=BUILD_COMMIT_SHA or '',
+        build_commit_ts=BUILD_COMMIT_TS or 0,
+        spoolman_url=sm_url,
+        filabridge_url=fb_ui_url,
+        buy_more_template=buy_more_url_template,
+    )
 
 # --- HELPER FUNCTIONS ---
 def clean_string(s):

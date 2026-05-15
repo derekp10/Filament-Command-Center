@@ -20,6 +20,8 @@
                 <span class="version-tag badge bg-dark border border-info"
                       id="fcc-build-version"
                       data-build-mtime="{{ build_mtime|default(0) }}"
+                      data-build-commit-sha="{{ build_commit_sha|default('') }}"
+                      data-build-commit-ts="{{ build_commit_ts|default(0) }}"
                       title="{{ version }}">{{ version }}</span>
             </div>
 
