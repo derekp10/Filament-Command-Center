@@ -290,7 +290,7 @@ There continues to be inconsistency with switching out spools when a box slot is
 * Add the ability to configure which extra fields should be bound and propagated to the other type of item. (Filament <-> Spool).
 * Spools might need to have a text field added to store the product data (Prusament link, etc.).
 * Add background refreshing used in Location Manager, etc... to update spool text (update weight other data).
-* Python server auto-reload on new code changes.
+*(L293 — Python server auto-reload on code changes — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14`. `app.run(...)` now reads `FCC_DEV` env var; when set to `1` / `true` / `yes` / `on`, passes `use_reloader=True` so werkzeug watches files and auto-restarts on edit. Defaults to off so the TrueNAS prod image keeps its current single-process behavior — no reload churn or behavior changes in prod unless the env var is explicitly set. To enable on the dev container, add `FCC_DEV=1` to the env section of the dev compose/spec (or `docker exec` with `-e FCC_DEV=1` for ad-hoc).)*
 
 
 # **On Hold**

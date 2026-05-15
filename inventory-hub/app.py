@@ -3123,4 +3123,9 @@ if __name__ == '__main__':
         spoolman_api.ensure_required_extras()
     except Exception as _e:
         state.logger.warning(f"ensure_required_extras failed at startup: {_e}")
-    app.run(host='0.0.0.0', port=8000)
+    # L293 — opt-in dev-mode auto-reload. Set `FCC_DEV=1` (or `true`) in
+    # the dev environment to have werkzeug watch files and restart the
+    # server on edits. Defaults to off so the TrueNAS prod image keeps
+    # its current behavior (one long-lived process, no reload churn).
+    _dev = str(os.environ.get('FCC_DEV', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    app.run(host='0.0.0.0', port=8000, use_reloader=_dev, debug=False)
