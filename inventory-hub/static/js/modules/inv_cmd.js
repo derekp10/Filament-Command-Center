@@ -248,7 +248,34 @@ const processScan = (text, source = 'keyboard') => {
                     fetch('/api/log_event', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({msg: "SCAN LOG: Legacy Location Barcode Scanned (" + text + ")", level: "WARNING"}) });
                 }
                 if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
-                if (state.heldSpools.length > 0) { performContextAssign(res.id); state.lastScannedLoc = null; return; }
+                if (state.heldSpools.length > 0) {
+                    // L124 fix: a toolhead / single-spool location can only hold
+                    // one spool. Bulk-assigning the entire buffer to a toolhead
+                    // sent every spool's Spoolman location to that toolhead,
+                    // which broke filabridge's one-spool-one-toolhead invariant
+                    // AND made all the buffered spools appear loaded on the
+                    // printer. Detect single-occupancy targets up-front and
+                    // pass only the topmost spool; keep the rest in the buffer
+                    // so the user can scan their next destination.
+                    const locData = state.allLocations.find(l => l.LocationID === res.id);
+                    const locType = (locData && locData.Type) ? String(locData.Type).toLowerCase() : '';
+                    const isSingleSpoolType = locType.includes('tool') || locType.includes('mmu') || locType.includes('direct load');
+                    let maxSpools = 0;
+                    if (locData) {
+                        const raw = parseInt(locData['Max Spools'], 10);
+                        if (!isNaN(raw)) maxSpools = raw;
+                    }
+                    const singleOccupancy = isSingleSpoolType || (maxSpools > 0 && maxSpools <= 1);
+                    if (singleOccupancy && state.heldSpools.length > 1) {
+                        const top = state.heldSpools[0];
+                        showToast(`Toolhead holds 1 spool — assigning #${top.id}; ${state.heldSpools.length - 1} stays in buffer`, "info", 5000);
+                        performContextAssign(res.id, null, false, [top.id]);
+                    } else {
+                        performContextAssign(res.id);
+                    }
+                    state.lastScannedLoc = null;
+                    return;
+                }
                 const locData = state.allLocations.find(l => l.LocationID === res.id);
                 if ((!locData || parseInt(locData['Max Spools']) <= 1) && res.contents && res.contents.length > 0) {
                     const spool = res.contents[0];
@@ -373,12 +400,18 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
     }
 };
 
-const performContextAssign = (tid, slot = null, confirmActivePrint = false) => {
+const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoolIdsOverride = null) => {
     setProcessing(true);
-    // [ALEX FIX] Bulk Assign: Send ALL held spools, not just the first one
+    // L124: callers can pass an explicit `spoolIdsOverride` subset (e.g. the
+    // single topmost id when the target is a toolhead) so the rest of the
+    // buffer stays untouched. Default = entire buffer (the legacy bulk-assign
+    // behavior).
+    const spoolIds = Array.isArray(spoolIdsOverride) && spoolIdsOverride.length
+        ? spoolIdsOverride.slice()
+        : state.heldSpools.map(s => s.id);
     const payload = {
         location: tid,
-        spools: state.heldSpools.map(s => s.id),
+        spools: spoolIds,
         slot: slot,
         origin: 'buffer',
         confirm_active_print: confirmActivePrint,
@@ -399,14 +432,16 @@ const performContextAssign = (tid, slot = null, confirmActivePrint = false) => {
                 _confirmActivePrintScan({
                     tid, slot,
                     stateInfo: res.active_print || { printer_name: tid, state: 'ACTIVE' },
-                    onConfirm: () => performContextAssign(tid, slot, true),
+                    onConfirm: () => performContextAssign(tid, slot, true, spoolIdsOverride),
                 });
                 return;
             }
             if (res.status === 'success') {
-                showToast("Assigned " + state.heldSpools.length + " items!", "success");
-                // [ALEX FIX] Clear entire buffer after bulk move
-                state.heldSpools = [];
+                const movedCount = spoolIds.length;
+                showToast("Assigned " + movedCount + " item" + (movedCount === 1 ? '' : 's') + "!", "success");
+                // Drop only the spools we actually moved; preserve the rest.
+                const movedSet = new Set(spoolIds.map(String));
+                state.heldSpools = state.heldSpools.filter(s => !movedSet.has(String(s.id)));
                 renderBuffer();
                 if (document.getElementById('manage-loc-id').value === tid) refreshManageView(tid);
                 if (window.fetchLocations) window.fetchLocations();
