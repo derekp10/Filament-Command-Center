@@ -396,6 +396,11 @@ SYSTEM_MANAGED_EXTRAS = frozenset({
     "physical_source_slot",
     # Owned by _auto_archive_on_empty / _auto_unarchive_on_refill.
     "fcc_pre_archive_location",
+    # 18.2 Part A — set when audit-mode auto-parks an unconfirmed spool
+    # at UNKNOWN. Carries the location the spool was expected at so a
+    # recovery scan can route it home; never user-editable (would lose
+    # the breadcrumb).
+    "fcc_pre_audit_location",
 })
 
 

@@ -990,7 +990,8 @@ def process_audit_scan(scan_result):
         if cmd == 'done' or cmd == 'cancel':
             # Generate Report
             missing = [sid for sid in session['expected_items'] if sid not in session['scanned_items']]
-            
+            expected_loc = session.get('location_id') or ''
+
             summary = "📝 <b>Audit Report:</b><br>"
             if not missing and not session['rogue_items']:
                 summary += "✅ Perfect Match! All items accounted for."
@@ -999,12 +1000,47 @@ def process_audit_scan(scan_result):
                 color = "ffaa00" # Orange
                 if missing: summary += f"❌ <b>Missing:</b> {', '.join(map(str, missing))}<br>"
                 if session['rogue_items']: summary += f"⚠️ <b>Extra:</b> {', '.join(map(str, session['rogue_items']))}"
-            
+
             state.add_log_entry(summary, "INFO", color)
+
+            # 18.2 Part A — on `done` (not `cancel` — cancel is the user
+            # explicitly bailing out, e.g. they realized they were
+            # auditing the wrong location), auto-park each missing spool
+            # at the virtual UNKNOWN bucket. Plant the audited location
+            # on extra.fcc_pre_audit_location so a recovery scan can
+            # route the spool home. SYSTEM_MANAGED_EXTRAS protects the
+            # key from being clobbered by user-driven edit surfaces.
+            if cmd == 'done' and missing and expected_loc:
+                for sid in missing:
+                    try:
+                        existing = spoolman_api.get_spool(sid) or {}
+                        cur_extra = dict(existing.get('extra') or {})
+                        cur_extra['fcc_pre_audit_location'] = expected_loc
+                        ok = spoolman_api.update_spool(
+                            sid,
+                            {"location": "UNKNOWN", "extra": cur_extra},
+                        )
+                        if ok:
+                            state.add_log_entry(
+                                f"❓ Audit: moved Spool #{sid} → UNKNOWN "
+                                f"(was expected at {expected_loc}, not scanned)",
+                                "WARNING",
+                                "ffaa00",
+                            )
+                        else:
+                            err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                            state.add_log_entry(
+                                f"❌ Audit: failed to park Spool #{sid} at UNKNOWN: {err}",
+                                "ERROR",
+                                "ff4444",
+                            )
+                    except Exception as _e:
+                        state.logger.error(f"Audit auto-park failed for #{sid}: {_e}")
+
             state.reset_audit()
             state.add_log_entry("Audit Mode Ended.", "INFO")
             return {"status": "success", "msg": "Audit Complete"}
-            
+
         return {"status": "error", "msg": "Command not allowed in Audit"}
 
     # 2. LOCATION SCAN
