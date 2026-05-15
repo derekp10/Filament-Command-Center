@@ -153,6 +153,10 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
 * Audit mode needs refinement possibly using the new unknow location for anything not scanned and confirmed to be in that locaiton. Also needs to be smart about virtual locations like carts where theres a cart location that contains sever shelves, as an example.
 
+* Scanns of prusament filament should also update min/max bed and nozzle tempratures, on existing filaments. These value should stay the same, but there is some lagacy data entry where this data wasn't 
+
+* Scann prusament data link into the search field in spool section fails to grab all available data and add it to the available fields in the UI of Add/Edit Wizzard, on an existing spool in the system. Scanning that data should update/add those fields. Except being if the current weight of the spool doesn't match the weight on the data card, implying that it was used, in those cases, current weights should be left alown, but total weight, and other elements should be updateable. (Basically perserve current usage amount, but update all other fields.)
+
 There continues to be inconsistency with switching out spools when a box slot is attached to a head, either ejecting doesn't fully clear all values, or only pulls it from the box, but not the toolhead. I have to take the new spool, assigne it to the box, remove the old spool from the box, and manually assign it to the toolhead directly. So we need to deep dive into that whole system and find out why this is still a problem. I've included the logs below to try and out line the the flow better than me trying to type it.
 [17:02:49] 🗑️ Force Unassigned #240
 [17:02:48] 📦 Auto-archived Spool #240 (remaining weight hit 0) — moved to UNASSIGNED

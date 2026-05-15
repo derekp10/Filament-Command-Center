@@ -70,8 +70,14 @@ def test_offcanvas_max_weight_input_present_and_wired(page: Page, base_url: str)
 
     max_input = page.locator("#global-search-max-weight")
     expect(max_input).to_be_visible(timeout=5000)
-    # Sanity: the placeholder advertises Max g.
-    assert "Max" in (max_input.get_attribute("placeholder") or "")
+    # Both Min and Max labels live in input-group-text spans inside the
+    # shared input-group (post-layout cleanup so users can tell which
+    # field is which at a glance).
+    min_input = page.locator("#global-search-min-weight")
+    expect(min_input).to_be_visible()
+    group_text = page.locator("#global-search-max-weight").locator("xpath=ancestor::div[contains(@class,'input-group')]//span[contains(@class,'input-group-text')]").all_inner_texts()
+    assert any("Min" in t for t in group_text), f"Min label missing from input-group: {group_text}"
+    assert any("Max" in t for t in group_text), f"Max label missing from input-group: {group_text}"
 
     # Capture the search call to confirm max_weight is wired into the URL.
     captured = {}
