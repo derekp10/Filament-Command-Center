@@ -2651,7 +2651,40 @@ window.wizardSubmit = async () => {
 
         if (data.success) {
             wizardState.isDirty = false;
-            msg.innerHTML = `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
+            // Group 17.3: append a Queue-label button for each just-created
+            // spool id so the user can fire off labels without having to
+            // hunt the spool down in the inventory list afterward. Wraps
+            // the existing success message; only fires on create (the
+            // edit-spool mode doesn't carry a created_spools list).
+            let successBody = `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
+            if (wizardState.mode !== 'edit_spool' && Array.isArray(data.created_spools) && data.created_spools.length) {
+                const chips = data.created_spools.map(sid => (
+                    `<button type="button" class="btn btn-sm btn-outline-info fw-bold me-1 mt-1 fcc-wiz-queue-label"
+                             data-spool-id="${sid}" title="Queue a print label for Spool #${sid}">🖨️ #${sid}</button>`
+                )).join('');
+                successBody += `<div class="mt-2 small text-light">Queue label: ${chips}</div>`;
+            }
+            msg.innerHTML = successBody;
+            // Wire each newly-rendered chip to the existing addToQueue flow.
+            if (msg.querySelectorAll) {
+                msg.querySelectorAll('.fcc-wiz-queue-label').forEach((btn) => {
+                    btn.addEventListener('click', (ev) => {
+                        ev.preventDefault();
+                        const sid = parseInt(btn.dataset.spoolId, 10);
+                        if (!sid || typeof window.addToQueue !== 'function') return;
+                        // Prevent duplicate queue entries.
+                        if (Array.isArray(window.labelQueue) && window.labelQueue.find(q => q.id === sid && q.type === 'spool')) {
+                            if (typeof showToast === 'function') showToast(`Spool #${sid} already in queue`, 'info', 2000);
+                            return;
+                        }
+                        window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
+                        if (typeof showToast === 'function') showToast(`Queued label for Spool #${sid}`, 'success', 2500);
+                        btn.classList.remove('btn-outline-info');
+                        btn.classList.add('btn-success');
+                        btn.disabled = true;
+                    });
+                });
+            }
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse')); // Instantly trigger UI rebinding across all open panels
 
             // Reset Weigh-Out Protocol tracking on save so subsequent saves don't double-dip
