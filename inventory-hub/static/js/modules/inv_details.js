@@ -278,6 +278,38 @@ const openFilamentDetails = (fid, silent = false) => {
                     }
                 }
             }
+            // Group 17.1: surface swatch + label-confirmed status so users can
+            // tell at a glance whether the filament has a printed sample and
+            // whether the label has been physically confirmed via barcode scan.
+            // Reads from existing extras (`sample_printed` for swatches,
+            // `needs_label_print` tri-state for labels — false=confirmed,
+            // true=needs print, null/missing=unknown).
+            const fdSampleEl = document.getElementById('fil-detail-sample-status');
+            if (fdSampleEl) {
+                const rawSample = unquoteExtra(fdExtra.sample_printed);
+                const sampleTruthy = rawSample === true || rawSample === 'true' || rawSample === 'True' || rawSample === 1 || rawSample === '1';
+                const sampleFalsy = rawSample === false || rawSample === 'false' || rawSample === 'False' || rawSample === 0 || rawSample === '0';
+                if (sampleTruthy) {
+                    fdSampleEl.innerHTML = '<span class="badge bg-success">✅ Yes</span>';
+                } else if (sampleFalsy) {
+                    fdSampleEl.innerHTML = '<span class="badge bg-secondary">No</span>';
+                } else {
+                    fdSampleEl.innerHTML = '<span class="badge bg-dark border border-secondary text-muted">unknown</span>';
+                }
+            }
+            const fdLabelEl = document.getElementById('fil-detail-label-status');
+            if (fdLabelEl) {
+                const rawLabel = unquoteExtra(fdExtra.needs_label_print);
+                const needsPrint = rawLabel === true || rawLabel === 'true' || rawLabel === 'True';
+                const confirmed = rawLabel === false || rawLabel === 'false' || rawLabel === 'False';
+                if (confirmed) {
+                    fdLabelEl.innerHTML = '<span class="badge bg-success">✅ Confirmed</span>';
+                } else if (needsPrint) {
+                    fdLabelEl.innerHTML = '<span class="badge bg-warning text-dark">🖨️ Needs print</span>';
+                } else {
+                    fdLabelEl.innerHTML = '<span class="badge bg-dark border border-secondary text-muted">unknown</span>';
+                }
+            }
             document.getElementById('fil-detail-comment').value = d.comment || "";
 
             const swatch = document.getElementById('fil-detail-swatch');
