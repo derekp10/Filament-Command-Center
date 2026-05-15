@@ -383,24 +383,36 @@ window.wizardRefreshAllSectionSummaries = () => {
         const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
         if (btn) {
             let lastKbAt = 0;
+            // Group 10.1 SC round-5: toggle Bootstrap's Collapse instance
+            // directly instead of synthesizing btn.click(). The click()
+            // path goes through Bootstrap's data-bs-toggle handler — and
+            // the browser ALSO dispatches a native click on keyup (Space)
+            // or shortly after (Enter), causing intermittent double-fire
+            // even with the round-4 debounce. Going through the API
+            // directly bypasses the click handler entirely; even if a
+            // native click leaks through, Bootstrap's own _isTransitioning
+            // lock blocks the redundant toggle.
             btn.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
                     e.preventDefault();
+                    e.stopPropagation();
                     const now = Date.now();
-                    if (now - lastKbAt < 300) return;  // already handled this keystroke
+                    if (now - lastKbAt < 400) return;
                     lastKbAt = now;
-                    btn.click();
+                    if (window.bootstrap && window.bootstrap.Collapse) {
+                        bootstrap.Collapse.getOrCreateInstance(panel, { toggle: false }).toggle();
+                    }
                 }
             });
+            // Backstop: drop any native click that arrives within 400ms of a
+            // keyboard toggle. Covers the (rare) case where the browser's
+            // synthesized click still reaches Bootstrap despite preventDefault.
             btn.addEventListener('click', (e) => {
-                // If a native (isTrusted) click arrives within 300ms of our
-                // synthesized one, drop it — it's the browser's synthesized
-                // click from the same keystroke trying to re-toggle.
-                if (e.isTrusted && (Date.now() - lastKbAt < 300)) {
+                if (e.isTrusted && (Date.now() - lastKbAt < 400)) {
                     e.stopImmediatePropagation();
                     e.preventDefault();
                 }
-            }, true);  // capture phase — beat Bootstrap's bubble-phase data-bs-toggle handler
+            }, true);
         }
         panel.addEventListener('shown.bs.collapse', (e) => {
             if (e.target !== panel) return;
@@ -627,6 +639,34 @@ const wizardReset = () => {
     // normally populate them. (Group 10.1 SC round-3 fix.)
     document.getElementById('wiz-fil-diameter').value = '1.75';
     document.getElementById('wiz-fil-density').value = '1.24';
+
+    // Group 10.1 SC round-5: reset collapse-panel classes to HTML defaults
+    // so prior-session expand/collapse state doesn't bleed into the new
+    // modal session. Previously, pressing Shift+E to expand all sections
+    // then closing the wizard left the .show classes on those panels;
+    // re-opening flashed them visible until wizardApplyCollapseDefaults
+    // ran (which is async, after Promise.all of fetches — ~500ms+ later).
+    const _wizOptionalPanels = [
+        'wiz-fil-color-panel', 'wiz-fil-temps-panel', 'wiz-fil-extras-panel',
+        'wiz-spool-weight-panel', 'wiz-spool-metadata-panel', 'wiz-spool-extras-panel',
+    ];
+    _wizOptionalPanels.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.classList.remove('show', 'collapsing');
+            el.style.height = '';
+            const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+        }
+    });
+    const _wizPhysEl = document.getElementById('wiz-fil-physical-panel');
+    if (_wizPhysEl) {
+        _wizPhysEl.classList.add('show');
+        _wizPhysEl.classList.remove('collapsing');
+        _wizPhysEl.style.height = '';
+        const _wizPhysBtn = document.querySelector('button.fcc-wiz-section-toggle[data-bs-target="#wiz-fil-physical-panel"]');
+        if (_wizPhysBtn) _wizPhysBtn.setAttribute('aria-expanded', 'true');
+    }
 
     if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
     if (window.wizardClearFilamentMismatchPanel) window.wizardClearFilamentMismatchPanel();
