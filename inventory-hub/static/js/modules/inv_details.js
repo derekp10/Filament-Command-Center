@@ -251,6 +251,33 @@ const openFilamentDetails = (fid, silent = false) => {
                 fdSlicerEl.dataset.value = fdSlicer;
             }
             document.getElementById('fil-detail-density').innerText = d.density ? `${d.density} g/cm³` : "--";
+
+            // Group 17.5: surface the resolved Empty Spool Weight + inheritance
+            // badge so the user doesn't have to open the Edit modal to find it.
+            // Uses the canonical resolver in weight_utils.js (same cascade as
+            // every other weight surface).
+            const fdEmptyEl = document.getElementById('fil-detail-empty-spool-weight');
+            const fdEmptySrcEl = document.getElementById('fil-detail-empty-spool-source');
+            if (fdEmptyEl && typeof window.resolveEmptySpoolWeightSource === 'function') {
+                const resolved = window.resolveEmptySpoolWeightSource({
+                    spoolWt: null,  // filament-modal view — no per-spool override here
+                    filamentWt: d.spool_weight,
+                    vendor: d.vendor,
+                });
+                if (resolved.value == null) {
+                    fdEmptyEl.innerText = "—";
+                    if (fdEmptySrcEl) { fdEmptySrcEl.innerText = "not set"; fdEmptySrcEl.style.display = ''; }
+                } else {
+                    fdEmptyEl.innerText = `${resolved.value} g`;
+                    if (fdEmptySrcEl) {
+                        const label = resolved.source === 'filament' ? '↩ filament'
+                            : resolved.source === 'vendor' ? '↩ vendor'
+                            : resolved.source;
+                        fdEmptySrcEl.innerText = label;
+                        fdEmptySrcEl.style.display = '';
+                    }
+                }
+            }
             document.getElementById('fil-detail-comment').value = d.comment || "";
 
             const swatch = document.getElementById('fil-detail-swatch');
@@ -416,9 +443,13 @@ const openFilamentDetails = (fid, silent = false) => {
                                         }
                                     });
                                     if (added > 0) {
-                                        showToast(`Queued ${added} spools!`);
-                                        // Open the queue to confirm, let it stack natively!
-                                        window.openQueueModal();
+                                        // Group 17.2: don't auto-open the queue modal here.
+                                        // Auto-opening interrupted users who wanted to keep
+                                        // adding labels from other filaments/spools without
+                                        // closing the queue panel each time. The toast carries
+                                        // enough confirmation; the queue is reachable via the
+                                        // existing top-bar button when the user actually wants it.
+                                        showToast(`Queued ${added} label${added === 1 ? '' : 's'} — open Print Queue to review`, 'success', 4000);
                                     } else {
                                         showToast("All spools already in queue", "info");
                                     }

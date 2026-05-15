@@ -143,13 +143,13 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
 * Add filament sample status to the display modal, as well as the edit section. So that I can easily see if a swatch has be created for an item. Perhaps also include if a label print has been confirmed, to help trace down lagacy labels that need to be updated.
 
-* I don't think the queue all active spools in the Filament Display modal should automatically open the print queue window, it causes firction if I also need to print a new label for the filament, or need to queue up more labels from other filaments/spools.
+*(L146 — Filament-modal "Queue all active spools" should NOT auto-open the Print Queue modal — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14` (Group 17.2). Handler in `inv_details.js:413` no longer calls `window.openQueueModal()` after success; instead toasts "Queued N labels — open Print Queue to review" (4 s). Users can keep queuing labels from other filaments/spools without dismissing the panel each time. Regression coverage in `test_filament_queue_all_no_auto_open.py`.)*
 
 * Add a queue labe for a spool that was just created. in the bottom section, that becomes visible once it's created. So that I can easily queue a label from there with out having to find it in the filament spool list.
 
 * Multiple spools share Legacy ID XX, should have an add new button if one isn't sure if any of the items on the list are the correct one.
 
-* Back fill weight from filament modal button should show the empty spool weight being use for back fill, or we should just add that to the filament details modal. So the user doesn't have to load up the edit modal to see what the value is.
+*(L152 — Surface empty-spool weight on Filament Details modal — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14` (Group 17.5, recommendation B). New "⚖️ Empty Spool: <N>g [↩ filament / ↩ vendor / not set]" fact-card row added to `modals_details.html` and populated by `inv_details.js` using the canonical `window.resolveEmptySpoolWeightSource` cascade from `weight_utils.js`. Inheritance badge tells the user where the value came from (filament's own value vs vendor inheritance) so they don't need to round-trip through the Edit modal. Regression coverage in `test_filament_empty_spool_weight_row.py`.)*
 
 * Audit mode needs refinement possibly using the new unknow location for anything not scanned and confirmed to be in that locaiton. Also needs to be smart about virtual locations like carts where theres a cart location that contains sever shelves, as an example.
 
