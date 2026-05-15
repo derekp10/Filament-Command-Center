@@ -153,6 +153,29 @@ window.openWizardModal = async () => {
         window.modals.wizardModal = m;
         m.show();
     }
+    // Group 10.1 SC round-6: when the wizard launches on top of another
+    // modal (spool/filament details), focus stays on the launching button
+    // and Bootstrap's keyboard-dismiss handler (bound to the modal
+    // element) never receives Escape until the user clicks the wizard
+    // first. Force focus into the wizard after show finishes so Escape
+    // works immediately.
+    const _wizModalEl = document.getElementById('wizardModal');
+    if (_wizModalEl) {
+        const _focusFirst = () => {
+            const focusables = _wizModalEl.querySelectorAll(
+                'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]),'
+                + ' select:not([disabled]), textarea:not([disabled]),'
+                + ' [tabindex]:not([tabindex="-1"])'
+            );
+            for (const el of focusables) {
+                if (el.offsetParent !== null) { el.focus(); return; }
+            }
+            _wizModalEl.focus();
+        };
+        // shown.bs.modal fires once Bootstrap finishes its own focus
+        // management — override after that so we win the focus war.
+        _wizModalEl.addEventListener('shown.bs.modal', _focusFirst, { once: true });
+    }
     await Promise.all([
         wizardFetchVendors(),
         wizardFetchLocations(),
@@ -186,8 +209,11 @@ window.wizardApplyCollapseDefaults = (context) => {
     // 'always-open' stays expanded in both contexts; 'optional' obeys the
     // create=collapsed / edit=smart-on-content rule.
     const sections = [
+        // Group 10.1 SC round-6: Physical Specs is collapsible like the
+        // others. Chip shows the defaults at a glance so user can verify
+        // by expanding only when they need to deviate from 1.75mm / 1.24.
         ['wiz-fil-color-panel',      'optional'],
-        ['wiz-fil-physical-panel',   'always-open'],
+        ['wiz-fil-physical-panel',   'optional'],
         ['wiz-fil-temps-panel',      'optional'],
         ['wiz-fil-extras-panel',     'optional'],
         ['wiz-spool-weight-panel',   'optional'],
@@ -518,8 +544,6 @@ window.wizardExpandAllSections = () => {
 };
 window.wizardCollapseAllSections = () => {
     Object.keys(_wizSectionSummarizers).forEach(id => {
-        // Physical Specs is the only always-open panel — skip it.
-        if (id === 'wiz-fil-physical-panel') return;
         const el = document.getElementById(id);
         if (!el || !window.bootstrap || !window.bootstrap.Collapse) return;
         bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).hide();
@@ -647,8 +671,9 @@ const wizardReset = () => {
     // re-opening flashed them visible until wizardApplyCollapseDefaults
     // ran (which is async, after Promise.all of fetches — ~500ms+ later).
     const _wizOptionalPanels = [
-        'wiz-fil-color-panel', 'wiz-fil-temps-panel', 'wiz-fil-extras-panel',
-        'wiz-spool-weight-panel', 'wiz-spool-metadata-panel', 'wiz-spool-extras-panel',
+        'wiz-fil-color-panel', 'wiz-fil-physical-panel', 'wiz-fil-temps-panel',
+        'wiz-fil-extras-panel', 'wiz-spool-weight-panel',
+        'wiz-spool-metadata-panel', 'wiz-spool-extras-panel',
     ];
     _wizOptionalPanels.forEach(id => {
         const el = document.getElementById(id);
@@ -659,14 +684,6 @@ const wizardReset = () => {
             if (btn) btn.setAttribute('aria-expanded', 'false');
         }
     });
-    const _wizPhysEl = document.getElementById('wiz-fil-physical-panel');
-    if (_wizPhysEl) {
-        _wizPhysEl.classList.add('show');
-        _wizPhysEl.classList.remove('collapsing');
-        _wizPhysEl.style.height = '';
-        const _wizPhysBtn = document.querySelector('button.fcc-wiz-section-toggle[data-bs-target="#wiz-fil-physical-panel"]');
-        if (_wizPhysBtn) _wizPhysBtn.setAttribute('aria-expanded', 'true');
-    }
 
     if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
     if (window.wizardClearFilamentMismatchPanel) window.wizardClearFilamentMismatchPanel();

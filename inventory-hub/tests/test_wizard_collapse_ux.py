@@ -31,13 +31,17 @@ from playwright.sync_api import Page, expect
 
 OPTIONAL_PANELS = [
     "wiz-fil-color-panel",
+    "wiz-fil-physical-panel",
     "wiz-fil-temps-panel",
     "wiz-fil-extras-panel",
     "wiz-spool-weight-panel",
     "wiz-spool-metadata-panel",
     "wiz-spool-extras-panel",
 ]
-ALWAYS_OPEN_PANELS = ["wiz-fil-physical-panel"]
+# Group 10.1 SC round-6: Physical Specs is now a regular collapsible. The
+# always-open category is empty (kept for forward compat — any future
+# pinned panel can be added back here).
+ALWAYS_OPEN_PANELS = []
 
 
 def _open_create_wizard(page: Page) -> None:
