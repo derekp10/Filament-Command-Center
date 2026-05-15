@@ -39,7 +39,7 @@
 
 *(L40 — Legacy QR code scans triggering the help overlay — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14`. `shortcuts_registry.js` capture-phase `?` handler now detects an in-flight scan (non-empty `state.scanBuffer` + `state.scanStartTime` within 500ms) and lets `?` flow through to the scan accumulator instead of popping the overlay. Regression coverage in `test_quickswap_ui_e2e.py::test_shortcuts_overlay_question_mark_mid_scan_does_not_trigger`.)*
 
-* Fix version number that no longer gets updated. (Remove, or find a way to update it when we do updates.)
+*(L42 — Version number stale — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14`. Replaced hardcoded `VERSION = "v154.26..."` constant with `_compute_build_mtime()` that walks `inventory-hub/{app.py,static,templates}` for the newest mtime. Server renders `build YYYY-MM-DD HH:MM UTC`; a DOMContentLoaded hook in `scripts.html` converts to the user's local timezone via `data-build-mtime` so PDT users don't see "tomorrow" when the container clock is UTC. Regression coverage in `test_build_version_badge.py` (2 tests — local-format match + assert legacy `v154.x` literal is gone).)*
 
 * Unknown crash on Filament command center after auto deduct fired. Had to refresh browser window to get QR code scans working? Need to check code for any breaks.
 Logs Below from Prod server:

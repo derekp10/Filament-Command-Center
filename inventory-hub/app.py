@@ -10,7 +10,41 @@ import os
 import json
 import logging
 
-VERSION = "v154.26 (Scale Weights Update)"
+def _compute_build_mtime():
+    """L42 fix: derive a freshness-stamp from the newest source-file mtime.
+
+    The manually-bumped VERSION constant was stale by ~25 commits when this
+    was wired up. Walk the live code dirs (app's own dir + static + templates)
+    and use the most recent mtime so the badge always reflects the actual
+    build the user is looking at — no manual bump step to forget.
+
+    Returns a UNIX timestamp (float). The frontend converts it to the user's
+    local timezone so the badge isn't confusing when the container runs UTC
+    and the user is in PDT.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    newest = 0
+    for sub in ('', 'static', 'templates'):
+        root = os.path.join(here, sub) if sub else here
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Skip caches / generated artifacts.
+            dirnames[:] = [d for d in dirnames if d not in ('__pycache__', '.git', 'data', '__screenshots__')]
+            for name in filenames:
+                if name.endswith(('.pyc', '.pyo', '.log', '.bak')):
+                    continue
+                try:
+                    mt = os.path.getmtime(os.path.join(dirpath, name))
+                    if mt > newest:
+                        newest = mt
+                except OSError:
+                    continue
+    return newest
+
+
+BUILD_MTIME = _compute_build_mtime()
+VERSION = "build " + (__import__('time').strftime('%Y-%m-%d %H:%M UTC', __import__('time').gmtime(BUILD_MTIME)) if BUILD_MTIME else "?")
 app = Flask(__name__)
 
 # One-time feeder_map → slot_targets migration. Kept behind an explicit
@@ -91,7 +125,7 @@ def dashboard():
     fb_ui_url = fb_api_url.replace('/api', '')
     buy_more_url_template = cfg.get('buy_more_url_template', '')
     
-    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url, filabridge_url=fb_ui_url, buy_more_template=buy_more_url_template)
+    return render_template('dashboard.html', version=VERSION, build_mtime=BUILD_MTIME, spoolman_url=sm_url, filabridge_url=fb_ui_url, buy_more_template=buy_more_url_template)
 
 # --- HELPER FUNCTIONS ---
 def clean_string(s):

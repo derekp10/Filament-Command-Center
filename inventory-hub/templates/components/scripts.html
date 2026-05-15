@@ -39,6 +39,21 @@
         // Bootstrapping
         requestWakeLock();
 
+        // L42 — Replace server-rendered UTC build stamp with a local-time
+        // version so users in PDT/EST/etc don't see "tomorrow's date" when
+        // the container clock is UTC.
+        const verEl = document.getElementById('fcc-build-version');
+        if (verEl) {
+            const mt = parseFloat(verEl.dataset.buildMtime || '0');
+            if (mt > 0) {
+                const d = new Date(mt * 1000);
+                const pad = (n) => String(n).padStart(2, '0');
+                const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                verEl.textContent = `build ${local}`;
+                // Keep the UTC value in the tooltip so it's still recoverable.
+            }
+        }
+
         // Initialize Modals
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal',
             'actionModal', 'safetyModal', 'queueModal', 'spoolModal',
