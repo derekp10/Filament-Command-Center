@@ -147,9 +147,11 @@ def _dashboard_ready(page: Page) -> None:
     page.wait_for_function("typeof window.openEditWizard === 'function'", timeout=5_000)
 
 
-def test_edit_with_price_auto_expands_metadata_panel(page: Page):
-    """Editing a spool that has a non-zero price auto-expands the Pricing &
-    Metadata panel so the user immediately sees the existing value."""
+def test_edit_with_price_keeps_metadata_collapsed_but_chip_shows(page: Page):
+    """Edit mode lands with optional panels collapsed (round-4 change —
+    no more smart-expand). The summary chip on the Pricing & Metadata
+    toggle should reflect the populated price so the user can see it
+    at a glance without expanding the panel."""
     _dashboard_ready(page)
     _stub_spool_details(page, {
         "id": 42,
@@ -172,13 +174,22 @@ def test_edit_with_price_auto_expands_metadata_panel(page: Page):
     page.wait_for_function(
         "document.getElementById('wiz-spool-price').value === '19.99'", timeout=3_000
     )
-    # Give wizardApplyCollapseDefaults('edit') a moment to fire at end of .then.
-    _wait_for_panel_open(page, "wiz-spool-metadata-panel")
+    page.wait_for_timeout(500)
+    assert not _panel_is_open(page, "wiz-spool-metadata-panel"), (
+        "Metadata panel should stay collapsed in edit mode (round-4 default)"
+    )
+    chip_html = page.evaluate(
+        "() => document.querySelector('button.fcc-wiz-section-toggle[data-bs-target=\"#wiz-spool-metadata-panel\"] .fcc-wiz-section-summary')?.innerHTML"
+    )
+    assert chip_html and "19.99" in chip_html, (
+        f"Pricing & Metadata chip should show the populated price; got: {chip_html!r}"
+    )
 
 
-def test_edit_with_archived_only_auto_expands_metadata_panel(page: Page):
-    """Edge case: the smart-expand predicate must treat checked checkboxes
-    as 'has data' even when all other inputs in the panel are empty."""
+def test_edit_with_archived_only_shows_chip_indicator(page: Page):
+    """Edge case: the chip summarizer must treat checked checkboxes as
+    'has data' so the user sees the archived flag even though the panel
+    stays collapsed."""
     _dashboard_ready(page)
     _stub_spool_details(page, {
         "id": 99,
@@ -201,7 +212,16 @@ def test_edit_with_archived_only_auto_expands_metadata_panel(page: Page):
     page.wait_for_function(
         "document.getElementById('wiz-spool-archived').checked === true", timeout=3_000
     )
-    _wait_for_panel_open(page, "wiz-spool-metadata-panel")
+    page.wait_for_timeout(500)
+    assert not _panel_is_open(page, "wiz-spool-metadata-panel"), (
+        "Metadata panel should stay collapsed in edit mode (round-4 default)"
+    )
+    chip_html = page.evaluate(
+        "() => document.querySelector('button.fcc-wiz-section-toggle[data-bs-target=\"#wiz-spool-metadata-panel\"] .fcc-wiz-section-summary')?.innerHTML"
+    )
+    assert chip_html and "archived" in chip_html.lower(), (
+        f"Pricing & Metadata chip should reflect the archived flag; got: {chip_html!r}"
+    )
 
 
 def test_edit_with_no_optional_data_keeps_metadata_collapsed(page: Page):
@@ -239,9 +259,10 @@ def test_edit_with_no_optional_data_keeps_metadata_collapsed(page: Page):
     )
 
 
-def test_new_spool_from_filament_auto_expands_weight_panel(page: Page):
+def test_new_spool_from_filament_keeps_weight_collapsed_chip_shows_tare(page: Page):
     """openNewSpoolFromFilamentWizard prefills the spool empty_weight from
-    the filament cascade — Weight & Scale should auto-expand to show it."""
+    the filament cascade. Round-4: Weight & Scale stays collapsed but the
+    chip should advertise the inherited tare value."""
     _dashboard_ready(page)
     page.evaluate(
         """(fil) => {
@@ -264,4 +285,13 @@ def test_new_spool_from_filament_auto_expands_weight_panel(page: Page):
     page.wait_for_function(
         "document.getElementById('wiz-spool-empty_weight').value === '180'", timeout=3_000
     )
-    _wait_for_panel_open(page, "wiz-spool-weight-panel")
+    page.wait_for_timeout(500)
+    assert not _panel_is_open(page, "wiz-spool-weight-panel"), (
+        "Weight & Scale should stay collapsed in edit mode (round-4 default)"
+    )
+    chip_html = page.evaluate(
+        "() => document.querySelector('button.fcc-wiz-section-toggle[data-bs-target=\"#wiz-spool-weight-panel\"] .fcc-wiz-section-summary')?.innerHTML"
+    )
+    assert chip_html and "180" in chip_html, (
+        f"Weight & Scale chip should advertise the inherited 180g tare; got: {chip_html!r}"
+    )

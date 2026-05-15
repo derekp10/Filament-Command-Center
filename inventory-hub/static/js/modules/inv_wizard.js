@@ -206,9 +206,14 @@ window.wizardApplyCollapseDefaults = (context) => {
         let open;
         if (kind === 'always-open') {
             open = true;
-        } else if (context === 'edit') {
-            open = hasAnyValue(panelEl);
         } else {
+            // Both 'create' and 'edit' now default to collapsed for optional
+            // panels. The summary chips show what's filled in already, so
+            // the user can expand only what they actually want to change.
+            // Smart-expand-on-edit was dropped per Session C round-4 feedback —
+            // it caused too many panels to fan open at once, with cascading
+            // scrolls. Chips give the at-a-glance view that auto-expand was
+            // trying to provide.
             open = false;
         }
         // Apply state synchronously WITHOUT triggering Bootstrap's animation
@@ -369,18 +374,33 @@ window.wizardRefreshAllSectionSummaries = () => {
         const panel = document.getElementById(id);
         if (!panel) return;
         // Bootstrap's default Enter/Space-clicks-focused-button behavior
-        // isn't firing for these toggles (verified — locator.click() opens
-        // the panel but locator.press('Enter') does not). Add an explicit
-        // keydown handler that synthesizes a click on Enter or Space so
-        // keyboard nav works as expected.
+        // doesn't reliably fire for these toggles, so we synthesize a click
+        // on keydown. BUT the browser sometimes ALSO dispatches a native
+        // click on keyup (Space) or independently (Enter), causing a
+        // expand+collapse double-fire — user has to press twice to land
+        // on "expanded". Fix: track the last keyboard-induced click and
+        // suppress any native click that arrives within 300ms.
         const btn = document.querySelector(`button.fcc-wiz-section-toggle[data-bs-target="#${id}"]`);
         if (btn) {
+            let lastKbAt = 0;
             btn.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
                     e.preventDefault();
+                    const now = Date.now();
+                    if (now - lastKbAt < 300) return;  // already handled this keystroke
+                    lastKbAt = now;
                     btn.click();
                 }
             });
+            btn.addEventListener('click', (e) => {
+                // If a native (isTrusted) click arrives within 300ms of our
+                // synthesized one, drop it — it's the browser's synthesized
+                // click from the same keystroke trying to re-toggle.
+                if (e.isTrusted && (Date.now() - lastKbAt < 300)) {
+                    e.stopImmediatePropagation();
+                    e.preventDefault();
+                }
+            }, true);  // capture phase — beat Bootstrap's bubble-phase data-bs-toggle handler
         }
         panel.addEventListener('shown.bs.collapse', (e) => {
             if (e.target !== panel) return;

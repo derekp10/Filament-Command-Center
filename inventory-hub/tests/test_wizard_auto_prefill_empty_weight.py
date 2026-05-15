@@ -16,6 +16,19 @@ from __future__ import annotations
 
 from playwright.sync_api import Page, expect
 
+def _expand_weight_panel(page):
+    """Group 10.1 round-4: Weight & Scale defaults collapsed even on edit-
+    like flows. Expand programmatically so the inherited-badge visibility
+    assertions can see the badge inside the panel."""
+    page.evaluate(
+        "() => bootstrap.Collapse.getOrCreateInstance("
+        "  document.getElementById('wiz-spool-weight-panel'), {toggle:false}"
+        ").show()"
+    )
+    page.wait_for_timeout(400)
+
+
+
 
 def _open_dashboard_and_wait(page: Page):
     page.goto("http://localhost:8000")
@@ -64,6 +77,7 @@ def test_prefill_from_filament_shows_filament_badge(page: Page):
     )
 
     badge = page.locator("#wiz-spool-empty-inherited-badge")
+    _expand_weight_panel(page)
     expect(badge).to_be_visible()
     source = page.locator("#wiz-spool-empty-inherited-source").inner_text()
     assert source == "filament", f"expected 'filament', got {source!r}"
@@ -86,6 +100,7 @@ def test_prefill_falls_back_to_vendor_shows_vendor_badge(page: Page):
     )
 
     badge = page.locator("#wiz-spool-empty-inherited-badge")
+    _expand_weight_panel(page)
     expect(badge).to_be_visible()
     source = page.locator("#wiz-spool-empty-inherited-source").inner_text()
     assert source == "vendor", f"expected 'vendor', got {source!r}"
@@ -135,9 +150,11 @@ def test_user_edit_clears_inherited_badge(page: Page):
     )
 
     badge = page.locator("#wiz-spool-empty-inherited-badge")
+    _expand_weight_panel(page)
     expect(badge).to_be_visible()
 
     # Type in the field — the badge should disappear.
+    _expand_weight_panel(page)
     field = page.locator("#wiz-spool-empty_weight")
     field.click()
     # Append a digit; existing value 180 -> 1805
