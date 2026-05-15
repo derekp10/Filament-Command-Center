@@ -403,6 +403,62 @@ def api_get_spool(spool_id):
     except Exception as e:
         return jsonify({"success": False, "msg": str(e)}), 500
 
+# Canonical presentation order for wizard / details-modal extras.
+# Spoolman's /api/v1/field/{entity} response has no `order` key, so the wizard's
+# existing sort step (inv_wizard.js — `.sort((a,b) => (a.order||0) - (b.order||0))`)
+# was a no-op. Group 10.6 fix: enrich each field dict with an `order` index here.
+# Unknown keys sort to the end (FIELD_ORDER_UNKNOWN).
+FIELD_ORDER_UNKNOWN = 9999
+FIELD_ORDER = {
+    "filament": [
+        "filament_attributes",
+        "shore_hardness",
+        "slicer_profile",
+        "product_url",
+        "purchase_url",
+        "sheet_link",
+        "price_total",
+        "original_color",
+        "nozzle_temp_max",
+        "bed_temp_max",
+        "drying_temp",
+        "drying_time",
+        "flush_multiplier",
+        "multi_color_direction",
+        "needs_label_print",
+        "sample_printed",
+    ],
+    "spool": [
+        "spool_type",
+        "spool_temp",
+        "container_slot",
+        "physical_source",
+        "physical_source_slot",
+        "product_url",
+        "purchase_url",
+        # Prusament-import spool-instance metadata (read-mostly; surfaced
+        # via external_parsers on label scan).
+        "original_color",
+        "nozzle_temp_max",
+        "bed_temp_max",
+        "prusament_manufacturing_date",
+        "prusament_length_m",
+        "is_refill",
+        "needs_label_print",
+        "fcc_pre_archive_location",
+    ],
+}
+
+
+def _enrich_field_order(entity_type, fields):
+    """Stamp each field dict with `order` per FIELD_ORDER; unknown keys go to the end."""
+    order_list = FIELD_ORDER.get(entity_type, [])
+    for f in fields or []:
+        key = f.get("key")
+        f["order"] = order_list.index(key) if key in order_list else FIELD_ORDER_UNKNOWN
+    return fields
+
+
 @app.route('/api/external/fields', methods=['GET'])
 def api_external_fields():
     """Proxy route to fetch Spoolman custom Extra fields configuration (e.g. Filament Attributes, Spool Types)."""
@@ -410,11 +466,11 @@ def api_external_fields():
     out = {"filament": [], "spool": []}
     try:
         rf = requests.get(f"{sm_url}/api/v1/field/filament", timeout=5)
-        if rf.ok: out["filament"] = rf.json()
-        
+        if rf.ok: out["filament"] = _enrich_field_order("filament", rf.json())
+
         rs = requests.get(f"{sm_url}/api/v1/field/spool", timeout=5)
-        if rs.ok: out["spool"] = rs.json()
-        
+        if rs.ok: out["spool"] = _enrich_field_order("spool", rs.json())
+
         return jsonify({"success": True, "fields": out})
     except Exception as e:
         state.logger.error(f"API Error fetching extra fields config: {e}")
@@ -484,6 +540,14 @@ def api_create_inventory_wizard():
                 spool_data['extra'] = sp_extra
             if 'needs_label_print' not in sp_extra:
                 sp_extra['needs_label_print'] = True
+
+            # Group 10.3: explicit default-to-Unassigned. The wizard already
+            # sends `location: ''` when the user leaves the combobox blank, but
+            # if a future caller drops the field entirely or sends None,
+            # fall through to '' so spoolman_api.create_spool's UNASSIGNED-coerce
+            # path receives a string rather than letting Spoolman invent state.
+            if spool_data.get('location') is None:
+                spool_data['location'] = ''
 
             # Per-spool override list takes precedence over `quantity` when present.
             # Each entry shallow-merges onto spool_data, with `extra` deep-merged

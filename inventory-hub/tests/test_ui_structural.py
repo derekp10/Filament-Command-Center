@@ -314,6 +314,12 @@ def test_wizard_escape_warns_when_dirty(page: Page, reset_dom_state_js: str):
     page.wait_for_timeout(500)
 
     # Make the form dirty
+    # Group 10.1: Color panel defaults collapsed in create mode — expand before fill.
+    page.evaluate(
+        "() => { const el = document.getElementById('wiz-fil-color-panel');"
+        " if (el && !el.classList.contains('show'))"
+        " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }"
+    )
     page.locator('#wiz-fil-color_name').fill("Test Color")
 
     # Escape → Swal guard should appear, modal stays open

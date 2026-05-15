@@ -1,5 +1,5 @@
 <div class="modal fade fcc-modal-wizard" id="wizardModal" tabindex="-1">
-    <div class="modal-dialog modal-xl modal-dialog-centered fcc-modal-wizard-dialog">
+    <div class="modal-dialog modal-xl fcc-modal-wizard-dialog">
         <div class="modal-content fcc-modal-details">
             <div class="modal-header border-secondary fcc-modal-header">
                 <h4 class="modal-title font-monospace fw-bold text-white d-flex align-items-center flex-wrap gap-3">
@@ -92,8 +92,10 @@
                             <span id="wiz-step2-fil-badge" class="badge text-bg-warning text-dark" style="font-size: 0.85rem;"></span>
                         </span>
                     </h5>
+
+                    <!-- IDENTITY (always flat — required fields) -->
                     <div class="row g-3">
-                        <div class="col-md-4">
+                        <div class="col-md-6">
                             <label class="form-label small text-secondary mb-1">Vendor*</label>
                             <!-- Switchable input for Vendor. `wiz-fil-vendor-sel` stays the
                                  vendor_id holder so existing readers/writers keep working;
@@ -126,7 +128,7 @@
                                     title="Add New Manufacturer">➕</button>
                             </div>
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-6">
                             <label class="form-label small text-secondary mb-1">MaterialType*</label>
                             <div class="position-relative wizard-single-autocomplete" id="wizard-autocomplete-material">
                                 <input type="text" class="form-control bg-dark text-white border-secondary"
@@ -135,90 +137,150 @@
                                     onblur="window.wizardMaterialBlur()"
                                     oninput="window.wizardMaterialFilter(); window.wizardAutoUpdateDensity();"
                                     onkeydown="window.wizardMaterialKeydown(event)">
-                                <div class="autocomplete-dropdown position-absolute w-100 bg-dark border border-secondary rounded shadow-lg" 
-                                     id="dropdown-material" 
+                                <div class="autocomplete-dropdown position-absolute w-100 bg-dark border border-secondary rounded shadow-lg"
+                                     id="dropdown-material"
                                      style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label small text-secondary mb-1">Color Name</label>
-                            <input type="text" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-fil-color_name" placeholder="e.g. Galaxy Black" autocomplete="off">
-                        </div>
+                    </div>
 
-                        <div class="col-md-4">
-                            <label class="form-label small text-secondary mb-1">Color (Hex or Gradient)</label>
-                            <div class="input-group input-group-sm mb-1" id="wiz-fil-color-container">
-                                <input type="color"
-                                    class="form-control form-control-color bg-dark border-secondary px-1"
-                                    value="#FFFFFF" oninput="this.nextElementSibling.value = this.value.toUpperCase()">
-                                <input type="text"
-                                    class="form-control bg-dark text-white border-secondary font-monospace"
-                                    placeholder="#FFFFFF" value="#FFFFFF" id="wiz-fil-color_hex_0"
-                                    autocomplete="off"
-                                    oninput="this.previousElementSibling.value = (this.value.startsWith('#') ? this.value : '#' + this.value).padEnd(7, '0').substring(0,7)">
-                                <button class="btn btn-outline-secondary" type="button" onclick="wizardAddColorHex()"
-                                    title="Add another color for gradients">➕</button>
+                    <!-- COLOR (collapsible) -->
+                    <button type="button" class="btn fcc-wiz-section-toggle"
+                        data-bs-toggle="collapse" data-bs-target="#wiz-fil-color-panel"
+                        aria-expanded="false" aria-controls="wiz-fil-color-panel">
+                        <span class="fcc-wiz-section-title">Color</span>
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
+                        <span class="fcc-wiz-section-chevron">▾</span>
+                    </button>
+                    <div id="wiz-fil-color-panel" class="collapse">
+                        <div class="row g-3 fcc-wiz-section-panel">
+                            <div class="col-md-6">
+                                <label class="form-label small text-secondary mb-1">Color Name</label>
+                                <input type="text" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-fil-color_name" placeholder="e.g. Galaxy Black" autocomplete="off">
                             </div>
-                            <div id="wiz-fil-color-extra-container"></div>
-                            <select class="form-select form-select-sm bg-dark text-white border-secondary mt-1"
-                                id="wiz-fil-color-direction" style="display: none;">
-                                <option value="coaxial">Coextruded (Multi-Color)</option>
-                                <option value="longitudinal">Longitudinal (Gradient)</option>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label small text-secondary mb-1">Diameter (mm)</label>
-                            <input type="number" step="0.01" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-fil-diameter" value="1.75">
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label small text-secondary mb-1">Density (g/cm³)</label>
-                            <input type="number" step="0.01" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-fil-density" value="1.24">
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label small text-secondary mb-1">Net Weight (g)</label>
-                            <input type="number" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-fil-weight" placeholder="1000">
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label small text-secondary mb-1" title="Tare weight of the spool">Spool
-                                Wt (g)</label>
-                            <input type="number" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-fil-empty_weight" placeholder="Tare">
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label small text-secondary mb-1">Nozzle Min (°C)</label>
-                            <input type="number"
-                                class="form-control bg-dark text-white border-secondary sync-source-fil"
-                                data-key="settings_extruder_temp" id="wiz-fil-settings_extruder_temp" placeholder="215">
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label small text-secondary mb-1">Nozzle Max (°C)</label>
-                            <input type="number"
-                                class="form-control bg-dark text-white border-secondary"
-                                id="wiz-fil-nozzle_temp_max" placeholder="240">
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label small text-secondary mb-1">Bed Min (°C)</label>
-                            <input type="number"
-                                class="form-control bg-dark text-white border-secondary sync-source-fil"
-                                data-key="settings_bed_temp" id="wiz-fil-settings_bed_temp" placeholder="60">
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label small text-secondary mb-1">Bed Max (°C)</label>
-                            <input type="number"
-                                class="form-control bg-dark text-white border-secondary"
-                                id="wiz-fil-bed_temp_max" placeholder="80">
+                            <div class="col-md-6">
+                                <label class="form-label small text-secondary mb-1">Color (Hex or Gradient)</label>
+                                <div class="input-group input-group-sm mb-1" id="wiz-fil-color-container">
+                                    <input type="color"
+                                        class="form-control form-control-color bg-dark border-secondary px-1"
+                                        value="#FFFFFF" oninput="this.nextElementSibling.value = this.value.toUpperCase()">
+                                    <input type="text"
+                                        class="form-control bg-dark text-white border-secondary font-monospace"
+                                        placeholder="#FFFFFF" value="#FFFFFF" id="wiz-fil-color_hex_0"
+                                        autocomplete="off"
+                                        oninput="this.previousElementSibling.value = (this.value.startsWith('#') ? this.value : '#' + this.value).padEnd(7, '0').substring(0,7)">
+                                    <button class="btn btn-outline-secondary" type="button" onclick="wizardAddColorHex()"
+                                        title="Add another color for gradients">➕</button>
+                                </div>
+                                <div id="wiz-fil-color-extra-container"></div>
+                                <div id="wiz-fil-color-direction-wrapper" style="display: none;" class="mt-1">
+                                    <label class="form-label small text-secondary mb-1 d-block"
+                                        title="Only meaningful when multiple hex colors are set above. Coextruded prints two colors side-by-side; Longitudinal cycles down the spool.">
+                                        Multi-color print direction
+                                        <span class="text-info fcc-wiz-hint">(only with 2+ colors above)</span>
+                                    </label>
+                                    <select class="form-select form-select-sm bg-dark text-white border-secondary"
+                                        id="wiz-fil-color-direction">
+                                        <option value="coaxial">Coextruded (Multi-Color)</option>
+                                        <option value="longitudinal">Longitudinal (Gradient)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <!-- Original Color slot — wizardFetchExtraFields routes the
+                                 original_color dynamic extra here so it lives with the
+                                 other color fields instead of the Custom Filament Attributes
+                                 block. (Group 10.1 Session C polish.) -->
+                            <div class="col-md-12" id="wiz-fil-original-color-slot"></div>
                         </div>
                     </div>
 
-                    <!-- DYNAMIC CUSTOM EXTRA FIELDS INJECTED HERE -->
-                    <h6 class="text-secondary border-bottom border-dark pb-1 mt-4 mb-3 fcc-subtext">
-                        CUSTOM FILAMENT ATTRIBUTES</h6>
-                    <div class="row g-3" id="wiz-fil-dynamic-extra-fields"></div>
+                    <!-- PHYSICAL SPECS (collapsible) -->
+                    <button type="button" class="btn fcc-wiz-section-toggle"
+                        data-bs-toggle="collapse" data-bs-target="#wiz-fil-physical-panel"
+                        aria-expanded="true" aria-controls="wiz-fil-physical-panel">
+                        <span class="fcc-wiz-section-title">Physical Specs</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
+                        <span class="fcc-wiz-section-chevron">▾</span>
+                    </button>
+                    <div id="wiz-fil-physical-panel" class="collapse show">
+                        <div class="row g-3 fcc-wiz-section-panel">
+                            <div class="col-md-3">
+                                <label class="form-label small text-secondary mb-1">Diameter (mm)</label>
+                                <input type="number" step="0.01" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-fil-diameter" value="1.75">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small text-secondary mb-1">Density (g/cm³)</label>
+                                <input type="number" step="0.01" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-fil-density" value="1.24">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small text-secondary mb-1">Net Weight (g)</label>
+                                <input type="number" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-fil-weight" placeholder="1000">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small text-secondary mb-1" title="Tare weight of the spool">Spool
+                                    Wt (g)</label>
+                                <input type="number" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-fil-empty_weight" placeholder="Tare">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PRINT TEMPERATURES (collapsible) -->
+                    <button type="button" class="btn fcc-wiz-section-toggle"
+                        data-bs-toggle="collapse" data-bs-target="#wiz-fil-temps-panel"
+                        aria-expanded="false" aria-controls="wiz-fil-temps-panel">
+                        <span class="fcc-wiz-section-title">Print Temperatures</span>
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
+                        <span class="fcc-wiz-section-chevron">▾</span>
+                    </button>
+                    <div id="wiz-fil-temps-panel" class="collapse">
+                        <div class="row g-3 fcc-wiz-section-panel">
+                            <div class="col-md-3">
+                                <label class="form-label small text-secondary mb-1">Nozzle Min (°C)</label>
+                                <input type="number"
+                                    class="form-control bg-dark text-white border-secondary sync-source-fil"
+                                    data-key="settings_extruder_temp" id="wiz-fil-settings_extruder_temp" placeholder="215">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small text-secondary mb-1">Nozzle Max (°C)</label>
+                                <input type="number"
+                                    class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-fil-nozzle_temp_max" placeholder="240">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small text-secondary mb-1">Bed Min (°C)</label>
+                                <input type="number"
+                                    class="form-control bg-dark text-white border-secondary sync-source-fil"
+                                    data-key="settings_bed_temp" id="wiz-fil-settings_bed_temp" placeholder="60">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small text-secondary mb-1">Bed Max (°C)</label>
+                                <input type="number"
+                                    class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-fil-bed_temp_max" placeholder="80">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- CUSTOM FILAMENT ATTRIBUTES (collapsible) -->
+                    <button type="button" class="btn fcc-wiz-section-toggle"
+                        data-bs-toggle="collapse" data-bs-target="#wiz-fil-extras-panel"
+                        aria-expanded="false" aria-controls="wiz-fil-extras-panel">
+                        <span class="fcc-wiz-section-title">Custom Filament Attributes</span>
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
+                        <span class="fcc-wiz-section-chevron">▾</span>
+                    </button>
+                    <div id="wiz-fil-extras-panel" class="collapse">
+                        <div class="row g-3 fcc-wiz-section-panel" id="wiz-fil-dynamic-extra-fields"></div>
+                    </div>
 
                     <!-- Hidden Container for Extra External Metadata -->
                     <div id="wiz-fil-external-metadata" style="display:none;"></div>
@@ -226,25 +288,47 @@
 
                 <!-- STEP 3: SPOOL PROPERTIES -->
                 <div class="wizard-step mb-3" id="step-3-spool" style="display: none; opacity: 0.5;">
-                    <div class="d-flex justify-content-between align-items-end border-bottom border-dark pb-2 mb-3">
-                        <h5 class="text-info mb-0 d-flex align-items-center flex-wrap gap-3">
-                            <span>STEP 3: SPOOL INSTANCES</span>
-                            <span id="wiz-step3-spl-context" class="d-none align-items-center gap-2">
-                                <span class="text-secondary fw-normal" style="font-size: 0.85rem;">— Working on</span>
-                                <span id="wiz-step3-spl-badge" class="badge text-bg-info" style="font-size: 0.85rem;"></span>
-                            </span>
-                        </h5>
-                        <div class="d-flex align-items-center bg-dark p-2 rounded border border-warning shadow-sm">
-                            <label class="text-warning me-2 mb-0 fw-bold fs-5">BULK QUANTITY TO CREATE:</label>
-                            <input type="number"
-                                class="form-control form-control-lg bg-dark text-warning border-warning font-monospace text-center fw-bold fs-4 w-90px"
-                                id="wiz-spool-qty" value="1" min="1" max="50"
-                                oninput="window.wizardSyncSpoolRows && window.wizardSyncSpoolRows()">
+                    <h5 class="text-info border-bottom border-dark pb-2 mb-3 d-flex align-items-center flex-wrap gap-3">
+                        <span>STEP 3: SPOOL INSTANCES</span>
+                        <span id="wiz-step3-spl-context" class="d-none align-items-center gap-2">
+                            <span class="text-secondary fw-normal" style="font-size: 0.85rem;">— Working on</span>
+                            <span id="wiz-step3-spl-badge" class="badge text-bg-info" style="font-size: 0.85rem;"></span>
+                        </span>
+                    </h5>
+
+                    <!-- QUANTITY & LOCATION (always flat) -->
+                    <div class="row g-3 align-items-end">
+                        <div class="col-md-5">
+                            <!-- The d-flex wrapper is `qtyBox.parentElement` in inv_wizard.js
+                                 (wizardReset + edit-mode hide). Keep `d-flex` so the toggled
+                                 `style.display = 'flex'` matches the original layout. -->
+                            <div class="d-flex align-items-center bg-dark p-2 rounded border border-warning shadow-sm">
+                                <label class="text-warning me-2 mb-0 fw-bold fs-5" for="wiz-spool-qty">BULK QUANTITY TO CREATE:</label>
+                                <input type="number"
+                                    class="form-control form-control-lg bg-dark text-warning border-warning font-monospace text-center fw-bold fs-4 w-90px"
+                                    id="wiz-spool-qty" value="1" min="1" max="50"
+                                    oninput="window.wizardSyncSpoolRows && window.wizardSyncSpoolRows()">
+                            </div>
+                        </div>
+                        <div class="col-md-7">
+                            <label class="form-label small text-secondary mb-1">Location</label>
+                            <!-- `wiz-spool-location` stays as the hidden LocationID holder so
+                                 existing readers keep working; the visible search box is
+                                 `wiz-spool-location-search`. -->
+                            <div class="position-relative wizard-single-autocomplete" id="wizard-autocomplete-location">
+                                <input type="text" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-spool-location-search" placeholder="Unassigned (default)" autocomplete="off">
+                                <input type="hidden" id="wiz-spool-location" value="">
+                                <div class="autocomplete-dropdown position-absolute w-100 bg-dark border border-secondary rounded shadow-lg"
+                                    id="dropdown-location"
+                                    style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">
+                                </div>
+                            </div>
                         </div>
                     </div>
 
                     <!-- Per-spool Prusament scan rows (one per spool, optional). -->
-                    <div class="bg-dark p-2 rounded border border-secondary mb-3">
+                    <div class="bg-dark p-2 rounded border border-secondary mb-3 mt-3">
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <label class="text-info mb-0 small fw-bold">📷 Per-spool Prusament scan (optional)</label>
                             <span id="wiz-spool-rows-summary" class="text-secondary small"></span>
@@ -263,97 +347,114 @@
                     <div id="wiz-duplicate-picker" style="display: none;"></div>
                     <div id="wiz-fil-mismatch-panel" style="display: none;"></div>
 
-                    <div class="row g-3">
-                        <div class="col-md-4">
-                            <label class="form-label small text-secondary mb-1">Location</label>
-                            <!-- `wiz-spool-location` stays as the hidden LocationID holder so
-                                 existing readers keep working; the visible search box is
-                                 `wiz-spool-location-search`. -->
-                            <div class="position-relative wizard-single-autocomplete" id="wizard-autocomplete-location">
-                                <input type="text" class="form-control bg-dark text-white border-secondary"
-                                    id="wiz-spool-location-search" placeholder="-- Unassigned --" autocomplete="off">
-                                <input type="hidden" id="wiz-spool-location" value="">
-                                <div class="autocomplete-dropdown position-absolute w-100 bg-dark border border-secondary rounded shadow-lg"
-                                    id="dropdown-location"
-                                    style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">
-                                </div>
+                    <!-- WEIGHT & SCALE (collapsible) -->
+                    <button type="button" class="btn fcc-wiz-section-toggle"
+                        data-bs-toggle="collapse" data-bs-target="#wiz-spool-weight-panel"
+                        aria-expanded="false" aria-controls="wiz-spool-weight-panel">
+                        <span class="fcc-wiz-section-title">Weight &amp; Scale</span>
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
+                        <span class="fcc-wiz-section-chevron">▾</span>
+                    </button>
+                    <div id="wiz-spool-weight-panel" class="collapse">
+                        <div class="row g-3 fcc-wiz-section-panel">
+                            <div class="col-md-4">
+                                <label class="form-label small text-secondary mb-1">
+                                    Spool Weight (g)
+                                    <span class="text-info ms-1 fcc-wiz-hint">(Optional)</span>
+                                    <span class="text-info ms-1 fcc-subtext"
+                                        title="Auto-synced from Filament Tab">🔗</span>
+                                    <span id="wiz-spool-empty-inherited-badge"
+                                        class="badge bg-info-subtle text-info-emphasis ms-1"
+                                        style="display: none; font-size: 0.7rem; font-weight: normal;"
+                                        title="Inherited from the parent filament or vendor. Type your own value to override.">↩ from <span id="wiz-spool-empty-inherited-source">filament</span></span>
+                                </label>
+                                <input type="number" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-spool-empty_weight" placeholder="(Inherited)"
+                                    onkeyup="window.wizardCalcUsedWeight()">
                             </div>
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label small text-secondary mb-1">
-                                Spool Weight (g)
-                                <span class="text-info ms-1 fcc-wiz-hint">(Optional)</span>
-                                <span class="text-info ms-1 fcc-subtext"
-                                    title="Auto-synced from Filament Tab">🔗</span>
-                                <span id="wiz-spool-empty-inherited-badge"
-                                    class="badge bg-info-subtle text-info-emphasis ms-1"
-                                    style="display: none; font-size: 0.7rem; font-weight: normal;"
-                                    title="Inherited from the parent filament or vendor. Type your own value to override.">↩ from <span id="wiz-spool-empty-inherited-source">filament</span></span>
-                            </label>
-                            <input type="number" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-spool-empty_weight" placeholder="(Inherited)"
-                                onkeyup="window.wizardCalcUsedWeight()">
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label small text-secondary mb-1"
-                                title="Overrides the Filament net weight if this particular spool is larger/smaller">Spool
-                                Net Wt (g)</label>
-                            <input type="number" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-spool-initial_weight" placeholder="(Inherits Filament)"
-                                onkeyup="window.wizardCalcUsedWeight()">
-                        </div>
-
-                        <div class="col-md-3">
-                            <label class="form-label small text-secondary mb-1"
-                                title="Put an already-used spool on a scale and enter its total weight here.">Scale
-                                Gross Wt (g)</label>
-                            <input type="number" class="form-control bg-dark text-info border-info" id="wiz-spool-scale"
-                                placeholder="Calculate used..." onkeyup="window.wizardCalcUsedWeight()">
-                        </div>
-                        <div class="col-md-3" id="container-wiz-spool-recent-usage" style="display: none;">
-                            <label class="form-label small text-danger mb-1 fw-bold" title="Manually log filament used on latest print">+ Add Printed Wt (g)</label>
-                            <input type="number" class="form-control bg-dark text-danger border-danger fw-bold"
-                                id="wiz-spool-recent-usage" placeholder="e.g. 150" onkeyup="window.wizardCalcFromRecentUsage()">
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label small text-secondary mb-1 text-success">Remaining Wt (g)</label>
-                            <input type="number" class="form-control bg-dark text-success border-success fw-bold"
-                                id="wiz-spool-remaining" placeholder="Calc..." onkeyup="window.wizardCalcUsedFromRemaining()">
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label small text-secondary mb-1">Total Used Wt (g)</label>
-                            <input type="number" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-spool-used" value="0" onkeyup="window.wizardCalcRemainingFromUsed()">
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label small text-secondary mb-1">Price Paid ($)</label>
-                            <input type="number" step="0.01" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-spool-price" placeholder="0.00">
-                        </div>
-                        <div class="col-md-4 d-flex align-items-center mt-4">
-                            <div class="form-check form-switch ms-2">
-                                <input class="form-check-input bg-dark border-secondary" type="checkbox" id="wiz-spool-archived">
-                                <label class="form-check-label text-warning small ms-1" for="wiz-spool-archived">Archived (Hide Spool)</label>
+                            <div class="col-md-4">
+                                <label class="form-label small text-secondary mb-1"
+                                    title="Overrides the Filament net weight if this particular spool is larger/smaller">Spool
+                                    Net Wt (g)</label>
+                                <input type="number" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-spool-initial_weight" placeholder="(Inherits Filament)"
+                                    onkeyup="window.wizardCalcUsedWeight()">
                             </div>
-                        </div>
-                        <div class="col-md-12">
-                            <label class="form-label small text-secondary mb-1">Comment/Notes</label>
-                            <input type="text" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-spool-comment" placeholder="Optional notes...">
-                        </div>
-                        <div class="col-md-12">
-                            <label class="form-label small text-secondary mb-1">🔗 Purchase Link
-                                <span class="text-info ms-1 fcc-wiz-hint">(Optional — where to re-order this spool)</span>
-                            </label>
-                            <input type="url" class="form-control bg-dark text-white border-secondary"
-                                id="wiz-spool-purchase_url" placeholder="https://...">
+                            <div class="col-md-4">
+                                <label class="form-label small text-secondary mb-1"
+                                    title="Put an already-used spool on a scale and enter its total weight here.">Scale
+                                    Gross Wt (g)</label>
+                                <input type="number" class="form-control bg-dark text-info border-info" id="wiz-spool-scale"
+                                    placeholder="Calculate used..." onkeyup="window.wizardCalcUsedWeight()">
+                            </div>
+                            <div class="col-md-4" id="container-wiz-spool-recent-usage" style="display: none;">
+                                <label class="form-label small text-danger mb-1 fw-bold" title="Manually log filament used on latest print">+ Add Printed Wt (g)</label>
+                                <input type="number" class="form-control bg-dark text-danger border-danger fw-bold"
+                                    id="wiz-spool-recent-usage" placeholder="e.g. 150" onkeyup="window.wizardCalcFromRecentUsage()">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small text-secondary mb-1 text-success">Remaining Wt (g)</label>
+                                <input type="number" class="form-control bg-dark text-success border-success fw-bold"
+                                    id="wiz-spool-remaining" placeholder="Calc..." onkeyup="window.wizardCalcUsedFromRemaining()">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small text-secondary mb-1">Total Used Wt (g)</label>
+                                <input type="number" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-spool-used" value="0" onkeyup="window.wizardCalcRemainingFromUsed()">
+                            </div>
                         </div>
                     </div>
 
-                    <!-- DYNAMIC SPOOL EXTRA FIELDS INJECTED HERE -->
-                    <h6 class="text-secondary border-bottom border-dark pb-1 mt-4 mb-3 fcc-subtext">
-                        SPOOL CONFIGURATION</h6>
-                    <div class="row g-3" id="wiz-spool-dynamic-extra-fields"></div>
+                    <!-- PRICING & METADATA (collapsible) -->
+                    <button type="button" class="btn fcc-wiz-section-toggle"
+                        data-bs-toggle="collapse" data-bs-target="#wiz-spool-metadata-panel"
+                        aria-expanded="false" aria-controls="wiz-spool-metadata-panel">
+                        <span class="fcc-wiz-section-title">Pricing &amp; Metadata</span>
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
+                        <span class="fcc-wiz-section-chevron">▾</span>
+                    </button>
+                    <div id="wiz-spool-metadata-panel" class="collapse">
+                        <div class="row g-3 fcc-wiz-section-panel">
+                            <div class="col-md-4">
+                                <label class="form-label small text-secondary mb-1">Price Paid ($)</label>
+                                <input type="number" step="0.01" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-spool-price" placeholder="0.00">
+                            </div>
+                            <div class="col-md-4 d-flex align-items-center mt-4">
+                                <div class="form-check form-switch ms-2">
+                                    <input class="form-check-input bg-dark border-secondary" type="checkbox" id="wiz-spool-archived">
+                                    <label class="form-check-label text-warning small ms-1" for="wiz-spool-archived">Archived (Hide Spool)</label>
+                                </div>
+                            </div>
+                            <div class="col-md-12">
+                                <label class="form-label small text-secondary mb-1">Comment/Notes</label>
+                                <input type="text" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-spool-comment" placeholder="Optional notes...">
+                            </div>
+                            <div class="col-md-12">
+                                <label class="form-label small text-secondary mb-1">🔗 Purchase Link
+                                    <span class="text-info ms-1 fcc-wiz-hint">(Optional — falls back to the filament's link if left blank)</span>
+                                </label>
+                                <input type="url" class="form-control bg-dark text-white border-secondary"
+                                    id="wiz-spool-purchase_url" placeholder="https://...">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- CUSTOM SPOOL ATTRIBUTES (collapsible) -->
+                    <button type="button" class="btn fcc-wiz-section-toggle"
+                        data-bs-toggle="collapse" data-bs-target="#wiz-spool-extras-panel"
+                        aria-expanded="false" aria-controls="wiz-spool-extras-panel">
+                        <span class="fcc-wiz-section-title">Custom Spool Attributes</span>
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis fw-normal">optional</span>
+                        <span class="fcc-wiz-section-summary text-muted small fw-normal" aria-hidden="true"></span>
+                        <span class="fcc-wiz-section-chevron">▾</span>
+                    </button>
+                    <div id="wiz-spool-extras-panel" class="collapse">
+                        <div class="row g-3 fcc-wiz-section-panel" id="wiz-spool-dynamic-extra-fields"></div>
+                    </div>
                 </div>
 
             </div>

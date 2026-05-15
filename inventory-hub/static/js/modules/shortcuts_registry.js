@@ -57,6 +57,8 @@
     };
 
     // Bind `?` globally + `Escape` to close the overlay.
+    // Capture phase so we can stopImmediatePropagation before Bootstrap's
+    // modal-level Escape handler (also bound on document) fires.
     document.addEventListener('keydown', (e) => {
         const ov = document.getElementById('fcc-shortcuts-overlay');
         if (!ov) return;
@@ -67,9 +69,16 @@
             e.preventDefault();
             window.toggleShortcutsOverlay();
         } else if (e.key === 'Escape' && ov.style.display === 'block') {
+            // Group 10.1 SC round-3 fix: Escape used to bubble to whichever
+            // Bootstrap modal was open underneath the shortcuts overlay,
+            // dismissing the wizard at the same time as the overlay. Stop
+            // immediate propagation so neither Bootstrap nor any sibling
+            // listener fires — overlay consumes Escape exclusively.
+            e.preventDefault();
+            e.stopImmediatePropagation();
             window.toggleShortcutsOverlay();
         }
-    });
+    }, true);  // capture phase — beats Bootstrap's bubble-phase handler
 
     // Seed the registry with shortcuts we already know about.
     window.registerShortcut({

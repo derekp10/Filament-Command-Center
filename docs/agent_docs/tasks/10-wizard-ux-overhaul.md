@@ -1,56 +1,76 @@
 # Group 10: Add/Edit Wizard UX Overhaul
 
 **Branch name:** `feature/wizard-ux-overhaul`
-**Estimated effort:** ~5.5–7 hours (can split into two sessions)
+**Estimated effort:** ~5.5–7 hours (split into two sessions)
 **Risk:** HIGH — wizard is 144KB, complex, regression-prone
 
 ## Goal
 
 Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 
-> ⚠️ **This is the highest-risk group.** Plan for a dedicated testing pass. Consider splitting into two sessions: Session A (items 10.1–10.3: flow & defaults) and Session B (items 10.4–10.8: field fixes & audit).
+> ⚠️ **This is the highest-risk group.** Split executed: Session A (flow & defaults) shipped 2026-05-14 on `feature/wizard-ux-overhaul`. Session B (field fixes + nested-Swal audit) shipped 2026-05-14 on `feature/wizard-session-b`. Session C (aggressive cleanup pass — 10.1 only) deferred to its own branch.
+
+## Session status
+
+| Session | Items | Status | Branch |
+|---------|-------|--------|--------|
+| **A** — Flow & defaults | 10.2, 10.3, 10.7, 10.10, 10.11 | ✅ DONE 2026-05-14 | `feature/wizard-ux-overhaul` |
+| **B** — Fields, validation, nested-Swal audit | 10.4, 10.5, 10.6, 10.8, 10.9 | ✅ DONE 2026-05-14 | `feature/wizard-session-b` |
+| **C** — Aggressive cleanup pass | 10.1 | ✅ DONE 2026-05-14 (9 commits, 6 feedback rounds) | `feature/wizard-cleanup-aggressive` |
+
+When resuming, `/work-group 10` should focus on the Session C item below (10.1) — all others are shipped on `dev`.
 
 ## Items to Complete
 
-### 10.1 — Wizard UX cleanup pass
+### 10.1 — Wizard UX cleanup pass  ✅ Session C (2026-05-14)
+**Shipped:** 7 collapsible Bootstrap `.collapse` panels (Color, Physical Specs, Print Temperatures, Custom Filament Attributes, Weight & Scale, Pricing & Metadata, Custom Spool Attributes) — all default-collapsed in create AND edit mode. Always-visible summary chips on each toggle use `getFilamentStyle` / `makeSwatchHtml` (printer-status toolhead pattern) so multi-color swatches render as gradients. `Shift+E` / `Shift+C` expand-all / collapse-all keyboard shortcuts registered under "Wizard" scope in the `?` overlay. `original_color` relocated into the Color panel; `shore_hardness` gated to TPU-family materials; Prusament-prefixed labels renamed to generic. Modal pinned to top (no more recenter-on-expand). Wizard auto-focuses on `shown.bs.modal` so Escape works immediately when launched from spool/filament details. Six feedback rounds — see [completed-archive.md](../../../completed-archive.md) for the per-round breakdown.
 **Buglist ref:** L41
 **What:** The wizard is functional but clunky — too much data shown at once, not intuitive. Needs modernization without losing functionality.
 
 **Approach:** Audit the step flow, identify what can be collapsed/hidden behind progressive disclosure, improve visual hierarchy. Do NOT remove functionality — reorganize it.
 
-### 10.2 — Location selector is clunky
+### 10.2 — Location selector is clunky  ✅ Session A (2026-05-14)
 **Buglist ref:** L37
+**Shipped:** `wizardBindCombobox` now renders the full list on focus (and click-while-focused), highlighting the current selection. See [inv_wizard.js:285](../../../inventory-hub/static/js/modules/inv_wizard.js).
 **What:** User has to delete existing text to see the full location list. Needs a proper searchable dropdown/combobox pattern.
 
-### 10.3 — New spools should default to unassigned
+### 10.3 — New spools should default to unassigned  ✅ Session A (2026-05-14)
 **Buglist ref:** L35
+**Shipped:** Defensive empty-location coercion in `api_create_inventory_wizard` ([app.py](../../../inventory-hub/app.py)) and placeholder copy now reads "Unassigned (default)" to advertise the no-pick default.
 **What:** If no location is provided, newly created spools should default to "Unassigned" rather than requiring explicit selection.
 
-### 10.4 — Consolidate duplicate purchase link fields
+### 10.4 — Consolidate duplicate purchase link fields  ✅ Session B (2026-05-14)
+**Shipped:** Single spool-tab `wiz-spool-purchase_url` with smart fallback via `wizardApplyPurchaseLinkFallback`; `wizardReset` extended to clear `input[type="url"]` and reset placeholder (the "doesn't clear between usages" bug).
 **Buglist ref:** L162
 **What:** Two purchase links exist — one inherited from filament, one on the spool. Need to consolidate to one field or implement smart fallback (prefer spool-specific, fall back to filament). One field doesn't clear between usages.
 
-### 10.5 — New slicer profile should auto-add to current filament
+### 10.5 — New slicer profile should auto-add to current filament  ✅ Session B (2026-05-14)
+**Shipped:** `window.wizardOnNewChoiceAdded` hook fires after `wizardFetchExtraFields()` re-renders the schema and selects the new value on the working filament's `<select>`. Mirrors `inv_details.js:promptEditSlicerProfile`.
 **Buglist ref:** L163
 **What:** Creating a new slicer profile from within the wizard should auto-associate it with the filament being edited.
 
-### 10.6 — Spoolman field ordering bug
+### 10.6 — Spoolman field ordering bug  ✅ Session B (2026-05-14)
+**Shipped:** `FIELD_ORDER` constant + `_enrich_field_order` helper in `app.py` stamp each field with a canonical `order` index; the wizard's existing sort step actually works now. Unknown keys pin to 9999.
 **Buglist ref:** L164
 **What:** Custom fields move around when modified or when new items are added. Need to lock down field order.
 
-### 10.7 — Maintain multi-spool creation ability
+### 10.7 — Maintain multi-spool creation ability  ✅ Session A (2026-05-14)
 **Buglist ref:** L160
+**Shipped:** No code change required — confirmed via existing `test_wizard_per_spool_scan_e2e.py` + `test_wizard_per_spool_scan_unit.py` that the quantity-driven row sync still produces N spools after the combobox / cancel-restore changes.
 **What:** Guard/verify that the ability to add multiple spools of the same type at once still works after any wizard changes.
 
-### 10.8 — SweetAlert2 nested modal audit
+### 10.8 — SweetAlert2 nested modal audit  ✅ Session B (2026-05-14)
+**Shipped:** All three `Swal.fire` sites in `inv_wizard.js` migrated to `window.mountOverlay()`. The unsaved-changes prompt uses stateful in-place content swaps (`data-stage="input|suggestion|confirm"`) to dodge the capture-phase Escape race when nesting overlays. Regression-guard test in `test_wizard_overlay_migration.py` fails loudly on any future `Swal.fire` reintroduction.
 **Buglist ref:** L165
+**Known symptom:** the unsaved-changes Swal at [inv_wizard.js:92](../../../inventory-hub/static/js/modules/inv_wizard.js#L92) shifts the `.cmd-deck` bottom bar down — Bootstrap's `.modal-open` and SweetAlert's `.swal2-shown` body classes both compensate for the scrollbar independently and the body's effective height changes. Migrating to `mountOverlay` fixes the shift as a side effect.
 **What:** Audit existing code for nested `Swal.fire()` calls and replace with inline overlay divs per project convention.
 
 **Primary file:** `inventory-hub/static/js/modules/inv_wizard.js` (144KB)
 **Template:** `inventory-hub/templates/components/modals_wizard.html`
 **Backend:** `inventory-hub/app.py` — wizard endpoints
 
-### 10.9 — Filament-attributes input validation (prevention guards)
+### 10.9 — Filament-attributes input validation (prevention guards)  ✅ Session B (2026-05-14)
+**Shipped:** Shared `choice_validation.js` module with all 5 guards (min length, leading/trailing punctuation, fuzzy/prefix/normalized-key match, two-step confirm, live canonical preview). Hooked into `wizardPromptNewChoice`, `wizardAddMultiChoiceChip` blur-commit, and `inv_details.js:addAttrChip` for parity. Bulk-cleanup migration for the existing dead choices remains deferred — prevention shipped first.
 **Buglist ref:** L221–L239
 **What:** The filament-attributes choice list has dead/bogus entries (`Tran`, `F`, `Carbon-Fiber`, etc.) created by unchecked input. Spoolman makes new choices permanent — removal requires a destructive snapshot-restore migration. Prevention guards in the wizard's "+ Add new attribute" flow will stop new garbage entries from being created.
 
@@ -72,8 +92,9 @@ Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 - [ ] Two-step confirm before a new choice is committed to Spoolman
 - [ ] Existing choices can still be selected without any prompt
 
-### 10.10 — Location search box should show all locations after selection
+### 10.10 — Location search box should show all locations after selection  ✅ Session A (2026-05-14)
 **Buglist ref:** L129
+**Shipped:** Covered together with 10.2 — same `wizardBindCombobox` fix. Mirror behavior added to `promptEditLocation` Force-Location dialog at [inv_details.js:801](../../../inventory-hub/static/js/modules/inv_details.js#L801).
 **What:** Once a valid location is selected or loaded in the wizard, the location search/combobox should display the full location list (not filter it down). Same fix should propagate to all other location search text boxes in the app.
 
 **Files:**
@@ -85,8 +106,9 @@ Modernize the Add/Edit Inventory Wizard's UX flow and fix field-level bugs.
 - [ ] Full location list is accessible after a selection is made
 - [ ] Consistent behavior across all location search boxes
 
-### 10.11 — Wizard close opens details modal even when search was the source
+### 10.11 — Wizard close opens details modal even when search was the source  ✅ Session A (2026-05-14)
 **Buglist ref:** L14
+**Shipped:** Both `openEditWizard` ([inv_wizard.js:2110](../../../inventory-hub/static/js/modules/inv_wizard.js#L2110)) and `openCloneWizard` ([inv_wizard.js:1957](../../../inventory-hub/static/js/modules/inv_wizard.js#L1957)) now only set a return-id when a spool/filament details modal is actually visible at launch. Cancel from search FAB / Location Manager / dashboard FAB no longer pops a spurious details modal. Regression test: [test_wizard_group10_session_a.py](../../../inventory-hub/tests/test_wizard_group10_session_a.py).
 **What:** "Details/display modal pops up after editing a spool from the global search, even though search was the source." Repro: Search for a spool via the global search FAB → click the **Edit** button on a search result → wizard opens → cancel the wizard → the spool's details modal loads in place.
 
 **Likely cause:** The wizard's close path (`onCancel` / `onClose`) unconditionally calls `openSpoolDetails` / `openFilamentDetails`, regardless of where the edit was initiated from. Should restore focus to the launch surface (search results panel in this case), not always fall back to details.

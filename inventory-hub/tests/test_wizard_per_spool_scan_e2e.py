@@ -831,6 +831,12 @@ def test_per_spool_scan_failure_blocks_submit(page: Page):
     page.locator("#btn-type-manual").click()
 
     # Fill bare-minimum filament fields so submit isn't otherwise blocked.
+    # Group 10.1: Color panel defaults collapsed in create mode — expand before fill.
+    page.evaluate(
+        "() => { const el = document.getElementById('wiz-fil-color-panel');"
+        " if (el && !el.classList.contains('show'))"
+        " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }"
+    )
     page.locator("#wiz-fil-material").fill("PLA")
     page.locator("#wiz-fil-color_name").fill("Test")
 

@@ -807,6 +807,18 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                         clearKbHighlight();
                     });
 
+                    // Group 10.2/10.10 parity with wizardBindCombobox: if the
+                    // user re-focuses the search input (e.g. after typing,
+                    // clicking an item, then coming back to pick a different
+                    // one), reveal the full list again — don't keep the prior
+                    // filter applied to a no-longer-relevant query.
+                    searchInput.addEventListener('focus', () => {
+                        if (searchInput.value === '') return; // nothing to clear
+                        searchInput.value = '';
+                        items.forEach(item => { item.style.display = 'block'; });
+                        clearKbHighlight();
+                    });
+
                     items.forEach(item => {
                         item.addEventListener('click', () => {
                             clearKbHighlight();
@@ -1610,8 +1622,27 @@ const _editfilOpenModal = (fil) => {
         });
     };
     const addAttrChip = (val, { silent = false } = {}) => {
-        const v = String(val || '').trim();
+        let v = String(val || '').trim();
         if (!v) return;
+        // Group 10.9 — same validation guards as the wizard's filament-attributes
+        // path. `silent` is used when seeding existing chips on modal open;
+        // those values are already canonical in Spoolman, so we bypass the gate.
+        if (!silent && typeof window.validateNewChoice === 'function' && !attrChoices.includes(v)) {
+            const result = window.validateNewChoice(v, attrChoices);
+            if (!result.ok) {
+                if (typeof showToast === 'function') {
+                    showToast(result.error || 'Invalid attribute', 'warning', 5000);
+                }
+                return;
+            }
+            if (result.suggestion) {
+                if (typeof showToast === 'function') {
+                    showToast(`Did you mean "${result.suggestion}"? — pick it from the suggestions, or refine the typed value.`, 'info', 7000);
+                }
+                return;
+            }
+            v = result.canonical;
+        }
         if (attrSelected.includes(v)) return;
         attrSelected.push(v);
         const known = attrChoices.includes(v);

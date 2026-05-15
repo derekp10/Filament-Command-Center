@@ -698,8 +698,35 @@ def ensure_extra_field(entity_type, key, name, field_type="text", choices=None, 
         r = requests.get(f"{sm_url}/api/v1/field/{entity_type}", timeout=5)
         if r.ok:
             existing = r.json()
-            if any(f.get('key') == key for f in existing):
-                return True  # Already there.
+            existing_field = next((f for f in existing if f.get('key') == key), None)
+            if existing_field:
+                # Field exists. Update the label in-place if it drifted from
+                # the canonical `name` we register here — Spoolman lets us
+                # re-POST the same endpoint with new metadata to update.
+                # Reuses the field's actual type / choices so we don't lose
+                # data on a label-only refresh (Session C rename of
+                # "Prusament Manufacturing Date" → "Manufacturing Date").
+                if existing_field.get('name') != name:
+                    update_payload = {
+                        "name": name,
+                        "field_type": existing_field.get('field_type', field_type),
+                    }
+                    if existing_field.get('field_type') == 'choice':
+                        update_payload['multi_choice'] = existing_field.get('multi_choice', False)
+                        if 'choices' in existing_field:
+                            update_payload['choices'] = existing_field['choices']
+                    upd = requests.post(f"{sm_url}/api/v1/field/{entity_type}/{key}", json=update_payload, timeout=5)
+                    if upd.ok:
+                        state.logger.info(
+                            f"Spoolman extra field {entity_type}/{key} label updated: "
+                            f"{existing_field.get('name')!r} → {name!r}"
+                        )
+                    else:
+                        state.logger.warning(
+                            f"Could not update Spoolman extra field {entity_type}/{key} label: "
+                            f"HTTP {upd.status_code} — {upd.text[:200]}"
+                        )
+                return True
         payload = {"name": name, "field_type": field_type}
         if field_type == "choice":
             payload["multi_choice"] = bool(multi)
@@ -737,8 +764,14 @@ REQUIRED_FILAMENT_EXTRAS = [
 # filament creation succeeded). Self-heal at startup mirrors the filament
 # pattern above.
 REQUIRED_SPOOL_EXTRAS = [
-    ("prusament_manufacturing_date", "Prusament Manufacturing Date", "text"),
-    ("prusament_length_m", "Prusament Length (m)", "text"),
+    # Group 10.1 Session C: labels are intentionally generic. The KEY still
+    # carries the historical `prusament_` prefix (Spoolman key-rename would
+    # require a value-preserving migration) but the LABEL is what the user
+    # sees in the wizard / details modals. Generic labels mean future
+    # external parsers (Bambu, Hatchbox, etc.) can populate the same field
+    # without the UI being misleading.
+    ("prusament_manufacturing_date", "Manufacturing Date", "text"),
+    ("prusament_length_m", "Length (m)", "text"),
 ]
 
 # Vendor extras the Manufacturer/Vendor Edit modal V1 writes (Group 6.2).
