@@ -16,7 +16,7 @@
 | 7 | 🧪 Testing Housekeeping | 2 | ~1–1.5 hrs | `DONE` 2026-05-07 | [07-testing-housekeeping.md](tasks/07-testing-housekeeping.md) |
 | 8 | 🟣 Keyboard Navigation & Dialog Polish | 4 | ~3.5 hrs | `DONE` 2026-05-12 (8.1 partial — 12 button-only modals deferred as Bootstrap-default-acceptable) | [08-keyboard-nav-polish.md](tasks/08-keyboard-nav-polish.md) |
 | 9 | 🟢 Quick-Swap Grid Enhancements & Printer Status Widget | 3 | ~4–5 hrs | `DONE` 2026-05-13 | [09-quickswap-grid.md](tasks/09-quickswap-grid.md) |
-| 10 | 🟠 Add/Edit Wizard UX Overhaul | 11 | ~6.5–8 hrs | `PARTIAL` 2026-05-14 (Sessions A+B: 10.2/10.3/10.4/10.5/10.6/10.7/10.8/10.9/10.10/10.11 shipped — only 10.1 aggressive cleanup remains, deferred to its own branch) | [10-wizard-ux-overhaul.md](tasks/10-wizard-ux-overhaul.md) |
+| 10 | 🟠 Add/Edit Wizard UX Overhaul | 11 | ~6.5–8 hrs | `DONE` 2026-05-14 (Sessions A+B+C — 10.1 progressive-disclosure cleanup shipped on `feature/wizard-cleanup-aggressive` across 9 commits / 6 feedback rounds; merged to dev + main) | [10-wizard-ux-overhaul.md](tasks/10-wizard-ux-overhaul.md) |
 | 11 | ⚫ External Parsers & Prusament Cleanup | 3 | ~3 hrs | `DONE` 2026-05-13 | [11-external-parsers.md](tasks/11-external-parsers.md) |
 | 12 | 🔵 Weight Entry Unified Component — Phase 2 | 2 | ~6–10 hrs | `DONE` 2026-04-27 | [12-weight-entry-component.md](tasks/12-weight-entry-component.md) |
 | 13 | 🐛 Recent Bugfixes (Weight + Dryer Display + LOC Search + Bind Desync + Eject) | 9 | ~6–8 hrs | `DONE` 2026-05-11 | [13-recent-bugfixes.md](tasks/13-recent-bugfixes.md) |
