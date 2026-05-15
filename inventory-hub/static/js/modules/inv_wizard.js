@@ -144,6 +144,14 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
 })();
 
 window.openWizardModal = async () => {
+    // L26 follow-up: close any open details modal before launching the
+    // wizard. The 2026-04-29 lock-up Derek reproed was wizard-on-top-of-
+    // details — the silent-refresh path's promise can land mid-wizard-
+    // open and leave state.processing stuck true. Closing the siblings
+    // first mirrors the details↔details pattern shipped 2026-05-12.
+    if (typeof window.hideAllDetailsModals === 'function') {
+        window.hideAllDetailsModals();
+    }
     wizardReset();
     if (window.modals && window.modals.wizardModal) {
         window.modals.wizardModal.show();

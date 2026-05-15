@@ -27,6 +27,13 @@ const _hideSiblingDetailsModal = (key) => {
         if (el && el.classList.contains('show')) modals[key].hide();
     }, 400);
 };
+// L26 follow-up: expose so wizard entry points can close stacked
+// details modals before launching, mirroring the details↔details pattern.
+window.hideSiblingDetailsModal = _hideSiblingDetailsModal;
+window.hideAllDetailsModals = () => {
+    _hideSiblingDetailsModal('spoolModal');
+    _hideSiblingDetailsModal('filamentModal');
+};
 
 const openSpoolDetails = (id, silent = false) => {
     // 8.3 — Prevent details-on-details stacking. A user-initiated open
