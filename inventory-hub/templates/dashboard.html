@@ -82,6 +82,23 @@
         </div>
     </div>
 
+    <!-- L184 — Activity Log "N new" corner pill. Hidden until either
+         (a) at least one new entry has arrived AND the dashboard log
+             panel isn't currently visible (covered by a modal), or
+         (b) the user has unread entries from a prior session.
+         Clicking pops a compact log overlay above any modal stack via
+         window.mountOverlay (z-index 20000). The pill itself sits at
+         z-index 1080 — above Bootstrap modals' default 1055 but below
+         our overlay tier so opening the overlay still occludes the pill.
+         Sized for thumb-tap on the eventual mobile build too. -->
+    <button type="button" id="fcc-log-pill" class="btn btn-sm shadow"
+        onclick="window.openLogPillOverlay && window.openLogPillOverlay()"
+        title="New Activity Log entries — click to view">
+        <span id="fcc-log-pill-icon">📡</span>
+        <span id="fcc-log-pill-count" class="ms-1">0</span>
+        <span class="ms-1" style="font-weight:600; font-size:0.8rem;">new</span>
+    </button>
+
     <!-- Printer Status widget (Group 9.3) — at-a-glance row per printer with
          a stylized toolhead schematic. Hidden when no printers have bound
          toolheads; otherwise rendered by inv_printer_status.js. -->

@@ -1631,3 +1631,44 @@ body:has(.cmd-deck) .fcc-fab-search {
     margin-left: 0;
     border-left: none;
 }
+
+/* L184 — Activity Log corner pill. Positioned ABOVE the search FAB
+   so it never blocks the WEIGH QR (cmd-deck) or the search FAB itself.
+   Search FAB lives at bottom:30 (or bottom:180 on dashboard pages
+   via the :has(.cmd-deck) lift); pill sits ~80px above it in both
+   shapes. Initial display:none — JS flips it on when there are
+   unseen entries. */
+#fcc-log-pill {
+    display: none;
+    position: fixed;
+    right: 30px;
+    bottom: 110px;        /* 30 (FAB anchor) + 65 (FAB diameter) + 15 (gap) */
+    z-index: 1080;
+    background: #0ff;
+    color: #111;
+    font-weight: 900;
+    border: 2px solid #08b;
+    border-radius: 999px;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.95rem;
+    box-shadow: 0 0 12px rgba(0, 255, 255, 0.4);
+    cursor: pointer;
+    user-select: none;
+}
+body:has(.cmd-deck) #fcc-log-pill {
+    /* Dashboard: FAB is lifted to bottom:180px (180 + 65 = 245), so the
+       pill sits another ~15px above that to clear it AND the cmd-deck. */
+    bottom: 260px;
+}
+#fcc-log-pill:hover {
+    background: #00e5e5;
+    box-shadow: 0 0 18px rgba(0, 255, 255, 0.7);
+}
+@keyframes fccLogPillFlash {
+    0%   { box-shadow: 0 0 6px rgba(0, 255, 255, 0.3); transform: scale(1); }
+    30%  { box-shadow: 0 0 22px rgba(0, 255, 255, 0.95); transform: scale(1.08); }
+    100% { box-shadow: 0 0 12px rgba(0, 255, 255, 0.4); transform: scale(1); }
+}
+.fcc-log-pill-flash {
+    animation: fccLogPillFlash 0.7s ease-out;
+}

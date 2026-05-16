@@ -622,6 +622,104 @@ window.showGlobalQrModal = (locId) => {
     if (modals.locQrViewModal) modals.locQrViewModal.show();
 };
 
+// L184 — log-pill state. Tracks the time of the newest entry the user
+// has "seen" (i.e. that was current the last time the dashboard log
+// panel was visible OR the pill overlay was opened/dismissed). Anything
+// newer counts as unread. Persisted across page reloads via localStorage
+// so a sticky modal stack doesn't reset the count on every refresh.
+const LOG_PILL_KEY = 'fcc.logPill.lastSeenTime';
+const _readLastSeenTime = () => {
+    try {
+        const v = localStorage.getItem(LOG_PILL_KEY);
+        return v || '';
+    } catch (_) { return ''; }
+};
+const _writeLastSeenTime = (t) => {
+    try { localStorage.setItem(LOG_PILL_KEY, t || ''); } catch (_) { /* private mode */ }
+};
+const _isLiveLogsVisible = () => {
+    // The pill is suppressed when the dashboard log panel is on-screen
+    // (the user can already see new entries). Hidden when any modal /
+    // offcanvas / fullscreen takeover covers it. Cheap heuristic: check
+    // the bounding box overlap against viewport AND that no `.modal.show`
+    // or `.offcanvas.show` is currently obscuring it. Conservative — if
+    // we're not sure, treat as covered and show the pill.
+    const el = document.getElementById('live-logs');
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    if (r.bottom < 0 || r.top > window.innerHeight) return false;
+    // Any open Bootstrap modal/offcanvas occludes the dashboard.
+    if (document.querySelector('.modal.show, .offcanvas.show')) return false;
+    return true;
+};
+
+const _updateLogPill = (logs) => {
+    const pill = document.getElementById('fcc-log-pill');
+    if (!pill) return;
+    const lastSeen = _readLastSeenTime();
+    const unseen = (logs || []).filter(l => (l.time || '') > lastSeen);
+    // When the live log panel is on-screen the user is already reading
+    // new entries — mark them seen and hide the pill.
+    if (_isLiveLogsVisible() && logs && logs.length) {
+        _writeLastSeenTime(logs[0].time || lastSeen);
+        pill.style.display = 'none';
+        return;
+    }
+    if (unseen.length === 0) {
+        pill.style.display = 'none';
+        return;
+    }
+    const countEl = document.getElementById('fcc-log-pill-count');
+    if (countEl) countEl.innerText = String(unseen.length);
+    pill.style.display = '';
+    // Brief flash to draw the eye to a fresh entry.
+    pill.classList.remove('fcc-log-pill-flash');
+    // void offsetWidth — force the browser to commit the class removal
+    // so re-adding it actually re-triggers the animation.
+    void pill.offsetWidth;
+    pill.classList.add('fcc-log-pill-flash');
+};
+
+window.openLogPillOverlay = () => {
+    // Snapshot the latest logs and render them in a mountOverlay so the
+    // panel sits above any modal stack. Closing marks every entry as seen.
+    fetch('/api/logs').then(r => r.json()).then(d => {
+        const logs = (d && d.logs) || [];
+        if (logs.length) _writeLastSeenTime(logs[0].time || '');
+        const rows = logs.map(l =>
+            `<div class="log-${l.type}" style="padding:2px 4px; border-bottom:1px solid #222;">[${l.time}] ${l.msg}</div>`
+        ).join('') || '<div class="text-muted small p-3">Activity Log is empty.</div>';
+        const html = `
+            <div style="background:#1e1e1e; color:#fff; border:2px solid #0ff;
+                        border-radius:8px; padding:14px 16px; min-width:420px; max-width:90vw;
+                        max-height:80vh; display:flex; flex-direction:column;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div style="font-weight:bold; font-size:1.1em; color:#0ff;">📡 Activity Log</div>
+                    <button id="fcc-log-pill-close" class="btn btn-sm btn-outline-info">Close</button>
+                </div>
+                <div style="overflow-y:auto; font-family:monospace; font-size:0.85rem;
+                            background:#0a0a0a; padding:8px; border:1px solid #333; flex:1 1 auto;">
+                    ${rows}
+                </div>
+                <div class="mt-2 small text-muted">Press <kbd>Esc</kbd> to close. New entries are marked read when this panel opens.</div>
+            </div>
+        `;
+        const handle = window.mountOverlay({
+            id: 'fcc-log-pill-overlay',
+            content: html,
+            tier: 'standard',
+            backdrop: true,
+            backdropDismiss: true,
+        });
+        const closeBtn = handle.element.querySelector('#fcc-log-pill-close');
+        if (closeBtn) closeBtn.onclick = () => handle.cleanup();
+        // Hide the pill now that the user has acknowledged.
+        const pill = document.getElementById('fcc-log-pill');
+        if (pill) pill.style.display = 'none';
+    });
+};
+
 const updateLogState = (force = false) => {
     if (!state.logsPaused || force) fetch('/api/logs').then(r => r.json()).then(d => {
         // --- NO WIGGLE CHECK ---
@@ -643,6 +741,7 @@ const updateLogState = (force = false) => {
                 return `<div class="log-${l.type}${extraClass}">[${l.time}] ${l.msg}${extraHtml}</div>`;
             }).join('');
         }
+        _updateLogPill(d.logs || []);
 
         const sSpool = document.getElementById('st-spoolman');
         const sFila = document.getElementById('st-filabridge');
