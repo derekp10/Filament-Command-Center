@@ -71,26 +71,42 @@ const openSpoolDetails = (id, silent = false) => {
             }
             const locBadge = document.getElementById('detail-location-badge');
             if (locBadge) {
-                locBadge.innerText = locDisplay;
-                if (locDisplay === "Unassigned") {
-                    locBadge.className = "badge bg-secondary ms-2 me-1";
-                    locBadge.style.cursor = "default";
-                    locBadge.onclick = null;
-                    locBadge.title = "";
-                } else if (locDisplay.startsWith("Deployed:")) {
+                const isUnknown = String(d.location || '').toUpperCase() === 'UNKNOWN';
+                // 18.1 — Unknown bucket gets the yellow caution badge here too
+                // so the Spool Details modal's location row matches the rest
+                // of the UI (spool cards + Location Manager type badge). Was
+                // previously rendering blue, which read as a normal location.
+                if (isUnknown) {
+                    locBadge.innerText = '❓ Unknown';
                     locBadge.className = "badge bg-warning text-dark ms-2 me-1";
-                    locBadge.style.cursor = "default";
-                    locBadge.onclick = null;
-                    locBadge.title = "";
-                } else {
-                    // It's a normal location, make it clickable
-                    locBadge.className = "badge bg-info text-dark ms-2 me-1";
                     locBadge.style.cursor = "pointer";
-                    locBadge.title = "View Location Details";
+                    locBadge.title = "Physically lost — last known location unknown. Click to open the Unknown bucket.";
                     locBadge.onclick = () => {
                         if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
-                        if (window.openManage) window.openManage(d.location);
+                        if (window.openManage) window.openManage('UNKNOWN');
                     };
+                } else {
+                    locBadge.innerText = locDisplay;
+                    if (locDisplay === "Unassigned") {
+                        locBadge.className = "badge bg-secondary ms-2 me-1";
+                        locBadge.style.cursor = "default";
+                        locBadge.onclick = null;
+                        locBadge.title = "";
+                    } else if (locDisplay.startsWith("Deployed:")) {
+                        locBadge.className = "badge bg-warning text-dark ms-2 me-1";
+                        locBadge.style.cursor = "default";
+                        locBadge.onclick = null;
+                        locBadge.title = "";
+                    } else {
+                        // It's a normal location, make it clickable
+                        locBadge.className = "badge bg-info text-dark ms-2 me-1";
+                        locBadge.style.cursor = "pointer";
+                        locBadge.title = "View Location Details";
+                        locBadge.onclick = () => {
+                            if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
+                            if (window.openManage) window.openManage(d.location);
+                        };
+                    }
                 }
             }
 

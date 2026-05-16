@@ -992,14 +992,31 @@ def process_audit_scan(scan_result):
             missing = [sid for sid in session['expected_items'] if sid not in session['scanned_items']]
             expected_loc = session.get('location_id') or ''
 
+            # 18.2 follow-up — bare spool IDs aren't useful in the Activity
+            # Log report ("Missing: 101, 102, 103" doesn't tell the user
+            # which spools to look for). Resolve each id to a display label
+            # via format_spool_display; fall back to "#N" on any lookup
+            # miss so a missing record can't break the report.
+            def _label(sid):
+                try:
+                    sd = spoolman_api.get_spool(sid)
+                    if sd:
+                        info = spoolman_api.format_spool_display(sd) or {}
+                        text = info.get('text') or ''
+                        if text:
+                            return f"#{sid} {text}"
+                except Exception:
+                    pass
+                return f"#{sid}"
+
             summary = "📝 <b>Audit Report:</b><br>"
             if not missing and not session['rogue_items']:
                 summary += "✅ Perfect Match! All items accounted for."
                 color = "00ff00" # Green
             else:
                 color = "ffaa00" # Orange
-                if missing: summary += f"❌ <b>Missing:</b> {', '.join(map(str, missing))}<br>"
-                if session['rogue_items']: summary += f"⚠️ <b>Extra:</b> {', '.join(map(str, session['rogue_items']))}"
+                if missing: summary += f"❌ <b>Missing:</b> {', '.join(_label(sid) for sid in missing)}<br>"
+                if session['rogue_items']: summary += f"⚠️ <b>Extra:</b> {', '.join(_label(sid) for sid in session['rogue_items'])}"
 
             state.add_log_entry(summary, "INFO", color)
 
@@ -1020,9 +1037,14 @@ def process_audit_scan(scan_result):
                             sid,
                             {"location": "UNKNOWN", "extra": cur_extra},
                         )
+                        # 18.2 follow-up — log with the spool's display label
+                        # so the Activity Log line is actually readable
+                        # ("moved Spool #102 Hatchbox PLA Black → UNKNOWN"
+                        # vs the prior bare "moved Spool #102 → UNKNOWN").
+                        display = _label(sid)
                         if ok:
                             state.add_log_entry(
-                                f"❓ Audit: moved Spool #{sid} → UNKNOWN "
+                                f"❓ Audit: moved Spool {display} → UNKNOWN "
                                 f"(was expected at {expected_loc}, not scanned)",
                                 "WARNING",
                                 "ffaa00",
@@ -1030,7 +1052,7 @@ def process_audit_scan(scan_result):
                         else:
                             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
                             state.add_log_entry(
-                                f"❌ Audit: failed to park Spool #{sid} at UNKNOWN: {err}",
+                                f"❌ Audit: failed to park Spool {display} at UNKNOWN: {err}",
                                 "ERROR",
                                 "ff4444",
                             )

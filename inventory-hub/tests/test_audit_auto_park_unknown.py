@@ -136,3 +136,62 @@ def test_fcc_pre_audit_location_is_system_managed():
     it during a routine save."""
     from spoolman_api import SYSTEM_MANAGED_EXTRAS
     assert 'fcc_pre_audit_location' in SYSTEM_MANAGED_EXTRAS
+
+
+def test_audit_summary_includes_display_labels_not_bare_ids():
+    """18.2 follow-up — the Activity Log Missing/Extra summary lines must
+    include the spool's display label (brand + material + color), not
+    just bare IDs. Bare IDs aren't enough information to actually go
+    find the spool. Falls back to "#N" silently if Spoolman can't
+    resolve the record."""
+    _seed_audit("LR-MDB-1", expected=[101, 102], scanned=[101])
+    state.AUDIT_SESSION['rogue_items'] = [999]
+
+    log_calls = []
+
+    def _fake_get_spool(sid):
+        if sid == 102:
+            return {"id": 102, "filament": {"name": "Galaxy Black", "material": "PLA"}}
+        if sid == 999:
+            return {"id": 999, "filament": {"name": "Mystery", "material": "PETG"}}
+        return None
+
+    def _fake_format(spool):
+        # Mimic spoolman_api.format_spool_display shape.
+        fil = (spool or {}).get('filament') or {}
+        text = f"{fil.get('material','?')} ({fil.get('name','?')})"
+        return {"text": text, "color": "#fff"}
+
+    with patch.object(logic.spoolman_api, "get_spool", side_effect=_fake_get_spool), \
+         patch.object(logic.spoolman_api, "format_spool_display", side_effect=_fake_format), \
+         patch.object(logic.spoolman_api, "update_spool", return_value={"id": 102}), \
+         patch.object(state, "add_log_entry", side_effect=lambda *a, **k: log_calls.append(a)):
+        logic.process_audit_scan({'type': 'command', 'cmd': 'done'})
+
+    # Find the summary line (the one containing "Audit Report").
+    summary = next((c[0] for c in log_calls if 'Audit Report' in c[0]), None)
+    assert summary, f"No 'Audit Report' line emitted; got {[c[0] for c in log_calls]}"
+    # Missing-list entry references the resolved display text.
+    assert "#102" in summary and "PLA" in summary and "Galaxy Black" in summary, (
+        f"Missing line should carry display label, not bare ID. Got: {summary!r}"
+    )
+    # Extra-list entry too.
+    assert "#999" in summary and "PETG" in summary, (
+        f"Extra line should carry display label. Got: {summary!r}"
+    )
+
+
+def test_audit_summary_falls_back_to_bare_id_on_lookup_miss():
+    """If get_spool returns None / blows up, the summary still renders
+    with `#N` for that entry instead of erroring out."""
+    _seed_audit("LR-MDB-1", expected=[101, 102], scanned=[101])
+
+    log_calls = []
+    with patch.object(logic.spoolman_api, "get_spool", return_value=None), \
+         patch.object(logic.spoolman_api, "update_spool", return_value={"id": 102}), \
+         patch.object(state, "add_log_entry", side_effect=lambda *a, **k: log_calls.append(a)):
+        logic.process_audit_scan({'type': 'command', 'cmd': 'done'})
+
+    summary = next((c[0] for c in log_calls if 'Audit Report' in c[0]), None)
+    assert summary, "No Audit Report emitted"
+    assert "#102" in summary, f"Bare-id fallback missing: {summary!r}"
