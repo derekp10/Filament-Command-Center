@@ -181,6 +181,28 @@ def test_audit_summary_includes_display_labels_not_bare_ids():
     )
 
 
+def test_resolve_scan_recognizes_cmd_cancel():
+    """18.2 Part B follow-up — CMD:CANCEL is the safe-bail counterpart to
+    CMD:DONE for audit mode. Without parser support the deck-button
+    toggle had no way to end an audit without auto-parking missing
+    spools (Derek 2026-05-16 prod break)."""
+    import logic
+    from unittest.mock import patch
+    with patch.object(logic.locations_db, "load_locations_list", return_value=[]):
+        r = logic.resolve_scan("CMD:CANCEL")
+    assert r == {'type': 'command', 'cmd': 'cancel'}
+
+
+def test_required_spool_extras_includes_fcc_pre_audit_location():
+    """Auto-park to UNKNOWN PATCHes extra.fcc_pre_audit_location. If
+    that field isn't in REQUIRED_SPOOL_EXTRAS, Spoolman 400s the write
+    with `Unknown extra field` and the auto-park silently fails per
+    spool (Derek 2026-05-16 prod break)."""
+    from spoolman_api import REQUIRED_SPOOL_EXTRAS
+    keys = {entry[0] for entry in REQUIRED_SPOOL_EXTRAS}
+    assert 'fcc_pre_audit_location' in keys
+
+
 def test_audit_summary_falls_back_to_bare_id_on_lookup_miss():
     """If get_spool returns None / blows up, the summary still renders
     with `#N` for that entry instead of erroring out."""

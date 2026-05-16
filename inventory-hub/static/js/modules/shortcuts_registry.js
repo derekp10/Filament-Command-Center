@@ -228,7 +228,12 @@
     window.registerShortcut({
         id: 'scan-cmd-done', scope: 'Scan Commands',
         keys: ['CMD:DONE'],
-        description: 'Close the open location manager.'
+        description: 'Close the open location manager OR commit an audit (missing spools → Unknown).'
+    });
+    window.registerShortcut({
+        id: 'scan-cmd-cancel', scope: 'Scan Commands',
+        keys: ['CMD:CANCEL'],
+        description: 'Cancel an active audit without moving any spools (safe bail; opposite of CMD:DONE).'
     });
     window.registerShortcut({
         id: 'scan-cmd-slot', scope: 'Scan Commands',

@@ -91,10 +91,30 @@ const toggleDropMode = () => { state.dropMode = !state.dropMode; state.ejectMode
 const toggleEjectMode = () => { state.ejectMode = !state.ejectMode; state.dropMode = false; updateDeckVisuals(); };
 window.resetCommandModes = () => { state.dropMode = false; state.ejectMode = false; updateDeckVisuals(); };
 const toggleAudit = () => {
+    // 18.2 Part B — the deck-button toggle is the user's SAFE bail. When
+    // turning audit off via the button, send CMD:CANCEL (no moves) rather
+    // than CMD:DONE (which auto-parks missing spools at UNKNOWN). The
+    // panel's explicit "✅ Done & Auto-Park" button is the path for the
+    // destructive commit; toggle stays purely additive/reversible.
+    // Derek 2026-05-16: previously clicking the deck button while audit
+    // was active triggered CMD:DONE and force-moved unscanned spools to
+    // UNKNOWN, with no way to bail short of refresh.
     state.auditActive = !state.auditActive;
     updateLogState(true);
-    const cmd = state.auditActive ? "CMD:AUDIT" : "CMD:DONE";
+    const cmd = state.auditActive ? "CMD:AUDIT" : "CMD:CANCEL";
     fetch('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: cmd }) });
+};
+
+// Explicit commit path — exposed for the panel button. Mirrors the
+// CMD:DONE scan: closes audit, missing spools get auto-parked to UNKNOWN.
+window.commitAuditWithAutoPark = () => {
+    state.auditActive = false;
+    updateLogState(true);
+    fetch('/api/identify_scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'CMD:DONE' }),
+    });
 };
 
 const updateDeckVisuals = () => {
@@ -205,11 +225,38 @@ window.updateAuditVisuals = () => {
                     ${rogueTiles}
                 </div>
             ` : ''}
-            <div class="small mt-3" style="color:rgba(255,255,255,0.7);">
-                Missing spools auto-move to <b style="color:#fc0;">❓ Unknown</b> when you scan <code>CMD:DONE</code>.
-                Scan <code>CMD:CANCEL</code> to bail without moving anything.
+            <!-- 18.2 Part B follow-up: surface DONE + CANCEL as explicit
+                 click-targets AND QR codes so the user has both keyboard/
+                 mouse and scanner exits. Without these the only way out
+                 was the deck button (used to auto-DONE; now CANCEL-only). -->
+            <div class="d-flex justify-content-between align-items-stretch gap-3 mt-3 pt-3 border-top border-secondary">
+                <div style="flex:1; text-align:center;">
+                    <button class="btn btn-success fw-bold w-100 mb-2"
+                            onclick="window.commitAuditWithAutoPark && window.commitAuditWithAutoPark()">
+                        ✅ Done &amp; Auto-Park
+                    </button>
+                    <div id="fcc-audit-panel-qr-done" style="display:inline-block; background:#fff; padding:4px; border-radius:4px;"></div>
+                    <div class="small mt-1" style="color: rgba(255,255,255,0.75);">
+                        Missing spools <b style="color:#fc0;">→ ❓ Unknown</b>
+                    </div>
+                </div>
+                <div style="flex:1; text-align:center;">
+                    <button class="btn btn-outline-danger fw-bold w-100 mb-2"
+                            onclick="if (typeof toggleAudit==='function') toggleAudit(); else window.closeAuditPanel();">
+                        ❌ Cancel Audit
+                    </button>
+                    <div id="fcc-audit-panel-qr-cancel" style="display:inline-block; background:#fff; padding:4px; border-radius:4px;"></div>
+                    <div class="small mt-1" style="color: rgba(255,255,255,0.75);">
+                        Bail without moving anything
+                    </div>
+                </div>
             </div>
         `;
+        // Generate QR codes after the placeholders are in the DOM.
+        if (typeof window.generateSafeQR === 'function') {
+            window.generateSafeQR('fcc-audit-panel-qr-done', 'CMD:DONE', 90);
+            window.generateSafeQR('fcc-audit-panel-qr-cancel', 'CMD:CANCEL', 90);
+        }
     };
 
     const _poll = async () => {

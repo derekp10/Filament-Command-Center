@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Filament Command Center {{ version }}</title>
+    <title>Filament Command Center</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -58,10 +58,16 @@
                      FilaBridge ↔ Spoolman Reconcile tool; future config
                      panels (user preferences, choice cleanup, etc.) will
                      slot into the same modal. -->
-                <button class="btn btn-outline-info ms-2" id="btn-config"
+                <!-- Emoji centering: explicit flex centering + zero
+                     horizontal padding because the ⚙️ glyph's visual
+                     center sits left of its em-box center. Plain
+                     text-align/inline-block let Bootstrap's default
+                     button padding shove it visually right. -->
+                <button class="btn btn-outline-info ms-2 d-inline-flex align-items-center justify-content-center"
+                    id="btn-config"
                     onclick="window.openConfigModal && window.openConfigModal()"
                     title="Admin / Config tools"
-                    style="font-weight:bold; width:38px;">⚙️</button>
+                    style="font-weight:bold; width:38px; height:38px; padding:0; font-size:1.1rem; line-height:1;">⚙️</button>
             </div>
         </div>
     </nav>

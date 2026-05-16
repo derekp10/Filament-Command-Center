@@ -246,6 +246,12 @@ def resolve_scan(text):
         if "CMD:NEXT" in upper_text: return {'type': 'command', 'cmd': 'next'}
         if "CMD:PREV" in upper_text: return {'type': 'command', 'cmd': 'prev'}
         if "CMD:DONE" in upper_text: return {'type': 'command', 'cmd': 'done'}
+        # 18.2 Part B — CMD:CANCEL is the safe-bail counterpart to CMD:DONE
+        # for audit mode. DONE commits + auto-parks missing spools at UNKNOWN;
+        # CANCEL closes the session without any moves. Required so the
+        # AUDIT deck button toggle can map to CANCEL (no accidental
+        # auto-parks) and the visual panel can surface both actions.
+        if "CMD:CANCEL" in upper_text: return {'type': 'command', 'cmd': 'cancel'}
         
         # SLOT (Interactive)
         if "CMD:SLOT:" in upper_text:

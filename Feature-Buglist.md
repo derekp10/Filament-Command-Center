@@ -182,7 +182,14 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
   New backend endpoint `GET /api/audit_session` returns the enriched payload (per-spool display label, color hex, multi_color_hexes for gradient swatches, remaining weight, slot) so the frontend doesn't do per-id Spoolman lookups itself. Cheap when no audit active (returns `{active:false}` immediately).
 
-  `fcc_pre_audit_location` added to `SYSTEM_MANAGED_EXTRAS`. Regression coverage: `test_audit_auto_park_unknown.py` (7 tests — auto-park + cancel + display labels), `test_audit_session_endpoint.py` (3 tests — inactive/active/missing-spool fallback), `test_audit_visual_panel.py` (1 e2e — panel opens + Hide tears down). _[Parent/child rollup so scanning all of a cart's shelves counts toward auditing the cart itself is still a future enhancement on top of this — would need to expand the audit session to span multiple locations.]_)*
+  `fcc_pre_audit_location` added to `SYSTEM_MANAGED_EXTRAS` AND to `REQUIRED_SPOOL_EXTRAS` so app startup auto-registers the field on any Spoolman that's missing it (fixes the 2026-05-16 prod break where the field wasn't registered and the auto-park PATCH 400'd with "Unknown extra field fcc_pre_audit_location"). Also added to `setup-and-rebuild/setup_fields.py` for the canonical full-rebuild path.
+
+  **Audit exit UX corrections (Derek 2026-05-16):**
+  - The AUDIT deck-button toggle now sends `CMD:CANCEL` (not `CMD:DONE`) when bailing out, so an accidental second click doesn't force-move unscanned spools to UNKNOWN. The destructive commit path is the explicit "✅ Done & Auto-Park" button in the panel.
+  - The visual panel surfaces both actions as click-targets AND scannable QR codes: "✅ Done & Auto-Park" (CMD:DONE) and "❌ Cancel Audit" (CMD:CANCEL). Previously the panel only had a "Hide" button — the user could dismiss the panel but couldn't end the audit without re-clicking the deck button (which used to be the auto-park trap).
+  - New `CMD:CANCEL` scan-command parser in `logic.py:resolve_scan` (the audit code already handled `cmd == 'cancel'` but nothing produced that cmd value). Registered in `shortcuts_registry.js` so the `?` help reference covers it.
+
+  Regression coverage: `test_audit_auto_park_unknown.py` (9 tests — including new `test_resolve_scan_recognizes_cmd_cancel` and `test_required_spool_extras_includes_fcc_pre_audit_location` regression guards), `test_audit_session_endpoint.py` (3 tests), `test_audit_visual_panel.py` (1 e2e). _[Parent/child rollup so scanning all of a cart's shelves counts toward auditing the cart itself is still a future enhancement on top of this — would need to expand the audit session to span multiple locations.]_)*
 
 * Scanns of prusament filament should also update min/max bed and nozzle tempratures, on existing filaments. These value should stay the same, but there is some lagacy data entry where this data wasn't 
 

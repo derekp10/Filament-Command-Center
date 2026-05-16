@@ -777,6 +777,13 @@ REQUIRED_SPOOL_EXTRAS = [
     # without the UI being misleading.
     ("prusament_manufacturing_date", "Manufacturing Date", "text"),
     ("prusament_length_m", "Length (m)", "text"),
+    # 18.2 Part A — breadcrumb planted when audit auto-parks an unscanned
+    # spool at UNKNOWN. Recovery scans read it to route the spool home.
+    # Must be in REQUIRED_SPOOL_EXTRAS so app startup self-heals against
+    # a Spoolman that's missing it; without this, the auto-park PATCH 400s
+    # ("Unknown extra field fcc_pre_audit_location") and missing spools stay
+    # at their stale location (silent failure surfaces as red Activity Log).
+    ("fcc_pre_audit_location", "Pre-Audit Location (system)", "text"),
 ]
 
 # Vendor extras the Manufacturer/Vendor Edit modal V1 writes (Group 6.2).
