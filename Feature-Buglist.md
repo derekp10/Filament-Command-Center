@@ -351,7 +351,17 @@ All 3 of these things are important and have value. We should table for now, and
 
 # ** Filabridge Error Recovery **
 * Keep an eye on filabridge errors and note the type of recovery method used to fill in the missing weight data. (Fast-Fetch or RAM-Fetch) To see if Fast-Fetch (Based on a HTTP Range request of a file.) works.
-* **Filabridge ↔ Spoolman reconcile utility.** Admin action (button in Config or a top-bar widget) that reads `/api/status` from filabridge and cross-checks every non-zero toolhead mapping against Spoolman's `location` field. For each mismatch, offer two choices: (a) "Trust Spoolman — unmap filabridge" (clears the stale entry) or (b) "Trust filabridge — update Spoolman" (writes the toolhead into Spoolman's `location`). Today this is fixable only via a manual Python one-liner (see `acf309c` / `efa15dd` discussion 2026-04-22). The new `_fb_spool_location()` pre-flight in `logic.py` prevents *new* desyncs, but doesn't heal ghost mappings created by earlier bugs, manual DB edits, or the retired `suppress_fb_unmap` code path — once a ghost exists, it persists until the affected spool gets moved through the fixed path.
+*(L324 — Filabridge ↔ Spoolman reconcile utility — DONE 2026-05-16 via `feature/buglist-sweep-2026-05-14`. Shipped as the first inhabitant of a new Config / Admin modal scaffold (the ⚙️ button now sits next to `?` in the nav bar). Per Derek's "having both options would be nice" — both resolution paths are surfaced per-mismatch row:
+  - **Trust Spoolman** → clears the stale FilaBridge toolhead entry via `_fb_write(printer, th, 0)`. Spoolman's location wins.
+  - **Trust FilaBridge** → writes Spoolman `location = <fb_location>` for the affected spool. System-managed extras (container_slot, physical_source, etc.) are preserved — this is a "rewrite Spoolman to match the truth FB already accepted" op, not a smart_move.
+
+  Two new endpoints: `GET /api/filabridge/reconcile` (scans, returns mismatches with both views) and `POST /api/filabridge/reconcile/apply` (resolves one row). UI: `configModal` opens via the ⚙️ button, presents a table of mismatches with action buttons per row + a per-row spool display label. After applying any fix the scan auto-reruns so the table reflects the current state.
+
+  Config UI scaffold (Derek 2026-05-16: "I've been wanting to add a configuration button and system this would be a nice way to start that up for future feature use"). The modal is structured as a series of Bootstrap `.card` panels — adding future sections (user preferences, choice cleanup launcher, etc.) is a matter of dropping another card into `modals_config.html` and adding its JS to `inv_config.js`. The existing card pattern is the contract.
+
+  Build Info section added as the second card: surfaces the resolved commit SHA + timestamps from the L42 round 2 stamp. Read-only.
+
+  Regression coverage: `test_filabridge_reconcile.py` (8 backend tests — clean/mismatch/orphan-position/zero-spool detection + both apply paths + payload validation) and `test_config_modal_smoke.py` (2 e2e — modal opens, scan renders results).)*
 
 # **New related project to be integrated **
 

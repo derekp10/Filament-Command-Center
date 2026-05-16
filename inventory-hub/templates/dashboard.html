@@ -54,6 +54,14 @@
                     onclick="window.toggleShortcutsOverlay()"
                     title="Keyboard shortcuts (?)"
                     style="font-weight:bold; width:38px;">?</button>
+                <!-- L324 Config / Admin entry point. First inhabitant is the
+                     FilaBridge ↔ Spoolman Reconcile tool; future config
+                     panels (user preferences, choice cleanup, etc.) will
+                     slot into the same modal. -->
+                <button class="btn btn-outline-info ms-2" id="btn-config"
+                    onclick="window.openConfigModal && window.openConfigModal()"
+                    title="Admin / Config tools"
+                    style="font-weight:bold; width:38px;">⚙️</button>
             </div>
         </div>
     </nav>
@@ -194,6 +202,7 @@
     {% include 'components/label_spool.html' %}
     {% include 'components/offcanvas_search.html' %}
     {% include 'components/modals_filabridge_recovery.html' %}
+    {% include 'components/modals_config.html' %}
     <!-- Global Floating Action Button for Search -->
     <button class="btn btn-primary shadow-lg border border-info fcc-fab-search"
         onclick="SearchEngine.open()" title="Global Inventory Search">
