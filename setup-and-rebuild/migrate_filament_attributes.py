@@ -30,15 +30,22 @@ other choice-type extras field. The snapshot → force_reset → restore
 flow is the same for every such migration.
 
 Usage:
-  python setup-and-rebuild/migrate_filament_attributes.py --dry-run
-      Walks the field, lists deletions + flagged choices, shows what
-      would be restored. No writes.
-
   python setup-and-rebuild/migrate_filament_attributes.py
-      Performs the migration. Snapshots all filaments' filament_attributes
-      values, force_reset the field, recreates with the cleaned choice
-      list, and restores the snapshotted values (with deleted-choice
-      entries stripped out per record).
+
+      The script ALWAYS analyzes first (no separate --dry-run flag to
+      remember). It prints the plan, asks `yes` to commit, and does
+      nothing destructive otherwise. So a casual run is safe — you'll
+      see exactly what would change before anything happens.
+
+      Optional flag --auto-yes skips the confirmation prompt for CI /
+      scripted use. Don't use that on prod without a backup.
+
+Safety net (Derek 2026-05-16): any choice in `FLAG_CHOICES` that's
+ACTUALLY USED by at least one filament in the database is auto-kept
+and reported, never deleted. Only zero-usage flagged choices get
+promoted to the delete list. `DELETE_CHOICES` keeps the "confirmed
+safe — delete regardless" semantics; usage gets logged per-filament
+so you can see what got stripped.
 
 Prereqs:
   - The target Spoolman instance pointed at by config.json must be
@@ -130,9 +137,9 @@ def _list_filaments() -> list[dict[str, Any]]:
         return []
 
 
-def main(dry_run: bool) -> int:
+def main(auto_yes: bool) -> int:
     print(f"[i] Target Spoolman: {SPOOLMAN_IP}")
-    print(f"   Mode: {'DRY-RUN (no writes)' if dry_run else 'LIVE (will write)'}")
+    print("   Mode: ANALYZE-then-CONFIRM (no writes until you type 'yes')")
 
     field = _get_field_definition(FIELD_ENTITY, FIELD_KEY)
     if field is None:
@@ -140,72 +147,101 @@ def main(dry_run: bool) -> int:
         return 2
 
     existing_choices = set(field.get("choices") or [])
-    print(f"\n[list] Current {FIELD_KEY} choices ({len(existing_choices)}):")
-    for c in sorted(existing_choices):
-        marker = " [del]  [DELETE]" if c in DELETE_CHOICES else (" [warn]  [FLAGGED - investigating]" if c in FLAG_CHOICES else "")
-        print(f"   - {c!r}{marker}")
 
-    will_delete = DELETE_CHOICES & existing_choices
-    missing_in_field = DELETE_CHOICES - existing_choices
-    if missing_in_field:
-        print(f"\n[i]  Already absent from field (no-op): {sorted(missing_in_field)}")
-    if not will_delete:
-        print("\n[ok] Nothing to delete - every target choice is already absent. Done.")
-        return 0
-
-    new_choices = sorted(existing_choices - DELETE_CHOICES)
-    print(f"\n[plan] Will delete {len(will_delete)}: {sorted(will_delete)}")
-    print(f"   Resulting choice list ({len(new_choices)}): {new_choices}")
-
-    # Snapshot which filaments use the deleted choices so the user can
-    # eyeball before committing. Also flag any usage of FLAG_CHOICES.
+    # --- USAGE SCAN drives both the report AND the auto-decision for
+    # FLAG_CHOICES (Derek 2026-05-16: keep flagged choices that are in
+    # use; auto-promote unused ones into the delete list).
     print("\n[snap] Snapshotting filament_attributes values...")
     filaments = _list_filaments()
     if not filaments:
         return 2
     snapshot: dict[int, list[str]] = {}
-    affected_by_deletion: list[tuple[int, str, list[str], list[str]]] = []  # (fid, name, before, after)
-    flagged_usage: list[tuple[int, str, list[str]]] = []
-
+    usage: dict[str, list[tuple[int, str]]] = {}   # choice -> [(fid, name), ...]
+    name_by_fid: dict[int, str] = {}
     for f in filaments:
         fid = f.get("id")
         if fid is None:
             continue
+        name_by_fid[fid] = f.get("name") or "?"
         extra = f.get("extra") or {}
         attrs = _parse_attrs(extra.get(FIELD_KEY))
         if not attrs:
             continue
         snapshot[fid] = attrs
-        cleaned = [a for a in attrs if a not in DELETE_CHOICES]
-        if cleaned != attrs:
-            affected_by_deletion.append((fid, f.get("name") or "?", attrs, cleaned))
-        used_flags = [a for a in attrs if a in FLAG_CHOICES]
-        if used_flags:
-            flagged_usage.append((fid, f.get("name") or "?", used_flags))
-
+        for a in attrs:
+            usage.setdefault(a, []).append((fid, name_by_fid[fid]))
     print(f"   Snapshotted {len(snapshot)} filaments with non-empty attributes.")
-    if affected_by_deletion:
-        print(f"\n[edit]  {len(affected_by_deletion)} filament(s) will have entries stripped:")
-        for fid, name, before, after in affected_by_deletion:
-            print(f"   #{fid} {name!r}: {before} → {after}")
-    if flagged_usage:
-        print(f"\n[warn]  {len(flagged_usage)} filament(s) currently use FLAGGED choices "
-              f"(NOT deleted - Derek to investigate):")
-        for fid, name, used in flagged_usage:
-            print(f"   #{fid} {name!r}: uses {used}")
-    else:
-        print("\n[i]  No filaments currently use any FLAGGED choices. Safe to delete those next "
-              "round if Derek confirms.")
 
-    if dry_run:
-        print("\n[dry]  DRY-RUN complete. Re-run without --dry-run to commit.")
+    # FLAG_CHOICES auto-decision: kept if any filament uses it; promoted
+    # to delete-list if zero usage on this DB. Never silently dropped.
+    promoted_from_flag: set[str] = set()
+    kept_flagged: dict[str, list[tuple[int, str]]] = {}
+    for choice in FLAG_CHOICES:
+        if choice not in existing_choices:
+            continue
+        if choice in usage and usage[choice]:
+            kept_flagged[choice] = usage[choice]
+        else:
+            promoted_from_flag.add(choice)
+
+    effective_delete = (DELETE_CHOICES | promoted_from_flag) & existing_choices
+
+    # --- DISPLAY: every current choice with per-line decision marker
+    print(f"\n[list] Current {FIELD_KEY} choices ({len(existing_choices)}):")
+    for c in sorted(existing_choices):
+        marker = ""
+        if c in DELETE_CHOICES:
+            n = len(usage.get(c, []))
+            marker = f" [del] [DELETE - confirmed safe]" + (f" ({n} filament(s) use it)" if n else "")
+        elif c in promoted_from_flag:
+            marker = " [del] [DELETE - flagged, but UNUSED on this DB]"
+        elif c in kept_flagged:
+            marker = f" [keep] [FLAGGED but IN USE - keeping, {len(kept_flagged[c])} filament(s)]"
+        print(f"   - {c!r:35s}{marker}")
+
+    missing_in_field = DELETE_CHOICES - existing_choices
+    if missing_in_field:
+        print(f"\n[i]  Confirmed-safe entries already absent (no-op): {sorted(missing_in_field)}")
+
+    if not effective_delete:
+        print("\n[ok] Nothing to delete - every target is either already absent or in use. Done.")
         return 0
 
-    # --- LIVE PATH ---
-    confirm = input("\n[warn]  About to force_reset the schema and rebuild. Type 'yes' to proceed: ")
-    if confirm.strip().lower() != "yes":
-        print("Aborted.")
-        return 1
+    new_choices = sorted(existing_choices - effective_delete)
+    print(f"\n[plan] Will delete {len(effective_delete)}: {sorted(effective_delete)}")
+    if promoted_from_flag:
+        print(f"   Auto-promoted from FLAG (unused on this DB): {sorted(promoted_from_flag)}")
+    if kept_flagged:
+        print("   KEPT (flagged but in use on this DB):")
+        for c, used_by in sorted(kept_flagged.items()):
+            preview = ", ".join(f"#{fid} {nm!r}" for fid, nm in used_by[:5])
+            tail = f" ... +{len(used_by) - 5} more" if len(used_by) > 5 else ""
+            print(f"     - {c!r}: {preview}{tail}")
+    print(f"\n   Resulting choice list ({len(new_choices)}):")
+    for c in new_choices:
+        print(f"     - {c!r}")
+
+    # Per-filament strip preview against the EFFECTIVE delete set.
+    affected_by_deletion: list[tuple[int, str, list[str], list[str]]] = []
+    for fid, attrs in snapshot.items():
+        cleaned = [a for a in attrs if a not in effective_delete]
+        if cleaned != attrs:
+            affected_by_deletion.append((fid, name_by_fid.get(fid, "?"), attrs, cleaned))
+    if affected_by_deletion:
+        print(f"\n[edit] {len(affected_by_deletion)} filament(s) will have entries stripped on restore:")
+        for fid, name, before, after in affected_by_deletion:
+            print(f"   #{fid} {name!r}: {before} -> {after}")
+    else:
+        print("\n[ok] No filaments use any to-be-deleted choices - restore phase is a no-op.")
+
+    # --- CONFIRMATION ---
+    if auto_yes:
+        print("\n[warn] --auto-yes passed; proceeding without prompt.")
+    else:
+        confirm = input("\n[warn] About to force_reset the schema and rebuild. Type 'yes' to commit: ")
+        if confirm.strip().lower() != "yes":
+            print("Aborted - no changes made.")
+            return 1
 
     # Force-reset the field with the new choice list.
     try:
@@ -239,11 +275,12 @@ def main(dry_run: bool) -> int:
 
     print(f"   [ok] Field rebuilt with {len(new_choices)} cleaned choices.")
 
-    # Restore each filament's values (minus the deleted choices).
+    # Restore each filament's values (minus the EFFECTIVE delete set —
+    # confirmed + auto-promoted-from-flag).
     restored = 0
     failed = 0
     for fid, attrs in snapshot.items():
-        cleaned = [a for a in attrs if a not in DELETE_CHOICES]
+        cleaned = [a for a in attrs if a not in effective_delete]
         if cleaned == attrs:
             # Unchanged - Spoolman likely preserved it across the rebuild,
             # but writing explicitly is cheap and idempotent.
@@ -269,7 +306,10 @@ def main(dry_run: bool) -> int:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Show what would change without writing.")
+    parser.add_argument(
+        "--auto-yes", action="store_true",
+        help="Skip the 'type yes to commit' prompt. Use for scripted runs; "
+             "DON'T use on prod without a backup.",
+    )
     args = parser.parse_args()
-    sys.exit(main(args.dry_run))
+    sys.exit(main(args.auto_yes))
