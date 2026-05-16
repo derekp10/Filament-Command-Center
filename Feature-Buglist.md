@@ -310,7 +310,11 @@ There continues to be inconsistency with switching out spools when a box slot is
 
   **Bad data to fix** (out of scope for choice cleanup): no orphaned values found in actual records — everything stored references either a still-valid choice or `+` (intentional).
 
-  **Approach when ready:** Write `setup-and-rebuild/migrate_filament_attributes.py` following `migrate_container_slot_to_text` template. Should be runnable from host with config_loader path setup, ask for confirmation, snapshot → force_reset → recreate → restore. Verify against a live Spoolman dev instance with backup before touching prod.]_
+  **Approach when ready:** Write `setup-and-rebuild/migrate_filament_attributes.py` following `migrate_container_slot_to_text` template. Should be runnable from host with config_loader path setup, ask for confirmation, snapshot → force_reset → recreate → restore. Verify against a live Spoolman dev instance with backup before touching prod.
+
+  **SCRIPT SHIPPED 2026-05-16** via `feature/buglist-sweep-2026-05-14`. `setup-and-rebuild/migrate_filament_attributes.py` is the generalizable cleanup tool — `DELETE_CHOICES` + `FLAG_CHOICES` sets at the top are the only thing to edit for future cleanup runs against this or any other choice-type Spoolman extra field. Dry-run on dev validated: 5 deletions (`Carbon-Fiber`, `F`, `Tran`, `Transparent; High-Speed`, `Wood`) → 29 choices remaining, snapshot covers 111 filaments. **For Infill + Matte Pro are NOT in the delete list** — `For Infill` is in FLAG_CHOICES pending Derek's prod check (Derek 2026-05-16: "I want to flag filament for infill use but I'm not sure if I use that flag or do it differently"; needs prod check). Dev shows zero filaments using either flagged choice — safe to add to DELETE_CHOICES once prod is confirmed.
+
+  **To run against prod:** (1) BACKUP Spoolman DB first (Spoolman's field DELETE is destructive at the schema level). (2) Point your shell at the prod `config.json`. (3) `python setup-and-rebuild/migrate_filament_attributes.py --dry-run` to confirm what will change. (4) Re-run without `--dry-run`, answer `yes` to the confirmation prompt.]_
 * Continue to support Spoolman's "Import from External" feature for filaments... _[Status of existing parsers + a gap list of unimplemented sources lives in the module docstring at the top of `inventory-hub/external_parsers.py` as of 2026-05-13 (Group 11). The audit + dropdown cleanup landed; the items below are the still-unimplemented sources.]_
     - open-filament-database
     - Prusament spool specific data links
