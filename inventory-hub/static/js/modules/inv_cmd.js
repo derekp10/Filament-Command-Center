@@ -166,6 +166,12 @@ window.updateAuditVisuals = () => {
 (function () {
     let _handle = null;
     let _pollTimer = null;
+    // 2026-05-16 — every-2s flicker fix: hash-skip the body innerHTML
+    // rewrite when the audit payload hasn't actually changed. Same pattern
+    // as updateLogState's lastLogHash. Without this the tile grid + the
+    // two QR codes got destroyed and re-created on every tick even when
+    // no scan had landed; Derek saw the panel "redraw" every 2-3s.
+    let _lastRenderHash = null;
     const _escapeHtml = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -202,6 +208,12 @@ window.updateAuditVisuals = () => {
         const root = _handle.element;
         const body = root.querySelector('#fcc-audit-panel-body');
         if (!body) return;
+        // Hash-skip when payload is unchanged so the 2s poll stops
+        // re-rendering the tile grid (and re-generating QR codes) every
+        // tick. Derek 2026-05-16 visible-flicker fix.
+        const hash = JSON.stringify(data);
+        if (hash === _lastRenderHash) return;
+        _lastRenderHash = hash;
         const s = data.stats || { total_expected: 0, found: 0, missing: 0, rogue: 0 };
         const expectedTiles = (data.expected || []).map(r => _renderTile(r, r.found ? 'found' : 'missing')).join('');
         const rogueTiles = (data.rogue || []).map(r => _renderTile(r, 'rogue')).join('');
@@ -278,6 +290,7 @@ window.updateAuditVisuals = () => {
     window.openAuditPanel = () => {
         if (_handle) return;  // idempotent
         if (typeof window.mountOverlay !== 'function') return;
+        _lastRenderHash = null;  // force first render after open
         const content = `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #ff00ff;
                         border-radius:8px; padding:14px 16px;
