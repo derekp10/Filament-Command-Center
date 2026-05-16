@@ -106,11 +106,18 @@ def _format_version():
     would false-trigger on every deploy. Users who want to see dirty
     state can `git status` directly.
     """
+    return _format_version_from(BUILD_COMMIT_SHA, BUILD_COMMIT_TS)
+
+
+def _format_version_from(sha, ts):
+    """Pure formatter so the dashboard route can re-render the badge
+    using a freshly-read sha/ts pair without relying on the module-
+    global BUILD_COMMIT_SHA/TS (which are frozen at startup)."""
     import time as _time
-    if BUILD_COMMIT_SHA:
-        label = f"commit {BUILD_COMMIT_SHA}"
-        if BUILD_COMMIT_TS:
-            label += " • " + _time.strftime('%Y-%m-%d %H:%M UTC', _time.gmtime(BUILD_COMMIT_TS))
+    if sha:
+        label = f"commit {sha}"
+        if ts:
+            label += " • " + _time.strftime('%Y-%m-%d %H:%M UTC', _time.gmtime(ts))
         return label
     if BUILD_MTIME:
         return "build " + _time.strftime('%Y-%m-%d %H:%M UTC', _time.gmtime(BUILD_MTIME))
@@ -198,12 +205,20 @@ def dashboard():
     fb_ui_url = fb_api_url.replace('/api', '')
     buy_more_url_template = cfg.get('buy_more_url_template', '')
     
+    # Re-read .build_info on every dashboard render so a post-commit hook
+    # update (host-side) takes effect without needing a container restart.
+    # `_load_build_commit()` is cheap — at most one tiny file read and a
+    # quick parse. The mtime walk stays at startup (more expensive, doesn't
+    # need to be live). Recomposes VERSION too so the startup-log line and
+    # the rendered badge can drift apart safely.
+    live_sha, live_ts = _load_build_commit()
+    live_version = _format_version_from(live_sha, live_ts) if (live_sha or BUILD_MTIME) else VERSION
     return render_template(
         'dashboard.html',
-        version=VERSION,
+        version=live_version,
         build_mtime=BUILD_MTIME,
-        build_commit_sha=BUILD_COMMIT_SHA or '',
-        build_commit_ts=BUILD_COMMIT_TS or 0,
+        build_commit_sha=live_sha or '',
+        build_commit_ts=live_ts or 0,
         spoolman_url=sm_url,
         filabridge_url=fb_ui_url,
         buy_more_template=buy_more_url_template,
