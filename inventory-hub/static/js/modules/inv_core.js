@@ -663,9 +663,12 @@ window.openLogPillOverlay = () => {
     fetch('/api/logs').then(r => r.json()).then(d => {
         const logs = (d && d.logs) || [];
         if (logs.length) _writeLastSeenTime(logs[0].time || '');
+        // Contrast note: avoid Bootstrap's `text-muted` (#6c757d) — it
+        // hits ~1.4:1 against the dark overlay bg and reads as gray-on-gray.
+        // Use explicit rgba(255,255,255,0.7) for low-emphasis text instead.
         const rows = logs.map(l =>
             `<div class="log-${l.type}" style="padding:2px 4px; border-bottom:1px solid #222;">[${l.time}] ${l.msg}</div>`
-        ).join('') || '<div class="text-muted small p-3">Activity Log is empty.</div>';
+        ).join('') || '<div class="small p-3" style="color: rgba(255,255,255,0.7);">Activity Log is empty.</div>';
         const html = `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #0ff;
                         border-radius:8px; padding:14px 16px; min-width:420px; max-width:90vw;
@@ -678,7 +681,7 @@ window.openLogPillOverlay = () => {
                             background:#0a0a0a; padding:8px; border:1px solid #333; flex:1 1 auto;">
                     ${rows}
                 </div>
-                <div class="mt-2 small text-muted">Press <kbd>Esc</kbd> to close. New entries are marked read when this panel opens.</div>
+                <div class="mt-2 small" style="color: rgba(255,255,255,0.7);">Press <kbd style="background:#111; color:#0ff; padding:1px 5px;">Esc</kbd> to close. New entries are marked read when this panel opens.</div>
             </div>
         `;
         const handle = window.mountOverlay({
