@@ -1297,6 +1297,13 @@ def api_get_locations():
     for row in csv_rows:
         lid = str(row.get('LocationID', '')).upper()
         if lid == "UNASSIGNED": continue # Skip if somehow in CSV
+        # 18.1 — Skip any on-disk UNKNOWN row too. Derek experimented with
+        # creating one manually before this feature landed; an on-disk
+        # row with "Spoolman Native" Type would shadow the virtual yellow-
+        # band row injected at the bottom. The virtual injection is the
+        # single source of truth now. Stale on-disk rows can be deleted
+        # via the Location Manager UI without breaking anything.
+        if lid == "UNKNOWN": continue
         
         max_s = row.get('Max Spools', '')
         try:

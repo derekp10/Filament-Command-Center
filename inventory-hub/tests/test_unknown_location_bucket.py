@@ -48,6 +48,14 @@ def test_locations_api_includes_unknown_row_at_bottom(api_base_url: str):
     occ = last.get('Occupancy', '')
     assert 'item' in occ, f"Occupancy field missing or malformed: {occ!r}"
 
+    # No duplicates — if a stale on-disk UNKNOWN row exists (Derek
+    # experimented with one before this feature landed), the iteration
+    # SKIP in app.py keeps only the virtual injection.
+    unknown_rows = [l for l in locs if str(l.get('LocationID', '')).upper() == 'UNKNOWN']
+    assert len(unknown_rows) == 1, (
+        f"Expected exactly one UNKNOWN row (virtual only); got {len(unknown_rows)}: {unknown_rows}"
+    )
+
 
 def test_resolve_scan_accepts_bare_unknown():
     """Mirror of the UNASSIGNED carve-out: typing UNKNOWN as a bare
