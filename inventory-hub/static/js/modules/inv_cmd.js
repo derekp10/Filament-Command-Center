@@ -253,9 +253,13 @@ window.updateAuditVisuals = () => {
             </div>
         `;
         // Generate QR codes after the placeholders are in the DOM.
-        if (typeof window.generateSafeQR === 'function') {
-            window.generateSafeQR('fcc-audit-panel-qr-done', 'CMD:DONE', 90);
-            window.generateSafeQR('fcc-audit-panel-qr-cancel', 'CMD:CANCEL', 90);
+        // `generateSafeQR` is a script-scope const in inv_core.js — accessible
+        // by bare name (not on window). The wrong `window.generateSafeQR`
+        // guard previously silently dropped these calls, which is why no
+        // QR rendered (Derek 2026-05-16).
+        if (typeof generateSafeQR === 'function') {
+            generateSafeQR('fcc-audit-panel-qr-done', 'CMD:DONE', 90);
+            generateSafeQR('fcc-audit-panel-qr-cancel', 'CMD:CANCEL', 90);
         }
     };
 
