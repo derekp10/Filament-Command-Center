@@ -125,12 +125,144 @@ window.updateAuditVisuals = () => {
         if (deckBtn) deckBtn.classList.add('btn-audit-active');
         if (lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
         if (qrDiv) { qrDiv.innerHTML = ""; generateSafeQR('qr-audit', "CMD:DONE", 85); }
+        // 18.2 Part B — auto-open the visual audit panel when an audit
+        // session is detected. Activity Log entries continue to fire too;
+        // the panel is additive, not a replacement (Derek 2026-05-15:
+        // "I still like the idea of having the activity log reference").
+        if (typeof window.openAuditPanel === 'function') window.openAuditPanel();
     } else {
         if (deckBtn) deckBtn.classList.remove('btn-audit-active');
         if (lbl) { lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit'); }
         if (qrDiv) { qrDiv.innerHTML = ""; generateSafeQR('qr-audit', "CMD:AUDIT", 85); }
+        if (typeof window.closeAuditPanel === 'function') window.closeAuditPanel();
     }
 };
+
+// --- 18.2 Part B — VISUAL AUDIT PANEL --------------------------------------
+// Lives as a mountOverlay (tier 'standard') so it sits above any modal
+// stack. Polls /api/audit_session every 2s while audit is active so the
+// found/missing tiles tick as the user scans. Closes automatically when
+// the audit ends (CMD:DONE / CMD:CANCEL).
+(function () {
+    let _handle = null;
+    let _pollTimer = null;
+    const _escapeHtml = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    const _renderTile = (row, kind) => {
+        // kind: 'found' (green check), 'missing' (gray ?), 'rogue' (yellow !)
+        const swatchBg = (typeof window.makeSwatchHtml === 'function')
+            ? window.makeSwatchHtml(row.color, row.color_direction, { size: 28, borderColor: '#444' })
+            : `<span style="display:inline-block;width:28px;height:28px;background:#${row.color || '333'};border-radius:4px;"></span>`;
+        const weight = row.remaining_weight != null ? `${Math.round(row.remaining_weight)}g` : '';
+        const slot = row.slot ? ` (slot ${_escapeHtml(row.slot)})` : '';
+        const badge = kind === 'found'
+            ? '<span style="color:#0f0; font-weight:bold;">✅ scanned</span>'
+            : (kind === 'rogue'
+                ? '<span style="color:#fc0; font-weight:bold;">⚠️ rogue</span>'
+                : '<span style="color:rgba(255,255,255,0.7);">⬜ not scanned</span>');
+        const border = kind === 'found' ? '#0f0' : (kind === 'rogue' ? '#fc0' : '#555');
+        const bg = kind === 'found' ? '#0a2a0a' : (kind === 'rogue' ? '#2a2410' : '#1a1a1a');
+        return `
+            <div style="display:flex; align-items:center; gap:10px; padding:8px;
+                        background:${bg}; border:1px solid ${border}; border-radius:6px;">
+                ${swatchBg}
+                <div style="flex:1; min-width:0;">
+                    <div class="text-truncate" style="color:#fff; font-weight:600; font-size:0.9rem;"
+                         title="${_escapeHtml(row.display)}">#${row.id} ${_escapeHtml(row.display)}</div>
+                    <div style="font-size:0.75rem; color:rgba(255,255,255,0.75);">${_escapeHtml(weight)}${_escapeHtml(slot)}</div>
+                </div>
+                <div style="font-size:0.8rem;">${badge}</div>
+            </div>
+        `;
+    };
+
+    const _render = (data) => {
+        if (!_handle) return;
+        const root = _handle.element;
+        const body = root.querySelector('#fcc-audit-panel-body');
+        if (!body) return;
+        const s = data.stats || { total_expected: 0, found: 0, missing: 0, rogue: 0 };
+        const expectedTiles = (data.expected || []).map(r => _renderTile(r, r.found ? 'found' : 'missing')).join('');
+        const rogueTiles = (data.rogue || []).map(r => _renderTile(r, 'rogue')).join('');
+        const loc = _escapeHtml(data.location_id || '(scan a location to start)');
+        body.innerHTML = `
+            <div style="margin-bottom:10px; font-size:0.95rem;">
+                Auditing <b style="color:#0ff;">${loc}</b> —
+                <span style="color:#0f0; font-weight:bold;">${s.found}/${s.total_expected}</span> found,
+                <span style="color:rgba(255,255,255,0.75); font-weight:bold;">${s.missing}</span> missing,
+                <span style="color:#fc0; font-weight:bold;">${s.rogue}</span> rogue
+            </div>
+            ${data.expected && data.expected.length ? `
+                <div style="font-weight:bold; color:#0ff; margin-bottom:6px;">Expected here</div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:6px; margin-bottom:12px;">
+                    ${expectedTiles}
+                </div>
+            ` : `<div class="small" style="color:rgba(255,255,255,0.7);">Scan a location's QR to populate the expected list.</div>`}
+            ${data.rogue && data.rogue.length ? `
+                <div style="font-weight:bold; color:#fc0; margin-bottom:6px;">Rogue (scanned but expected elsewhere)</div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:6px;">
+                    ${rogueTiles}
+                </div>
+            ` : ''}
+            <div class="small mt-3" style="color:rgba(255,255,255,0.7);">
+                Missing spools auto-move to <b style="color:#fc0;">❓ Unknown</b> when you scan <code>CMD:DONE</code>.
+                Scan <code>CMD:CANCEL</code> to bail without moving anything.
+            </div>
+        `;
+    };
+
+    const _poll = async () => {
+        try {
+            const r = await fetch('/api/audit_session');
+            const d = await r.json();
+            if (!d || !d.active) {
+                window.closeAuditPanel();
+                return;
+            }
+            _render(d);
+        } catch (e) { /* network hiccup — try again next tick */ }
+    };
+
+    window.openAuditPanel = () => {
+        if (_handle) return;  // idempotent
+        if (typeof window.mountOverlay !== 'function') return;
+        const content = `
+            <div style="background:#1e1e1e; color:#fff; border:2px solid #ff00ff;
+                        border-radius:8px; padding:14px 16px;
+                        width:min(820px,94vw); max-height:80vh; display:flex; flex-direction:column;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div style="font-weight:bold; font-size:1.15em; color:#ff7eff;">
+                        🕵️‍♀️ Audit in Progress
+                    </div>
+                    <button id="fcc-audit-panel-close" class="btn btn-sm btn-outline-light"
+                            title="Hide the panel (audit stays active; reopen via the AUDIT deck button while running)">Hide</button>
+                </div>
+                <div id="fcc-audit-panel-body" style="overflow-y:auto; flex:1 1 auto;">
+                    <div class="small" style="color:rgba(255,255,255,0.7);">Loading audit state…</div>
+                </div>
+            </div>
+        `;
+        _handle = window.mountOverlay({
+            id: 'fcc-audit-panel-overlay',
+            content,
+            tier: 'standard',
+            backdrop: true,
+            backdropDismiss: false,  // Audit is in progress; Hide is the explicit dismiss
+            onEscape: () => window.closeAuditPanel(),
+        });
+        const closeBtn = _handle.element.querySelector('#fcc-audit-panel-close');
+        if (closeBtn) closeBtn.onclick = () => window.closeAuditPanel();
+        // Initial render + start the 2s poll.
+        _poll();
+        _pollTimer = setInterval(_poll, 2000);
+    };
+
+    window.closeAuditPanel = () => {
+        if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+        if (_handle) { try { _handle.cleanup(); } catch (_) { /* noop */ } _handle = null; }
+    };
+})();
 
 // --- SCAN ROUTER ---
 const processScan = (text, source = 'keyboard') => {

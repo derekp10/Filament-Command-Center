@@ -3095,6 +3095,61 @@ def api_fb_manual_recovery():
 # /api/filabridge/reconcile           GET  → list of mismatches
 # /api/filabridge/reconcile/apply     POST → resolve one mismatch
 #
+@app.route('/api/audit_session', methods=['GET'])
+def api_audit_session():
+    """L154 / 18.2 Part B — current audit session snapshot for the visual
+    audit panel. Returns the location being audited plus enriched expected/
+    scanned/rogue lists (each with the spool's display label, color,
+    remaining weight, and slot if known) so the frontend can render a
+    grid of tiles without doing per-id Spoolman lookups itself.
+
+    Cheap when no audit is active (returns {active: False} immediately)."""
+    sess = state.AUDIT_SESSION
+    if not sess.get('active'):
+        return jsonify({"active": False})
+
+    expected = list(sess.get('expected_items') or [])
+    scanned = set(sess.get('scanned_items') or [])
+    rogue = list(sess.get('rogue_items') or [])
+
+    def _enrich(sid):
+        try:
+            sp = spoolman_api.get_spool(sid) or {}
+        except Exception:
+            sp = {}
+        info = spoolman_api.format_spool_display(sp) if sp else {}
+        fil = (sp.get('filament') or {})
+        return {
+            "id": int(sid),
+            "display": info.get('text') or f"#{sid}",
+            "color": fil.get('color_hex') or info.get('color') or '',
+            "color_direction": fil.get('multi_color_direction') or 'longitudinal',
+            "multi_color_hexes": fil.get('multi_color_hexes') or '',
+            "remaining_weight": sp.get('remaining_weight'),
+            "slot": (sp.get('extra') or {}).get('container_slot') or '',
+        }
+
+    expected_rows = []
+    for sid in expected:
+        row = _enrich(sid)
+        row['found'] = (sid in scanned)
+        expected_rows.append(row)
+    rogue_rows = [{**_enrich(sid), 'found': True, 'rogue': True} for sid in rogue]
+
+    return jsonify({
+        "active": True,
+        "location_id": sess.get('location_id'),
+        "expected": expected_rows,
+        "rogue": rogue_rows,
+        "stats": {
+            "total_expected": len(expected),
+            "found": sum(1 for r in expected_rows if r['found']),
+            "missing": sum(1 for r in expected_rows if not r['found']),
+            "rogue": len(rogue),
+        },
+    })
+
+
 @app.route('/api/filabridge/reconcile', methods=['GET'])
 def api_filabridge_reconcile():
     """Walk FilaBridge /status, cross-check against Spoolman per-spool
