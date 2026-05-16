@@ -193,6 +193,70 @@ def test_resolve_scan_recognizes_cmd_cancel():
     assert r == {'type': 'command', 'cmd': 'cancel'}
 
 
+def test_audit_idle_timeout_auto_cancels_stale_session(monkeypatch):
+    """A browser-tab close, crash, or abandoned session leaves
+    AUDIT_SESSION.active=True with no real user behind the wheel.
+    _check_audit_idle_timeout() heals this on the next /api/logs poll
+    (≤ 5s after the AUDIT_IDLE_TIMEOUT_SECONDS window expires)."""
+    import app as app_module
+    import time as _t
+    # Seed an active session whose last activity is BEYOND the timeout.
+    state.AUDIT_SESSION.update({
+        "active": True,
+        "location_id": "LR-MDB-1",
+        "expected_items": [101, 102],
+        "scanned_items": [],
+        "rogue_items": [],
+        "last_activity_ts": _t.time() - (state.AUDIT_IDLE_TIMEOUT_SECONDS + 60),
+    })
+    log_calls = []
+    monkeypatch.setattr(state, "add_log_entry",
+                        lambda *a, **k: log_calls.append(a))
+
+    app_module._check_audit_idle_timeout()
+
+    assert state.AUDIT_SESSION["active"] is False, "Stale session should auto-cancel"
+    # A log entry explains what happened (so the user notices on next refresh).
+    assert any("auto-cancelled" in (c[0] or "") for c in log_calls), (
+        f"Expected an auto-cancel log entry; got {log_calls}"
+    )
+
+
+def test_audit_idle_timeout_leaves_fresh_session_alone():
+    """Active session with recent activity must NOT get cancelled."""
+    import app as app_module
+    import time as _t
+    state.AUDIT_SESSION.update({
+        "active": True,
+        "location_id": "LR-MDB-1",
+        "expected_items": [101],
+        "scanned_items": [],
+        "rogue_items": [],
+        "last_activity_ts": _t.time() - 30,   # 30s old — way under the 30-min window
+    })
+    app_module._check_audit_idle_timeout()
+    assert state.AUDIT_SESSION["active"] is True
+
+
+def test_audit_idle_timeout_seeds_missing_timestamp():
+    """Legacy session from a process that pre-dates the watchdog (no
+    last_activity_ts at all) should NOT get cancelled on the first
+    check — instead the timer starts from now. Otherwise the watchdog
+    would nuke any session whose timestamp got lost in a state migration."""
+    import app as app_module
+    state.AUDIT_SESSION.update({
+        "active": True,
+        "location_id": "LR-MDB-1",
+        "expected_items": [101],
+        "scanned_items": [],
+        "rogue_items": [],
+        "last_activity_ts": 0.0,   # no timestamp at all
+    })
+    app_module._check_audit_idle_timeout()
+    assert state.AUDIT_SESSION["active"] is True
+    assert state.AUDIT_SESSION["last_activity_ts"] > 0
+
+
 def test_required_spool_extras_includes_fcc_pre_audit_location():
     """Auto-park to UNKNOWN PATCHes extra.fcc_pre_audit_location. If
     that field isn't in REQUIRED_SPOOL_EXTRAS, Spoolman 400s the write

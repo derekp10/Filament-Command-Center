@@ -9,6 +9,7 @@ import csv
 import os
 import json
 import logging
+import time
 
 def _compute_build_mtime():
     """L42 fix: derive a freshness-stamp from the newest source-file mtime.
@@ -1795,11 +1796,17 @@ def api_identify_scan():
     if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
         state.reset_audit()
         state.AUDIT_SESSION['active'] = True
+        state.AUDIT_SESSION['last_activity_ts'] = time.time()
         state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
         state.add_log_entry("Scan a Location label to begin checking.", "INFO")
-        return jsonify({"type": "command", "cmd": "clear"}) 
+        return jsonify({"type": "command", "cmd": "clear"})
 
     if state.AUDIT_SESSION.get('active'):
+        # Refresh the watchdog timestamp on every audit-mode scan so the
+        # idle-timeout in _check_audit_idle_timeout() only fires after a
+        # real abandonment. Updating BEFORE process_audit_scan so an
+        # explicit CMD:DONE/CMD:CANCEL still ends the session cleanly.
+        state.AUDIT_SESSION['last_activity_ts'] = time.time()
         logic.process_audit_scan(res)
         return jsonify({"type": "command", "cmd": "clear"})
 
@@ -3103,7 +3110,13 @@ def api_audit_session():
     remaining weight, and slot if known) so the frontend can render a
     grid of tiles without doing per-id Spoolman lookups itself.
 
-    Cheap when no audit is active (returns {active: False} immediately)."""
+    Cheap when no audit is active (returns {active: False} immediately).
+
+    Runs the idle-timeout watchdog first so even a direct poll heals a
+    stale session — the dashboard's heartbeat hits /api/logs every 5s,
+    but in case anything skips that path the same check here closes
+    the loop."""
+    _check_audit_idle_timeout()
     sess = state.AUDIT_SESSION
     if not sess.get('active'):
         return jsonify({"active": False})
@@ -3317,8 +3330,43 @@ def api_log_event():
     if msg: state.add_log_entry(msg, level)
     return jsonify({"success": True})
 
+def _check_audit_idle_timeout():
+    """Auto-cancel an audit session that's gone stale.
+
+    A closed tab, browser crash, or server-restart-then-relaunch can
+    leave AUDIT_SESSION.active=True with no real user behind the wheel.
+    Without this watchdog the audit panel keeps auto-opening on every
+    subsequent dashboard load until someone explicitly scans CMD:CANCEL
+    or the process restarts. Checked on every /api/logs poll (every 5s
+    from the dashboard heartbeat), so the recovery latency is ≤ 5s
+    after the timeout window expires.
+    """
+    if not state.AUDIT_SESSION.get('active'):
+        return
+    last = float(state.AUDIT_SESSION.get('last_activity_ts') or 0.0)
+    if last <= 0:
+        # No timestamp at all (legacy session from before this watchdog
+        # landed). Plant `now` so the timer starts NOW rather than
+        # auto-cancelling immediately.
+        state.AUDIT_SESSION['last_activity_ts'] = time.time()
+        return
+    if (time.time() - last) > state.AUDIT_IDLE_TIMEOUT_SECONDS:
+        loc = state.AUDIT_SESSION.get('location_id') or ''
+        state.add_log_entry(
+            f"🕒 Audit auto-cancelled after "
+            f"{state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min of inactivity"
+            + (f" (was on {loc})" if loc else "")
+            + " — no spools moved.",
+            "WARNING", "ffaa00",
+        )
+        state.reset_audit()
+
+
 @app.route('/api/logs', methods=['GET'])
 def api_get_logs_route():
+    # Cheap pre-flight: clear any abandoned audit session before the
+    # frontend sees audit_active=True and auto-opens the panel.
+    _check_audit_idle_timeout()
     sm_url, fb_url = config_loader.get_api_urls()
     sm_ok, fb_ok = False, False
     try: sm_ok = requests.get(f"{sm_url}/api/v1/health", timeout=3).ok
