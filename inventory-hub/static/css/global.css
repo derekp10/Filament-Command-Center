@@ -1435,6 +1435,27 @@ body:has(.cmd-deck) .fcc-fab-search {
     flex: 1 1 auto;
     min-width: 0;
 }
+/* L56 — printer-state badge sits under the printer name. Colors mirror
+   the dashboard status-light convention: green=active, amber=paused,
+   muted=idle, red=attention, dark-gray=offline. */
+.fcc-ps-name-stack { min-width: 0; flex: 1 1 auto; gap: 0.15rem; }
+.fcc-ps-state {
+    display: inline-block;
+    align-self: flex-start;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 0.05rem 0.4rem;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    text-transform: uppercase;
+    line-height: 1.2;
+}
+.fcc-ps-state-printing { background: rgba(16,185,129,0.18); color: #4ade80; border-color: rgba(74,222,128,0.4); }
+.fcc-ps-state-paused   { background: rgba(245,158,11,0.18); color: #ffc107; border-color: rgba(255,193,7,0.4); }
+.fcc-ps-state-idle     { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.18); }
+.fcc-ps-state-attention{ background: rgba(239,68,68,0.18); color: #ff6b6b; border-color: rgba(255,107,107,0.4); }
+.fcc-ps-state-offline  { background: rgba(0,0,0,0.35); color: rgba(255,255,255,0.45); border-color: rgba(255,255,255,0.15); }
 .fcc-ps-reorder-stack {
     width: 18px;
     flex: 0 0 18px;

@@ -134,7 +134,9 @@
     const _fingerprint = (rows) => {
         const parts = [];
         Object.entries(rows).sort().forEach(([name, info]) => {
-            parts.push(name + '|' + info.toolheads.map(th => {
+            const stateFp = info.state === null ? 'offline'
+                : info.state ? String(info.state.state || '') : '';
+            parts.push(name + '@' + stateFp + '|' + info.toolheads.map(th => {
                 const it = th.item;
                 return th.id + ':' + (it ? `${it.id}:${it.color || ''}:${Math.round(it.remaining_weight || 0)}` : 'empty');
             }).join(','));
@@ -270,6 +272,32 @@
         </span>`;
     };
 
+    // L56 — printer-state badge. Direct PrusaLink read (no dryer-box
+    // dependency), so this renders for Core One in direct-feed setups
+    // where the toolhead weight only ticks after FilaBridge auto-deduct
+    // (which needs the dryer-box-mediated mapping). state === null means
+    // the printer didn't answer; show "OFFLINE" so the user can tell
+    // it's a probe failure vs. an actual idle printer.
+    const _renderStateBadge = (state) => {
+        if (state === undefined) return '';
+        if (state === null) {
+            return `<span class="fcc-ps-state fcc-ps-state-offline" title="Printer unreachable (offline, networked elsewhere, or cold-rebooting)">OFFLINE</span>`;
+        }
+        const raw = String(state.state || '').toUpperCase();
+        if (!raw) return '';
+        const isActive = !!state.is_active;
+        // PRINTING/PAUSING/RESUMING → active (green-pop)
+        // PAUSED → paused (amber)
+        // FINISHED/STOPPED/IDLE/READY/OPERATIONAL → idle (muted)
+        // anything else (BUSY, ATTENTION, ERROR) → attention (red)
+        let cls = 'fcc-ps-state-idle';
+        if (isActive) cls = 'fcc-ps-state-printing';
+        else if (raw === 'PAUSED') cls = 'fcc-ps-state-paused';
+        else if (['IDLE', 'READY', 'OPERATIONAL', 'FINISHED', 'STOPPED'].includes(raw)) cls = 'fcc-ps-state-idle';
+        else cls = 'fcc-ps-state-attention';
+        return `<span class="fcc-ps-state ${cls}" title="PrusaLink reports: ${raw}">${raw}</span>`;
+    };
+
     const _renderRow = (name, info, idx, total) => {
         const safeName = name.replace(/"/g, '&quot;').replace(/'/g, "\\'");
         const upBtn = idx > 0
@@ -280,6 +308,7 @@
             ? `<button type="button" class="fcc-ps-reorder" title="Move down"
                     onclick="event.stopPropagation(); window.movePrinterStatusRow('${safeName}', 1)">▼</button>`
             : `<span class="fcc-ps-reorder-placeholder"></span>`;
+        const stateBadge = _renderStateBadge(info.state);
         // Per-printer expanded row. The collapsed view is now a single
         // chip strip in the widget header (rendered separately in _render),
         // not per-row, so we don't include compact chips here anymore.
@@ -290,7 +319,10 @@
                         ${upBtn}
                         ${downBtn}
                     </div>
-                    <div class="fcc-ps-name text-info fw-bold ms-2">${name}</div>
+                    <div class="fcc-ps-name-stack d-flex flex-column ms-2">
+                        <div class="fcc-ps-name text-info fw-bold">${name}</div>
+                        ${stateBadge}
+                    </div>
                 </div>
                 <div class="fcc-ps-toolheads d-flex gap-2 flex-wrap">
                     ${info.toolheads.map(_renderToolheadBlock).join('')}
@@ -348,6 +380,17 @@
         _state.inFlight = true;
         try {
             const rows = await _aggregate();
+            // L56 — preserve printer `state` from the last bulk-pulse render
+            // (refreshFromAggregate), since the per-printer fan-out here
+            // doesn't include it. Without this merge, every sync-pulse
+            // event would briefly wipe the PRINTING / IDLE / OFFLINE
+            // badge by overriding the bulk-pulse data with stateless rows.
+            Object.keys(rows).forEach(name => {
+                const cached = _state.rowsByPrinter[name];
+                if (cached && cached.state !== undefined && rows[name].state === undefined) {
+                    rows[name].state = cached.state;
+                }
+            });
             _state.rowsByPrinter = rows;
             const fp = _fingerprint(rows);
             if (fp === _state.lastFingerprint) return;  // unchanged, skip render

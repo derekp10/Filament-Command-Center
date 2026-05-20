@@ -3548,11 +3548,22 @@ def _pulse_section_printer_status():
     the client-side fan-out of printer_map + N x toolhead_slots +
     M x get_contents fetches with one parallel server-side call. Each
     per-printer aggregation runs in its own thread (capped at 8) so a
-    slow Spoolman call for one toolhead doesn't serially block the rest."""
+    slow Spoolman call for one toolhead doesn't serially block the rest.
+
+    L56: each printer's payload also carries a `state` dict pulled
+    directly from PrusaLink (`prusalink_api.get_printer_state`). This
+    is the only path that ticks live for a dryer-box-less printer
+    (e.g. Derek's Core One direct-feed setup) — the toolhead `item`
+    weight only changes when FilaBridge auto-deducts after a print,
+    which needs the dryer-box-mediated mapping. The state probe has
+    no such dependency. `state` is None when the printer is offline
+    or unreachable so the widget can show an offline indicator.
+    """
     from concurrent.futures import ThreadPoolExecutor
 
     cfg = config_loader.load_config()
     printer_map = cfg.get('printer_map', {}) or {}
+    _, fb_url = config_loader.get_api_urls()
     grouped = {}
     for loc_id, info in printer_map.items():
         name = info.get('printer_name', 'Unknown')
@@ -3585,7 +3596,13 @@ def _pulse_section_printer_status():
                 'unbound': not is_bound,
             })
         toolheads.sort(key=lambda t: (t['position'], t['id']))
-        return name, {'toolheads': toolheads}
+        # Direct PrusaLink probe — runs regardless of dryer-box bindings,
+        # so the widget ticks for dryer-box-less printers (L56).
+        try:
+            state_info = prusalink_api.get_printer_state(fb_url, name)
+        except Exception:
+            state_info = None
+        return name, {'toolheads': toolheads, 'state': state_info}
 
     out = {}
     max_workers = max(1, min(8, len(grouped)))
