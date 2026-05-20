@@ -23,6 +23,8 @@
 | 14 | 🧪 Test-Sweep Flake Stabilization | 6 | ~3–5 hrs | `DONE` 2026-05-12 | [14-test-sweep-flake-stabilization.md](tasks/14-test-sweep-flake-stabilization.md) |
 | 15 | 🪟 Canonical Overlay-Mount Helper | 3 | ~5–7 hrs | `DONE` 2026-05-11 (Path A — 5 inline overlays migrated; 4 non-inline surfaces deferred) | [15-canonical-overlay-mount.md](tasks/15-canonical-overlay-mount.md) |
 | 16 | 🧰 Testing Hardening & Helper Consolidation | 4 | ~3–4 hrs | `DONE` 2026-05-12 | [16-testing-hardening.md](tasks/16-testing-hardening.md) |
+| 17 | 🪟 Details Modal, Queue & Wizard End-State Polish | 5 | ~3–4 hrs | `DONE` 2026-05-14/15 (all 5 items shipped on `feature/buglist-sweep-2026-05-14`; 17.1 edit-toggle side completed 2026-05-15 by un-hiding `needs_label_print` from the wizard's hide list) | [17-details-queue-wizard-polish.md](tasks/17-details-queue-wizard-polish.md) |
+| 18 | 📍 Unknown Location + Audit Mode Refinement | 2 | ~4–6 hrs | `DONE` 2026-05-15/16 (18.1 Unknown bucket + 18.2 Part A auto-park + Part B visual panel + idle watchdog all shipped on `feature/buglist-sweep-2026-05-14`; parent/child rollup deferred as future enhancement on top of the multi-location audit) | [18-unknown-location-audit.md](tasks/18-unknown-location-audit.md) |
 
 ## Items NOT Grouped (Solo, Deferred, or On Hold)
 
@@ -32,30 +34,43 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 |------|--------|
 | `locations.json` corruption recurring (L25) | `PARTIAL` 2026-05-12 — Hardening (1) per-call unique temp filename + (2) verify-after-write tripwire shipped on `feature/locations-json-write-hardening`. Monitor prod hub.log for `verify-after-write FAILED` critical lines. (3) explicit truncate + (4) Docker named volume deferred pending recurrence signal. |
 | Screen blanking / wake lock (L17) | ON HOLD — OS-level issue |
-| Config system design (L18) | NEEDS DESIGN SESSION — large standalone (touches Group 13.9's localStorage preference key) |
-| Filabridge status light (L20) | ON HOLD — hardware/firmware |
+| Config system design (L18) | NEEDS DESIGN SESSION for full schema. Config UI scaffold now shipped 2026-05-16 as the host for Filabridge reconcile + Build Info cards — adding future sections is just dropping another `.card` into `modals_config.html`. Full schema design (key/label/type/default/validation, import/export, hierarchy) still pending. |
+| Filabridge status light (L20) | ON HOLD — all-software (FilaBridge process ↔ FCC `/api/status` polling). Defer until correlated logs from both sides + a clear repro of flicker-vs-solid behavior are available. |
 | FIL:58 label scan (L23) | ON HOLD — needs physical label |
-| Frontend lock-up (L28) | ON HOLD — hasn't recurred (modal-on-modal race partial repro) |
-| Legacy QR → help button (L44) | Small standalone fix |
-| Version number broken (L46) | Small standalone fix |
-| Unknown crash after auto-deduct (L48+) | ON HOLD — needs repro; server logs suggest container restart mid-session |
-| Confirm-change modal blocked during print (L126) | Standalone — scan/smart-move confirm_active_print path (companion to closed 13.8) |
-| Toolhead scan assigns ALL buffer spools (L128) | Standalone — toolhead must enforce max-1 spool; breaks FilaBridge sync |
-| "Already verified" activity log spam (L132) | Standalone — activity log verbosity / label-verify UX |
-| Force-location should clear deployed status (L134) | Standalone — force-location handler in details modal |
-| Prusa metrics tooling research (L141) | Research / future inspiration — `prusa_exporter` + Prusa-Firmware-Buddy metrics docs. Could feed 9.3 (Printer Status widget), filabridge reconcile, or richer state probing. Not actionable as a discrete task. |
-| Box-slot ↔ toolhead spool-switching inconsistency (L145) | **NEEDS INVESTIGATION** — continuing-bug observation 2026-05-12: eject doesn't fully clear toolhead bind when box slot is bound to a toolhead. Despite Group 13.6 (toolhead-first assign + auto-archive cleanup), the eject path still leaves stale state. 10 min of Activity Log capture included as raw data for diagnosis. Likely a new flavor of the same architectural gap — different code path than 13.6 covered. |
-| Activity Log ubiquity (L173) | Standalone design decision |
-| Slot-render-order arrows inconsistent (L205) | 5-min polish — pick a single consistent arrow convention in `modals_loc_mgr.html:243-245` Feeds editor |
-| Shortcuts overlay click-through (L207) | Natural deferred-Group-15 follow-up — `mountOverlay()` is the reference pattern; touches `dashboard.html` `#fcc-shortcuts-overlay` + `shortcuts_registry.js` toggle |
-| Location Manager redesign (L210) | IN PROGRESS — multi-phase, separately tracked |
-| Bulk Moves (L237) | Blocked by Location Manager Phase 3+ |
-| Buffer scan assign-all (L240) | Likely already fixed — verify & close |
-| Location Manager cross-browser sync (L241) | ON HOLD — needs SSE/WS |
-| Mobile mode (L254) | Large standalone architectural effort |
-| Dashboard modularization (L255) | Large standalone refactor |
-| Filabridge reconcile utility (L313) | Standalone admin tool |
-| Project Color Loadout (L317) | Blocked by Location Manager Phase 3 |
+| Display modal on Display modal (L26) | `PARTIAL` 2026-05-12 + FOLLOW-UP 2026-05-14 — details↔details and wizard↔details stacking now both close siblings via `window.hideAllDetailsModals`. Retest the L28 freeze with same scenario. |
+| Frontend lock-up (L28) | `NEEDS REPRO` — RECURRED 2026-05-18 during force-eject of a ghost-deployed spool in dryer-box modal. Detailed capture instructions in buglist entry (DevTools Console + Network HAR before refresh). Pairs with L122 PARTIAL — same DevTools capture answers both. |
+| Unknown crash after auto-deduct (L69) | ON HOLD — needs repro; server logs suggest container restart mid-session |
+| Confirm-change modal blocked during print (L122) | `PARTIAL` 2026-05-14 — scan-side `_confirmActivePrintScan` migrated to `mountOverlay`. Manage-modal slot-assign path (`_confirmActivePrintAssign` in `inv_loc_mgr.js`) still hand-rolled; needs same migration if symptom recurs on slot-click path. |
+| Prusa metrics tooling research (L161) | Research / future inspiration — `prusa_exporter` + Prusa-Firmware-Buddy metrics docs. Could feed 9.3 (Printer Status widget), filabridge reconcile, or richer state probing. Not actionable as a discrete task. |
+| **NEW** Prusament temp scans should update existing filaments (L198) | Scan should update min/max bed + nozzle temps on existing filaments (currently doesn't backfill legacy data). |
+| **NEW** Prusament data-link spool scan should update existing fields (L200) | Scanning the QR into the spool search field should update all available fields on the existing spool, preserving current usage (weight differs → legacy spool used; preserve current weight, update total weight + other metadata). |
+| **NEW** Edit Filament > Import from External collapse glitch (L202) | CSS one-liner — source dropdown box leaves a visible sliver after collapse. |
+| **NEW** Box slot → empty doesn't propagate to filabridge (L204) | Setting a dryerbox slot (attached to a toolhead) to empty leaves FilaBridge thinking the old spool is still there. Sibling of L206. |
+| Box-slot ↔ toolhead spool-switching inconsistency (L206) | **NEEDS INVESTIGATION** — continuing-bug observation 2026-05-12: eject doesn't fully clear toolhead bind when box slot is bound to a toolhead. Despite Group 13.6 (toolhead-first assign + auto-archive cleanup), the eject path still leaves stale state. 10 min of Activity Log capture included as raw data for diagnosis. Likely a new flavor of the same architectural gap — different code path than 13.6 covered. L204 is the narrower sibling. |
+| Refactor strip cards in Location Manager (L241) | UI/Theming standalone — merge horizontal layout with modern grid card features |
+| High-Contrast Pop everywhere (L242) | Large UI/Theming pass — White Text + Heavy Black Shadow + adaptive variants per color |
+| Slicer Profile animation reuse (L243) | Small standalone — identify the nifty animation, reuse elsewhere |
+| Help button per modal (L250) | Standalone — modal-specific help affordance |
+| Legacy ID assignment tool (L252) | Standalone — pair existing Spoolman IDs to physical legacy spools (bulk-import case) |
+| Location Manager redesign (L271) | IN PROGRESS — multi-phase, Phase 1A shipped (parent_id additive); Phases 1B+ separately tracked |
+| Bulk Moves (L298) | Blocked by Location Manager Phase 3+ |
+| Shapeshifting QR codes (L299) | Small UX win — extend shapeshift pattern to more places (Audit button, etc.) |
+| Location Manager cross-browser sync (L302) | ON HOLD — needs SSE/WS transport |
+| Mobile mode (L315) | Large standalone architectural effort |
+| Dashboard modularization (L316) | Large standalone refactor |
+| Make as much configurable (L317) | Folds into Config system (L18) — see scaffold note |
+| Spoolman extras sort order restore (L318) | Standalone — extras drift order when modified |
+| Clean up filament attributes (L319) | `PARTIAL` 2026-05-16 + AUTO-RUN 2026-05-19 — script shipped at `setup-and-rebuild/migrate_filament_attributes.py` + auto-cleanup at startup via `spoolman_api.ensure_filament_attributes_cleaned()`. `For Infill` + `Matte Pro` pending Derek's prod check before promotion to DELETE_CHOICES. |
+| Continue supporting Spoolman Import from External (L341) | Tracks gap list of unimplemented sources (open-filament-database, Prusament spool-specific, Open Print Tags) |
+| Dev Spoolman/filabridge environment (L345) | Standalone — set up isolated dev versions |
+| Log cleanup routine (L347) | Standalone — log file rotation/cleanup |
+| Dynamic setup code refactor (L348) | Standalone — keep brand-new-install path working |
+| Continue Spoolman vendor→filament→spool cascade (L349) | Continuing |
+| Configure extras propagation Filament↔Spool (L350) | Standalone — relates to Config system |
+| Spool product data text field (L351) | Standalone — Prusament link, etc. |
+| Background refresh in Location Manager (L352) | Standalone — periodic spool text updates |
+| Project Color Loadout (L391) | Blocked by Location Manager Phase 3 |
+| Core One MMU rows cleanup (Derek aside) | Not yet a discrete buglist entry — Derek 2026-05-16 noted: remove unused `CORE1-M1`–`CORE1-M5` MMU rows + decide whether `CORE1-M0` should be renamed from "No MMU Direct Load" to simply "Tool Head". File as a buglist item next time. |
 | All "On Hold" section items | ON HOLD |
 
 **Note on test flakes:** The `test_quickswap_visual` baseline mismatch, `test_ui_details_modal_e2e` offcanvas-backdrop flake, and `test_amazon_parser_matching` BS4-missing issue were all closed by Group 14 (14.4 / 14.3 / 14.5 respectively). Detailed write-up in `completed-archive.md`. Post-Group-14 follow-ups (parallel `tests/` directory, `_open_manage` consolidation, `reset_dom_state_js` audit, Windows pip footgun) are bundled into Group 16.

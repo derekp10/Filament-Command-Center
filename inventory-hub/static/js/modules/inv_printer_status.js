@@ -100,12 +100,17 @@
                 .slice()
                 .sort((a, b) => (a.position || 0) - (b.position || 0))
                 .map(e => ({ id: String(e.location_id).toUpperCase(), position: e.position || 0 }));
-            // Toolheads with at least one bound source slot are the only
-            // ones we render — an unbound toolhead has nothing to deduct
-            // from and nothing useful to show in this widget.
+            // L140 fix: previously skipped any printer with zero bound source
+            // slots — that hid Core One on prod entirely because Derek
+            // hadn't wired any dryer-box slot_targets to CORE1-M*. Show
+            // every registered printer now; flag unbound toolheads with
+            // an `unbound: true` marker so the renderer can show a
+            // "no bound slots yet" placeholder instead of a spool tile.
+            // Bound toolheads still render with current contents; the
+            // mix is fine (printer can be partially bound).
             const bound = toolheadIds.filter(th => (bindings.toolheads[th.id] || []).length > 0);
-            if (!bound.length) return;
-            // Resolve current contents of each toolhead.
+            const unbound = toolheadIds.filter(th => !((bindings.toolheads[th.id] || []).length > 0));
+            // Resolve current contents of each bound toolhead.
             const filled = await Promise.all(bound.map(async th => {
                 try {
                     const r = await fetch(`/api/get_contents?id=${encodeURIComponent(th.id)}`);
@@ -115,7 +120,11 @@
                     return { ...th, item: null };
                 }
             }));
-            out[name] = { toolheads: filled };
+            const unboundEntries = unbound.map(th => ({ ...th, item: null, unbound: true }));
+            // Merge + re-sort by position so the visual order matches
+            // printer layout regardless of bound/unbound mix.
+            const allRows = [...filled, ...unboundEntries].sort((a, b) => (a.position || 0) - (b.position || 0));
+            out[name] = { toolheads: allRows };
         }));
         return out;
     };
@@ -145,6 +154,25 @@
     const _renderToolheadBlock = (th) => {
         const it = th.item;
         const positionAttr = `data-toolhead="${th.id}"`;
+        // L140 fix — unbound toolheads (no dryer-box slot_targets points
+        // at them) render with a distinct "no bound slots" placeholder
+        // instead of being hidden, so the printer is visible on the
+        // dashboard with an actionable hint instead of mysteriously
+        // missing. Clicking still opens the toolhead in the Location
+        // Manager so the user can either bind a slot or quick-swap.
+        if (th.unbound) {
+            return `
+                <div class="fcc-ps-th fcc-ps-th-unbound" ${positionAttr}
+                     style="cursor:pointer; border:1px dashed #ffd54a;"
+                     title="${th.id} — no dryer-box slot is bound to this toolhead. Bind one in the Location Manager → Feeds editor for a dryer box.">
+                    <div class="fcc-ps-th-bar"><div class="fcc-ps-th-bar-fill" style="width:0%;"></div></div>
+                    <div class="fcc-ps-th-body fcc-ps-th-body-empty">
+                        <div class="fcc-ps-th-id text-truncate">${th.id}</div>
+                    </div>
+                    <div class="fcc-ps-th-chip" style="font-size:0.72rem; color:#ffd54a;">🔗 no bound slot</div>
+                </div>
+            `;
+        }
         if (!it) {
             // No text-muted here — Bootstrap's text-muted (#6c757d) sits
             // at ~1.4:1 against our dark widget bg. Use an explicit light
@@ -201,6 +229,17 @@
     // gray fallback) and contrast is consistent with all other chips.
     const _renderToolheadCompact = (th) => {
         const it = th.item;
+        if (th.unbound) {
+            // L140 fix companion — collapsed-mode chip for unbound toolheads.
+            return `<span class="fcc-ps-mini fcc-ps-mini-empty"
+                          data-toolhead="${th.id}"
+                          style="border:1px dashed #ffd54a;"
+                          title="${th.id} — no dryer-box slot bound (bind one in the Location Manager)">
+                <span class="fcc-ps-mini-swatch fcc-ps-mini-swatch-empty"></span>
+                <span class="fcc-ps-mini-id">${th.id}</span>
+                <span class="fcc-ps-mini-weight" style="color:#ffd54a;">🔗</span>
+            </span>`;
+        }
         if (!it) {
             // "empty" text uses an explicit light color (not Bootstrap's
             // text-muted, which sits at ~#6c757d and disappears against

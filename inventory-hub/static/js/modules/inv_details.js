@@ -27,6 +27,13 @@ const _hideSiblingDetailsModal = (key) => {
         if (el && el.classList.contains('show')) modals[key].hide();
     }, 400);
 };
+// L26 follow-up: expose so wizard entry points can close stacked
+// details modals before launching, mirroring the details↔details pattern.
+window.hideSiblingDetailsModal = _hideSiblingDetailsModal;
+window.hideAllDetailsModals = () => {
+    _hideSiblingDetailsModal('spoolModal');
+    _hideSiblingDetailsModal('filamentModal');
+};
 
 const openSpoolDetails = (id, silent = false) => {
     // 8.3 — Prevent details-on-details stacking. A user-initiated open
@@ -64,26 +71,42 @@ const openSpoolDetails = (id, silent = false) => {
             }
             const locBadge = document.getElementById('detail-location-badge');
             if (locBadge) {
-                locBadge.innerText = locDisplay;
-                if (locDisplay === "Unassigned") {
-                    locBadge.className = "badge bg-secondary ms-2 me-1";
-                    locBadge.style.cursor = "default";
-                    locBadge.onclick = null;
-                    locBadge.title = "";
-                } else if (locDisplay.startsWith("Deployed:")) {
+                const isUnknown = String(d.location || '').toUpperCase() === 'UNKNOWN';
+                // 18.1 — Unknown bucket gets the yellow caution badge here too
+                // so the Spool Details modal's location row matches the rest
+                // of the UI (spool cards + Location Manager type badge). Was
+                // previously rendering blue, which read as a normal location.
+                if (isUnknown) {
+                    locBadge.innerText = '❓ Unknown';
                     locBadge.className = "badge bg-warning text-dark ms-2 me-1";
-                    locBadge.style.cursor = "default";
-                    locBadge.onclick = null;
-                    locBadge.title = "";
-                } else {
-                    // It's a normal location, make it clickable
-                    locBadge.className = "badge bg-info text-dark ms-2 me-1";
                     locBadge.style.cursor = "pointer";
-                    locBadge.title = "View Location Details";
+                    locBadge.title = "Physically lost — last known location unknown. Click to open the Unknown bucket.";
                     locBadge.onclick = () => {
                         if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
-                        if (window.openManage) window.openManage(d.location);
+                        if (window.openManage) window.openManage('UNKNOWN');
                     };
+                } else {
+                    locBadge.innerText = locDisplay;
+                    if (locDisplay === "Unassigned") {
+                        locBadge.className = "badge bg-secondary ms-2 me-1";
+                        locBadge.style.cursor = "default";
+                        locBadge.onclick = null;
+                        locBadge.title = "";
+                    } else if (locDisplay.startsWith("Deployed:")) {
+                        locBadge.className = "badge bg-warning text-dark ms-2 me-1";
+                        locBadge.style.cursor = "default";
+                        locBadge.onclick = null;
+                        locBadge.title = "";
+                    } else {
+                        // It's a normal location, make it clickable
+                        locBadge.className = "badge bg-info text-dark ms-2 me-1";
+                        locBadge.style.cursor = "pointer";
+                        locBadge.title = "View Location Details";
+                        locBadge.onclick = () => {
+                            if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
+                            if (window.openManage) window.openManage(d.location);
+                        };
+                    }
                 }
             }
 
@@ -251,6 +274,65 @@ const openFilamentDetails = (fid, silent = false) => {
                 fdSlicerEl.dataset.value = fdSlicer;
             }
             document.getElementById('fil-detail-density').innerText = d.density ? `${d.density} g/cm³` : "--";
+
+            // Group 17.5: surface the resolved Empty Spool Weight + inheritance
+            // badge so the user doesn't have to open the Edit modal to find it.
+            // Uses the canonical resolver in weight_utils.js (same cascade as
+            // every other weight surface).
+            const fdEmptyEl = document.getElementById('fil-detail-empty-spool-weight');
+            const fdEmptySrcEl = document.getElementById('fil-detail-empty-spool-source');
+            if (fdEmptyEl && typeof window.resolveEmptySpoolWeightSource === 'function') {
+                const resolved = window.resolveEmptySpoolWeightSource({
+                    spoolWt: null,  // filament-modal view — no per-spool override here
+                    filamentWt: d.spool_weight,
+                    vendor: d.vendor,
+                });
+                if (resolved.value == null) {
+                    fdEmptyEl.innerText = "—";
+                    if (fdEmptySrcEl) { fdEmptySrcEl.innerText = "not set"; fdEmptySrcEl.style.display = ''; }
+                } else {
+                    fdEmptyEl.innerText = `${resolved.value} g`;
+                    if (fdEmptySrcEl) {
+                        const label = resolved.source === 'filament' ? '↩ filament'
+                            : resolved.source === 'vendor' ? '↩ vendor'
+                            : resolved.source;
+                        fdEmptySrcEl.innerText = label;
+                        fdEmptySrcEl.style.display = '';
+                    }
+                }
+            }
+            // Group 17.1: surface swatch + label-confirmed status so users can
+            // tell at a glance whether the filament has a printed sample and
+            // whether the label has been physically confirmed via barcode scan.
+            // Reads from existing extras (`sample_printed` for swatches,
+            // `needs_label_print` tri-state for labels — false=confirmed,
+            // true=needs print, null/missing=unknown).
+            const fdSampleEl = document.getElementById('fil-detail-sample-status');
+            if (fdSampleEl) {
+                const rawSample = unquoteExtra(fdExtra.sample_printed);
+                const sampleTruthy = rawSample === true || rawSample === 'true' || rawSample === 'True' || rawSample === 1 || rawSample === '1';
+                const sampleFalsy = rawSample === false || rawSample === 'false' || rawSample === 'False' || rawSample === 0 || rawSample === '0';
+                if (sampleTruthy) {
+                    fdSampleEl.innerHTML = '<span class="badge bg-success">✅ Yes</span>';
+                } else if (sampleFalsy) {
+                    fdSampleEl.innerHTML = '<span class="badge bg-secondary">No</span>';
+                } else {
+                    fdSampleEl.innerHTML = '<span class="badge bg-dark border border-secondary text-muted">unknown</span>';
+                }
+            }
+            const fdLabelEl = document.getElementById('fil-detail-label-status');
+            if (fdLabelEl) {
+                const rawLabel = unquoteExtra(fdExtra.needs_label_print);
+                const needsPrint = rawLabel === true || rawLabel === 'true' || rawLabel === 'True';
+                const confirmed = rawLabel === false || rawLabel === 'false' || rawLabel === 'False';
+                if (confirmed) {
+                    fdLabelEl.innerHTML = '<span class="badge bg-success">✅ Confirmed</span>';
+                } else if (needsPrint) {
+                    fdLabelEl.innerHTML = '<span class="badge bg-warning text-dark">🖨️ Needs print</span>';
+                } else {
+                    fdLabelEl.innerHTML = '<span class="badge bg-dark border border-secondary text-muted">unknown</span>';
+                }
+            }
             document.getElementById('fil-detail-comment').value = d.comment || "";
 
             const swatch = document.getElementById('fil-detail-swatch');
@@ -416,9 +498,13 @@ const openFilamentDetails = (fid, silent = false) => {
                                         }
                                     });
                                     if (added > 0) {
-                                        showToast(`Queued ${added} spools!`);
-                                        // Open the queue to confirm, let it stack natively!
-                                        window.openQueueModal();
+                                        // Group 17.2: don't auto-open the queue modal here.
+                                        // Auto-opening interrupted users who wanted to keep
+                                        // adding labels from other filaments/spools without
+                                        // closing the queue panel each time. The toast carries
+                                        // enough confirmation; the queue is reachable via the
+                                        // existing top-bar button when the user actually wants it.
+                                        showToast(`Queued ${added} label${added === 1 ? '' : 's'} — open Print Queue to review`, 'success', 4000);
                                     } else {
                                         showToast("All spools already in queue", "info");
                                     }

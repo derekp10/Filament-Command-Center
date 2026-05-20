@@ -60,6 +60,8 @@ window.updateManageTitle = (loc, itemArray = null) => {
     else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
     else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
     else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
+    // 18.1 — Unknown bucket: yellow caution band so it's instantly readable.
+    else if (t.includes('Unknown')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #ffd54a; box-shadow: 0 0 6px rgba(255,193,7,0.6);'; }
     
     const typeBadge = `<span class="badge ${badgeClass} ms-3 fs-6" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); padding-top: 5px; ${badgeStyle}">${loc.Type}</span>`;
 

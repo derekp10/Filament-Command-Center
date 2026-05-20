@@ -144,6 +144,14 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
 })();
 
 window.openWizardModal = async () => {
+    // L26 follow-up: close any open details modal before launching the
+    // wizard. The 2026-04-29 lock-up Derek reproed was wizard-on-top-of-
+    // details — the silent-refresh path's promise can land mid-wizard-
+    // open and leave state.processing stuck true. Closing the siblings
+    // first mirrors the details↔details pattern shipped 2026-05-12.
+    if (typeof window.hideAllDetailsModals === 'function') {
+        window.hideAllDetailsModals();
+    }
     wizardReset();
     if (window.modals && window.modals.wizardModal) {
         window.modals.wizardModal.show();
@@ -632,6 +640,11 @@ const wizardReset = () => {
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
     wizardState.lockedAfterSuccess = false;
+
+    // 17.3 follow-up: clear stale queue-label chips from the prior
+    // success so a fresh wizard open doesn't show last-run's spool IDs.
+    const _actionRow = document.getElementById('wiz-postcreate-actions');
+    if (_actionRow) _actionRow.innerHTML = '';
     // Note: returnToSpoolId is NOT cleared here — it persists across reset so that
     // after a clone/edit completes, the original spool detail modal can re-open.
 
@@ -1353,7 +1366,17 @@ const wizardFetchExtraFields = () => {
                         // value on read when blank (inv_details.js:168). To edit
                         // the filament-level value directly, use the Edit
                         // Filament modal.
-                        if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed', 'needs_label_print',
+                        //
+                        // L144 / 17.1 round 2: `needs_label_print` UN-hidden so it
+                        // surfaces alongside `sample_printed` as a boolean checkbox
+                        // in the wizard's Filament Extras section. Both flags are
+                        // already registered in setup_fields.py (filament_standards)
+                        // so the dynamic-field renderer turns them into proper
+                        // toggle inputs without bespoke per-field UI. The display
+                        // side (badges on Filament Details modal) shipped in
+                        // 17.1 round 1. `label_printed` (the legacy retired key)
+                        // stays hidden — it's gone in M7+ data.
+                        if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed',
                              'nozzle_temp_max', 'bed_temp_max', 'purchase_url'].includes(field.key)) return;
 
                         let html = wizardGenerateFieldHTML(field, 'fil');
@@ -2652,6 +2675,43 @@ window.wizardSubmit = async () => {
         if (data.success) {
             wizardState.isDirty = false;
             msg.innerHTML = `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
+            // 17.3 follow-up: render queue-label chips into the dedicated
+            // `wiz-postcreate-actions` row in the modal footer (alongside
+            // Cancel + Create Inventory) so subsequent status-message
+            // overwrites — like the post-success "Make a change to add
+            // more..." auto-prompt three seconds later — can't clobber
+            // them before the user gets a chance to click. Only fires
+            // on create (edit-spool mode doesn't carry created_spools).
+            const actionRow = document.getElementById('wiz-postcreate-actions');
+            if (actionRow) actionRow.innerHTML = '';
+            if (actionRow && wizardState.mode !== 'edit_spool' && Array.isArray(data.created_spools) && data.created_spools.length) {
+                const labelEl = document.createElement('span');
+                labelEl.className = 'small text-light fw-bold me-2';
+                labelEl.innerText = 'Queue label:';
+                actionRow.appendChild(labelEl);
+                data.created_spools.forEach(sid => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'btn btn-sm btn-outline-info fw-bold fcc-wiz-queue-label';
+                    btn.dataset.spoolId = String(sid);
+                    btn.title = `Queue a print label for Spool #${sid}`;
+                    btn.innerText = `🖨️ #${sid}`;
+                    btn.addEventListener('click', (ev) => {
+                        ev.preventDefault();
+                        if (!sid || typeof window.addToQueue !== 'function') return;
+                        if (Array.isArray(window.labelQueue) && window.labelQueue.find(q => q.id === sid && q.type === 'spool')) {
+                            if (typeof showToast === 'function') showToast(`Spool #${sid} already in queue`, 'info', 2000);
+                            return;
+                        }
+                        window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
+                        if (typeof showToast === 'function') showToast(`Queued label for Spool #${sid}`, 'success', 2500);
+                        btn.classList.remove('btn-outline-info');
+                        btn.classList.add('btn-success');
+                        btn.disabled = true;
+                    });
+                    actionRow.appendChild(btn);
+                });
+            }
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse')); // Instantly trigger UI rebinding across all open panels
 
             // Reset Weigh-Out Protocol tracking on save so subsequent saves don't double-dip

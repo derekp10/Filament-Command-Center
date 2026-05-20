@@ -39,15 +39,30 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         return `<option value="${c.id}">${escapeHtml(label)}</option>`;
     }).join('');
 
+    // Group 17.4: derive a fallback parent-filament id for the "Add new" path.
+    // All candidates share the same filament (legacy id resolves at the filament
+    // level), so pulling from the first one is safe; null-guard for callers
+    // that built the candidate list without filament metadata.
+    const parentFilamentId = (() => {
+        for (const c of candidates) {
+            const v = parseInt(c.filament_id, 10);
+            if (Number.isFinite(v)) return v;
+        }
+        return null;
+    })();
+
     const panelHtml = `
         <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; max-width:600px; width:92%;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ Multiple spools share Legacy ID ${escapeHtml(legacy_id || '?')}</div>
             <div style="color:#ffc; margin-bottom:14px;">
-                ${candidates.length} spools are attached to the filament with this legacy ID. Pick the right one to continue, or queue a fresh <code>ID:</code>-format label for the chosen spool so future scans aren't ambiguous.
+                ${candidates.length} spools are attached to the filament with this legacy ID. Pick the right one to continue, queue a fresh <code>ID:</code>-format label for the chosen spool, or add a new spool on this filament if none on the list is the right one.
             </div>
             <select id="fcc-legacy-picker-sel" class="form-select form-select-sm bg-dark text-white border-secondary mb-3" size="${Math.min(6, candidates.length)}" style="width:100%;">${optsHtml}</select>
             <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
                 <button id="fcc-legacy-picker-cancel" class="btn btn-secondary btn-sm" style="min-width:100px;">Cancel</button>
+                ${parentFilamentId != null
+                    ? `<button id="fcc-legacy-picker-addnew" class="btn btn-outline-info btn-sm" style="min-width:140px;">➕ Add new spool</button>`
+                    : ''}
                 <button id="fcc-legacy-picker-print" class="btn btn-warning btn-sm" style="min-width:160px;">🖨️ Print new label</button>
                 <button id="fcc-legacy-picker-use" class="btn btn-success btn-sm" style="min-width:140px;">✓ Use selected</button>
             </div>
@@ -112,12 +127,28 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
 
     const onCancelClick = () => { cleanup(); onAbort(); };
 
+    // Group 17.4: route the "Add new spool" affordance through the existing
+    // openNewSpoolFromFilamentWizard flow so the user lands in the wizard with
+    // the parent filament pre-selected. We abort the original scan flow
+    // (legacy id is still ambiguous until the new spool gets its own ID:NNN
+    // label printed + verified) — same posture as the "Print new label" path.
+    const onAddNewClick = () => {
+        cleanup();
+        if (parentFilamentId != null && typeof window.openNewSpoolFromFilamentWizard === 'function') {
+            window.openNewSpoolFromFilamentWizard(parentFilamentId);
+        } else if (window.showToast) {
+            window.showToast('Add-new path unavailable (missing filament id)', 'error', 5000);
+        }
+        onAbort();
+    };
+
     const keyHandler = (e) => {
         // Escape is owned by mountOverlay's onEscape.
         if (e.key === 'Enter') {
             const active = document.activeElement;
             if (active && active.id === 'fcc-legacy-picker-print') { e.preventDefault(); e.stopPropagation(); onPrintClick(); }
             else if (active && active.id === 'fcc-legacy-picker-cancel') { e.preventDefault(); e.stopPropagation(); onCancelClick(); }
+            else if (active && active.id === 'fcc-legacy-picker-addnew') { e.preventDefault(); e.stopPropagation(); onAddNewClick(); }
             else { e.preventDefault(); e.stopPropagation(); onUseClick(); }
         }
     };
@@ -125,6 +156,8 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
     ov.querySelector('#fcc-legacy-picker-cancel').onclick = onCancelClick;
     ov.querySelector('#fcc-legacy-picker-print').onclick = onPrintClick;
     ov.querySelector('#fcc-legacy-picker-use').onclick = onUseClick;
+    const addNewBtn = ov.querySelector('#fcc-legacy-picker-addnew');
+    if (addNewBtn) addNewBtn.onclick = onAddNewClick;
     document.addEventListener('keydown', keyHandler, true);
     // Initial focus on the "Use selected" button is handled by mountOverlay's
     // initialFocus option.

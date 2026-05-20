@@ -51,23 +51,60 @@
     window.toggleShortcutsOverlay = function () {
         const ov = document.getElementById('fcc-shortcuts-overlay');
         if (!ov) return;
+        const bd = document.getElementById('fcc-shortcuts-overlay-backdrop');
         const hidden = ov.style.display === 'none' || !ov.style.display;
         renderList();  // refresh in case new shortcuts were registered post-load
         ov.style.display = hidden ? 'block' : 'none';
+        if (bd) bd.style.display = hidden ? 'block' : 'none';
     };
 
     // Bind `?` globally + `Escape` to close the overlay.
     // Capture phase so we can stopImmediatePropagation before Bootstrap's
     // modal-level Escape handler (also bound on document) fires.
+    // L40 round 2 — defer-the-help mechanism. Round 1 detected `?` mid-stream
+    // via state.scanBuffer + scanStartTime, but failed when the legacy QR
+    // STARTED with `?` (buffer empty at capture-phase, no scanStartTime yet).
+    // Round 2 schedules the help-toggle on a short timer; if any other
+    // character arrives in that window we cancel — that's a scan stream,
+    // not a deliberate help press. Cost is ~120ms of latency on intentional
+    // `?` presses — well below human-perceptible.
+    let _pendingHelpTimer = null;
+    const HELP_DEFER_MS = 120;
+
     document.addEventListener('keydown', (e) => {
         const ov = document.getElementById('fcc-shortcuts-overlay');
         if (!ov) return;
         // Don't hijack typing inside inputs.
         const tag = (e.target && e.target.tagName) || '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
+
+        // If a deferred help-open is pending and ANY printable char (other
+        // than `?` itself, which restarts the timer) arrives within the
+        // window, this is a scan stream — cancel the open.
+        if (_pendingHelpTimer && e.key.length === 1 && e.key !== '?') {
+            clearTimeout(_pendingHelpTimer);
+            _pendingHelpTimer = null;
+        }
+
         if (e.key === '?') {
-            e.preventDefault();
-            window.toggleShortcutsOverlay();
+            // Mid-stream `?` (round-1 path): if we're clearly in a fast
+            // scan, yield to the scan accumulator immediately without the
+            // 120ms detour.
+            const st = (typeof state !== 'undefined') ? state : window.state;
+            const scanInFlight = st && typeof st.scanBuffer === 'string'
+                && st.scanBuffer.length > 0
+                && st.scanStartTime
+                && (Date.now() - st.scanStartTime) < 500;
+            if (scanInFlight) return;
+            // Defer the help open — if more chars arrive within 120ms,
+            // we'll cancel it above and let the scan accumulator handle
+            // the `?`. The browser's default for `?` is no-op, so
+            // skipping preventDefault is fine.
+            if (_pendingHelpTimer) clearTimeout(_pendingHelpTimer);
+            _pendingHelpTimer = setTimeout(() => {
+                _pendingHelpTimer = null;
+                window.toggleShortcutsOverlay();
+            }, HELP_DEFER_MS);
         } else if (e.key === 'Escape' && ov.style.display === 'block') {
             // Group 10.1 SC round-3 fix: Escape used to bubble to whichever
             // Bootstrap modal was open underneath the shortcuts overlay,
@@ -215,7 +252,12 @@
     window.registerShortcut({
         id: 'scan-cmd-done', scope: 'Scan Commands',
         keys: ['CMD:DONE'],
-        description: 'Close the open location manager.'
+        description: 'Close the open location manager OR commit an audit (missing spools → Unknown).'
+    });
+    window.registerShortcut({
+        id: 'scan-cmd-cancel', scope: 'Scan Commands',
+        keys: ['CMD:CANCEL'],
+        description: 'Cancel an active audit without moving any spools (safe bail; opposite of CMD:DONE).'
     });
     window.registerShortcut({
         id: 'scan-cmd-slot', scope: 'Scan Commands',

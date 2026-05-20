@@ -20,8 +20,20 @@ AUDIT_SESSION = {
     "location_id": None,
     "expected_items": [], # List of Spool IDs supposed to be there
     "scanned_items": [],  # List of Spool IDs we actually found
-    "rogue_items": []     # Spools we found that belong elsewhere
+    "rogue_items": [],    # Spools we found that belong elsewhere
+    # Idle-timeout watchdog. Updated on every audit-mode scan and on
+    # audit start. _check_audit_idle_timeout() in logic.py force-cancels
+    # the session when stale, so a closed-tab / browser-crash / docker-
+    # restart-during-audit can't leave the panel auto-opening on every
+    # subsequent dashboard load.
+    "last_activity_ts": 0.0,
 }
+
+# Audit auto-cancel threshold. 30 minutes is long enough that someone
+# can pause mid-audit to physically chase a spool down without losing
+# the session, but short enough that an abandoned audit doesn't haunt
+# the dashboard indefinitely.
+AUDIT_IDLE_TIMEOUT_SECONDS = 30 * 60
 
 # --- LOGGING SETUP ---
 logger = logging.getLogger("InventoryHub")
@@ -100,5 +112,6 @@ def reset_audit():
         "location_id": None,
         "expected_items": [],
         "scanned_items": [],
-        "rogue_items": []
+        "rogue_items": [],
+        "last_activity_ts": 0.0,
     })

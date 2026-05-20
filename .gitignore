@@ -27,3 +27,11 @@ inventory-hub/data/*
 inventory-hub/locations.json
 inventory-hub/locations.json.*.bak
 inventory-hub/data/locations.json.*.bak
+
+# Dashboard version badge — regenerated at server startup (and on every
+# git commit via .git/hooks/post-commit, see setup-and-rebuild/
+# install_build_info_hook.sh). For prod, run
+# `python inventory-hub/_gen_build_info.py` before `docker build` so the
+# file ships in the image. Kept out of git so the per-commit churn
+# doesn't pollute diffs.
+inventory-hub/.build_info

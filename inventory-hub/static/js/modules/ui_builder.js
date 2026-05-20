@@ -108,10 +108,19 @@ const SpoolCardBuilder = {
             // Standard Location Badge
             if (isFil) {
                 locBadgeHTML = `<span class="badge bg-secondary"><i class="bi bi-box"></i> Filament Template</span>`;
-                item.remaining = '---'; 
+                item.remaining = '---';
             } else if (item.location) {
                 const badgeClick = `event.stopPropagation(); if(window.openManage) { window.openManage('${item.location}'); if(window.SearchEngine && window.SearchEngine.offcanvas){window.SearchEngine.offcanvas.hide();} }`;
-                if (item.is_ghost) locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 Deployed: ${item.location} (Slot ${item.slot})</span>`;
+                // 18.1 — UNKNOWN bucket: yellow caution badge (riffs on the
+                // Unassigned secondary-badge shape but tinted to signal
+                // "we don't know where this is physically"). Most data
+                // here will end up being ghost rows for spools that were
+                // used up under the old spreadsheet system without a
+                // proper update — this badge makes them easy to spot.
+                if (String(item.location).toUpperCase() === 'UNKNOWN') {
+                    locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Physically lost — last known location unknown">❓ Unknown</span>`;
+                }
+                else if (item.is_ghost) locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 Deployed: ${item.location} (Slot ${item.slot})</span>`;
                 else locBadgeHTML = `<span class="badge bg-info text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 ${item.location}</span>`;
             } else {
                 locBadgeHTML = `<span class="badge bg-secondary"><i class="bi bi-question-circle"></i> Unassigned</span>`;
@@ -363,7 +372,10 @@ const SpoolCardBuilder = {
             // Location badge — mirrors search mode, no SearchEngine offcanvas needed
             if (item.location) {
                 const badgeClick = `event.stopPropagation(); if(window.openManage) window.openManage('${item.location}')`;
-                if (item.is_ghost) {
+                // 18.1 — UNKNOWN bucket badge (yellow caution, same shape as search mode).
+                if (String(item.location).toUpperCase() === 'UNKNOWN') {
+                    locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Physically lost — last known location unknown">❓ Unknown</span>`;
+                } else if (item.is_ghost) {
                     locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 Deployed: ${item.location}${item.slot ? ` (Slot ${item.slot})` : ''}</span>`;
                 } else {
                     locBadgeHTML = `<span class="badge bg-info text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 ${item.location}</span>`;

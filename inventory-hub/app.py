@@ -9,8 +9,123 @@ import csv
 import os
 import json
 import logging
+import time
 
-VERSION = "v154.26 (Scale Weights Update)"
+def _compute_build_mtime():
+    """L42 fix: derive a freshness-stamp from the newest source-file mtime.
+
+    The manually-bumped VERSION constant was stale by ~25 commits when this
+    was wired up. Walk the live code dirs (app's own dir + static + templates)
+    and use the most recent mtime so the badge always reflects the actual
+    build the user is looking at — no manual bump step to forget.
+
+    Returns a UNIX timestamp (float). The frontend converts it to the user's
+    local timezone so the badge isn't confusing when the container runs UTC
+    and the user is in PDT.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    newest = 0
+    for sub in ('', 'static', 'templates'):
+        root = os.path.join(here, sub) if sub else here
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Skip caches / generated artifacts.
+            dirnames[:] = [d for d in dirnames if d not in ('__pycache__', '.git', 'data', '__screenshots__')]
+            for name in filenames:
+                if name.endswith(('.pyc', '.pyo', '.log', '.bak')):
+                    continue
+                # Skip self-rewriting artifacts so the build-info refresh
+                # doesn't pump the mtime forward and falsely trigger "+local".
+                if name in ('.build_info',):
+                    continue
+                try:
+                    mt = os.path.getmtime(os.path.join(dirpath, name))
+                    if mt > newest:
+                        newest = mt
+                except OSError:
+                    continue
+    return newest
+
+
+def _load_build_commit():
+    """L42 round 2: opportunistically resolve the current git commit so the
+    dashboard badge shows the actual version running.
+
+    Strategy:
+      1. If .git is reachable from this file (host or .git-bind-mounted
+         container), regenerate `inventory-hub/.build_info` so it's always
+         fresh. Done via the standalone `_gen_build_info` helper so the
+         same code path is usable from a git post-commit hook or a CI step.
+      2. Read `.build_info` if present. Either way (we just wrote it, or
+         it was baked into the prod image), parse SHA + optional unix ts.
+      3. Return (sha, ts) or (None, None) — caller falls back to mtime.
+
+    No git binary required; the helper parses .git/HEAD + logs/HEAD
+    directly. Failures are silent — version-badge freshness shouldn't
+    crash the server.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    info_path = os.path.join(here, '.build_info')
+    try:
+        import _gen_build_info  # type: ignore
+        _gen_build_info.write_build_info(info_path)
+    except Exception:
+        # Helper missing or .git unreachable — fine, fall through to
+        # whatever (if anything) was previously baked in.
+        pass
+    if not os.path.isfile(info_path):
+        return None, None
+    try:
+        with open(info_path, 'r', encoding='utf-8') as f:
+            line = f.read().strip()
+    except OSError:
+        return None, None
+    if not line:
+        return None, None
+    parts = line.split('|', 1)
+    sha = parts[0].strip() or None
+    ts = None
+    if len(parts) > 1:
+        try:
+            ts = int(parts[1].strip())
+        except (ValueError, TypeError):
+            ts = None
+    return sha, ts
+
+
+BUILD_MTIME = _compute_build_mtime()
+BUILD_COMMIT_SHA, BUILD_COMMIT_TS = _load_build_commit()
+
+
+def _format_version():
+    """Compose the dashboard badge string. Prefer commit info when we have
+    it; fall back to the mtime stamp.
+
+    Note: a `+local` suffix for uncommitted edits was considered but
+    dropped — prod pulls reset file mtimes to the pull time, which
+    would false-trigger on every deploy. Users who want to see dirty
+    state can `git status` directly.
+    """
+    return _format_version_from(BUILD_COMMIT_SHA, BUILD_COMMIT_TS)
+
+
+def _format_version_from(sha, ts):
+    """Pure formatter so the dashboard route can re-render the badge
+    using a freshly-read sha/ts pair without relying on the module-
+    global BUILD_COMMIT_SHA/TS (which are frozen at startup)."""
+    import time as _time
+    if sha:
+        label = f"commit {sha}"
+        if ts:
+            label += " • " + _time.strftime('%Y-%m-%d %H:%M UTC', _time.gmtime(ts))
+        return label
+    if BUILD_MTIME:
+        return "build " + _time.strftime('%Y-%m-%d %H:%M UTC', _time.gmtime(BUILD_MTIME))
+    return "build ?"
+
+
+VERSION = _format_version()
 app = Flask(__name__)
 
 # One-time feeder_map → slot_targets migration. Kept behind an explicit
@@ -91,7 +206,24 @@ def dashboard():
     fb_ui_url = fb_api_url.replace('/api', '')
     buy_more_url_template = cfg.get('buy_more_url_template', '')
     
-    return render_template('dashboard.html', version=VERSION, spoolman_url=sm_url, filabridge_url=fb_ui_url, buy_more_template=buy_more_url_template)
+    # Re-read .build_info on every dashboard render so a post-commit hook
+    # update (host-side) takes effect without needing a container restart.
+    # `_load_build_commit()` is cheap — at most one tiny file read and a
+    # quick parse. The mtime walk stays at startup (more expensive, doesn't
+    # need to be live). Recomposes VERSION too so the startup-log line and
+    # the rendered badge can drift apart safely.
+    live_sha, live_ts = _load_build_commit()
+    live_version = _format_version_from(live_sha, live_ts) if (live_sha or BUILD_MTIME) else VERSION
+    return render_template(
+        'dashboard.html',
+        version=live_version,
+        build_mtime=BUILD_MTIME,
+        build_commit_sha=live_sha or '',
+        build_commit_ts=live_ts or 0,
+        spoolman_url=sm_url,
+        filabridge_url=fb_ui_url,
+        buy_more_template=buy_more_url_template,
+    )
 
 # --- HELPER FUNCTIONS ---
 def clean_string(s):
@@ -763,6 +895,7 @@ def api_search_inventory():
     only_in_stock = request.args.get('in_stock', 'false').lower() == 'true'
     empty = request.args.get('empty', 'false').lower() == 'true'
     min_weight = request.args.get('min_weight', '')
+    max_weight = request.args.get('max_weight', '')
     target_type = request.args.get('type', 'spool')
     # Deployment status filter: '' | 'any' = no filter, 'deployed' = toolhead/ghost only,
     # 'undeployed' = not on a toolhead. Filaments ignore this.
@@ -778,6 +911,7 @@ def api_search_inventory():
             empty=empty,
             target_type=target_type,
             min_weight=min_weight,
+            max_weight=max_weight,
             deployed_state=deployed_state,
         )
         return jsonify({"success": True, "results": results})
@@ -1042,8 +1176,9 @@ def api_get_locations():
             
     csv_rows = list(local_map.values())
     occupancy_map: dict[str, int] = {}
-    unassigned_count: int = 0 
-    
+    unassigned_count: int = 0
+    unknown_count: int = 0  # 18.1 — spools sitting at the virtual UNKNOWN bucket
+
     sm_url, _ = config_loader.get_api_urls()
     try:
         resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
@@ -1054,13 +1189,17 @@ def api_get_locations():
                 if loc == 'UNASSIGNED': loc = "" # Coerce to true blank
                 extra = s.get('extra')
                 if not isinstance(extra, dict): extra = {}
-                
-                if loc: 
+
+                if loc == 'UNKNOWN':
+                    unknown_count += 1
+                    # Don't add UNKNOWN to occupancy_map — it's a virtual
+                    # bucket with no on-disk row to attach to.
+                elif loc:
                     if loc not in occupancy_map:
                         occupancy_map[loc] = 1
                     else:
                         occupancy_map[loc] += 1
-                else: 
+                else:
                     unassigned_count += 1 # type: ignore # pyre-ignore
                 
                 # [ALEX FIX] Ghost Occupancy Count
@@ -1174,6 +1313,13 @@ def api_get_locations():
     for row in csv_rows:
         lid = str(row.get('LocationID', '')).upper()
         if lid == "UNASSIGNED": continue # Skip if somehow in CSV
+        # 18.1 — Skip any on-disk UNKNOWN row too. Derek experimented with
+        # creating one manually before this feature landed; an on-disk
+        # row with "Spoolman Native" Type would shadow the virtual yellow-
+        # band row injected at the bottom. The virtual injection is the
+        # single source of truth now. Stale on-disk rows can be deleted
+        # via the Location Manager UI without breaking anything.
+        if lid == "UNKNOWN": continue
         
         max_s = row.get('Max Spools', '')
         try:
@@ -1196,8 +1342,24 @@ def api_get_locations():
             row['OccupancyRaw'] = curr_val 
             if max_val > 0: row['Occupancy'] = f"{curr_val}/{max_val}"
             else: row['Occupancy'] = f"{curr_val} items"
-            
+
         final_list.append(row)
+
+    # 18.1 — virtual UNKNOWN bucket, pinned to the BOTTOM of the list
+    # (Derek's pick: bottom over top because spools land here when they're
+    # physically misplaced; finding them is the goal, so they shouldn't
+    # crowd the top of the manager). Distinct from Unassigned (which is
+    # "deliberately on the workbench, awaiting a destination"); Unknown
+    # is "we don't know where it actually is — it's not at the location
+    # its tag claims." Riff on Unassigned visual treatment but yellow
+    # to flag as a caution state. The frontend renders the badge.
+    final_list.append({
+        "LocationID": "UNKNOWN",
+        "Name": "❓ Unknown (Physically Lost)",
+        "Type": "Unknown",
+        "Occupancy": f"{unknown_count} items",
+        "Max Spools": 0,
+    })
     return jsonify(final_list)
 
 @app.route('/api/locations', methods=['POST'])
@@ -1634,11 +1796,17 @@ def api_identify_scan():
     if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
         state.reset_audit()
         state.AUDIT_SESSION['active'] = True
+        state.AUDIT_SESSION['last_activity_ts'] = time.time()
         state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
         state.add_log_entry("Scan a Location label to begin checking.", "INFO")
-        return jsonify({"type": "command", "cmd": "clear"}) 
+        return jsonify({"type": "command", "cmd": "clear"})
 
     if state.AUDIT_SESSION.get('active'):
+        # Refresh the watchdog timestamp on every audit-mode scan so the
+        # idle-timeout in _check_audit_idle_timeout() only fires after a
+        # real abandonment. Updating BEFORE process_audit_scan so an
+        # explicit CMD:DONE/CMD:CANCEL still ends the session cleanly.
+        state.AUDIT_SESSION['last_activity_ts'] = time.time()
         logic.process_audit_scan(res)
         return jsonify({"type": "command", "cmd": "clear"})
 
@@ -1669,6 +1837,7 @@ def api_identify_scan():
         
     if res['type'] == 'spool':
         sid = res['id']; data = spoolman_api.get_spool(sid)
+        label_already_verified = False  # response flag — see L128 below
         if data:
             if source == 'barcode' and text.strip().upper().startswith('ID:'):
                 extra = data.get('extra', {})
@@ -1695,11 +1864,15 @@ def api_identify_scan():
                             f"❌ Failed to verify Spool #{sid} label: {err}", "ERROR", "ff4444"
                         )
                 else:
-                    # Always give the user feedback on a label scan, even
-                    # when no flag flip was needed. Silence here is the
-                    # symptom that motivated Item 3 — users couldn't tell
-                    # whether the scan was acknowledged at all.
+                    # L128 follow-up (2026-05-15): toast-only ack felt
+                    # noisier than the log line it replaced, so revert
+                    # to writing to the Activity Log. The log is bounded
+                    # at 50 entries server-side and the user can pause
+                    # it via the click-to-pause indicator — both better
+                    # mitigations for blind-scan volume than a 1.5s
+                    # toast for every scan.
                     state.add_log_entry(f"ℹ️ Spool #{sid} already verified", "INFO", "00ccff")
+                    label_already_verified = True
             
             info = spoolman_api.format_spool_display(data)
             
@@ -1717,9 +1890,9 @@ def api_identify_scan():
                 final_slot = ghost_slot
 
             return jsonify({
-                "type": "spool", 
-                "id": int(sid), 
-                "display": info['text'], 
+                "type": "spool",
+                "id": int(sid),
+                "display": info['text'],
                 "color": info['color'],
                 "color_direction": info.get("color_direction", "longitudinal"),
                 "remaining_weight": data.get("remaining_weight"),
@@ -1728,12 +1901,14 @@ def api_identify_scan():
                 "location": p_source if is_ghost else sloc,
                 "is_ghost": is_ghost,
                 "slot": final_slot,
-                "deployed_to": sloc if is_ghost else None
+                "deployed_to": sloc if is_ghost else None,
+                "label_already_verified": label_already_verified
             })
             
     if res['type'] == 'filament':
         fid = res['id']
         data = spoolman_api.get_filament(fid)
+        label_already_verified = False  # response flag — see L128 (spool branch)
         if data:
             if source == 'barcode' and text.strip().upper().startswith('FIL:'):
                 extra = data.get('extra', {})
@@ -1754,10 +1929,15 @@ def api_identify_scan():
                             f"❌ Failed to verify Filament #{fid} label: {err}", "ERROR", "ff4444"
                         )
                 else:
+                    # L128 follow-up (2026-05-15): see spool branch — reverted
+                    # to Activity Log entry. Response flag still emitted in case
+                    # any future surface needs the signal, but the toast on the
+                    # frontend has been removed.
                     state.add_log_entry(f"ℹ️ Filament #{fid} already verified", "INFO", "00ccff")
-            
+                    label_already_verified = True
+
             name = data.get('name', 'Unknown Filament')
-            return jsonify({"type": "filament", "id": int(fid), "display": name})
+            return jsonify({"type": "filament", "id": int(fid), "display": name, "label_already_verified": label_already_verified})
 
     # --- SLOT ASSIGNMENT (Phase 1) ---
     # LOC:X:SLOT:Y scans mean "drop the buffered spool into slot Y of location X".
@@ -2908,8 +3088,216 @@ def api_fb_manual_recovery():
             
     _, fb_url = config_loader.get_api_urls()
     prusalink_api.acknowledge_filabridge_error(fb_url, error_id)
-    
+
     return jsonify({"success": True, "msg": f"Updated {spools_updated} spools."})
+
+
+# --- FILABRIDGE ↔ SPOOLMAN RECONCILE (L324) -----------------------------------
+# Cross-checks every non-zero FilaBridge toolhead_mapping against the
+# spool's Spoolman `location` field. Surfaces mismatches that the
+# `_fb_spool_location()` pre-flight in logic.py prevents from being
+# created NEW but doesn't heal once they exist (manual DB edits, prior
+# bugs, the retired suppress_fb_unmap path, etc.).
+#
+# /api/filabridge/reconcile           GET  → list of mismatches
+# /api/filabridge/reconcile/apply     POST → resolve one mismatch
+#
+@app.route('/api/audit_session', methods=['GET'])
+def api_audit_session():
+    """L154 / 18.2 Part B — current audit session snapshot for the visual
+    audit panel. Returns the location being audited plus enriched expected/
+    scanned/rogue lists (each with the spool's display label, color,
+    remaining weight, and slot if known) so the frontend can render a
+    grid of tiles without doing per-id Spoolman lookups itself.
+
+    Cheap when no audit is active (returns {active: False} immediately).
+
+    Runs the idle-timeout watchdog first so even a direct poll heals a
+    stale session — the dashboard's heartbeat hits /api/logs every 5s,
+    but in case anything skips that path the same check here closes
+    the loop."""
+    _check_audit_idle_timeout()
+    sess = state.AUDIT_SESSION
+    if not sess.get('active'):
+        return jsonify({"active": False})
+
+    expected = list(sess.get('expected_items') or [])
+    scanned = set(sess.get('scanned_items') or [])
+    rogue = list(sess.get('rogue_items') or [])
+
+    def _enrich(sid):
+        try:
+            sp = spoolman_api.get_spool(sid) or {}
+        except Exception:
+            sp = {}
+        info = spoolman_api.format_spool_display(sp) if sp else {}
+        fil = (sp.get('filament') or {})
+        return {
+            "id": int(sid),
+            "display": info.get('text') or f"#{sid}",
+            "color": fil.get('color_hex') or info.get('color') or '',
+            "color_direction": fil.get('multi_color_direction') or 'longitudinal',
+            "multi_color_hexes": fil.get('multi_color_hexes') or '',
+            "remaining_weight": sp.get('remaining_weight'),
+            "slot": (sp.get('extra') or {}).get('container_slot') or '',
+        }
+
+    expected_rows = []
+    for sid in expected:
+        row = _enrich(sid)
+        row['found'] = (sid in scanned)
+        expected_rows.append(row)
+    rogue_rows = [{**_enrich(sid), 'found': True, 'rogue': True} for sid in rogue]
+
+    return jsonify({
+        "active": True,
+        "location_id": sess.get('location_id'),
+        "expected": expected_rows,
+        "rogue": rogue_rows,
+        "stats": {
+            "total_expected": len(expected),
+            "found": sum(1 for r in expected_rows if r['found']),
+            "missing": sum(1 for r in expected_rows if not r['found']),
+            "rogue": len(rogue),
+        },
+    })
+
+
+@app.route('/api/filabridge/reconcile', methods=['GET'])
+def api_filabridge_reconcile():
+    """Walk FilaBridge /status, cross-check against Spoolman per-spool
+    location. Return a JSON payload listing each mismatch with both views
+    so the UI can offer 'Trust Spoolman' / 'Trust FilaBridge' actions."""
+    _, fb_url = config_loader.get_api_urls()
+    try:
+        resp = requests.get(f"{fb_url}/status", timeout=5)
+        if not resp.ok:
+            return jsonify({"success": False, "msg": f"FilaBridge /status returned {resp.status_code}"})
+        fb_data = resp.json() or {}
+    except requests.RequestException as e:
+        return jsonify({"success": False, "msg": f"FilaBridge unreachable: {e}"})
+
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    # Build a reverse: (printer_name, position) → location_id, for the
+    # mapping side that FB exposes as raw position numbers.
+    pos_to_loc = {}
+    for loc_id, info in printer_map.items():
+        key = (info.get('printer_name'), int(info.get('position', 0)))
+        pos_to_loc[key] = loc_id.upper()
+
+    mismatches = []
+    matched = 0
+    fb_mappings = fb_data.get('toolhead_mappings', {}) or {}
+    for _printer_key, toolheads in fb_mappings.items():
+        for th_id, entry in (toolheads or {}).items():
+            try:
+                spool_id = int((entry or {}).get('spool_id') or 0)
+            except (TypeError, ValueError):
+                continue
+            if spool_id <= 0:
+                continue
+            try:
+                th_pos = int(th_id)
+            except (TypeError, ValueError):
+                continue
+            fb_printer = (entry or {}).get('printer_name') or _printer_key
+            fb_loc = pos_to_loc.get((fb_printer, th_pos))
+            if not fb_loc:
+                mismatches.append({
+                    "spool_id": spool_id,
+                    "fb_printer": fb_printer,
+                    "fb_toolhead": th_pos,
+                    "fb_location": None,
+                    "sm_location": None,
+                    "reason": "FilaBridge reports a toolhead position with no matching entry in printer_map; unmap recommended.",
+                })
+                continue
+            sp = spoolman_api.get_spool(spool_id) or {}
+            sm_loc = str(sp.get('location') or '').strip().upper()
+            if sm_loc == fb_loc:
+                matched += 1
+                continue
+            mismatches.append({
+                "spool_id": spool_id,
+                "fb_printer": fb_printer,
+                "fb_toolhead": th_pos,
+                "fb_location": fb_loc,
+                "sm_location": sm_loc or None,
+                "spool_display": spoolman_api.format_spool_display(sp).get('text', f"#{spool_id}") if sp else f"#{spool_id}",
+                "reason": (
+                    "FilaBridge says this spool is on the listed toolhead; "
+                    "Spoolman records a different location. They diverged at some "
+                    "point — likely a stale ghost from before _fb_spool_location pre-flight landed."
+                ),
+            })
+    return jsonify({"success": True, "matched": matched, "mismatches": mismatches})
+
+
+@app.route('/api/filabridge/reconcile/apply', methods=['POST'])
+def api_filabridge_reconcile_apply():
+    """Resolve one mismatch.
+
+    Payload:
+      {
+        "spool_id": int,
+        "action": "trust_spoolman" | "trust_filabridge",
+        "fb_printer": str,
+        "fb_toolhead": int,
+        "fb_location": str | null,     # required for trust_filabridge
+        "sm_location": str | null,
+      }
+    """
+    data = request.json or {}
+    action = data.get('action')
+    spool_id = data.get('spool_id')
+    fb_printer = data.get('fb_printer')
+    try:
+        fb_toolhead = int(data.get('fb_toolhead'))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "msg": "fb_toolhead must be an int"})
+    if not spool_id or action not in ('trust_spoolman', 'trust_filabridge'):
+        return jsonify({"success": False, "msg": "Bad payload"})
+
+    _, fb_url = config_loader.get_api_urls()
+    if action == 'trust_spoolman':
+        # Clear FilaBridge's stale toolhead entry; Spoolman's location wins.
+        ok, detail = logic._fb_write(fb_printer, fb_toolhead, 0, fb_url)
+        if ok:
+            state.add_log_entry(
+                f"🔧 Reconcile: cleared FilaBridge {fb_printer}-{fb_toolhead} (trusted Spoolman for Spool #{spool_id})",
+                "SUCCESS", "00ff00",
+            )
+            return jsonify({"success": True})
+        state.add_log_entry(
+            f"❌ Reconcile: failed to clear FilaBridge {fb_printer}-{fb_toolhead}: {detail}",
+            "ERROR", "ff4444",
+        )
+        return jsonify({"success": False, "msg": detail})
+
+    # action == 'trust_filabridge'
+    fb_location = (data.get('fb_location') or '').strip().upper()
+    if not fb_location:
+        return jsonify({"success": False, "msg": "fb_location required for trust_filabridge"})
+    sp = spoolman_api.get_spool(spool_id) or {}
+    extra = dict((sp.get('extra') or {}))
+    # Don't disturb container_slot / physical_source — perform_smart_move
+    # would, but this is a "rewrite Spoolman to match the truth FilaBridge
+    # already accepted" operation, so we leave the system-managed extras
+    # alone and only set the location field.
+    if spoolman_api.update_spool(spool_id, {"location": fb_location, "extra": extra}):
+        state.add_log_entry(
+            f"🔧 Reconcile: set Spoolman #{spool_id} location → {fb_location} (trusted FilaBridge)",
+            "SUCCESS", "00ff00",
+        )
+        return jsonify({"success": True})
+    err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+    state.add_log_entry(
+        f"❌ Reconcile: Spoolman rejected #{spool_id} → {fb_location}: {err}",
+        "ERROR", "ff4444",
+    )
+    return jsonify({"success": False, "msg": err})
+
 
 # --- PERSISTENCE ROUTES ---
 @app.route('/api/state/buffer', methods=['GET', 'POST'])
@@ -2942,8 +3330,43 @@ def api_log_event():
     if msg: state.add_log_entry(msg, level)
     return jsonify({"success": True})
 
+def _check_audit_idle_timeout():
+    """Auto-cancel an audit session that's gone stale.
+
+    A closed tab, browser crash, or server-restart-then-relaunch can
+    leave AUDIT_SESSION.active=True with no real user behind the wheel.
+    Without this watchdog the audit panel keeps auto-opening on every
+    subsequent dashboard load until someone explicitly scans CMD:CANCEL
+    or the process restarts. Checked on every /api/logs poll (every 5s
+    from the dashboard heartbeat), so the recovery latency is ≤ 5s
+    after the timeout window expires.
+    """
+    if not state.AUDIT_SESSION.get('active'):
+        return
+    last = float(state.AUDIT_SESSION.get('last_activity_ts') or 0.0)
+    if last <= 0:
+        # No timestamp at all (legacy session from before this watchdog
+        # landed). Plant `now` so the timer starts NOW rather than
+        # auto-cancelling immediately.
+        state.AUDIT_SESSION['last_activity_ts'] = time.time()
+        return
+    if (time.time() - last) > state.AUDIT_IDLE_TIMEOUT_SECONDS:
+        loc = state.AUDIT_SESSION.get('location_id') or ''
+        state.add_log_entry(
+            f"🕒 Audit auto-cancelled after "
+            f"{state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min of inactivity"
+            + (f" (was on {loc})" if loc else "")
+            + " — no spools moved.",
+            "WARNING", "ffaa00",
+        )
+        state.reset_audit()
+
+
 @app.route('/api/logs', methods=['GET'])
 def api_get_logs_route():
+    # Cheap pre-flight: clear any abandoned audit session before the
+    # frontend sees audit_active=True and auto-opens the panel.
+    _check_audit_idle_timeout()
     sm_url, fb_url = config_loader.get_api_urls()
     sm_ok, fb_ok = False, False
     try: sm_ok = requests.get(f"{sm_url}/api/v1/health", timeout=3).ok
@@ -3078,4 +3501,18 @@ if __name__ == '__main__':
         spoolman_api.ensure_required_extras()
     except Exception as _e:
         state.logger.warning(f"ensure_required_extras failed at startup: {_e}")
-    app.run(host='0.0.0.0', port=8000)
+    # Derek 2026-05-19: auto-clean the filament_attributes dropdown so we
+    # never have to find + run the standalone migration script manually.
+    # Idempotent — first boot does the cleanup; subsequent boots are a
+    # cheap field-definition GET + early-return. Failures log and move
+    # on, never block startup.
+    try:
+        spoolman_api.ensure_filament_attributes_cleaned()
+    except Exception as _e:
+        state.logger.warning(f"ensure_filament_attributes_cleaned failed at startup: {_e}")
+    # L293 — opt-in dev-mode auto-reload. Set `FCC_DEV=1` (or `true`) in
+    # the dev environment to have werkzeug watch files and restart the
+    # server on edits. Defaults to off so the TrueNAS prod image keeps
+    # its current behavior (one long-lived process, no reload churn).
+    _dev = str(os.environ.get('FCC_DEV', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    app.run(host='0.0.0.0', port=8000, use_reloader=_dev, debug=False)
