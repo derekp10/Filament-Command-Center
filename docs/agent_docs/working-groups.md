@@ -35,7 +35,7 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 | `locations.json` corruption recurring (L25) | `PARTIAL` 2026-05-12 — Hardening (1) per-call unique temp filename + (2) verify-after-write tripwire shipped on `feature/locations-json-write-hardening`. Monitor prod hub.log for `verify-after-write FAILED` critical lines. (3) explicit truncate + (4) Docker named volume deferred pending recurrence signal. |
 | Screen blanking / wake lock (L17) | ON HOLD — OS-level issue |
 | Config system design (L18) | NEEDS DESIGN SESSION for full schema. Config UI scaffold now shipped 2026-05-16 as the host for Filabridge reconcile + Build Info cards — adding future sections is just dropping another `.card` into `modals_config.html`. Full schema design (key/label/type/default/validation, import/export, hierarchy) still pending. |
-| Filabridge status light (L20) | ON HOLD — hardware/firmware |
+| Filabridge status light (L20) | ON HOLD — all-software (FilaBridge process ↔ FCC `/api/status` polling). Defer until correlated logs from both sides + a clear repro of flicker-vs-solid behavior are available. |
 | FIL:58 label scan (L23) | ON HOLD — needs physical label |
 | Display modal on Display modal (L26) | `PARTIAL` 2026-05-12 + FOLLOW-UP 2026-05-14 — details↔details and wizard↔details stacking now both close siblings via `window.hideAllDetailsModals`. Retest the L28 freeze with same scenario. |
 | Frontend lock-up (L28) | `NEEDS REPRO` — RECURRED 2026-05-18 during force-eject of a ghost-deployed spool in dryer-box modal. Detailed capture instructions in buglist entry (DevTools Console + Network HAR before refresh). Pairs with L122 PARTIAL — same DevTools capture answers both. |
