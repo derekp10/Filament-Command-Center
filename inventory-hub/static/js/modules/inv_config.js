@@ -183,21 +183,26 @@ console.log("🚀 Loaded Module: CONFIG");
             ? filaments.filter(f => _attrsMatchesFilter(f, needle))
             : filaments;
         const visibleCount = filteredFilaments.length;
-        // Schema-level chips — each carries an X to delete the choice
-        // from the field. Background tone of the X scales with usage so
-        // the "this is irreversible for N records" weight is obvious.
+        // Choices manager — schema-level. Each chip carries a visible
+        // red ✕ button so the "click to delete this tag from the system"
+        // affordance is obvious. Background tone of the chip itself
+        // scales with usage so unused (safe-to-remove) choices look
+        // muted vs in-use (warn-on-remove) choices.
         const choiceChips = choices.map(c => {
             const n = counts[c] || 0;
             const usageTitle = n
-                ? `${n} filament(s) carry this flag — removing requires confirm`
+                ? `${n} filament(s) carry this tag — removing will strip it from every record`
                 : `unused — safe to remove`;
-            return `<span class="badge bg-secondary me-1 mb-1 d-inline-flex align-items-center" title="${usageTitle}">
-                ${_esc(c)}
-                <span class="ms-1 text-info">${n}</span>
-                <button type="button" class="btn-close btn-close-white ms-2 config-attrs-rm-choice"
+            const chipBg = n ? 'background:#0d6efd; color:#fff;' : 'background:#444; color:#bbb;';
+            return `<span class="config-attrs-choice-chip d-inline-flex align-items-center me-2 mb-2"
+                          title="${usageTitle}"
+                          style="${chipBg} padding:0.25rem 0.5rem; border-radius:4px; font-size:0.85rem;">
+                <span class="fw-bold">${_esc(c)}</span>
+                <span class="ms-2" style="opacity:0.85;">${n}</span>
+                <button type="button" class="btn btn-sm config-attrs-rm-choice ms-2 p-0 d-inline-flex align-items-center justify-content-center"
                         data-choice="${_esc(c)}" data-usage="${n}"
-                        style="font-size:0.55rem; opacity:${n ? '0.75' : '0.55'};"
-                        title="Remove this choice from the Spoolman field"></button>
+                        title="Remove this tag from the system"
+                        style="width:18px; height:18px; line-height:1; background:#dc3545; color:#fff; border:none; border-radius:3px; font-weight:bold;">✕</button>
             </span>`;
         }).join('');
         const choiceOpts = choices.map(c => `<option value="${_esc(c)}">${_esc(c)}</option>`).join('');
@@ -219,44 +224,56 @@ console.log("🚀 Loaded Module: CONFIG");
         }).join('');
         const selCount = _attrs.selected.size;
         host.innerHTML = `
-            <div class="mb-2 small" style="color: rgba(255,255,255,0.85);">
-                <div class="mb-1"><b>${total}</b> filament(s) loaded. Manage choices (click ✕ to remove from schema):</div>
-                <div class="mt-1">${choiceChips || '<i class="text-muted">(no choices defined)</i>'}</div>
-                <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
+            <!-- SECTION 1: Choices manager (schema-level add/remove). -->
+            <div class="p-3 mb-3 border rounded" style="border-color:#0d6efd!important; background:rgba(13,110,253,0.08);">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="mb-0 text-info fw-bold">🛠 Choices Manager <span class="badge bg-secondary ms-1">${choices.length}</span></h6>
+                    <span class="small text-muted">add a new tag or remove an existing one — propagates to every filament that carries it</span>
+                </div>
+                <div class="mb-2">${choiceChips || '<i class="text-muted small">(no choices defined yet — add one below)</i>'}</div>
+                <div class="d-flex flex-wrap align-items-center gap-2">
                     <input type="text" id="config-attrs-add-input" class="form-control form-control-sm bg-dark text-white border-secondary"
-                           placeholder="New attribute name…" autocomplete="off" style="max-width: 240px;">
-                    <button class="btn btn-sm btn-outline-info" id="config-attrs-add-btn">＋ Add new choice</button>
+                           placeholder="Type a new tag name…" autocomplete="off" style="max-width: 280px;">
+                    <button class="btn btn-sm btn-success fw-bold" id="config-attrs-add-btn">＋ Add new tag</button>
                 </div>
             </div>
-            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                <input type="text" id="config-attrs-filter" class="form-control form-control-sm bg-dark text-white border-secondary"
-                       placeholder="🔎 Filter by id / vendor / material / name / attribute…"
-                       value="${_esc(_attrs.filter)}" autocomplete="off" style="max-width: 380px;">
-                <span class="small text-muted">${visibleCount}/${total} visible${needle ? ` for "${_esc(_attrs.filter)}"` : ''}</span>
-                ${_attrs.filter ? '<button class="btn btn-sm btn-outline-secondary" id="config-attrs-filter-clear">clear</button>' : ''}
-            </div>
-            <div class="d-flex flex-wrap align-items-center gap-2 mb-2 p-2 border border-secondary rounded">
-                <span class="small text-info fw-bold">Bulk action for <span id="config-attrs-sel-count">${selCount}</span> selected:</span>
-                <select id="config-attrs-bulk-choice" class="form-select form-select-sm bg-dark text-white border-secondary" style="width: auto;">
-                    ${choiceOpts}
-                </select>
-                <button class="btn btn-sm btn-success" id="config-attrs-bulk-add" ${selCount ? '' : 'disabled'}>＋ Add to selected</button>
-                <button class="btn btn-sm btn-warning" id="config-attrs-bulk-remove" ${selCount ? '' : 'disabled'}>− Remove from selected</button>
-            </div>
-            <div style="max-height: 45vh; overflow-y: auto;">
-                <table class="table table-sm table-dark table-hover align-middle mb-0">
-                    <thead>
-                        <tr>
-                            <th style="width:32px;"><input type="checkbox" id="config-attrs-select-all" ${allVisibleSelectedCls}></th>
-                            <th>ID</th>
-                            <th>Vendor</th>
-                            <th>Material</th>
-                            <th>Name</th>
-                            <th>Attributes</th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows || '<tr><td colspan="6" class="text-center text-muted small">no matches</td></tr>'}</tbody>
-                </table>
+
+            <!-- SECTION 2: Per-filament bulk editor. -->
+            <div class="p-3 border rounded" style="border-color:#ffc107!important; background:rgba(255,193,7,0.06);">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="mb-0 text-warning fw-bold">📋 Per-Filament Bulk Editor</h6>
+                    <span class="small text-muted"><b>${total}</b> filament(s) loaded</span>
+                </div>
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                    <input type="text" id="config-attrs-filter" class="form-control form-control-sm bg-dark text-white border-secondary"
+                           placeholder="🔎 Filter by id / vendor / material / name / attribute…"
+                           value="${_esc(_attrs.filter)}" autocomplete="off" style="max-width: 380px;">
+                    <span class="small text-muted">${visibleCount}/${total} visible${needle ? ` for "${_esc(_attrs.filter)}"` : ''}</span>
+                    ${_attrs.filter ? '<button class="btn btn-sm btn-outline-secondary" id="config-attrs-filter-clear">clear</button>' : ''}
+                </div>
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2 p-2 rounded" style="background:rgba(0,0,0,0.35);">
+                    <span class="small text-warning fw-bold">Apply to <span id="config-attrs-sel-count">${selCount}</span> selected:</span>
+                    <select id="config-attrs-bulk-choice" class="form-select form-select-sm bg-dark text-white border-secondary" style="width: auto;">
+                        ${choiceOpts}
+                    </select>
+                    <button class="btn btn-sm btn-success" id="config-attrs-bulk-add" ${selCount ? '' : 'disabled'}>＋ Add to selected</button>
+                    <button class="btn btn-sm btn-warning" id="config-attrs-bulk-remove" ${selCount ? '' : 'disabled'}>− Remove from selected</button>
+                </div>
+                <div style="max-height: 40vh; overflow-y: auto;">
+                    <table class="table table-sm table-dark table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th style="width:32px;"><input type="checkbox" id="config-attrs-select-all" ${allVisibleSelectedCls}></th>
+                                <th>ID</th>
+                                <th>Vendor</th>
+                                <th>Material</th>
+                                <th>Name</th>
+                                <th>Attributes</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows || '<tr><td colspan="6" class="text-center text-muted small">no matches</td></tr>'}</tbody>
+                    </table>
+                </div>
             </div>
         `;
 

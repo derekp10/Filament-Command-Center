@@ -3422,7 +3422,7 @@ def api_filament_attributes_bulk_set():
         updated += 1
 
     state.add_log_entry(
-        f"🏷 Filament Attributes bulk-set: +{sorted(add_set)} / -{sorted(remove_set)} "
+        f"🏷️ Filament Attributes bulk-set: +{sorted(add_set)} / -{sorted(remove_set)} "
         f"across {len(ids)} filament(s) — {updated} updated, {unchanged} unchanged, "
         f"{len(errors)} error(s).",
         "INFO" if not errors else "WARNING",
@@ -3450,7 +3450,7 @@ def api_filament_attributes_add_choice():
     res = spoolman_api.update_extra_field_choices('filament', 'filament_attributes', [choice])
     if res.get('success'):
         state.add_log_entry(
-            f"🏷 Filament Attributes: added choice {choice!r}", "INFO", "00ccff"
+            f"🏷️ Filament Attributes: added choice {choice!r}", "INFO", "00ccff"
         )
     return jsonify(res)
 
@@ -3600,7 +3600,7 @@ def api_filament_attributes_remove_choice():
     level = "INFO" if not restore_failures else "WARNING"
     color = "00ccff" if not restore_failures else "ffaa00"
     state.add_log_entry(
-        f"🏷 Filament Attributes: removed choice {choice!r} "
+        f"🏷️ Filament Attributes: removed choice {choice!r} "
         f"(stripped from {len(users)} filament(s); restored {restored}/{len(snapshot)} "
         f"sibling-attr records"
         + (f"; {len(restore_failures)} restore failure(s)" if restore_failures else "")
