@@ -650,9 +650,16 @@ window.saveFeedsSection = () => {
 
 window.renderFeedsSection = renderFeedsSection;
 
+// L28 polling guard: see updateLogState in inv_core.js for rationale.
+// refreshManageView is invoked on a 5s sync-pulse while the manage modal
+// is open; without this guard, a slow get_contents stacked subsequent
+// ticks on top of itself.
+let _refreshManageViewInflight = false;
 window.refreshManageView = (id) => {
     const loc = state.allLocations.find(l => l.LocationID == id);
     if (!loc) return false;
+    if (_refreshManageViewInflight) return true;
+    _refreshManageViewInflight = true;
 
     // Fetch data first (Don't touch DOM yet)
     fetch(`/api/get_contents?id=${id}`)
@@ -675,7 +682,9 @@ window.refreshManageView = (id) => {
             const isGrid = (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
             if (isGrid) renderGrid(d, parseInt(loc['Max Spools']));
             else renderList(d, id);
-        });
+        })
+        .catch(e => console.warn("refreshManageView failed:", e))
+        .finally(() => { _refreshManageViewInflight = false; });
     return true;
 };
 

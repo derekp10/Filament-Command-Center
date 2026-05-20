@@ -717,6 +717,13 @@ const persistBuffer = () => {
 };
 
 const loadBuffer = () => {
+    // L28 polling guard: bail if a previous tick is still in flight.
+    // isBufferSyncing was already used to block persistBuffer uploads
+    // during a sync; reusing it here also gates the next poll from
+    // piling up on top of an in-flight one — under a slow backend,
+    // unguarded 2s ticks were a major contributor to socket-buffer
+    // exhaustion (net::ERR_NO_BUFFER_SPACE).
+    if (window.isBufferSyncing) return;
     window.isBufferSyncing = true; // Block uploads
     fetch('/api/state/buffer')
         .then(r => r.json())
@@ -761,15 +768,19 @@ const loadBuffer = () => {
 };
 
 // --- LIVE REFRESH POLLING ---
+// L28 polling guard: see updateLogState for rationale.
+let _liveRefreshInflight = false;
 const liveRefreshBuffer = () => {
     if (!state.heldSpools || state.heldSpools.length === 0) return;
+    if (_liveRefreshInflight) return;
 
     // Only fetch if we are actually looking at the dashboard
     // No need to spam Spoolman if the user is in the Location Manager or elsewhere
-    // Wait, the user specifically wants the buffer updated in the background even if they are in Manager, 
+    // Wait, the user specifically wants the buffer updated in the background even if they are in Manager,
     // because the Manager uses the global buffer.
     const spoolIds = state.heldSpools.map(s => s.id);
 
+    _liveRefreshInflight = true;
     fetch('/api/spools/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -814,7 +825,8 @@ const liveRefreshBuffer = () => {
                 if (window.renderBuffer) window.renderBuffer();
             }
         })
-        .catch(e => console.warn("Live Refresh Buffer Failed", e));
+        .catch(e => console.warn("Live Refresh Buffer Failed", e))
+        .finally(() => { _liveRefreshInflight = false; });
 };
 
 document.addEventListener('inventory:sync-pulse', liveRefreshBuffer);

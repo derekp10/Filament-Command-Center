@@ -409,7 +409,11 @@ const hexToRgb = (hex) => {
 };
 
 // --- DATA FETCHERS ---
+// L28 polling guard: see updateLogState for rationale. Same pattern.
+let _fetchLocationsInflight = false;
 const fetchLocations = () => {
+    if (_fetchLocationsInflight) return;
+    _fetchLocationsInflight = true;
     fetch('/api/locations')
         .then(r => r.json())
         .then(d => {
@@ -575,7 +579,9 @@ const fetchLocations = () => {
                 </tr>`;
                 }).join('');
             }
-        });
+        })
+        .catch(e => console.warn("fetchLocations failed:", e))
+        .finally(() => { _fetchLocationsInflight = false; });
 };
 window.fetchLocations = fetchLocations;
 
@@ -699,8 +705,18 @@ window.openLogPillOverlay = () => {
     });
 };
 
+// L28 root cause: this poll fired on a 5s heartbeat without an in-flight
+// guard and without a .catch(), so a slow backend (e.g. mid-PATCH) would
+// pile fetches up until Chrome hit net::ERR_NO_BUFFER_SPACE — at which
+// point every poll started rejecting and the unhandled rejections cascaded
+// into a "frozen" frontend. Guard + catch keep the poll well-behaved under
+// load: ticks back off automatically while a request is still pending.
+let _updateLogStateInflight = false;
 const updateLogState = (force = false) => {
-    if (!state.logsPaused || force) fetch('/api/logs').then(r => r.json()).then(d => {
+    if (state.logsPaused && !force) return;
+    if (_updateLogStateInflight) return;
+    _updateLogStateInflight = true;
+    fetch('/api/logs').then(r => r.json()).then(d => {
         // --- NO WIGGLE CHECK ---
         const contentHash = JSON.stringify(d);
         if (!force && state.lastLogHash === contentHash) return;
@@ -733,7 +749,8 @@ const updateLogState = (force = false) => {
             // Audit Visuals are handled in Command Center Module
             if (window.updateAuditVisuals) window.updateAuditVisuals();
         }
-    });
+    }).catch(e => console.warn("updateLogState failed:", e))
+      .finally(() => { _updateLogStateInflight = false; });
 };
 
 // --- MODAL HELPERS ---
