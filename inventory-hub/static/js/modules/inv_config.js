@@ -156,25 +156,54 @@ console.log("🚀 Loaded Module: CONFIG");
     };
 
     // --- FILAMENT ATTRIBUTES MANAGER (L58) ---
-    // In-module state for the attributes table — selected filament ids
-    // and the cached report so the bulk-set action doesn't have to
-    // re-fetch before sending the PATCH. Re-scanning after a bulk-set
-    // refreshes both.
-    const _attrs = { report: null, selected: new Set() };
+    // In-module state:
+    //   report   — cached /report payload (choices, filaments, counts)
+    //   selected — checked-row filament ids (Set, survives table re-render
+    //              within a scan, dropped on re-scan to drop stale ids)
+    //   filter   — free-text search string for the filter bar; matches
+    //              against id/vendor/material/name/attribute substrings
+    const _attrs = { report: null, selected: new Set(), filter: '' };
+
+    const _attrsMatchesFilter = (f, needle) => {
+        if (!needle) return true;
+        const hay = [
+            String(f.id), f.vendor, f.material, f.name,
+            (f.attributes || []).join(' '),
+        ].join(' ').toLowerCase();
+        return hay.includes(needle);
+    };
 
     const _attrsRenderTable = () => {
         const host = document.getElementById('config-attrs-results');
         if (!host || !_attrs.report) return;
         const { choices, filaments, counts } = _attrs.report;
         const total = filaments.length;
-        const selCount = _attrs.selected.size;
+        const needle = (_attrs.filter || '').toLowerCase();
+        const filteredFilaments = needle
+            ? filaments.filter(f => _attrsMatchesFilter(f, needle))
+            : filaments;
+        const visibleCount = filteredFilaments.length;
+        // Schema-level chips — each carries an X to delete the choice
+        // from the field. Background tone of the X scales with usage so
+        // the "this is irreversible for N records" weight is obvious.
         const choiceChips = choices.map(c => {
             const n = counts[c] || 0;
-            return `<span class="badge bg-secondary me-1 mb-1" title="${n} filament(s) carry this flag">${_esc(c)} <span class="ms-1 text-info">${n}</span></span>`;
+            const usageTitle = n
+                ? `${n} filament(s) carry this flag — removing requires confirm`
+                : `unused — safe to remove`;
+            return `<span class="badge bg-secondary me-1 mb-1 d-inline-flex align-items-center" title="${usageTitle}">
+                ${_esc(c)}
+                <span class="ms-1 text-info">${n}</span>
+                <button type="button" class="btn-close btn-close-white ms-2 config-attrs-rm-choice"
+                        data-choice="${_esc(c)}" data-usage="${n}"
+                        style="font-size:0.55rem; opacity:${n ? '0.75' : '0.55'};"
+                        title="Remove this choice from the Spoolman field"></button>
+            </span>`;
         }).join('');
         const choiceOpts = choices.map(c => `<option value="${_esc(c)}">${_esc(c)}</option>`).join('');
-        const allSelectedCls = selCount === total && total > 0 ? 'checked' : '';
-        const rows = filaments.map(f => {
+        const selVisible = filteredFilaments.filter(f => _attrs.selected.has(f.id)).length;
+        const allVisibleSelectedCls = selVisible === visibleCount && visibleCount > 0 ? 'checked' : '';
+        const rows = filteredFilaments.map(f => {
             const checked = _attrs.selected.has(f.id) ? 'checked' : '';
             const archived = f.archived ? '<span class="badge bg-dark text-muted ms-1">archived</span>' : '';
             const attrs = (f.attributes || []).map(a => `<span class="badge bg-info text-dark me-1">${_esc(a)}</span>`).join('') || '<span class="text-muted small">—</span>';
@@ -188,10 +217,23 @@ console.log("🚀 Loaded Module: CONFIG");
                     <td>${attrs}</td>
                 </tr>`;
         }).join('');
+        const selCount = _attrs.selected.size;
         host.innerHTML = `
             <div class="mb-2 small" style="color: rgba(255,255,255,0.85);">
-                <b>${total}</b> filament(s) loaded. Flag usage:
+                <div class="mb-1"><b>${total}</b> filament(s) loaded. Manage choices (click ✕ to remove from schema):</div>
                 <div class="mt-1">${choiceChips || '<i class="text-muted">(no choices defined)</i>'}</div>
+                <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
+                    <input type="text" id="config-attrs-add-input" class="form-control form-control-sm bg-dark text-white border-secondary"
+                           placeholder="New attribute name…" autocomplete="off" style="max-width: 240px;">
+                    <button class="btn btn-sm btn-outline-info" id="config-attrs-add-btn">＋ Add new choice</button>
+                </div>
+            </div>
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                <input type="text" id="config-attrs-filter" class="form-control form-control-sm bg-dark text-white border-secondary"
+                       placeholder="🔎 Filter by id / vendor / material / name / attribute…"
+                       value="${_esc(_attrs.filter)}" autocomplete="off" style="max-width: 380px;">
+                <span class="small text-muted">${visibleCount}/${total} visible${needle ? ` for "${_esc(_attrs.filter)}"` : ''}</span>
+                ${_attrs.filter ? '<button class="btn btn-sm btn-outline-secondary" id="config-attrs-filter-clear">clear</button>' : ''}
             </div>
             <div class="d-flex flex-wrap align-items-center gap-2 mb-2 p-2 border border-secondary rounded">
                 <span class="small text-info fw-bold">Bulk action for <span id="config-attrs-sel-count">${selCount}</span> selected:</span>
@@ -201,11 +243,11 @@ console.log("🚀 Loaded Module: CONFIG");
                 <button class="btn btn-sm btn-success" id="config-attrs-bulk-add" ${selCount ? '' : 'disabled'}>＋ Add to selected</button>
                 <button class="btn btn-sm btn-warning" id="config-attrs-bulk-remove" ${selCount ? '' : 'disabled'}>− Remove from selected</button>
             </div>
-            <div style="max-height: 50vh; overflow-y: auto;">
+            <div style="max-height: 45vh; overflow-y: auto;">
                 <table class="table table-sm table-dark table-hover align-middle mb-0">
                     <thead>
                         <tr>
-                            <th style="width:32px;"><input type="checkbox" id="config-attrs-select-all" ${allSelectedCls}></th>
+                            <th style="width:32px;"><input type="checkbox" id="config-attrs-select-all" ${allVisibleSelectedCls}></th>
                             <th>ID</th>
                             <th>Vendor</th>
                             <th>Material</th>
@@ -213,7 +255,7 @@ console.log("🚀 Loaded Module: CONFIG");
                             <th>Attributes</th>
                         </tr>
                     </thead>
-                    <tbody>${rows}</tbody>
+                    <tbody>${rows || '<tr><td colspan="6" class="text-center text-muted small">no matches</td></tr>'}</tbody>
                 </table>
             </div>
         `;
@@ -227,10 +269,37 @@ console.log("🚀 Loaded Module: CONFIG");
             });
         });
         const selAll = document.getElementById('config-attrs-select-all');
+        // Select-all operates on the currently-visible (filtered) rows so
+        // the user can narrow with the search box then check-all without
+        // accidentally pulling in records they can't see.
         if (selAll) selAll.addEventListener('change', (e) => {
-            _attrs.selected = new Set(e.target.checked ? filaments.map(f => f.id) : []);
+            if (e.target.checked) filteredFilaments.forEach(f => _attrs.selected.add(f.id));
+            else filteredFilaments.forEach(f => _attrs.selected.delete(f.id));
             _attrsRenderTable();
         });
+
+        // Search filter — re-renders on every keystroke. With ~200 rows
+        // it's snappy enough not to need a debounce.
+        const filterEl = document.getElementById('config-attrs-filter');
+        if (filterEl) {
+            filterEl.addEventListener('input', (e) => {
+                _attrs.filter = e.target.value;
+                _attrsRenderTable();
+                // Restore focus + caret position after the re-render.
+                const after = document.getElementById('config-attrs-filter');
+                if (after) {
+                    after.focus();
+                    after.setSelectionRange(after.value.length, after.value.length);
+                }
+            });
+        }
+        const filterClear = document.getElementById('config-attrs-filter-clear');
+        if (filterClear) filterClear.addEventListener('click', () => {
+            _attrs.filter = '';
+            _attrsRenderTable();
+        });
+
+        // Bulk add/remove on selected rows.
         const choiceEl = document.getElementById('config-attrs-bulk-choice');
         const apply = (which) => {
             const choice = choiceEl ? choiceEl.value : '';
@@ -244,6 +313,44 @@ console.log("🚀 Loaded Module: CONFIG");
         const remBtn = document.getElementById('config-attrs-bulk-remove');
         if (addBtn) addBtn.addEventListener('click', () => apply('add'));
         if (remBtn) remBtn.addEventListener('click', () => apply('remove'));
+
+        // Schema-side: add new choice.
+        const newInput = document.getElementById('config-attrs-add-input');
+        const newBtn = document.getElementById('config-attrs-add-btn');
+        const doAdd = () => {
+            const val = (newInput && newInput.value || '').trim();
+            if (!val) {
+                window.showToast && window.showToast('Type a name first', 'warning', 4000);
+                return;
+            }
+            window.configAttrsAddChoice(val);
+        };
+        if (newBtn) newBtn.addEventListener('click', doAdd);
+        if (newInput) newInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); doAdd(); }
+        });
+
+        // Schema-side: remove a choice from the field. Server gates with
+        // a confirmation step when usage > 0 — we surface that as a
+        // browser confirm() dialog rather than a SweetAlert/mountOverlay
+        // here, since the Admin modal already owns the modal stack.
+        host.querySelectorAll('.config-attrs-rm-choice').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const c = btn.dataset.choice;
+                const usage = parseInt(btn.dataset.usage || '0', 10);
+                if (!c) return;
+                if (usage > 0) {
+                    const ok = confirm(
+                        `Remove choice "${c}" from the schema?\n\n` +
+                        `${usage} filament(s) currently have this tag — they will lose it.\n` +
+                        `This cannot be undone (besides re-adding the choice and re-tagging each filament).`
+                    );
+                    if (!ok) return;
+                }
+                window.configAttrsRemoveChoice(c, usage > 0);
+            });
+        });
     };
 
     const _attrsUpdateSelCount = () => {
@@ -306,6 +413,53 @@ console.log("🚀 Loaded Module: CONFIG");
             window.configAttrsScan();
         } catch (e) {
             window.showToast && window.showToast(`Bulk-set error: ${e.message || e}`, 'error', 7000);
+        }
+    };
+
+    window.configAttrsAddChoice = async (choice) => {
+        try {
+            const r = await fetch('/api/filament_attributes/add_choice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ choice }),
+            });
+            const d = await r.json();
+            if (!d.success) {
+                window.showToast && window.showToast(`Add failed: ${d.msg || 'unknown'}`, 'error', 7000);
+                return;
+            }
+            window.showToast && window.showToast(`Added choice "${choice}"`, 'success', 4000);
+            // Refresh so the new choice appears in the bulk-set picker.
+            window.configAttrsScan();
+        } catch (e) {
+            window.showToast && window.showToast(`Add error: ${e.message || e}`, 'error', 7000);
+        }
+    };
+
+    // `force` mirrors the server-side flag — true on the second call after
+    // the user confirms a destructive remove (usage > 0). For unused
+    // choices we still send `force: true` so the server doesn't need to
+    // round-trip the "are you sure?" check.
+    window.configAttrsRemoveChoice = async (choice, force) => {
+        try {
+            const r = await fetch('/api/filament_attributes/remove_choice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ choice, force: true }),
+            });
+            const d = await r.json();
+            if (!d.success) {
+                window.showToast && window.showToast(`Remove failed: ${d.msg || 'unknown'}`, 'error', 7000);
+                return;
+            }
+            const stripped = d.stripped || 0;
+            const msg = stripped
+                ? `Removed choice "${choice}" — stripped from ${stripped} filament(s).`
+                : `Removed unused choice "${choice}".`;
+            window.showToast && window.showToast(msg, 'success', 4000);
+            window.configAttrsScan();
+        } catch (e) {
+            window.showToast && window.showToast(`Remove error: ${e.message || e}`, 'error', 7000);
         }
     };
 })();

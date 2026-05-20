@@ -3436,6 +3436,185 @@ def api_filament_attributes_bulk_set():
     })
 
 
+@app.route('/api/filament_attributes/add_choice', methods=['POST'])
+def api_filament_attributes_add_choice():
+    """Add a new choice to the Spoolman filament_attributes field. Thin
+    wrapper around update_extra_field_choices that scopes to the right
+    entity/key and validates the user's input."""
+    payload = request.get_json(silent=True) or {}
+    choice = str(payload.get('choice', '')).strip()
+    if not choice:
+        return jsonify({"success": False, "msg": "choice is required"}), 400
+    if len(choice) > 80:
+        return jsonify({"success": False, "msg": "choice too long (max 80 chars)"}), 400
+    res = spoolman_api.update_extra_field_choices('filament', 'filament_attributes', [choice])
+    if res.get('success'):
+        state.add_log_entry(
+            f"🏷 Filament Attributes: added choice {choice!r}", "INFO", "00ccff"
+        )
+    return jsonify(res)
+
+
+@app.route('/api/filament_attributes/remove_choice', methods=['POST'])
+def api_filament_attributes_remove_choice():
+    """Remove a choice from the Spoolman filament_attributes field.
+
+    Safety: counts usage across all filaments first. If usage > 0 and
+    `force` is not truthy, refuses and returns `usage_count` so the UI
+    can prompt the user. With `force: true`, strips the choice from
+    every filament that carries it BEFORE deleting from the schema —
+    that ordering matters so a mid-operation crash doesn't leave the
+    field referencing a value still attached to records.
+    """
+    import json as _json
+    import requests as _req
+    payload = request.get_json(silent=True) or {}
+    choice = str(payload.get('choice', '')).strip()
+    force = bool(payload.get('force'))
+    if not choice:
+        return jsonify({"success": False, "msg": "choice is required"}), 400
+
+    sm_url, _ = config_loader.get_api_urls()
+    # Pull current field def + filaments.
+    try:
+        ch_resp = _req.get(f"{sm_url}/api/v1/field/filament", timeout=10)
+        if not ch_resp.ok:
+            return jsonify({"success": False, "msg": f"Spoolman field list HTTP {ch_resp.status_code}"})
+        fields = ch_resp.json() or []
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"Spoolman field list error: {e}"})
+    attr_field = next((f for f in fields if f.get("key") == "filament_attributes"), None)
+    if not attr_field:
+        return jsonify({"success": False, "msg": "filament_attributes field not found"})
+    current_choices = list(attr_field.get('choices') or [])
+    if choice not in current_choices:
+        return jsonify({"success": False, "msg": f"{choice!r} is not a current choice"})
+
+    try:
+        f_resp = _req.get(f"{sm_url}/api/v1/filament", timeout=20)
+        if not f_resp.ok:
+            return jsonify({"success": False, "msg": f"Spoolman filament list HTTP {f_resp.status_code}"})
+        raw_fils = f_resp.json() or []
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"Spoolman filament list error: {e}"})
+
+    users = []  # [(fid, attrs)]
+    for f in raw_fils:
+        fid = f.get('id')
+        if fid is None:
+            continue
+        attrs = spoolman_api._parse_filament_attrs_value(
+            (f.get('extra') or {}).get('filament_attributes')
+        )
+        if choice in attrs:
+            users.append((fid, attrs))
+
+    if users and not force:
+        return jsonify({
+            "success": False,
+            "needs_confirm": True,
+            "usage_count": len(users),
+            "msg": (f"{len(users)} filament(s) still have {choice!r}. "
+                    f"Re-send with force=true to strip the tag from those "
+                    f"records and delete the choice.")
+        })
+
+    # Snapshot ALL filaments' attribute lists (not just users of the
+    # deleted choice) so we can re-PATCH after the schema-recreate.
+    # Spoolman's POST to /api/v1/field/<key> only ADDS choices — it
+    # refuses to shrink the list — so removing a choice requires
+    # DELETE-then-POST. The DELETE wipes data per CLAUDE.md note on
+    # ensure_filament_attributes_cleaned. Snapshot+restore protects
+    # every filament's other attributes during that window.
+    snapshot = {}
+    for f in raw_fils:
+        fid = f.get('id')
+        if fid is None:
+            continue
+        attrs = spoolman_api._parse_filament_attrs_value(
+            (f.get('extra') or {}).get('filament_attributes')
+        )
+        if attrs:
+            snapshot[fid] = attrs
+
+    new_choices = sorted(c for c in current_choices if c != choice)
+    try:
+        d_resp = _req.delete(
+            f"{sm_url}/api/v1/field/filament/filament_attributes", timeout=15
+        )
+        if not d_resp.ok and d_resp.status_code != 404:
+            return jsonify({
+                "success": False,
+                "msg": f"Schema DELETE failed ({d_resp.status_code}): {d_resp.text[:200]}",
+            })
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"Schema DELETE error: {e}"})
+
+    payload_out = {
+        "name": attr_field.get("name") or "Filament Attributes",
+        "field_type": attr_field.get("field_type") or "choice",
+        "multi_choice": attr_field.get("multi_choice", True),
+        "choices": new_choices,
+    }
+    try:
+        post_r = _req.post(
+            f"{sm_url}/api/v1/field/filament/filament_attributes",
+            json=payload_out, timeout=10,
+        )
+        if not post_r.ok:
+            state.add_log_entry(
+                f"⚠ Filament Attributes: deleted field for {choice!r} removal "
+                f"but POST recreate failed ({post_r.status_code}): {post_r.text[:200]}. "
+                f"Re-run setup_fields.py to restore the schema.",
+                "ERROR", "ff4444",
+            )
+            return jsonify({
+                "success": False,
+                "msg": f"Schema POST failed: {post_r.text[:200]}. Schema is now MISSING — re-run setup_fields.py.",
+            })
+    except Exception as e:
+        state.add_log_entry(
+            f"⚠ Filament Attributes: schema POST error during {choice!r} removal: {e} — "
+            f"re-run setup_fields.py to restore.",
+            "ERROR", "ff4444",
+        )
+        return jsonify({"success": False, "msg": f"Schema POST error: {e}"})
+
+    # Restore every filament's attribute list (minus the deleted choice).
+    restored, restore_failures = 0, []
+    for fid, attrs in snapshot.items():
+        cleaned = [a for a in attrs if a != choice]
+        try:
+            pr = _req.patch(
+                f"{sm_url}/api/v1/filament/{fid}",
+                json={"extra": {"filament_attributes": _json.dumps(cleaned)}},
+                timeout=10,
+            )
+            if pr.ok:
+                restored += 1
+            else:
+                restore_failures.append({"id": fid, "msg": f"HTTP {pr.status_code}: {pr.text[:120]}"})
+        except _req.RequestException as e:
+            restore_failures.append({"id": fid, "msg": str(e)[:200]})
+
+    level = "INFO" if not restore_failures else "WARNING"
+    color = "00ccff" if not restore_failures else "ffaa00"
+    state.add_log_entry(
+        f"🏷 Filament Attributes: removed choice {choice!r} "
+        f"(stripped from {len(users)} filament(s); restored {restored}/{len(snapshot)} "
+        f"sibling-attr records"
+        + (f"; {len(restore_failures)} restore failure(s)" if restore_failures else "")
+        + ").",
+        level, color,
+    )
+    return jsonify({
+        "success": True,
+        "stripped": len(users),
+        "restored": restored,
+        "restore_failures": restore_failures,
+    })
+
+
 # --- PERSISTENCE ROUTES ---
 @app.route('/api/state/buffer', methods=['GET', 'POST'])
 def api_state_buffer():

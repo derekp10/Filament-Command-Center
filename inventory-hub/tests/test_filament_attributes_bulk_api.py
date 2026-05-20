@@ -158,6 +158,127 @@ def test_bulk_set_validates_payload(api_base_url):
 
 
 @pytest.mark.usefixtures("require_server")
+def test_add_choice_then_remove_unused_round_trips(api_base_url):
+    """Schema-level add + remove on an unused test choice — verifies the
+    DELETE+POST recreate path lands the new choices array without
+    corrupting siblings. Test choice name is deliberately distinctive
+    so a leftover from a crashed test is easy to spot + manually clean."""
+    test_choice = "L58_TEST_unused_choice"
+    # Be safe: if a prior run left it, remove first.
+    r0 = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+    if test_choice in r0.get("choices", []):
+        requests.post(
+            f"{api_base_url}/api/filament_attributes/remove_choice",
+            json={"choice": test_choice, "force": True}, timeout=20,
+        )
+    try:
+        r_add = requests.post(
+            f"{api_base_url}/api/filament_attributes/add_choice",
+            json={"choice": test_choice}, timeout=10,
+        )
+        assert r_add.ok and r_add.json().get("success"), r_add.text
+        report = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+        assert test_choice in report["choices"]
+        assert report["counts"].get(test_choice, 0) == 0
+
+        # Unused choice → remove should succeed without needing force.
+        r_rm = requests.post(
+            f"{api_base_url}/api/filament_attributes/remove_choice",
+            json={"choice": test_choice}, timeout=20,
+        )
+        body = r_rm.json()
+        assert body.get("success") is True, body
+        assert body.get("stripped") == 0
+        # Sanity: every filament that previously had attrs still has them.
+        report_after = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+        assert test_choice not in report_after["choices"]
+        # Total non-empty attribute lists should match (the test choice
+        # was unused, so stripping it cannot have changed any count).
+        for c, n in report["counts"].items():
+            if c == test_choice:
+                continue
+            assert report_after["counts"].get(c, 0) == n, (
+                f"sibling choice {c!r} count drifted: {n} → {report_after['counts'].get(c, 0)}"
+            )
+    finally:
+        # Make absolutely sure the test choice is gone even on failure.
+        rr = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+        if test_choice in rr.get("choices", []):
+            requests.post(
+                f"{api_base_url}/api/filament_attributes/remove_choice",
+                json={"choice": test_choice, "force": True}, timeout=20,
+            )
+
+
+@pytest.mark.usefixtures("require_server")
+def test_remove_choice_in_use_requires_force(api_base_url):
+    """Remove without `force` on an in-use choice → 200 with
+    success=false, needs_confirm=true, usage_count>0. The schema is
+    NOT modified — the next report still shows the choice."""
+    test_choice = "L58_TEST_in_use_choice"
+    target, _ = _pick_target(api_base_url)
+    fid = target["id"]
+    original = _snapshot_attrs(api_base_url, fid)
+    # Add the choice + tag the target filament with it.
+    requests.post(
+        f"{api_base_url}/api/filament_attributes/add_choice",
+        json={"choice": test_choice}, timeout=10,
+    )
+    requests.post(
+        f"{api_base_url}/api/filament_attributes/bulk_set",
+        json={"filament_ids": [fid], "add": [test_choice]}, timeout=10,
+    )
+    try:
+        r = requests.post(
+            f"{api_base_url}/api/filament_attributes/remove_choice",
+            json={"choice": test_choice}, timeout=20,
+        )
+        body = r.json()
+        assert body.get("success") is False
+        assert body.get("needs_confirm") is True
+        assert body.get("usage_count") == 1
+        # Choice still present in the schema.
+        rep = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+        assert test_choice in rep["choices"]
+        assert test_choice in _snapshot_attrs(api_base_url, fid)
+
+        # Re-send with force → succeeds, strips the tag, removes the choice.
+        r2 = requests.post(
+            f"{api_base_url}/api/filament_attributes/remove_choice",
+            json={"choice": test_choice, "force": True}, timeout=20,
+        )
+        body2 = r2.json()
+        assert body2.get("success") is True
+        assert body2.get("stripped") == 1
+        rep2 = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+        assert test_choice not in rep2["choices"]
+        assert test_choice not in _snapshot_attrs(api_base_url, fid)
+    finally:
+        _restore(api_base_url, fid, original)
+        rr = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+        if test_choice in rr.get("choices", []):
+            requests.post(
+                f"{api_base_url}/api/filament_attributes/remove_choice",
+                json={"choice": test_choice, "force": True}, timeout=20,
+            )
+
+
+@pytest.mark.usefixtures("require_server")
+def test_add_choice_validation(api_base_url):
+    """add_choice rejects empty / oversized choice names."""
+    r1 = requests.post(
+        f"{api_base_url}/api/filament_attributes/add_choice",
+        json={"choice": "   "}, timeout=5,
+    )
+    assert r1.status_code == 400
+    r2 = requests.post(
+        f"{api_base_url}/api/filament_attributes/add_choice",
+        json={"choice": "x" * 200}, timeout=5,
+    )
+    assert r2.status_code == 400
+
+
+@pytest.mark.usefixtures("require_server")
 def test_bulk_set_preserves_sibling_extras(api_base_url):
     """Regression for the L58 root cause: a bulk-op stripping siblings.
     Spoolman PATCH on `extra` REPLACES the dict, so a partial payload
