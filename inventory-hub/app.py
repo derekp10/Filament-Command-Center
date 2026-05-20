@@ -3299,6 +3299,143 @@ def api_filabridge_reconcile_apply():
     return jsonify({"success": False, "msg": err})
 
 
+# --- FILAMENT ATTRIBUTES MANAGER (L58) ----------------------------------------
+# Sibling of L319 (auto-cleanup at startup, schema-level). This is the
+# per-record editor side: report which filaments have which flags, and
+# apply add/remove in bulk to a chosen set of filament IDs. The bulk-add
+# path is the recovery mechanism for the "For Infill" incident — when a
+# prior bulk-op stripped a flag from many filaments at once, the user
+# can re-stamp it across all affected records without per-record clicks.
+#
+# /api/filament_attributes/report     GET  → choices + per-filament attrs + counts
+# /api/filament_attributes/bulk_set   POST → apply {add:[], remove:[]} to filament_ids
+@app.route('/api/filament_attributes/report', methods=['GET'])
+def api_filament_attributes_report():
+    """Return a snapshot of every filament's filament_attributes value
+    plus the canonical choice list and per-choice usage counts."""
+    import requests as _req
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        ch_resp = _req.get(f"{sm_url}/api/v1/field/filament", timeout=10)
+        if not ch_resp.ok:
+            return jsonify({"success": False, "msg": f"Spoolman field list HTTP {ch_resp.status_code}"})
+        fields = ch_resp.json() or []
+        attr_field = next((f for f in fields if f.get("key") == "filament_attributes"), None)
+        choices = list((attr_field or {}).get("choices") or [])
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"Spoolman field list error: {e}"})
+
+    try:
+        f_resp = _req.get(f"{sm_url}/api/v1/filament", timeout=20)
+        if not f_resp.ok:
+            return jsonify({"success": False, "msg": f"Spoolman filament list HTTP {f_resp.status_code}"})
+        raw = f_resp.json() or []
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"Spoolman filament list error: {e}"})
+
+    filaments = []
+    counts = {c: 0 for c in choices}
+    for f in raw:
+        fid = f.get("id")
+        if fid is None:
+            continue
+        extras = f.get("extra") or {}
+        attrs = spoolman_api._parse_filament_attrs_value(extras.get("filament_attributes"))
+        for a in attrs:
+            counts[a] = counts.get(a, 0) + 1
+        filaments.append({
+            "id": fid,
+            "name": f.get("name") or "",
+            "material": f.get("material") or "",
+            "vendor": (f.get("vendor") or {}).get("name") or "",
+            "color_hex": f.get("color_hex") or "",
+            "archived": bool(f.get("archived")),
+            "attributes": attrs,
+        })
+    filaments.sort(key=lambda x: (x["archived"], (x["vendor"] or "").lower(),
+                                  (x["material"] or "").lower(), (x["name"] or "").lower(), x["id"]))
+    return jsonify({
+        "success": True,
+        "choices": choices,
+        "filaments": filaments,
+        "counts": counts,
+    })
+
+
+@app.route('/api/filament_attributes/bulk_set', methods=['POST'])
+def api_filament_attributes_bulk_set():
+    """Apply {add: [...], remove: [...]} to filament_attributes on each
+    filament in `filament_ids`. Per-filament set semantics (idempotent):
+    `add` is union'd into the existing list, `remove` is subtracted.
+
+    Goes through spoolman_api.update_filament which merges the partial
+    {extra: {filament_attributes: ...}} payload against the existing
+    record's extras (CLAUDE.md write-surface convention — Spoolman's
+    PATCH replaces the whole `extra` dict, so partial payloads silently
+    wipe siblings otherwise). Surfaces LAST_SPOOLMAN_ERROR per-failure.
+    """
+    import json as _json
+    payload = request.get_json(silent=True) or {}
+    ids = payload.get('filament_ids') or []
+    add_list = list(payload.get('add') or [])
+    remove_list = list(payload.get('remove') or [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({"success": False, "msg": "filament_ids must be a non-empty list"}), 400
+    if not add_list and not remove_list:
+        return jsonify({"success": False, "msg": "Nothing to do — pass `add` and/or `remove`."}), 400
+
+    add_set = {str(x) for x in add_list if str(x)}
+    remove_set = {str(x) for x in remove_list if str(x)}
+
+    updated, unchanged, errors = 0, 0, []
+    for raw_id in ids:
+        try:
+            fid = int(raw_id)
+        except (ValueError, TypeError):
+            errors.append({"id": raw_id, "msg": "not an integer id"})
+            continue
+        fil = spoolman_api.get_filament(fid)
+        if not fil:
+            errors.append({"id": fid, "msg": "filament not found"})
+            continue
+        existing_attrs = spoolman_api._parse_filament_attrs_value(
+            (fil.get('extra') or {}).get('filament_attributes')
+        )
+        existing_set = set(existing_attrs)
+        new_set = (existing_set | add_set) - remove_set
+        if new_set == existing_set:
+            unchanged += 1
+            continue
+        # Preserve order: keep existing attrs that survive, then append
+        # newly-added in user-specified order. Avoids gratuitous shuffles.
+        merged = [a for a in existing_attrs if a in new_set]
+        for a in add_list:
+            sa = str(a)
+            if sa in new_set and sa not in merged:
+                merged.append(sa)
+        result = spoolman_api.update_filament(
+            fid, {"extra": {"filament_attributes": _json.dumps(merged)}}
+        )
+        if result is None:
+            errors.append({"id": fid, "msg": spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"})
+            continue
+        updated += 1
+
+    state.add_log_entry(
+        f"🏷 Filament Attributes bulk-set: +{sorted(add_set)} / -{sorted(remove_set)} "
+        f"across {len(ids)} filament(s) — {updated} updated, {unchanged} unchanged, "
+        f"{len(errors)} error(s).",
+        "INFO" if not errors else "WARNING",
+        "00ccff" if not errors else "ffaa00",
+    )
+    return jsonify({
+        "success": True,
+        "updated": updated,
+        "unchanged": unchanged,
+        "errors": errors,
+    })
+
+
 # --- PERSISTENCE ROUTES ---
 @app.route('/api/state/buffer', methods=['GET', 'POST'])
 def api_state_buffer():

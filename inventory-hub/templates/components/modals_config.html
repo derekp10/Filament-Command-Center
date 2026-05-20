@@ -41,6 +41,34 @@
                     </div>
                 </div>
 
+                <!-- SECTION: Filament Attributes Manager (L58) -->
+                <div class="card bg-black border-secondary mb-3">
+                    <div class="card-header d-flex justify-content-between align-items-center"
+                         style="background: #1a1a1a;">
+                        <span class="fw-bold text-info">🏷 Filament Attributes</span>
+                        <button class="btn btn-sm btn-info fw-bold"
+                                id="btn-config-attrs-scan"
+                                onclick="window.configAttrsScan && window.configAttrsScan()">
+                            🔎 Load report
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <p class="small mb-2" style="color: rgba(255,255,255,0.78);">
+                            Lists which filaments carry which <code>filament_attributes</code>
+                            flags, and lets you bulk-add or bulk-remove a flag across the
+                            selected rows. Use this to undo a flag wipe (e.g. when a prior
+                            bulk-op stripped "For Infill" from a batch) without per-record
+                            clicks. Per-filament editing still lives in the Edit Filament
+                            modal's chip picker.
+                        </p>
+                        <div id="config-attrs-results">
+                            <div class="small" style="color: rgba(255,255,255,0.6);">
+                                Click <b>Load report</b> to start.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Future sections slot in here. Pattern: a Bootstrap .card
                      with a header (title + action button) and a body that
                      can carry whatever shape the panel needs. -->
