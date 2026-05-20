@@ -23,8 +23,8 @@
 | 14 | 🧪 Test-Sweep Flake Stabilization | 6 | ~3–5 hrs | `DONE` 2026-05-12 | [14-test-sweep-flake-stabilization.md](tasks/14-test-sweep-flake-stabilization.md) |
 | 15 | 🪟 Canonical Overlay-Mount Helper | 3 | ~5–7 hrs | `DONE` 2026-05-11 (Path A — 5 inline overlays migrated; 4 non-inline surfaces deferred) | [15-canonical-overlay-mount.md](tasks/15-canonical-overlay-mount.md) |
 | 16 | 🧰 Testing Hardening & Helper Consolidation | 4 | ~3–4 hrs | `DONE` 2026-05-12 | [16-testing-hardening.md](tasks/16-testing-hardening.md) |
-| 17 | 🪟 Details Modal, Queue & Wizard End-State Polish | 5 | ~3–4 hrs | `DONE` 2026-05-14 (17.1 PARTIAL — display side shipped, edit-toggle deferred; 17.2/17.3/17.4/17.5 fully shipped on `feature/buglist-sweep-2026-05-14`) | [17-details-queue-wizard-polish.md](tasks/17-details-queue-wizard-polish.md) |
-| 18 | 📍 Unknown Location + Audit Mode Refinement | 2 | ~4–6 hrs | `READY` | [18-unknown-location-audit.md](tasks/18-unknown-location-audit.md) |
+| 17 | 🪟 Details Modal, Queue & Wizard End-State Polish | 5 | ~3–4 hrs | `DONE` 2026-05-14/15 (all 5 items shipped on `feature/buglist-sweep-2026-05-14`; 17.1 edit-toggle side completed 2026-05-15 by un-hiding `needs_label_print` from the wizard's hide list) | [17-details-queue-wizard-polish.md](tasks/17-details-queue-wizard-polish.md) |
+| 18 | 📍 Unknown Location + Audit Mode Refinement | 2 | ~4–6 hrs | `DONE` 2026-05-15/16 (18.1 Unknown bucket + 18.2 Part A auto-park + Part B visual panel + idle watchdog all shipped on `feature/buglist-sweep-2026-05-14`; parent/child rollup deferred as future enhancement on top of the multi-location audit) | [18-unknown-location-audit.md](tasks/18-unknown-location-audit.md) |
 
 ## Items NOT Grouped (Solo, Deferred, or On Hold)
 
