@@ -264,6 +264,105 @@ def test_remove_choice_in_use_requires_force(api_base_url):
 
 
 @pytest.mark.usefixtures("require_server")
+def test_sweep_unused_preview_then_commit(api_base_url):
+    """Sweep unused choices is the user-triggered replacement for the
+    boot-time auto-promote that was drained 2026-05-20. Two-step round-
+    trip: preview (no force) returns the list, commit (force=true)
+    actually removes them via DELETE+POST recreate."""
+    test_choice = "L58_TEST_sweep_choice"
+    # Make sure our test choice is present but unused.
+    rep0 = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+    if test_choice not in rep0["choices"]:
+        requests.post(
+            f"{api_base_url}/api/filament_attributes/add_choice",
+            json={"choice": test_choice}, timeout=10,
+        )
+    # Sanity: usage must be zero for the test to mean anything.
+    rep_pre = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+    assert rep_pre["counts"].get(test_choice, 0) == 0
+    pre_choice_count = len(rep_pre["choices"])
+
+    try:
+        # Preview — no force.
+        r_prev = requests.post(
+            f"{api_base_url}/api/filament_attributes/sweep_unused",
+            json={}, timeout=20,
+        )
+        body_prev = r_prev.json()
+        assert body_prev.get("success") is True, body_prev
+        assert test_choice in body_prev.get("unused", []), body_prev
+        # Schema is NOT modified by the preview call.
+        rep_mid = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+        assert test_choice in rep_mid["choices"]
+        unused_to_sweep = body_prev["unused"]
+
+        # Commit.
+        r_commit = requests.post(
+            f"{api_base_url}/api/filament_attributes/sweep_unused",
+            json={"force": True}, timeout=30,
+        )
+        body_commit = r_commit.json()
+        assert body_commit.get("success") is True, body_commit
+        assert test_choice in body_commit.get("removed", [])
+        # Choice count drops by exactly the number swept.
+        rep_after = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+        assert test_choice not in rep_after["choices"]
+        assert len(rep_after["choices"]) == pre_choice_count - len(unused_to_sweep), (
+            f"choice count should drop by {len(unused_to_sweep)}: "
+            f"{pre_choice_count} → {len(rep_after['choices'])}"
+        )
+        # In-use choices survived.
+        for c in rep_pre["choices"]:
+            if rep_pre["counts"].get(c, 0) > 0:
+                assert c in rep_after["choices"], f"in-use choice {c!r} was incorrectly swept"
+    finally:
+        # If somehow it's still around, clean up.
+        rr = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+        if test_choice in rr.get("choices", []):
+            requests.post(
+                f"{api_base_url}/api/filament_attributes/remove_choice",
+                json={"choice": test_choice, "force": True}, timeout=20,
+            )
+
+
+@pytest.mark.usefixtures("require_server")
+def test_sweep_unused_preserves_in_use_choices(api_base_url):
+    """A choice with usage > 0 must NOT appear in the unused preview,
+    even alongside other zero-usage choices that are being swept. Catches
+    a snapshot-vs-current-state bug in the usage computation."""
+    test_choice = "L58_TEST_sweep_in_use"
+    target, _ = _pick_target(api_base_url)
+    fid = target["id"]
+    original = _snapshot_attrs(api_base_url, fid)
+    requests.post(
+        f"{api_base_url}/api/filament_attributes/add_choice",
+        json={"choice": test_choice}, timeout=10,
+    )
+    requests.post(
+        f"{api_base_url}/api/filament_attributes/bulk_set",
+        json={"filament_ids": [fid], "add": [test_choice]}, timeout=10,
+    )
+    try:
+        r = requests.post(
+            f"{api_base_url}/api/filament_attributes/sweep_unused",
+            json={}, timeout=20,
+        )
+        body = r.json()
+        assert body.get("success") is True
+        assert test_choice not in body.get("unused", []), (
+            f"in-use choice {test_choice!r} should NOT be in sweep list"
+        )
+    finally:
+        _restore(api_base_url, fid, original)
+        rr = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
+        if test_choice in rr.get("choices", []):
+            requests.post(
+                f"{api_base_url}/api/filament_attributes/remove_choice",
+                json={"choice": test_choice, "force": True}, timeout=20,
+            )
+
+
+@pytest.mark.usefixtures("require_server")
 def test_add_choice_validation(api_base_url):
     """add_choice rejects empty / oversized choice names."""
     r1 = requests.post(

@@ -3615,6 +3615,153 @@ def api_filament_attributes_remove_choice():
     })
 
 
+@app.route('/api/filament_attributes/sweep_unused', methods=['POST'])
+def api_filament_attributes_sweep_unused():
+    """Find and (optionally) remove every choice with zero usage.
+
+    Replaces the boot-time auto-promote path that was drained 2026-05-20
+    to avoid the "add a new choice + forget to tag before next reboot →
+    silently re-stripped" footgun. Same capability, but explicitly user-
+    triggered: the UI previews the list (`force` omitted/false) and only
+    commits with `force: true` after the user confirms.
+
+    Preview shape:  { success, unused: [str, ...], total_choices: int }
+    Commit shape:   { success, removed: [str, ...], restored: int,
+                      restore_failures: [{id, msg}, ...] }
+    """
+    import json as _json
+    import requests as _req
+    payload = request.get_json(silent=True) or {}
+    force = bool(payload.get('force'))
+
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        ch_resp = _req.get(f"{sm_url}/api/v1/field/filament", timeout=10)
+        if not ch_resp.ok:
+            return jsonify({"success": False, "msg": f"Spoolman field list HTTP {ch_resp.status_code}"})
+        fields = ch_resp.json() or []
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"Spoolman field list error: {e}"})
+    attr_field = next((f for f in fields if f.get("key") == "filament_attributes"), None)
+    if not attr_field:
+        return jsonify({"success": False, "msg": "filament_attributes field not found"})
+    current_choices = list(attr_field.get('choices') or [])
+
+    try:
+        f_resp = _req.get(f"{sm_url}/api/v1/filament", timeout=20)
+        if not f_resp.ok:
+            return jsonify({"success": False, "msg": f"Spoolman filament list HTTP {f_resp.status_code}"})
+        raw_fils = f_resp.json() or []
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"Spoolman filament list error: {e}"})
+
+    # Transient-state guard: if Spoolman returns zero filaments but the
+    # field exists, treat as "ask me later" rather than "everything is
+    # unused, nuke them all." Mirrors the same guard in
+    # ensure_filament_attributes_cleaned on the auto-cleanup path.
+    if not raw_fils:
+        return jsonify({
+            "success": False,
+            "msg": "Spoolman returned 0 filaments — refusing to compute usage from a possibly-transient empty list.",
+        })
+
+    usage = {c: 0 for c in current_choices}
+    snapshot = {}  # fid -> [attrs]
+    for f in raw_fils:
+        fid = f.get('id')
+        if fid is None:
+            continue
+        attrs = spoolman_api._parse_filament_attrs_value(
+            (f.get('extra') or {}).get('filament_attributes')
+        )
+        if attrs:
+            snapshot[fid] = attrs
+        for a in attrs:
+            usage[a] = usage.get(a, 0) + 1
+    unused = sorted(c for c in current_choices if not usage.get(c))
+
+    if not force:
+        return jsonify({
+            "success": True,
+            "unused": unused,
+            "total_choices": len(current_choices),
+        })
+
+    if not unused:
+        return jsonify({"success": True, "removed": [], "restored": 0, "restore_failures": []})
+
+    new_choices = sorted(c for c in current_choices if c not in unused)
+    try:
+        d_resp = _req.delete(
+            f"{sm_url}/api/v1/field/filament/filament_attributes", timeout=15
+        )
+        if not d_resp.ok and d_resp.status_code != 404:
+            return jsonify({
+                "success": False,
+                "msg": f"Schema DELETE failed ({d_resp.status_code}): {d_resp.text[:200]}",
+            })
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"Schema DELETE error: {e}"})
+
+    payload_out = {
+        "name": attr_field.get("name") or "Filament Attributes",
+        "field_type": attr_field.get("field_type") or "choice",
+        "multi_choice": attr_field.get("multi_choice", True),
+        "choices": new_choices,
+    }
+    try:
+        post_r = _req.post(
+            f"{sm_url}/api/v1/field/filament/filament_attributes",
+            json=payload_out, timeout=10,
+        )
+        if not post_r.ok:
+            state.add_log_entry(
+                f"⚠ Filament Attributes: sweep deleted field but POST recreate failed "
+                f"({post_r.status_code}): {post_r.text[:200]}. Re-run setup_fields.py to restore.",
+                "ERROR", "ff4444",
+            )
+            return jsonify({
+                "success": False,
+                "msg": f"Schema POST failed: {post_r.text[:200]}. Schema is now MISSING — re-run setup_fields.py.",
+            })
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"Schema POST error: {e}"})
+
+    # Restore each filament's attribute list. Since we only removed
+    # zero-usage choices, the cleaned list per filament is identical to
+    # the snapshot — but we still PATCH back as belt-and-suspenders
+    # (mirrors ensure_filament_attributes_cleaned's recovery path).
+    restored, restore_failures = 0, []
+    for fid, attrs in snapshot.items():
+        try:
+            pr = _req.patch(
+                f"{sm_url}/api/v1/filament/{fid}",
+                json={"extra": {"filament_attributes": _json.dumps(attrs)}},
+                timeout=10,
+            )
+            if pr.ok:
+                restored += 1
+            else:
+                restore_failures.append({"id": fid, "msg": f"HTTP {pr.status_code}: {pr.text[:120]}"})
+        except _req.RequestException as e:
+            restore_failures.append({"id": fid, "msg": str(e)[:200]})
+
+    state.add_log_entry(
+        f"🧹 Filament Attributes: swept {len(unused)} unused choice(s): {unused} "
+        f"(restored {restored}/{len(snapshot)} sibling records"
+        + (f"; {len(restore_failures)} failure(s)" if restore_failures else "")
+        + ").",
+        "INFO" if not restore_failures else "WARNING",
+        "00ccff" if not restore_failures else "ffaa00",
+    )
+    return jsonify({
+        "success": True,
+        "removed": unused,
+        "restored": restored,
+        "restore_failures": restore_failures,
+    })
+
+
 # --- PERSISTENCE ROUTES ---
 @app.route('/api/state/buffer', methods=['GET', 'POST'])
 def api_state_buffer():

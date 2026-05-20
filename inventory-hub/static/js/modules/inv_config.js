@@ -235,6 +235,8 @@ console.log("🚀 Loaded Module: CONFIG");
                     <input type="text" id="config-attrs-add-input" class="form-control form-control-sm bg-dark text-white border-secondary"
                            placeholder="Type a new tag name…" autocomplete="off" style="max-width: 280px;">
                     <button class="btn btn-sm btn-success fw-bold" id="config-attrs-add-btn">＋ Add new tag</button>
+                    <button class="btn btn-sm btn-outline-warning" id="config-attrs-sweep-btn"
+                            title="Find and remove every tag with zero usage (with confirm). Same logic the boot-time auto-cleanup used to run, now explicit.">🧹 Sweep unused</button>
                 </div>
             </div>
 
@@ -347,6 +349,12 @@ console.log("🚀 Loaded Module: CONFIG");
             if (e.key === 'Enter') { e.preventDefault(); doAdd(); }
         });
 
+        // Schema-side: sweep unused choices.
+        const sweepBtn = document.getElementById('config-attrs-sweep-btn');
+        if (sweepBtn) sweepBtn.addEventListener('click', () => {
+            window.configAttrsSweepUnused();
+        });
+
         // Schema-side: remove a choice from the field. Server gates with
         // a confirmation step when usage > 0 — we surface that as a
         // browser confirm() dialog rather than a SweetAlert/mountOverlay
@@ -450,6 +458,57 @@ console.log("🚀 Loaded Module: CONFIG");
             window.configAttrsScan();
         } catch (e) {
             window.showToast && window.showToast(`Add error: ${e.message || e}`, 'error', 7000);
+        }
+    };
+
+    // Sweep all zero-usage choices. Two-step server round-trip: first
+    // call (no force) returns the preview list; second call (force=true)
+    // commits the DELETE+POST recreate. The preview lets us show the
+    // user the exact list before they confirm — important because the
+    // operation is irreversible (besides re-adding each choice).
+    window.configAttrsSweepUnused = async () => {
+        try {
+            const r = await fetch('/api/filament_attributes/sweep_unused', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            });
+            const d = await r.json();
+            if (!d.success) {
+                window.showToast && window.showToast(`Sweep preview failed: ${d.msg || 'unknown'}`, 'error', 7000);
+                return;
+            }
+            const unused = d.unused || [];
+            if (!unused.length) {
+                window.showToast && window.showToast('All choices are in use — nothing to sweep.', 'info', 4000);
+                return;
+            }
+            const ok = confirm(
+                `Sweep ${unused.length} unused tag(s) from the system?\n\n` +
+                unused.map(c => `  • ${c}`).join('\n') +
+                `\n\n` +
+                `Each tag currently has zero filaments using it. Removal is irreversible ` +
+                `(besides re-adding each name).`
+            );
+            if (!ok) return;
+            const r2 = await fetch('/api/filament_attributes/sweep_unused', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ force: true }),
+            });
+            const d2 = await r2.json();
+            if (!d2.success) {
+                window.showToast && window.showToast(`Sweep failed: ${d2.msg || 'unknown'}`, 'error', 7000);
+                return;
+            }
+            const removed = d2.removed || [];
+            window.showToast && window.showToast(
+                `Swept ${removed.length} unused tag(s): ${removed.join(', ')}`,
+                'success', 5000,
+            );
+            window.configAttrsScan();
+        } catch (e) {
+            window.showToast && window.showToast(`Sweep error: ${e.message || e}`, 'error', 7000);
         }
     };
 
