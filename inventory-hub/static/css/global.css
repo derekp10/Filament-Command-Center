@@ -1679,3 +1679,12 @@ body:has(.cmd-deck) #fcc-log-pill {
 .fcc-log-pill-flash {
     animation: fccLogPillFlash 0.7s ease-out;
 }
+
+/* L202 — Edit Filament > Import-from-External collapse panel.
+   Bug: during the 350ms Bootstrap height transition, the Source <select>
+   (top child of the panel) stays visible inside the animating height
+   window, so the user perceived a sliver of the dropdown still showing
+   "after" collapsing. Snap the collapse instead of animating it — open/
+   close is instant, with no transient half-rendered children. */
+#editfil-import-panel { overflow: hidden; }
+#editfil-import-panel.collapsing { transition: none !important; height: 0 !important; }
