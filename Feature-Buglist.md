@@ -55,7 +55,7 @@
 
 * Printer status. Core1 printer status doesn't seem to update because not boxes are attached, this should be based off of the direct print head data, not based on an attached dryer box. (I don't always use a dryerbox so this is a poor indicator of what's being used.) Tool seems to list the correct filament.
 
-* For Infill was removed, even though it was attached to a filament. So something went wrong there.
+* For Infill was removed, even though it was attached to a filament. So something went wrong there. Now that the bulk was done. SOme things move when it should have been a conversion, oh well. Lets make sure this doens't eat future matching items (for infill being the primary one) We should probalby build an internal clean up system around this so that the user can add or remove them at well, and get a better report of what items have what, incase they want to change it. Perhaps a bulk add (snese I'm going to have to re-add thos for infill items again.)
 
 * Need to do something about the fact that if a toolhead has multiple slots assigned to it for a dryer box, that new spool assignments don't automatically take over the current toolhead's assigned spool. **Decision: (c) Leave it to the user via Quick-Swap.** Intent is ambiguous — a new spool landing in a shared box may not mean the user wants to switch the active toolhead assignment (e.g., staging spools for later). Quick-Swap is the deliberate, explicit action for swapping. No auto-switch or auto-prompt. _[RESOLVED — no code change needed.]_
 
