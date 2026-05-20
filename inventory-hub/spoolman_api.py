@@ -829,11 +829,15 @@ FILAMENT_ATTRIBUTES_DELETE_CHOICES = frozenset({
     "Wood",                    # superseded by "Wood Filled"
     "F",                       # typo
 })
-FILAMENT_ATTRIBUTES_FLAG_CHOICES = frozenset({
-    # Kept on prod if any filament uses them; auto-deleted if zero usage.
-    "For Infill",
-    "Matte Pro",
-})
+# L58 follow-up (Derek 2026-05-20): FLAG_CHOICES is intentionally empty.
+# Previous design auto-deleted any flagged choice with zero usage on every
+# boot — a footgun for legitimate-but-rare values like "For Infill" /
+# "Matte Pro": re-adding the choice without tagging at least one filament
+# before next restart would silently re-strip it. Schema-level removal
+# is now an explicit user action via the Config / Admin → Filament
+# Attributes manager (L58 UI). Keep the empty frozenset so callers don't
+# have to special-case absence.
+FILAMENT_ATTRIBUTES_FLAG_CHOICES: frozenset = frozenset()
 
 
 def _parse_filament_attrs_value(raw):
