@@ -814,6 +814,23 @@ const PULSE_IDLE_THRESHOLD_MS = 60000;
 
 let _lastUserActivity = Date.now();
 const _bumpUserActivity = () => { _lastUserActivity = Date.now(); };
+// Activity bumpers. Notes on coverage:
+// - `keydown` covers USB / Bluetooth barcode scanners — they emit
+//   synthetic keystrokes to the focused window, so a scan bumps activity
+//   the same way a keyboard press does. Only caveat: if the tab is
+//   hidden, the scanner's keystrokes go to whatever IS focused (OS
+//   shell, another app), not the browser. That's not a cadence problem
+//   — there's no way to handle a scan on a hidden tab regardless.
+// - `pointerdown` covers both mouse + touch via the unified Pointer
+//   Events API; `touchstart` is kept as a belt-and-suspenders for older
+//   mobile browsers that fire touch* but not pointer*.
+// - When the mobile mode lands (Feature-Buglist L315 — large mobile
+//   architectural effort), the cadence buckets themselves may want
+//   revisiting (mobile backgrounding fires visibilitychange far more
+//   often than desktop tab-switching does, so the 30s "hidden" bucket
+//   could be either too aggressive or too conservative depending on
+//   battery/cellular use). The activity list itself should already
+//   carry over — touchstart + pointerdown is already mobile-correct.
 ['keydown', 'mousedown', 'pointerdown', 'wheel', 'touchstart'].forEach(ev =>
     document.addEventListener(ev, _bumpUserActivity, { passive: true, capture: true })
 );
@@ -849,12 +866,28 @@ const _computePulseInclude = () => {
 };
 
 let _pulseInflight = false;
+let _pulseNextTimer = null;
+// _scheduleNextPulse owns every setTimeout we use to drive ticks so the
+// visibilitychange handler can cancel-and-reschedule when the tab comes
+// back to focus (otherwise the user would wait up to 30s — the hidden-
+// bucket scheduled gap — for fresh data after switching back).
+const _scheduleNextPulse = (delayMs) => {
+    if (_pulseNextTimer !== null) {
+        clearTimeout(_pulseNextTimer);
+        _pulseNextTimer = null;
+    }
+    _pulseNextTimer = setTimeout(() => {
+        _pulseNextTimer = null;
+        _dashboardPulseTick();
+    }, delayMs);
+};
+
 const _dashboardPulseTick = () => {
     if (_pulseInflight) {
         // Guard: don't stack pulses if the backend is slow. Schedule the
         // next attempt at the current cadence — we'll re-evaluate when
         // the in-flight one returns.
-        setTimeout(_dashboardPulseTick, _pulseInterval());
+        _scheduleNextPulse(_pulseInterval());
         return;
     }
     _pulseInflight = true;
@@ -919,7 +952,7 @@ const _dashboardPulseTick = () => {
         .catch(e => console.warn("dashboard_pulse failed:", e))
         .finally(() => {
             _pulseInflight = false;
-            setTimeout(_dashboardPulseTick, _pulseInterval());
+            _scheduleNextPulse(_pulseInterval());
         });
 };
 
@@ -929,10 +962,18 @@ window.startSmartSync = () => {
     console.log("🔄 Smart Sync Protocol Initiated (adaptive: 5s active / 15s idle / 30s hidden)");
     // Kick the first tick off immediately so the dashboard populates
     // without waiting 5s on cold load.
-    setTimeout(_dashboardPulseTick, 100);
-    // visibilitychange snaps cadence back into the right bucket as soon
-    // as the user comes back to the tab.
-    document.addEventListener('visibilitychange', _bumpUserActivity);
+    _scheduleNextPulse(100);
+    // When the user comes back to a tab that was in the 30s hidden
+    // bucket, cancel the far-future tick and fire one immediately so
+    // they don't see stale data on switch-back. The bump_activity
+    // listener fires on the same event but only updates the timestamp;
+    // without this re-schedule, the staleness gap could be up to 30s.
+    document.addEventListener('visibilitychange', () => {
+        _bumpUserActivity();
+        if (!document.hidden && !_pulseInflight) {
+            _scheduleNextPulse(50);
+        }
+    });
 };
 
 // Test/debug hook: expose the tick directly so a test can fire it
