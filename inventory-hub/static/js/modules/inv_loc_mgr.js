@@ -654,35 +654,38 @@ window.renderFeedsSection = renderFeedsSection;
 // refreshManageView is invoked on a 5s sync-pulse while the manage modal
 // is open; without this guard, a slow get_contents stacked subsequent
 // ticks on top of itself.
+//
+// L206: render path extracted to _renderManagePayload so the bulk-pulse
+// dispatcher can hand pre-fetched contents in without an extra fetch.
 let _refreshManageViewInflight = false;
+const _renderManagePayload = (id, d) => {
+    const loc = state.allLocations.find(l => l.LocationID == id);
+    if (!loc) return false;
+    // --- NO WIGGLE CHECK ---
+    const bufHash = state.heldSpools.map(s => s.id).join(',');
+    const contentHash = JSON.stringify(d);
+    const newHash = `${contentHash}|${bufHash}`;
+    if (state.lastLocRenderHash === newHash) return true;
+    state.lastLocRenderHash = newHash;
+    // -----------------------
+    window.updateManageTitle(loc, d);
+    renderManagerNav();
+    const isGrid = (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
+    if (isGrid) renderGrid(d, parseInt(loc['Max Spools']));
+    else renderList(d, id);
+    return true;
+};
+window._renderManagePayload = _renderManagePayload;
+
 window.refreshManageView = (id) => {
     const loc = state.allLocations.find(l => l.LocationID == id);
     if (!loc) return false;
     if (_refreshManageViewInflight) return true;
     _refreshManageViewInflight = true;
 
-    // Fetch data first (Don't touch DOM yet)
     fetch(`/api/get_contents?id=${id}`)
         .then(r => r.json())
-        .then(d => {
-            // --- NO WIGGLE CHECK ---
-            // Create a signature of the Content + Buffer State
-            const bufHash = state.heldSpools.map(s => s.id).join(',');
-            const contentHash = JSON.stringify(d);
-            const newHash = `${contentHash}|${bufHash}`;
-
-            // If nothing changed, STOP. This eliminates the wiggle for 99% of sync pulses.
-            if (state.lastLocRenderHash === newHash) return;
-            state.lastLocRenderHash = newHash;
-            // -----------------------
-
-            // Data changed? Okay, render it.
-            window.updateManageTitle(loc, d);
-            renderManagerNav();
-            const isGrid = (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
-            if (isGrid) renderGrid(d, parseInt(loc['Max Spools']));
-            else renderList(d, id);
-        })
+        .then(d => _renderManagePayload(id, d))
         .catch(e => console.warn("refreshManageView failed:", e))
         .finally(() => { _refreshManageViewInflight = false; });
     return true;

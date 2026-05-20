@@ -770,14 +770,52 @@ const loadBuffer = () => {
 // --- LIVE REFRESH POLLING ---
 // L28 polling guard: see updateLogState for rationale.
 let _liveRefreshInflight = false;
+// L206: render path extracted so the bulk-pulse dispatcher can hand
+// a spools_refresh payload (same {id: data} shape that /api/spools/refresh
+// returns) directly into the diff/update loop without another fetch.
+const _renderSpoolsRefreshPayload = (data) => {
+    if (!data || typeof data !== 'object') return;
+    let changed = false;
+    state.heldSpools.forEach(s => {
+        const fresh = data[s.id];
+        if (!fresh) return;
+        // Diff covers every field the buffer card actually renders. Pre-2026-04-28
+        // this list excluded location / is_ghost / slot / deployed_to, so a backend-
+        // driven location move (Location Manager, Quick-Swap, force-unassign,
+        // auto-archive-on-empty) would correctly update `archived` and the weight,
+        // but leave the location badge stale until the user navigated away and
+        // back — root cause of buglist L24 / L40.
+        if (fresh.display !== s.display ||
+            fresh.color !== s.color ||
+            fresh.color_direction !== s.color_direction ||
+            fresh.remaining_weight !== s.remaining_weight ||
+            !s.details ||
+            fresh.archived !== s.archived ||
+            fresh.location !== s.location ||
+            fresh.is_ghost !== s.is_ghost ||
+            fresh.slot !== s.slot ||
+            fresh.deployed_to !== s.deployed_to) {
+            s.display = fresh.display;
+            s.color = fresh.color;
+            s.color_direction = fresh.color_direction;
+            s.remaining_weight = fresh.remaining_weight;
+            s.details = fresh.details;
+            s.archived = fresh.archived;
+            s.location = fresh.location;
+            s.is_ghost = fresh.is_ghost;
+            s.slot = fresh.slot;
+            s.deployed_to = fresh.deployed_to;
+            changed = true;
+        }
+    });
+    if (changed && window.renderBuffer) window.renderBuffer();
+};
+window._renderSpoolsRefreshPayload = _renderSpoolsRefreshPayload;
+
 const liveRefreshBuffer = () => {
     if (!state.heldSpools || state.heldSpools.length === 0) return;
     if (_liveRefreshInflight) return;
 
-    // Only fetch if we are actually looking at the dashboard
-    // No need to spam Spoolman if the user is in the Location Manager or elsewhere
-    // Wait, the user specifically wants the buffer updated in the background even if they are in Manager,
-    // because the Manager uses the global buffer.
     const spoolIds = state.heldSpools.map(s => s.id);
 
     _liveRefreshInflight = true;
@@ -787,49 +825,20 @@ const liveRefreshBuffer = () => {
         body: JSON.stringify({ spools: spoolIds })
     })
         .then(r => r.json())
-        .then(data => {
-            let changed = false;
-            state.heldSpools.forEach(s => {
-                const fresh = data[s.id];
-                if (!fresh) return;
-                // Diff covers every field the buffer card actually renders. Pre-2026-04-28
-                // this list excluded location / is_ghost / slot / deployed_to, so a backend-
-                // driven location move (Location Manager, Quick-Swap, force-unassign,
-                // auto-archive-on-empty) would correctly update `archived` and the weight,
-                // but leave the location badge stale until the user navigated away and
-                // back — root cause of buglist L24 / L40.
-                if (fresh.display !== s.display ||
-                    fresh.color !== s.color ||
-                    fresh.color_direction !== s.color_direction ||
-                    fresh.remaining_weight !== s.remaining_weight ||
-                    !s.details ||
-                    fresh.archived !== s.archived ||
-                    fresh.location !== s.location ||
-                    fresh.is_ghost !== s.is_ghost ||
-                    fresh.slot !== s.slot ||
-                    fresh.deployed_to !== s.deployed_to) {
-                    s.display = fresh.display;
-                    s.color = fresh.color;
-                    s.color_direction = fresh.color_direction;
-                    s.remaining_weight = fresh.remaining_weight;
-                    s.details = fresh.details;
-                    s.archived = fresh.archived;
-                    s.location = fresh.location;
-                    s.is_ghost = fresh.is_ghost;
-                    s.slot = fresh.slot;
-                    s.deployed_to = fresh.deployed_to;
-                    changed = true;
-                }
-            });
-            if (changed) {
-                if (window.renderBuffer) window.renderBuffer();
-            }
-        })
+        .then(_renderSpoolsRefreshPayload)
         .catch(e => console.warn("Live Refresh Buffer Failed", e))
         .finally(() => { _liveRefreshInflight = false; });
 };
+window.liveRefreshBuffer = liveRefreshBuffer;
 
-document.addEventListener('inventory:sync-pulse', liveRefreshBuffer);
+// L206: the dashboard_pulse heartbeat already refreshes buffer cards via
+// its spools_refresh section; skip the duplicate /api/spools/refresh fetch
+// when this event came from that source. Other dispatchers (wizard save,
+// weigh-out, details modal saves) still trigger a fresh fetch.
+document.addEventListener('inventory:sync-pulse', (e) => {
+    if (e && e.detail && e.detail.source === 'dashboard_pulse') return;
+    liveRefreshBuffer();
+});
 
 // Heartbeat (Checks every 2 seconds)
 setInterval(loadBuffer, 2000);
