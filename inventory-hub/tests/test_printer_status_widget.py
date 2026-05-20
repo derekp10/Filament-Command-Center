@@ -140,9 +140,13 @@ def test_widget_visual_collapsed_baseline(page: Page, base_url, snapshot):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_widget_hidden_when_no_bound_toolheads(page: Page, base_url, api_base_url):
-    """If every dryer box has zero bindings, the widget stays hidden so it
-    doesn't take up dashboard space for users not yet using bindings."""
+def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url, api_base_url):
+    """L140 fix: with zero bound dryer-slots the widget previously hid
+    EVERY printer (the symptom that hid Core One on prod when only XL
+    had slot_targets). After the fix, every printer in printer_map
+    renders; toolheads without a bound source slot get a "🔗 no bound
+    slot" placeholder so the printer is discoverable + the hint is
+    actionable instead of mysteriously missing."""
     # Snapshot every dryer box's bindings, then clear them.
     boxes = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json().get("slots", [])
     box_originals = {}
@@ -164,12 +168,22 @@ def test_widget_hidden_when_no_bound_toolheads(page: Page, base_url, api_base_ur
     try:
         page.goto(base_url)
         page.wait_for_selector("#buffer-zone", timeout=10000)
-        # Give the widget time to attempt aggregation.
-        page.wait_for_timeout(1500)
+        # Wait for the widget body to populate (aggregation takes a sec).
+        page.wait_for_function(
+            "() => { const w = document.getElementById('printer-status-widget');"
+            "       return w && getComputedStyle(w).display !== 'none'"
+            "         && w.querySelectorAll('.fcc-ps-row').length > 0; }",
+            timeout=5000,
+        )
         widget = page.locator("#printer-status-widget")
-        # Should remain hidden (display:none) since nothing is bound.
-        is_visible = widget.is_visible()
-        assert not is_visible, "Widget should be hidden when no toolheads are bound"
+        # The widget should now show printers (rather than be hidden).
+        rows = widget.locator(".fcc-ps-row")
+        assert rows.count() > 0, "Widget should render rows even when no toolheads are bound"
+        # Every toolhead tile should be an unbound placeholder right now.
+        unbound = widget.locator(".fcc-ps-th-unbound")
+        assert unbound.count() > 0, (
+            "With all bindings cleared, every rendered toolhead should be an unbound placeholder"
+        )
     finally:
         for b, original in box_originals.items():
             requests.put(

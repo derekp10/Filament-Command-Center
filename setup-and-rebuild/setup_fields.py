@@ -312,6 +312,12 @@ create_field("spool", "physical_source_slot", "Physical Source Slot", "text")
 # can restore the spool to its pre-archive location. System-managed; never
 # user-editable. See spoolman_api.SYSTEM_MANAGED_EXTRAS.
 create_field("spool", "fcc_pre_archive_location", "Pre-Archive Location (system)", "text")
+# Breadcrumb planted by audit auto-park (logic.process_audit_scan) when a
+# spool expected at an audited location wasn't scan-confirmed and gets
+# moved to the virtual UNKNOWN bucket. System-managed; see
+# spoolman_api.SYSTEM_MANAGED_EXTRAS. App startup self-heals via
+# ensure_required_extras() too, so this entry is the canonical-rebuild path.
+create_field("spool", "fcc_pre_audit_location", "Pre-Audit Location (system)", "text")
 create_field("spool", "needs_label_print", "Needs Label Print", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")

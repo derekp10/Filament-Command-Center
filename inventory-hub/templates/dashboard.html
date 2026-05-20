@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Filament Command Center {{ version }}</title>
+    <title>Filament Command Center</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -17,7 +17,12 @@
         <div class="container-fluid">
             <div class="navbar-brand-group">
                 <span class="navbar-brand">Filament Command Center</span>
-                <span class="version-tag badge bg-dark border border-info">{{ version }}</span>
+                <span class="version-tag badge bg-dark border border-info"
+                      id="fcc-build-version"
+                      data-build-mtime="{{ build_mtime|default(0) }}"
+                      data-build-commit-sha="{{ build_commit_sha|default('') }}"
+                      data-build-commit-ts="{{ build_commit_ts|default(0) }}"
+                      title="{{ version }}">{{ version }}</span>
             </div>
 
             <div class="d-flex align-items-center gap-3">
@@ -49,11 +54,33 @@
                     onclick="window.toggleShortcutsOverlay()"
                     title="Keyboard shortcuts (?)"
                     style="font-weight:bold; width:38px;">?</button>
+                <!-- L324 Config / Admin entry point. First inhabitant is the
+                     FilaBridge ↔ Spoolman Reconcile tool; future config
+                     panels (user preferences, choice cleanup, etc.) will
+                     slot into the same modal. -->
+                <!-- Emoji centering: explicit flex centering + zero
+                     horizontal padding because the ⚙️ glyph's visual
+                     center sits left of its em-box center. Plain
+                     text-align/inline-block let Bootstrap's default
+                     button padding shove it visually right. -->
+                <button class="btn btn-outline-info ms-2 d-inline-flex align-items-center justify-content-center"
+                    id="btn-config"
+                    onclick="window.openConfigModal && window.openConfigModal()"
+                    title="Admin / Config tools"
+                    style="font-weight:bold; width:38px; height:38px; padding:0; font-size:1.1rem; line-height:1;">⚙️</button>
             </div>
         </div>
     </nav>
 
-    <!-- Shortcuts overlay — populated by shortcuts_registry.js at runtime. -->
+    <!-- Shortcuts overlay — populated by shortcuts_registry.js at runtime.
+         L218 fix: the panel previously sat alone with no backdrop, so outside
+         clicks fell through and dismissed whatever modal was underneath. The
+         backdrop sibling below catches outside clicks (closes the overlay) so
+         click-through is impossible. -->
+    <div id="fcc-shortcuts-overlay-backdrop"
+        class="position-fixed top-0 start-0 w-100 h-100"
+        style="display:none; z-index:10000; background:rgba(0,0,0,0.45);"
+        onclick="window.toggleShortcutsOverlay()"></div>
     <div id="fcc-shortcuts-overlay"
         class="position-fixed top-50 start-50 translate-middle bg-dark border border-info rounded p-4 shadow-lg"
         style="display:none; z-index:10001; min-width:640px; max-width:95vw; max-height:85vh; overflow-y:auto;">
@@ -68,6 +95,23 @@
             or <kbd style="background:#111; color:#0ff; font-weight:bold; padding:2px 6px;">Esc</kbd> to close.
         </div>
     </div>
+
+    <!-- L184 — Activity Log "N new" corner pill. Hidden until either
+         (a) at least one new entry has arrived AND the dashboard log
+             panel isn't currently visible (covered by a modal), or
+         (b) the user has unread entries from a prior session.
+         Clicking pops a compact log overlay above any modal stack via
+         window.mountOverlay (z-index 20000). The pill itself sits at
+         z-index 1080 — above Bootstrap modals' default 1055 but below
+         our overlay tier so opening the overlay still occludes the pill.
+         Sized for thumb-tap on the eventual mobile build too. -->
+    <button type="button" id="fcc-log-pill" class="btn btn-sm shadow"
+        onclick="window.openLogPillOverlay && window.openLogPillOverlay()"
+        title="New Activity Log entries — click to view">
+        <span id="fcc-log-pill-icon">📡</span>
+        <span id="fcc-log-pill-count" class="ms-1">0</span>
+        <span class="ms-1" style="font-weight:600; font-size:0.8rem;">new</span>
+    </button>
 
     <!-- Printer Status widget (Group 9.3) — at-a-glance row per printer with
          a stylized toolhead schematic. Hidden when no printers have bound
@@ -100,9 +144,15 @@
             <div class="col-logs">
                 <div
                     class="p-2 border-bottom border-secondary text-info fw-bold d-flex justify-content-between align-items-center">
-                    <span>Live Activity 📡</span><span id="log-status" class="small fw-bold" style="color:#0f0;">Auto-Refresh ON</span>
+                    <span>Live Activity 📡</span><span id="log-status" class="small fw-bold" style="color:#0f0; cursor:pointer; user-select:none;" onclick="window.toggleLogsStickyPause && window.toggleLogsStickyPause()" title="Click to toggle sticky pause">Auto-Refresh ON (click to pause)</span>
                 </div>
-                <div id="live-logs" class="log-box" onmouseenter="pauseLogs(true)" onmouseleave="pauseLogs(false)">
+                <!-- L286 follow-up: hover-pause removed (was the
+                     bug, not the workaround). The indicator above is
+                     now the only pause path — click to lock, click to
+                     resume. RECENT_LOGS is bounded at 50 server-side
+                     so resume always backfills whatever ticked while
+                     paused. -->
+                <div id="live-logs" class="log-box">
                 </div>
             </div>
 
@@ -158,6 +208,7 @@
     {% include 'components/label_spool.html' %}
     {% include 'components/offcanvas_search.html' %}
     {% include 'components/modals_filabridge_recovery.html' %}
+    {% include 'components/modals_config.html' %}
     <!-- Global Floating Action Button for Search -->
     <button class="btn btn-primary shadow-lg border border-info fcc-fab-search"
         onclick="SearchEngine.open()" title="Global Inventory Search">

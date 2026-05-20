@@ -120,13 +120,28 @@ const setProcessing = (s) => {
     state.processing = s; ov.style.display = s ? 'block' : 'none';
 };
 
+// L286 final: the click-to-toggle indicator is the only pause path. The
+// old onmouseenter/onmouseleave hover-pause was removed in the dashboard
+// template — it caused accidental pauses Derek didn't realize were active.
+// `window.logsStickyPaused` mirrors `state.logsPaused`; kept as a separate
+// flag so tests + future callers can probe the "user explicitly paused"
+// signal without coupling to the polling internal.
+window.logsStickyPaused = false;
 const pauseLogs = (isPaused) => {
     state.logsPaused = isPaused;
+    window.logsStickyPaused = isPaused;
     const el = document.getElementById('log-status');
     if (el) {
-        if (isPaused) { el.innerText = "PAUSED ⏸"; el.style.color = "#fc0"; el.classList.remove('text-light'); }
-        else { el.innerText = "Auto-Refresh ON"; el.style.color = "#0f0"; el.classList.remove('text-light'); }
+        if (isPaused) { el.innerText = "PAUSED ⏸ (click to resume)"; el.style.color = "#fc0"; el.classList.remove('text-light'); }
+        else { el.innerText = "Auto-Refresh ON (click to pause)"; el.style.color = "#0f0"; el.classList.remove('text-light'); }
     }
+};
+
+// Click-to-toggle from the log-status indicator. RECENT_LOGS is bounded
+// at 50 server-side, so resume always backfills with whatever ticked while
+// the user was reading.
+window.toggleLogsStickyPause = () => {
+    pauseLogs(!state.logsPaused);
 };
 
 // --- GRAPHICS HELPERS ---
@@ -518,6 +533,9 @@ const fetchLocations = () => {
                     else if (t.includes('Room')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
                     // [ALEX FIX] Ghostly, Hollow Look for Virtual
                     else if (t.includes('Virtual')) { badgeClass = 'bg-transparent text-light'; badgeStyle = 'border:2px dashed #aaa; box-shadow: inset 0 0 5px rgba(255,255,255,0.2);'; }
+                    // 18.1 — Unknown bucket: yellow caution band so the row
+                    // stands out at the bottom of the table.
+                    else if (t.includes('Unknown')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #ffd54a; box-shadow: 0 0 6px rgba(255,193,7,0.6);'; }
 
                     const typeBadge = `<span class="badge ${badgeClass}" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
 
@@ -604,6 +622,83 @@ window.showGlobalQrModal = (locId) => {
     if (modals.locQrViewModal) modals.locQrViewModal.show();
 };
 
+// L184 — log-pill state. Tracks the time of the newest entry the user
+// has "seen" (i.e. that was current the last time the dashboard log
+// panel was visible OR the pill overlay was opened/dismissed). Anything
+// newer counts as unread. Persisted across page reloads via localStorage
+// so a sticky modal stack doesn't reset the count on every refresh.
+const LOG_PILL_KEY = 'fcc.logPill.lastSeenTime';
+const _readLastSeenTime = () => {
+    try {
+        const v = localStorage.getItem(LOG_PILL_KEY);
+        return v || '';
+    } catch (_) { return ''; }
+};
+const _writeLastSeenTime = (t) => {
+    try { localStorage.setItem(LOG_PILL_KEY, t || ''); } catch (_) { /* private mode */ }
+};
+const _updateLogPill = (logs) => {
+    const pill = document.getElementById('fcc-log-pill');
+    if (!pill) return;
+    const lastSeen = _readLastSeenTime();
+    const unseen = (logs || []).filter(l => (l.time || '') > lastSeen);
+    if (unseen.length === 0) {
+        pill.style.display = 'none';
+        return;
+    }
+    const countEl = document.getElementById('fcc-log-pill-count');
+    if (countEl) countEl.innerText = String(unseen.length);
+    // Use !important via inline style to override any CSS display:none.
+    pill.style.setProperty('display', 'inline-flex', 'important');
+    pill.style.alignItems = 'center';
+    // Brief flash to draw the eye to a fresh entry.
+    pill.classList.remove('fcc-log-pill-flash');
+    void pill.offsetWidth;  // force reflow so re-adding restarts the animation
+    pill.classList.add('fcc-log-pill-flash');
+};
+
+window.openLogPillOverlay = () => {
+    // Snapshot the latest logs and render them in a mountOverlay so the
+    // panel sits above any modal stack. Closing marks every entry as seen.
+    fetch('/api/logs').then(r => r.json()).then(d => {
+        const logs = (d && d.logs) || [];
+        if (logs.length) _writeLastSeenTime(logs[0].time || '');
+        // Contrast note: avoid Bootstrap's `text-muted` (#6c757d) — it
+        // hits ~1.4:1 against the dark overlay bg and reads as gray-on-gray.
+        // Use explicit rgba(255,255,255,0.7) for low-emphasis text instead.
+        const rows = logs.map(l =>
+            `<div class="log-${l.type}" style="padding:2px 4px; border-bottom:1px solid #222;">[${l.time}] ${l.msg}</div>`
+        ).join('') || '<div class="small p-3" style="color: rgba(255,255,255,0.7);">Activity Log is empty.</div>';
+        const html = `
+            <div style="background:#1e1e1e; color:#fff; border:2px solid #0ff;
+                        border-radius:8px; padding:14px 16px; min-width:420px; max-width:90vw;
+                        max-height:80vh; display:flex; flex-direction:column;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div style="font-weight:bold; font-size:1.1em; color:#0ff;">📡 Activity Log</div>
+                    <button id="fcc-log-pill-close" class="btn btn-sm btn-outline-info">Close</button>
+                </div>
+                <div style="overflow-y:auto; font-family:monospace; font-size:0.85rem;
+                            background:#0a0a0a; padding:8px; border:1px solid #333; flex:1 1 auto;">
+                    ${rows}
+                </div>
+                <div class="mt-2 small" style="color: rgba(255,255,255,0.7);">Press <kbd style="background:#111; color:#0ff; padding:1px 5px;">Esc</kbd> to close. New entries are marked read when this panel opens.</div>
+            </div>
+        `;
+        const handle = window.mountOverlay({
+            id: 'fcc-log-pill-overlay',
+            content: html,
+            tier: 'standard',
+            backdrop: true,
+            backdropDismiss: true,
+        });
+        const closeBtn = handle.element.querySelector('#fcc-log-pill-close');
+        if (closeBtn) closeBtn.onclick = () => handle.cleanup();
+        // Hide the pill now that the user has acknowledged.
+        const pill = document.getElementById('fcc-log-pill');
+        if (pill) pill.style.display = 'none';
+    });
+};
+
 const updateLogState = (force = false) => {
     if (!state.logsPaused || force) fetch('/api/logs').then(r => r.json()).then(d => {
         // --- NO WIGGLE CHECK ---
@@ -625,6 +720,7 @@ const updateLogState = (force = false) => {
                 return `<div class="log-${l.type}${extraClass}">[${l.time}] ${l.msg}${extraHtml}</div>`;
             }).join('');
         }
+        _updateLogPill(d.logs || []);
 
         const sSpool = document.getElementById('st-spoolman');
         const sFila = document.getElementById('st-filabridge');
@@ -694,7 +790,10 @@ window.startSmartSync = () => {
 document.addEventListener('DOMContentLoaded', () => {
     // Start Heartbeat
     window.startSmartSync();
-    
+    // L184 — fire the log poll once immediately so the corner pill can
+    // populate without waiting ~5s for the first heartbeat tick.
+    updateLogState(true);
+
     // Initialize Wake Lock Handlers
     requestWakeLock();
 

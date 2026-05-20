@@ -396,6 +396,11 @@ SYSTEM_MANAGED_EXTRAS = frozenset({
     "physical_source_slot",
     # Owned by _auto_archive_on_empty / _auto_unarchive_on_refill.
     "fcc_pre_archive_location",
+    # 18.2 Part A — set when audit-mode auto-parks an unconfirmed spool
+    # at UNKNOWN. Carries the location the spool was expected at so a
+    # recovery scan can route it home; never user-editable (would lose
+    # the breadcrumb).
+    "fcc_pre_audit_location",
 })
 
 
@@ -772,6 +777,13 @@ REQUIRED_SPOOL_EXTRAS = [
     # without the UI being misleading.
     ("prusament_manufacturing_date", "Manufacturing Date", "text"),
     ("prusament_length_m", "Length (m)", "text"),
+    # 18.2 Part A — breadcrumb planted when audit auto-parks an unscanned
+    # spool at UNKNOWN. Recovery scans read it to route the spool home.
+    # Must be in REQUIRED_SPOOL_EXTRAS so app startup self-heals against
+    # a Spoolman that's missing it; without this, the auto-park PATCH 400s
+    # ("Unknown extra field fcc_pre_audit_location") and missing spools stay
+    # at their stale location (silent failure surfaces as red Activity Log).
+    ("fcc_pre_audit_location", "Pre-Audit Location (system)", "text"),
 ]
 
 # Vendor extras the Manufacturer/Vendor Edit modal V1 writes (Group 6.2).
@@ -794,6 +806,193 @@ def ensure_required_extras():
         ensure_extra_field("spool", key, name, ftype)
     for key, name, ftype in REQUIRED_VENDOR_EXTRAS:
         ensure_extra_field("vendor", key, name, ftype)
+
+
+# --- CHOICE CLEANUP (auto-run at app startup, idempotent) -------------------
+#
+# Derek 2026-05-19: "Can this just run on its own first run and clean things
+# up? I don't like running things on prod myself, cause finding it and
+# running it is kind of a pain."
+#
+# The DELETE list is the confirmed-safe deletions Derek audited 2026-04-28.
+# The FLAG list is "kept if any filament uses it on this DB; auto-promoted
+# to DELETE if usage is zero" — the safety net that means we can't
+# accidentally strip data Derek still relies on.
+#
+# Idempotent on subsequent boots: when none of the DELETE / FLAG choices are
+# in the current field definition, this is a single GET + early return.
+
+FILAMENT_ATTRIBUTES_DELETE_CHOICES = frozenset({
+    "Carbon-Fiber",            # dupe of "Carbon Fiber"
+    "Tran",                    # truncated
+    "Transparent; High-Speed", # semicolon-bogus
+    "Wood",                    # superseded by "Wood Filled"
+    "F",                       # typo
+})
+FILAMENT_ATTRIBUTES_FLAG_CHOICES = frozenset({
+    # Kept on prod if any filament uses them; auto-deleted if zero usage.
+    "For Infill",
+    "Matte Pro",
+})
+
+
+def _parse_filament_attrs_value(raw):
+    """filament_attributes is stored as a JSON-encoded string list, e.g.
+    '["+", "Silk"]'. Tolerant of both wire-form and raw list inputs."""
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed]
+            return [str(parsed)]
+        except (ValueError, TypeError):
+            return [raw]
+    return []
+
+
+def ensure_filament_attributes_cleaned():
+    """Auto-trim dead/duplicate entries from the filament_attributes
+    choice list. Safe to call on every boot — idempotent when nothing
+    needs cleaning, and defensive against transient Spoolman issues
+    (skips silently if filaments can't be listed).
+
+    Failures NEVER block startup; they log at WARNING level.
+    """
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.get(f"{sm_url}/api/v1/field/filament", timeout=10)
+        if not r.ok:
+            return
+        field = next(
+            (f for f in (r.json() or []) if f.get("key") == "filament_attributes"),
+            None,
+        )
+        if field is None:
+            return  # field doesn't exist yet; nothing to clean
+
+        existing = set(field.get("choices") or [])
+        # Targets that are actually present in the current field.
+        possible_deletes = FILAMENT_ATTRIBUTES_DELETE_CHOICES & existing
+        possible_flags = FILAMENT_ATTRIBUTES_FLAG_CHOICES & existing
+        if not possible_deletes and not possible_flags:
+            return  # nothing to do; common path after first successful run
+
+        # List filaments to compute usage. If Spoolman returns an empty
+        # list while we KNOW the choice field exists, treat that as a
+        # transient state (rather than evidence that nothing uses any of
+        # the flagged choices) and skip — the next boot retries.
+        f_resp = requests.get(f"{sm_url}/api/v1/filament", timeout=20)
+        if not f_resp.ok:
+            return
+        filaments = f_resp.json() or []
+        if not filaments:
+            state.logger.info(
+                "ensure_filament_attributes_cleaned: Spoolman returned 0 filaments; "
+                "skipping cleanup to avoid false 'unused' calls. Will retry next boot."
+            )
+            return
+
+        usage = {}  # choice -> [(fid, name)]
+        snapshot = {}  # fid -> [attrs]
+        name_by_fid = {}
+        for f in filaments:
+            fid = f.get("id")
+            if fid is None:
+                continue
+            name_by_fid[fid] = f.get("name") or "?"
+            extras = f.get("extra") or {}
+            attrs = _parse_filament_attrs_value(extras.get("filament_attributes"))
+            if not attrs:
+                continue
+            snapshot[fid] = attrs
+            for a in attrs:
+                usage.setdefault(a, []).append((fid, name_by_fid[fid]))
+
+        # Auto-promote unused FLAG_CHOICES into the effective-delete set.
+        promoted = {c for c in possible_flags if not usage.get(c)}
+        kept_flagged = {c: usage[c] for c in possible_flags if usage.get(c)}
+        effective_delete = possible_deletes | promoted
+        if not effective_delete:
+            # Every flagged target turned out to be in use; nothing to remove.
+            return
+
+        new_choices = sorted(existing - effective_delete)
+
+        # Pre-flight log so the operator sees what's about to change
+        # before the schema rebuild fires. State logger goes to hub.log
+        # AND the Activity Log via the WARNING/INFO add_log_entry below.
+        state.logger.info(
+            f"filament_attributes cleanup: "
+            f"will delete {sorted(effective_delete)} "
+            f"(promoted from flag: {sorted(promoted)}; "
+            f"kept-because-in-use: {sorted(kept_flagged.keys())})"
+        )
+
+        # DELETE the field, then POST it back with the cleaned choice list.
+        d_resp = requests.delete(
+            f"{sm_url}/api/v1/field/filament/filament_attributes", timeout=15
+        )
+        if not d_resp.ok and d_resp.status_code != 404:
+            state.logger.warning(
+                f"filament_attributes cleanup DELETE failed "
+                f"({d_resp.status_code}): {d_resp.text[:300]}"
+            )
+            return
+
+        c_resp = requests.post(
+            f"{sm_url}/api/v1/field/filament/filament_attributes",
+            json={
+                "name": "Filament Attributes",
+                "field_type": "choice",
+                "multi_choice": True,
+                "choices": new_choices,
+            },
+            timeout=15,
+        )
+        if not c_resp.ok:
+            state.logger.error(
+                f"filament_attributes cleanup POST failed "
+                f"({c_resp.status_code}): {c_resp.text[:300]} — "
+                "field is now MISSING from Spoolman. Re-run setup_fields.py "
+                "to restore."
+            )
+            return
+
+        # Restore each filament's value (sans the deleted choices).
+        restored, failed = 0, 0
+        for fid, attrs in snapshot.items():
+            cleaned = [a for a in attrs if a not in effective_delete]
+            try:
+                pr = requests.patch(
+                    f"{sm_url}/api/v1/filament/{fid}",
+                    json={"extra": {"filament_attributes": json.dumps(cleaned)}},
+                    timeout=10,
+                )
+                if pr.ok:
+                    restored += 1
+                else:
+                    failed += 1
+            except requests.RequestException:
+                failed += 1
+
+        # User-visible summary in the Activity Log (the hub.log line above
+        # is for debugging; this one shows on the dashboard).
+        state.add_log_entry(
+            f"🧹 Filament Attributes cleaned: removed {sorted(effective_delete)} "
+            f"({restored} filaments restored"
+            + (f", {failed} failed" if failed else "")
+            + ")",
+            "INFO",
+            "00ccff",
+        )
+    except requests.RequestException as e:
+        state.logger.warning(f"ensure_filament_attributes_cleaned: network error: {e}")
+    except Exception as e:
+        state.logger.warning(f"ensure_filament_attributes_cleaned: unexpected error: {e}")
 
 
 def update_extra_field_choices(entity_type, key, new_choices):
@@ -1085,7 +1284,7 @@ def get_best_color_distance(target_hex, compare_hex_csv):
         return float('inf')
     return min(distances)
 
-def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", deployed_state=""):
+def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", max_weight="", deployed_state=""):
     """
     Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
     Returns a sorted list of dictionaries matching the criteria.
@@ -1170,6 +1369,10 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 if min_weight:
                     try:
                         if rem < float(min_weight): continue
+                    except: pass
+                if max_weight:
+                    try:
+                        if rem > float(max_weight): continue
                     except: pass
 
                 # 2b. Deployment filter (spool-only). A spool counts as

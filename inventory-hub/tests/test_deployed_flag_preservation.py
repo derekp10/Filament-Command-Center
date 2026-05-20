@@ -301,6 +301,48 @@ def test_smart_move_to_bound_toolhead_preserves_real_source():
     assert patch_data["extra"]["physical_source_slot"] == "1"
 
 
+def test_force_move_to_room_clears_ghost_trail():
+    """L130 fix — force-locating a spool that was deployed to a toolhead
+    (physical_source=LR-MDB-1:2) into a Room/Cart must clear physical_source
+    and physical_source_slot. Otherwise search_inventory.is_deployed still
+    reports the spool as deployed because its ghost source is still a
+    toolhead, and the details modal keeps showing "Deployed: XL-3"
+    after the user explicitly forced it elsewhere."""
+    printer_map = {"XL-3": {"printer_name": "🦝 XL", "position": 2}}
+    loc_list = [
+        {"LocationID": "XL-3", "Type": "Tool Head", "Max Spools": "1"},
+        {"LocationID": "LR-MDB-1", "Type": "Dryer Box", "Max Spools": "4"},
+        # Generic room — not Printer, not Dryer Box, not Tool Head.
+        {"LocationID": "LR", "Type": "Room", "Max Spools": ""},
+    ]
+    spool_data = {
+        "id": 99, "location": "LR-MDB-1",  # ghost-deployed to XL-3 via this box
+        "extra": {
+            "physical_source": "LR-MDB-1",
+            "physical_source_slot": "2",
+            "container_slot": "2",
+        }
+    }
+    captured = {}
+    ctx = _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured)
+    for m in ctx: m.start()
+    try:
+        logic.perform_smart_move("LR", [99], target_slot=None, origin="manual_override")
+    finally:
+        for m in reversed(ctx): m.stop()
+
+    _, patch_data = captured['update']
+    extras = patch_data["extra"]
+    # THE regression: the prior ghost trail must be gone now that the user
+    # explicitly relocated the spool to a non-toolhead.
+    assert "physical_source" not in extras or extras.get("physical_source") in (None, ""), \
+        f"physical_source should be cleared on force-move to non-toolhead, got {extras.get('physical_source')!r}"
+    assert "physical_source_slot" not in extras or extras.get("physical_source_slot") in (None, ""), \
+        f"physical_source_slot should be cleared, got {extras.get('physical_source_slot')!r}"
+    # Sanity: the destination was actually written.
+    assert patch_data["location"] == "LR"
+
+
 def test_smart_move_to_unbound_toolhead_no_ghost_synthesis():
     """13.6 Part A complement — if the destination toolhead has no
     reverse-binding from any dryer-box slot, the spool's physical_source

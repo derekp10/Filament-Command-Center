@@ -61,9 +61,15 @@
                     <!-- Dynamically populated by UI loop -->
                 </select>
 
-                <div class="input-group input-group-sm w-100px ms-1">
-                    <span class="input-group-text bg-dark border-secondary px-1" title="Minimum Weight (g)">⚖️</span>
-                    <input type="number" id="global-search-min-weight" class="form-control bg-dark text-white border-secondary px-1" placeholder="Min g" min="0" title="Minimum Remaining Weight (g)">
+                <!-- Remaining-weight range: ⚖️ [Min] [____] [Max] [____]
+                     Both inputs share one input-group so the relationship is
+                     visually obvious and each field is explicitly labeled. -->
+                <div class="input-group input-group-sm ms-1" style="width:215px;">
+                    <span class="input-group-text bg-dark border-secondary px-1" title="Remaining weight range (g)">⚖️</span>
+                    <span class="input-group-text bg-dark text-info border-secondary px-1 fw-bold" style="font-size:0.7rem;">Min</span>
+                    <input type="number" id="global-search-min-weight" class="form-control bg-dark text-white border-secondary px-1" placeholder="g" min="0" title="Minimum Remaining Weight (g)">
+                    <span class="input-group-text bg-dark text-info border-secondary px-1 fw-bold" style="font-size:0.7rem;">Max</span>
+                    <input type="number" id="global-search-max-weight" class="form-control bg-dark text-white border-secondary px-1" placeholder="g" min="0" title="Maximum Remaining Weight (g)">
                 </div>
 
                 <!-- Deployment filter (spool-only). Skipped silently by the
