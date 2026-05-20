@@ -409,10 +409,22 @@ const hexToRgb = (hex) => {
 };
 
 // --- DATA FETCHERS ---
-const fetchLocations = () => {
-    fetch('/api/locations')
-        .then(r => r.json())
-        .then(d => {
+// L28 polling guard: see updateLogState for rationale. Same pattern.
+// L206: split fetch + render so the bulk-pulse dispatcher can hand
+// pre-fetched data into _renderLocationsPayload without another round-trip.
+let _fetchLocationsInflight = false;
+const _renderLocationsPayload = (d) => {
+    if (!d) return;
+    // The bulk endpoint can pass {error: ...} when locations.json is
+    // corrupt — surface to console and bail out (the locations table
+    // will simply not update this tick).
+    if (!Array.isArray(d)) {
+        if (d && d.error) console.warn("locations payload error:", d.error);
+        return;
+    }
+    // The body below was previously the entire .then() callback of
+    // fetchLocations. Pulled out as-is so the legacy fetch path and the
+    // bulk-pulse path produce identical DOM.
             // [ALEX FIX] Ensure Unassigned is in the list
             let hasUnassigned = d.some(l => l.LocationID === 'Unassigned');
             if(!hasUnassigned) {
@@ -575,8 +587,18 @@ const fetchLocations = () => {
                 </tr>`;
                 }).join('');
             }
-        });
 };
+
+const fetchLocations = () => {
+    if (_fetchLocationsInflight) return;
+    _fetchLocationsInflight = true;
+    fetch('/api/locations')
+        .then(r => r.json())
+        .then(_renderLocationsPayload)
+        .catch(e => console.warn("fetchLocations failed:", e))
+        .finally(() => { _fetchLocationsInflight = false; });
+};
+window._renderLocationsPayload = _renderLocationsPayload;
 window.fetchLocations = fetchLocations;
 
 window.sortLocations = (col) => {
@@ -699,41 +721,62 @@ window.openLogPillOverlay = () => {
     });
 };
 
-const updateLogState = (force = false) => {
-    if (!state.logsPaused || force) fetch('/api/logs').then(r => r.json()).then(d => {
-        // --- NO WIGGLE CHECK ---
-        const contentHash = JSON.stringify(d);
-        if (!force && state.lastLogHash === contentHash) return;
-        state.lastLogHash = contentHash;
-        // -----------------------
+// L28 root cause: this poll fired on a 5s heartbeat without an in-flight
+// guard and without a .catch(), so a slow backend (e.g. mid-PATCH) would
+// pile fetches up until Chrome hit net::ERR_NO_BUFFER_SPACE — at which
+// point every poll started rejecting and the unhandled rejections cascaded
+// into a "frozen" frontend. Guard + catch keep the poll well-behaved under
+// load: ticks back off automatically while a request is still pending.
+//
+// L206: render path extracted to _renderLogsPayload so the bulk-pulse
+// dispatcher can hand pre-fetched data directly into the renderer without
+// triggering another /api/logs round-trip.
+const _renderLogsPayload = (d, force = false) => {
+    if (!d) return;
+    // --- NO WIGGLE CHECK ---
+    const contentHash = JSON.stringify(d);
+    if (!force && state.lastLogHash === contentHash) return;
+    state.lastLogHash = contentHash;
+    // -----------------------
 
-        const logsEl = document.getElementById('live-logs');
-        if (logsEl) {
-            logsEl.innerHTML = d.logs.map(l => {
-                let extraHtml = '';
-                let extraClass = '';
-                if (l.meta && l.meta.type === 'filabridge_error') {
-                    const dataStr = encodeURIComponent(JSON.stringify(l.meta));
-                    extraClass = ' filabridge-error-log';
-                    extraHtml = `<button class="btn btn-sm btn-outline-warning ms-2 py-0 px-1" onclick="window.openFilaBridgeRecovery('${dataStr}')">💊 Fix</button>`;
-                }
-                return `<div class="log-${l.type}${extraClass}">[${l.time}] ${l.msg}${extraHtml}</div>`;
-            }).join('');
-        }
-        _updateLogPill(d.logs || []);
+    const logsEl = document.getElementById('live-logs');
+    if (logsEl && d.logs) {
+        logsEl.innerHTML = d.logs.map(l => {
+            let extraHtml = '';
+            let extraClass = '';
+            if (l.meta && l.meta.type === 'filabridge_error') {
+                const dataStr = encodeURIComponent(JSON.stringify(l.meta));
+                extraClass = ' filabridge-error-log';
+                extraHtml = `<button class="btn btn-sm btn-outline-warning ms-2 py-0 px-1" onclick="window.openFilaBridgeRecovery('${dataStr}')">💊 Fix</button>`;
+            }
+            return `<div class="log-${l.type}${extraClass}">[${l.time}] ${l.msg}${extraHtml}</div>`;
+        }).join('');
+    }
+    _updateLogPill(d.logs || []);
 
-        const sSpool = document.getElementById('st-spoolman');
-        const sFila = document.getElementById('st-filabridge');
+    const sSpool = document.getElementById('st-spoolman');
+    const sFila = document.getElementById('st-filabridge');
+    if (d.status) {
         if (sSpool) sSpool.className = `status-dot ${d.status.spoolman ? 'status-on' : 'status-off'}`;
         if (sFila) sFila.className = `status-dot ${d.status.filabridge ? 'status-on' : 'status-off'}`;
+    }
 
-        if (d.audit_active !== state.lastAuditState) {
-            state.lastAuditState = d.audit_active;
-            state.auditActive = d.audit_active;
-            // Audit Visuals are handled in Command Center Module
-            if (window.updateAuditVisuals) window.updateAuditVisuals();
-        }
-    });
+    if (d.audit_active !== undefined && d.audit_active !== state.lastAuditState) {
+        state.lastAuditState = d.audit_active;
+        state.auditActive = d.audit_active;
+        if (window.updateAuditVisuals) window.updateAuditVisuals();
+    }
+};
+window._renderLogsPayload = _renderLogsPayload;
+
+let _updateLogStateInflight = false;
+const updateLogState = (force = false) => {
+    if (state.logsPaused && !force) return;
+    if (_updateLogStateInflight) return;
+    _updateLogStateInflight = true;
+    fetch('/api/logs').then(r => r.json()).then(d => _renderLogsPayload(d, force))
+        .catch(e => console.warn("updateLogState failed:", e))
+        .finally(() => { _updateLogStateInflight = false; });
 };
 
 // --- MODAL HELPERS ---
@@ -755,36 +798,192 @@ const promptAction = (t, m, btns) => {
 };
 
 // --- SMART SYNC PROTOCOL (Heartbeat) ---
+//
+// L206: replaced fan-out (~12 reqs/5s) with a single `/api/dashboard_pulse`
+// call per tick. Each section's renderer was extracted upstream so the
+// dispatcher can hand pre-fetched data in without an extra round-trip.
+// Adaptive cadence: 5s when active, 15s after 60s idle, 30s when the tab
+// is hidden. Visibility/idle changes don't force a re-poll — the next
+// scheduled tick just lands sooner or later than it otherwise would.
+
+// Cadence buckets (ms). Tunable in one place if needed.
+const PULSE_INTERVAL_ACTIVE = 5000;
+const PULSE_INTERVAL_IDLE = 15000;
+const PULSE_INTERVAL_HIDDEN = 30000;
+const PULSE_IDLE_THRESHOLD_MS = 60000;
+
+let _lastUserActivity = Date.now();
+const _bumpUserActivity = () => { _lastUserActivity = Date.now(); };
+// Activity bumpers. Notes on coverage:
+// - `keydown` covers USB / Bluetooth barcode scanners — they emit
+//   synthetic keystrokes to the focused window, so a scan bumps activity
+//   the same way a keyboard press does. Only caveat: if the tab is
+//   hidden, the scanner's keystrokes go to whatever IS focused (OS
+//   shell, another app), not the browser. That's not a cadence problem
+//   — there's no way to handle a scan on a hidden tab regardless.
+// - `pointerdown` covers both mouse + touch via the unified Pointer
+//   Events API; `touchstart` is kept as a belt-and-suspenders for older
+//   mobile browsers that fire touch* but not pointer*.
+// - When the mobile mode lands (Feature-Buglist L315 — large mobile
+//   architectural effort), the cadence buckets themselves may want
+//   revisiting (mobile backgrounding fires visibilitychange far more
+//   often than desktop tab-switching does, so the 30s "hidden" bucket
+//   could be either too aggressive or too conservative depending on
+//   battery/cellular use). The activity list itself should already
+//   carry over — touchstart + pointerdown is already mobile-correct.
+['keydown', 'mousedown', 'pointerdown', 'wheel', 'touchstart'].forEach(ev =>
+    document.addEventListener(ev, _bumpUserActivity, { passive: true, capture: true })
+);
+
+const _pulseInterval = () => {
+    if (document.hidden) return PULSE_INTERVAL_HIDDEN;
+    if (Date.now() - _lastUserActivity > PULSE_IDLE_THRESHOLD_MS) return PULSE_INTERVAL_IDLE;
+    return PULSE_INTERVAL_ACTIVE;
+};
+
+// Build the include= list based on what the user can actually see this
+// tick. There's no point asking for `locations` if the table isn't on
+// screen — saves the backend a Spoolman+locations.json round-trip.
+const _computePulseInclude = () => {
+    const sections = ['logs'];  // always — needed for status dots + audit watchdog
+    const locTable = document.getElementById('location-table');
+    if (locTable && locTable.offsetParent !== null) sections.push('locations');
+    const manageModal = document.getElementById('manageModal');
+    let manageId = null;
+    if (manageModal && manageModal.classList.contains('show')) {
+        const manageLocId = document.getElementById('manage-loc-id');
+        if (manageLocId && manageLocId.value) {
+            sections.push('manage');
+            manageId = manageLocId.value;
+        }
+    }
+    // Always include printer_status — the widget is on the dashboard and
+    // is one of the most useful at-a-glance surfaces. Aggregation cost
+    // lives server-side (parallelized) so the network cost is one section
+    // in the bulk payload, not N separate fetches.
+    sections.push('printer_status');
+    return { sections, manageId };
+};
+
+let _pulseInflight = false;
+let _pulseNextTimer = null;
+// _scheduleNextPulse owns every setTimeout we use to drive ticks so the
+// visibilitychange handler can cancel-and-reschedule when the tab comes
+// back to focus (otherwise the user would wait up to 30s — the hidden-
+// bucket scheduled gap — for fresh data after switching back).
+const _scheduleNextPulse = (delayMs) => {
+    if (_pulseNextTimer !== null) {
+        clearTimeout(_pulseNextTimer);
+        _pulseNextTimer = null;
+    }
+    _pulseNextTimer = setTimeout(() => {
+        _pulseNextTimer = null;
+        _dashboardPulseTick();
+    }, delayMs);
+};
+
+const _dashboardPulseTick = () => {
+    if (_pulseInflight) {
+        // Guard: don't stack pulses if the backend is slow. Schedule the
+        // next attempt at the current cadence — we'll re-evaluate when
+        // the in-flight one returns.
+        _scheduleNextPulse(_pulseInterval());
+        return;
+    }
+    _pulseInflight = true;
+
+    const { sections, manageId } = _computePulseInclude();
+    // If logs are paused (user explicitly paused the activity log), still
+    // pull everything else but skip the logs section.
+    const include = state.logsPaused
+        ? sections.filter(s => s !== 'logs').concat('status')
+        : sections;
+    let url = `/api/dashboard_pulse?include=${encodeURIComponent(include.join(','))}`;
+    if (manageId) url += `&manage_id=${encodeURIComponent(manageId)}`;
+
+    // POST body carries refresh_spool_ids when the buffer has held spools,
+    // replacing the old liveRefreshBuffer fetch.
+    const heldIds = (state.heldSpools || []).map(s => s.id);
+    const fetchOpts = heldIds.length > 0
+        ? {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_spool_ids: heldIds }),
+        }
+        : { method: 'GET' };
+
+    fetch(url, fetchOpts)
+        .then(r => r.json())
+        .then(payload => {
+            if (!payload || typeof payload !== 'object') return;
+
+            // logs / status renderer — handles status dots + audit visuals + log entries
+            if (payload.logs) {
+                _renderLogsPayload(payload.logs);
+            } else if (payload.status) {
+                // No log entries but still got status — repaint the dots only.
+                const sSpool = document.getElementById('st-spoolman');
+                const sFila = document.getElementById('st-filabridge');
+                if (sSpool) sSpool.className = `status-dot ${payload.status.spoolman ? 'status-on' : 'status-off'}`;
+                if (sFila) sFila.className = `status-dot ${payload.status.filabridge ? 'status-on' : 'status-off'}`;
+                if (payload.status.audit_active !== undefined && payload.status.audit_active !== state.lastAuditState) {
+                    state.lastAuditState = payload.status.audit_active;
+                    state.auditActive = payload.status.audit_active;
+                    if (window.updateAuditVisuals) window.updateAuditVisuals();
+                }
+            }
+            if (payload.locations) _renderLocationsPayload(payload.locations);
+            if (payload.manage && payload.manage.contents && window._renderManagePayload) {
+                window._renderManagePayload(payload.manage.id, payload.manage.contents);
+            }
+            if (payload.printer_status && window.refreshPrinterStatusWidgetFromAggregate) {
+                window.refreshPrinterStatusWidgetFromAggregate(payload.printer_status);
+            }
+            if (payload.spools_refresh && window._renderSpoolsRefreshPayload) {
+                window._renderSpoolsRefreshPayload(payload.spools_refresh);
+            }
+
+            // Broadcast for listeners that still poll independently
+            // (inv_backlog, inv_details modal sync, inv_search results).
+            // These do NOT include liveRefreshBuffer — that's now driven
+            // directly by the spools_refresh payload above.
+            document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'dashboard_pulse' } }));
+        })
+        .catch(e => console.warn("dashboard_pulse failed:", e))
+        .finally(() => {
+            _pulseInflight = false;
+            _scheduleNextPulse(_pulseInterval());
+        });
+};
+
 window.startSmartSync = () => {
     if (window._smartSyncRunning) return;
     window._smartSyncRunning = true;
-    console.log("🔄 Smart Sync Protocol Initiated (5s Interval)");
-
-    setInterval(() => {
-        // 1. Refresh Logs & System Status (Spoolman/Filabridge connectivity)
-        if (!state.logsPaused) updateLogState();
-
-        // 2. Refresh Location List if Visible (Modal Open)
-        // We check offsetParent to determine if the table is actually visible to the user
-        const locTable = document.getElementById('location-table');
-        if (locTable && locTable.offsetParent !== null) {
-            fetchLocations();
+    console.log("🔄 Smart Sync Protocol Initiated (adaptive: 5s active / 15s idle / 30s hidden)");
+    // Kick the first tick off immediately so the dashboard populates
+    // without waiting 5s on cold load.
+    _scheduleNextPulse(100);
+    // When the user comes back to a tab that was in the 30s hidden
+    // bucket, cancel the far-future tick and fire one immediately so
+    // they don't see stale data on switch-back. The bump_activity
+    // listener fires on the same event but only updates the timestamp;
+    // without this re-schedule, the staleness gap could be up to 30s.
+    document.addEventListener('visibilitychange', () => {
+        _bumpUserActivity();
+        if (!document.hidden && !_pulseInflight) {
+            _scheduleNextPulse(50);
         }
-
-        // 2.5. Refresh Location Manager Modal contents if open
-        const manageModal = document.getElementById('manageModal');
-        if (manageModal && manageModal.classList.contains('show')) {
-            const manageLocId = document.getElementById('manage-loc-id');
-            if (manageLocId && manageLocId.value && typeof window.refreshManageView === 'function') {
-                window.refreshManageView(manageLocId.value);
-            }
-        }
-
-        // 3. Broadcast Pulse for other modules (like Location Manager)
-        document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-
-    }, 5000); // 5 Second Heartbeat
+    });
 };
+
+// Test/debug hook: expose the tick directly so a test can fire it
+// without waiting on setTimeout.
+window._dashboardPulseTickOnce = () => {
+    _pulseInflight = false;  // reset in case a prior tick is stuck
+    _dashboardPulseTick();
+};
+// Expose the current-cadence reader for the cadence test.
+window._pulseInterval = _pulseInterval;
 
 // --- GLOBAL MODAL / WINDOW MANAGER ---
 document.addEventListener('DOMContentLoaded', () => {

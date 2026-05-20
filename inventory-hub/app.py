@@ -3491,6 +3491,191 @@ def api_get_logs_route():
         "status": {"spoolman": sm_ok, "filabridge": fb_ok}
     })
 
+
+# ---------------------------------------------------------------------------
+# L206 — Aggregated dashboard heartbeat
+#
+# startSmartSync used to fan out to ~6 separate endpoints every 5s
+# (logs, locations, get_contents for an open manage modal, spools/refresh,
+# printer_map + N x toolhead_slots + M x get_contents for printer status).
+# At peak ~15 requests per heartbeat — the load that pushed L28 over the
+# socket-buffer edge on 2026-05-18.
+#
+# This endpoint replaces that fan-out with a single bulk call. Callers
+# specify which sections they need via `?include=logs,locations,...`,
+# the backend assembles them in parallel via a ThreadPoolExecutor, and
+# the frontend dispatches each section to its existing renderer. Net
+# effect: ~12 requests/5s -> 1 request/5s, same data, lower overhead.
+# ---------------------------------------------------------------------------
+
+_VALID_PULSE_SECTIONS = frozenset({
+    'logs', 'status', 'locations', 'buffer', 'manage', 'printer_status'
+})
+
+
+def _pulse_section_logs():
+    """Invoke the /api/logs handler and unwrap its JSON. Preserves the
+    audit-idle-watchdog and FilaBridge error auto-recover side effects
+    because the bulk endpoint REPLACES the legacy heartbeat that used
+    to drive them - losing them would silently break audit cancellation
+    and recovery."""
+    resp = api_get_logs_route()
+    return resp.get_json()
+
+
+def _pulse_section_locations():
+    """Invoke the /api/locations handler and unwrap. Handles the 500
+    locations-corrupt path by returning {'error': ...} so the caller
+    can decide how to surface it; the bulk endpoint as a whole still
+    returns 200 since other sections may have valid data."""
+    rv = api_get_locations()
+    if isinstance(rv, tuple):
+        resp, status = rv[0], rv[1]
+        return {'error': resp.get_json(), 'status': status}
+    return rv.get_json()
+
+
+def _pulse_section_manage(loc_id):
+    """Mirror of /api/get_contents for one location."""
+    return {
+        'id': loc_id,
+        'contents': spoolman_api.get_spools_at_location_detailed(loc_id),
+    }
+
+
+def _pulse_section_printer_status():
+    """Server-side aggregator for the Printer Status widget. Replaces
+    the client-side fan-out of printer_map + N x toolhead_slots +
+    M x get_contents fetches with one parallel server-side call. Each
+    per-printer aggregation runs in its own thread (capped at 8) so a
+    slow Spoolman call for one toolhead doesn't serially block the rest."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    cfg = config_loader.load_config()
+    printer_map = cfg.get('printer_map', {}) or {}
+    grouped = {}
+    for loc_id, info in printer_map.items():
+        name = info.get('printer_name', 'Unknown')
+        grouped.setdefault(name, []).append({
+            'location_id': str(loc_id).upper(),
+            'position': info.get('position', 0),
+        })
+    for entries in grouped.values():
+        entries.sort(key=lambda e: (e['position'], e['location_id']))
+
+    if not grouped:
+        return {}
+
+    def fetch_for_printer(item):
+        name, entries = item
+        bindings_result = locations_db.get_bindings_for_machine(name, printer_map)
+        bindings = bindings_result.get('toolheads', {})
+        toolheads = []
+        for entry in entries:
+            tid = entry['location_id']
+            is_bound = bool(bindings.get(tid, []))
+            item_data = None
+            if is_bound:
+                contents = spoolman_api.get_spools_at_location_detailed(tid)
+                item_data = contents[0] if contents else None
+            toolheads.append({
+                'id': tid,
+                'position': entry['position'],
+                'item': item_data,
+                'unbound': not is_bound,
+            })
+        toolheads.sort(key=lambda t: (t['position'], t['id']))
+        return name, {'toolheads': toolheads}
+
+    out = {}
+    max_workers = max(1, min(8, len(grouped)))
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for name, payload in ex.map(fetch_for_printer, grouped.items()):
+            out[name] = payload
+    return out
+
+
+@app.route('/api/dashboard_pulse', methods=['GET', 'POST'])
+def api_dashboard_pulse():
+    """Aggregated heartbeat - see L206 docstring block above.
+
+    Query params:
+      include   comma-separated section names. Valid: logs, status,
+                locations, buffer, manage, printer_status. Unknown
+                names are silently ignored (forward-compat).
+      manage_id required when 'manage' is in include - the LocationID
+                whose contents to fetch.
+    Body (POST): {"refresh_spool_ids": [123, 124, ...]} - if present
+                and non-empty, the response includes a "spools_refresh"
+                section keyed by spool id, equivalent to a POST to
+                /api/spools/refresh.
+
+    Returns: {section_name: payload, ...}. Sections that error
+    individually return {"error": "..."} in their slot; the response
+    as a whole stays 200 so a partial failure doesn't blank the
+    dashboard.
+    """
+    raw_include = (request.args.get('include') or '').strip()
+    requested = set(s.strip().lower() for s in raw_include.split(',') if s.strip())
+    include = requested & _VALID_PULSE_SECTIONS
+    manage_id = (request.args.get('manage_id') or '').strip().upper()
+
+    refresh_spool_ids = []
+    if request.method == 'POST' and request.is_json:
+        body = request.get_json(silent=True) or {}
+        refresh_spool_ids = body.get('refresh_spool_ids') or []
+        if not isinstance(refresh_spool_ids, list):
+            refresh_spool_ids = []
+
+    out = {}
+
+    # logs and status share the underlying Spoolman+FilaBridge health
+    # check, so we invoke the handler at most once per request.
+    if 'logs' in include or 'status' in include:
+        try:
+            logs_payload = _pulse_section_logs()
+        except Exception as e:
+            logs_payload = {'error': str(e)}
+        if 'logs' in include:
+            out['logs'] = logs_payload
+        if 'status' in include and isinstance(logs_payload, dict) and 'status' in logs_payload:
+            out['status'] = {
+                'spoolman': logs_payload['status'].get('spoolman', False),
+                'filabridge': logs_payload['status'].get('filabridge', False),
+                'audit_active': logs_payload.get('audit_active', False),
+                'undo_available': logs_payload.get('undo_available', False),
+            }
+
+    if 'locations' in include:
+        try:
+            out['locations'] = _pulse_section_locations()
+        except Exception as e:
+            out['locations'] = {'error': str(e)}
+
+    if 'buffer' in include:
+        out['buffer'] = state.GLOBAL_BUFFER
+
+    if 'manage' in include and manage_id:
+        try:
+            out['manage'] = _pulse_section_manage(manage_id)
+        except Exception as e:
+            out['manage'] = {'error': str(e), 'id': manage_id}
+
+    if 'printer_status' in include:
+        try:
+            out['printer_status'] = _pulse_section_printer_status()
+        except Exception as e:
+            out['printer_status'] = {'error': str(e)}
+
+    if refresh_spool_ids:
+        try:
+            out['spools_refresh'] = logic.get_live_spools_data(refresh_spool_ids)
+        except Exception as e:
+            out['spools_refresh'] = {'error': str(e)}
+
+    return jsonify(out)
+
+
 if __name__ == '__main__':
     state.logger.info(f"🛠️ Server {VERSION} Started")
     # Register required Spoolman extras (max-temps etc.) so saves from the

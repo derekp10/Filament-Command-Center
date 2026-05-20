@@ -397,6 +397,20 @@
         refresh();
     });
 
+    // L206 bulk-pulse hook: render from a pre-fetched aggregate without
+    // hitting the per-printer fan-out. Same fingerprint/wiggle protection
+    // as refresh(). Called by startSmartSync's dashboard_pulse dispatcher
+    // when the response includes a printer_status section.
+    const refreshFromAggregate = (rows) => {
+        if (!rows || typeof rows !== 'object') return;
+        _state.rowsByPrinter = rows;
+        const fp = _fingerprint(rows);
+        if (fp === _state.lastFingerprint) return;
+        _state.lastFingerprint = fp;
+        _render(rows);
+    };
+    window.refreshPrinterStatusWidgetFromAggregate = refreshFromAggregate;
+
     // Exposed for tests + manual debugging.
     window.refreshPrinterStatusWidget = refresh;
 })();

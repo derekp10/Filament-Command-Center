@@ -228,11 +228,12 @@
             }
         });
 
-        // Start Core Services
-        updateLogState();
-        fetchLocations();
-
-        // Polling
-        setInterval(updateLogState, 2500);
+        // L206: cold-start prime + heartbeat are both owned by
+        // startSmartSync now (which fires _dashboardPulseTick on a 100ms
+        // setTimeout to populate logs/locations/status/printer immediately,
+        // then schedules adaptive ticks). The previous standalone
+        // `setInterval(updateLogState, 2500)` was an even-more-frequent
+        // duplicate of the 5s heartbeat and contributed to the L28
+        // polling-flood. Removed; do not re-add — the bulk path covers it.
     });
 </script>
