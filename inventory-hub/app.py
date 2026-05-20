@@ -3501,6 +3501,15 @@ if __name__ == '__main__':
         spoolman_api.ensure_required_extras()
     except Exception as _e:
         state.logger.warning(f"ensure_required_extras failed at startup: {_e}")
+    # Derek 2026-05-19: auto-clean the filament_attributes dropdown so we
+    # never have to find + run the standalone migration script manually.
+    # Idempotent — first boot does the cleanup; subsequent boots are a
+    # cheap field-definition GET + early-return. Failures log and move
+    # on, never block startup.
+    try:
+        spoolman_api.ensure_filament_attributes_cleaned()
+    except Exception as _e:
+        state.logger.warning(f"ensure_filament_attributes_cleaned failed at startup: {_e}")
     # L293 — opt-in dev-mode auto-reload. Set `FCC_DEV=1` (or `true`) in
     # the dev environment to have werkzeug watch files and restart the
     # server on edits. Defaults to off so the TrueNAS prod image keeps

@@ -39,6 +39,8 @@
   4. Take a screenshot of the dashboard showing which modals are open AND the state of the buffer / activity log.
   5. Note from memory:
        - What were you doing in the last 30 seconds? (Scan? Open a modal? Click a button?)
+          A. I opened up a dryer box location, removed an extra filament (it was a box so it was 2/1) using the force feature. I was looking at the deployed status of a filament which was incorrectly marked ad deployed to the Core1-M0, when the actual printer had somethinge else in it. (filabrige was correct, but for some reason this item was still in it)
+          I have pictures of the console, but didn't see any red errors in network. Please remind me to find the pictures from around 8:35pm on 5/18/2026.
        - Did the freeze happen instantly or did the UI feel slow before locking?
        - For L122 specifically: did the active-print confirm overlay try to appear and get dismissed by something? Was it during a scan flow (top-bar input) or while clicking a slot inside the Location Manager modal? The answer tells us which overlay was at fault.
   6. NOW you can hard-refresh.
@@ -329,7 +331,13 @@ There continues to be inconsistency with switching out spools when a box slot is
 
   **SCRIPT SHIPPED 2026-05-16** via `feature/buglist-sweep-2026-05-14`. `setup-and-rebuild/migrate_filament_attributes.py` is the generalizable cleanup tool — `DELETE_CHOICES` + `FLAG_CHOICES` sets at the top are the only thing to edit for future cleanup runs against this or any other choice-type Spoolman extra field. Dry-run on dev validated: 5 deletions (`Carbon-Fiber`, `F`, `Tran`, `Transparent; High-Speed`, `Wood`) → 29 choices remaining, snapshot covers 111 filaments. **For Infill + Matte Pro are NOT in the delete list** — `For Infill` is in FLAG_CHOICES pending Derek's prod check (Derek 2026-05-16: "I want to flag filament for infill use but I'm not sure if I use that flag or do it differently"; needs prod check). Dev shows zero filaments using either flagged choice — safe to add to DELETE_CHOICES once prod is confirmed.
 
-  **To run against prod:** (1) BACKUP Spoolman DB first (Spoolman's field DELETE is destructive at the schema level). (2) Point your shell at the prod `config.json`. (3) `python setup-and-rebuild/migrate_filament_attributes.py --dry-run` to confirm what will change. (4) Re-run without `--dry-run`, answer `yes` to the confirmation prompt.]_
+  **To run against prod:** (1) BACKUP Spoolman DB first (Spoolman's field DELETE is destructive at the schema level). (2) Point your shell at the prod `config.json`. (3) `python setup-and-rebuild/migrate_filament_attributes.py` — analyzes first, asks `yes` to commit.
+
+  **AUTO-RUN AT STARTUP 2026-05-19** (Derek 2026-05-19: "Can this just run on its own first run and clean things up? I don't like running things on prod myself, cause finding it and running it is kind of a pain."). The same cleanup logic now lives in `spoolman_api.ensure_filament_attributes_cleaned()` and is called from `app.py` startup right after `ensure_required_extras()`. First boot on a dirty Spoolman runs the cleanup with the same safety net (FLAG_CHOICES auto-promote on zero usage, kept-with-log on any usage); subsequent boots take an early-return path with one field-definition GET. Failures are caught + WARNING-logged so they never crash startup. Defensive guard: if Spoolman returns zero filaments while the field still exists, the cleanup skips (transient state, not "everything unused" — retried next boot). Activity Log surfaces a summary line when cleanup actually fires so the user notices what happened.
+
+  The standalone script in `setup-and-rebuild/` stays as a future-proof generalizable tool for cleaning OTHER choice fields (just edit the constants at the top), but you don't need to run it for filament_attributes — it'll just happen on the next prod restart.
+
+  Regression coverage: `test_filament_attributes_auto_cleanup.py` (7 tests — idempotent no-op, first-boot delete, flag-in-use preserved, flag-zero-usage auto-promoted, transient zero-filaments guard, network-error swallowed, post-failure non-crashing).]_
 * Continue to support Spoolman's "Import from External" feature for filaments... _[Status of existing parsers + a gap list of unimplemented sources lives in the module docstring at the top of `inventory-hub/external_parsers.py` as of 2026-05-13 (Group 11). The audit + dropdown cleanup landed; the items below are the still-unimplemented sources.]_
     - open-filament-database
     - Prusament spool specific data links
