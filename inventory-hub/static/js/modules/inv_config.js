@@ -461,12 +461,19 @@ console.log("🚀 Loaded Module: CONFIG");
         }
     };
 
-    // Sweep all zero-usage choices. Two-step server round-trip: first
-    // call (no force) returns the preview list; second call (force=true)
-    // commits the DELETE+POST recreate. The preview lets us show the
-    // user the exact list before they confirm — important because the
-    // operation is irreversible (besides re-adding each choice).
+    // Sweep zero-usage choices. Two-step server round-trip: first call
+    // (no force) returns the preview list; second call (force=true,
+    // choices=[subset]) commits the DELETE+POST recreate for the
+    // user-selected subset. The preview→select→commit flow lets the user
+    // keep individual currently-unused tags (e.g. "For Infill" they're
+    // about to re-apply but haven't yet).
+    //
+    // UI: mountOverlay-based styled dialog with per-tag checkboxes, NOT
+    // a browser confirm(). CLAUDE.md "Inline overlays MUST route through
+    // window.mountOverlay()" — same focus/z-index/host-cascade guarantees
+    // every other inline overlay in the app gets.
     window.configAttrsSweepUnused = async () => {
+        let unused = [];
         try {
             const r = await fetch('/api/filament_attributes/sweep_unused', {
                 method: 'POST',
@@ -478,38 +485,125 @@ console.log("🚀 Loaded Module: CONFIG");
                 window.showToast && window.showToast(`Sweep preview failed: ${d.msg || 'unknown'}`, 'error', 7000);
                 return;
             }
-            const unused = d.unused || [];
-            if (!unused.length) {
-                window.showToast && window.showToast('All choices are in use — nothing to sweep.', 'info', 4000);
-                return;
-            }
-            const ok = confirm(
-                `Sweep ${unused.length} unused tag(s) from the system?\n\n` +
-                unused.map(c => `  • ${c}`).join('\n') +
-                `\n\n` +
-                `Each tag currently has zero filaments using it. Removal is irreversible ` +
-                `(besides re-adding each name).`
-            );
-            if (!ok) return;
-            const r2 = await fetch('/api/filament_attributes/sweep_unused', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ force: true }),
-            });
-            const d2 = await r2.json();
-            if (!d2.success) {
-                window.showToast && window.showToast(`Sweep failed: ${d2.msg || 'unknown'}`, 'error', 7000);
-                return;
-            }
-            const removed = d2.removed || [];
-            window.showToast && window.showToast(
-                `Swept ${removed.length} unused tag(s): ${removed.join(', ')}`,
-                'success', 5000,
-            );
-            window.configAttrsScan();
+            unused = d.unused || [];
         } catch (e) {
-            window.showToast && window.showToast(`Sweep error: ${e.message || e}`, 'error', 7000);
+            window.showToast && window.showToast(`Sweep preview error: ${e.message || e}`, 'error', 7000);
+            return;
         }
+        if (!unused.length) {
+            window.showToast && window.showToast('All choices are in use — nothing to sweep.', 'info', 4000);
+            return;
+        }
+
+        const rows = unused.map(c => `
+            <label class="d-flex align-items-center px-3 py-2 border-bottom border-secondary"
+                   style="cursor:pointer; user-select:none;">
+                <input type="checkbox" class="form-check-input me-3 sweep-overlay-cb"
+                       data-choice="${_esc(c)}" checked>
+                <span class="fw-bold text-info">${_esc(c)}</span>
+                <span class="ms-auto small text-muted">0 filaments</span>
+            </label>
+        `).join('');
+
+        const body = `
+            <div style="background:#181818; color:#fff; border:2px solid #ffc107; border-radius:6px;
+                        width:520px; max-width:92vw; max-height:80vh; display:flex; flex-direction:column;
+                        box-shadow:0 0 24px rgba(255,193,7,0.35);">
+                <div class="d-flex justify-content-between align-items-center px-3 py-2"
+                     style="background:#1a1a1a; border-bottom:1px solid #ffc107;">
+                    <h6 class="m-0 fw-bold text-warning">🧹 Sweep Unused Tags</h6>
+                    <button type="button" class="btn-close btn-close-white" id="sweep-overlay-cancel-x"
+                            aria-label="Close" style="filter: invert(0);"></button>
+                </div>
+                <div class="px-3 py-2 small" style="color:rgba(255,255,255,0.78); border-bottom:1px solid #333;">
+                    Each tag below has <b>zero filaments</b> using it right now. Uncheck any you want
+                    to keep — removal is irreversible (you'd have to re-add by name).
+                </div>
+                <div class="d-flex align-items-center px-3 py-2" style="background:#1f1f1f;">
+                    <button type="button" class="btn btn-sm btn-outline-info" id="sweep-overlay-all">Select all</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="sweep-overlay-none">Select none</button>
+                    <span class="ms-auto small text-muted">
+                        <span id="sweep-overlay-count">${unused.length}</span> / ${unused.length} selected
+                    </span>
+                </div>
+                <div id="sweep-overlay-rows" style="flex:1 1 auto; overflow-y:auto; background:#141414;">
+                    ${rows}
+                </div>
+                <div class="d-flex justify-content-end gap-2 px-3 py-2"
+                     style="background:#1a1a1a; border-top:1px solid #333;">
+                    <button type="button" class="btn btn-sm btn-secondary" id="sweep-overlay-cancel">Cancel</button>
+                    <button type="button" class="btn btn-sm btn-warning fw-bold" id="sweep-overlay-commit">
+                        🧹 Sweep selected
+                    </button>
+                </div>
+            </div>
+        `;
+
+        const configModal = document.getElementById('configModal');
+        const handle = window.mountOverlay({
+            id: 'fcc-sweep-unused-overlay',
+            content: body,
+            tier: 'confirm',  // sits above the configModal
+            host: configModal,  // cleanup on host close
+            initialFocus: '#sweep-overlay-commit',
+            occlude: ['select'],
+        });
+        const root = handle.panel;
+
+        const updateCount = () => {
+            const n = root.querySelectorAll('.sweep-overlay-cb:checked').length;
+            const lbl = root.querySelector('#sweep-overlay-count');
+            if (lbl) lbl.textContent = String(n);
+            const commit = root.querySelector('#sweep-overlay-commit');
+            if (commit) commit.disabled = n === 0;
+        };
+
+        root.querySelectorAll('.sweep-overlay-cb').forEach(cb => {
+            cb.addEventListener('change', updateCount);
+        });
+        root.querySelector('#sweep-overlay-all').addEventListener('click', () => {
+            root.querySelectorAll('.sweep-overlay-cb').forEach(cb => { cb.checked = true; });
+            updateCount();
+        });
+        root.querySelector('#sweep-overlay-none').addEventListener('click', () => {
+            root.querySelectorAll('.sweep-overlay-cb').forEach(cb => { cb.checked = false; });
+            updateCount();
+        });
+        root.querySelector('#sweep-overlay-cancel').addEventListener('click', () => handle.cleanup());
+        root.querySelector('#sweep-overlay-cancel-x').addEventListener('click', () => handle.cleanup());
+        root.querySelector('#sweep-overlay-commit').addEventListener('click', async () => {
+            const chosen = Array.from(root.querySelectorAll('.sweep-overlay-cb:checked'))
+                .map(cb => cb.dataset.choice);
+            if (!chosen.length) return;
+            const commit = root.querySelector('#sweep-overlay-commit');
+            commit.disabled = true;
+            commit.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Sweeping…';
+            try {
+                const r2 = await fetch('/api/filament_attributes/sweep_unused', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force: true, choices: chosen }),
+                });
+                const d2 = await r2.json();
+                if (!d2.success) {
+                    window.showToast && window.showToast(`Sweep failed: ${d2.msg || 'unknown'}`, 'error', 7000);
+                    commit.disabled = false;
+                    commit.innerHTML = '🧹 Sweep selected';
+                    return;
+                }
+                const removed = d2.removed || [];
+                handle.cleanup();
+                window.showToast && window.showToast(
+                    `Swept ${removed.length} tag(s): ${removed.join(', ')}`,
+                    'success', 5000,
+                );
+                window.configAttrsScan();
+            } catch (e) {
+                window.showToast && window.showToast(`Sweep error: ${e.message || e}`, 'error', 7000);
+                commit.disabled = false;
+                commit.innerHTML = '🧹 Sweep selected';
+            }
+        });
     };
 
     // `force` mirrors the server-side flag — true on the second call after

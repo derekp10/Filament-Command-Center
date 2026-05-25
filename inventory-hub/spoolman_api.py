@@ -901,7 +901,15 @@ def ensure_filament_attributes_cleaned():
             return
 
         usage = {}  # choice -> [(fid, name)]
-        snapshot = {}  # fid -> [attrs]
+        # FULL extras dict (raw wire form) per filament. Original snapshot
+        # only captured filament_attributes value and the restore PATCH
+        # sent {extra: {filament_attributes: ...}} — which made Spoolman
+        # replace the whole extras dict, silently wiping product_url,
+        # nozzle_temp_max, original_color, etc. on every "restored"
+        # filament. Bug surfaced on Derek's 2026-05-19 prod boot
+        # ("112 filaments restored" — they lost siblings). See
+        # test_sweep_preserves_sibling_extras.
+        extras_snapshot = {}  # fid -> {full extras dict}
         name_by_fid = {}
         for f in filaments:
             fid = f.get("id")
@@ -909,10 +917,11 @@ def ensure_filament_attributes_cleaned():
                 continue
             name_by_fid[fid] = f.get("name") or "?"
             extras = f.get("extra") or {}
+            if extras:
+                extras_snapshot[fid] = dict(extras)
             attrs = _parse_filament_attrs_value(extras.get("filament_attributes"))
             if not attrs:
                 continue
-            snapshot[fid] = attrs
             for a in attrs:
                 usage.setdefault(a, []).append((fid, name_by_fid[fid]))
 
@@ -966,14 +975,21 @@ def ensure_filament_attributes_cleaned():
             )
             return
 
-        # Restore each filament's value (sans the deleted choices).
+        # Restore each filament's FULL extras dict (with deleted choices
+        # filtered out of filament_attributes). Sending the whole dict
+        # back preserves siblings — partial PATCH on `extra` makes
+        # Spoolman replace the whole sub-document.
         restored, failed = 0, 0
-        for fid, attrs in snapshot.items():
-            cleaned = [a for a in attrs if a not in effective_delete]
+        for fid, extras_in in extras_snapshot.items():
+            extras_out = dict(extras_in)
+            if 'filament_attributes' in extras_out:
+                attrs = _parse_filament_attrs_value(extras_out['filament_attributes'])
+                cleaned = [a for a in attrs if a not in effective_delete]
+                extras_out['filament_attributes'] = json.dumps(cleaned)
             try:
                 pr = requests.patch(
                     f"{sm_url}/api/v1/filament/{fid}",
-                    json={"extra": {"filament_attributes": json.dumps(cleaned)}},
+                    json={"extra": extras_out},
                     timeout=10,
                 )
                 if pr.ok:

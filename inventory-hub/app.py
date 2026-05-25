@@ -3519,23 +3519,18 @@ def api_filament_attributes_remove_choice():
                     f"records and delete the choice.")
         })
 
-    # Snapshot ALL filaments' attribute lists (not just users of the
-    # deleted choice) so we can re-PATCH after the schema-recreate.
-    # Spoolman's POST to /api/v1/field/<key> only ADDS choices — it
-    # refuses to shrink the list — so removing a choice requires
-    # DELETE-then-POST. The DELETE wipes data per CLAUDE.md note on
-    # ensure_filament_attributes_cleaned. Snapshot+restore protects
-    # every filament's other attributes during that window.
-    snapshot = {}
+    # Snapshot the FULL extras dict (raw wire form) per filament — see
+    # sweep_unused for the same fix rationale. Sending only
+    # {filament_attributes: ...} would make Spoolman's PATCH replace
+    # the whole extras dict and wipe siblings (product_url, etc.).
+    extras_snapshot = {}
     for f in raw_fils:
         fid = f.get('id')
         if fid is None:
             continue
-        attrs = spoolman_api._parse_filament_attrs_value(
-            (f.get('extra') or {}).get('filament_attributes')
-        )
-        if attrs:
-            snapshot[fid] = attrs
+        extras = f.get('extra') or {}
+        if extras:
+            extras_snapshot[fid] = dict(extras)
 
     new_choices = sorted(c for c in current_choices if c != choice)
     try:
@@ -3580,14 +3575,22 @@ def api_filament_attributes_remove_choice():
         )
         return jsonify({"success": False, "msg": f"Schema POST error: {e}"})
 
-    # Restore every filament's attribute list (minus the deleted choice).
+    # Restore every filament's FULL extras dict (with the deleted
+    # choice filtered out of filament_attributes). Sending the whole
+    # dict back is what preserves siblings — partial PATCH on `extra`
+    # makes Spoolman replace the whole sub-document. See sweep_unused
+    # for the same fix rationale + the regression that pins it.
     restored, restore_failures = 0, []
-    for fid, attrs in snapshot.items():
-        cleaned = [a for a in attrs if a != choice]
+    for fid, extras_in in extras_snapshot.items():
+        extras_out = dict(extras_in)
+        if 'filament_attributes' in extras_out:
+            attrs = spoolman_api._parse_filament_attrs_value(extras_out['filament_attributes'])
+            cleaned = [a for a in attrs if a != choice]
+            extras_out['filament_attributes'] = _json.dumps(cleaned)
         try:
             pr = _req.patch(
                 f"{sm_url}/api/v1/filament/{fid}",
-                json={"extra": {"filament_attributes": _json.dumps(cleaned)}},
+                json={"extra": extras_out},
                 timeout=10,
             )
             if pr.ok:
@@ -3601,7 +3604,7 @@ def api_filament_attributes_remove_choice():
     color = "00ccff" if not restore_failures else "ffaa00"
     state.add_log_entry(
         f"🏷️ Filament Attributes: removed choice {choice!r} "
-        f"(stripped from {len(users)} filament(s); restored {restored}/{len(snapshot)} "
+        f"(stripped from {len(users)} filament(s); restored {restored}/{len(extras_snapshot)} "
         f"sibling-attr records"
         + (f"; {len(restore_failures)} restore failure(s)" if restore_failures else "")
         + ").",
@@ -3628,11 +3631,21 @@ def api_filament_attributes_sweep_unused():
     Preview shape:  { success, unused: [str, ...], total_choices: int }
     Commit shape:   { success, removed: [str, ...], restored: int,
                       restore_failures: [{id, msg}, ...] }
+
+    `choices` (optional, commit-only): restrict the sweep to a specific
+    subset of the unused list. The Choices Manager UI uses this so the
+    user can keep some currently-unused tags if they're about to be
+    re-applied. The intersection with the freshly-computed unused list
+    is enforced server-side — passing in a name that is NOT zero-usage
+    will be silently dropped rather than risk wiping a tagged choice.
     """
     import json as _json
     import requests as _req
     payload = request.get_json(silent=True) or {}
     force = bool(payload.get('force'))
+    selected_choices = payload.get('choices')
+    if selected_choices is not None and not isinstance(selected_choices, list):
+        return jsonify({"success": False, "msg": "`choices` must be a list when provided"}), 400
 
     sm_url, _ = config_loader.get_api_urls()
     try:
@@ -3665,17 +3678,24 @@ def api_filament_attributes_sweep_unused():
             "msg": "Spoolman returned 0 filaments — refusing to compute usage from a possibly-transient empty list.",
         })
 
+    # Snapshot the FULL extras dict (raw wire form) per filament so
+    # siblings (product_url, nozzle_temp_max, original_color, ...)
+    # survive the DELETE → POST → restore cycle. Earlier draft only
+    # snapshotted the filament_attributes value and then PATCH'd
+    # `{extra: {filament_attributes: ...}}` — which made Spoolman
+    # replace the WHOLE extras dict, silently wiping every sibling.
+    # Symptom: filaments end up bimodal (only-attrs OR only-siblings,
+    # never both). Captured in test_sweep_preserves_sibling_extras.
     usage = {c: 0 for c in current_choices}
-    snapshot = {}  # fid -> [attrs]
+    extras_snapshot = {}  # fid -> {full extras dict, raw wire form}
     for f in raw_fils:
         fid = f.get('id')
         if fid is None:
             continue
-        attrs = spoolman_api._parse_filament_attrs_value(
-            (f.get('extra') or {}).get('filament_attributes')
-        )
-        if attrs:
-            snapshot[fid] = attrs
+        extras = f.get('extra') or {}
+        if extras:
+            extras_snapshot[fid] = dict(extras)
+        attrs = spoolman_api._parse_filament_attrs_value(extras.get('filament_attributes'))
         for a in attrs:
             usage[a] = usage.get(a, 0) + 1
     unused = sorted(c for c in current_choices if not usage.get(c))
@@ -3687,10 +3707,17 @@ def api_filament_attributes_sweep_unused():
             "total_choices": len(current_choices),
         })
 
-    if not unused:
+    # Honor optional `choices` subset. Always intersect with the
+    # freshly-computed unused list so an out-of-date client (stale
+    # preview) can't ask us to sweep a now-tagged choice.
+    if selected_choices is not None:
+        unused_set = set(unused) & {str(c) for c in selected_choices}
+    else:
+        unused_set = set(unused)
+    if not unused_set:
         return jsonify({"success": True, "removed": [], "restored": 0, "restore_failures": []})
-
-    new_choices = sorted(c for c in current_choices if c not in unused)
+    unused = sorted(unused_set)
+    new_choices = sorted(c for c in current_choices if c not in unused_set)
     try:
         d_resp = _req.delete(
             f"{sm_url}/api/v1/field/filament/filament_attributes", timeout=15
@@ -3727,16 +3754,24 @@ def api_filament_attributes_sweep_unused():
     except Exception as e:
         return jsonify({"success": False, "msg": f"Schema POST error: {e}"})
 
-    # Restore each filament's attribute list. Since we only removed
-    # zero-usage choices, the cleaned list per filament is identical to
-    # the snapshot — but we still PATCH back as belt-and-suspenders
-    # (mirrors ensure_filament_attributes_cleaned's recovery path).
+    # Restore each filament's FULL extras dict. Since we only removed
+    # zero-usage choices, the filament_attributes value in the snapshot
+    # is already correct — but we still pass it through to keep the wire
+    # form consistent. The critical piece is sending the WHOLE dict so
+    # Spoolman's replace-on-PATCH preserves siblings.
     restored, restore_failures = 0, []
-    for fid, attrs in snapshot.items():
+    for fid, extras_in in extras_snapshot.items():
+        extras_out = dict(extras_in)
+        # Defensive: if any swept choice still appears in this filament's
+        # attribute list (shouldn't, since usage was zero), strip it.
+        if 'filament_attributes' in extras_out:
+            attrs = spoolman_api._parse_filament_attrs_value(extras_out['filament_attributes'])
+            cleaned = [a for a in attrs if a not in unused_set]
+            extras_out['filament_attributes'] = _json.dumps(cleaned)
         try:
             pr = _req.patch(
                 f"{sm_url}/api/v1/filament/{fid}",
-                json={"extra": {"filament_attributes": _json.dumps(attrs)}},
+                json={"extra": extras_out},
                 timeout=10,
             )
             if pr.ok:
@@ -3748,7 +3783,7 @@ def api_filament_attributes_sweep_unused():
 
     state.add_log_entry(
         f"🧹 Filament Attributes: swept {len(unused)} unused choice(s): {unused} "
-        f"(restored {restored}/{len(snapshot)} sibling records"
+        f"(restored {restored}/{len(extras_snapshot)} sibling records"
         + (f"; {len(restore_failures)} failure(s)" if restore_failures else "")
         + ").",
         "INFO" if not restore_failures else "WARNING",

@@ -169,7 +169,7 @@ def test_add_choice_then_remove_unused_round_trips(api_base_url):
     if test_choice in r0.get("choices", []):
         requests.post(
             f"{api_base_url}/api/filament_attributes/remove_choice",
-            json={"choice": test_choice, "force": True}, timeout=20,
+            json={"choice": test_choice, "force": True}, timeout=120,
         )
     try:
         r_add = requests.post(
@@ -184,7 +184,7 @@ def test_add_choice_then_remove_unused_round_trips(api_base_url):
         # Unused choice → remove should succeed without needing force.
         r_rm = requests.post(
             f"{api_base_url}/api/filament_attributes/remove_choice",
-            json={"choice": test_choice}, timeout=20,
+            json={"choice": test_choice}, timeout=120,
         )
         body = r_rm.json()
         assert body.get("success") is True, body
@@ -206,7 +206,7 @@ def test_add_choice_then_remove_unused_round_trips(api_base_url):
         if test_choice in rr.get("choices", []):
             requests.post(
                 f"{api_base_url}/api/filament_attributes/remove_choice",
-                json={"choice": test_choice, "force": True}, timeout=20,
+                json={"choice": test_choice, "force": True}, timeout=120,
             )
 
 
@@ -231,7 +231,7 @@ def test_remove_choice_in_use_requires_force(api_base_url):
     try:
         r = requests.post(
             f"{api_base_url}/api/filament_attributes/remove_choice",
-            json={"choice": test_choice}, timeout=20,
+            json={"choice": test_choice}, timeout=120,
         )
         body = r.json()
         assert body.get("success") is False
@@ -245,7 +245,7 @@ def test_remove_choice_in_use_requires_force(api_base_url):
         # Re-send with force → succeeds, strips the tag, removes the choice.
         r2 = requests.post(
             f"{api_base_url}/api/filament_attributes/remove_choice",
-            json={"choice": test_choice, "force": True}, timeout=20,
+            json={"choice": test_choice, "force": True}, timeout=120,
         )
         body2 = r2.json()
         assert body2.get("success") is True
@@ -259,7 +259,7 @@ def test_remove_choice_in_use_requires_force(api_base_url):
         if test_choice in rr.get("choices", []):
             requests.post(
                 f"{api_base_url}/api/filament_attributes/remove_choice",
-                json={"choice": test_choice, "force": True}, timeout=20,
+                json={"choice": test_choice, "force": True}, timeout=120,
             )
 
 
@@ -286,7 +286,7 @@ def test_sweep_unused_preview_then_commit(api_base_url):
         # Preview — no force.
         r_prev = requests.post(
             f"{api_base_url}/api/filament_attributes/sweep_unused",
-            json={}, timeout=20,
+            json={}, timeout=120,
         )
         body_prev = r_prev.json()
         assert body_prev.get("success") is True, body_prev
@@ -321,8 +321,53 @@ def test_sweep_unused_preview_then_commit(api_base_url):
         if test_choice in rr.get("choices", []):
             requests.post(
                 f"{api_base_url}/api/filament_attributes/remove_choice",
-                json={"choice": test_choice, "force": True}, timeout=20,
+                json={"choice": test_choice, "force": True}, timeout=120,
             )
+
+
+@pytest.mark.usefixtures("require_server")
+def test_sweep_unused_respects_choices_subset(api_base_url):
+    """The styled sweep overlay lets the user uncheck individual tags
+    to keep them. UI sends `choices: [subset]` — server must intersect
+    with the freshly-computed unused list (so a stale UI can't ask us
+    to sweep a now-tagged choice) and remove ONLY the selected subset."""
+    keep = "L58_TEST_sweep_subset_KEEP"
+    nuke = "L58_TEST_sweep_subset_NUKE"
+    try:
+        for c in (keep, nuke):
+            requests.post(f"{api_base_url}/api/filament_attributes/add_choice",
+                          json={"choice": c}, timeout=10)
+        # Preview confirms both are unused.
+        prev = requests.post(f"{api_base_url}/api/filament_attributes/sweep_unused",
+                             json={}, timeout=30).json()
+        assert keep in prev["unused"]
+        assert nuke in prev["unused"]
+
+        # Commit with `choices: [nuke]` — only nuke should be removed.
+        r = requests.post(f"{api_base_url}/api/filament_attributes/sweep_unused",
+                          json={"force": True, "choices": [nuke]}, timeout=120)
+        body = r.json()
+        assert body.get("success") is True
+        assert body.get("removed") == [nuke], body
+        rep = requests.get(f"{api_base_url}/api/filament_attributes/report",
+                           timeout=10).json()
+        assert keep in rep["choices"], "kept tag should survive subset sweep"
+        assert nuke not in rep["choices"], "selected tag should be swept"
+
+        # Bonus: stale-client guard — passing a choice that's NOT unused
+        # (or doesn't exist) is silently filtered out, not honored.
+        r2 = requests.post(f"{api_base_url}/api/filament_attributes/sweep_unused",
+                           json={"force": True, "choices": ["nonexistent_choice"]},
+                           timeout=30).json()
+        assert r2.get("success") is True
+        assert r2.get("removed") == [], r2
+    finally:
+        for c in (keep, nuke):
+            rr = requests.get(f"{api_base_url}/api/filament_attributes/report",
+                              timeout=10).json()
+            if c in rr.get("choices", []):
+                requests.post(f"{api_base_url}/api/filament_attributes/remove_choice",
+                              json={"choice": c, "force": True}, timeout=120)
 
 
 @pytest.mark.usefixtures("require_server")
@@ -345,7 +390,7 @@ def test_sweep_unused_preserves_in_use_choices(api_base_url):
     try:
         r = requests.post(
             f"{api_base_url}/api/filament_attributes/sweep_unused",
-            json={}, timeout=20,
+            json={}, timeout=120,
         )
         body = r.json()
         assert body.get("success") is True
@@ -358,7 +403,7 @@ def test_sweep_unused_preserves_in_use_choices(api_base_url):
         if test_choice in rr.get("choices", []):
             requests.post(
                 f"{api_base_url}/api/filament_attributes/remove_choice",
-                json={"choice": test_choice, "force": True}, timeout=20,
+                json={"choice": test_choice, "force": True}, timeout=120,
             )
 
 
@@ -375,6 +420,89 @@ def test_add_choice_validation(api_base_url):
         json={"choice": "x" * 200}, timeout=5,
     )
     assert r2.status_code == 400
+
+
+@pytest.mark.usefixtures("require_server")
+def test_sweep_preserves_sibling_extras(api_base_url):
+    """L58 data-safety regression. The sweep's restore PATCH used to send
+    only {extra: {filament_attributes: "..."}} which made Spoolman
+    replace the whole `extra` sub-document, silently wiping every
+    sibling (product_url, nozzle_temp_max, original_color, ...) on
+    every filament that had attrs. Caught by the bimodal-state signal
+    in dev/prod: filaments were either has-attrs-only or has-siblings-
+    only, never both. Fix is to snapshot the FULL extras dict and
+    PATCH the whole thing back. Derek's 2026-05-19 prod boot ('112
+    filaments restored') is the same bug firing through
+    ensure_filament_attributes_cleaned."""
+    import requests as _req
+    SPOOLMAN_URL = "http://192.168.1.29:7913"
+
+    # Find a filament with non-trivial sibling extras but no current
+    # attribute tags, so we can tag it and force the restore path.
+    raw = _req.get(f"{SPOOLMAN_URL}/api/v1/filament", timeout=10).json()
+    target = None
+    for f in raw:
+        extras = f.get("extra") or {}
+        siblings = {k: v for k, v in extras.items()
+                    if k != "filament_attributes" and v not in (None, "", "[]", '""')}
+        if len(siblings) >= 2 and not extras.get("filament_attributes"):
+            target = f
+            break
+    if not target:
+        pytest.skip("no filament with siblings-only extras in dev DB — can't exercise restore path")
+    fid = target["id"]
+    pre_extras = dict(target["extra"])
+    pre_sib_keys = {k for k in pre_extras if k != "filament_attributes"
+                    and pre_extras[k] not in (None, "", "[]", '""')}
+
+    probe_tag = "L58_REGRESSION_sibling_probe"
+    filler_tag = "L58_REGRESSION_sweep_filler"
+    try:
+        # Set up: tag the target so it has attrs + siblings. Add the
+        # filler so sweep has zero-usage work to do.
+        r1 = requests.post(f"{api_base_url}/api/filament_attributes/add_choice",
+                           json={"choice": probe_tag}, timeout=10)
+        assert r1.ok
+        requests.post(f"{api_base_url}/api/filament_attributes/bulk_set",
+                      json={"filament_ids": [fid], "add": [probe_tag]}, timeout=10)
+        requests.post(f"{api_base_url}/api/filament_attributes/add_choice",
+                      json={"choice": filler_tag}, timeout=10)
+
+        # Run sweep. The filler is unused → swept. The target keeps probe_tag.
+        r2 = requests.post(f"{api_base_url}/api/filament_attributes/sweep_unused",
+                           json={"force": True}, timeout=60)
+        body = r2.json()
+        assert body.get("success") is True, body
+        assert filler_tag in body.get("removed", []), body
+        assert probe_tag not in body.get("removed", []), body
+
+        # The keystone assertion: every sibling extra on the target survives.
+        post = _req.get(f"{SPOOLMAN_URL}/api/v1/filament/{fid}", timeout=10).json()
+        post_extras = dict((post or {}).get("extra") or {})
+        post_sib_keys = {k for k in post_extras if k != "filament_attributes"
+                         and post_extras[k] not in (None, "", "[]", '""')}
+        wiped = pre_sib_keys - post_sib_keys
+        assert not wiped, (
+            f"sweep wiped sibling extras {sorted(wiped)} on filament #{fid} — "
+            f"restore PATCH must send the FULL extras dict, not just "
+            f"filament_attributes"
+        )
+        # And values, not just keys, must be preserved.
+        for k in pre_sib_keys:
+            assert post_extras.get(k) == pre_extras[k], (
+                f"sibling {k!r} value changed by sweep: "
+                f"{pre_extras[k]!r} → {post_extras.get(k)!r}"
+            )
+    finally:
+        # Restore filament state regardless of outcome.
+        requests.post(f"{api_base_url}/api/filament_attributes/bulk_set",
+                      json={"filament_ids": [fid], "remove": [probe_tag]}, timeout=10)
+        for c in (probe_tag, filler_tag):
+            rr = requests.get(f"{api_base_url}/api/filament_attributes/report",
+                              timeout=10).json()
+            if c in rr.get("choices", []):
+                requests.post(f"{api_base_url}/api/filament_attributes/remove_choice",
+                              json={"choice": c, "force": True}, timeout=60)
 
 
 @pytest.mark.usefixtures("require_server")
