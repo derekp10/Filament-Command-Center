@@ -210,8 +210,11 @@ console.log("🚀 Loaded Module: CONFIG");
         const allVisibleSelectedCls = selVisible === visibleCount && visibleCount > 0 ? 'checked' : '';
         const rows = filteredFilaments.map(f => {
             const checked = _attrs.selected.has(f.id) ? 'checked' : '';
-            const archived = f.archived ? '<span class="badge bg-dark text-muted ms-1">archived</span>' : '';
-            const attrs = (f.attributes || []).map(a => `<span class="badge bg-info text-dark me-1">${_esc(a)}</span>`).join('') || '<span class="text-muted small">—</span>';
+            // Don't use Bootstrap's text-muted (#6c757d) — sits at ~1.4:1
+            // against our dark backgrounds. Same WCAG-AA-bound contrast pitfall
+            // pinned in inv_printer_status.js / test_contrast_guard.
+            const archived = f.archived ? '<span class="badge bg-dark ms-1" style="color:rgba(255,255,255,0.65);">archived</span>' : '';
+            const attrs = (f.attributes || []).map(a => `<span class="badge bg-info text-dark me-1">${_esc(a)}</span>`).join('') || '<span class="small" style="color:rgba(255,255,255,0.55);">—</span>';
             return `
                 <tr data-fid="${f.id}">
                     <td><input type="checkbox" class="config-attrs-row-cb" data-fid="${f.id}" ${checked}></td>
@@ -228,9 +231,9 @@ console.log("🚀 Loaded Module: CONFIG");
             <div class="p-3 mb-3 border rounded" style="border-color:#0d6efd!important; background:rgba(13,110,253,0.08);">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <h6 class="mb-0 text-info fw-bold">🛠 Choices Manager <span class="badge bg-secondary ms-1">${choices.length}</span></h6>
-                    <span class="small text-muted">add a new tag or remove an existing one — propagates to every filament that carries it</span>
+                    <span class="small" style="color:rgba(255,255,255,0.7);">add a new tag or remove an existing one — propagates to every filament that carries it</span>
                 </div>
-                <div class="mb-2">${choiceChips || '<i class="text-muted small">(no choices defined yet — add one below)</i>'}</div>
+                <div class="mb-2">${choiceChips || '<i class="small" style="color:rgba(255,255,255,0.6);">(no choices defined yet — add one below)</i>'}</div>
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <input type="text" id="config-attrs-add-input" class="form-control form-control-sm bg-dark text-white border-secondary"
                            placeholder="Type a new tag name…" autocomplete="off" style="max-width: 280px;">
@@ -244,13 +247,13 @@ console.log("🚀 Loaded Module: CONFIG");
             <div class="p-3 border rounded" style="border-color:#ffc107!important; background:rgba(255,193,7,0.06);">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <h6 class="mb-0 text-warning fw-bold">📋 Per-Filament Bulk Editor</h6>
-                    <span class="small text-muted"><b>${total}</b> filament(s) loaded</span>
+                    <span class="small" style="color:rgba(255,255,255,0.7);"><b>${total}</b> filament(s) loaded</span>
                 </div>
                 <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
                     <input type="text" id="config-attrs-filter" class="form-control form-control-sm bg-dark text-white border-secondary"
                            placeholder="🔎 Filter by id / vendor / material / name / attribute…"
                            value="${_esc(_attrs.filter)}" autocomplete="off" style="max-width: 380px;">
-                    <span class="small text-muted">${visibleCount}/${total} visible${needle ? ` for "${_esc(_attrs.filter)}"` : ''}</span>
+                    <span class="small" style="color:rgba(255,255,255,0.7);">${visibleCount}/${total} visible${needle ? ` for "${_esc(_attrs.filter)}"` : ''}</span>
                     ${_attrs.filter ? '<button class="btn btn-sm btn-outline-secondary" id="config-attrs-filter-clear">clear</button>' : ''}
                 </div>
                 <div class="d-flex flex-wrap align-items-center gap-2 mb-2 p-2 rounded" style="background:rgba(0,0,0,0.35);">
@@ -273,7 +276,7 @@ console.log("🚀 Loaded Module: CONFIG");
                                 <th>Attributes</th>
                             </tr>
                         </thead>
-                        <tbody>${rows || '<tr><td colspan="6" class="text-center text-muted small">no matches</td></tr>'}</tbody>
+                        <tbody>${rows || '<tr><td colspan="6" class="text-center small" style="color:rgba(255,255,255,0.6);">no matches</td></tr>'}</tbody>
                     </table>
                 </div>
             </div>
@@ -501,7 +504,7 @@ console.log("🚀 Loaded Module: CONFIG");
                 <input type="checkbox" class="form-check-input me-3 sweep-overlay-cb"
                        data-choice="${_esc(c)}" checked>
                 <span class="fw-bold text-info">${_esc(c)}</span>
-                <span class="ms-auto small text-muted">0 filaments</span>
+                <span class="ms-auto small" style="color:rgba(255,255,255,0.65);">0 filaments</span>
             </label>
         `).join('');
 
@@ -522,7 +525,7 @@ console.log("🚀 Loaded Module: CONFIG");
                 <div class="d-flex align-items-center px-3 py-2" style="background:#1f1f1f;">
                     <button type="button" class="btn btn-sm btn-outline-info" id="sweep-overlay-all">Select all</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="sweep-overlay-none">Select none</button>
-                    <span class="ms-auto small text-muted">
+                    <span class="ms-auto small" style="color:rgba(255,255,255,0.7);">
                         <span id="sweep-overlay-count">${unused.length}</span> / ${unused.length} selected
                     </span>
                 </div>
