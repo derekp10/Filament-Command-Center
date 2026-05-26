@@ -170,7 +170,14 @@ def test_first_boot_deletes_confirmed_safe_choices(monkeypatch):
 
 def test_flag_choice_in_use_is_kept(monkeypatch):
     """A FLAG_CHOICES entry that's actually in use by any filament
-    must survive the cleanup."""
+    must survive the cleanup. FLAG_CHOICES was drained to empty on
+    2026-05-20 (Derek footgun avoidance), so this test pokes a
+    non-empty set into place to keep the algorithm under coverage in
+    case future maintenance flags choices again."""
+    monkeypatch.setattr(
+        spoolman_api, "FILAMENT_ATTRIBUTES_FLAG_CHOICES",
+        frozenset({"For Infill", "Matte Pro"}),
+    )
     dirty = ["+", "Basic", "For Infill", "Wood"]
     filaments = [
         _filament(10, "Prototype Filler", ["For Infill"]),  # uses the flagged one
@@ -201,8 +208,13 @@ def test_flag_choice_in_use_is_kept(monkeypatch):
 
 def test_flag_choice_with_zero_usage_is_promoted_to_delete(monkeypatch):
     """When NO filament uses a FLAG_CHOICES entry, it gets auto-promoted
-    into the delete list — that's the path that lets Derek skip the
-    "is For Infill in use?" question entirely."""
+    into the delete list. Algorithm-level coverage only — production
+    FLAG_CHOICES is empty as of 2026-05-20, so this path never fires
+    on prod boots until/unless someone adds a choice to the set."""
+    monkeypatch.setattr(
+        spoolman_api, "FILAMENT_ATTRIBUTES_FLAG_CHOICES",
+        frozenset({"For Infill", "Matte Pro"}),
+    )
     dirty = ["+", "Basic", "For Infill", "Matte Pro"]
     filaments = [
         _filament(20, "Basic PLA", ["Basic"]),  # uses neither flagged choice

@@ -191,3 +191,58 @@ def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url, ap
                 json={"slot_targets": original},
                 timeout=5,
             )
+
+
+@pytest.mark.usefixtures("require_server")
+def test_l56_printer_status_payload_includes_state(api_base_url):
+    """L56 — dashboard_pulse's printer_status section must carry each
+    printer's PrusaLink state alongside the toolhead list. Without this,
+    a dryer-box-less printer (e.g. Core One direct-feed) has no way to
+    show live PRINTING / IDLE / OFFLINE in the widget — the toolhead
+    weight only ticks after FilaBridge auto-deduct, which itself depends
+    on the dryer-box-mediated mapping. Probe direct from PrusaLink and
+    pass through; widget rendering tested separately."""
+    r = requests.get(
+        f"{api_base_url}/api/dashboard_pulse?include=printer_status", timeout=15
+    )
+    assert r.ok, f"dashboard_pulse failed: {r.status_code} {r.text}"
+    payload = r.json().get("printer_status") or {}
+    assert payload, "expected at least one printer in printer_status"
+    for name, info in payload.items():
+        assert "state" in info, f"printer {name!r} missing 'state' key"
+        st = info["state"]
+        # PrusaLink reachable → dict with state + is_active; unreachable → None.
+        # Both are valid per L56 (we surface OFFLINE in the UI for None).
+        assert st is None or (
+            isinstance(st, dict) and "state" in st and "is_active" in st
+        ), f"printer {name!r} state malformed: {st!r}"
+
+
+@pytest.mark.usefixtures("require_server", "bound_xl1")
+def test_l56_state_badge_renders_in_widget(page: Page, base_url):
+    """L56 — the printer-state badge renders for every printer the widget
+    shows. Critically, the badge must SURVIVE a subsequent sync-pulse:
+    the legacy `_aggregate()` path returns rows without `state`, and an
+    earlier draft of this fix let that path wipe the badge between bulk
+    pulses. Wait through a sync-pulse cycle and assert the badge sticks."""
+    page.goto(base_url)
+    page.wait_for_selector("#buffer-zone", timeout=10000)
+    page.wait_for_function(
+        "() => document.querySelectorAll('#printer-status-widget .fcc-ps-state').length > 0",
+        timeout=12000,
+    )
+    initial_count = page.evaluate(
+        "() => document.querySelectorAll('#printer-status-widget .fcc-ps-state').length"
+    )
+    assert initial_count > 0, "no state badges rendered on first pulse"
+    # Force a sync-pulse to trigger the legacy `_aggregate()` re-render.
+    page.evaluate(
+        "() => document.dispatchEvent(new CustomEvent('inventory:sync-pulse'))"
+    )
+    page.wait_for_timeout(500)
+    after_count = page.evaluate(
+        "() => document.querySelectorAll('#printer-status-widget .fcc-ps-state').length"
+    )
+    assert after_count == initial_count, (
+        f"sync-pulse wiped state badges (initial={initial_count}, after={after_count})"
+    )
