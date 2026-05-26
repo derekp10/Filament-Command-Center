@@ -1220,17 +1220,30 @@ def api_get_locations():
     csv_rows = list(local_map.values())
     
     # 1. First Pass: Compute total Room occupancies
+    # Phase 1B (Location Manager redesign): resolve_parent prefers the
+    # explicit `parent_id` written by the Phase-1A migration over the
+    # legacy `loc.split('-')[0]` prefix trick. Behavior is identical for
+    # rows whose parent_id matches the prefix (the migration default),
+    # but a PM/PJ box that's been explicitly re-parented to a real room
+    # via parent_id will now correctly contribute to that room's count
+    # — pre-Phase-1B it was silently dropped on the PM/PJ exclusion.
     for loc, count in occupancy_map.items():
-        if loc and "-" in loc:
-            parent = loc.split("-")[0]
-            # Verify prefix is valid (not TST, PM, PJ, etc)
-            if parent not in ["TST", "TEST", "PM", "PJ"]:
-                room_occupancy[parent] = room_occupancy.get(parent, 0) + count
+        if not loc:
+            continue
+        row = local_map.get(loc)
+        parent = locations_db.resolve_parent(row) if row else locations_db.resolve_parent(loc)
+        if parent:
+            # Skip pseudo-prefixes the prefix-derivation can produce.
+            # Once Phase 5 retires prefix parsing this exclusion becomes
+            # unnecessary (a real parent_id is always a real row).
+            if parent in ["TST", "TEST", "PM", "PJ"]:
+                continue
+            room_occupancy[parent] = room_occupancy.get(parent, 0) + count
         else:
-            # It's floating in a parent directly
-            if loc:
-                room_occupancy[loc] = room_occupancy.get(loc, 0) + count
-                room_floating[loc] = room_floating.get(loc, 0) + count
+            # No parent (top-level room/printer row, or unparented).
+            # Floating-in-parent count is the row contributing to itself.
+            room_occupancy[loc] = room_occupancy.get(loc, 0) + count
+            room_floating[loc] = room_floating.get(loc, 0) + count
 
     # 2. Inject Virtual Rooms/Printers if they don't exist
     #
