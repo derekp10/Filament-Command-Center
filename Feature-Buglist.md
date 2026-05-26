@@ -12,7 +12,17 @@
 *(L37 — `[RECURRING] data/locations.json corruption` — PARTIAL 2026-05-12. Hardening (1) per-call temp filename + (2) verify-after-write tripwire shipped on `feature/locations-json-write-hardening`. Monitor prod hub.log for `verify-after-write FAILED` critical lines; (3) explicit truncate and (4) Docker named volume deferred pending recurrence signal. See `completed-archive.md`.)*
 
 
+* needs to be more of a space on the Color section betwene the color name and the color count (if multicolor, possibly single colors too) of the edit/add wizzard. The two are right next to each other, which makes the line look cramped on the screen. This is the rolled up "collapsed" information section, not within it.
 
+* Looks like scanns that confirm a filament label aren't also confirming that the sample was printed. This are to be confirmed in a pair I believe. Also, seems to be no way to edit filament sample status?
+
+* Sometimes the inprogress printing update modal will have its QR codes on the right side of it. This seemed to happen when there was a toast up in the background, but could be unrelated.
+
+* A way to search what filaments have the most spools available.
+
+* Theres a bug causing location labels for computer room cart 2 to constnatly re appear in the print queue.
+
+* Print Status seems to not update weight when a print finishes, It might not be tired into updates currently in live. (commit cfe00ed7 • 2026-05-19 19:41)
 
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop. _[ON HOLD — OS-level power management, not fixable in app code. Candidate mitigations if we care: Wake Lock API (`navigator.wakeLock.request('screen')`) gated behind a toggle in the nav bar; only works when the tab is foreground. Worth considering if we add a kiosk/shop-floor mode.]_
 * Config button, for configuing certain things in the system without having to edit a config file manually in a text editor. **Decision: Full-schema design first.** The architecture must be extensible so adding new configurable items "just works" without code changes to the config UI itself. The schema should be self-describing (key, label, type, default, section, validation rules) so the UI can render any new entry automatically. This will pull in the "Make as much of Command Center user configurable as possible" item. When we sit down for design: define the schema format, config storage (JSON file vs. DB table), import/export format, and a section hierarchy. _[NEEDS DESIGN SESSION — schedule a dedicated design discussion before any code starts.]_
@@ -52,10 +62,6 @@
    - L122 symptom on a SCAN flow → likely fixed already (`_confirmActivePrintScan` migrated to `mountOverlay` in `feature/buglist-sweep-2026-05-14`). If it still happens, the migration may need a different tier or focus-guard option.
    - L122 symptom on a SLOT CLICK inside Location Manager → `_confirmActivePrintAssign` in `inv_loc_mgr.js` (still hand-rolled). Migration is a ~30-line copy of the scan-side fix.
 
-
-* Printer status. Core1 printer status doesn't seem to update because not boxes are attached, this should be based off of the direct print head data, not based on an attached dryer box. (I don't always use a dryerbox so this is a poor indicator of what's being used.) Tool seems to list the correct filament.
-
-* For Infill was removed, even though it was attached to a filament. So something went wrong there. Now that the bulk was done. SOme things move when it should have been a conversion, oh well. Lets make sure this doens't eat future matching items (for infill being the primary one) We should probalby build an internal clean up system around this so that the user can add or remove them at well, and get a better report of what items have what, incase they want to change it. Perhaps a bulk add (snese I'm going to have to re-add thos for infill items again.)
 
 * Need to do something about the fact that if a toolhead has multiple slots assigned to it for a dryer box, that new spool assignments don't automatically take over the current toolhead's assigned spool. **Decision: (c) Leave it to the user via Quick-Swap.** Intent is ambiguous — a new spool landing in a shared box may not mean the user wants to switch the active toolhead assignment (e.g., staging spools for later). Quick-Swap is the deliberate, explicit action for swapping. No auto-switch or auto-prompt. _[RESOLVED — no code change needed.]_
 
@@ -200,8 +206,6 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 * Scanns of prusament filament should also update min/max bed and nozzle tempratures, on existing filaments. These value should stay the same, but there is some lagacy data entry where this data wasn't 
 
 * Scann prusament data link into the search field in spool section fails to grab all available data and add it to the available fields in the UI of Add/Edit Wizzard, on an existing spool in the system. Scanning that data should update/add those fields. Except being if the current weight of the spool doesn't match the weight on the data card, implying that it was used, in those cases, current weights should be left alown, but total weight, and other elements should be updateable. (Basically perserve current usage amount, but update all other fields.)
-
-* Edit filament - Advanced tab - Import from external section, when expanded then condensed, a bit of the source dropdown box still shows after colapsing.
 
 * Setting a dryerbox slot that's attached to a toolhead to empty, doesn't propagate an empty field setting to filabridge. It thinks the old spool is still in that slot.
 
@@ -354,6 +358,14 @@ There continues to be inconsistency with switching out spools when a box slot is
 * Add the ability to configure which extra fields should be bound and propagated to the other type of item. (Filament <-> Spool).
 * Spools might need to have a text field added to store the product data (Prusament link, etc.).
 * Add background refreshing used in Location Manager, etc... to update spool text (update weight other data).
+* **Test flakes when a printer is in active `PRINTING` state during the sweep (Derek 2026-05-20)**: six tests started failing during the L56/L58/L202 trio sweep on `feature/buglist-trio-2026-05-20` — all 6 also fail on `dev` parent commit, confirmed pre-existing, not regressions from the trio work. Failure pattern: `wait_for_function`/`expect(page.locator("#manageModal")).to_be_visible(...)` times out after clicking a Printer-Status toolhead tile or chip. Hypothesis: when the bound spool's printer reports `PRINTING` from PrusaLink, the manage modal flow gates / re-routes (likely the L122 active-print confirm-overlay intercept on the `_confirmActivePrintAssign` slot-click path that's still inline-mountOverlay-bypassed per CLAUDE.md). When Derek's Core One is `FINISHED`/`IDLE`, the tests presumably pass. Affected tests:
+    - `test_printer_status_widget.py::test_widget_toolhead_click_opens_quickswap`
+    - `test_printer_status_widget.py::test_collapsed_header_chip_clickable`
+    - `test_contrast_guard.py::test_bind_picker_has_no_gray_on_gray_text`
+    - `test_contrast_guard.py::test_quickswap_section_has_no_gray_on_gray_text`
+    - `test_contrast_guard.py::test_feeds_section_has_no_gray_on_gray_text`
+    - `test_contrast_guard.py::test_quickswap_confirm_overlay_has_no_gray_on_gray_text`
+  Investigation needed: capture the failing flow's network + console under PRINTING, compare against IDLE. If the active-print intercept is the cause, either (a) seed an `is_active=false` printer stub for these tests, or (b) extend the L122 follow-up to migrate `_confirmActivePrintAssign` to `mountOverlay` and have it dismiss-on-click rather than blocking.
 *(L293 — Python server auto-reload on code changes — DONE 2026-05-14 via `feature/buglist-sweep-2026-05-14`. `app.run(...)` now reads `FCC_DEV` env var; when set to `1` / `true` / `yes` / `on`, passes `use_reloader=True` so werkzeug watches files and auto-restarts on edit. Defaults to off so the TrueNAS prod image keeps its current single-process behavior — no reload churn or behavior changes in prod unless the env var is explicitly set. To enable on the dev container, add `FCC_DEV=1` to the env section of the dev compose/spec (or `docker exec` with `-e FCC_DEV=1` for ad-hoc).)*
 
 

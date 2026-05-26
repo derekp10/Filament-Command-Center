@@ -195,6 +195,37 @@ def test_apply_selected_writes_form_values_without_posting(page: Page):
     assert update_calls == 0, f"Apply Selected unexpectedly POSTed {update_calls} times"
 
 
+def test_l202_collapse_leaves_no_sliver(page: Page):
+    """L202 — after toggling the Import-from-External panel closed, no child
+    should remain visible. Bootstrap's 350ms height transition was leaving
+    the top child (Source <select>) briefly rendered inside the animating
+    height window; the snap-collapse CSS in global.css suppresses that.
+    Asserts the panel is fully hidden immediately after the toggle click."""
+    _wait_ready(page)
+    _open_edit_filament(page, {
+        "id": 1, "name": "Probe", "material": "PLA",
+        "vendor": {"id": 1, "name": "V"},
+    })
+    # _open_edit_filament already opened the panel via .add('show'); close it
+    # through the real Bootstrap toggle so we exercise the .collapsing path.
+    page.locator("[data-bs-target='#editfil-import-panel']").click()
+    panel = page.locator("#editfil-import-panel")
+    expect(panel).not_to_have_class("collapse show")
+    info = panel.evaluate("""
+        el => {
+            const cs = getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            return { display: cs.display, rectH: r.height };
+        }
+    """)
+    assert info["display"] == "none", f"panel not hidden, got display={info['display']}"
+    assert info["rectH"] == 0, f"panel still has height, got {info['rectH']}"
+    src_h = page.locator("#editfil-external-source").evaluate(
+        "el => el.getBoundingClientRect().height"
+    )
+    assert src_h == 0, f"source select still visible, height={src_h}"
+
+
 def test_apply_skips_unchecked_rows(page: Page):
     _wait_ready(page)
     _stub_external_search(page)
