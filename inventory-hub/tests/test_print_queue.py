@@ -74,19 +74,57 @@ def test_identify_scan_barcode_clears_flag(client):
         assert "Label Verified" in mock_log.call_args[0][0]
 
 def test_identify_scan_barcode_filament(client):
-    """Test that a physical barcode scan on a filament clears needs_label_print"""
+    """Test that a physical barcode scan on a filament clears
+    needs_label_print AND confirms sample_printed (L17 — a physical
+    FIL: label exists on a printed swatch, so the sample is printed)."""
     with patch('logic.resolve_scan') as mock_resolve, patch('spoolman_api.get_filament') as mock_get, patch('spoolman_api.update_filament') as mock_update, patch('state.add_log_entry') as mock_log:
         mock_resolve.return_value = {"type": "filament", "id": 5}
         mock_get.return_value = {"id": 5, "extra": {"needs_label_print": True}}
         mock_update.return_value = {"id": 5} # Success
-        
+
         res = client.post('/api/identify_scan', json={"text": "FIL:5", "source": "barcode"})
         data = res.get_json()
         assert data['type'] == 'filament'
-        
+
         mock_update.assert_called_once()
         args, _ = mock_update.call_args
         assert args[1]['extra']['needs_label_print'] is False
+        # L17 — sample_printed must be paired with the label-confirm so
+        # users don't have to maintain it as a separate toggle.
+        assert args[1]['extra']['sample_printed'] is True
+
+
+def test_identify_scan_barcode_filament_pairs_sample_when_previously_unset(client):
+    """L17 — even when sample_printed isn't already present in the
+    filament's extras, the FIL: label-confirm scan must add it as True.
+    Guards against a regression where the pairing only happened when
+    the field already existed."""
+    with patch('logic.resolve_scan') as mock_resolve, patch('spoolman_api.get_filament') as mock_get, patch('spoolman_api.update_filament') as mock_update, patch('state.add_log_entry'):
+        mock_resolve.return_value = {"type": "filament", "id": 7}
+        # No sample_printed key at all in the existing extras.
+        mock_get.return_value = {"id": 7, "extra": {"needs_label_print": True}}
+        mock_update.return_value = {"id": 7}
+
+        client.post('/api/identify_scan', json={"text": "FIL:7", "source": "barcode"})
+
+        args, _ = mock_update.call_args
+        assert args[1]['extra'].get('sample_printed') is True
+
+
+def test_identify_scan_barcode_filament_skips_sample_when_already_verified(client):
+    """L17 — when the label is already verified (needs_label_print=False),
+    the early-exit path runs and we should NOT touch sample_printed. The
+    user may have intentionally cleared sample_printed for some workflow
+    reason; a re-scan of an already-verified label shouldn't reset it."""
+    with patch('logic.resolve_scan') as mock_resolve, patch('spoolman_api.get_filament') as mock_get, patch('spoolman_api.update_filament') as mock_update, patch('state.add_log_entry'):
+        mock_resolve.return_value = {"type": "filament", "id": 8}
+        mock_get.return_value = {"id": 8, "extra": {"needs_label_print": False, "sample_printed": False}}
+        mock_update.return_value = {"id": 8}
+
+        client.post('/api/identify_scan', json={"text": "FIL:8", "source": "barcode"})
+
+        # No update should fire on an already-verified label scan.
+        mock_update.assert_not_called()
 
 def test_identify_scan_barcode_database_rejection(client):
     """A failed Spoolman update on label-confirm scan must surface as ERROR

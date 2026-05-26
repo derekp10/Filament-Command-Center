@@ -1936,6 +1936,13 @@ def api_identify_scan():
                 )
                 if not already_verified:
                     extra['needs_label_print'] = False
+                    # L17 — a physical FIL: label exists on a swatch, so
+                    # the sample must have been printed too. Confirm both
+                    # in a pair so users don't have to maintain
+                    # sample_printed separately. The Activity Log line
+                    # already advertised "Label & Sample Verified"; the
+                    # code now matches the message.
+                    extra['sample_printed'] = True
                     if spoolman_api.update_filament(fid, {'extra': extra}):
                         state.add_log_entry(f"✔️ Filament #{fid} Label & Sample Verified", "SUCCESS", "00ff00")
                     else:
