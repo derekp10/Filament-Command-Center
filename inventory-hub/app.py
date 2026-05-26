@@ -620,6 +620,84 @@ def api_external_fields():
         state.logger.error(f"API Error fetching extra fields config: {e}")
     return jsonify({"success": False, "fields": out})
 
+@app.route('/api/spoolman/restore_field_order', methods=['POST'])
+def api_spoolman_restore_field_order():
+    """L318 — write FIELD_ORDER's canonical index back to each Spoolman
+    field's `order` property so Spoolman's own UI renders extras in
+    the same order FCC's wizard / details modal do.
+
+    Spoolman's `POST /api/v1/field/{entity}/{key}` is an upsert: the
+    POST body must carry the full ExtraFieldParameters payload (name,
+    field_type, choices, etc.) — sending only `order` would clobber
+    the other properties to their defaults. We GET the current field
+    def, splice in the canonical order index, and POST it back. Fields
+    not in FIELD_ORDER fall through unchanged (no `order` value sent
+    means Spoolman keeps whatever it already had).
+
+    Idempotent: re-running just writes the same order values; no
+    side effects on the actual filament / spool data.
+    """
+    sm_url, _ = config_loader.get_api_urls()
+    summary = {"filament": {"updated": 0, "skipped": 0, "errors": []},
+               "spool":    {"updated": 0, "skipped": 0, "errors": []}}
+
+    for entity_type in ("filament", "spool"):
+        order_list = FIELD_ORDER.get(entity_type, [])
+        try:
+            r = requests.get(f"{sm_url}/api/v1/field/{entity_type}", timeout=10)
+            if not r.ok:
+                summary[entity_type]["errors"].append(f"GET failed: {r.status_code}")
+                continue
+            fields = r.json() or []
+        except Exception as e:
+            summary[entity_type]["errors"].append(f"GET error: {e}")
+            continue
+
+        for fld in fields:
+            key = fld.get("key")
+            if not key or key not in order_list:
+                summary[entity_type]["skipped"] += 1
+                continue
+            new_order = order_list.index(key)
+            if int(fld.get("order") or 0) == new_order:
+                # Already in the right slot — skip the round-trip.
+                summary[entity_type]["skipped"] += 1
+                continue
+            # Build the upsert payload — preserve every other ExtraFieldParameters
+            # property the GET returned. Spoolman POST clobbers omitted fields
+            # to schema defaults (e.g. choices→null), so we MUST echo them back.
+            payload = {
+                "name": fld.get("name", key),
+                "field_type": fld.get("field_type", "text"),
+                "order": new_order,
+            }
+            for prop in ("unit", "default_value", "choices", "multi_choice"):
+                if prop in fld and fld[prop] is not None:
+                    payload[prop] = fld[prop]
+            try:
+                w = requests.post(
+                    f"{sm_url}/api/v1/field/{entity_type}/{key}",
+                    json=payload, timeout=10,
+                )
+                if not w.ok:
+                    summary[entity_type]["errors"].append(
+                        f"{key}: HTTP {w.status_code} {(w.text or '')[:140]}"
+                    )
+                    continue
+                summary[entity_type]["updated"] += 1
+            except Exception as e:
+                summary[entity_type]["errors"].append(f"{key}: {e}")
+
+    total_updated = sum(s["updated"] for s in summary.values())
+    total_errors = sum(len(s["errors"]) for s in summary.values())
+    if total_updated or total_errors:
+        state.add_log_entry(
+            f"🔢 Restored Spoolman field order — {total_updated} updated, {total_errors} error(s)",
+            "INFO", "00d4ff",
+        )
+    return jsonify({"success": total_errors == 0, "summary": summary})
+
+
 @app.route('/api/external/fields/add_choice', methods=['POST'])
 def api_external_fields_add_choice():
     """Appends a new choice to a multi-choice field in Spoolman and updates the schema."""
