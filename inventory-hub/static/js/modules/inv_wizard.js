@@ -318,8 +318,8 @@ const _wizSectionSummarizers = {
             : '';
         const label = name || (allHexes[0] || hex0 || '');
         const hexTag = allHexes.length > 1
-            ? ` <span class="font-monospace text-info">${allHexes.length} colors</span>`
-            : (allHexes[0] ? ` <span class="font-monospace text-muted">${allHexes[0]}</span>` : '');
+            ? ` <span class="font-monospace text-info ms-2">${allHexes.length} colors</span>`
+            : (allHexes[0] ? ` <span class="font-monospace text-muted ms-2">${allHexes[0]}</span>` : '');
         return `<span class="d-inline-flex align-items-center">${swatch}<span class="text-light">${_wizEscape(label)}</span>${hexTag}</span>`;
     },
     'wiz-fil-temps-panel': () => {
