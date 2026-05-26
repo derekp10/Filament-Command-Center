@@ -154,6 +154,7 @@ try:
                 _backup = f"{locations_db.JSON_FILE}.pre-feedermap-migration-{_stamp}.bak"
                 shutil.copy2(locations_db.JSON_FILE, _backup)
                 state.logger.info(f"📦 Backed up locations.json → {_backup}")
+                _prune_locations_backups()
             except Exception as _bk_err:
                 state.logger.warning(f"Could not write pre-migration backup: {_bk_err}")
             locations_db.save_locations_list(_migrated)
@@ -177,12 +178,23 @@ try:
             _backup = f"{locations_db.JSON_FILE}.pre-parent-id-migration-{_stamp}.bak"
             shutil.copy2(locations_db.JSON_FILE, _backup)
             state.logger.info(f"📦 Backed up locations.json → {_backup}")
+            _prune_locations_backups()
         except Exception as _bk_err:
             state.logger.warning(f"Could not write pre-parent-id-migration backup: {_bk_err}")
         locations_db.save_locations_list(_phase1a_migrated)
         state.logger.info("💾 parent_id backfilled across locations.json — Phase-1A migration complete.")
 except Exception as _p1a_err:
     state.logger.error(f"parent_id migration skipped due to error: {_p1a_err}")
+
+# L347 follow-up — also prune at startup so accumulated backups from
+# previous boots get trimmed even when no migration fires this boot.
+# Cheap glob; idempotent under the cap.
+try:
+    _pruned = _prune_locations_backups()
+    if _pruned:
+        state.logger.info(f"🧹 Pruned {len(_pruned)} old locations.json backup(s)")
+except Exception as _prune_err:
+    state.logger.warning(f"locations.json backup prune skipped: {_prune_err}")
 
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
 log = logging.getLogger('werkzeug')
@@ -880,6 +892,47 @@ def _evict_old_fb_snapshots(snapshots, cap=MAX_FB_ERROR_SNAPSHOTS):
         return snapshots
     items = list(snapshots.items())
     return dict(items[-cap:])
+
+
+# L347 follow-up — prune old locations.json.pre-*.bak migration backups.
+# Each migration that fires writes a timestamped .bak; nothing deletes
+# them. Dev currently has 3 (pre-13.x-repair + 2 pre-parent-id); a
+# long-running prod install with several schema migrations would
+# accumulate one per migration per restart-after-edit.
+MAX_LOCATIONS_BACKUPS = 5
+
+
+def _prune_locations_backups(json_file_path=None, keep=MAX_LOCATIONS_BACKUPS):
+    """Keep at most `keep` of the most-recently-modified
+    `locations.json.pre-*.bak` files alongside `json_file_path`. Returns
+    the list of deleted paths (empty when under the cap). Failures
+    swallow themselves so a permissions issue can't break startup."""
+    import glob
+    if json_file_path is None:
+        json_file_path = locations_db.JSON_FILE
+    pattern = f"{json_file_path}.pre-*.bak"
+    try:
+        matches = glob.glob(pattern)
+    except Exception:
+        return []
+    if len(matches) <= keep:
+        return []
+    try:
+        matches.sort(key=lambda p: os.path.getmtime(p))
+    except Exception:
+        # If mtime lookup fails (permissions / race) fall through to
+        # filename sort — the timestamp in the filename gives the right
+        # order as a backstop.
+        matches.sort()
+    victims = matches[:-keep]
+    deleted = []
+    for p in victims:
+        try:
+            os.remove(p)
+            deleted.append(p)
+        except Exception:
+            pass
+    return deleted
 
 
 @app.route('/api/external/search', methods=['GET'])
