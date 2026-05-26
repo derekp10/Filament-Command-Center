@@ -3587,8 +3587,13 @@ def api_filament_attributes_remove_choice():
             attrs = spoolman_api._parse_filament_attrs_value(extras_out['filament_attributes'])
             cleaned = [a for a in attrs if a != choice]
             extras_out['filament_attributes'] = _json.dumps(cleaned)
+        # noqa: spoolman-extra-patch — extras_out is the FULL extras
+        # snapshot, not a partial dict, so Spoolman's replace-on-PATCH
+        # semantics preserve every sibling field. The choice was already
+        # filtered out of filament_attributes above. test_no_direct_extra_patch
+        # honors this marker as an audited exception.
         try:
-            pr = _req.patch(
+            pr = _req.patch(  # noqa: spoolman-extra-patch
                 f"{sm_url}/api/v1/filament/{fid}",
                 json={"extra": extras_out},
                 timeout=10,
@@ -3768,8 +3773,11 @@ def api_filament_attributes_sweep_unused():
             attrs = spoolman_api._parse_filament_attrs_value(extras_out['filament_attributes'])
             cleaned = [a for a in attrs if a not in unused_set]
             extras_out['filament_attributes'] = _json.dumps(cleaned)
+        # noqa: spoolman-extra-patch — extras_out is the FULL extras
+        # snapshot (siblings preserved); only filament_attributes is filtered.
+        # See test_no_direct_extra_patch for the bypass-marker contract.
         try:
-            pr = _req.patch(
+            pr = _req.patch(  # noqa: spoolman-extra-patch
                 f"{sm_url}/api/v1/filament/{fid}",
                 json={"extra": extras_out},
                 timeout=10,
