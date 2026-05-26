@@ -900,6 +900,9 @@ def api_search_inventory():
     # Deployment status filter: '' | 'any' = no filter, 'deployed' = toolhead/ghost only,
     # 'undeployed' = not on a toolhead. Filaments ignore this.
     deployed_state = request.args.get('deployed', '').strip().lower()
+    # Sort axis. Currently filament-only: 'spools_desc' / 'spools_asc'.
+    # Empty / unknown tokens fall through to the default sort path.
+    sort = request.args.get('sort', '').strip().lower()
 
     try:
         results = spoolman_api.search_inventory(
@@ -913,6 +916,7 @@ def api_search_inventory():
             min_weight=min_weight,
             max_weight=max_weight,
             deployed_state=deployed_state,
+            sort=sort,
         )
         return jsonify({"success": True, "results": results})
     except Exception as e:

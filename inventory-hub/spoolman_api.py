@@ -1304,7 +1304,7 @@ def get_best_color_distance(target_hex, compare_hex_csv):
         return float('inf')
     return min(distances)
 
-def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", max_weight="", deployed_state=""):
+def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", max_weight="", deployed_state="", sort=""):
     """
     Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
     Returns a sorted list of dictionaries matching the criteria.
@@ -1513,6 +1513,20 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 'details': info.get('details', {})
             })
             
+        # Explicit sort override (currently filament-only). Apply before
+        # falling through to the default heuristics so an explicit sort
+        # takes precedence over color/weight-implicit ordering.
+        sort_token = (sort or '').strip().lower()
+        if target_type == 'filament' and sort_token in ('spools_desc', 'spools_asc'):
+            # `spools_count` is always populated for filament searches
+            # above; coerce None defensively in case a future code path
+            # leaves it unset.
+            if sort_token == 'spools_desc':
+                results.sort(key=lambda x: (-(x.get('spools_count') or 0), -x['id']))
+            else:
+                results.sort(key=lambda x: ((x.get('spools_count') or 0), -x['id']))
+            return results
+
         # Sort by color distance (closest first), then by ID (newest first usually)
         # If min_weight is present, we prioritize sorting by ascending weight to surface near-empty spools first
         if color_hex:
@@ -1525,7 +1539,7 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 results.sort(key=lambda x: (x['remaining'], -x['id']))
             else:
                 results.sort(key=lambda x: -x['id'])
-            
+
         return results
         
     except Exception as e:
