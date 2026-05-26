@@ -391,6 +391,53 @@ console.log("🚀 Loaded Module: CONFIG");
         if (remBtn) remBtn.disabled = !hasSel;
     };
 
+    // --- RESTORE SPOOLMAN FIELD ORDER (L318) ---
+    window.configRestoreFieldOrder = async () => {
+        const host = document.getElementById('config-restore-field-order-results');
+        const btn = document.getElementById('btn-config-restore-field-order');
+        if (!host) return;
+        host.innerHTML = `<div class="text-info small"><span class="spinner-border spinner-border-sm me-2"></span>Restoring field order…</div>`;
+        if (btn) btn.disabled = true;
+        try {
+            const r = await fetch('/api/spoolman/restore_field_order', { method: 'POST' });
+            const d = await r.json();
+            const sum = d.summary || { filament: {}, spool: {} };
+            const renderEntity = (label, s) => {
+                const errors = Array.isArray(s.errors) ? s.errors : [];
+                const errHtml = errors.length
+                    ? `<ul class="small mb-0 mt-1" style="color:#ff8a8a;">${errors.map(e => `<li>${_esc(e)}</li>`).join('')}</ul>`
+                    : '';
+                return `
+                    <li>
+                        <b>${_esc(label)}:</b>
+                        ${s.updated || 0} updated · ${s.skipped || 0} skipped · ${errors.length} error(s)
+                        ${errHtml}
+                    </li>`;
+            };
+            const totalUpdated = (sum.filament.updated || 0) + (sum.spool.updated || 0);
+            const alertClass = d.success
+                ? (totalUpdated > 0 ? 'alert-success' : 'alert-info')
+                : 'alert-warning';
+            const headline = d.success
+                ? (totalUpdated > 0
+                    ? '✅ Restore complete'
+                    : 'ℹ️ Already in canonical order — no writes needed')
+                : '⚠️ Restore finished with errors';
+            host.innerHTML = `
+                <div class="alert ${alertClass} py-2 mb-0">
+                    <div class="fw-bold mb-1">${headline}</div>
+                    <ul class="small mb-0">
+                        ${renderEntity('Filament fields', sum.filament || {})}
+                        ${renderEntity('Spool fields', sum.spool || {})}
+                    </ul>
+                </div>`;
+        } catch (e) {
+            host.innerHTML = `<div class="alert alert-danger py-2 mb-0">Restore failed: ${_esc(e.message || e)}</div>`;
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    };
+
     window.configAttrsScan = async () => {
         const host = document.getElementById('config-attrs-results');
         const btn = document.getElementById('btn-config-attrs-scan');

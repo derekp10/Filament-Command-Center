@@ -71,6 +71,36 @@
                     </div>
                 </div>
 
+                <!-- SECTION: Restore Spoolman Field Sort Order (L318) -->
+                <div class="card bg-black border-secondary mb-3">
+                    <div class="card-header d-flex justify-content-between align-items-center"
+                         style="background: #1a1a1a;">
+                        <span class="fw-bold text-info">🔢 Restore Spoolman Field Order</span>
+                        <button class="btn btn-sm btn-info fw-bold"
+                                id="btn-config-restore-field-order"
+                                onclick="window.configRestoreFieldOrder && window.configRestoreFieldOrder()">
+                            ▶ Run restore
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <p class="small mb-2" style="color: rgba(255,255,255,0.78);">
+                            Spoolman doesn't preserve a canonical sort order on its extra
+                            fields — every field drifts to <code>order: 0</code> after
+                            edits, and Spoolman's own UI shows them in mutation order.
+                            This writes FCC's <code>FIELD_ORDER</code> canonical index
+                            back to each field so Spoolman renders extras in the same
+                            sequence as the wizard / details modal. Idempotent — fields
+                            already in position skip the round-trip; unknown keys (not
+                            in <code>FIELD_ORDER</code>) pass through untouched.
+                        </p>
+                        <div id="config-restore-field-order-results">
+                            <div class="small" style="color: rgba(255,255,255,0.6);">
+                                Click <b>Run restore</b> to start.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Future sections slot in here. Pattern: a Bootstrap .card
                      with a header (title + action button) and a body that
                      can carry whatever shape the panel needs. -->
