@@ -146,3 +146,39 @@ def test_fb_error_snapshotting(mock_app):
              data = json.load(f)
              assert "err_snap_1" in data
              assert data["err_snap_1"][0]["id"] == 999
+
+
+# L347 — bounded snapshot store. The dict-cap helper is the seam: tests
+# operate on synthetic dicts so they don't have to wire up the entire
+# /api/logs polling loop just to assert the eviction policy.
+
+def test_evict_old_fb_snapshots_returns_unchanged_under_cap():
+    import app as flask_app
+    snaps = {f"err_{i}": [{"id": i}] for i in range(50)}
+    out = flask_app._evict_old_fb_snapshots(snaps, cap=100)
+    assert out is snaps  # under cap → same dict, no copy
+    assert len(out) == 50
+
+
+def test_evict_old_fb_snapshots_caps_at_threshold():
+    import app as flask_app
+    # Insert 150 entries with monotonic timestamp-style suffixes so the
+    # tail-N survivors are deterministically the highest-numbered ones.
+    snaps = {f"err_{i:04d}": [{"id": i}] for i in range(150)}
+    out = flask_app._evict_old_fb_snapshots(snaps, cap=100)
+    assert len(out) == 100
+    # The 100 newest (insertion-order) entries survive.
+    assert "err_0050" in out
+    assert "err_0149" in out
+    # The oldest 50 were evicted.
+    assert "err_0049" not in out
+    assert "err_0000" not in out
+
+
+def test_evict_old_fb_snapshots_handles_non_dict_input():
+    import app as flask_app
+    # Defensive — if the on-disk file is corrupt and parses to a list
+    # or None, the helper must not crash. It just returns the input as-is
+    # so the surrounding try/except can log + recover.
+    assert flask_app._evict_old_fb_snapshots(None) is None
+    assert flask_app._evict_old_fb_snapshots([]) == []

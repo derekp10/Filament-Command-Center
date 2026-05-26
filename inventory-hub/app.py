@@ -862,6 +862,26 @@ def api_spool_update():
 
 import external_parsers # Added for plugin architecture
 
+
+# L347 — bound the filabridge_error_snapshots.json size at the most-recent
+# MAX_FB_ERROR_SNAPSHOTS entries. Each filabridge error appends an entry
+# that's never deleted; on a long-running prod install this grows forever
+# (~1KB per entry — the cost is unbounded disk + the JSON parse on every
+# recovery lookup, not catastrophic but real). Python 3.7+ dict preserves
+# insertion order, so dropping the head N entries evicts the oldest.
+MAX_FB_ERROR_SNAPSHOTS = 100
+
+
+def _evict_old_fb_snapshots(snapshots, cap=MAX_FB_ERROR_SNAPSHOTS):
+    """Return a dict containing at most `cap` of the most-recently-inserted
+    entries from `snapshots`. Insertion order is preserved by Python dicts
+    (3.7+), so slicing the tail of items() gives the newest survivors."""
+    if not isinstance(snapshots, dict) or len(snapshots) <= cap:
+        return snapshots
+    items = list(snapshots.items())
+    return dict(items[-cap:])
+
+
 @app.route('/api/external/search', methods=['GET'])
 def api_external_search():
     """
@@ -3943,6 +3963,9 @@ def api_get_logs_route():
                                         with open(snap_path, 'r', encoding='utf-8') as f:
                                             snapshots = json.load(f)
                                     snapshots[err_id] = spools
+                                    # L347 — bound the snapshot store; see
+                                    # _evict_old_fb_snapshots above for rationale.
+                                    snapshots = _evict_old_fb_snapshots(snapshots)
                                     os.makedirs(os.path.dirname(snap_path), exist_ok=True)
                                     with open(snap_path, 'w', encoding='utf-8') as f:
                                         json.dump(snapshots, f)
