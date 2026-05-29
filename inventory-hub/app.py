@@ -2017,17 +2017,10 @@ def _handle_prusament_url_scan(res):
     spool_id = res.get('spool_id')
     url = res.get('url', '')
 
-    parsed = external_parsers.search_external('prusament', url) or []
-    if not parsed:
-        state.add_log_entry(
-            f"⚠️ Couldn't read Prusament spool {spool_id} — check the URL / connection",
-            "WARNING", "ffaa00",
-        )
-        return jsonify({"type": "prusament_url", "status": "fetch_failed", "spool_id": spool_id})
-    obj = parsed[0]
-    obj_extra = obj.get('extra') or {}
-
-    # --- Match an existing spool by its stored Prusament URL (per-spool) ---
+    # Match FIRST — deciding a match needs only the scanned id vs. stored
+    # product_urls, NOT the (slow) prusament.com page fetch. So a no-match
+    # "onboard" responds fast (just a Spoolman spool list); the page fetch is
+    # deferred to the matched/backfill path and the Add wizard (Stage 3).
     needle = f"/spool/{spool_id}/"
     matched = None
     for s in spoolman_api.get_all_spools(allow_archived=True):
@@ -2038,10 +2031,22 @@ def _handle_prusament_url_scan(res):
 
     if not matched:
         state.add_log_entry(
-            f"🆕 Prusament spool {spool_id} isn't in inventory yet — ready to onboard",
+            "🆕 Scanned a Prusament spool that isn't in inventory yet — ready to onboard",
             "INFO", "00ccff",
         )
-        return jsonify({"type": "prusament_new", "spool_id": spool_id, "parsed": obj})
+        return jsonify({"type": "prusament_new", "spool_id": spool_id, "url": url})
+
+    # Matched — NOW fetch the spool page for its temps.
+    parsed = external_parsers.search_external('prusament', url) or []
+    if not parsed:
+        state.add_log_entry(
+            f"⚠️ Matched spool #{matched.get('id')} but couldn't read its Prusament "
+            f"page — check the connection",
+            "WARNING", "ffaa00",
+        )
+        return jsonify({"type": "prusament_url", "status": "fetch_failed", "spool_id": spool_id})
+    obj = parsed[0]
+    obj_extra = obj.get('extra') or {}
 
     sid = matched.get('id')
     fid = (matched.get('filament') or {}).get('id')

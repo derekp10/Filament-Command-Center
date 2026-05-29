@@ -86,14 +86,15 @@ def _scan(client, url=_URL):
 
 
 def test_prusament_scan_no_match_returns_new_for_onboarding(client):
-    with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
-         patch("spoolman_api.get_all_spools", return_value=[
-             {"id": 1, "extra": {"product_url": "https://prusament.com/spool/99999/abc/"}},
-         ]):
+    # No spool's product_url matches the scanned id -> fast onboard response
+    # (match-first means NO prusament.com fetch on this path).
+    with patch("spoolman_api.get_all_spools", return_value=[
+        {"id": 1, "extra": {"product_url": "https://prusament.com/spool/99999/abc/"}},
+    ]):
         res = _scan(client)
     assert res["type"] == "prusament_new"
     assert res["spool_id"] == "17705"
-    assert res["parsed"]["material"] == "PLA"
+    assert res["url"] == _URL
 
 
 def test_prusament_scan_match_backfills_blank_temps(client):
@@ -156,7 +157,11 @@ def test_prusament_scan_differing_temps_suppressed_when_active_spool(client):
 
 
 def test_prusament_scan_fetch_failure_is_reported(client):
-    with patch("external_parsers.search_external", return_value=[]):
+    # A match exists, but the Prusament page can't be read -> fetch_failed
+    # (the fetch only happens on the matched path now).
+    matched = {"id": 42, "extra": {"product_url": _URL}, "filament": {"id": 7}}
+    with patch("spoolman_api.get_all_spools", return_value=[matched]), \
+         patch("external_parsers.search_external", return_value=[]):
         res = _scan(client)
     assert res["type"] == "prusament_url"
     assert res["status"] == "fetch_failed"
