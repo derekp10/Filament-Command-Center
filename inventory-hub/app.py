@@ -4401,4 +4401,15 @@ if __name__ == '__main__':
     # server on edits. Defaults to off so the TrueNAS prod image keeps
     # its current behavior (one long-lived process, no reload churn).
     _dev = str(os.environ.get('FCC_DEV', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    # ALSO opt into Jinja2 template auto-reload in dev — without this,
+    # `use_reloader=True` only re-execs the Python process on .py edits;
+    # template (.html) edits stay cached by Jinja2 for the lifetime of the
+    # process and a server restart is required to see them. With debug=False
+    # (which we keep so the interactive debugger never ships to prod) Flask
+    # otherwise defaults to "don't auto-reload templates," which is the
+    # production-safe default. 2026-05-28 — Derek caught L21's sort dropdown
+    # not appearing in /search because the container had cached the pre-L21
+    # template through a 3-day uptime; this prevents that footgun.
+    if _dev:
+        app.config['TEMPLATES_AUTO_RELOAD'] = True
     app.run(host='0.0.0.0', port=8000, use_reloader=_dev, debug=False)
