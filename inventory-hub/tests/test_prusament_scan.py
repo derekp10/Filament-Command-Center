@@ -7,6 +7,7 @@ onto the matching existing filament or onboard a brand-new spool.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -15,6 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from unittest.mock import patch  # noqa: E402
 
 import pytest  # noqa: E402
+from playwright.sync_api import expect  # noqa: E402
 
 from logic import resolve_scan  # noqa: E402
 import app as app_module  # noqa: E402
@@ -165,3 +167,32 @@ def test_prusament_scan_fetch_failure_is_reported(client):
         res = _scan(client)
     assert res["type"] == "prusament_url"
     assert res["status"] == "fetch_failed"
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 (frontend) — a 'prusament_new' scan opens the Add wizard pre-filled
+# from the scanned URL. Hermetic: the scan endpoint AND the wizard's external
+# search are mocked via page.route, so no real backend / prusament.com hit.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usefixtures("require_server")
+def test_prusament_new_scan_opens_prefilled_add_wizard(page, base_url, reset_dom_state_js):
+    url = "https://prusament.com/spool/17705/abc123/"
+    page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_function(
+        "typeof processScan === 'function' && typeof openWizardModal === 'function'",
+        timeout=10000,
+    )
+    page.route("**/api/identify_scan", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"type": "prusament_new", "spool_id": "17705", "url": url}),
+    ))
+    page.route("**/api/external/search**", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"success": True, "results": []}),
+    ))
+    page.evaluate(f"processScan({json.dumps(url)}, 'barcode')")
+    expect(page.locator("#wizardModal")).to_be_visible(timeout=6000)
+    expect(page.locator("#wiz-search-external")).to_have_value(url, timeout=4000)

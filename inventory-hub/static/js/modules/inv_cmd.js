@@ -515,6 +515,41 @@ const processScan = (text, source = 'keyboard') => {
                 // L128 follow-up (2026-05-15): see spool branch — reverted
                 // to Activity Log only; no per-scan toast.
                 openFilamentDetails(res.id);
+            } else if (res.type === 'prusament_matched') {
+                // Backend matched the scanned Prusament spool to an existing
+                // record and silently backfilled any BLANK nozzle/bed temps.
+                if (res.status === 'error') {
+                    showToast(res.msg || 'Prusament temp backfill failed', 'error', 7000);
+                } else if (res.filled && res.filled.length) {
+                    showToast(`🌡️ Backfilled ${res.filled.length} temp(s) on ${res.filament_name || 'filament'} from Prusament`, 'success', 4000);
+                } else {
+                    showToast(`✅ Matched ${res.filament_name || 'filament'} — temps already current`, 'info', 4000);
+                }
+                // Temps that DIFFER from the scan (Prusa changed the spec) — the
+                // backend only surfaces these when no active spools are in use.
+                // The full per-field conflict overlay + queue-label are Stage 2c
+                // polish; until then, warn so the suggestion isn't lost.
+                if (res.conflicts && res.conflicts.length) {
+                    if (typeof window.promptPrusamentTempConflict === 'function') {
+                        window.promptPrusamentTempConflict(res);
+                    } else {
+                        showToast(`ℹ️ ${res.conflicts.length} temp(s) differ from Prusament's current spec — review on ${res.filament_name || 'the filament'}`, 'warning', 7000);
+                    }
+                }
+            } else if (res.type === 'prusament_new') {
+                // No existing spool matched — onboard by opening the Add wizard
+                // pre-filled from the scanned URL (reuses the wizard's external
+                // import: set the query, then trigger the search).
+                showToast('🆕 New Prusament spool — opening the Add wizard to onboard it', 'info', 4500);
+                if (typeof window.openWizardModal === 'function') {
+                    Promise.resolve(window.openWizardModal()).then(() => {
+                        const q = document.getElementById('wiz-search-external');
+                        if (q) {
+                            q.value = res.url || '';
+                            if (typeof window.wizardSearchExternal === 'function') window.wizardSearchExternal();
+                        }
+                    });
+                }
             } else if (res.type === 'error') showToast(res.msg, 'error');
         })
         .catch((e) => { setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
