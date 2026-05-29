@@ -246,3 +246,38 @@ def test_l56_state_badge_renders_in_widget(page: Page, base_url):
     assert after_count == initial_count, (
         f"sync-pulse wiped state badges (initial={initial_count}, after={after_count})"
     )
+
+
+@pytest.mark.usefixtures("require_server", "bound_xl1")
+def test_l361_toolhead_click_survives_rerender(page: Page, base_url):
+    """L361 — clicking a toolhead tile must still open the manage modal
+    even when the widget has just re-rendered (which happens frequently
+    when a printer is actively PRINTING and the state badge / weight
+    tick over). The fix moved the click handler to event delegation on
+    the widget root, so the handler survives an arbitrary number of
+    body re-renders. Without delegation, clicks that landed on a newly-
+    rendered toolhead element silently dropped because the per-element
+    listener belonged to the prior render generation.
+    """
+    page.goto(base_url)
+    page.wait_for_selector("#buffer-zone", timeout=10000)
+    page.wait_for_function(
+        "() => document.querySelector('.fcc-ps-th')",
+        timeout=12000,
+    )
+    # Force several full re-renders (mimics rapid sync-pulse during print).
+    page.evaluate(
+        """() => {
+            const w = document.getElementById('printer-status-widget');
+            const body = w.querySelector('.fcc-ps-body');
+            const saved = body.innerHTML;
+            // Wipe + restore three times so any per-element listener is
+            // orphaned. Delegation on the widget root survives.
+            for (let i = 0; i < 3; i++) {
+                body.innerHTML = '';
+                body.innerHTML = saved;
+            }
+        }"""
+    )
+    page.locator(f".fcc-ps-th[data-toolhead='{TEST_TOOLHEAD}']").first.click()
+    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)

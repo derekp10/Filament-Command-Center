@@ -212,8 +212,19 @@ window.closeMultiSpoolModal = () => {
     if (multiSpoolModal) multiSpoolModal.hide();
 };
 
-/* --- PERSISTENCE LAYER --- */
+/* --- PERSISTENCE LAYER ---
+ *
+ * L23 — without a suppression window the user-clear path lost a race:
+ *   T-1.95s  loadQueue GET issued (server still has CR-CART-2)
+ *   T+0      user clicks Clear → labelQueue=[], persistQueue POSTs []
+ *   T+0.05s  the stale GET response arrives → labelQueue replaced with
+ *            server's pre-clear payload → CR-CART-2 reappears.
+ * Tracking the last-write timestamp lets loadQueue ignore any response
+ * whose request was issued before the most recent local mutation.
+ */
+let lastPersistAt = 0;
 const persistQueue = () => {
+    lastPersistAt = Date.now();
     fetch('/api/state/queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -223,9 +234,14 @@ const persistQueue = () => {
 
 let queueInitialLoad = true;
 const loadQueue = () => {
+    const issuedAt = Date.now();
     fetch('/api/state/queue')
         .then(r => r.json())
         .then(data => {
+            // Drop responses to requests that pre-date the most recent
+            // local mutation — they reflect the server's old state and
+            // would clobber the user's just-applied change.
+            if (issuedAt < lastPersistAt) return;
             if (Array.isArray(data)) {
                 const currentStr = JSON.stringify(labelQueue);
                 const serverStr = JSON.stringify(data);

@@ -363,15 +363,23 @@
                 return `<div class="fcc-ps-printer-group" data-printer="${safeName}">${chips}</div>`;
             }).join('');
         }
-        // Wire clicks AFTER innerHTML so listeners attach to the new DOM.
-        // Same handler for expanded blocks AND header chips — both
-        // open Quick-Swap on the toolhead.
-        widget.querySelectorAll('.fcc-ps-th, .fcc-ps-mini').forEach(el => {
-            el.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const tid = el.dataset.toolhead;
-                if (tid && window.openManage) window.openManage(tid);
-            });
+        // Delegated click handler — bound ONCE on the stable widget root
+        // (see _wireDelegation). Re-attaching per render lost clicks when
+        // the widget re-rendered between Playwright's actionability check
+        // and click, especially during active PRINTING when state/weight
+        // ticks invalidated the fingerprint frequently (L361).
+        _wireDelegation(widget);
+    };
+
+    const _wireDelegation = (widget) => {
+        if (widget._fccPsClicksWired) return;
+        widget._fccPsClicksWired = true;
+        widget.addEventListener('click', (e) => {
+            const el = e.target.closest('.fcc-ps-th, .fcc-ps-mini');
+            if (!el || !widget.contains(el)) return;
+            e.stopPropagation();
+            const tid = el.dataset.toolhead;
+            if (tid && window.openManage) window.openManage(tid);
         });
     };
 

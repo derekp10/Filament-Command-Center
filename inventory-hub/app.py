@@ -154,6 +154,7 @@ try:
                 _backup = f"{locations_db.JSON_FILE}.pre-feedermap-migration-{_stamp}.bak"
                 shutil.copy2(locations_db.JSON_FILE, _backup)
                 state.logger.info(f"📦 Backed up locations.json → {_backup}")
+                _prune_locations_backups()
             except Exception as _bk_err:
                 state.logger.warning(f"Could not write pre-migration backup: {_bk_err}")
             locations_db.save_locations_list(_migrated)
@@ -177,12 +178,23 @@ try:
             _backup = f"{locations_db.JSON_FILE}.pre-parent-id-migration-{_stamp}.bak"
             shutil.copy2(locations_db.JSON_FILE, _backup)
             state.logger.info(f"📦 Backed up locations.json → {_backup}")
+            _prune_locations_backups()
         except Exception as _bk_err:
             state.logger.warning(f"Could not write pre-parent-id-migration backup: {_bk_err}")
         locations_db.save_locations_list(_phase1a_migrated)
         state.logger.info("💾 parent_id backfilled across locations.json — Phase-1A migration complete.")
 except Exception as _p1a_err:
     state.logger.error(f"parent_id migration skipped due to error: {_p1a_err}")
+
+# L347 follow-up — also prune at startup so accumulated backups from
+# previous boots get trimmed even when no migration fires this boot.
+# Cheap glob; idempotent under the cap.
+try:
+    _pruned = _prune_locations_backups()
+    if _pruned:
+        state.logger.info(f"🧹 Pruned {len(_pruned)} old locations.json backup(s)")
+except Exception as _prune_err:
+    state.logger.warning(f"locations.json backup prune skipped: {_prune_err}")
 
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
 log = logging.getLogger('werkzeug')
@@ -608,6 +620,119 @@ def api_external_fields():
         state.logger.error(f"API Error fetching extra fields config: {e}")
     return jsonify({"success": False, "fields": out})
 
+@app.route('/api/spoolman/restore_field_order', methods=['POST'])
+def api_spoolman_restore_field_order():
+    """L318 — write FIELD_ORDER's canonical index back to each Spoolman
+    field's `order` property so Spoolman's own UI renders extras in
+    the same order FCC's wizard / details modal do.
+
+    Spoolman's `POST /api/v1/field/{entity}/{key}` is an upsert: the
+    POST body must carry the full ExtraFieldParameters payload (name,
+    field_type, choices, etc.) — sending only `order` would clobber
+    the other properties to their defaults. We GET the current field
+    def, splice in the canonical order index, and POST it back, ALWAYS
+    echoing every property the GET returned so nothing else changes.
+
+    Idempotent: re-running just writes the same order values; no
+    side effects on the actual filament / spool data.
+
+    Query param `dry_run` (default: false) — when `true`/`1`/`yes`,
+    the endpoint reports what WOULD change without writing back to
+    Spoolman. The UI uses this to preview before committing. The
+    `changes` list per entity carries `{key, from_order, to_order}`
+    so the user sees exactly which fields move and by how much.
+    Derek 2026-05-28: previously tried setting field order once and
+    "it got overwritten" — the dry-run preview lets the user verify
+    the plan before pressing Apply.
+    """
+    sm_url, _ = config_loader.get_api_urls()
+    dry_run = (request.args.get('dry_run') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+    summary = {
+        "filament": {"updated": 0, "would_update": 0, "skipped": 0,
+                     "changes": [], "errors": []},
+        "spool":    {"updated": 0, "would_update": 0, "skipped": 0,
+                     "changes": [], "errors": []},
+    }
+
+    for entity_type in ("filament", "spool"):
+        order_list = FIELD_ORDER.get(entity_type, [])
+        try:
+            r = requests.get(f"{sm_url}/api/v1/field/{entity_type}", timeout=10)
+            if not r.ok:
+                summary[entity_type]["errors"].append(f"GET failed: {r.status_code}")
+                continue
+            fields = r.json() or []
+        except Exception as e:
+            summary[entity_type]["errors"].append(f"GET error: {e}")
+            continue
+
+        for fld in fields:
+            key = fld.get("key")
+            if not key or key not in order_list:
+                summary[entity_type]["skipped"] += 1
+                continue
+            new_order = order_list.index(key)
+            current_order = int(fld.get("order") or 0)
+            if current_order == new_order:
+                # Already in the right slot — skip the round-trip.
+                summary[entity_type]["skipped"] += 1
+                continue
+            summary[entity_type]["changes"].append({
+                "key": key,
+                "name": fld.get("name", key),
+                "from_order": current_order,
+                "to_order": new_order,
+            })
+            if dry_run:
+                summary[entity_type]["would_update"] += 1
+                continue
+            # Build the upsert payload — preserve every other ExtraFieldParameters
+            # property the GET returned. Spoolman POST clobbers omitted fields
+            # to schema defaults (e.g. choices→null), so we MUST echo them back.
+            # Covers the full schema: name, field_type (required), unit,
+            # default_value, choices, multi_choice (nullable).
+            payload = {
+                "name": fld.get("name", key),
+                "field_type": fld.get("field_type", "text"),
+                "order": new_order,
+            }
+            for prop in ("unit", "default_value", "choices", "multi_choice"):
+                if prop in fld and fld[prop] is not None:
+                    payload[prop] = fld[prop]
+            try:
+                w = requests.post(
+                    f"{sm_url}/api/v1/field/{entity_type}/{key}",
+                    json=payload, timeout=10,
+                )
+                if not w.ok:
+                    summary[entity_type]["errors"].append(
+                        f"{key}: HTTP {w.status_code} {(w.text or '')[:140]}"
+                    )
+                    continue
+                summary[entity_type]["updated"] += 1
+            except Exception as e:
+                summary[entity_type]["errors"].append(f"{key}: {e}")
+
+    total_updated = sum(s["updated"] for s in summary.values())
+    total_would = sum(s["would_update"] for s in summary.values())
+    total_errors = sum(len(s["errors"]) for s in summary.values())
+    if dry_run:
+        state.add_log_entry(
+            f"🔢 Field-order dry-run — {total_would} field(s) would move, {total_errors} error(s)",
+            "INFO", "00d4ff",
+        )
+    elif total_updated or total_errors:
+        state.add_log_entry(
+            f"🔢 Restored Spoolman field order — {total_updated} updated, {total_errors} error(s)",
+            "INFO", "00d4ff",
+        )
+    return jsonify({
+        "success": total_errors == 0,
+        "dry_run": dry_run,
+        "summary": summary,
+    })
+
+
 @app.route('/api/external/fields/add_choice', methods=['POST'])
 def api_external_fields_add_choice():
     """Appends a new choice to a multi-choice field in Spoolman and updates the schema."""
@@ -862,6 +987,67 @@ def api_spool_update():
 
 import external_parsers # Added for plugin architecture
 
+
+# L347 — bound the filabridge_error_snapshots.json size at the most-recent
+# MAX_FB_ERROR_SNAPSHOTS entries. Each filabridge error appends an entry
+# that's never deleted; on a long-running prod install this grows forever
+# (~1KB per entry — the cost is unbounded disk + the JSON parse on every
+# recovery lookup, not catastrophic but real). Python 3.7+ dict preserves
+# insertion order, so dropping the head N entries evicts the oldest.
+MAX_FB_ERROR_SNAPSHOTS = 100
+
+
+def _evict_old_fb_snapshots(snapshots, cap=MAX_FB_ERROR_SNAPSHOTS):
+    """Return a dict containing at most `cap` of the most-recently-inserted
+    entries from `snapshots`. Insertion order is preserved by Python dicts
+    (3.7+), so slicing the tail of items() gives the newest survivors."""
+    if not isinstance(snapshots, dict) or len(snapshots) <= cap:
+        return snapshots
+    items = list(snapshots.items())
+    return dict(items[-cap:])
+
+
+# L347 follow-up — prune old locations.json.pre-*.bak migration backups.
+# Each migration that fires writes a timestamped .bak; nothing deletes
+# them. Dev currently has 3 (pre-13.x-repair + 2 pre-parent-id); a
+# long-running prod install with several schema migrations would
+# accumulate one per migration per restart-after-edit.
+MAX_LOCATIONS_BACKUPS = 5
+
+
+def _prune_locations_backups(json_file_path=None, keep=MAX_LOCATIONS_BACKUPS):
+    """Keep at most `keep` of the most-recently-modified
+    `locations.json.pre-*.bak` files alongside `json_file_path`. Returns
+    the list of deleted paths (empty when under the cap). Failures
+    swallow themselves so a permissions issue can't break startup."""
+    import glob
+    if json_file_path is None:
+        json_file_path = locations_db.JSON_FILE
+    pattern = f"{json_file_path}.pre-*.bak"
+    try:
+        matches = glob.glob(pattern)
+    except Exception:
+        return []
+    if len(matches) <= keep:
+        return []
+    try:
+        matches.sort(key=lambda p: os.path.getmtime(p))
+    except Exception:
+        # If mtime lookup fails (permissions / race) fall through to
+        # filename sort — the timestamp in the filename gives the right
+        # order as a backstop.
+        matches.sort()
+    victims = matches[:-keep]
+    deleted = []
+    for p in victims:
+        try:
+            os.remove(p)
+            deleted.append(p)
+        except Exception:
+            pass
+    return deleted
+
+
 @app.route('/api/external/search', methods=['GET'])
 def api_external_search():
     """
@@ -900,6 +1086,9 @@ def api_search_inventory():
     # Deployment status filter: '' | 'any' = no filter, 'deployed' = toolhead/ghost only,
     # 'undeployed' = not on a toolhead. Filaments ignore this.
     deployed_state = request.args.get('deployed', '').strip().lower()
+    # Sort axis. Currently filament-only: 'spools_desc' / 'spools_asc'.
+    # Empty / unknown tokens fall through to the default sort path.
+    sort = request.args.get('sort', '').strip().lower()
 
     try:
         results = spoolman_api.search_inventory(
@@ -913,6 +1102,7 @@ def api_search_inventory():
             min_weight=min_weight,
             max_weight=max_weight,
             deployed_state=deployed_state,
+            sort=sort,
         )
         return jsonify({"success": True, "results": results})
     except Exception as e:
@@ -1216,17 +1406,30 @@ def api_get_locations():
     csv_rows = list(local_map.values())
     
     # 1. First Pass: Compute total Room occupancies
+    # Phase 1B (Location Manager redesign): resolve_parent prefers the
+    # explicit `parent_id` written by the Phase-1A migration over the
+    # legacy `loc.split('-')[0]` prefix trick. Behavior is identical for
+    # rows whose parent_id matches the prefix (the migration default),
+    # but a PM/PJ box that's been explicitly re-parented to a real room
+    # via parent_id will now correctly contribute to that room's count
+    # — pre-Phase-1B it was silently dropped on the PM/PJ exclusion.
     for loc, count in occupancy_map.items():
-        if loc and "-" in loc:
-            parent = loc.split("-")[0]
-            # Verify prefix is valid (not TST, PM, PJ, etc)
-            if parent not in ["TST", "TEST", "PM", "PJ"]:
-                room_occupancy[parent] = room_occupancy.get(parent, 0) + count
+        if not loc:
+            continue
+        row = local_map.get(loc)
+        parent = locations_db.resolve_parent(row) if row else locations_db.resolve_parent(loc)
+        if parent:
+            # Skip pseudo-prefixes the prefix-derivation can produce.
+            # Once Phase 5 retires prefix parsing this exclusion becomes
+            # unnecessary (a real parent_id is always a real row).
+            if parent in ["TST", "TEST", "PM", "PJ"]:
+                continue
+            room_occupancy[parent] = room_occupancy.get(parent, 0) + count
         else:
-            # It's floating in a parent directly
-            if loc:
-                room_occupancy[loc] = room_occupancy.get(loc, 0) + count
-                room_floating[loc] = room_floating.get(loc, 0) + count
+            # No parent (top-level room/printer row, or unparented).
+            # Floating-in-parent count is the row contributing to itself.
+            room_occupancy[loc] = room_occupancy.get(loc, 0) + count
+            room_floating[loc] = room_floating.get(loc, 0) + count
 
     # 2. Inject Virtual Rooms/Printers if they don't exist
     #
@@ -1919,6 +2122,13 @@ def api_identify_scan():
                 )
                 if not already_verified:
                     extra['needs_label_print'] = False
+                    # L17 — a physical FIL: label exists on a swatch, so
+                    # the sample must have been printed too. Confirm both
+                    # in a pair so users don't have to maintain
+                    # sample_printed separately. The Activity Log line
+                    # already advertised "Label & Sample Verified"; the
+                    # code now matches the message.
+                    extra['sample_printed'] = True
                     if spoolman_api.update_filament(fid, {'extra': extra}):
                         state.add_log_entry(f"✔️ Filament #{fid} Label & Sample Verified", "SUCCESS", "00ff00")
                     else:
@@ -2949,6 +3159,14 @@ def api_fb_recovery_spools():
                     return jsonify({"success": True, "spools": snapshots[error_id]})
         except Exception:
             pass
+        # L347 — snapshot store is bounded at MAX_FB_ERROR_SNAPSHOTS via
+        # _evict_old_fb_snapshots(); an older error_id may have been
+        # evicted. Falling through here returns the LIVE spool state at
+        # the requested printer instead of the at-error snapshot. For
+        # most recovery flows the live state is what the user actually
+        # wants anyway; the snapshot was just a "what was on the
+        # toolhead at the moment FilaBridge errored" reference. Missing
+        # snapshot is NOT an error — only a missing printer_name is.
     
     cfg = config_loader.load_config()
     printer_map = cfg.get("printer_map", {})
@@ -3919,6 +4137,9 @@ def api_get_logs_route():
                                         with open(snap_path, 'r', encoding='utf-8') as f:
                                             snapshots = json.load(f)
                                     snapshots[err_id] = spools
+                                    # L347 — bound the snapshot store; see
+                                    # _evict_old_fb_snapshots above for rationale.
+                                    snapshots = _evict_old_fb_snapshots(snapshots)
                                     os.makedirs(os.path.dirname(snap_path), exist_ok=True)
                                     with open(snap_path, 'w', encoding='utf-8') as f:
                                         json.dump(snapshots, f)
@@ -4223,4 +4444,15 @@ if __name__ == '__main__':
     # server on edits. Defaults to off so the TrueNAS prod image keeps
     # its current behavior (one long-lived process, no reload churn).
     _dev = str(os.environ.get('FCC_DEV', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    # ALSO opt into Jinja2 template auto-reload in dev — without this,
+    # `use_reloader=True` only re-execs the Python process on .py edits;
+    # template (.html) edits stay cached by Jinja2 for the lifetime of the
+    # process and a server restart is required to see them. With debug=False
+    # (which we keep so the interactive debugger never ships to prod) Flask
+    # otherwise defaults to "don't auto-reload templates," which is the
+    # production-safe default. 2026-05-28 — Derek caught L21's sort dropdown
+    # not appearing in /search because the container had cached the pre-L21
+    # template through a 3-day uptime; this prevents that footgun.
+    if _dev:
+        app.config['TEMPLATES_AUTO_RELOAD'] = True
     app.run(host='0.0.0.0', port=8000, use_reloader=_dev, debug=False)

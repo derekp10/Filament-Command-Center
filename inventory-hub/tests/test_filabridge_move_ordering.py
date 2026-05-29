@@ -349,3 +349,132 @@ def test_move_to_same_toolhead_does_not_double_unmap():
     assert _call_spool_id(post_calls[0]) == 240
 
     assert result["filabridge_ok"] is True
+
+
+def _fb_status_with_mapping(printer_name, toolhead_id, spool_id):
+    """Build a fake filabridge `/status` response payload that reports
+    `spool_id` mapped to (printer_name, toolhead_id). Used by L204
+    tests where _fb_spool_location needs to find the spool's toolhead
+    via the filabridge status endpoint."""
+    return {
+        "toolhead_mappings": {
+            printer_name: {
+                str(toolhead_id): {
+                    "printer_name": printer_name,
+                    "spool_id": spool_id,
+                }
+            }
+        }
+    }
+
+
+def test_l204_dryer_move_unmaps_filabridge_when_spool_was_on_toolhead():
+    """L204 — moving a ghost-deployed spool back to its dryerbox must
+    also unmap filabridge for the toolhead that was holding it.
+    Pre-fix the DRYER MOVE branch wrote Spoolman cleanly but never
+    touched filabridge, leaving the toolhead pinned to a spool that
+    Spoolman had already moved away. Repro: filabridge reports the
+    spool on XL-3; perform_smart_move to PM-DB-1 must POST an unmap
+    for XL-3 before / during the move."""
+    printer_map = {
+        "XL-3": {"printer_name": "XL", "position": 3},
+    }
+    loc_list = [
+        {"LocationID": "XL-3", "Type": "Tool Head", "Max Spools": "1"},
+        {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "4",
+         "extra": {"slot_targets": {"1": "XL-3"}}},
+    ]
+    spool_240 = {"id": 240, "location": "XL-3",
+                 "extra": {"physical_source": "PM-DB-1", "physical_source_slot": "1"}}
+
+    def fake_update(sid, data):
+        return {"id": sid, **data}
+
+    fb_status_resp = MagicMock(ok=True)
+    fb_status_resp.json.return_value = _fb_status_with_mapping("XL", 3, 240)
+
+    ctx = [
+        patch.object(logic.config_loader, "load_config",
+                     return_value={"printer_map": printer_map}),
+        patch.object(logic.config_loader, "get_api_urls",
+                     return_value=("http://spoolman", "http://filabridge")),
+        patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
+        patch.object(logic.spoolman_api, "get_spool", return_value=spool_240),
+        patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
+        patch.object(logic.spoolman_api, "format_spool_display",
+                     return_value={"text": "#240", "color": "ff0000"}),
+        patch.object(logic.spoolman_api, "update_spool", side_effect=fake_update),
+        patch.object(logic.requests, "post", return_value=MagicMock(ok=True)),
+        patch.object(logic.requests, "get", return_value=fb_status_resp),
+    ]
+    for m in ctx:
+        m.start()
+    try:
+        logic.perform_smart_move("PM-DB-1", [240], target_slot="1", origin="test")
+        post_calls = list(logic.requests.post.call_args_list)
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+
+    # The dryer-move branch must unmap XL-3 (where filabridge reports
+    # the spool) before / during the move. Auto-deploy chains to XL-3
+    # again, so we also expect a final map(XL-3, 240) — but the critical
+    # assertion is that the unmap is present at all.
+    unmap_calls = [c for c in post_calls if _call_spool_id(c) == 0]
+    unmapped_targets = [_call_toolhead(c) for c in unmap_calls]
+    assert ("XL", 3) in unmapped_targets, (
+        f"expected unmap(XL-3) in fb POSTs, got: "
+        f"{[(_call_toolhead(c), _call_spool_id(c)) for c in post_calls]!r}"
+    )
+
+
+def test_l204_eject_falls_back_to_filabridge_lookup_when_spoolman_lags():
+    """L204 — perform_smart_eject must unmap filabridge even when the
+    spool's Spoolman location isn't in printer_map (e.g. the location
+    field still reads as the dryerbox because the DRYER MOVE branch
+    didn't unmap previously, or the user manually edited Spoolman).
+    Without the fix the user ejects the visible spool, Spoolman clears
+    cleanly, but filabridge stays pinned and the toolhead reads occupied."""
+    printer_map = {
+        "XL-3": {"printer_name": "XL", "position": 3},
+    }
+    spool_240 = {"id": 240, "location": "PM-DB-1",
+                 "extra": {"container_slot": "1"}}
+
+    def fake_update(sid, data):
+        return True
+
+    fb_status_resp = MagicMock(ok=True)
+    fb_status_resp.json.return_value = _fb_status_with_mapping("XL", 3, 240)
+
+    ctx = [
+        patch.object(logic.config_loader, "load_config",
+                     return_value={"printer_map": printer_map}),
+        patch.object(logic.config_loader, "get_api_urls",
+                     return_value=("http://spoolman", "http://filabridge")),
+        patch.object(logic.spoolman_api, "get_spool", return_value=spool_240),
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
+        patch.object(logic.spoolman_api, "format_spool_display",
+                     return_value={"text": "#240", "color": "ff0000"}),
+        patch.object(logic.spoolman_api, "update_spool", side_effect=fake_update),
+        patch.object(logic.requests, "post", return_value=MagicMock(ok=True)),
+        patch.object(logic.requests, "get", return_value=fb_status_resp),
+    ]
+    for m in ctx:
+        m.start()
+    try:
+        logic.perform_smart_eject(240, confirmed_unassign=True)
+        post_calls = list(logic.requests.post.call_args_list)
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+
+    # The eject must POST an unmap to filabridge for XL-3, picked up
+    # via the _fb_spool_location fallback even though Spoolman says PM-DB-1.
+    unmaps = [c for c in post_calls
+              if _call_spool_id(c) == 0 and _call_toolhead(c) == ("XL", 3)]
+    assert len(unmaps) >= 1, (
+        f"expected at least one unmap(XL-3), got fb POSTs: "
+        f"{[(_call_toolhead(c), _call_spool_id(c)) for c in post_calls]!r}"
+    )

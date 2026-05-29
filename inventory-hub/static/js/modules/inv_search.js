@@ -31,6 +31,11 @@ const SearchEngine = {
             const deployedSel = document.getElementById('global-search-deployed');
             if (deployedSel) deployedSel.addEventListener('change', () => this.debounceTrigger());
 
+            // Sort axis (select) — re-run search on change. Filament-only
+            // sort tokens are silently ignored when target_type=spool.
+            const sortSel = document.getElementById('global-search-sort');
+            if (sortSel) sortSel.addEventListener('change', () => this.debounceTrigger());
+
             // Color picker sets the hex field implicitly
             const picker = document.getElementById('global-search-color-picker');
             const hexInput = document.getElementById('global-search-color-hex');
@@ -66,6 +71,7 @@ const SearchEngine = {
                     const mxw = document.getElementById('global-search-max-weight');
                     const s = document.getElementById('global-search-in-stock');
                     const dep = document.getElementById('global-search-deployed');
+                    const srt = document.getElementById('global-search-sort');
 
                     if (q) q.value = '';
                     if (h) h.value = '';
@@ -75,6 +81,7 @@ const SearchEngine = {
                     if (mxw) mxw.value = '';
                     if (s) s.checked = true;
                     if (dep) dep.value = '';
+                    if (srt) srt.value = '';
 
                     this.debounceTrigger();
                 });
@@ -202,11 +209,14 @@ const SearchEngine = {
         // Deployment filter. Empty string = no filter (default).
         const deployedEl = document.getElementById('global-search-deployed');
         const deployed = deployedEl ? deployedEl.value : '';
+        // Sort axis. Empty string = backend default (color-distance / id desc).
+        const sortEl = document.getElementById('global-search-sort');
+        const sort = sortEl ? sortEl.value : '';
 
         const resBox = document.getElementById('global-search-results');
 
         // If nothing is typed, don't execute a massive search, just show empty state
-        if (!query && !material && !colorHex && !minWeight && !maxWeight && !deployed) {
+        if (!query && !material && !colorHex && !minWeight && !maxWeight && !deployed && !sort) {
             resBox.innerHTML = `
                 <div class="text-center text-light mt-5">
                     <h1 class="opacity-25 mb-3">💬</h1>
@@ -228,6 +238,7 @@ const SearchEngine = {
                 in_stock: inStock,
                 type: targetType,
                 deployed: deployed,
+                sort: sort,
             });
 
             const response = await fetch(`/api/search?${params.toString()}`);

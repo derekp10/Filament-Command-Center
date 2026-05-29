@@ -614,6 +614,23 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             # [ALEX FIX] Clean up the source slot memory too, since we are home now.
             new_extra.pop('physical_source_slot', None)
 
+            # L204 — unmap filabridge for whichever toolhead currently
+            # holds this spool. Without this, moving a ghost-deployed
+            # spool back to its dryerbox (Quick-Swap Return, scan-into-
+            # box flow, etc.) clears Spoolman cleanly but leaves the
+            # toolhead pinned in filabridge — the dryerbox slot reads
+            # empty in the UI while the printer still thinks the spool
+            # is loaded.
+            fb_origin = _fb_spool_location(int(sid), fb_url)
+            if fb_origin:
+                ok, detail = _fb_write(fb_origin[0], fb_origin[1], 0, fb_url)
+                fb_outcomes.append((ok, detail))
+                if not ok:
+                    state.add_log_entry(
+                        f"⚠️ Filabridge unmap {fb_origin[0]}-{fb_origin[1]} FAILED: {detail}",
+                        "ERROR", "ff4444",
+                    )
+
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 slot_txt = f" [Slot {target_slot}]" if target_slot else ""
                 state.add_log_entry(f"📦 {info['text']} -> Dryer {target}{slot_txt}", "INFO", info['color'])
@@ -638,6 +655,22 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
                 # Mirrors the DRYER MOVE branch's pop() above.
                 new_extra.pop('physical_source', None)
                 new_extra.pop('physical_source_slot', None)
+
+                # L204 — moving to a non-toolhead non-dryer destination
+                # (Room / Cart / Shelf / UNASSIGNED) also needs to unmap
+                # filabridge if the spool was previously toolhead-loaded;
+                # only fires in the non-toolhead branch because the
+                # toolhead branch above is its own destination and is
+                # handled by the PRINTER MOVE block earlier.
+                fb_origin = _fb_spool_location(int(sid), fb_url)
+                if fb_origin:
+                    ok, detail = _fb_write(fb_origin[0], fb_origin[1], 0, fb_url)
+                    fb_outcomes.append((ok, detail))
+                    if not ok:
+                        state.add_log_entry(
+                            f"⚠️ Filabridge unmap {fb_origin[0]}-{fb_origin[1]} FAILED: {detail}",
+                            "ERROR", "ff4444",
+                        )
 
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
@@ -786,7 +819,26 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         ok, detail = _fb_write(p['printer_name'], p['position'], 0, fb_url)
         if not ok:
             state.add_log_entry(f"⚠️ Filabridge unmap {p['printer_name']}-{p['position']} FAILED: {detail}", "ERROR", "ff4444")
-    
+    else:
+        # L204 — Spoolman location can lag behind filabridge: a spool
+        # whose Spoolman row says "in dryerbox slot 2" can still be
+        # mapped on a toolhead from an earlier auto-deploy that wasn't
+        # subsequently cleared (e.g. when the spool was moved out via
+        # the DRYER/GENERIC MOVE branches that don't unmap filabridge,
+        # or after a manual Spoolman edit). Probe filabridge directly
+        # and unmap there too — without this, ejecting such a spool
+        # clears Spoolman cleanly but leaves filabridge pinned to the
+        # now-gone spool, and the toolhead reads as occupied until
+        # somebody runs the reconcile tool.
+        fb_origin = _fb_spool_location(spool_id, fb_url)
+        if fb_origin:
+            ok, detail = _fb_write(fb_origin[0], fb_origin[1], 0, fb_url)
+            if not ok:
+                state.add_log_entry(
+                    f"⚠️ Filabridge unmap {fb_origin[0]}-{fb_origin[1]} FAILED: {detail}",
+                    "ERROR", "ff4444",
+                )
+
     # Save the original slot before we wipe it for processing
     orig_container_slot = extra.get('container_slot', '')
     
@@ -918,6 +970,18 @@ def perform_force_unassign(spool_id, confirm_active_print=False):
         ok, detail = _fb_write(p['printer_name'], p['position'], 0, fb_url)
         if not ok:
             state.add_log_entry(f"⚠️ Filabridge unmap {p['printer_name']}-{p['position']} FAILED: {detail}", "ERROR", "ff4444")
+    else:
+        # L204 — see perform_smart_eject above for the rationale.
+        # Force-unassign should always leave filabridge in a clean state,
+        # regardless of whether Spoolman currently agrees with it.
+        fb_origin = _fb_spool_location(spool_id, fb_url)
+        if fb_origin:
+            ok, detail = _fb_write(fb_origin[0], fb_origin[1], 0, fb_url)
+            if not ok:
+                state.add_log_entry(
+                    f"⚠️ Filabridge unmap {fb_origin[0]}-{fb_origin[1]} FAILED: {detail}",
+                    "ERROR", "ff4444",
+                )
 
     # [ALEX FIX] Explicitly overwrite slots and sources with empty strings
     # to guarantee Spoolman API removes them instead of ignoring dropped keys

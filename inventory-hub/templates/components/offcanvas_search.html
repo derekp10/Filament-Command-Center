@@ -82,6 +82,16 @@
                     <option value="undeployed">📦 Not deployed</option>
                 </select>
 
+                <!-- Sort axis. Filament-only sorts are silently ignored by
+                     the backend when target_type=spool. -->
+                <select id="global-search-sort"
+                    class="form-select form-select-sm bg-dark text-white border-secondary"
+                    title="Sort results">
+                    <option value="">Default sort</option>
+                    <option value="spools_desc">🧵 Most spools (filaments)</option>
+                    <option value="spools_asc">🧵 Fewest spools (filaments)</option>
+                </select>
+
                 <div class="form-check form-switch ms-auto">
                     <input class="form-check-input" type="checkbox" role="switch" id="global-search-in-stock" checked>
                     <label class="form-check-label small text-info" for="global-search-in-stock">In Stock</label>
