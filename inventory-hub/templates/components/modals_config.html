@@ -79,7 +79,7 @@
                         <button class="btn btn-sm btn-info fw-bold"
                                 id="btn-config-restore-field-order"
                                 onclick="window.configRestoreFieldOrder && window.configRestoreFieldOrder()">
-                            ▶ Run restore
+                            👀 Preview changes
                         </button>
                     </div>
                     <div class="card-body">
@@ -89,13 +89,22 @@
                             edits, and Spoolman's own UI shows them in mutation order.
                             This writes FCC's <code>FIELD_ORDER</code> canonical index
                             back to each field so Spoolman renders extras in the same
-                            sequence as the wizard / details modal. Idempotent — fields
-                            already in position skip the round-trip; unknown keys (not
-                            in <code>FIELD_ORDER</code>) pass through untouched.
+                            sequence as the wizard / details modal.
+                        </p>
+                        <p class="small mb-2" style="color: rgba(255,255,255,0.78);">
+                            <b>Safety:</b> Preview is a dry-run — it shows the exact
+                            list of moves without writing anything. Only the
+                            <b>Apply</b> button on the preview commits changes. Each
+                            write echoes Spoolman's full field definition (name,
+                            type, choices, etc.) back to it, so the only property
+                            that ever changes is <code>order</code>. Idempotent —
+                            fields already in position skip the round-trip; keys
+                            not in FCC's <code>FIELD_ORDER</code> pass through
+                            untouched.
                         </p>
                         <div id="config-restore-field-order-results">
                             <div class="small" style="color: rgba(255,255,255,0.6);">
-                                Click <b>Run restore</b> to start.
+                                Click <b>Preview changes</b> to start.
                             </div>
                         </div>
                     </div>

@@ -630,16 +630,29 @@ def api_spoolman_restore_field_order():
     POST body must carry the full ExtraFieldParameters payload (name,
     field_type, choices, etc.) — sending only `order` would clobber
     the other properties to their defaults. We GET the current field
-    def, splice in the canonical order index, and POST it back. Fields
-    not in FIELD_ORDER fall through unchanged (no `order` value sent
-    means Spoolman keeps whatever it already had).
+    def, splice in the canonical order index, and POST it back, ALWAYS
+    echoing every property the GET returned so nothing else changes.
 
     Idempotent: re-running just writes the same order values; no
     side effects on the actual filament / spool data.
+
+    Query param `dry_run` (default: false) — when `true`/`1`/`yes`,
+    the endpoint reports what WOULD change without writing back to
+    Spoolman. The UI uses this to preview before committing. The
+    `changes` list per entity carries `{key, from_order, to_order}`
+    so the user sees exactly which fields move and by how much.
+    Derek 2026-05-28: previously tried setting field order once and
+    "it got overwritten" — the dry-run preview lets the user verify
+    the plan before pressing Apply.
     """
     sm_url, _ = config_loader.get_api_urls()
-    summary = {"filament": {"updated": 0, "skipped": 0, "errors": []},
-               "spool":    {"updated": 0, "skipped": 0, "errors": []}}
+    dry_run = (request.args.get('dry_run') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+    summary = {
+        "filament": {"updated": 0, "would_update": 0, "skipped": 0,
+                     "changes": [], "errors": []},
+        "spool":    {"updated": 0, "would_update": 0, "skipped": 0,
+                     "changes": [], "errors": []},
+    }
 
     for entity_type in ("filament", "spool"):
         order_list = FIELD_ORDER.get(entity_type, [])
@@ -659,13 +672,25 @@ def api_spoolman_restore_field_order():
                 summary[entity_type]["skipped"] += 1
                 continue
             new_order = order_list.index(key)
-            if int(fld.get("order") or 0) == new_order:
+            current_order = int(fld.get("order") or 0)
+            if current_order == new_order:
                 # Already in the right slot — skip the round-trip.
                 summary[entity_type]["skipped"] += 1
+                continue
+            summary[entity_type]["changes"].append({
+                "key": key,
+                "name": fld.get("name", key),
+                "from_order": current_order,
+                "to_order": new_order,
+            })
+            if dry_run:
+                summary[entity_type]["would_update"] += 1
                 continue
             # Build the upsert payload — preserve every other ExtraFieldParameters
             # property the GET returned. Spoolman POST clobbers omitted fields
             # to schema defaults (e.g. choices→null), so we MUST echo them back.
+            # Covers the full schema: name, field_type (required), unit,
+            # default_value, choices, multi_choice (nullable).
             payload = {
                 "name": fld.get("name", key),
                 "field_type": fld.get("field_type", "text"),
@@ -689,13 +714,23 @@ def api_spoolman_restore_field_order():
                 summary[entity_type]["errors"].append(f"{key}: {e}")
 
     total_updated = sum(s["updated"] for s in summary.values())
+    total_would = sum(s["would_update"] for s in summary.values())
     total_errors = sum(len(s["errors"]) for s in summary.values())
-    if total_updated or total_errors:
+    if dry_run:
+        state.add_log_entry(
+            f"🔢 Field-order dry-run — {total_would} field(s) would move, {total_errors} error(s)",
+            "INFO", "00d4ff",
+        )
+    elif total_updated or total_errors:
         state.add_log_entry(
             f"🔢 Restored Spoolman field order — {total_updated} updated, {total_errors} error(s)",
             "INFO", "00d4ff",
         )
-    return jsonify({"success": total_errors == 0, "summary": summary})
+    return jsonify({
+        "success": total_errors == 0,
+        "dry_run": dry_run,
+        "summary": summary,
+    })
 
 
 @app.route('/api/external/fields/add_choice', methods=['POST'])

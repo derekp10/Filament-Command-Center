@@ -392,49 +392,133 @@ console.log("🚀 Loaded Module: CONFIG");
     };
 
     // --- RESTORE SPOOLMAN FIELD ORDER (L318) ---
+    // Preview-then-apply flow. The Preview button hits the endpoint with
+    // ?dry_run=true so the user sees the exact list of moves before any
+    // write to Spoolman happens. Apply only fires after the user clicks
+    // the second button. Derek 2026-05-28 explicitly wanted assurance
+    // that this can't lose field data; the dry-run is the safety net.
+
+    const _renderRestoreSummary = (d, mode) => {
+        const sum = d.summary || { filament: {}, spool: {} };
+        const renderEntityRow = (label, s) => {
+            const errors = Array.isArray(s.errors) ? s.errors : [];
+            const moved = mode === 'apply' ? (s.updated || 0) : (s.would_update || 0);
+            const movedLabel = mode === 'apply' ? 'updated' : 'will move';
+            const errHtml = errors.length
+                ? `<ul class="small mb-0 mt-1" style="color:#ff8a8a;">${errors.map(e => `<li>${_esc(e)}</li>`).join('')}</ul>`
+                : '';
+            // Per-field change table — what's actually going to move, by name.
+            const changes = Array.isArray(s.changes) ? s.changes : [];
+            const changesHtml = changes.length
+                ? `
+                    <div class="small mt-1" style="color: rgba(255,255,255,0.85);">
+                        <table class="table table-dark table-sm table-bordered mb-0" style="font-size:0.82rem;">
+                            <thead>
+                                <tr>
+                                    <th>Field</th>
+                                    <th style="width:5rem;">From</th>
+                                    <th style="width:5rem;">To</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${changes.map(c => `
+                                    <tr>
+                                        <td>${_esc(c.name || c.key)} <span class="text-secondary">(<code>${_esc(c.key)}</code>)</span></td>
+                                        <td><span class="badge bg-secondary">${c.from_order}</span></td>
+                                        <td><span class="badge bg-info text-dark">${c.to_order}</span></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>`
+                : '';
+            return `
+                <li class="mb-2">
+                    <b>${_esc(label)}:</b>
+                    ${moved} ${movedLabel} · ${s.skipped || 0} skipped · ${errors.length} error(s)
+                    ${errHtml}
+                    ${changesHtml}
+                </li>`;
+        };
+        const movedTotal = mode === 'apply'
+            ? ((sum.filament.updated || 0) + (sum.spool.updated || 0))
+            : ((sum.filament.would_update || 0) + (sum.spool.would_update || 0));
+        const alertClass = d.success
+            ? (movedTotal > 0 ? (mode === 'apply' ? 'alert-success' : 'alert-warning') : 'alert-info')
+            : 'alert-danger';
+        let headline;
+        if (!d.success) {
+            headline = '⚠️ Errors encountered — see details below';
+        } else if (movedTotal === 0) {
+            headline = 'ℹ️ Already in canonical order — nothing to do';
+        } else if (mode === 'apply') {
+            headline = `✅ Restored — ${movedTotal} field(s) updated`;
+        } else {
+            headline = `👀 Preview — ${movedTotal} field(s) will move`;
+        }
+        const applyBtn = (mode === 'preview' && d.success && movedTotal > 0)
+            ? `<div class="mt-2 d-flex gap-2">
+                    <button class="btn btn-sm btn-warning fw-bold"
+                            onclick="window.configRestoreFieldOrderApply()">
+                        ✅ Apply ${movedTotal} change${movedTotal === 1 ? '' : 's'}
+                    </button>
+                    <button class="btn btn-sm btn-outline-light"
+                            onclick="window.configRestoreFieldOrderReset()">
+                        Cancel
+                    </button>
+               </div>`
+            : '';
+        return `
+            <div class="alert ${alertClass} py-2 mb-0">
+                <div class="fw-bold mb-1">${headline}</div>
+                <ul class="small mb-0 ps-3">
+                    ${renderEntityRow('Filament fields', sum.filament || {})}
+                    ${renderEntityRow('Spool fields', sum.spool || {})}
+                </ul>
+                ${applyBtn}
+            </div>`;
+    };
+
     window.configRestoreFieldOrder = async () => {
+        // Default click = PREVIEW (dry_run). Apply is a separate explicit
+        // action after the user reviews the proposed changes.
         const host = document.getElementById('config-restore-field-order-results');
         const btn = document.getElementById('btn-config-restore-field-order');
         if (!host) return;
-        host.innerHTML = `<div class="text-info small"><span class="spinner-border spinner-border-sm me-2"></span>Restoring field order…</div>`;
+        host.innerHTML = `<div class="text-info small"><span class="spinner-border spinner-border-sm me-2"></span>Loading preview…</div>`;
         if (btn) btn.disabled = true;
         try {
-            const r = await fetch('/api/spoolman/restore_field_order', { method: 'POST' });
+            const r = await fetch('/api/spoolman/restore_field_order?dry_run=true',
+                                  { method: 'POST' });
             const d = await r.json();
-            const sum = d.summary || { filament: {}, spool: {} };
-            const renderEntity = (label, s) => {
-                const errors = Array.isArray(s.errors) ? s.errors : [];
-                const errHtml = errors.length
-                    ? `<ul class="small mb-0 mt-1" style="color:#ff8a8a;">${errors.map(e => `<li>${_esc(e)}</li>`).join('')}</ul>`
-                    : '';
-                return `
-                    <li>
-                        <b>${_esc(label)}:</b>
-                        ${s.updated || 0} updated · ${s.skipped || 0} skipped · ${errors.length} error(s)
-                        ${errHtml}
-                    </li>`;
-            };
-            const totalUpdated = (sum.filament.updated || 0) + (sum.spool.updated || 0);
-            const alertClass = d.success
-                ? (totalUpdated > 0 ? 'alert-success' : 'alert-info')
-                : 'alert-warning';
-            const headline = d.success
-                ? (totalUpdated > 0
-                    ? '✅ Restore complete'
-                    : 'ℹ️ Already in canonical order — no writes needed')
-                : '⚠️ Restore finished with errors';
-            host.innerHTML = `
-                <div class="alert ${alertClass} py-2 mb-0">
-                    <div class="fw-bold mb-1">${headline}</div>
-                    <ul class="small mb-0">
-                        ${renderEntity('Filament fields', sum.filament || {})}
-                        ${renderEntity('Spool fields', sum.spool || {})}
-                    </ul>
-                </div>`;
+            host.innerHTML = _renderRestoreSummary(d, 'preview');
         } catch (e) {
-            host.innerHTML = `<div class="alert alert-danger py-2 mb-0">Restore failed: ${_esc(e.message || e)}</div>`;
+            host.innerHTML = `<div class="alert alert-danger py-2 mb-0">Preview failed: ${_esc(e.message || e)}</div>`;
         } finally {
             if (btn) btn.disabled = false;
+        }
+    };
+
+    window.configRestoreFieldOrderApply = async () => {
+        const host = document.getElementById('config-restore-field-order-results');
+        if (!host) return;
+        host.innerHTML = `<div class="text-info small"><span class="spinner-border spinner-border-sm me-2"></span>Applying changes to Spoolman…</div>`;
+        try {
+            const r = await fetch('/api/spoolman/restore_field_order',
+                                  { method: 'POST' });
+            const d = await r.json();
+            host.innerHTML = _renderRestoreSummary(d, 'apply');
+        } catch (e) {
+            host.innerHTML = `<div class="alert alert-danger py-2 mb-0">Apply failed: ${_esc(e.message || e)}</div>`;
+        }
+    };
+
+    window.configRestoreFieldOrderReset = () => {
+        const host = document.getElementById('config-restore-field-order-results');
+        if (host) {
+            host.innerHTML = `<div class="small" style="color: rgba(255,255,255,0.6);">
+                Click <b>Preview changes</b> to start.
+            </div>`;
         }
     };
 

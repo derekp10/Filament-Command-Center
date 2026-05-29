@@ -181,3 +181,116 @@ def test_restore_field_order_surfaces_spoolman_errors():
     assert len(errs) == 1
     assert "slicer_profile" in errs[0]
     assert "400" in errs[0]
+
+
+# L318 safety — dry-run preview. Derek 2026-05-28: previously tried
+# setting field order once and "it got overwritten." The dry-run mode
+# lets the user preview the exact list of moves before committing.
+
+def test_restore_field_order_dry_run_does_not_post(monkeypatch):
+    """With ?dry_run=true the endpoint must NOT POST anything to
+    Spoolman — it just reports what WOULD move. This is the safety
+    net the UI uses to preview before the user presses Apply."""
+    fil_fields = [
+        {"key": "slicer_profile", "name": "Slicer Profile",
+         "field_type": "choice", "choices": ["A"], "order": 0},  # canonical 2
+        {"key": "shore_hardness", "name": "Shore Hardness",
+         "field_type": "choice", "choices": ["95A"], "order": 0},  # canonical 1
+    ]
+
+    def fake_get(url, timeout=10):
+        if "/field/filament" in url:
+            return _fake_field_response(fil_fields)
+        if "/field/spool" in url:
+            return _fake_field_response([])
+        return MagicMock(ok=False, status_code=404)
+
+    with patch("app.config_loader.get_api_urls",
+               return_value=("http://spoolman", "http://fb")), \
+         patch("app.requests.get", side_effect=fake_get), \
+         patch("app.requests.post") as mock_post:
+        client = _make_app()
+        res = client.post('/api/spoolman/restore_field_order?dry_run=true')
+
+    data = res.get_json()
+    # No writes happened — the dry-run guarantee.
+    mock_post.assert_not_called()
+    assert data['dry_run'] is True
+    assert data['success'] is True
+    assert data['summary']['filament']['updated'] == 0
+    assert data['summary']['filament']['would_update'] == 2
+    # Caller can render the per-field plan; assert the expected shape.
+    changes = data['summary']['filament']['changes']
+    by_key = {c['key']: c for c in changes}
+    assert by_key['slicer_profile']['from_order'] == 0
+    assert by_key['slicer_profile']['to_order'] == 2
+    assert by_key['shore_hardness']['from_order'] == 0
+    assert by_key['shore_hardness']['to_order'] == 1
+
+
+def test_restore_field_order_apply_after_dry_run_writes_same_set(monkeypatch):
+    """The same dataset run with dry_run=false must POST exactly the
+    set of changes the dry-run reported. This is the contract the
+    "preview → apply" UI flow relies on: what the user sees in the
+    preview is what gets written."""
+    fil_fields = [
+        {"key": "slicer_profile", "name": "Slicer Profile",
+         "field_type": "choice", "choices": ["A"], "order": 0},
+    ]
+
+    def fake_get(url, timeout=10):
+        if "/field/filament" in url:
+            return _fake_field_response(fil_fields)
+        if "/field/spool" in url:
+            return _fake_field_response([])
+        return MagicMock(ok=False, status_code=404)
+
+    post_keys = []
+    def fake_post(url, json=None, timeout=10):
+        # Capture {entity}/{key} substring.
+        post_keys.append(url.split('/field/')[-1])
+        m = MagicMock()
+        m.ok = True
+        return m
+
+    with patch("app.config_loader.get_api_urls",
+               return_value=("http://spoolman", "http://fb")), \
+         patch("app.requests.get", side_effect=fake_get), \
+         patch("app.requests.post", side_effect=fake_post):
+        client = _make_app()
+        # Default (no dry_run param) writes for real.
+        res = client.post('/api/spoolman/restore_field_order')
+
+    data = res.get_json()
+    assert data['dry_run'] is False
+    assert data['summary']['filament']['updated'] == 1
+    assert post_keys == ['filament/slicer_profile']
+
+
+def test_restore_field_order_dry_run_with_no_drift_reports_zero():
+    """A canonical-order Spoolman shouldn't pretend changes are
+    pending — the preview must show 0 would_update so the UI can
+    short-circuit to "already in order, nothing to do.\""""
+    fil_fields = [
+        {"key": "filament_attributes", "name": "Attributes",
+         "field_type": "choice", "choices": ["M"], "order": 0},  # canonical 0
+    ]
+
+    def fake_get(url, timeout=10):
+        if "/field/filament" in url:
+            return _fake_field_response(fil_fields)
+        if "/field/spool" in url:
+            return _fake_field_response([])
+        return MagicMock(ok=False, status_code=404)
+
+    with patch("app.config_loader.get_api_urls",
+               return_value=("http://spoolman", "http://fb")), \
+         patch("app.requests.get", side_effect=fake_get), \
+         patch("app.requests.post") as mock_post:
+        client = _make_app()
+        res = client.post('/api/spoolman/restore_field_order?dry_run=1')
+
+    data = res.get_json()
+    mock_post.assert_not_called()
+    assert data['summary']['filament']['would_update'] == 0
+    assert data['summary']['filament']['changes'] == []
