@@ -1117,21 +1117,26 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
 };
 
 // Inline confirm overlay for "you're moving onto a printer that's actively
-// printing." Avoids nested Swal per project convention; mounts into the
-// manage modal body so it stacks correctly above the manage modal backdrop.
+// printing." Avoids nested Swal per project convention.
+//
+// L122 follow-up 2026-05-25: migrated from hand-rolled createElement +
+// appendChild + document keydown listener to window.mountOverlay(). The
+// previous implementation could end up blocked/hidden behind certain
+// modal stacks (the buglist L122 symptom: "confirm change modal is
+// being blocked, canceled, or hidden") and was the prime suspect for
+// the L361 PRINTING-state test flakes that intercepted toolhead-tile
+// clicks while a print was active. mountOverlay's tier='confirm' sits
+// above any Bootstrap modal and the host=manageModal binding cleans
+// the overlay when the user dismisses the Location Manager.
 const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {} }) => {
-    const host = document.getElementById('manageModal') || document.body;
-    // Reuse a single overlay per page — tear down prior one if present.
-    let ov = document.getElementById('fcc-active-print-confirm-overlay');
-    if (ov) ov.remove();
-    ov = document.createElement('div');
-    ov.id = 'fcc-active-print-confirm-overlay';
-    ov.style.cssText = 'position:fixed; inset:0; z-index:20000; background:rgba(0,0,0,0.8); display:flex; align-items:center; justify-content:center;';
-    ov.innerHTML = `
+    const escapeHtml = (s) => String(s || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const content = `
         <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:460px; text-align:center;">
-            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${stateInfo.printer_name} is ${stateInfo.state}</div>
+            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${escapeHtml(stateInfo.printer_name)} is ${escapeHtml(stateInfo.state)}</div>
             <div style="color:#ffc; margin-bottom:14px;">
-                Reassigning a spool to <b>${loc}</b> during an active print will disrupt the print and may leave filabridge/Spoolman in a stale state. Continue anyway?
+                Reassigning a spool to <b>${escapeHtml(loc)}</b> during an active print will disrupt the print and may leave filabridge/Spoolman in a stale state. Continue anyway?
             </div>
             <div style="display:flex; gap:10px; justify-content:center;">
                 <button id="fcc-apc-yes" class="btn btn-warning btn-sm" style="min-width:120px;">Continue Anyway</button>
@@ -1139,41 +1144,41 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
             </div>
         </div>
     `;
-    host.appendChild(ov);
-    // Mount the QR-confirm pair inside the dialog box (under the buttons).
-    // qrSession.cleanup() unregisters the scan callbacks AND removes the
-    // QR row from the DOM — must run on every dialog dismissal so a late
-    // scan can't re-fire after the user already clicked.
-    const dialogBox = ov.querySelector('div');
+    let handle = null;
     let qrSession = null;
     const cleanup = () => {
-        try { ov.remove(); } catch (_) { /* noop */ }
-        document.removeEventListener('keydown', keyHandler, true);
+        if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
         if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
     };
     // After user confirms, call _doAssignFinalize with confirmActivePrint=true
     // so the backend's safety check doesn't re-prompt. Without this flag,
     // the backend would see the POST has no confirm and return requires_confirm,
     // creating an infinite loop.
-    const proceed = () => { cleanup(); setProcessing(true); _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true, options); };
-    // Keyboard contract: Enter activates whichever button is focused.
-    // Continue is focused by default → Enter accepts. Tab to Cancel + Enter
-    // → cancels. Escape always cancels regardless of focus.
-    //
-    // We explicitly route Enter to the focused button (not relying on the
-    // browser's native <button> Enter activation) because: (1) the document
-    // capture-phase keydown handler runs first and the user-tested behavior
-    // was inconsistent across barcode-scanner setups, and (2) being explicit
-    // means the test harness can simulate it reliably.
-    //
-    // Tradeoff: a barcode scanner emitting Enter as a suffix while this
-    // dialog is open will activate the focused button (Continue by default).
-    // The QR-CONFIRM/CANCEL pair routed via window.routeConfirmScan is the
-    // safer path for scan-driven flows.
+    const proceed = () => {
+        cleanup();
+        setProcessing(true);
+        _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true, options);
+    };
+    handle = window.mountOverlay({
+        id: 'fcc-active-print-confirm-overlay',
+        content,
+        tier: 'confirm',
+        host: document.getElementById('manageModal'),
+        initialFocus: '#fcc-apc-yes',
+        onEscape: cleanup,
+    });
+    const ov = handle.element;
+    const yesBtn = ov.querySelector('#fcc-apc-yes');
+    const noBtn = ov.querySelector('#fcc-apc-no');
+    if (yesBtn) yesBtn.onclick = proceed;
+    if (noBtn) noBtn.onclick = cleanup;
+    // Keyboard contract (mirrors _confirmActivePrintScan in inv_cmd.js):
+    // Enter activates the focused button (Yes/No); Tab cycles between
+    // them; Escape always cancels (owned by mountOverlay's onEscape).
+    // Route Enter explicitly because the document capture-phase handler
+    // runs first and the native button activation was inconsistent
+    // across barcode-scanner setups.
     const keyHandler = (e) => {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
-        const yesBtn = document.getElementById('fcc-apc-yes');
-        const noBtn = document.getElementById('fcc-apc-no');
         if (e.key === 'Enter') {
             const active = document.activeElement;
             if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
@@ -1181,11 +1186,6 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
             return;
         }
         if (e.key === 'Tab') {
-            // Focus trap: Tab should cycle between our two buttons only,
-            // never escape to the page behind the overlay (which let the
-            // user tab all the way out to the browser chrome). Shift+Tab
-            // reverses. If focus is somewhere OUTSIDE the overlay when
-            // Tab is pressed (e.g. a background element), pull it back in.
             const focusables = [yesBtn, noBtn].filter(Boolean);
             if (focusables.length === 0) return;
             const active = document.activeElement;
@@ -1204,13 +1204,10 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
             }
         }
     };
-    document.getElementById('fcc-apc-no').onclick = cleanup;
-    document.getElementById('fcc-apc-yes').onclick = proceed;
-    document.addEventListener('keydown', keyHandler, true);
-    document.getElementById('fcc-apc-yes').focus();
-    if (window.attachConfirmQRs && dialogBox) {
+    ov.addEventListener('keydown', keyHandler, true);
+    if (window.attachConfirmQRs && ov) {
         qrSession = window.attachConfirmQRs({
-            host: dialogBox,
+            host: ov,
             onConfirm: proceed,
             onCancel: cleanup,
             theme: 'warning',

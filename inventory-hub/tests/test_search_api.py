@@ -159,5 +159,66 @@ def test_api_endpoint(client):
             empty=False,
             target_type="filament",
             min_weight="",
+            max_weight="",
             deployed_state="",
+            sort="",
         )
+
+
+@patch('spoolman_api.requests.get')
+def test_search_filaments_sort_by_spool_count(mock_get):
+    """L21 — filament results can be sorted by spool count (most or
+    fewest available). The endpoint already populates `spools_count`
+    on every filament result by counting matching spools; the sort
+    just orders by it. Spool-side results ignore the sort token."""
+    mock_filaments = [
+        {"id": 1, "name": "Alpha", "material": "PLA", "color_hex": "111111",
+         "vendor": {"name": "Acme"}, "extra": {}},
+        {"id": 2, "name": "Beta",  "material": "PLA", "color_hex": "222222",
+         "vendor": {"name": "Acme"}, "extra": {}},
+        {"id": 3, "name": "Gamma", "material": "PLA", "color_hex": "333333",
+         "vendor": {"name": "Acme"}, "extra": {}},
+    ]
+    # Spool list: filament 2 has 3 spools, filament 3 has 1, filament 1 has 0.
+    mock_spools = [
+        {"id": 10, "remaining_weight": 100, "filament": {"id": 2, "vendor": {}}},
+        {"id": 11, "remaining_weight": 200, "filament": {"id": 2, "vendor": {}}},
+        {"id": 12, "remaining_weight": 300, "filament": {"id": 2, "vendor": {}}},
+        {"id": 13, "remaining_weight": 50,  "filament": {"id": 3, "vendor": {}}},
+    ]
+
+    def _fake_get(url, timeout=10):
+        resp = MagicMock()
+        resp.ok = True
+        if 'filament' in url:
+            resp.json.return_value = mock_filaments
+        else:
+            resp.json.return_value = mock_spools
+        return resp
+    mock_get.side_effect = _fake_get
+
+    desc = spoolman_api.search_inventory(target_type="filament", sort="spools_desc")
+    assert [r['id'] for r in desc] == [2, 3, 1]
+    assert desc[0]['spools_count'] == 3
+    assert desc[1]['spools_count'] == 1
+    assert desc[2]['spools_count'] == 0
+
+    asc = spoolman_api.search_inventory(target_type="filament", sort="spools_asc")
+    assert [r['id'] for r in asc] == [1, 3, 2]
+
+
+@patch('spoolman_api.requests.get')
+def test_search_unknown_sort_falls_through(mock_get):
+    """Garbage sort tokens are ignored — results fall back to default
+    ordering (id desc) so the endpoint never errors on bad input."""
+    mock_response = MagicMock()
+    mock_response.ok = True
+    mock_response.json.return_value = MOCK_FILAMENTS
+    mock_get.return_value = mock_response
+
+    results = spoolman_api.search_inventory(
+        target_type="filament", sort="bogus_axis"
+    )
+    # MOCK_FILAMENTS has one entry; default sort returns it unchanged.
+    assert len(results) == 1
+    assert results[0]['id'] == 99
