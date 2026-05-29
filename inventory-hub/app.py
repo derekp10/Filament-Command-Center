@@ -1990,6 +1990,147 @@ def api_manage_contents():
         ))
     return jsonify({"success": False})
 
+def _pm_norm(v):
+    """Normalize a stored temp/URL value (a native number, or a possibly
+    JSON-wrapped extra string) to a comparable trimmed string; '' if blank."""
+    if v is None:
+        return ''
+    return str(v).strip().strip('"').strip()
+
+
+def _handle_prusament_url_scan(res):
+    """Prusament spool-QR scan (feature/scan-match-pipeline).
+
+    Fetch the spool page via the Prusament parser, then:
+      - MATCH an existing spool by its stored extra.product_url (the URL saved
+        at import time) -> backfill the PARENT FILAMENT's *blank* temps
+        (nozzle/bed min+max) silently. For temps that are present but DIFFER
+        from the scan, surface an update suggestion ONLY when the filament has
+        no unarchived spools (else quiet-log — don't interrupt active use).
+        Also fills blank per-spool Prusament metadata. -> type 'prusament_matched'.
+      - NO MATCH -> hand the parsed object back so the UI can pre-fill the Add
+        wizard (Stage 3). -> type 'prusament_new'.
+
+    Filament writes go through update_filament_or_raise with a PARTIAL extra —
+    update_filament merges against the live record, so siblings survive.
+    """
+    spool_id = res.get('spool_id')
+    url = res.get('url', '')
+
+    parsed = external_parsers.search_external('prusament', url) or []
+    if not parsed:
+        state.add_log_entry(
+            f"⚠️ Couldn't read Prusament spool {spool_id} — check the URL / connection",
+            "WARNING", "ffaa00",
+        )
+        return jsonify({"type": "prusament_url", "status": "fetch_failed", "spool_id": spool_id})
+    obj = parsed[0]
+    obj_extra = obj.get('extra') or {}
+
+    # --- Match an existing spool by its stored Prusament URL (per-spool) ---
+    needle = f"/spool/{spool_id}/"
+    matched = None
+    for s in spoolman_api.get_all_spools(allow_archived=True):
+        pu = _pm_norm((s.get('extra') or {}).get('product_url'))
+        if pu and needle in pu:
+            matched = s
+            break
+
+    if not matched:
+        state.add_log_entry(
+            f"🆕 Prusament spool {spool_id} isn't in inventory yet — ready to onboard",
+            "INFO", "00ccff",
+        )
+        return jsonify({"type": "prusament_new", "spool_id": spool_id, "parsed": obj})
+
+    sid = matched.get('id')
+    fid = (matched.get('filament') or {}).get('id')
+    # Re-fetch the filament fresh — the spool's embedded copy can be stale.
+    fil = spoolman_api.get_filament(fid) or (matched.get('filament') or {})
+    fil_extra = fil.get('extra') or {}
+
+    # field -> (current on filament, scanned from parser, is_native_field)
+    temp_fields = {
+        'settings_extruder_temp': (fil.get('settings_extruder_temp'), obj.get('settings_extruder_temp'), True),
+        'settings_bed_temp':      (fil.get('settings_bed_temp'),      obj.get('settings_bed_temp'),      True),
+        'nozzle_temp_max':        (fil_extra.get('nozzle_temp_max'),  obj_extra.get('nozzle_temp_max'),  False),
+        'bed_temp_max':           (fil_extra.get('bed_temp_max'),     obj_extra.get('bed_temp_max'),     False),
+    }
+    native_fill, extra_fill, conflicts = {}, {}, []
+    for field, (cur, scanned, is_native) in temp_fields.items():
+        sc = _pm_norm(scanned)
+        if not sc:
+            continue  # parser had nothing for this field
+        if not _pm_norm(cur):
+            (native_fill if is_native else extra_fill)[field] = scanned
+        elif _pm_norm(cur) != sc:
+            conflicts.append({"field": field, "current": _pm_norm(cur), "scanned": sc})
+
+    # --- Write the blank-fills (partial extra; update_filament merges) ---
+    filled = []
+    data = dict(native_fill)
+    if extra_fill:
+        dirty, _stripped = spoolman_api.compute_dirty_extras(
+            fil_extra, extra_fill, system_managed=spoolman_api.SYSTEM_MANAGED_EXTRAS,
+        )
+        if dirty:
+            data['extra'] = dirty
+    if data:
+        try:
+            spoolman_api.update_filament_or_raise(fid, data)
+            filled = list(native_fill.keys()) + list((data.get('extra') or {}).keys())
+            state.add_log_entry(
+                f"🌡️ Backfilled {', '.join(filled)} on filament #{fid} from Prusament scan",
+                "SUCCESS", "00ff00",
+            )
+        except spoolman_api.SpoolmanRejection as e:
+            state.add_log_entry(
+                f"❌ Prusament temp backfill failed for filament #{fid}: {e}",
+                "ERROR", "ff4444",
+            )
+            return jsonify({
+                "type": "prusament_matched", "status": "error",
+                "spool_id": sid, "filament_id": fid, "msg": str(e),
+            })
+
+    # --- Best-effort refresh of blank per-spool Prusament metadata ---
+    pm_fill = {}
+    spool_extra = matched.get('extra') or {}
+    for k in ('prusament_manufacturing_date', 'prusament_length_m'):
+        if _pm_norm(obj_extra.get(k)) and not _pm_norm(spool_extra.get(k)):
+            pm_fill[k] = obj_extra.get(k)
+    if pm_fill and not spoolman_api.update_spool(sid, {'extra': pm_fill}):
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+        state.add_log_entry(
+            f"⚠️ Couldn't refresh Prusament metadata on spool #{sid}: {err}",
+            "WARNING", "ffaa00",
+        )
+
+    # --- Differ-suggest gate: only prompt when no unarchived spools remain ---
+    suggest = []
+    if conflicts:
+        siblings = spoolman_api.get_spools_for_filament(fid) or []
+        active = [s for s in siblings if not s.get('archived')]
+        if active:
+            state.add_log_entry(
+                f"ℹ️ Prusament scan: filament #{fid} has differing temps available, but "
+                f"{len(active)} active spool(s) are in use — not prompting",
+                "INFO", "00ccff",
+            )
+        else:
+            suggest = conflicts
+
+    return jsonify({
+        "type": "prusament_matched",
+        "status": "ok",
+        "spool_id": sid,
+        "filament_id": fid,
+        "filament_name": fil.get('name', 'Unknown'),
+        "filled": filled,
+        "conflicts": suggest,  # frontend (2c) shows the suggest-overlay when non-empty
+    })
+
+
 @app.route('/api/identify_scan', methods=['POST'])
 def api_identify_scan():
     text = request.json.get('text', '')
@@ -2148,6 +2289,9 @@ def api_identify_scan():
 
             name = data.get('name', 'Unknown Filament')
             return jsonify({"type": "filament", "id": int(fid), "display": name, "label_already_verified": label_already_verified})
+
+    if res['type'] == 'prusament_url':
+        return _handle_prusament_url_scan(res)
 
     # --- SLOT ASSIGNMENT (Phase 1) ---
     # LOC:X:SLOT:Y scans mean "drop the buffered spool into slot Y of location X".
