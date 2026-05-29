@@ -18,3 +18,7 @@ services:
 
     environment:
       - PYTHONUNBUFFERED=1
+      # Dev-only: activates the app.py L293 block — Werkzeug reloader (.py edits)
+      # + Jinja TEMPLATES_AUTO_RELOAD (.html edits) so changes hot-reload without
+      # a container restart. Prod on TrueNAS does not use this compose file.
+      - FCC_DEV=1
