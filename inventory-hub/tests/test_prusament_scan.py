@@ -184,6 +184,12 @@ def test_prusament_scan_fetch_failure_is_reported(client):
 @pytest.mark.usefixtures("require_server")
 def test_prusament_new_scan_opens_prefilled_add_wizard(page, base_url, reset_dom_state_js):
     url = "https://prusament.com/spool/17705/abc123/"
+    template = {
+        "name": "Prusament PLA Galaxy Black", "material": "PLA",
+        "vendor": {"name": "Prusament"}, "color_name": "Galaxy Black",
+        "color_hex": "1a1a2e", "weight": 1000,
+        "settings_extruder_temp": 215, "settings_bed_temp": 60,
+    }
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
     page.evaluate(reset_dom_state_js)
@@ -195,13 +201,21 @@ def test_prusament_new_scan_opens_prefilled_add_wizard(page, base_url, reset_dom
         status=200, content_type="application/json",
         body=json.dumps({"type": "prusament_new", "spool_id": "17705", "url": url}),
     ))
+    # Exactly one external result -> auto-applied; empty filament list -> the
+    # dup-matcher finds nothing, so it FILLS the form (vs. auto-switch to existing).
     page.route("**/api/external/search**", lambda route: route.fulfill(
         status=200, content_type="application/json",
-        body=json.dumps({"success": True, "results": []}),
+        body=json.dumps({"success": True, "results": [template]}),
     ))
+    page.route("**/api/filaments", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"filaments": []})))
+
     page.evaluate(f"processScan({json.dumps(url)}, 'barcode')")
     expect(page.locator("#wizardModal")).to_be_visible(timeout=6000)
     expect(page.locator("#wiz-search-external")).to_have_value(url, timeout=4000)
+    # The lone result auto-applied -> the form pre-populated (Derek's bug fix).
+    expect(page.locator("#wiz-fil-material")).to_have_value("PLA", timeout=6000)
+    expect(page.locator("#wiz-fil-color_name")).to_have_value("Galaxy Black", timeout=4000)
 
 
 @pytest.mark.usefixtures("require_server")

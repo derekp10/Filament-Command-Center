@@ -637,7 +637,7 @@ const processScan = (text, source = 'keyboard') => {
                         const q = document.getElementById('wiz-search-external');
                         if (q) {
                             q.value = res.url || '';
-                            if (typeof window.wizardSearchExternal === 'function') window.wizardSearchExternal();
+                            if (typeof window.wizardSearchExternal === 'function') window.wizardSearchExternal(true);
                         }
                     });
                 }

@@ -2227,7 +2227,7 @@ window.wizardOpenGlobalSearch = () => {
 };
 
 // --- EXTERNAL DATABASE LOGIC ---
-window.wizardSearchExternal = () => {
+window.wizardSearchExternal = (autoApplyIfSingle = false) => {
     let term = document.getElementById('wiz-search-external').value.trim();
     let source = document.getElementById('wiz-external-source').value;
     const sel = document.getElementById('wiz-external-results');
@@ -2274,6 +2274,14 @@ window.wizardSearchExternal = () => {
                     opt.innerText = `${brand} ${mat} - ${color}${wt}${diam}`;
                     sel.appendChild(opt);
                 });
+                // Auto-apply a lone result (e.g. a scanned/pasted Prusament URL
+                // resolves to exactly one spool) so the form pre-populates without
+                // a manual pick. Opt-in — the legacy "Import from External" button
+                // calls wizardSearchExternal() with no arg, so it's unchanged.
+                if (autoApplyIfSingle && d.results.length === 1 && typeof window.wizardExternalSelected === 'function') {
+                    sel.selectedIndex = 0;
+                    window.wizardExternalSelected();
+                }
             } else {
                 sel.innerHTML = '<option disabled>No external templates found.</option>';
                 document.getElementById('wiz-status-msg').innerText = "Search returned 0 results.";
