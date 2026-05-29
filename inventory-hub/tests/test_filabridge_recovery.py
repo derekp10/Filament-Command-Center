@@ -237,3 +237,81 @@ def test_prune_locations_backups_handles_missing_dir(tmp_path):
     # Don't create the path. glob just returns [].
     deleted = flask_app._prune_locations_backups(str(json_file), keep=5)
     assert deleted == []
+
+
+# L347 robustness — verify the recovery endpoint falls through to live
+# data when the requested error_id has been evicted from the bounded
+# snapshot store. Derek 2026-05-28: "Unless our code actively does
+# something with the error codes we don't have to worry about external."
+
+def test_fb_recovery_spools_evicted_error_id_falls_back_to_live_data(mock_app, tmp_path, monkeypatch):
+    """An error_id that's been evicted from the snapshot cap must NOT
+    cause the endpoint to error — it falls back to the live
+    `get_spools_at_location_detailed` path so the user can still recover.
+    This pins the fallback the L347 cap depends on for graceful aging."""
+    import app as flask_app
+    # Point the snapshot path at a tmp file containing 2 OTHER error_ids.
+    # The one we request ("err_evicted_long_ago") is intentionally absent.
+    snap_path = tmp_path / "filabridge_error_snapshots.json"
+    snap_path.write_text(json.dumps({
+        "err_recent_1": [{"id": 5, "extra": {}}],
+        "err_recent_2": [{"id": 6, "extra": {}}],
+    }))
+    # Patch os.path.dirname(__file__) → tmp_path inside the endpoint via
+    # the join call. Easier: monkeypatch the data path resolution.
+    real_join = os.path.join
+    def fake_join(*parts):
+        # Catch the specific snapshots-file resolution and redirect.
+        if parts and parts[-1] == "filabridge_error_snapshots.json":
+            return str(snap_path)
+        return real_join(*parts)
+    monkeypatch.setattr(flask_app.os.path, "join", fake_join)
+
+    with patch("app.config_loader.load_config") as mock_cfg, \
+         patch("app.spoolman_api.get_spools_at_location_detailed",
+               return_value=[{"id": 999, "extra": {}}]) as mock_live:
+        mock_cfg.return_value = {
+            "printer_map": {"l-1": {"printer_name": "TestPrinter"}}
+        }
+        res = mock_app.get(
+            "/api/fb_recovery_spools"
+            "?printer_name=TestPrinter&error_id=err_evicted_long_ago"
+        )
+
+    assert res.status_code == 200
+    data = res.get_json()
+    # Fall-through path: live spool data, not a snapshot reference.
+    assert data["success"] is True
+    assert len(data["spools"]) == 1
+    assert data["spools"][0]["id"] == 999
+    # The live path was actually exercised — not the cached snapshot.
+    assert mock_live.called
+
+
+def test_fb_recovery_spools_missing_snapshot_file_falls_back_to_live(mock_app, tmp_path, monkeypatch):
+    """If the snapshot file doesn't exist at all (fresh install, pruned,
+    or deleted), the endpoint still recovers via the live path."""
+    import app as flask_app
+    snap_path = tmp_path / "filabridge_error_snapshots.json"
+    # Intentionally don't create the file.
+    real_join = os.path.join
+    def fake_join(*parts):
+        if parts and parts[-1] == "filabridge_error_snapshots.json":
+            return str(snap_path)
+        return real_join(*parts)
+    monkeypatch.setattr(flask_app.os.path, "join", fake_join)
+
+    with patch("app.config_loader.load_config") as mock_cfg, \
+         patch("app.spoolman_api.get_spools_at_location_detailed",
+               return_value=[{"id": 42, "extra": {}}]):
+        mock_cfg.return_value = {
+            "printer_map": {"l-1": {"printer_name": "TestPrinter"}}
+        }
+        res = mock_app.get(
+            "/api/fb_recovery_spools"
+            "?printer_name=TestPrinter&error_id=any_error_id"
+        )
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["success"] is True
+    assert data["spools"][0]["id"] == 42

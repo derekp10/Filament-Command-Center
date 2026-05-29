@@ -3124,6 +3124,14 @@ def api_fb_recovery_spools():
                     return jsonify({"success": True, "spools": snapshots[error_id]})
         except Exception:
             pass
+        # L347 — snapshot store is bounded at MAX_FB_ERROR_SNAPSHOTS via
+        # _evict_old_fb_snapshots(); an older error_id may have been
+        # evicted. Falling through here returns the LIVE spool state at
+        # the requested printer instead of the at-error snapshot. For
+        # most recovery flows the live state is what the user actually
+        # wants anyway; the snapshot was just a "what was on the
+        # toolhead at the moment FilaBridge errored" reference. Missing
+        # snapshot is NOT an error — only a missing printer_name is.
     
     cfg = config_loader.load_config()
     printer_map = cfg.get("printer_map", {})
