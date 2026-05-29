@@ -212,8 +212,10 @@ def test_prusament_new_scan_opens_prefilled_add_wizard(page, base_url, reset_dom
 
     page.evaluate(f"processScan({json.dumps(url)}, 'barcode')")
     expect(page.locator("#wizardModal")).to_be_visible(timeout=6000)
-    expect(page.locator("#wiz-search-external")).to_have_value(url, timeout=4000)
-    # The lone result auto-applied -> the form pre-populated (Derek's bug fix).
+    # Onboarding drives the Step-3 per-spool scan, which fills BOTH halves: the
+    # spool override is captured AND (no filament match here) the filament fields
+    # populate. Asserting the filament fields proves the per-spool scan ran end to
+    # end — its spool-half (row.override) is set first, before the filament match.
     expect(page.locator("#wiz-fil-material")).to_have_value("PLA", timeout=6000)
     expect(page.locator("#wiz-fil-color_name")).to_have_value("Galaxy Black", timeout=4000)
 

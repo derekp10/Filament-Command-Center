@@ -629,15 +629,23 @@ const processScan = (text, source = 'keyboard') => {
                 }
             } else if (res.type === 'prusament_new') {
                 // No existing spool matched — onboard by opening the Add wizard
-                // pre-filled from the scanned URL (reuses the wizard's external
-                // import: set the query, then trigger the search).
+                // and driving the Step-3 per-spool Prusament scan for the first
+                // spool row. That single path fills BOTH halves: it matches (or
+                // creates) the filament AND captures the spool's per-spool data.
+                // (The old Step-2 "Import from External" did only the filament
+                // half, so the spool came up empty whenever the filament already
+                // existed — the bug Derek hit.)
                 showToast('🆕 New Prusament spool — opening the Add wizard to onboard it', 'info', 4500);
                 if (typeof window.openWizardModal === 'function') {
                     Promise.resolve(window.openWizardModal()).then(() => {
-                        const q = document.getElementById('wiz-search-external');
-                        if (q) {
-                            q.value = res.url || '';
-                            if (typeof window.wizardSearchExternal === 'function') window.wizardSearchExternal(true);
+                        const rowEl = document.querySelector('[data-spool-row-idx]');
+                        if (rowEl && typeof window.wizardScanSpoolRow === 'function') {
+                            const idx = parseInt(rowEl.getAttribute('data-spool-row-idx'), 10) || 0;
+                            window.wizardScanSpoolRow(idx, res.url || '');
+                        } else if (typeof window.wizardSearchExternal === 'function') {
+                            // Fallback (older markup): filament-half only.
+                            const q = document.getElementById('wiz-search-external');
+                            if (q) { q.value = res.url || ''; window.wizardSearchExternal(true); }
                         }
                     });
                 }
