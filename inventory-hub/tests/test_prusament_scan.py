@@ -141,6 +141,12 @@ def test_prusament_scan_differing_temps_suggested_when_no_active_spools(client):
     assert "nozzle_temp_max" in fields           # 225 -> 230
     assert "settings_bed_temp" not in fields     # 60 == 60
     assert "bed_temp_max" not in fields          # 65 == 65
+    # Each conflict carries the native flag + a friendly label for the overlay.
+    by_field = {c["field"]: c for c in res["conflicts"]}
+    assert by_field["settings_extruder_temp"]["native"] is True
+    assert by_field["nozzle_temp_max"]["native"] is False
+    assert by_field["settings_extruder_temp"]["label"] == "Nozzle (min)"
+    assert by_field["nozzle_temp_max"]["label"] == "Nozzle (max)"
 
 
 def test_prusament_scan_differing_temps_suppressed_when_active_spool(client):
@@ -196,3 +202,44 @@ def test_prusament_new_scan_opens_prefilled_add_wizard(page, base_url, reset_dom
     page.evaluate(f"processScan({json.dumps(url)}, 'barcode')")
     expect(page.locator("#wizardModal")).to_be_visible(timeout=6000)
     expect(page.locator("#wiz-search-external")).to_have_value(url, timeout=4000)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_prusament_matched_scan_overlay_updates_conflicting_temps(page, base_url, reset_dom_state_js):
+    url = "https://prusament.com/spool/17705/abc/"
+    matched_resp = {
+        "type": "prusament_matched", "status": "ok", "spool_id": 42, "filament_id": 7,
+        "filament_name": "Prusament PLA Galaxy Black", "filled": ["settings_bed_temp"],
+        "conflicts": [
+            {"field": "settings_extruder_temp", "label": "Nozzle (min)", "current": "210", "scanned": "215", "native": True},
+            {"field": "nozzle_temp_max", "label": "Nozzle (max)", "current": "225", "scanned": "230", "native": False},
+        ],
+    }
+    page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_function(
+        "typeof processScan === 'function' && typeof window.mountOverlay === 'function'",
+        timeout=10000,
+    )
+    page.route("**/api/identify_scan", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(matched_resp)))
+    captured = {}
+
+    def _capture(route):
+        captured["body"] = route.request.post_data
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"success": True}))
+
+    page.route("**/api/update_filament", _capture)
+
+    page.evaluate(f"processScan({json.dumps(url)}, 'barcode')")
+    overlay = page.locator("#fcc-prusament-matched-overlay")
+    expect(overlay).to_be_visible(timeout=6000)
+    expect(overlay).to_contain_text("current spec differs")
+    overlay.locator("#pm-update-temps").click()
+    expect(overlay).to_be_hidden(timeout=6000)
+
+    body = json.loads(captured["body"])
+    assert body["id"] == 7
+    assert body["data"]["settings_extruder_temp"] == 215        # native -> number
+    assert body["data"]["extra"]["nozzle_temp_max"] == "230"    # extra -> string

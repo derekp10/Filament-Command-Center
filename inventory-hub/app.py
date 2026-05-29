@@ -1998,6 +1998,14 @@ def _pm_norm(v):
     return str(v).strip().strip('"').strip()
 
 
+_PM_TEMP_LABELS = {
+    'settings_extruder_temp': 'Nozzle (min)',
+    'nozzle_temp_max': 'Nozzle (max)',
+    'settings_bed_temp': 'Bed (min)',
+    'bed_temp_max': 'Bed (max)',
+}
+
+
 def _handle_prusament_url_scan(res):
     """Prusament spool-QR scan (feature/scan-match-pipeline).
 
@@ -2069,7 +2077,10 @@ def _handle_prusament_url_scan(res):
         if not _pm_norm(cur):
             (native_fill if is_native else extra_fill)[field] = scanned
         elif _pm_norm(cur) != sc:
-            conflicts.append({"field": field, "current": _pm_norm(cur), "scanned": sc})
+            conflicts.append({
+                "field": field, "label": _PM_TEMP_LABELS.get(field, field),
+                "current": _pm_norm(cur), "scanned": sc, "native": is_native,
+            })
 
     # --- Write the blank-fills (partial extra; update_filament merges) ---
     filled = []

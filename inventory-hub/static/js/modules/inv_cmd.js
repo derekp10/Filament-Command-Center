@@ -328,6 +328,107 @@ window.updateAuditVisuals = () => {
     };
 })();
 
+// --- Prusament matched-scan overlay (Stage 2c) -----------------------------
+// Shown after a Prusament QR matches an existing spool: summarizes the blank
+// temps the backend backfilled, lets the user accept Prusament's CURRENT spec
+// for any temps that DIFFER (writes them via /api/update_filament), and offers
+// to queue the spool's label. Built on mountOverlay per project convention
+// (z-index / focus-guard / escape are handled there).
+window.promptPrusamentMatched = (res) => {
+    if (typeof window.mountOverlay !== 'function') {
+        showToast(`✅ Matched ${res.filament_name || 'filament'}`, 'success', 4000);
+        return;
+    }
+    const sid = res.spool_id, fid = res.filament_id;
+    const name = res.filament_name || 'filament';
+    const filled = res.filled || [];
+    const conflicts = res.conflicts || [];
+    const LABELS = {
+        settings_extruder_temp: 'Nozzle (min)', nozzle_temp_max: 'Nozzle (max)',
+        settings_bed_temp: 'Bed (min)', bed_temp_max: 'Bed (max)',
+    };
+    const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    const filledHtml = filled.length
+        ? `<div class="text-success small mb-2">🌡️ Backfilled: ${filled.map(f => esc(LABELS[f] || f)).join(', ')}</div>`
+        : `<div class="text-muted small mb-2">Temps already current — nothing to backfill.</div>`;
+
+    const conflictHtml = conflicts.length ? `
+        <div class="border border-warning rounded p-2 mb-2" style="background:#2a2a2a;">
+            <div class="text-warning small mb-1">⚠️ Prusament's current spec differs from your saved temps:</div>
+            ${conflicts.map(c => `
+                <div class="d-flex justify-content-between small text-light">
+                    <span>${esc(c.label || LABELS[c.field] || c.field)}</span>
+                    <span><span style="color:#adb5bd;">${esc(c.current)}°C</span> &rarr; <span class="text-info fw-bold">${esc(c.scanned)}°C</span></span>
+                </div>`).join('')}
+            <button id="pm-update-temps" class="btn btn-sm btn-warning w-100 mt-2">Update to Prusament's spec</button>
+        </div>` : '';
+
+    const content = `
+        <div class="p-3" style="max-width:420px; background:#1e1e1e; color:#fff; border:1px solid #444; border-radius:8px;">
+            <h6 class="text-info mb-1">🎯 Matched Prusament spool</h6>
+            <div class="mb-2"><strong>${esc(name)}</strong> <span class="text-muted">— Spool #${esc(sid)}</span></div>
+            ${filledHtml}
+            ${conflictHtml}
+            <div class="d-flex gap-2 mt-2">
+                <button id="pm-queue-label" class="btn btn-sm btn-outline-info flex-fill">🏷️ Queue label</button>
+                <button id="pm-done" class="btn btn-sm btn-secondary flex-fill">Done</button>
+            </div>
+        </div>`;
+
+    const handle = window.mountOverlay({
+        id: 'fcc-prusament-matched-overlay',
+        content,
+        tier: 'standard',
+        backdrop: true,
+        initialFocus: '#pm-done',
+        onEscape: () => { try { handle.cleanup(); } catch (_) { /* noop */ } },
+    });
+    const ov = handle.element;
+    const close = () => { try { handle.cleanup(); } catch (_) { /* noop */ } };
+
+    const doneBtn = ov.querySelector('#pm-done');
+    if (doneBtn) doneBtn.onclick = close;
+
+    const queueBtn = ov.querySelector('#pm-queue-label');
+    if (queueBtn) queueBtn.onclick = () => {
+        if (typeof window.addToQueueWithToast === 'function') {
+            window.addToQueueWithToast({ id: sid, type: 'spool', display: name });
+        }
+        close();
+    };
+
+    const updateBtn = ov.querySelector('#pm-update-temps');
+    if (updateBtn) updateBtn.onclick = () => {
+        const data = { extra: {} };
+        conflicts.forEach(c => {
+            if (c.native) data[c.field] = Number(c.scanned);
+            else data.extra[c.field] = String(c.scanned);
+        });
+        if (!Object.keys(data.extra).length) delete data.extra;
+        updateBtn.disabled = true;
+        updateBtn.textContent = 'Updating…';
+        fetch('/api/update_filament', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: fid, data }),
+        }).then(r => r.json()).then(d => {
+            if (d && d.success) {
+                showToast(`🌡️ Updated ${conflicts.length} temp(s) on ${name} to Prusament's spec`, 'success', 4000);
+                close();
+            } else {
+                showToast((d && d.msg) || 'Temp update rejected', 'error', 7000);
+                updateBtn.disabled = false;
+                updateBtn.textContent = "Update to Prusament's spec";
+            }
+        }).catch(() => {
+            showToast('Temp update failed (network)', 'error', 7000);
+            updateBtn.disabled = false;
+            updateBtn.textContent = "Update to Prusament's spec";
+        });
+    };
+};
+
 // --- SCAN ROUTER ---
 const processScan = (text, source = 'keyboard') => {
     const upper = text.toUpperCase();
@@ -516,25 +617,15 @@ const processScan = (text, source = 'keyboard') => {
                 // to Activity Log only; no per-scan toast.
                 openFilamentDetails(res.id);
             } else if (res.type === 'prusament_matched') {
-                // Backend matched the scanned Prusament spool to an existing
-                // record and silently backfilled any BLANK nozzle/bed temps.
+                // Matched an existing spool: the backend already backfilled blank
+                // temps. The overlay summarizes that, resolves any differing-temp
+                // conflicts (Update to Prusament's spec), and offers queue-label.
                 if (res.status === 'error') {
                     showToast(res.msg || 'Prusament temp backfill failed', 'error', 7000);
-                } else if (res.filled && res.filled.length) {
-                    showToast(`🌡️ Backfilled ${res.filled.length} temp(s) on ${res.filament_name || 'filament'} from Prusament`, 'success', 4000);
+                } else if (typeof window.promptPrusamentMatched === 'function') {
+                    window.promptPrusamentMatched(res);
                 } else {
-                    showToast(`✅ Matched ${res.filament_name || 'filament'} — temps already current`, 'info', 4000);
-                }
-                // Temps that DIFFER from the scan (Prusa changed the spec) — the
-                // backend only surfaces these when no active spools are in use.
-                // The full per-field conflict overlay + queue-label are Stage 2c
-                // polish; until then, warn so the suggestion isn't lost.
-                if (res.conflicts && res.conflicts.length) {
-                    if (typeof window.promptPrusamentTempConflict === 'function') {
-                        window.promptPrusamentTempConflict(res);
-                    } else {
-                        showToast(`ℹ️ ${res.conflicts.length} temp(s) differ from Prusament's current spec — review on ${res.filament_name || 'the filament'}`, 'warning', 7000);
-                    }
+                    showToast(`✅ Matched ${res.filament_name || 'filament'}`, 'success', 4000);
                 }
             } else if (res.type === 'prusament_new') {
                 // No existing spool matched — onboard by opening the Add wizard
