@@ -25,6 +25,7 @@
 | 16 | 🧰 Testing Hardening & Helper Consolidation | 4 | ~3–4 hrs | `DONE` 2026-05-12 | [16-testing-hardening.md](tasks/16-testing-hardening.md) |
 | 17 | 🪟 Details Modal, Queue & Wizard End-State Polish | 5 | ~3–4 hrs | `DONE` 2026-05-14/15 (all 5 items shipped on `feature/buglist-sweep-2026-05-14`; 17.1 edit-toggle side completed 2026-05-15 by un-hiding `needs_label_print` from the wizard's hide list) | [17-details-queue-wizard-polish.md](tasks/17-details-queue-wizard-polish.md) |
 | 18 | 📍 Unknown Location + Audit Mode Refinement | 2 | ~4–6 hrs | `DONE` 2026-05-15/16 (18.1 Unknown bucket + 18.2 Part A auto-park + Part B visual panel + idle watchdog all shipped on `feature/buglist-sweep-2026-05-14`; parent/child rollup deferred as future enhancement on top of the multi-location audit) | [18-unknown-location-audit.md](tasks/18-unknown-location-audit.md) |
+| 19 | 🧪 Dev-Env Reset & E2E Test-Debt Triage | 5 | ~4–6 hrs | `READY` 2026-05-31 | [19-dev-env-reset-test-debt.md](tasks/19-dev-env-reset-test-debt.md) |
 
 ## Items NOT Grouped (Solo, Deferred, or On Hold)
 
@@ -32,6 +33,8 @@ These items remain in `Feature-Buglist.md` but aren't part of a batch session:
 
 | Item | Reason |
 |------|--------|
+| **NEW** Filament-attribute add broken in wizard (buglist 2026-05-30) | No `+` button to add a new attribute in the add/edit wizard; the attribute modal lingers too long / ignores Escape; Escape on a toast should dismiss it; the Config-modal path works but is "clunky." **Config-attribute portion feeds L18 (Config system) — captured in the L18 design notes.** Touches the wizard, `inv_config.js`, and the toast layer. |
+| **NEW** Weight-remaining rounding error (buglist 2026-05-30) | Remaining-weight display is off by ≥1 g on BOTH the Spool Display modal and the add/remove wizard. Standalone bugfix on the weight compute path (`weight_utils.js` / `<WeightEntry>`). |
 | `locations.json` corruption recurring (L25) | `PARTIAL` 2026-05-12 — Hardening (1) per-call unique temp filename + (2) verify-after-write tripwire shipped on `feature/locations-json-write-hardening`. Monitor prod hub.log for `verify-after-write FAILED` critical lines. (3) explicit truncate + (4) Docker named volume deferred pending recurrence signal. |
 | Screen blanking / wake lock (L17) | ON HOLD — OS-level issue |
 | Config system design (L18) | NEEDS DESIGN SESSION for full schema. Config UI scaffold now shipped 2026-05-16 as the host for Filabridge reconcile + Build Info cards — adding future sections is just dropping another `.card` into `modals_config.html`. Full schema design (key/label/type/default/validation, import/export, hierarchy) still pending. |
