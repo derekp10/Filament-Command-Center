@@ -319,6 +319,8 @@ const openFilamentDetails = (fid, silent = false) => {
                 } else {
                     fdSampleEl.innerHTML = '<span class="badge bg-dark border border-secondary text-muted">unknown</span>';
                 }
+                // Stash the tri-state so the ✏️ editor opens on the current value.
+                fdSampleEl.dataset.value = sampleTruthy ? 'true' : (sampleFalsy ? 'false' : '');
             }
             const fdLabelEl = document.getElementById('fil-detail-label-status');
             if (fdLabelEl) {
@@ -745,6 +747,137 @@ window.promptEditSlicerProfile = (filamentId, currentProfile) => {
                     });
             });
         });
+};
+
+// L17 — inline editor for the filament's "Swatch Printed" (sample_printed)
+// status. Mirrors promptEditSlicerProfile: a Swal targeted at the filament
+// modal, a sibling-preserving extras merge, then POST /api/update_filament.
+// The scan pipeline only ever SETS sample_printed=true (on a FIL: label
+// confirm, app.py); this Details-modal toggle is the only surface that can
+// set it to false or clear it to "unknown" independently of a scan.
+window.promptEditSampleStatus = (filamentId, currentValue) => {
+    const cur = currentValue || '';
+    const opts = [
+        { id: 'true',  label: '✅ Yes — swatch printed' },
+        { id: 'false', label: 'No — not printed' },
+        { id: '',      label: '❔ Unknown / clear' },
+    ];
+    // Custom dark-themed list — NOT Swal's input:'radio', whose .swal2-radio
+    // widget paints a white pill, leaving our white popup text white-on-white.
+    // Mirrors promptEditSlicerProfile's theme-correct selection list.
+    const listHtml = opts.map(o => `
+        <div class="swal-sample-item p-2 border-bottom border-dark text-light"
+             data-id="${o.id}"
+             style="cursor:pointer; transition:0.2s; ${o.id === cur ? 'background:#444;' : 'background:transparent;'}">
+            ${o.label}
+        </div>
+    `).join('');
+
+    let docKeyHandler = null;  // document-level arrow-nav handler; removed on close
+
+    Swal.fire({
+        target: document.getElementById('filamentModal') || document.body,
+        title: '🎨 Swatch Printed?',
+        html: `
+            <div class="text-start">
+                <input type="hidden" id="swal-sample-value" value="${cur}">
+                <div id="swal-sample-list" class="border border-secondary rounded" style="background:#111;">
+                    ${listHtml}
+                </div>
+            </div>
+        `,
+        heightAuto: false,  // don't reflow <body> — was shifting the dashboard QR deck down
+        showCancelButton: true,
+        confirmButtonText: 'Save',
+        confirmButtonColor: '#0dcaf0',
+        background: '#1e1e1e',
+        color: '#fff',
+        allowEscapeKey: true,
+        allowOutsideClick: false,
+        didOpen: () => {
+            const popup = Swal.getPopup();
+            const hidden = popup.querySelector('#swal-sample-value');
+            const list = popup.querySelector('#swal-sample-list');
+            const items = list ? Array.from(list.querySelectorAll('.swal-sample-item')) : [];
+            let idx = Math.max(0, items.findIndex(el => el.dataset.id === cur));
+            const paint = () => {
+                items.forEach((el, i) => { el.style.background = (i === idx) ? '#444' : 'transparent'; });
+                if (items[idx]) hidden.value = items[idx].dataset.id;
+            };
+            paint();
+            items.forEach((el, i) => el.addEventListener('click', () => { idx = i; paint(); }));
+            // Keyboard nav (CLAUDE.md idiom): ↑/↓ move the highlight; Enter saves and
+            // Escape cancels via Swal's own handlers. Listen on document, not the
+            // popup — Swal parks focus outside our list, so a popup-scoped listener
+            // never receives the keydown. Removed in didClose.
+            docKeyHandler = (e) => {
+                if (!items.length) return;
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    // Capture phase + stopImmediatePropagation so we beat Swal's own
+                    // keydown handler, which otherwise moves focus between the
+                    // confirm/cancel buttons and swallows the event before it bubbles.
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    idx = (idx + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+                    paint();
+                }
+            };
+            document.addEventListener('keydown', docKeyHandler, true);
+        },
+        didClose: () => {
+            if (docKeyHandler) document.removeEventListener('keydown', docKeyHandler, true);
+        },
+        preConfirm: () => {
+            const popup = Swal.getPopup();
+            return popup.querySelector('#swal-sample-value')?.value ?? '';
+        },
+    }).then(result => {
+        if (!result.isConfirmed) return;
+        const choice = result.value;                  // 'true' | 'false' | ''
+        if (choice === (currentValue || '')) return;  // unchanged → no-op
+
+        fetch(`/api/filaments/${filamentId}`)
+            .then(r => r.json())
+            .then(res => {
+                const filament = res && res.data ? res.data : null;
+                const merged = { ...((filament && filament.extra) || {}) };
+                // Send a raw JS boolean — spoolman_api.update_filament normalizes
+                // bools to the stored "true"/"false" form, matching the
+                // label-confirm write path. Deleting the key clears it to the
+                // "unknown" tri-state.
+                if (choice === 'true') merged.sample_printed = true;
+                else if (choice === 'false') merged.sample_printed = false;
+                else delete merged.sample_printed;
+                return fetch('/api/update_filament', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: filamentId, data: { extra: merged } }),
+                }).then(r => r.json());
+            })
+            .then(saveRes => {
+                if (!saveRes || !saveRes.success) {
+                    Swal.fire({
+                        target: document.getElementById('filamentModal') || document.body,
+                        icon: 'error',
+                        title: 'Save failed',
+                        text: (saveRes && saveRes.msg) || 'Spoolman rejected the update',
+                        background: '#1e1e1e', color: '#fff',
+                    });
+                    return;
+                }
+                if (typeof showToast === 'function') showToast('Swatch status updated', 'success', 4000);
+                openFilamentDetails(filamentId, true);
+            })
+            .catch(err => {
+                Swal.fire({
+                    target: document.getElementById('filamentModal') || document.body,
+                    icon: 'error',
+                    title: 'Save failed',
+                    text: (err && err.message) || 'Network error',
+                    background: '#1e1e1e', color: '#fff',
+                });
+            });
+    });
 };
 
 // --- MANUAL LOCATION OVERRIDE ---
