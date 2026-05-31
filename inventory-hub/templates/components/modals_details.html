@@ -122,7 +122,10 @@
                         </p>
                         <p class="mb-1 d-flex align-items-center">
                             <strong class="me-1">🎨 Swatch Printed:</strong>
-                            <span id="fil-detail-sample-status"></span>
+                            <span id="fil-detail-sample-status" class="me-1"></span>
+                            <button class="btn btn-sm btn-outline-secondary py-0 px-1 border-0"
+                                onclick="promptEditSampleStatus(document.getElementById('fil-detail-id').innerText, document.getElementById('fil-detail-sample-status').dataset.value || '')"
+                                title="Edit Swatch Printed status">✏️</button>
                         </p>
                         <p class="mb-1 d-flex align-items-center">
                             <strong class="me-1">🏷️ Label Confirmed:</strong>

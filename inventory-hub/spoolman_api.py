@@ -85,6 +85,22 @@ def get_spool(sid):
     try: return parse_inbound_data(requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3).json())
     except: return None
 
+
+def get_all_spools(allow_archived=True):
+    """Return every spool (optionally including archived) as parsed dicts.
+    Backs the Prusament-scan matcher, which finds a spool by its stored
+    extra.product_url. Best-effort: returns [] on any failure."""
+    sm_url, _ = config_loader.get_api_urls()
+    q = "?allow_archived=true" if allow_archived else ""
+    try:
+        r = requests.get(f"{sm_url}/api/v1/spool{q}", timeout=5)
+        if not r.ok:
+            return []
+        return parse_inbound_data(r.json())
+    except Exception as e:
+        state.logger.error(f"get_all_spools failed: {e}")
+        return []
+
 def get_all_locations():
     """Fetches all locations from Spoolman."""
     sm_url, _ = config_loader.get_api_urls()

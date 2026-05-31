@@ -296,6 +296,15 @@ def resolve_scan(text):
         if clean_id.isdigit(): return {'type': 'filament', 'id': int(clean_id)}
         return {'type': 'error', 'msg': 'Invalid Filament ID Format'}
 
+    # 5.5 — Prusament spool QR. The physical Prusament spool label encodes a
+    # https://prusament.com/spool/<id>/<hash>/ URL. Recognize it BEFORE the
+    # generic URL branch below (which would otherwise dead-end on "Unknown/
+    # Invalid Link") so the scan pipeline can backfill temps onto the matching
+    # existing filament or onboard a brand-new spool. Match key is numeric <id>.
+    pm = re.search(r'prusament\.com/spool/(\d+)', text, re.IGNORECASE)
+    if pm:
+        return {'type': 'prusament_url', 'url': text, 'spool_id': pm.group(1)}
+
     # 6. LEGACY / URL PARSING
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
         m = re.search(r'range=(\d+)', decoded, re.IGNORECASE)
