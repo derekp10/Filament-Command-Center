@@ -641,6 +641,11 @@ const processScan = (text, source = 'keyboard') => {
                         const rowEl = document.querySelector('[data-spool-row-idx]');
                         if (rowEl && typeof window.wizardScanSpoolRow === 'function') {
                             const idx = parseInt(rowEl.getAttribute('data-spool-row-idx'), 10) || 0;
+                            // Show the URL in the row's field too — the badge-only
+                            // render doesn't refresh the input — so the user can see
+                            // and copy it. wizardScanSpoolRow still takes it by arg.
+                            const urlInput = rowEl.querySelector("input[type='url']");
+                            if (urlInput) urlInput.value = res.url || '';
                             window.wizardScanSpoolRow(idx, res.url || '');
                         } else if (typeof window.wizardSearchExternal === 'function') {
                             // Fallback (older markup): filament-half only.

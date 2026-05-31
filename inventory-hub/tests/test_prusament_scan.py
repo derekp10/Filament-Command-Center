@@ -218,6 +218,8 @@ def test_prusament_new_scan_opens_prefilled_add_wizard(page, base_url, reset_dom
     # end — its spool-half (row.override) is set first, before the filament match.
     expect(page.locator("#wiz-fil-material")).to_have_value("PLA", timeout=6000)
     expect(page.locator("#wiz-fil-color_name")).to_have_value("Galaxy Black", timeout=4000)
+    # The scanned URL is shown in the spool row's field (visible + copyable).
+    expect(page.locator("[data-spool-row-idx] input[type='url']").first).to_have_value(url, timeout=4000)
 
 
 @pytest.mark.usefixtures("require_server")
