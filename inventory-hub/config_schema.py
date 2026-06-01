@@ -19,6 +19,7 @@ docs/agent_docs/tasks/L18-config-system-design.md for the phased plan.
                  (e.g. fcc.weighEntry.defaultMode, read by weight_entry.js.)
 """
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
@@ -44,12 +45,34 @@ class Field:
     max: Optional[float] = None
 
 
+# Sentinel returned by GET /api/config for secret fields, and accepted by PUT to
+# mean "leave the stored secret unchanged". The plaintext secret is NEVER sent to
+# the browser; a real new value replaces it.
+SECRET_SENTINEL = "__secret_set__"
+
+# Lenient IPv4 / hostname charset check (rejects spaces and junk).
+_IP_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
 SECTIONS = [
+    Section("connection", "🔌 Connection",
+            "Spoolman / FilaBridge endpoints. Changes apply immediately — a wrong "
+            "value drops the connection until you fix it back here."),
     Section("behavior", "⚙️ Behavior"),
     Section("client", "🖥️ This Browser", "Stored per-device in this browser, not synced."),
 ]
 
 CONFIG_SCHEMA = [
+    # Connection — defaults MUST mirror config_loader.load_config()'s defaults.
+    Field("server_ip", "Server IP / host", "ip", "127.0.0.1",
+          section="connection", scope="server",
+          help="Host running Spoolman + FilaBridge."),
+    Field("spoolman_port", "Spoolman port", "port", 7912,
+          section="connection", scope="server", min=1, max=65535),
+    Field("filabridge_port", "FilaBridge port", "port", 5000,
+          section="connection", scope="server", min=1, max=65535),
+    Field("SCRAPER_API_KEY", "Scraper API key", "secret", "",
+          section="connection", scope="server",
+          help="Stored server-side; never sent to the browser. Leave blank to keep the current value."),
     Field("sync_delay", "Sync delay (seconds)", "float", 0.5,
           section="behavior", scope="server", min=0, max=10,
           help="Pause between Spoolman sync operations."),
@@ -92,10 +115,9 @@ def coerce_and_validate(key, value):
                 coerced = value.strip().lower() in ("true", "1", "yes", "on")
             else:
                 coerced = bool(value)
-        elif t == "int":
-            # NOTE: no int Field ships in Phase 1. When one is added, decide the
-            # contract explicitly — int(3.9)->3 and int(True)->1 coerce silently
-            # today; reject non-integral / bool input here if that's unwanted.
+        elif t in ("int", "port"):
+            # int(3.9)->3 / int(True)->1 coerce silently. No general int Field
+            # ships yet; 'port' is range-bounded (1..65535) below.
             coerced = int(value)
         elif t == "float":
             coerced = float(value)
@@ -104,14 +126,18 @@ def coerce_and_validate(key, value):
             if f.choices is not None and coerced not in f.choices:
                 raise ConfigValidationError(
                     f"{f.label}: '{coerced}' is not one of {f.choices}")
-        else:  # string
+        elif t == "ip":
+            coerced = str(value).strip()
+            if not coerced or not _IP_HOST_RE.match(coerced):
+                raise ConfigValidationError(f"{f.label}: '{value}' is not a valid IP / hostname")
+        else:  # string, secret
             coerced = str(value)
     except ConfigValidationError:
         raise
     except (TypeError, ValueError):
         raise ConfigValidationError(f"{f.label}: '{value}' is not a valid {t}")
 
-    if t in ("int", "float"):
+    if t in ("int", "float", "port"):
         # Reject NaN/inf BEFORE the range checks: NaN compares False against
         # BOTH bounds, so it would otherwise slip through and json.dump would
         # write the invalid bare token `NaN`/`Infinity` into config.json.
@@ -139,6 +165,11 @@ def validate_payload(values):
             errors.append(f"Unknown config key: {key}")
             continue
         if f.scope != "server":
+            continue
+        # A secret submitted as the sentinel means "leave unchanged" — skip it so
+        # save_config's passthrough preserves the existing stored secret (the
+        # plaintext is never sent to the browser, so this is how it round-trips).
+        if f.type == "secret" and value == SECRET_SENTINEL:
             continue
         try:
             coerced[key] = coerce_and_validate(key, value)

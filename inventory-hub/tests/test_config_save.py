@@ -340,3 +340,63 @@ def test_client_key_shared_with_weight_entry():
     assert key in weight_js, "weight_entry.js must reference the shared localStorage key"
     assert any(f["key"] == key for f in config_schema.schema_for_ui()["fields"]), \
         "config_schema must define the client key the WeightEntry reads"
+
+
+# --- Phase 2: secret masking (never leak plaintext; sentinel = keep unchanged) ---
+
+def test_get_endpoint_masks_secret(client):
+    r = client.get("/api/config")
+    body = r.get_data(as_text=True)
+    d = r.get_json()
+    assert d["values"]["SCRAPER_API_KEY"] == config_schema.SECRET_SENTINEL  # set -> sentinel
+    assert "secret-key-123" not in body  # plaintext NEVER leaves the server
+
+
+def test_save_secret_sentinel_preserves_existing(cfg_file):
+    result = config_loader.save_config(
+        {"SCRAPER_API_KEY": config_schema.SECRET_SENTINEL, "sync_delay": 1.5})
+    assert result["ok"] is True
+    on_disk = _read(cfg_file)
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # sentinel -> unchanged
+    assert on_disk["sync_delay"] == 1.5  # sibling still saved
+
+
+def test_save_secret_new_value_updates(cfg_file):
+    result = config_loader.save_config({"SCRAPER_API_KEY": "brand-new-key"})
+    assert result["ok"] is True
+    assert _read(cfg_file)["SCRAPER_API_KEY"] == "brand-new-key"
+
+
+def test_validate_payload_skips_secret_sentinel():
+    coerced, errors = config_schema.validate_payload(
+        {"SCRAPER_API_KEY": config_schema.SECRET_SENTINEL, "sync_delay": 2.0})
+    assert errors == []
+    assert "SCRAPER_API_KEY" not in coerced  # sentinel -> skipped (keep)
+    assert coerced["sync_delay"] == 2.0
+
+
+# --- Phase 2: ip + port field validation ---
+
+def test_ip_field_validation():
+    assert config_schema.coerce_and_validate("server_ip", "192.168.1.29") == "192.168.1.29"
+    assert config_schema.coerce_and_validate("server_ip", "my-host.local") == "my-host.local"
+    for bad in ("", "has space", "1.2.3.4; rm -rf"):
+        with pytest.raises(config_schema.ConfigValidationError):
+            config_schema.coerce_and_validate("server_ip", bad)
+
+
+def test_port_field_validation():
+    assert config_schema.coerce_and_validate("spoolman_port", "7913") == 7913
+    for bad in (0, 70000, "abc", "nan"):
+        with pytest.raises(config_schema.ConfigValidationError):
+            config_schema.coerce_and_validate("spoolman_port", bad)
+
+
+def test_save_connection_settings_persist(cfg_file):
+    result = config_loader.save_config({"server_ip": "10.0.0.5", "spoolman_port": 7000})
+    assert result["ok"] is True
+    on_disk = _read(cfg_file)
+    assert on_disk["server_ip"] == "10.0.0.5"
+    assert on_disk["spoolman_port"] == 7000
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # untouched sibling preserved
+    assert list(on_disk["printer_map"].keys()) == ["xl-1"]

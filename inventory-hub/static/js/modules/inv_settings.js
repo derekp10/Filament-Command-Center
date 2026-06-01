@@ -19,6 +19,9 @@
     const _esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const _domId = (key) => 'cfgset-' + String(key).replace(/[^a-zA-Z0-9_-]/g, '_');
+    // Mirrors config_schema.SECRET_SENTINEL. GET returns this (not the plaintext)
+    // for a set secret; sending it back on save means "leave unchanged".
+    const SECRET_SENTINEL = '__secret_set__';
 
     function readClient(key, fallback) {
         try {
@@ -49,10 +52,22 @@
                 `<option value="${_esc(c)}" ${String(value) === String(c) ? 'selected' : ''}>${_esc(c)}</option>`).join('');
             return `<select class="form-select form-select-sm cfgset-input bg-dark text-white border-secondary" ${data} style="max-width:240px;">${opts}</select>`;
         }
-        // int / float / string
+        if (f.type === 'secret') {
+            // Rendered EMPTY (the plaintext never reaches the browser). The
+            // placeholder reflects whether one is currently set; blank-on-save
+            // keeps it. data-initial carries the sentinel, not the real key.
+            const isSet = String(value) === SECRET_SENTINEL;
+            return `<div class="d-flex align-items-center gap-1">
+                <input class="form-control form-control-sm cfgset-input bg-dark text-white border-secondary"
+                       type="password" ${data} value="" autocomplete="off"
+                       placeholder="${isSet ? '•••••••• (set — blank keeps it)' : '(not set)'}" style="max-width:200px;">
+                <button type="button" class="btn btn-sm btn-outline-secondary cfgset-eye" tabindex="-1" title="Show / hide">👁</button>
+            </div>`;
+        }
+        // int / float / port -> number; ip / string -> text
         let typeAttrs = 'type="text"';
-        if (f.type === 'int' || f.type === 'float') {
-            typeAttrs = `type="number" step="${f.type === 'int' ? '1' : 'any'}"`
+        if (f.type === 'int' || f.type === 'float' || f.type === 'port') {
+            typeAttrs = `type="number" step="${f.type === 'float' ? 'any' : '1'}"`
                 + (f.min != null ? ` min="${_esc(f.min)}"` : '')
                 + (f.max != null ? ` max="${_esc(f.max)}"` : '');
         }
@@ -94,6 +109,12 @@
         host.innerHTML = html;
         const saveBtn = document.getElementById('cfgset-save');
         if (saveBtn) saveBtn.addEventListener('click', save);
+        host.querySelectorAll('.cfgset-eye').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const inp = btn.parentElement.querySelector('.cfgset-input');
+                if (inp) inp.type = (inp.type === 'password') ? 'text' : 'password';
+            });
+        });
     }
 
     async function save() {
@@ -106,6 +127,12 @@
             const key = el.dataset.key;
             const type = el.dataset.type;
             const scope = el.dataset.scope;
+            if (type === 'secret') {
+                // Blank = keep the existing secret (send the sentinel); anything
+                // typed = the new value. The plaintext never came from the server.
+                serverValues[key] = (el.value === '' ? SECRET_SENTINEL : el.value);
+                return;
+            }
             const val = (type === 'bool') ? el.checked : el.value;
             if (scope === 'client') {
                 // Only persist a client pref the user actually CHANGED. Writing

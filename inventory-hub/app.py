@@ -3552,10 +3552,14 @@ def api_get_config():
     schema = config_schema.schema_for_ui()
     values = {}
     for f in schema['fields']:
-        if f['scope'] == 'server':
-            values[f['key']] = cfg.get(f['key'], f['default'])
-        else:
+        if f['scope'] != 'server':
             values[f['key']] = f['default']
+        elif f['type'] == 'secret':
+            # NEVER send the plaintext secret to the browser — surface only
+            # whether one is currently set (the sentinel) vs. empty.
+            values[f['key']] = config_schema.SECRET_SENTINEL if cfg.get(f['key']) else ""
+        else:
+            values[f['key']] = cfg.get(f['key'], f['default'])
     return jsonify({"schema": schema, "values": values})
 
 
