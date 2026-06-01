@@ -200,4 +200,115 @@
             host.innerHTML = `<div class="alert alert-danger py-2 mb-0">Failed to load settings: ${_esc(e && e.message ? e.message : e)}</div>`;
         }
     };
+
+    // ---- L18 Phase 3: printer_map (toolhead) editor ----
+    const PM_HOST_ID = 'config-printer-map';
+
+    function pmRowHtml(entry, isNew) {
+        const loc = _esc(entry.location_id || '');
+        const name = _esc(entry.printer_name || '');
+        const pos = entry.position == null ? 0 : entry.position;
+        // Existing LocationIDs are read-only (renaming = remove+add, which the
+        // backend guards); new rows get an editable LocationID.
+        const locInput = isNew
+            ? `<input class="form-control form-control-sm pm-loc bg-dark text-white border-secondary" type="text" value="${loc}" placeholder="LocationID (e.g. CORE1-M6)" autocomplete="off" style="max-width:170px;">`
+            : `<input class="form-control form-control-sm pm-loc bg-dark text-white border-secondary" type="text" value="${loc}" readonly title="LocationID is fixed for existing toolheads — add or remove instead" style="max-width:170px; opacity:.7;">`;
+        return `<div class="d-flex align-items-center gap-2 py-1 pm-row">
+            ${locInput}
+            <input class="form-control form-control-sm pm-name bg-dark text-white border-secondary" type="text" value="${name}" placeholder="Printer name" autocomplete="off" style="max-width:180px;">
+            <input class="form-control form-control-sm pm-pos bg-dark text-white border-secondary" type="number" min="0" step="1" value="${_esc(pos)}" title="Position" style="max-width:90px;">
+            <button type="button" class="btn btn-sm btn-outline-danger pm-remove" title="Remove toolhead">🗑</button>
+        </div>`;
+    }
+
+    function pmWireRow(row) {
+        const rm = row.querySelector('.pm-remove');
+        if (rm) rm.addEventListener('click', () => row.remove());
+    }
+
+    function pmRender(entries) {
+        const host = document.getElementById(PM_HOST_ID);
+        if (!host) return;
+        let html = `<div class="small mb-2" style="color:rgba(255,255,255,0.55);">
+            Toolheads keyed by LocationID. Add new ones (e.g. an MMU / indxx upgrade) or edit a name / position.
+            Existing LocationIDs can't be renamed; removing one a dryer-box slot or spool still uses is blocked.
+        </div>`;
+        html += `<div id="pm-rows">` + (entries || []).map((e) => pmRowHtml(e, false)).join('') + `</div>`;
+        html += `<div class="d-flex align-items-center gap-2 mt-2">
+            <button type="button" class="btn btn-sm btn-outline-info" id="pm-add">+ Add toolhead</button>
+            <button type="button" class="btn btn-sm btn-info fw-bold" id="pm-save">Save toolheads</button>
+            <span class="small" id="pm-status" style="color:rgba(255,255,255,0.6);"></span>
+        </div>`;
+        host.innerHTML = html;
+        host.querySelectorAll('.pm-row').forEach(pmWireRow);
+        const addBtn = host.querySelector('#pm-add');
+        if (addBtn) addBtn.addEventListener('click', () => {
+            const rows = host.querySelector('#pm-rows');
+            rows.insertAdjacentHTML('beforeend', pmRowHtml({ location_id: '', printer_name: '', position: 0 }, true));
+            pmWireRow(rows.lastElementChild);
+        });
+        const saveBtn = host.querySelector('#pm-save');
+        if (saveBtn) saveBtn.addEventListener('click', pmSave);
+    }
+
+    async function pmSave() {
+        const host = document.getElementById(PM_HOST_ID);
+        if (!host) return;
+        const statusEl = host.querySelector('#pm-status');
+        const btn = host.querySelector('#pm-save');
+        const map = {};
+        let dupe = null;
+        for (const row of host.querySelectorAll('.pm-row')) {
+            const loc = (row.querySelector('.pm-loc').value || '').trim();
+            if (!loc) continue;  // skip blank rows
+            const key = loc.toUpperCase();
+            if (map[key]) { dupe = key; break; }
+            map[key] = {
+                printer_name: (row.querySelector('.pm-name').value || '').trim(),
+                position: Number(row.querySelector('.pm-pos').value) || 0,
+            };
+        }
+        if (dupe) {
+            if (window.showToast) window.showToast(`Duplicate LocationID: ${dupe}`, 'error', 7000);
+            return;
+        }
+        if (btn) btn.disabled = true;
+        if (statusEl) { statusEl.style.color = 'rgba(255,255,255,0.6)'; statusEl.textContent = 'Saving…'; }
+        try {
+            const r = await fetch('/api/printer_map', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ printer_map: map }),
+            });
+            const d = await r.json();
+            if (r.ok && d.ok) {
+                if (statusEl) { statusEl.style.color = '#7CFC00'; statusEl.textContent = '✓ Saved'; }
+                if (window.showToast) window.showToast('Toolheads saved', 'success', 4000);
+                window.renderPrinterMap();  // reload canonical from server
+            } else {
+                const msg = (d && d.error) ? d.error : 'Save failed';
+                if (statusEl) { statusEl.style.color = '#ff6b6b'; statusEl.textContent = msg; }
+                if (window.showToast) window.showToast(msg, 'error', 8000);  // long: block messages matter
+            }
+        } catch (e) {
+            const msg = 'Save error: ' + (e && e.message ? e.message : e);
+            if (statusEl) { statusEl.style.color = '#ff6b6b'; statusEl.textContent = msg; }
+            if (window.showToast) window.showToast(msg, 'error', 7000);
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    window.renderPrinterMap = async function () {
+        const host = document.getElementById(PM_HOST_ID);
+        if (!host) return;
+        host.innerHTML = `<div class="text-info small"><span class="spinner-border spinner-border-sm me-2"></span>Loading toolheads…</div>`;
+        try {
+            const r = await fetch('/api/printer_map');
+            const d = await r.json();
+            pmRender(d.entries || []);
+        } catch (e) {
+            host.innerHTML = `<div class="alert alert-danger py-2 mb-0">Failed to load toolheads: ${_esc(e && e.message ? e.message : e)}</div>`;
+        }
+    };
 })();

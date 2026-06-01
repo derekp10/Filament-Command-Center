@@ -122,3 +122,24 @@ def test_phase2_secret_and_connection_fields_render(page: Page, base_url: str, r
     assert page.locator('.cfgset-input[data-key="server_ip"]').evaluate("el => el.type") == "text"
     assert page.locator('.cfgset-input[data-key="filabridge_ip"]').evaluate("el => el.type") == "text"
     assert page.locator('.cfgset-input[data-key="spoolman_port"]').evaluate("el => el.type") == "number"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_phase3_printer_map_editor_renders(page: Page, base_url: str, reset_dom_state_js: str):
+    # Non-destructive: never clicks Save, so the real printer_map is untouched.
+    _open_settings(page, base_url, reset_dom_state_js)
+    page.wait_for_function(
+        "() => { const h = document.getElementById('config-printer-map'); return h && h.querySelector('.pm-row'); }",
+        timeout=10000,
+    )
+    rows_before = page.locator("#config-printer-map .pm-row").count()
+    assert rows_before >= 1
+    # existing LocationID inputs are read-only (no rename of an existing toolhead)
+    assert page.locator("#config-printer-map .pm-row .pm-loc").first.evaluate("el => el.readOnly") is True
+    # "+ Add toolhead" appends a row whose LocationID IS editable
+    page.locator("#pm-add").click()
+    assert page.locator("#config-printer-map .pm-row").count() == rows_before + 1
+    assert page.locator("#config-printer-map .pm-row .pm-loc").last.evaluate("el => el.readOnly") is False
+    # removing the just-added row restores the count (client-side only; no save)
+    page.locator("#config-printer-map .pm-row").last.locator(".pm-remove").click()
+    assert page.locator("#config-printer-map .pm-row").count() == rows_before

@@ -44,6 +44,8 @@ console.log("🚀 Loaded Module: CONFIG");
         }
         // L18 Phase 1 — paint the schema-driven settings card on every open.
         if (window.renderConfigSettings) window.renderConfigSettings();
+        // L18 Phase 3 — the printer_map (toolhead) editor.
+        if (window.renderPrinterMap) window.renderPrinterMap();
         window.modals.configModal.show();
     };
 
