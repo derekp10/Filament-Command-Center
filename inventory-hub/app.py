@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template # type: ignore
 import requests # type: ignore
 import state # type: ignore
 import config_loader # type: ignore
+import config_schema # type: ignore
 import locations_db # type: ignore
 import spoolman_api # type: ignore
 import logic # type: ignore
@@ -2576,7 +2577,124 @@ def api_printer_map():
     # Stable sort within each printer by position.
     for entries in grouped.values():
         entries.sort(key=lambda e: (e['position'], e['location_id']))
-    return jsonify({"printers": grouped})
+    # Flat, editable view for the Phase 3 config editor. Coerce position to int
+    # so a hand-edited / legacy non-int value can't TypeError the sort (the
+    # editor must load to let the user self-repair).
+    def _posint(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+    flat = [
+        {"location_id": loc_id.upper(),
+         "printer_name": info.get('printer_name', ''),
+         "position": _posint(info.get('position', 0))}
+        for loc_id, info in printer_map.items()
+    ]
+    flat.sort(key=lambda e: (e['printer_name'], e['position'], e['location_id']))
+    return jsonify({"printers": grouped, "entries": flat})
+
+
+def _pm_prefix(k):
+    """Printer prefix of a toolhead LocationID (the part before the first '-'),
+    matching locations_db._known_printer_prefixes."""
+    k = str(k).strip().upper()
+    return k.split('-', 1)[0] if '-' in k else k
+
+
+def _printer_map_blocked_removals(old_map, new_map):
+    """L18 Phase 3 referential guard. Adding toolheads + editing an existing
+    toolhead's name/position is always safe. Removing/renaming a key is BLOCKED
+    if the LocationID is still referenced:
+      - a dryer-box slot_target bound directly to it,
+      - a PRINTER:<prefix> pool slot whose prefix this key is the LAST toolhead of,
+      - spools physically at it.
+    FAILS CLOSED: if references cannot be verified (locations.json unreadable, or
+    Spoolman unreachable), the removal is blocked with a retryable reason rather
+    than allowed. Returns a list of {location_id, reasons}."""
+    old_keys = {str(k).strip().upper() for k in (old_map or {})}
+    new_keys = {str(k).strip().upper() for k in (new_map or {})}
+    removed = old_keys - new_keys
+    if not removed:
+        return []
+
+    # Prefixes that DISAPPEAR after this edit (the last toolhead of a printer is
+    # being removed) — a PRINTER:<prefix> pool sentinel on those would dangle.
+    lost_prefixes = {_pm_prefix(k) for k in old_keys} - {_pm_prefix(k) for k in new_keys}
+
+    # Scan dryer-box slot_targets: direct toolhead bindings + PRINTER: sentinels.
+    bound = set()              # toolhead LocationIDs directly bound
+    sentinel_prefixes = set()  # printer prefixes referenced via PRINTER:<prefix>
+    slots_verified = True
+    try:
+        for row in locations_db.load_locations_list():
+            targets = (row.get('extra') or {}).get('slot_targets') or {}
+            for tgt in targets.values():
+                if not tgt:
+                    continue
+                if locations_db.is_printer_sentinel(tgt):
+                    sentinel_prefixes.add(str(tgt).strip().upper().split(':', 1)[1])
+                else:
+                    bound.add(str(tgt).strip().upper())
+    except Exception as e:
+        state.logger.warning(f"printer_map guard: could not scan slot_targets, failing closed: {e}")
+        slots_verified = False  # FAIL CLOSED — block all removals below
+
+    blocked = []
+    for key in sorted(removed):
+        reasons = []
+        if key in bound:
+            reasons.append("a dryer-box slot is bound to it")
+        pfx = _pm_prefix(key)
+        if pfx in lost_prefixes and pfx in sentinel_prefixes:
+            reasons.append(f"a dryer-box pool slot still feeds printer '{pfx}' (PRINTER:{pfx})")
+        if not slots_verified:
+            reasons.append("could not verify dryer-box bindings (locations unreadable) — refusing")
+        # Spools physically at this toolhead — STRICT check raises on outage.
+        try:
+            if spoolman_api.get_spools_at_location_strict(key):
+                reasons.append("spool(s) are stored there")
+        except Exception as e:
+            state.logger.warning(f"printer_map guard: spool check unverifiable for {key}, failing closed: {e}")
+            reasons.append("could not verify spools (Spoolman unreachable) — refusing")
+        if reasons:
+            blocked.append({"location_id": key, "reasons": reasons})
+    return blocked
+
+
+@app.route('/api/printer_map', methods=['PUT'])
+def api_put_printer_map():
+    """L18 Phase 3 — persist an edited printer_map. Adding toolheads + editing
+    name/position is free; removing/renaming a key still referenced by a
+    dryer-box slot or holding spools is BLOCKED (409). Canonicalization + the
+    atomic write live in config_loader.save_printer_map."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = {}
+    new_map = payload.get('printer_map')
+    if not isinstance(new_map, dict):
+        return jsonify({"ok": False, "error": "printer_map must be an object"}), 400
+
+    old_map = config_loader.load_config().get('printer_map', {}) or {}
+    blocked = _printer_map_blocked_removals(old_map, new_map)
+    if blocked:
+        msg = "Can't remove/rename toolhead(s) still in use: " + "; ".join(
+            f"{b['location_id']} ({', '.join(b['reasons'])})" for b in blocked)
+        state.add_log_entry(f"⚙️ Printer-map save blocked — {msg}", "ERROR", "ff4444")
+        return jsonify({"ok": False, "error": msg, "blocked": blocked}), 409
+
+    result = config_loader.save_printer_map(new_map)
+    if result.get('ok'):
+        state.add_log_entry(
+            f"⚙️ Printer map updated ({len(result.get('printer_map') or {})} toolheads)", "INFO")
+        return jsonify(result)
+    # Validation errors (all start with "printer_map…") are a client 400; write/IO
+    # faults bubbled from the hardened writer ("config write failed…", "refusing
+    # to save…", "…verify-after-write failed…") are a server 500.
+    err = result.get('error') or ''
+    code = 400 if err.startswith('printer_map') else 500
+    state.add_log_entry(f"⚙️ Printer-map save failed: {err}", "ERROR", "ff4444")
+    return jsonify(result), code
 
 
 @app.route('/api/dryer_boxes/slots', methods=['GET'])
@@ -3539,6 +3657,130 @@ def api_audit_session():
             "rogue": len(rogue),
         },
     })
+
+
+@app.route('/api/config', methods=['GET'])
+def api_get_config():
+    """L18 Config System — return the declarative schema + current values for
+    the settings renderer. Server-scope values come from the live config;
+    client-scope fields return their default (the browser overrides them from
+    localStorage)."""
+    cfg = config_loader.load_config()
+    schema = config_schema.schema_for_ui()
+    values = {}
+    for f in schema['fields']:
+        if f['scope'] != 'server':
+            values[f['key']] = f['default']
+        elif f['type'] == 'secret':
+            # NEVER send the plaintext secret to the browser — surface only
+            # whether one is currently set (the sentinel) vs. empty.
+            values[f['key']] = config_schema.SECRET_SENTINEL if cfg.get(f['key']) else ""
+        else:
+            values[f['key']] = cfg.get(f['key'], f['default'])
+    return jsonify({"schema": schema, "values": values})
+
+
+@app.route('/api/config', methods=['PUT'])
+def api_put_config():
+    """L18 Config System — persist server-scope settings. Validation/write
+    errors are surfaced in the response JSON (the frontend toasts at 7s) and
+    written to the Activity Log; success is logged too. Accepts either
+    {"values": {...}} or a bare {...} body."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = {}
+    inner = payload.get('values')
+    values = inner if isinstance(inner, dict) else payload
+    result = config_loader.save_config(values)
+    if result.get('ok'):
+        saved = result.get('saved') or []
+        if saved:
+            state.add_log_entry(f"⚙️ Config updated: {', '.join(saved)}", "INFO")
+        return jsonify(result)
+    state.add_log_entry(f"⚙️ Config save failed: {result.get('error')}", "ERROR", "ff4444")
+    return jsonify(result), 400
+
+
+@app.route('/api/config/export', methods=['GET'])
+def api_config_export():
+    """L18 Phase 4 — export the current config as a JSON download for backup /
+    transfer. Secret values are REDACTED to the sentinel unless
+    ?include_secrets=1, so an export is shareable without leaking the API key."""
+    include_secrets = request.args.get('include_secrets', '').lower() in ('1', 'true', 'yes')
+    raw = config_loader.load_config_raw()
+    if not isinstance(raw, dict):
+        raw = {}
+    out = dict(raw)
+    if not include_secrets:
+        for k in config_schema.SECRET_KEYS:
+            if out.get(k):
+                out[k] = config_schema.SECRET_SENTINEL
+    body = json.dumps(out, indent=4, ensure_ascii=False)
+    resp = app.response_class(body, mimetype='application/json')
+    resp.headers['Content-Disposition'] = 'attachment; filename="fcc-config-export.json"'
+    return resp
+
+
+@app.route('/api/config/import', methods=['POST'])
+def api_config_import():
+    """L18 Phase 4 — import config SETTINGS from an uploaded JSON. PATCH-only:
+    applies ONLY schema-managed server keys present in the file (printer_map /
+    dryer_slots / paths / comments are NOT touched — they keep their own editors).
+    Body: {"config": {...}, "dry_run": bool}. dry_run returns the diff without
+    writing. A secret arriving as the sentinel keeps the existing value."""
+    # Parse defensively: request.get_json(silent=True) swallows JSONDecodeError
+    # but NOT RecursionError (deeply-nested JSON), which would 500. Cap the body
+    # (config is tiny) and catch both -> clean 400/413, the contract the UI expects.
+    raw = request.get_data(cache=False, as_text=True) or ''
+    if len(raw) > 512 * 1024:
+        return jsonify({"ok": False, "error": "import file too large"}), 413
+    try:
+        payload = json.loads(raw) if raw.strip() else None
+    except (ValueError, RecursionError):
+        return jsonify({"ok": False, "error": "import file is not valid JSON (or too deeply nested)"}), 400
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "import body must be a JSON object"}), 400
+    incoming = payload.get('config')
+    if not isinstance(incoming, dict):
+        return jsonify({"ok": False, "error": "import body needs a 'config' object"}), 400
+    dry_run = bool(payload.get('dry_run'))
+
+    cfg = config_loader.load_config()
+    fields = {f.key: f for f in config_schema.CONFIG_SCHEMA if f.scope == 'server'}
+    applicable = {k: v for k, v in incoming.items() if k in fields}
+    ignored = sorted(k for k in incoming if k not in fields)
+
+    coerced, errors = config_schema.validate_payload(applicable)
+    if errors:
+        return jsonify({"ok": False, "error": "; ".join(errors), "ignored": ignored}), 400
+
+    # Diff (current -> incoming) for the confirmation overlay; secrets masked.
+    diff = []
+    for k in sorted(coerced):
+        f = fields[k]
+        if f.type == 'secret':
+            diff.append({"key": k, "label": f.label,
+                         "from": "(set)" if cfg.get(k) else "(unset)", "to": "(new secret)"})
+        else:
+            cur, new = cfg.get(k, f.default), coerced[k]
+            if str(cur) != str(new):
+                diff.append({"key": k, "label": f.label, "from": cur, "to": new})
+
+    if dry_run:
+        return jsonify({"ok": True, "dry_run": True, "diff": diff, "ignored": ignored})
+
+    result = config_loader.save_config(applicable)
+    if not result.get('ok'):
+        # Validation already passed above. "refusing to save…" = the EXISTING
+        # config.json is corrupt (repair it, don't retry) -> 409; anything else is
+        # a genuine write/IO fault -> 500.
+        err = result.get('error') or ''
+        code = 409 if err.startswith('refusing to save') else 500
+        state.add_log_entry(f"⚙️ Config import failed: {err}", "ERROR", "ff4444")
+        return jsonify({"ok": False, "error": err, "ignored": ignored}), code
+    state.add_log_entry(
+        f"⚙️ Config imported ({len(result.get('saved') or [])} settings, {len(ignored)} ignored)", "INFO")
+    return jsonify({"ok": True, "saved": result.get('saved'), "ignored": ignored, "diff": diff})
 
 
 @app.route('/api/filabridge/reconcile', methods=['GET'])

@@ -1,0 +1,791 @@
+"""L18 Config System — Phase 1 backend tests for the safe writer.
+
+Covers design-doc acceptance criteria:
+  #2  load_config_raw() injects NO defaults and does NOT uppercase printer_map.
+  #3  load -> save -> load preserves every schema-unknown key exactly
+      (secrets, paths, comments, nested print_settings, lowercase printer_map,
+      dryer_slots).
+  #4  a bad value returns {ok:False, error} and touches NO disk; LAST_CONFIG_ERROR set.
+
+Plus: bool coercion, range/choice/unknown-key rejection, client-scope keys
+ignored by save_config, and success clearing LAST_CONFIG_ERROR.
+
+Pure unit tests — no running server. Monkeypatches config_loader.get_config_path
+at a throwaway temp file so the real config.json is never touched.
+"""
+import json
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import config_loader  # noqa: E402
+import config_schema  # noqa: E402
+
+
+# A realistic config carrying keys the schema does NOT own — these must
+# survive a save byte-for-byte. printer_map keys are intentionally LOWERCASE
+# to prove the save round-trip doesn't re-case them (load_config uppercases at
+# runtime; the on-disk write must not).
+SEED = {
+    "comment": "--- DEV CONFIGURATION ---",
+    "server_ip": "192.168.1.29",
+    "SCRAPER_API_KEY": "secret-key-123",
+    "spoolman_port": 7913,
+    "filabridge_port": 5001,
+    "sync_delay": 0.5,
+    "spoolman_db_path": "\\\\TRUENAS\\App_Data\\Spoolman\\spoolman.db",
+    "print_settings": {"mode": "browser", "csv_path": "/output/test_queue.csv"},
+    "buy_more_url_template": "https://www.amazon.com/s?k={{vendor}}",
+    "printer_map": {"xl-1": {"printer_name": "🦝 XL", "position": 0}},
+    "dryer_slots": ["PM-DB-1", "PM-DB-2"],
+    "auto_recover_filabridge_errors": True,
+}
+
+
+@pytest.fixture
+def cfg_file(tmp_path, monkeypatch):
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(SEED, indent=4), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    config_loader.LAST_CONFIG_ERROR = None
+    return p
+
+
+def _read(p):
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+# --- Criterion #2 ---------------------------------------------------------
+
+def test_load_config_raw_no_defaults_no_uppercase(cfg_file):
+    raw = config_loader.load_config_raw()
+    assert raw == SEED  # exact: nothing injected
+    assert list(raw["printer_map"].keys()) == ["xl-1"]  # NOT uppercased
+
+
+def test_load_config_raw_missing_file_returns_empty(tmp_path, monkeypatch):
+    missing = tmp_path / "nope.json"
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(missing), "TEST"))
+    assert config_loader.load_config_raw() == {}
+
+
+# --- Criterion #3 ---------------------------------------------------------
+
+def test_save_preserves_unknown_keys(cfg_file):
+    result = config_loader.save_config({"sync_delay": 1.5})
+    assert result["ok"] is True
+    assert result["saved"] == ["sync_delay"]
+
+    on_disk = _read(cfg_file)
+    expected = dict(SEED)
+    expected["sync_delay"] = 1.5
+    assert on_disk == expected  # only the edited key changed
+    assert list(on_disk["printer_map"].keys()) == ["xl-1"]  # still lowercase
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"
+    assert on_disk["print_settings"] == {"mode": "browser", "csv_path": "/output/test_queue.csv"}
+    assert on_disk["comment"] == "--- DEV CONFIGURATION ---"
+    # ensure_ascii=False: emoji printer name survives as real UTF-8, not \uXXXX
+    raw_text = cfg_file.read_text(encoding="utf-8")
+    assert "🦝 XL" in raw_text
+    assert "\\ud83e" not in raw_text  # not escaped
+
+
+def test_save_bool_coerces_and_persists(cfg_file):
+    result = config_loader.save_config({"auto_recover_filabridge_errors": "false"})
+    assert result["ok"] is True
+    assert _read(cfg_file)["auto_recover_filabridge_errors"] is False
+
+
+# --- Criterion #4 ---------------------------------------------------------
+
+def test_bad_value_rejected_no_disk_change(cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    result = config_loader.save_config({"sync_delay": "abc"})
+    assert result["ok"] is False
+    assert result["error"] and "sync delay" in result["error"].lower()
+    assert config_loader.LAST_CONFIG_ERROR == result["error"]
+    assert cfg_file.read_text(encoding="utf-8") == before  # untouched
+
+
+def test_out_of_range_rejected_no_disk_change(cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    result = config_loader.save_config({"sync_delay": 999})
+    assert result["ok"] is False
+    assert result["error"] and ("10" in result["error"] or "sync delay" in result["error"].lower())
+    assert config_loader.LAST_CONFIG_ERROR == result["error"]
+    assert cfg_file.read_text(encoding="utf-8") == before
+
+
+def test_unknown_key_rejected_no_disk_change(cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    result = config_loader.save_config({"totally_unknown": 1})
+    assert result["ok"] is False
+    assert "unknown" in result["error"].lower()
+    assert cfg_file.read_text(encoding="utf-8") == before
+
+
+# --- Client-scope + housekeeping -----------------------------------------
+
+def test_client_scope_key_ignored_by_save(cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    result = config_loader.save_config({"fcc.weighEntry.defaultMode": "gross"})
+    assert result["ok"] is True
+    assert result["saved"] == []  # nothing written server-side
+    assert cfg_file.read_text(encoding="utf-8") == before  # untouched
+
+
+def test_success_clears_last_error(cfg_file):
+    config_loader.LAST_CONFIG_ERROR = "stale"
+    config_loader.save_config({"sync_delay": 2.0})
+    assert config_loader.LAST_CONFIG_ERROR is None
+
+
+# --- Schema-level unit tests (no disk) -----------------------------------
+
+def test_validate_payload_ignores_client_scope():
+    coerced, errors = config_schema.validate_payload(
+        {"sync_delay": 1.0, "fcc.weighEntry.defaultMode": "net"})
+    assert errors == []
+    assert coerced == {"sync_delay": 1.0}  # client key not coerced server-side
+
+
+def test_coerce_select_rejects_bad_choice():
+    with pytest.raises(config_schema.ConfigValidationError):
+        config_schema.coerce_and_validate("fcc.weighEntry.defaultMode", "bogus")
+
+
+def test_coerce_select_accepts_valid_choice():
+    assert config_schema.coerce_and_validate("fcc.weighEntry.defaultMode", "net") == "net"
+
+
+# --- Review Must-fix #1: never clobber an unreadable/corrupt existing config ---
+
+def test_load_config_raw_corrupt_returns_none(tmp_path, monkeypatch):
+    p = tmp_path / "config.json"
+    p.write_text("{ this is not valid json ", encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    assert config_loader.load_config_raw() is None  # unreadable -> None, NOT {}
+
+
+def test_load_config_raw_non_dict_returns_none(tmp_path, monkeypatch):
+    p = tmp_path / "config.json"
+    p.write_text('["a", "b"]', encoding="utf-8")  # valid JSON, but a list
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    assert config_loader.load_config_raw() is None  # top-level non-dict -> None
+
+
+def test_save_refuses_on_corrupt_existing_no_disk_change(tmp_path, monkeypatch):
+    p = tmp_path / "config.json"
+    original = "{ half-written corrupt config "
+    p.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    config_loader.LAST_CONFIG_ERROR = None
+    result = config_loader.save_config({"sync_delay": 1.5})
+    assert result["ok"] is False
+    assert "refusing to save" in result["error"]
+    assert config_loader.LAST_CONFIG_ERROR == result["error"]
+    assert p.read_text(encoding="utf-8") == original  # byte-for-byte untouched
+
+
+def test_save_refuses_on_non_dict_existing_no_disk_change(tmp_path, monkeypatch):
+    p = tmp_path / "config.json"
+    original = "[1, 2, 3]"
+    p.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    result = config_loader.save_config({"sync_delay": 1.5})
+    assert result["ok"] is False
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_save_fresh_install_seeds_full_defaults(tmp_path, monkeypatch):
+    missing = tmp_path / "config.json"  # genuinely absent
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(missing), "TEST"))
+    result = config_loader.save_config({"sync_delay": 1.5})
+    assert result["ok"] is True
+    on_disk = _read(missing)
+    assert on_disk["sync_delay"] == 1.5
+    # complete file seeded from defaults, NOT a lone {"sync_delay": 1.5}
+    for k in ("server_ip", "spoolman_port", "filabridge_port", "printer_map", "dryer_slots"):
+        assert k in on_disk
+
+
+# --- Review Must-fix #2: NaN / non-finite floats rejected, touch no disk ---
+
+def test_coerce_rejects_nan_and_inf():
+    for bad in ("nan", "inf", "-inf", "Infinity"):
+        with pytest.raises(config_schema.ConfigValidationError):
+            config_schema.coerce_and_validate("sync_delay", bad)
+
+
+def test_save_rejects_nan_no_disk_change(cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    result = config_loader.save_config({"sync_delay": "nan"})
+    assert result["ok"] is False
+    assert "finite" in result["error"].lower()
+    assert cfg_file.read_text(encoding="utf-8") == before
+
+
+# --- Safety machinery: atomic-write failure, verify retry, verify-fails-twice ---
+
+def test_atomic_write_failure_surfaces_error_no_disk_change(cfg_file, monkeypatch):
+    before = cfg_file.read_text(encoding="utf-8")
+    monkeypatch.setattr(config_loader, "_write_config_atomic",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    result = config_loader.save_config({"sync_delay": 1.5})
+    assert result["ok"] is False
+    assert "write failed" in result["error"].lower()
+    assert config_loader.LAST_CONFIG_ERROR == result["error"]
+    assert cfg_file.read_text(encoding="utf-8") == before
+
+
+def test_verify_mismatch_retries_then_succeeds(cfg_file, monkeypatch):
+    calls = {"n": 0}
+    real_verify = config_loader._verify_config_file
+
+    def flaky(expected, path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return (False, "transient mismatch")
+        return real_verify(expected, path)
+
+    monkeypatch.setattr(config_loader, "_verify_config_file", flaky)
+    result = config_loader.save_config({"sync_delay": 3.0})
+    assert result["ok"] is True
+    assert calls["n"] >= 2  # retried at least once
+    assert _read(cfg_file)["sync_delay"] == 3.0
+
+
+def test_verify_fails_twice_returns_error(cfg_file, monkeypatch):
+    monkeypatch.setattr(config_loader, "_verify_config_file", lambda e, p: (False, "always bad"))
+    result = config_loader.save_config({"sync_delay": 4.0})
+    assert result["ok"] is False
+    assert "twice" in result["error"].lower()
+
+
+# --- Rolling .bak snapshot (last-known-good, refreshed every save) ---
+
+def test_bak_holds_pre_edit_state_and_rolls(cfg_file):
+    bak = str(cfg_file) + ".bak"
+    config_loader.save_config({"sync_delay": 1.5})
+    assert os.path.exists(bak)
+    bak1 = json.loads(open(bak, encoding="utf-8").read())
+    assert bak1 == SEED  # the state right before save #1
+    config_loader.save_config({"sync_delay": 2.5})
+    bak2 = json.loads(open(bak, encoding="utf-8").read())
+    assert bak2["sync_delay"] == 1.5  # rolled forward to the pre-save-#2 state
+    assert bak2 != SEED
+
+
+# --- HTTP endpoints (GET/PUT /api/config) via app.test_client ---
+
+@pytest.fixture
+def client(cfg_file):
+    try:
+        import app as app_module  # noqa: E402
+    except Exception as e:  # pragma: no cover - env without full app deps
+        pytest.skip(f"app import unavailable: {e}")
+    app_module.app.config["TESTING"] = True
+    return app_module.app.test_client()
+
+
+def test_get_config_endpoint(client):
+    r = client.get("/api/config")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert "schema" in d and "values" in d
+    assert d["values"]["sync_delay"] == 0.5  # from SEED on disk
+    assert d["values"]["fcc.weighEntry.defaultMode"] == "additive"  # client default
+
+
+def test_put_config_good_value_logs_info(client, monkeypatch):
+    import state
+    logs = []
+    monkeypatch.setattr(state, "add_log_entry", lambda *a, **k: logs.append(a))
+    r = client.put("/api/config", json={"values": {"sync_delay": 1.25}})
+    assert r.status_code == 200
+    assert r.get_json()["ok"] is True
+    assert any("INFO" in str(a) for a in logs)
+
+
+def test_put_config_bad_value_400_logs_error(client, monkeypatch):
+    import state
+    logs = []
+    monkeypatch.setattr(state, "add_log_entry", lambda *a, **k: logs.append(a))
+    r = client.put("/api/config", json={"values": {"sync_delay": "abc"}})
+    assert r.status_code == 400
+    assert r.get_json()["ok"] is False
+    assert any(("ERROR" in str(a) or "ff4444" in str(a)) for a in logs)
+
+
+def test_put_config_non_dict_body_no_500(client):
+    r = client.put("/api/config", json=[1, 2, 3])
+    assert r.status_code != 500  # normalized to {} -> ok no-op, never crashes
+
+
+def test_put_config_bare_body_accepted(client):
+    r = client.put("/api/config", json={"sync_delay": 0.75})  # no "values" wrapper
+    assert r.status_code == 200
+    assert r.get_json()["ok"] is True
+
+
+# --- Static guard: the client localStorage key must not drift from WeightEntry ---
+
+def test_client_key_shared_with_weight_entry():
+    import pathlib
+    mods = pathlib.Path(__file__).resolve().parents[1] / "static" / "js" / "modules"
+    weight_js = (mods / "weight_entry.js").read_text(encoding="utf-8")
+    key = "fcc.weighEntry.defaultMode"
+    assert key in weight_js, "weight_entry.js must reference the shared localStorage key"
+    assert any(f["key"] == key for f in config_schema.schema_for_ui()["fields"]), \
+        "config_schema must define the client key the WeightEntry reads"
+
+
+# --- Phase 2: secret masking (never leak plaintext; sentinel = keep unchanged) ---
+
+def test_get_endpoint_masks_secret(client):
+    r = client.get("/api/config")
+    body = r.get_data(as_text=True)
+    d = r.get_json()
+    assert d["values"]["SCRAPER_API_KEY"] == config_schema.SECRET_SENTINEL  # set -> sentinel
+    assert "secret-key-123" not in body  # plaintext NEVER leaves the server
+
+
+def test_save_secret_sentinel_preserves_existing(cfg_file):
+    result = config_loader.save_config(
+        {"SCRAPER_API_KEY": config_schema.SECRET_SENTINEL, "sync_delay": 1.5})
+    assert result["ok"] is True
+    on_disk = _read(cfg_file)
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # sentinel -> unchanged
+    assert on_disk["sync_delay"] == 1.5  # sibling still saved
+
+
+def test_save_secret_new_value_updates(cfg_file):
+    result = config_loader.save_config({"SCRAPER_API_KEY": "brand-new-key"})
+    assert result["ok"] is True
+    assert _read(cfg_file)["SCRAPER_API_KEY"] == "brand-new-key"
+
+
+def test_validate_payload_skips_secret_sentinel():
+    coerced, errors = config_schema.validate_payload(
+        {"SCRAPER_API_KEY": config_schema.SECRET_SENTINEL, "sync_delay": 2.0})
+    assert errors == []
+    assert "SCRAPER_API_KEY" not in coerced  # sentinel -> skipped (keep)
+    assert coerced["sync_delay"] == 2.0
+
+
+# --- Phase 2: ip + port field validation ---
+
+def test_ip_field_validation():
+    assert config_schema.coerce_and_validate("server_ip", "192.168.1.29") == "192.168.1.29"
+    assert config_schema.coerce_and_validate("server_ip", "my-host.local") == "my-host.local"
+    for bad in ("", "has space", "1.2.3.4; rm -rf"):
+        with pytest.raises(config_schema.ConfigValidationError):
+            config_schema.coerce_and_validate("server_ip", bad)
+
+
+def test_port_field_validation():
+    assert config_schema.coerce_and_validate("spoolman_port", "7913") == 7913
+    # boundaries accepted
+    assert config_schema.coerce_and_validate("spoolman_port", 1) == 1
+    assert config_schema.coerce_and_validate("spoolman_port", 65535) == 65535
+    # boundaries + junk rejected (65536 guards an off-by-one in the range check)
+    for bad in (0, 65536, 70000, "abc", "nan"):
+        with pytest.raises(config_schema.ConfigValidationError):
+            config_schema.coerce_and_validate("spoolman_port", bad)
+
+
+def test_port_rejects_bool():
+    # int(True)==1 must NOT sneak a JSON boolean through as port 1
+    with pytest.raises(config_schema.ConfigValidationError):
+        config_schema.coerce_and_validate("spoolman_port", True)
+
+
+def test_port_infinity_rejected_cleanly():
+    # Phase 2 review: int(float('inf')) raises OverflowError — must normalize to
+    # a clean ConfigValidationError (400), never escape as a 500.
+    with pytest.raises(config_schema.ConfigValidationError):
+        config_schema.coerce_and_validate("spoolman_port", float("inf"))
+    coerced, errors = config_schema.validate_payload({"spoolman_port": float("inf")})
+    assert errors and "spoolman_port" not in coerced
+
+
+def test_save_connection_settings_persist(cfg_file):
+    result = config_loader.save_config({"server_ip": "10.0.0.5", "spoolman_port": 7000})
+    assert result["ok"] is True
+    on_disk = _read(cfg_file)
+    assert on_disk["server_ip"] == "10.0.0.5"
+    assert on_disk["spoolman_port"] == 7000
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # untouched sibling preserved
+    assert list(on_disk["printer_map"].keys()) == ["xl-1"]
+
+
+# --- Spoolman / FilaBridge host decoupling (optional filabridge_ip) ---
+
+def test_filabridge_ip_optional_allows_blank():
+    assert config_schema.coerce_and_validate("filabridge_ip", "") == ""
+    assert config_schema.coerce_and_validate("filabridge_ip", "   ") == ""
+    with pytest.raises(config_schema.ConfigValidationError):
+        config_schema.coerce_and_validate("filabridge_ip", "bad host!")
+    # server_ip is NOT optional — blank is rejected
+    with pytest.raises(config_schema.ConfigValidationError):
+        config_schema.coerce_and_validate("server_ip", "")
+
+
+def test_get_api_urls_falls_back_to_server_ip(tmp_path, monkeypatch):
+    seed = {"server_ip": "10.0.0.1", "spoolman_port": 7000, "filabridge_port": 5050}
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(seed), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    sm, fb = config_loader.get_api_urls()
+    assert sm == "http://10.0.0.1:7000"
+    assert fb == "http://10.0.0.1:5050/api"  # no filabridge_ip -> falls back
+
+
+def test_get_api_urls_uses_separate_filabridge_host(tmp_path, monkeypatch):
+    seed = {"server_ip": "10.0.0.1", "spoolman_port": 7000,
+            "filabridge_ip": "10.0.0.99", "filabridge_port": 5050}
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(seed), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    sm, fb = config_loader.get_api_urls()
+    assert sm == "http://10.0.0.1:7000"
+    assert fb == "http://10.0.0.99:5050/api"  # FilaBridge on its own host
+
+
+def test_save_filabridge_ip_persists(cfg_file):
+    result = config_loader.save_config({"filabridge_ip": "10.0.0.99"})
+    assert result["ok"] is True
+    assert _read(cfg_file)["filabridge_ip"] == "10.0.0.99"
+
+
+# --- Phase 2 review test-gaps: empty-secret GET + no-log-leak ---
+
+def test_get_endpoint_empty_secret_returns_blank(tmp_path, monkeypatch):
+    try:
+        import app as app_module  # noqa: E402
+    except Exception as e:  # pragma: no cover
+        pytest.skip(f"app import unavailable: {e}")
+    seed = dict(SEED)
+    seed["SCRAPER_API_KEY"] = ""  # not set
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(seed), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    d = app_module.app.test_client().get("/api/config").get_json()
+    assert d["values"]["SCRAPER_API_KEY"] == ""  # unset -> "", NOT the sentinel
+
+
+def test_put_secret_value_never_logged(client, monkeypatch):
+    import state
+    logs = []
+    monkeypatch.setattr(state, "add_log_entry", lambda *a, **k: logs.append((a, k)))
+    r = client.put("/api/config", json={"values": {"SCRAPER_API_KEY": "super-secret-xyz"}})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert "super-secret-xyz" not in " ".join(str(x) for x in logs)  # value never logged
+
+
+# --- L18 Phase 3: printer_map canonicalization + guarded write ---
+
+def test_canonicalize_printer_map_uppercases_keys():
+    canon, err = config_loader._canonicalize_printer_map(
+        {"xl-1": {"printer_name": "XL", "position": 0}})
+    assert err is None
+    assert list(canon.keys()) == ["XL-1"]
+    assert canon["XL-1"] == {"printer_name": "XL", "position": 0}
+
+
+def test_canonicalize_printer_map_case_collision_rejected():
+    canon, err = config_loader._canonicalize_printer_map(
+        {"xl-1": {"printer_name": "A", "position": 0},
+         "XL-1": {"printer_name": "B", "position": 1}})
+    assert canon is None and "collision" in err.lower()
+
+
+def test_canonicalize_printer_map_shape_validation():
+    _, e1 = config_loader._canonicalize_printer_map({"XL-1": {"position": 0}})  # no name
+    assert e1 and "name" in e1.lower()
+    _, e2 = config_loader._canonicalize_printer_map({"XL-1": {"printer_name": "X", "position": "abc"}})
+    assert e2 and "position" in e2.lower()
+    _, e3 = config_loader._canonicalize_printer_map({"XL-1": {"printer_name": "X", "position": -1}})
+    assert e3 and "position" in e3.lower()
+
+
+def test_save_printer_map_persists_uppercased_and_preserves_siblings(cfg_file):
+    result = config_loader.save_printer_map(
+        {"xl-1": {"printer_name": "🦝 XL", "position": 0},
+         "core1-m0": {"printer_name": "Core One", "position": 0}})
+    assert result["ok"] is True
+    on_disk = _read(cfg_file)
+    assert set(on_disk["printer_map"].keys()) == {"XL-1", "CORE1-M0"}  # uppercased
+    # full-dict equality: every OTHER key (nested print_settings, dryer_slots list,
+    # comments, secret, ports) preserved verbatim by the passthrough merge.
+    expected = dict(SEED)
+    expected["printer_map"] = {"XL-1": {"printer_name": "🦝 XL", "position": 0},
+                               "CORE1-M0": {"printer_name": "Core One", "position": 0}}
+    assert on_disk == expected
+
+
+def test_save_printer_map_rejects_bad_shape_no_disk_change(cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    result = config_loader.save_printer_map({"XL-1": {"position": 0}})  # missing name
+    assert result["ok"] is False
+    assert cfg_file.read_text(encoding="utf-8") == before
+
+
+def _ref_env(monkeypatch, slot_targets=None, spools_by_loc=None,
+             spool_raises=False, locations_raises=False):
+    """Stub the two referential sources the PUT /api/printer_map guard consults.
+    spool_raises / locations_raises simulate a dependency outage so the guard's
+    fail-CLOSED behavior can be tested."""
+    import locations_db
+    import spoolman_api
+    rows = ([{"LocationID": "PM-DB-1", "Type": "Dryer Box", "extra": {"slot_targets": slot_targets}}]
+            if slot_targets else [])
+    if locations_raises:
+        def _boom():
+            raise RuntimeError("locations.json corrupt")
+        monkeypatch.setattr(locations_db, "load_locations_list", _boom)
+    else:
+        monkeypatch.setattr(locations_db, "load_locations_list", lambda: rows)
+    sbl = spools_by_loc or {}
+    if spool_raises:
+        def _sboom(loc):
+            raise RuntimeError("Spoolman unreachable")
+        monkeypatch.setattr(spoolman_api, "get_spools_at_location_strict", _sboom)
+    else:
+        monkeypatch.setattr(spoolman_api, "get_spools_at_location_strict",
+                            lambda loc: sbl.get(str(loc).strip().upper(), []))
+
+
+def test_put_printer_map_add_and_edit_allowed(client, monkeypatch):
+    _ref_env(monkeypatch)  # nothing referenced; SEED printer_map is {"xl-1": ...}
+    new_pm = {"XL-1": {"printer_name": "XL Renamed", "position": 2},
+              "XL-6": {"printer_name": "XL Renamed", "position": 5}}
+    r = client.put("/api/printer_map", json={"printer_map": new_pm})
+    assert r.status_code == 200
+    assert set(r.get_json()["printer_map"].keys()) == {"XL-1", "XL-6"}
+
+
+def test_put_printer_map_remove_unreferenced_allowed(client, monkeypatch):
+    _ref_env(monkeypatch)  # XL-1 not referenced anywhere
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+
+
+def test_put_printer_map_remove_bound_to_slot_blocked(client, monkeypatch):
+    _ref_env(monkeypatch, slot_targets={"1": "XL-1"})  # a dryer slot points at XL-1
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
+    assert r.status_code == 409
+    d = r.get_json()
+    assert d["ok"] is False and any(b["location_id"] == "XL-1" for b in d["blocked"])
+
+
+def test_put_printer_map_remove_with_spools_blocked(client, monkeypatch):
+    _ref_env(monkeypatch, spools_by_loc={"XL-1": [{"id": 1}]})  # a spool sits at XL-1
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
+    assert r.status_code == 409
+    assert r.get_json()["ok"] is False
+
+
+# --- Phase 3 review fixes: guard FAILS CLOSED + PRINTER:<prefix> sentinel ---
+
+def test_put_printer_map_fails_closed_when_spoolman_unreachable(client, monkeypatch):
+    _ref_env(monkeypatch, spool_raises=True)  # can't verify spools
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
+    assert r.status_code == 409
+    d = r.get_json()
+    assert d["ok"] is False
+    assert any("could not verify" in " ".join(b["reasons"]).lower() for b in d["blocked"])
+
+
+def test_put_printer_map_fails_closed_when_locations_unreadable(client, monkeypatch):
+    _ref_env(monkeypatch, locations_raises=True)  # can't scan slot_targets
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
+    assert r.status_code == 409
+    assert r.get_json()["ok"] is False
+
+
+def test_put_printer_map_blocks_last_toolhead_of_pool_prefix(client, monkeypatch):
+    # a dryer pool slot feeds PRINTER:XL; SEED's only XL-* toolhead is XL-1 —
+    # removing it drops the XL prefix, so the PRINTER:XL slot would dangle.
+    _ref_env(monkeypatch, slot_targets={"4": "PRINTER:XL"})
+    r = client.put("/api/printer_map", json={"printer_map": {"CORE1-M0": {"printer_name": "C1", "position": 0}}})
+    assert r.status_code == 409
+    d = r.get_json()
+    assert any("PRINTER:XL" in " ".join(b["reasons"]) for b in d["blocked"])
+
+
+def test_put_printer_map_allows_pool_prefix_when_another_toolhead_remains(client, monkeypatch):
+    # keep an XL-* toolhead so the XL prefix survives -> the PRINTER:XL slot is fine
+    _ref_env(monkeypatch, slot_targets={"4": "PRINTER:XL"})
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-2": {"printer_name": "XL", "position": 1}}})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+
+
+def test_put_printer_map_lowercase_resubmit_is_not_a_removal(client, monkeypatch):
+    _ref_env(monkeypatch, slot_targets={"1": "XL-1"})  # XL-1 IS bound
+    # resubmit the existing key in lowercase + edit its name -> NOT a removal
+    r = client.put("/api/printer_map", json={"printer_map": {"xl-1": {"printer_name": "XL Renamed", "position": 0}}})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert "XL-1" in r.get_json()["printer_map"]  # canonicalized, kept
+
+
+def test_put_printer_map_write_fault_is_500(client, monkeypatch):
+    _ref_env(monkeypatch)
+    monkeypatch.setattr(config_loader, "save_printer_map",
+                        lambda m: {"ok": False, "error": "config write failed: disk full"})
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-1": {"printer_name": "X", "position": 0}}})
+    assert r.status_code == 500  # infra fault, not client bad-input
+
+
+def test_put_printer_map_validation_error_is_400(client, monkeypatch):
+    _ref_env(monkeypatch)
+    monkeypatch.setattr(config_loader, "save_printer_map",
+                        lambda m: {"ok": False, "error": "printer_map['XL-1']: printer name is required"})
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-1": {"position": 0}}})
+    assert r.status_code == 400
+
+
+def test_save_printer_map_refuses_on_corrupt_existing(tmp_path, monkeypatch):
+    p = tmp_path / "config.json"
+    original = "{ corrupt json "
+    p.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    config_loader.LAST_CONFIG_ERROR = None
+    result = config_loader.save_printer_map({"XL-1": {"printer_name": "X", "position": 0}})
+    assert result["ok"] is False and "refusing to save" in result["error"]
+    assert p.read_text(encoding="utf-8") == original  # untouched
+
+
+def test_canonicalize_printer_map_rejects_bool_position():
+    _, err = config_loader._canonicalize_printer_map({"XL-1": {"printer_name": "X", "position": True}})
+    assert err and "boolean" in err.lower()
+
+
+# --- L18 Phase 4: config export / import ---
+
+def test_export_redacts_secret(client):
+    r = client.get("/api/config/export")
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert "secret-key-123" not in body  # plaintext NOT in the export
+    d = json.loads(body)
+    assert d["SCRAPER_API_KEY"] == config_schema.SECRET_SENTINEL
+    assert d["server_ip"] == "192.168.1.29"  # full backup — other keys present
+    assert "printer_map" in d
+
+
+def test_export_include_secrets(client):
+    r = client.get("/api/config/export?include_secrets=1")
+    d = json.loads(r.get_data(as_text=True))
+    assert d["SCRAPER_API_KEY"] == "secret-key-123"  # plaintext only when explicitly asked
+
+
+def test_import_dry_run_returns_diff_no_write(client, cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    r = client.post("/api/config/import", json={"config": {"sync_delay": 1.5}, "dry_run": True})
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["ok"] and d["dry_run"] is True
+    assert any(x["key"] == "sync_delay" for x in d["diff"])
+    assert cfg_file.read_text(encoding="utf-8") == before  # dry-run writes nothing
+
+
+def test_import_applies_patch_only_ignoring_non_schema(client, cfg_file):
+    r = client.post("/api/config/import", json={"config": {
+        "sync_delay": 2.5,
+        "printer_map": {"BOGUS": {"printer_name": "x", "position": 0}},  # not a schema field
+        "comment": "hacked",
+    }})
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["ok"] and "sync_delay" in d["saved"]
+    assert "printer_map" in d["ignored"] and "comment" in d["ignored"]
+    on_disk = _read(cfg_file)
+    assert on_disk["sync_delay"] == 2.5  # applied
+    assert list(on_disk["printer_map"].keys()) == ["xl-1"]  # UNTOUCHED (ignored)
+    assert on_disk["comment"] == "--- DEV CONFIGURATION ---"  # UNTOUCHED
+
+
+def test_import_validation_rejects_bad_no_write(client, cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    r = client.post("/api/config/import", json={"config": {"sync_delay": "abc"}})
+    assert r.status_code == 400
+    assert r.get_json()["ok"] is False
+    assert cfg_file.read_text(encoding="utf-8") == before
+
+
+def test_import_secret_sentinel_keeps_existing(client, cfg_file):
+    r = client.post("/api/config/import", json={"config": {
+        "SCRAPER_API_KEY": config_schema.SECRET_SENTINEL, "sync_delay": 3.0}})
+    assert r.status_code == 200 and r.get_json()["ok"]
+    on_disk = _read(cfg_file)
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # sentinel -> kept
+    assert on_disk["sync_delay"] == 3.0
+
+
+def test_import_non_dict_body_400(client):
+    assert client.post("/api/config/import", json=[1, 2, 3]).status_code == 400
+    assert client.post("/api/config/import", json={"config": "nope"}).status_code == 400
+
+
+def test_import_round_trips_redacted_export(client, cfg_file):
+    # export (redacted) then import it back -> secret preserved via the sentinel
+    exported = json.loads(client.get("/api/config/export").get_data(as_text=True))
+    r = client.post("/api/config/import", json={"config": exported})
+    assert r.status_code == 200 and r.get_json()["ok"]
+    assert _read(cfg_file)["SCRAPER_API_KEY"] == "secret-key-123"
+
+
+def test_import_new_secret_masked_in_diff_and_response(client, cfg_file):
+    # TOP-PRIORITY regression guard: a NEW (non-sentinel) secret submitted on
+    # import must NEVER be echoed back in the dry-run diff OR the apply response.
+    hostile = "hostile-new-key-xyz"
+    r = client.post("/api/config/import",
+                    json={"config": {"SCRAPER_API_KEY": hostile, "sync_delay": 1.0}, "dry_run": True})
+    assert r.status_code == 200
+    assert hostile not in r.get_data(as_text=True)  # plaintext never echoed
+    sec = [x for x in r.get_json()["diff"] if x["key"] == "SCRAPER_API_KEY"]
+    assert sec and sec[0]["to"] == "(new secret)"
+    # apply: still not echoed; on-disk gets the new value
+    r2 = client.post("/api/config/import", json={"config": {"SCRAPER_API_KEY": hostile}})
+    assert r2.status_code == 200 and hostile not in r2.get_data(as_text=True)
+    assert _read(cfg_file)["SCRAPER_API_KEY"] == hostile  # applied, just never echoed
+
+
+def test_import_patch_leaves_omitted_keys(client, cfg_file):
+    # PATCH, not replace: importing only sync_delay must leave other keys as-is.
+    client.post("/api/config/import", json={"config": {"sync_delay": 4.0}})
+    on_disk = _read(cfg_file)
+    assert on_disk["sync_delay"] == 4.0
+    assert on_disk["server_ip"] == "192.168.1.29"
+    assert on_disk["spoolman_port"] == 7913
+    assert on_disk["auto_recover_filabridge_errors"] is True
+
+
+def test_import_apply_write_fault_is_500(client, monkeypatch):
+    monkeypatch.setattr(config_loader, "save_config",
+                        lambda v: {"ok": False, "error": "config write failed: disk full"})
+    r = client.post("/api/config/import", json={"config": {"sync_delay": 1.0}})
+    assert r.status_code == 500 and r.get_json()["ok"] is False
+
+
+def test_import_apply_refuse_on_corrupt_is_409(client, monkeypatch):
+    monkeypatch.setattr(config_loader, "save_config",
+                        lambda v: {"ok": False, "error": "refusing to save: the existing config ..."})
+    r = client.post("/api/config/import", json={"config": {"sync_delay": 1.0}})
+    assert r.status_code == 409
+
+
+def test_import_deeply_nested_json_is_400_not_500(client):
+    # RecursionError from json.loads on deep nesting must be a clean 400, not 500.
+    deep = "[" * 50000 + "]" * 50000  # ~100KB, under the size cap -> reaches the parser
+    r = client.post("/api/config/import", data=deep, content_type="application/json")
+    assert r.status_code == 400
+
+
+def test_import_oversized_body_is_413(client):
+    big = '{"config": {"sync_delay": 1.0, "x": "' + ("a" * (600 * 1024)) + '"}}'
+    r = client.post("/api/config/import", data=big, content_type="application/json")
+    assert r.status_code == 413

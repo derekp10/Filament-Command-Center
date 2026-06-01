@@ -110,6 +110,51 @@
                     </div>
                 </div>
 
+                <!-- L18 Phase 1 — generic settings rendered from config_schema.py.
+                     Adding a setting is a one-line Field edit in the schema;
+                     inv_settings.js paints whatever the schema returns. -->
+                <div class="card bg-black border-secondary mb-3">
+                    <div class="card-header" style="background: #1a1a1a;">
+                        <span class="fw-bold text-info">⚙️ Settings</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="config-generated-settings">
+                            <div class="small" style="color: rgba(255,255,255,0.6);">Loading…</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- L18 Phase 3 — printer_map (toolhead) editor -->
+                <div class="card bg-black border-secondary mb-3">
+                    <div class="card-header" style="background: #1a1a1a;">
+                        <span class="fw-bold text-info">🖨️ Printers &amp; Toolheads</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="config-printer-map">
+                            <div class="small" style="color: rgba(255,255,255,0.6);">Loading…</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- L18 Phase 4 — config import / export -->
+                <div class="card bg-black border-secondary mb-3">
+                    <div class="card-header" style="background: #1a1a1a;">
+                        <span class="fw-bold text-info">📦 Import / Export</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="small mb-2" style="color: rgba(255,255,255,0.55);">
+                            Export the full config for backup (the API key is redacted). Import
+                            patches only the settings above — printer_map, paths, etc. keep their
+                            own editors and are ignored on import.
+                        </div>
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <a class="btn btn-sm btn-outline-info" href="/api/config/export" download>⬇ Export config</a>
+                            <input type="file" id="cfgio-file" accept="application/json,.json" class="d-none">
+                            <button type="button" class="btn btn-sm btn-outline-info" id="cfgio-import-btn">⬆ Import settings…</button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Future sections slot in here. Pattern: a Bootstrap .card
                      with a header (title + action button) and a body that
                      can carry whatever shape the panel needs. -->
