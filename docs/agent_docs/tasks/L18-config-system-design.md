@@ -247,3 +247,15 @@ The single dangerous primitive, proven before any framework rides on it.
 3. **What lives on the *prod* `config.json` that's not in the dev `load_config()` defaults?** This checkout has no `config.json`/`.example` (gitignored, absent in dev tree). The judges cite `SCRAPER_API_KEY`, `spoolman_db_path`, `backup_directory`, `export_directory`, `print_settings`, and `comment*` keys on the prod file. Please confirm the real prod key list so the passthrough byte-identity test seeds from reality, and so we know which (if any) deserve to be promoted to first-class `Field`s vs. left as passthrough.
 4. **Section taxonomy / labels.** Proposed: Connection / Behavior / Printers / This-Browser. Want different groupings or names before the schema hard-codes section order?
 5. **Import overwrite semantics.** On import, should an incoming file *replace* the full server set (missing keys reset to default) or *patch* only the keys present in the file? Recommendation: patch-only (safer, matches passthrough philosophy) — confirm.
+
+---
+
+## Implemented (Phases 1–2, with adversarial review)
+
+**Phase 1** (`a40f6b3`, +E2E `bcc412a`): safe writer (`save_config`: passthrough merge + atomic temp-file write + exact-equality verify-after-write + retry-once + rolling `.bak` + refuse-on-unreadable + `LAST_CONFIG_ERROR`), `load_config_raw()`, `GET`/`PUT /api/config`, schema-driven `inv_settings.js` Settings card. Reviewed (21 agents) → fixed 2 data-safety bugs (sparse-config wipe on unreadable file; NaN-to-disk).
+
+**Phase 2** (`9d3fc2f` + hardening): connection settings **editable** (Q1 answered: editable in P2) — `server_ip`, ports, and a **masked/updatable `SCRAPER_API_KEY`** (`SECRET_SENTINEL` round-trip; plaintext never sent to the browser — review-confirmed no-leak). New field types `ip`/`port`/`secret`. Reviewed (18 agents) → verdict sound; fixed port-`Infinity`→500 + a sentinel-collision nit.
+
+**Multi-host decoupling (Derek, 2026-05-31):** Spoolman and FilaBridge are NOT assumed to share a host. Added an **optional `filabridge_ip`** (blank ⇒ falls back to `server_ip`); `get_api_urls()` derives the FilaBridge host independently. Backward-compatible — existing single-host configs behave identically. Supersedes the single-`server_ip` assumption latent in `get_api_urls` pre-L18.
+
+**Open-question status:** Q1 ✅ (editable in P2). Q3 ✅ (real keys confirmed: `SCRAPER_API_KEY`, `spoolman_db_path`, `backup_directory`, `export_directory`, `print_settings`, `printer_map`, `dryer_slots`, `comment*` — all preserved by passthrough). Q2 (`printer_map` editor) deferred → Phase 3. Q5 (import/export) deferred → Phase 4. Q4 current taxonomy: Connection / Behavior / This-Browser.

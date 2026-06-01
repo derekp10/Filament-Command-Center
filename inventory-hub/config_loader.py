@@ -93,8 +93,12 @@ def load_config():
 def get_api_urls():
     cfg = load_config()
     server_ip = cfg.get("server_ip")
+    # Spoolman and FilaBridge need NOT share a host. filabridge_ip is optional —
+    # when blank/absent it falls back to server_ip, so existing single-host
+    # configs behave identically.
+    fb_host = cfg.get("filabridge_ip") or server_ip
     sm_url = f"http://{server_ip}:{cfg.get('spoolman_port')}"
-    fb_url = f"http://{server_ip}:{cfg.get('filabridge_port')}/api"
+    fb_url = f"http://{fb_host}:{cfg.get('filabridge_port')}/api"
     return sm_url, fb_url
 
 

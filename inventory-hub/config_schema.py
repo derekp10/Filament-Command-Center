@@ -6,10 +6,9 @@ from this schema and GET/PUT /api/config validate against the same definitions,
 so adding the Nth setting later is a one-line `Field` edit — not UI + backend +
 persistence triplicate work.
 
-Phase 1 deliberately seeds only LOW-STAKES settings (sync_delay,
-auto_recover_filabridge_errors, and the client-side weigh-entry default mode).
-server_ip / ports / printer_map are intentionally NOT editable yet — they are
-preserved untouched by save_config's passthrough merge. See
+Phase 2 adds the connection settings (server_ip, filabridge_ip, ports) and a
+masked SCRAPER_API_KEY secret. printer_map / dryer_slots remain NOT editable
+(preserved untouched by save_config's passthrough merge). See
 docs/agent_docs/tasks/L18-config-system-design.md for the phased plan.
 
 `scope`:
@@ -43,6 +42,7 @@ class Field:
     choices: Optional[List[str]] = None   # required for type='select'
     min: Optional[float] = None
     max: Optional[float] = None
+    optional: bool = False                 # type='ip': blank allowed (falls back elsewhere)
 
 
 # Sentinel returned by GET /api/config for secret fields, and accepted by PUT to
@@ -63,11 +63,14 @@ SECTIONS = [
 
 CONFIG_SCHEMA = [
     # Connection — defaults MUST mirror config_loader.load_config()'s defaults.
-    Field("server_ip", "Server IP / host", "ip", "127.0.0.1",
+    Field("server_ip", "Spoolman host / IP", "ip", "127.0.0.1",
           section="connection", scope="server",
-          help="Host running Spoolman + FilaBridge."),
+          help="Host running Spoolman (and FilaBridge too, unless overridden below)."),
     Field("spoolman_port", "Spoolman port", "port", 7912,
           section="connection", scope="server", min=1, max=65535),
+    Field("filabridge_ip", "FilaBridge host / IP", "ip", "",
+          section="connection", scope="server", optional=True,
+          help="Leave blank if FilaBridge runs on the same host as Spoolman."),
     Field("filabridge_port", "FilaBridge port", "port", 5000,
           section="connection", scope="server", min=1, max=65535),
     Field("SCRAPER_API_KEY", "Scraper API key", "secret", "",
@@ -116,8 +119,10 @@ def coerce_and_validate(key, value):
             else:
                 coerced = bool(value)
         elif t in ("int", "port"):
-            # int(3.9)->3 / int(True)->1 coerce silently. No general int Field
-            # ships yet; 'port' is range-bounded (1..65535) below.
+            # Reject booleans explicitly — int(True)==1 would otherwise let a
+            # JSON bool through as port 1. int(3.9)->3 truncation still applies.
+            if isinstance(value, bool):
+                raise ConfigValidationError(f"{f.label}: expected a number, not a boolean")
             coerced = int(value)
         elif t == "float":
             coerced = float(value)
@@ -128,13 +133,20 @@ def coerce_and_validate(key, value):
                     f"{f.label}: '{coerced}' is not one of {f.choices}")
         elif t == "ip":
             coerced = str(value).strip()
-            if not coerced or not _IP_HOST_RE.match(coerced):
+            if not coerced:
+                if f.optional:
+                    coerced = ""  # blank allowed (e.g. filabridge_ip -> falls back to server_ip)
+                else:
+                    raise ConfigValidationError(f"{f.label}: required")
+            elif not _IP_HOST_RE.match(coerced):
                 raise ConfigValidationError(f"{f.label}: '{value}' is not a valid IP / hostname")
         else:  # string, secret
             coerced = str(value)
     except ConfigValidationError:
         raise
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: e.g. int(float('inf')) for a port from a crafted JSON
+        # body — normalize to a clean validation error (400) instead of a 500.
         raise ConfigValidationError(f"{f.label}: '{value}' is not a valid {t}")
 
     if t in ("int", "float", "port"):
@@ -189,6 +201,7 @@ def schema_for_ui():
                 "key": f.key, "label": f.label, "type": f.type, "default": f.default,
                 "section": f.section, "scope": f.scope, "help": f.help,
                 "choices": f.choices, "min": f.min, "max": f.max,
+                "optional": f.optional,
             }
             for f in CONFIG_SCHEMA
         ],

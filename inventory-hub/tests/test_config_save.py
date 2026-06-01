@@ -387,9 +387,28 @@ def test_ip_field_validation():
 
 def test_port_field_validation():
     assert config_schema.coerce_and_validate("spoolman_port", "7913") == 7913
-    for bad in (0, 70000, "abc", "nan"):
+    # boundaries accepted
+    assert config_schema.coerce_and_validate("spoolman_port", 1) == 1
+    assert config_schema.coerce_and_validate("spoolman_port", 65535) == 65535
+    # boundaries + junk rejected (65536 guards an off-by-one in the range check)
+    for bad in (0, 65536, 70000, "abc", "nan"):
         with pytest.raises(config_schema.ConfigValidationError):
             config_schema.coerce_and_validate("spoolman_port", bad)
+
+
+def test_port_rejects_bool():
+    # int(True)==1 must NOT sneak a JSON boolean through as port 1
+    with pytest.raises(config_schema.ConfigValidationError):
+        config_schema.coerce_and_validate("spoolman_port", True)
+
+
+def test_port_infinity_rejected_cleanly():
+    # Phase 2 review: int(float('inf')) raises OverflowError — must normalize to
+    # a clean ConfigValidationError (400), never escape as a 500.
+    with pytest.raises(config_schema.ConfigValidationError):
+        config_schema.coerce_and_validate("spoolman_port", float("inf"))
+    coerced, errors = config_schema.validate_payload({"spoolman_port": float("inf")})
+    assert errors and "spoolman_port" not in coerced
 
 
 def test_save_connection_settings_persist(cfg_file):
@@ -400,3 +419,67 @@ def test_save_connection_settings_persist(cfg_file):
     assert on_disk["spoolman_port"] == 7000
     assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # untouched sibling preserved
     assert list(on_disk["printer_map"].keys()) == ["xl-1"]
+
+
+# --- Spoolman / FilaBridge host decoupling (optional filabridge_ip) ---
+
+def test_filabridge_ip_optional_allows_blank():
+    assert config_schema.coerce_and_validate("filabridge_ip", "") == ""
+    assert config_schema.coerce_and_validate("filabridge_ip", "   ") == ""
+    with pytest.raises(config_schema.ConfigValidationError):
+        config_schema.coerce_and_validate("filabridge_ip", "bad host!")
+    # server_ip is NOT optional — blank is rejected
+    with pytest.raises(config_schema.ConfigValidationError):
+        config_schema.coerce_and_validate("server_ip", "")
+
+
+def test_get_api_urls_falls_back_to_server_ip(tmp_path, monkeypatch):
+    seed = {"server_ip": "10.0.0.1", "spoolman_port": 7000, "filabridge_port": 5050}
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(seed), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    sm, fb = config_loader.get_api_urls()
+    assert sm == "http://10.0.0.1:7000"
+    assert fb == "http://10.0.0.1:5050/api"  # no filabridge_ip -> falls back
+
+
+def test_get_api_urls_uses_separate_filabridge_host(tmp_path, monkeypatch):
+    seed = {"server_ip": "10.0.0.1", "spoolman_port": 7000,
+            "filabridge_ip": "10.0.0.99", "filabridge_port": 5050}
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(seed), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    sm, fb = config_loader.get_api_urls()
+    assert sm == "http://10.0.0.1:7000"
+    assert fb == "http://10.0.0.99:5050/api"  # FilaBridge on its own host
+
+
+def test_save_filabridge_ip_persists(cfg_file):
+    result = config_loader.save_config({"filabridge_ip": "10.0.0.99"})
+    assert result["ok"] is True
+    assert _read(cfg_file)["filabridge_ip"] == "10.0.0.99"
+
+
+# --- Phase 2 review test-gaps: empty-secret GET + no-log-leak ---
+
+def test_get_endpoint_empty_secret_returns_blank(tmp_path, monkeypatch):
+    try:
+        import app as app_module  # noqa: E402
+    except Exception as e:  # pragma: no cover
+        pytest.skip(f"app import unavailable: {e}")
+    seed = dict(SEED)
+    seed["SCRAPER_API_KEY"] = ""  # not set
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(seed), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    d = app_module.app.test_client().get("/api/config").get_json()
+    assert d["values"]["SCRAPER_API_KEY"] == ""  # unset -> "", NOT the sentinel
+
+
+def test_put_secret_value_never_logged(client, monkeypatch):
+    import state
+    logs = []
+    monkeypatch.setattr(state, "add_log_entry", lambda *a, **k: logs.append((a, k)))
+    r = client.put("/api/config", json={"values": {"SCRAPER_API_KEY": "super-secret-xyz"}})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert "super-secret-xyz" not in " ".join(str(x) for x in logs)  # value never logged

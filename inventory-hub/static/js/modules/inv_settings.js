@@ -123,13 +123,16 @@
         const statusEl = document.getElementById('cfgset-status');
         const btn = document.getElementById('cfgset-save');
         const serverValues = {};
+        let reservedHit = false;
         host.querySelectorAll('.cfgset-input').forEach((el) => {
             const key = el.dataset.key;
             const type = el.dataset.type;
             const scope = el.dataset.scope;
             if (type === 'secret') {
                 // Blank = keep the existing secret (send the sentinel); anything
-                // typed = the new value. The plaintext never came from the server.
+                // typed = the new value. Guard the (implausible) case where the
+                // user literally types the internal sentinel string.
+                if (el.value !== '' && el.value === SECRET_SENTINEL) { reservedHit = true; return; }
                 serverValues[key] = (el.value === '' ? SECRET_SENTINEL : el.value);
                 return;
             }
@@ -144,6 +147,11 @@
                 serverValues[key] = val;
             }
         });
+        if (reservedHit) {
+            if (window.showToast) window.showToast('That value is reserved — choose a different key.', 'error', 7000);
+            if (statusEl) { statusEl.style.color = '#ff6b6b'; statusEl.textContent = 'Reserved value — not saved.'; }
+            return;
+        }
         if (btn) btn.disabled = true;
         if (statusEl) { statusEl.style.color = 'rgba(255,255,255,0.6)'; statusEl.textContent = 'Saving…'; }
         try {

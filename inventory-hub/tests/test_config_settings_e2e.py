@@ -97,3 +97,24 @@ def test_client_weigh_mode_persists_across_reload(page: Page, base_url: str, res
             "([k, v]) => { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); }",
             [WEIGH_KEY, original],
         )
+
+
+@pytest.mark.usefixtures("require_server")
+def test_phase2_secret_and_connection_fields_render(page: Page, base_url: str, reset_dom_state_js: str):
+    # Non-destructive: never clicks Save with a typed secret, so the real key
+    # on disk is never touched.
+    _open_settings(page, base_url, reset_dom_state_js)
+    sec = page.locator('.cfgset-input[data-key="SCRAPER_API_KEY"]')
+    expect(sec).to_be_visible()
+    assert sec.evaluate("el => el.type") == "password"
+    assert sec.input_value() == ""  # plaintext is NEVER populated into the field
+    # the eye toggles password <-> text
+    eye = page.locator(".cfgset-eye").first
+    eye.click()
+    assert sec.evaluate("el => el.type") == "text"
+    eye.click()
+    assert sec.evaluate("el => el.type") == "password"
+    # ip fields render as text, port as number
+    assert page.locator('.cfgset-input[data-key="server_ip"]').evaluate("el => el.type") == "text"
+    assert page.locator('.cfgset-input[data-key="filabridge_ip"]').evaluate("el => el.type") == "text"
+    assert page.locator('.cfgset-input[data-key="spoolman_port"]').evaluate("el => el.type") == "number"
