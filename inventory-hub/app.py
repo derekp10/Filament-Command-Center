@@ -3701,6 +3701,75 @@ def api_put_config():
     return jsonify(result), 400
 
 
+@app.route('/api/config/export', methods=['GET'])
+def api_config_export():
+    """L18 Phase 4 — export the current config as a JSON download for backup /
+    transfer. Secret values are REDACTED to the sentinel unless
+    ?include_secrets=1, so an export is shareable without leaking the API key."""
+    include_secrets = request.args.get('include_secrets', '').lower() in ('1', 'true', 'yes')
+    raw = config_loader.load_config_raw()
+    if not isinstance(raw, dict):
+        raw = {}
+    out = dict(raw)
+    if not include_secrets:
+        for k in config_schema.SECRET_KEYS:
+            if out.get(k):
+                out[k] = config_schema.SECRET_SENTINEL
+    body = json.dumps(out, indent=4, ensure_ascii=False)
+    resp = app.response_class(body, mimetype='application/json')
+    resp.headers['Content-Disposition'] = 'attachment; filename="fcc-config-export.json"'
+    return resp
+
+
+@app.route('/api/config/import', methods=['POST'])
+def api_config_import():
+    """L18 Phase 4 — import config SETTINGS from an uploaded JSON. PATCH-only:
+    applies ONLY schema-managed server keys present in the file (printer_map /
+    dryer_slots / paths / comments are NOT touched — they keep their own editors).
+    Body: {"config": {...}, "dry_run": bool}. dry_run returns the diff without
+    writing. A secret arriving as the sentinel keeps the existing value."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "import body must be a JSON object"}), 400
+    incoming = payload.get('config')
+    if not isinstance(incoming, dict):
+        return jsonify({"ok": False, "error": "import body needs a 'config' object"}), 400
+    dry_run = bool(payload.get('dry_run'))
+
+    cfg = config_loader.load_config()
+    fields = {f.key: f for f in config_schema.CONFIG_SCHEMA if f.scope == 'server'}
+    applicable = {k: v for k, v in incoming.items() if k in fields}
+    ignored = sorted(k for k in incoming if k not in fields)
+
+    coerced, errors = config_schema.validate_payload(applicable)
+    if errors:
+        return jsonify({"ok": False, "error": "; ".join(errors), "ignored": ignored}), 400
+
+    # Diff (current -> incoming) for the confirmation overlay; secrets masked.
+    diff = []
+    for k in sorted(coerced):
+        f = fields[k]
+        if f.type == 'secret':
+            diff.append({"key": k, "label": f.label,
+                         "from": "(set)" if cfg.get(k) else "(unset)", "to": "(new secret)"})
+        else:
+            cur, new = cfg.get(k, f.default), coerced[k]
+            if str(cur) != str(new):
+                diff.append({"key": k, "label": f.label, "from": cur, "to": new})
+
+    if dry_run:
+        return jsonify({"ok": True, "dry_run": True, "diff": diff, "ignored": ignored})
+
+    result = config_loader.save_config(applicable)
+    if not result.get('ok'):
+        # Validation already passed above, so a failure here is write/IO (500).
+        state.add_log_entry(f"⚙️ Config import failed: {result.get('error')}", "ERROR", "ff4444")
+        return jsonify({"ok": False, "error": result.get('error'), "ignored": ignored}), 500
+    state.add_log_entry(
+        f"⚙️ Config imported ({len(result.get('saved') or [])} settings, {len(ignored)} ignored)", "INFO")
+    return jsonify({"ok": True, "saved": result.get('saved'), "ignored": ignored, "diff": diff})
+
+
 @app.route('/api/filabridge/reconcile', methods=['GET'])
 def api_filabridge_reconcile():
     """Walk FilaBridge /status, cross-check against Spoolman per-spool

@@ -92,6 +92,7 @@ CONFIG_SCHEMA = [
 _BY_KEY = {f.key: f for f in CONFIG_SCHEMA}
 SERVER_FIELDS = [f for f in CONFIG_SCHEMA if f.scope == "server"]
 SERVER_KEYS = frozenset(f.key for f in SERVER_FIELDS)
+SECRET_KEYS = frozenset(f.key for f in CONFIG_SCHEMA if f.type == "secret")
 
 
 class ConfigValidationError(ValueError):

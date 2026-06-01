@@ -661,3 +661,78 @@ def test_save_printer_map_refuses_on_corrupt_existing(tmp_path, monkeypatch):
 def test_canonicalize_printer_map_rejects_bool_position():
     _, err = config_loader._canonicalize_printer_map({"XL-1": {"printer_name": "X", "position": True}})
     assert err and "boolean" in err.lower()
+
+
+# --- L18 Phase 4: config export / import ---
+
+def test_export_redacts_secret(client):
+    r = client.get("/api/config/export")
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert "secret-key-123" not in body  # plaintext NOT in the export
+    d = json.loads(body)
+    assert d["SCRAPER_API_KEY"] == config_schema.SECRET_SENTINEL
+    assert d["server_ip"] == "192.168.1.29"  # full backup — other keys present
+    assert "printer_map" in d
+
+
+def test_export_include_secrets(client):
+    r = client.get("/api/config/export?include_secrets=1")
+    d = json.loads(r.get_data(as_text=True))
+    assert d["SCRAPER_API_KEY"] == "secret-key-123"  # plaintext only when explicitly asked
+
+
+def test_import_dry_run_returns_diff_no_write(client, cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    r = client.post("/api/config/import", json={"config": {"sync_delay": 1.5}, "dry_run": True})
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["ok"] and d["dry_run"] is True
+    assert any(x["key"] == "sync_delay" for x in d["diff"])
+    assert cfg_file.read_text(encoding="utf-8") == before  # dry-run writes nothing
+
+
+def test_import_applies_patch_only_ignoring_non_schema(client, cfg_file):
+    r = client.post("/api/config/import", json={"config": {
+        "sync_delay": 2.5,
+        "printer_map": {"BOGUS": {"printer_name": "x", "position": 0}},  # not a schema field
+        "comment": "hacked",
+    }})
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["ok"] and "sync_delay" in d["saved"]
+    assert "printer_map" in d["ignored"] and "comment" in d["ignored"]
+    on_disk = _read(cfg_file)
+    assert on_disk["sync_delay"] == 2.5  # applied
+    assert list(on_disk["printer_map"].keys()) == ["xl-1"]  # UNTOUCHED (ignored)
+    assert on_disk["comment"] == "--- DEV CONFIGURATION ---"  # UNTOUCHED
+
+
+def test_import_validation_rejects_bad_no_write(client, cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    r = client.post("/api/config/import", json={"config": {"sync_delay": "abc"}})
+    assert r.status_code == 400
+    assert r.get_json()["ok"] is False
+    assert cfg_file.read_text(encoding="utf-8") == before
+
+
+def test_import_secret_sentinel_keeps_existing(client, cfg_file):
+    r = client.post("/api/config/import", json={"config": {
+        "SCRAPER_API_KEY": config_schema.SECRET_SENTINEL, "sync_delay": 3.0}})
+    assert r.status_code == 200 and r.get_json()["ok"]
+    on_disk = _read(cfg_file)
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # sentinel -> kept
+    assert on_disk["sync_delay"] == 3.0
+
+
+def test_import_non_dict_body_400(client):
+    assert client.post("/api/config/import", json=[1, 2, 3]).status_code == 400
+    assert client.post("/api/config/import", json={"config": "nope"}).status_code == 400
+
+
+def test_import_round_trips_redacted_export(client, cfg_file):
+    # export (redacted) then import it back -> secret preserved via the sentinel
+    exported = json.loads(client.get("/api/config/export").get_data(as_text=True))
+    r = client.post("/api/config/import", json={"config": exported})
+    assert r.status_code == 200 and r.get_json()["ok"]
+    assert _read(cfg_file)["SCRAPER_API_KEY"] == "secret-key-123"

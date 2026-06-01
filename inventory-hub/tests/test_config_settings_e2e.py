@@ -125,6 +125,24 @@ def test_phase2_secret_and_connection_fields_render(page: Page, base_url: str, r
 
 
 @pytest.mark.usefixtures("require_server")
+def test_phase4_import_export_card(page: Page, base_url: str, reset_dom_state_js: str, tmp_path):
+    # Non-destructive: drives Import to the dry-run confirm overlay, then CANCELS
+    # (never clicks Apply), so the real config.json is untouched.
+    _open_settings(page, base_url, reset_dom_state_js)
+    expect(page.locator('a[href="/api/config/export"]')).to_be_visible()
+    expect(page.locator("#cfgio-import-btn")).to_be_visible()
+    # upload a config file -> dry-run -> the confirm overlay mounts
+    f = tmp_path / "cfg-import.json"
+    f.write_text('{"sync_delay": 0.7}', encoding="utf-8")
+    page.locator("#cfgio-file").set_input_files(str(f))
+    page.wait_for_selector("#cfgio-apply", timeout=8000)
+    expect(page.locator("#cfgio-apply")).to_be_visible()
+    # cancel — do NOT apply (keep the live config untouched)
+    page.locator("#cfgio-cancel").click()
+    page.wait_for_selector("#cfgio-apply", state="detached", timeout=5000)
+
+
+@pytest.mark.usefixtures("require_server")
 def test_phase3_printer_map_editor_renders(page: Page, base_url: str, reset_dom_state_js: str):
     # Non-destructive: never clicks Save, so the real printer_map is untouched.
     _open_settings(page, base_url, reset_dom_state_js)

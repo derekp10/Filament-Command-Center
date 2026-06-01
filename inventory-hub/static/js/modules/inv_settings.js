@@ -323,4 +323,93 @@
             host.innerHTML = `<div class="alert alert-danger py-2 mb-0">Failed to load toolheads: ${_esc(e && e.message ? e.message : e)}</div>`;
         }
     };
+
+    // ---- L18 Phase 4: config import / export ----
+    function showImportConfirm(parsed, dry) {
+        const diff = dry.diff || [];
+        const ignored = dry.ignored || [];
+        const rows = diff.length
+            ? diff.map((x) => `<div class="d-flex justify-content-between gap-3 py-1" style="border-bottom:1px solid #2a2a2a;">
+                    <span class="text-light small">${_esc(x.label || x.key)}</span>
+                    <span class="small"><span style="color:#ff8a8a;">${_esc(x.from)}</span> &rarr; <span style="color:#7CFC00;">${_esc(x.to)}</span></span>
+                 </div>`).join('')
+            : `<div class="small" style="color:rgba(255,255,255,0.6);">No setting changes — incoming values match the current config.</div>`;
+        const ignoredHtml = ignored.length
+            ? `<div class="small mt-2" style="color:rgba(255,255,255,0.5);">Ignored ${ignored.length} non-setting key(s) (printer_map / paths / etc. keep their own editors): ${_esc(ignored.join(', '))}</div>`
+            : '';
+        const body = `
+            <div style="background:#1a1a1a; border:1px solid #333; border-radius:8px; max-width:560px; width:92vw; max-height:80vh; display:flex; flex-direction:column;">
+                <div class="px-3 py-2 fw-bold text-info" style="background:#1f1f1f;">⬆ Import settings — review changes</div>
+                <div class="px-3 py-2" style="flex:1 1 auto; overflow-y:auto;">${rows}${ignoredHtml}</div>
+                <div class="d-flex justify-content-end gap-2 px-3 py-2" style="background:#1a1a1a; border-top:1px solid #333;">
+                    <button type="button" class="btn btn-sm btn-secondary" id="cfgio-cancel">Cancel</button>
+                    <button type="button" class="btn btn-sm btn-info fw-bold" id="cfgio-apply" ${diff.length ? '' : 'disabled'}>Apply ${diff.length} change(s)</button>
+                </div>
+            </div>`;
+        const handle = window.mountOverlay({
+            id: 'fcc-config-import-overlay',
+            content: body,
+            tier: 'confirm',
+            host: document.getElementById('configModal'),
+            initialFocus: '#cfgio-apply',
+        });
+        const root = handle.panel;
+        root.querySelector('#cfgio-cancel').addEventListener('click', () => handle.cleanup());
+        const applyBtn = root.querySelector('#cfgio-apply');
+        if (applyBtn) applyBtn.addEventListener('click', async () => {
+            applyBtn.disabled = true;
+            applyBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Applying…';
+            try {
+                const r = await fetch('/api/config/import', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ config: parsed }),
+                });
+                const res = await r.json();
+                handle.cleanup();
+                if (r.ok && res.ok) {
+                    if (window.showToast) window.showToast(`Imported ${(res.saved || []).length} setting(s)`, 'success', 4000);
+                    if (window.renderConfigSettings) window.renderConfigSettings();  // refresh the cards
+                } else if (window.showToast) {
+                    window.showToast(res.error || 'Import failed', 'error', 8000);
+                }
+            } catch (e) {
+                handle.cleanup();
+                if (window.showToast) window.showToast('Import failed: ' + (e && e.message ? e.message : e), 'error', 7000);
+            }
+        });
+    }
+
+    window.wireImportExport = function () {
+        const btn = document.getElementById('cfgio-import-btn');
+        const fileInput = document.getElementById('cfgio-file');
+        if (!btn || !fileInput || btn.dataset.wired) return;  // wire once
+        btn.dataset.wired = '1';
+        btn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', async () => {
+            const file = fileInput.files && fileInput.files[0];
+            fileInput.value = '';  // allow re-selecting the same file
+            if (!file) return;
+            let parsed;
+            try {
+                parsed = JSON.parse(await file.text());
+            } catch (e) {
+                if (window.showToast) window.showToast('Not valid JSON: ' + (e && e.message ? e.message : e), 'error', 7000);
+                return;
+            }
+            try {
+                const r = await fetch('/api/config/import', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ config: parsed, dry_run: true }),
+                });
+                const d = await r.json();
+                if (!d.ok) {
+                    if (window.showToast) window.showToast(d.error || 'Import rejected', 'error', 8000);
+                    return;
+                }
+                showImportConfirm(parsed, d);
+            } catch (e) {
+                if (window.showToast) window.showToast('Import preview failed: ' + (e && e.message ? e.message : e), 'error', 7000);
+            }
+        });
+    };
 })();

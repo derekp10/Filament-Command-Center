@@ -46,6 +46,8 @@ console.log("🚀 Loaded Module: CONFIG");
         if (window.renderConfigSettings) window.renderConfigSettings();
         // L18 Phase 3 — the printer_map (toolhead) editor.
         if (window.renderPrinterMap) window.renderPrinterMap();
+        // L18 Phase 4 — wire the import/export controls (once).
+        if (window.wireImportExport) window.wireImportExport();
         window.modals.configModal.show();
     };
 
