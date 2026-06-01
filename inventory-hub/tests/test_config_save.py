@@ -13,6 +13,7 @@ ignored by save_config, and success clearing LAST_CONFIG_ERROR.
 Pure unit tests — no running server. Monkeypatches config_loader.get_config_path
 at a throwaway temp file so the real config.json is never touched.
 """
+import errno
 import json
 import os
 import sys
@@ -262,6 +263,41 @@ def test_verify_fails_twice_returns_error(cfg_file, monkeypatch):
     result = config_loader.save_config({"sync_delay": 4.0})
     assert result["ok"] is False
     assert "twice" in result["error"].lower()
+
+
+# --- Single-file bind-mount fallback (os.replace -> EBUSY) -----------------
+# config.json is mounted as an individual file (`../config.json:/config.json`),
+# so it's a mount point os.replace can't rename over -> EBUSY (errno 16). The
+# writer must fall back to an in-place overwrite rather than fail the save.
+
+def test_ebusy_replace_falls_back_to_in_place_write(cfg_file, monkeypatch):
+    def busy_replace(src, dst):
+        raise OSError(errno.EBUSY, "Device or resource busy")
+    monkeypatch.setattr(config_loader.os, "replace", busy_replace)
+
+    result = config_loader.save_config({"sync_delay": 9.0})
+    assert result["ok"] is True, result["error"]
+    on_disk = _read(cfg_file)
+    assert on_disk["sync_delay"] == 9.0
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # siblings preserved
+    assert list(on_disk["printer_map"].keys()) == ["xl-1"]
+    # the fallback removes its temp file — nothing orphaned beside the target
+    leftovers = [f for f in os.listdir(cfg_file.parent) if f.endswith(".tmp")]
+    assert leftovers == []
+
+
+def test_non_bind_mount_replace_error_is_not_masked(cfg_file, monkeypatch):
+    # A real disk error (ENOSPC) must NOT be swallowed by the bind-mount
+    # fallback — it has to surface as a failed save with the disk untouched.
+    before = cfg_file.read_text(encoding="utf-8")
+    def enospc_replace(src, dst):
+        raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(config_loader.os, "replace", enospc_replace)
+
+    result = config_loader.save_config({"sync_delay": 9.0})
+    assert result["ok"] is False
+    assert "write failed" in result["error"].lower()
+    assert cfg_file.read_text(encoding="utf-8") == before  # no partial write
 
 
 # --- Rolling .bak snapshot (last-known-good, refreshed every save) ---

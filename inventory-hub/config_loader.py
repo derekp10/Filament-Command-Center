@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import sys
@@ -142,12 +143,36 @@ def load_config_raw():
     return data
 
 
+# os.replace() raises one of these when `path` is a mount point you can't
+# rename over — the single-file bind-mount case (see _write_config_atomic).
+_BIND_MOUNT_REPLACE_ERRNOS = frozenset((errno.EBUSY, errno.EXDEV, errno.EINVAL))
+
+
 def _write_config_atomic(cfg_dict, path):
-    """One atomic write attempt: a per-call uniquely-named temp file in the
-    same directory, fsync, then os.replace onto `path` (atomic on POSIX and
-    NTFS). Raises on failure; the caller decides whether to retry. Mirrors
-    locations_db._write_locations_atomic (the outage-hardened precedent)."""
+    """One write attempt, as durable as the target's filesystem allows.
+
+    PRIMARY (atomic): a per-call uniquely-named temp file in the same directory,
+    fsync, then os.replace onto `path` (atomic on POSIX and NTFS). Mirrors
+    locations_db._write_locations_atomic (the outage-hardened precedent).
+
+    SINGLE-FILE BIND-MOUNT FALLBACK: config.json is bind-mounted as an
+    individual file in dev (`../config.json:/config.json`) and prod, so `path`
+    is itself a mount point — you CANNOT rename another file over it and
+    os.replace raises EBUSY (errno 16; EXDEV/EINVAL on some storage drivers).
+    locations.json never hits this because it lives inside a *directory* mount.
+    When os.replace fails with that signature, fall back to an fsynced in-place
+    overwrite (same inode, new bytes). That step alone isn't atomic, but the
+    caller's rolling .bak snapshot + exact-equality verify-after-write +
+    retry-once still guard the write.
+
+    Raises on failure; the caller decides whether to retry."""
     parent_dir = os.path.dirname(path) or '.'
+    # Serialize ONCE up front: a serialization error is caught before any file
+    # is touched, and the SAME bytes feed both the temp write and the in-place
+    # fallback so the two paths can never diverge. ensure_ascii=False so
+    # non-ASCII values (e.g. emoji printer names like "🦝 XL") round-trip as
+    # real UTF-8 instead of being rewritten to \uXXXX escapes on every save.
+    payload = json.dumps(cfg_dict, indent=4, ensure_ascii=False)
     tmp = tempfile.NamedTemporaryFile(
         mode='w', encoding='utf-8',
         dir=parent_dir, prefix='config.', suffix='.tmp', delete=False,
@@ -155,15 +180,25 @@ def _write_config_atomic(cfg_dict, path):
     tmp_path = tmp.name
     try:
         try:
-            # ensure_ascii=False so non-ASCII values (e.g. emoji printer names
-            # like "🦝 XL" in printer_map) round-trip as real UTF-8 instead of
-            # being rewritten to \uXXXX escapes on every save.
-            json.dump(cfg_dict, tmp, indent=4, ensure_ascii=False)
+            tmp.write(payload)
             tmp.flush()
             os.fsync(tmp.fileno())
         finally:
             tmp.close()
-        os.replace(tmp_path, path)
+        try:
+            os.replace(tmp_path, path)
+        except OSError as e:
+            if e.errno not in _BIND_MOUNT_REPLACE_ERRNOS:
+                raise
+            # Target is a single-file bind mount → overwrite in place, fsynced.
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
         return path
     except Exception:
         try:
