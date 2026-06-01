@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template # type: ignore
 import requests # type: ignore
 import state # type: ignore
 import config_loader # type: ignore
+import config_schema # type: ignore
 import locations_db # type: ignore
 import spoolman_api # type: ignore
 import logic # type: ignore
@@ -3539,6 +3540,44 @@ def api_audit_session():
             "rogue": len(rogue),
         },
     })
+
+
+@app.route('/api/config', methods=['GET'])
+def api_get_config():
+    """L18 Config System — return the declarative schema + current values for
+    the settings renderer. Server-scope values come from the live config;
+    client-scope fields return their default (the browser overrides them from
+    localStorage)."""
+    cfg = config_loader.load_config()
+    schema = config_schema.schema_for_ui()
+    values = {}
+    for f in schema['fields']:
+        if f['scope'] == 'server':
+            values[f['key']] = cfg.get(f['key'], f['default'])
+        else:
+            values[f['key']] = f['default']
+    return jsonify({"schema": schema, "values": values})
+
+
+@app.route('/api/config', methods=['PUT'])
+def api_put_config():
+    """L18 Config System — persist server-scope settings. Validation/write
+    errors are surfaced in the response JSON (the frontend toasts at 7s) and
+    written to the Activity Log; success is logged too. Accepts either
+    {"values": {...}} or a bare {...} body."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = {}
+    inner = payload.get('values')
+    values = inner if isinstance(inner, dict) else payload
+    result = config_loader.save_config(values)
+    if result.get('ok'):
+        saved = result.get('saved') or []
+        if saved:
+            state.add_log_entry(f"⚙️ Config updated: {', '.join(saved)}", "INFO")
+        return jsonify(result)
+    state.add_log_entry(f"⚙️ Config save failed: {result.get('error')}", "ERROR", "ff4444")
+    return jsonify(result), 400
 
 
 @app.route('/api/filabridge/reconcile', methods=['GET'])

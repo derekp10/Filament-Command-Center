@@ -42,6 +42,8 @@ console.log("🚀 Loaded Module: CONFIG");
                 <div>Source mtime: ${_esc(fmtTs(mtime))}</div>
             `;
         }
+        // L18 Phase 1 — paint the schema-driven settings card on every open.
+        if (window.renderConfigSettings) window.renderConfigSettings();
         window.modals.configModal.show();
     };
 

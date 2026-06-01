@@ -110,6 +110,20 @@
                     </div>
                 </div>
 
+                <!-- L18 Phase 1 — generic settings rendered from config_schema.py.
+                     Adding a setting is a one-line Field edit in the schema;
+                     inv_settings.js paints whatever the schema returns. -->
+                <div class="card bg-black border-secondary mb-3">
+                    <div class="card-header" style="background: #1a1a1a;">
+                        <span class="fw-bold text-info">⚙️ Settings</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="config-generated-settings">
+                            <div class="small" style="color: rgba(255,255,255,0.6);">Loading…</div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Future sections slot in here. Pattern: a Bootstrap .card
                      with a header (title + action button) and a body that
                      can carry whatever shape the panel needs. -->
