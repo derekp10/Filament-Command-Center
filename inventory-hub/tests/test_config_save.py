@@ -483,3 +483,89 @@ def test_put_secret_value_never_logged(client, monkeypatch):
     r = client.put("/api/config", json={"values": {"SCRAPER_API_KEY": "super-secret-xyz"}})
     assert r.status_code == 200 and r.get_json()["ok"] is True
     assert "super-secret-xyz" not in " ".join(str(x) for x in logs)  # value never logged
+
+
+# --- L18 Phase 3: printer_map canonicalization + guarded write ---
+
+def test_canonicalize_printer_map_uppercases_keys():
+    canon, err = config_loader._canonicalize_printer_map(
+        {"xl-1": {"printer_name": "XL", "position": 0}})
+    assert err is None
+    assert list(canon.keys()) == ["XL-1"]
+    assert canon["XL-1"] == {"printer_name": "XL", "position": 0}
+
+
+def test_canonicalize_printer_map_case_collision_rejected():
+    canon, err = config_loader._canonicalize_printer_map(
+        {"xl-1": {"printer_name": "A", "position": 0},
+         "XL-1": {"printer_name": "B", "position": 1}})
+    assert canon is None and "collision" in err.lower()
+
+
+def test_canonicalize_printer_map_shape_validation():
+    _, e1 = config_loader._canonicalize_printer_map({"XL-1": {"position": 0}})  # no name
+    assert e1 and "name" in e1.lower()
+    _, e2 = config_loader._canonicalize_printer_map({"XL-1": {"printer_name": "X", "position": "abc"}})
+    assert e2 and "position" in e2.lower()
+    _, e3 = config_loader._canonicalize_printer_map({"XL-1": {"printer_name": "X", "position": -1}})
+    assert e3 and "position" in e3.lower()
+
+
+def test_save_printer_map_persists_uppercased_and_preserves_siblings(cfg_file):
+    result = config_loader.save_printer_map(
+        {"xl-1": {"printer_name": "🦝 XL", "position": 0},
+         "core1-m0": {"printer_name": "Core One", "position": 0}})
+    assert result["ok"] is True
+    on_disk = _read(cfg_file)
+    assert set(on_disk["printer_map"].keys()) == {"XL-1", "CORE1-M0"}  # uppercased
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # sibling preserved
+    assert on_disk["server_ip"] == "192.168.1.29"
+
+
+def test_save_printer_map_rejects_bad_shape_no_disk_change(cfg_file):
+    before = cfg_file.read_text(encoding="utf-8")
+    result = config_loader.save_printer_map({"XL-1": {"position": 0}})  # missing name
+    assert result["ok"] is False
+    assert cfg_file.read_text(encoding="utf-8") == before
+
+
+def _ref_env(monkeypatch, slot_targets=None, spools_by_loc=None):
+    """Stub the two referential sources the PUT /api/printer_map guard consults."""
+    import locations_db
+    import spoolman_api
+    rows = ([{"LocationID": "PM-DB-1", "Type": "Dryer Box", "extra": {"slot_targets": slot_targets}}]
+            if slot_targets else [])
+    monkeypatch.setattr(locations_db, "load_locations_list", lambda: rows)
+    sbl = spools_by_loc or {}
+    monkeypatch.setattr(spoolman_api, "get_spools_at_location",
+                        lambda loc: sbl.get(str(loc).strip().upper(), []))
+
+
+def test_put_printer_map_add_and_edit_allowed(client, monkeypatch):
+    _ref_env(monkeypatch)  # nothing referenced; SEED printer_map is {"xl-1": ...}
+    new_pm = {"XL-1": {"printer_name": "XL Renamed", "position": 2},
+              "XL-6": {"printer_name": "XL Renamed", "position": 5}}
+    r = client.put("/api/printer_map", json={"printer_map": new_pm})
+    assert r.status_code == 200
+    assert set(r.get_json()["printer_map"].keys()) == {"XL-1", "XL-6"}
+
+
+def test_put_printer_map_remove_unreferenced_allowed(client, monkeypatch):
+    _ref_env(monkeypatch)  # XL-1 not referenced anywhere
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+
+
+def test_put_printer_map_remove_bound_to_slot_blocked(client, monkeypatch):
+    _ref_env(monkeypatch, slot_targets={"1": "XL-1"})  # a dryer slot points at XL-1
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
+    assert r.status_code == 409
+    d = r.get_json()
+    assert d["ok"] is False and any(b["location_id"] == "XL-1" for b in d["blocked"])
+
+
+def test_put_printer_map_remove_with_spools_blocked(client, monkeypatch):
+    _ref_env(monkeypatch, spools_by_loc={"XL-1": [{"id": 1}]})  # a spool sits at XL-1
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
+    assert r.status_code == 409
+    assert r.get_json()["ok"] is False

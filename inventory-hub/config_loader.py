@@ -219,40 +219,53 @@ def save_config(new_values):
         # Nothing server-side to persist (e.g. only client prefs submitted).
         return {"ok": True, "error": None, "saved": []}
 
+    ok, err = _write_merged_config(coerced)
+    if not ok:
+        return {"ok": False, "error": err, "saved": []}
+
+    if hasattr(state, 'logger'):
+        state.logger.info(f"💾 Config updated ({', '.join(sorted(coerced))})")
+    return {"ok": True, "error": None, "saved": sorted(coerced)}
+
+
+def _write_merged_config(changes):
+    """Shared persist path used by save_config + save_printer_map. Passthrough-
+    merges `changes` (already validated/canonicalized by the caller) onto the
+    RAW on-disk config, then atomic write + exact-equality verify-after-write +
+    retry-once, with a rolling last-known-good .bak. Sets LAST_CONFIG_ERROR and
+    returns (ok: bool, error: str|None). Refuses to write when the existing
+    config can't be read as a JSON object (would silently drop other keys)."""
+    global LAST_CONFIG_ERROR
     config_file, _mode = get_config_path()
     existing = load_config_raw()
 
-    # Guard against clobbering a config we couldn't read. load_config_raw()
-    # returns None when the file EXISTS but isn't a readable JSON object;
-    # merging into {} would atomically drop every other on-disk key (server_ip,
-    # ports, printer_map, SCRAPER_API_KEY, paths, print_settings, dryer_slots,
-    # comment_*). Refuse and surface the error rather than silently wipe.
     if existing is None:
         LAST_CONFIG_ERROR = (
             "refusing to save: the existing config could not be read as a JSON object "
             "(saving would drop all other keys) — fix or remove the file first")
         if hasattr(state, 'logger'):
             state.logger.error(LAST_CONFIG_ERROR)
-        return {"ok": False, "error": LAST_CONFIG_ERROR, "saved": []}
+        return False, LAST_CONFIG_ERROR
 
     if not existing and not os.path.exists(config_file):
         # Genuinely fresh install (no file): seed from runtime defaults so the
-        # created file is complete, not a lone 1-key object.
+        # created file is complete, not a lone partial object.
         merged = dict(load_config())
     else:
         merged = dict(existing)
-    merged.update(coerced)  # only schema-owned server keys are overwritten
 
     # Rolling last-known-good snapshot: persist the PRE-EDIT config (which
     # load_config_raw just confirmed parses) to .bak on EVERY save. Skip when
-    # there's nothing good to back up (fresh install). Re-serialized from the
-    # parsed dict, so a corrupt file can never become the backup.
+    # there's nothing good to back up. Re-serialized from the parsed dict, so a
+    # corrupt file can never become the backup.
     if existing:
         try:
             with open(config_file + ".bak", 'w', encoding='utf-8') as bf:
                 json.dump(existing, bf, indent=4, ensure_ascii=False)
         except OSError:
             pass  # best-effort
+
+    merged.update(changes)  # only the caller's keys overwritten; the rest preserved
 
     def _attempt():
         _write_config_atomic(merged, config_file)
@@ -264,7 +277,7 @@ def save_config(new_values):
         LAST_CONFIG_ERROR = f"config write failed: {e}"
         if hasattr(state, 'logger'):
             state.logger.error(LAST_CONFIG_ERROR)
-        return {"ok": False, "error": LAST_CONFIG_ERROR, "saved": []}
+        return False, LAST_CONFIG_ERROR
 
     if not ok:
         if hasattr(state, 'logger'):
@@ -276,13 +289,59 @@ def save_config(new_values):
             LAST_CONFIG_ERROR = f"config write failed on retry: {e}"
             if hasattr(state, 'logger'):
                 state.logger.critical(LAST_CONFIG_ERROR)
-            return {"ok": False, "error": LAST_CONFIG_ERROR, "saved": []}
+            return False, LAST_CONFIG_ERROR
         if not ok:
             LAST_CONFIG_ERROR = f"config verify-after-write failed twice: {detail}"
             if hasattr(state, 'logger'):
                 state.logger.critical(LAST_CONFIG_ERROR)
-            return {"ok": False, "error": LAST_CONFIG_ERROR, "saved": []}
+            return False, LAST_CONFIG_ERROR
 
+    return True, None
+
+
+def _canonicalize_printer_map(new_map):
+    """Validate + canonicalize an edited printer_map for save. Uppercases keys
+    (matching load_config's normalization), rejects case-insensitive collisions,
+    and validates each entry's shape. Returns (canonical_dict, error_str|None)."""
+    if not isinstance(new_map, dict):
+        return None, "printer_map must be an object"
+    canonical = {}
+    for raw_key, info in new_map.items():
+        key = str(raw_key).strip().upper()
+        if not key:
+            return None, "printer_map: a toolhead is missing its LocationID"
+        if key in canonical:
+            return None, f"printer_map: duplicate LocationID '{key}' (case-insensitive collision)"
+        if not isinstance(info, dict):
+            return None, f"printer_map['{key}'] must be an object"
+        name = str(info.get("printer_name", "")).strip()
+        if not name:
+            return None, f"printer_map['{key}']: printer name is required"
+        try:
+            position = int(info.get("position", 0))
+        except (TypeError, ValueError):
+            return None, f"printer_map['{key}']: position must be a whole number"
+        if position < 0:
+            return None, f"printer_map['{key}']: position must be ≥ 0"
+        canonical[key] = {"printer_name": name, "position": position}
+    return canonical, None
+
+
+def save_printer_map(new_map):
+    """Persist an edited printer_map (L18 Phase 3). Canonicalizes + validates,
+    then passthrough-merges via the shared hardened writer. Does NOT perform the
+    referential-integrity check (a removed key still bound to a dryer-box slot or
+    holding spools) — that lives in the /api/printer_map PUT handler, which has
+    locations.json + Spoolman. Returns {ok, error, printer_map}."""
+    global LAST_CONFIG_ERROR
+    LAST_CONFIG_ERROR = None
+    canonical, err = _canonicalize_printer_map(new_map)
+    if err:
+        LAST_CONFIG_ERROR = err
+        return {"ok": False, "error": err}
+    ok, werr = _write_merged_config({"printer_map": canonical})
+    if not ok:
+        return {"ok": False, "error": werr}
     if hasattr(state, 'logger'):
-        state.logger.info(f"💾 Config updated ({', '.join(sorted(coerced))})")
-    return {"ok": True, "error": None, "saved": sorted(coerced)}
+        state.logger.info(f"💾 printer_map updated ({len(canonical)} toolheads)")
+    return {"ok": True, "error": None, "printer_map": canonical}

@@ -2577,7 +2577,81 @@ def api_printer_map():
     # Stable sort within each printer by position.
     for entries in grouped.values():
         entries.sort(key=lambda e: (e['position'], e['location_id']))
-    return jsonify({"printers": grouped})
+    # Flat, editable view for the Phase 3 config editor.
+    flat = [
+        {"location_id": loc_id.upper(),
+         "printer_name": info.get('printer_name', ''),
+         "position": info.get('position', 0)}
+        for loc_id, info in printer_map.items()
+    ]
+    flat.sort(key=lambda e: (e['printer_name'], e['position'], e['location_id']))
+    return jsonify({"printers": grouped, "entries": flat})
+
+
+def _printer_map_blocked_removals(old_map, new_map):
+    """L18 Phase 3 referential guard. Adding toolheads + editing an existing
+    toolhead's name/position is always safe. Removing or renaming a key is NOT
+    if that LocationID is still referenced — by a dryer-box slot_target or by
+    spools physically at it. Returns a list of {location_id, reasons} to block."""
+    old_keys = {str(k).strip().upper() for k in (old_map or {})}
+    new_keys = {str(k).strip().upper() for k in (new_map or {})}
+    removed = old_keys - new_keys
+    if not removed:
+        return []
+    # Toolhead LocationIDs currently bound by any dryer-box slot_target.
+    bound = set()
+    try:
+        for row in locations_db.load_locations_list():
+            targets = (row.get('extra') or {}).get('slot_targets') or {}
+            for tgt in targets.values():
+                if tgt and not locations_db.is_printer_sentinel(tgt):
+                    bound.add(str(tgt).strip().upper())
+    except Exception as e:
+        state.logger.warning(f"printer_map guard: could not scan slot_targets: {e}")
+    blocked = []
+    for key in sorted(removed):
+        reasons = []
+        if key in bound:
+            reasons.append("a dryer-box slot is bound to it")
+        try:
+            spools = spoolman_api.get_spools_at_location(key)
+            if spools:
+                reasons.append(f"{len(spools)} spool(s) are stored there")
+        except Exception as e:
+            state.logger.warning(f"printer_map guard: spool check failed for {key}: {e}")
+        if reasons:
+            blocked.append({"location_id": key, "reasons": reasons})
+    return blocked
+
+
+@app.route('/api/printer_map', methods=['PUT'])
+def api_put_printer_map():
+    """L18 Phase 3 — persist an edited printer_map. Adding toolheads + editing
+    name/position is free; removing/renaming a key still referenced by a
+    dryer-box slot or holding spools is BLOCKED (409). Canonicalization + the
+    atomic write live in config_loader.save_printer_map."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = {}
+    new_map = payload.get('printer_map')
+    if not isinstance(new_map, dict):
+        return jsonify({"ok": False, "error": "printer_map must be an object"}), 400
+
+    old_map = config_loader.load_config().get('printer_map', {}) or {}
+    blocked = _printer_map_blocked_removals(old_map, new_map)
+    if blocked:
+        msg = "Can't remove/rename toolhead(s) still in use: " + "; ".join(
+            f"{b['location_id']} ({', '.join(b['reasons'])})" for b in blocked)
+        state.add_log_entry(f"⚙️ Printer-map save blocked — {msg}", "ERROR", "ff4444")
+        return jsonify({"ok": False, "error": msg, "blocked": blocked}), 409
+
+    result = config_loader.save_printer_map(new_map)
+    if result.get('ok'):
+        state.add_log_entry(
+            f"⚙️ Printer map updated ({len(result.get('printer_map') or {})} toolheads)", "INFO")
+        return jsonify(result)
+    state.add_log_entry(f"⚙️ Printer-map save failed: {result.get('error')}", "ERROR", "ff4444")
+    return jsonify(result), 400
 
 
 @app.route('/api/dryer_boxes/slots', methods=['GET'])
