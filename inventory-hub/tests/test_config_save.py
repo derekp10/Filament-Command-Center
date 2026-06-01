@@ -736,3 +736,56 @@ def test_import_round_trips_redacted_export(client, cfg_file):
     r = client.post("/api/config/import", json={"config": exported})
     assert r.status_code == 200 and r.get_json()["ok"]
     assert _read(cfg_file)["SCRAPER_API_KEY"] == "secret-key-123"
+
+
+def test_import_new_secret_masked_in_diff_and_response(client, cfg_file):
+    # TOP-PRIORITY regression guard: a NEW (non-sentinel) secret submitted on
+    # import must NEVER be echoed back in the dry-run diff OR the apply response.
+    hostile = "hostile-new-key-xyz"
+    r = client.post("/api/config/import",
+                    json={"config": {"SCRAPER_API_KEY": hostile, "sync_delay": 1.0}, "dry_run": True})
+    assert r.status_code == 200
+    assert hostile not in r.get_data(as_text=True)  # plaintext never echoed
+    sec = [x for x in r.get_json()["diff"] if x["key"] == "SCRAPER_API_KEY"]
+    assert sec and sec[0]["to"] == "(new secret)"
+    # apply: still not echoed; on-disk gets the new value
+    r2 = client.post("/api/config/import", json={"config": {"SCRAPER_API_KEY": hostile}})
+    assert r2.status_code == 200 and hostile not in r2.get_data(as_text=True)
+    assert _read(cfg_file)["SCRAPER_API_KEY"] == hostile  # applied, just never echoed
+
+
+def test_import_patch_leaves_omitted_keys(client, cfg_file):
+    # PATCH, not replace: importing only sync_delay must leave other keys as-is.
+    client.post("/api/config/import", json={"config": {"sync_delay": 4.0}})
+    on_disk = _read(cfg_file)
+    assert on_disk["sync_delay"] == 4.0
+    assert on_disk["server_ip"] == "192.168.1.29"
+    assert on_disk["spoolman_port"] == 7913
+    assert on_disk["auto_recover_filabridge_errors"] is True
+
+
+def test_import_apply_write_fault_is_500(client, monkeypatch):
+    monkeypatch.setattr(config_loader, "save_config",
+                        lambda v: {"ok": False, "error": "config write failed: disk full"})
+    r = client.post("/api/config/import", json={"config": {"sync_delay": 1.0}})
+    assert r.status_code == 500 and r.get_json()["ok"] is False
+
+
+def test_import_apply_refuse_on_corrupt_is_409(client, monkeypatch):
+    monkeypatch.setattr(config_loader, "save_config",
+                        lambda v: {"ok": False, "error": "refusing to save: the existing config ..."})
+    r = client.post("/api/config/import", json={"config": {"sync_delay": 1.0}})
+    assert r.status_code == 409
+
+
+def test_import_deeply_nested_json_is_400_not_500(client):
+    # RecursionError from json.loads on deep nesting must be a clean 400, not 500.
+    deep = "[" * 50000 + "]" * 50000  # ~100KB, under the size cap -> reaches the parser
+    r = client.post("/api/config/import", data=deep, content_type="application/json")
+    assert r.status_code == 400
+
+
+def test_import_oversized_body_is_413(client):
+    big = '{"config": {"sync_delay": 1.0, "x": "' + ("a" * (600 * 1024)) + '"}}'
+    r = client.post("/api/config/import", data=big, content_type="application/json")
+    assert r.status_code == 413

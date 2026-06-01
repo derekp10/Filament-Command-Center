@@ -3728,7 +3728,16 @@ def api_config_import():
     dryer_slots / paths / comments are NOT touched — they keep their own editors).
     Body: {"config": {...}, "dry_run": bool}. dry_run returns the diff without
     writing. A secret arriving as the sentinel keeps the existing value."""
-    payload = request.get_json(silent=True)
+    # Parse defensively: request.get_json(silent=True) swallows JSONDecodeError
+    # but NOT RecursionError (deeply-nested JSON), which would 500. Cap the body
+    # (config is tiny) and catch both -> clean 400/413, the contract the UI expects.
+    raw = request.get_data(cache=False, as_text=True) or ''
+    if len(raw) > 512 * 1024:
+        return jsonify({"ok": False, "error": "import file too large"}), 413
+    try:
+        payload = json.loads(raw) if raw.strip() else None
+    except (ValueError, RecursionError):
+        return jsonify({"ok": False, "error": "import file is not valid JSON (or too deeply nested)"}), 400
     if not isinstance(payload, dict):
         return jsonify({"ok": False, "error": "import body must be a JSON object"}), 400
     incoming = payload.get('config')
@@ -3762,9 +3771,13 @@ def api_config_import():
 
     result = config_loader.save_config(applicable)
     if not result.get('ok'):
-        # Validation already passed above, so a failure here is write/IO (500).
-        state.add_log_entry(f"⚙️ Config import failed: {result.get('error')}", "ERROR", "ff4444")
-        return jsonify({"ok": False, "error": result.get('error'), "ignored": ignored}), 500
+        # Validation already passed above. "refusing to save…" = the EXISTING
+        # config.json is corrupt (repair it, don't retry) -> 409; anything else is
+        # a genuine write/IO fault -> 500.
+        err = result.get('error') or ''
+        code = 409 if err.startswith('refusing to save') else 500
+        state.add_log_entry(f"⚙️ Config import failed: {err}", "ERROR", "ff4444")
+        return jsonify({"ok": False, "error": err, "ignored": ignored}), code
     state.add_log_entry(
         f"⚙️ Config imported ({len(result.get('saved') or [])} settings, {len(ignored)} ignored)", "INFO")
     return jsonify({"ok": True, "saved": result.get('saved'), "ignored": ignored, "diff": diff})
