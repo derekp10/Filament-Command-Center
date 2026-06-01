@@ -317,8 +317,11 @@ def _canonicalize_printer_map(new_map):
         name = str(info.get("printer_name", "")).strip()
         if not name:
             return None, f"printer_map['{key}']: printer name is required"
+        pos_raw = info.get("position", 0)
+        if isinstance(pos_raw, bool):
+            return None, f"printer_map['{key}']: position must be a number, not a boolean"
         try:
-            position = int(info.get("position", 0))
+            position = int(pos_raw)
         except (TypeError, ValueError):
             return None, f"printer_map['{key}']: position must be a whole number"
         if position < 0:

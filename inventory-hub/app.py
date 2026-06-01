@@ -2577,48 +2577,86 @@ def api_printer_map():
     # Stable sort within each printer by position.
     for entries in grouped.values():
         entries.sort(key=lambda e: (e['position'], e['location_id']))
-    # Flat, editable view for the Phase 3 config editor.
+    # Flat, editable view for the Phase 3 config editor. Coerce position to int
+    # so a hand-edited / legacy non-int value can't TypeError the sort (the
+    # editor must load to let the user self-repair).
+    def _posint(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
     flat = [
         {"location_id": loc_id.upper(),
          "printer_name": info.get('printer_name', ''),
-         "position": info.get('position', 0)}
+         "position": _posint(info.get('position', 0))}
         for loc_id, info in printer_map.items()
     ]
     flat.sort(key=lambda e: (e['printer_name'], e['position'], e['location_id']))
     return jsonify({"printers": grouped, "entries": flat})
 
 
+def _pm_prefix(k):
+    """Printer prefix of a toolhead LocationID (the part before the first '-'),
+    matching locations_db._known_printer_prefixes."""
+    k = str(k).strip().upper()
+    return k.split('-', 1)[0] if '-' in k else k
+
+
 def _printer_map_blocked_removals(old_map, new_map):
     """L18 Phase 3 referential guard. Adding toolheads + editing an existing
-    toolhead's name/position is always safe. Removing or renaming a key is NOT
-    if that LocationID is still referenced — by a dryer-box slot_target or by
-    spools physically at it. Returns a list of {location_id, reasons} to block."""
+    toolhead's name/position is always safe. Removing/renaming a key is BLOCKED
+    if the LocationID is still referenced:
+      - a dryer-box slot_target bound directly to it,
+      - a PRINTER:<prefix> pool slot whose prefix this key is the LAST toolhead of,
+      - spools physically at it.
+    FAILS CLOSED: if references cannot be verified (locations.json unreadable, or
+    Spoolman unreachable), the removal is blocked with a retryable reason rather
+    than allowed. Returns a list of {location_id, reasons}."""
     old_keys = {str(k).strip().upper() for k in (old_map or {})}
     new_keys = {str(k).strip().upper() for k in (new_map or {})}
     removed = old_keys - new_keys
     if not removed:
         return []
-    # Toolhead LocationIDs currently bound by any dryer-box slot_target.
-    bound = set()
+
+    # Prefixes that DISAPPEAR after this edit (the last toolhead of a printer is
+    # being removed) — a PRINTER:<prefix> pool sentinel on those would dangle.
+    lost_prefixes = {_pm_prefix(k) for k in old_keys} - {_pm_prefix(k) for k in new_keys}
+
+    # Scan dryer-box slot_targets: direct toolhead bindings + PRINTER: sentinels.
+    bound = set()              # toolhead LocationIDs directly bound
+    sentinel_prefixes = set()  # printer prefixes referenced via PRINTER:<prefix>
+    slots_verified = True
     try:
         for row in locations_db.load_locations_list():
             targets = (row.get('extra') or {}).get('slot_targets') or {}
             for tgt in targets.values():
-                if tgt and not locations_db.is_printer_sentinel(tgt):
+                if not tgt:
+                    continue
+                if locations_db.is_printer_sentinel(tgt):
+                    sentinel_prefixes.add(str(tgt).strip().upper().split(':', 1)[1])
+                else:
                     bound.add(str(tgt).strip().upper())
     except Exception as e:
-        state.logger.warning(f"printer_map guard: could not scan slot_targets: {e}")
+        state.logger.warning(f"printer_map guard: could not scan slot_targets, failing closed: {e}")
+        slots_verified = False  # FAIL CLOSED — block all removals below
+
     blocked = []
     for key in sorted(removed):
         reasons = []
         if key in bound:
             reasons.append("a dryer-box slot is bound to it")
+        pfx = _pm_prefix(key)
+        if pfx in lost_prefixes and pfx in sentinel_prefixes:
+            reasons.append(f"a dryer-box pool slot still feeds printer '{pfx}' (PRINTER:{pfx})")
+        if not slots_verified:
+            reasons.append("could not verify dryer-box bindings (locations unreadable) — refusing")
+        # Spools physically at this toolhead — STRICT check raises on outage.
         try:
-            spools = spoolman_api.get_spools_at_location(key)
-            if spools:
-                reasons.append(f"{len(spools)} spool(s) are stored there")
+            if spoolman_api.get_spools_at_location_strict(key):
+                reasons.append("spool(s) are stored there")
         except Exception as e:
-            state.logger.warning(f"printer_map guard: spool check failed for {key}: {e}")
+            state.logger.warning(f"printer_map guard: spool check unverifiable for {key}, failing closed: {e}")
+            reasons.append("could not verify spools (Spoolman unreachable) — refusing")
         if reasons:
             blocked.append({"location_id": key, "reasons": reasons})
     return blocked
@@ -2650,8 +2688,13 @@ def api_put_printer_map():
         state.add_log_entry(
             f"⚙️ Printer map updated ({len(result.get('printer_map') or {})} toolheads)", "INFO")
         return jsonify(result)
-    state.add_log_entry(f"⚙️ Printer-map save failed: {result.get('error')}", "ERROR", "ff4444")
-    return jsonify(result), 400
+    # Validation errors (all start with "printer_map…") are a client 400; write/IO
+    # faults bubbled from the hardened writer ("config write failed…", "refusing
+    # to save…", "…verify-after-write failed…") are a server 500.
+    err = result.get('error') or ''
+    code = 400 if err.startswith('printer_map') else 500
+    state.add_log_entry(f"⚙️ Printer-map save failed: {err}", "ERROR", "ff4444")
+    return jsonify(result), code
 
 
 @app.route('/api/dryer_boxes/slots', methods=['GET'])

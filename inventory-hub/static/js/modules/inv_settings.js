@@ -258,15 +258,27 @@
         const btn = host.querySelector('#pm-save');
         const map = {};
         let dupe = null;
+        let incomplete = false;
         for (const row of host.querySelectorAll('.pm-row')) {
             const loc = (row.querySelector('.pm-loc').value || '').trim();
-            if (!loc) continue;  // skip blank rows
+            const name = (row.querySelector('.pm-name').value || '').trim();
+            const posRaw = row.querySelector('.pm-pos').value;
+            if (!loc) {
+                // A fully-blank row is fine to skip; a row with a name/position
+                // but no LocationID is a mistake — don't silently drop it.
+                if (name || (posRaw !== '' && posRaw != null)) incomplete = true;
+                continue;
+            }
             const key = loc.toUpperCase();
             if (map[key]) { dupe = key; break; }
             map[key] = {
-                printer_name: (row.querySelector('.pm-name').value || '').trim(),
-                position: Number(row.querySelector('.pm-pos').value) || 0,
+                printer_name: name,
+                position: Math.max(0, Math.trunc(Number(posRaw)) || 0),
             };
+        }
+        if (incomplete) {
+            if (window.showToast) window.showToast('A toolhead row is missing its LocationID — fill it in or clear the row.', 'error', 7000);
+            return;
         }
         if (dupe) {
             if (window.showToast) window.showToast(`Duplicate LocationID: ${dupe}`, 'error', 7000);

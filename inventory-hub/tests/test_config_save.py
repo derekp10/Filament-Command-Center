@@ -518,8 +518,12 @@ def test_save_printer_map_persists_uppercased_and_preserves_siblings(cfg_file):
     assert result["ok"] is True
     on_disk = _read(cfg_file)
     assert set(on_disk["printer_map"].keys()) == {"XL-1", "CORE1-M0"}  # uppercased
-    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # sibling preserved
-    assert on_disk["server_ip"] == "192.168.1.29"
+    # full-dict equality: every OTHER key (nested print_settings, dryer_slots list,
+    # comments, secret, ports) preserved verbatim by the passthrough merge.
+    expected = dict(SEED)
+    expected["printer_map"] = {"XL-1": {"printer_name": "🦝 XL", "position": 0},
+                               "CORE1-M0": {"printer_name": "Core One", "position": 0}}
+    assert on_disk == expected
 
 
 def test_save_printer_map_rejects_bad_shape_no_disk_change(cfg_file):
@@ -529,16 +533,29 @@ def test_save_printer_map_rejects_bad_shape_no_disk_change(cfg_file):
     assert cfg_file.read_text(encoding="utf-8") == before
 
 
-def _ref_env(monkeypatch, slot_targets=None, spools_by_loc=None):
-    """Stub the two referential sources the PUT /api/printer_map guard consults."""
+def _ref_env(monkeypatch, slot_targets=None, spools_by_loc=None,
+             spool_raises=False, locations_raises=False):
+    """Stub the two referential sources the PUT /api/printer_map guard consults.
+    spool_raises / locations_raises simulate a dependency outage so the guard's
+    fail-CLOSED behavior can be tested."""
     import locations_db
     import spoolman_api
     rows = ([{"LocationID": "PM-DB-1", "Type": "Dryer Box", "extra": {"slot_targets": slot_targets}}]
             if slot_targets else [])
-    monkeypatch.setattr(locations_db, "load_locations_list", lambda: rows)
+    if locations_raises:
+        def _boom():
+            raise RuntimeError("locations.json corrupt")
+        monkeypatch.setattr(locations_db, "load_locations_list", _boom)
+    else:
+        monkeypatch.setattr(locations_db, "load_locations_list", lambda: rows)
     sbl = spools_by_loc or {}
-    monkeypatch.setattr(spoolman_api, "get_spools_at_location",
-                        lambda loc: sbl.get(str(loc).strip().upper(), []))
+    if spool_raises:
+        def _sboom(loc):
+            raise RuntimeError("Spoolman unreachable")
+        monkeypatch.setattr(spoolman_api, "get_spools_at_location_strict", _sboom)
+    else:
+        monkeypatch.setattr(spoolman_api, "get_spools_at_location_strict",
+                            lambda loc: sbl.get(str(loc).strip().upper(), []))
 
 
 def test_put_printer_map_add_and_edit_allowed(client, monkeypatch):
@@ -569,3 +586,78 @@ def test_put_printer_map_remove_with_spools_blocked(client, monkeypatch):
     r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
     assert r.status_code == 409
     assert r.get_json()["ok"] is False
+
+
+# --- Phase 3 review fixes: guard FAILS CLOSED + PRINTER:<prefix> sentinel ---
+
+def test_put_printer_map_fails_closed_when_spoolman_unreachable(client, monkeypatch):
+    _ref_env(monkeypatch, spool_raises=True)  # can't verify spools
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
+    assert r.status_code == 409
+    d = r.get_json()
+    assert d["ok"] is False
+    assert any("could not verify" in " ".join(b["reasons"]).lower() for b in d["blocked"])
+
+
+def test_put_printer_map_fails_closed_when_locations_unreadable(client, monkeypatch):
+    _ref_env(monkeypatch, locations_raises=True)  # can't scan slot_targets
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-9": {"printer_name": "New", "position": 0}}})
+    assert r.status_code == 409
+    assert r.get_json()["ok"] is False
+
+
+def test_put_printer_map_blocks_last_toolhead_of_pool_prefix(client, monkeypatch):
+    # a dryer pool slot feeds PRINTER:XL; SEED's only XL-* toolhead is XL-1 —
+    # removing it drops the XL prefix, so the PRINTER:XL slot would dangle.
+    _ref_env(monkeypatch, slot_targets={"4": "PRINTER:XL"})
+    r = client.put("/api/printer_map", json={"printer_map": {"CORE1-M0": {"printer_name": "C1", "position": 0}}})
+    assert r.status_code == 409
+    d = r.get_json()
+    assert any("PRINTER:XL" in " ".join(b["reasons"]) for b in d["blocked"])
+
+
+def test_put_printer_map_allows_pool_prefix_when_another_toolhead_remains(client, monkeypatch):
+    # keep an XL-* toolhead so the XL prefix survives -> the PRINTER:XL slot is fine
+    _ref_env(monkeypatch, slot_targets={"4": "PRINTER:XL"})
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-2": {"printer_name": "XL", "position": 1}}})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+
+
+def test_put_printer_map_lowercase_resubmit_is_not_a_removal(client, monkeypatch):
+    _ref_env(monkeypatch, slot_targets={"1": "XL-1"})  # XL-1 IS bound
+    # resubmit the existing key in lowercase + edit its name -> NOT a removal
+    r = client.put("/api/printer_map", json={"printer_map": {"xl-1": {"printer_name": "XL Renamed", "position": 0}}})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert "XL-1" in r.get_json()["printer_map"]  # canonicalized, kept
+
+
+def test_put_printer_map_write_fault_is_500(client, monkeypatch):
+    _ref_env(monkeypatch)
+    monkeypatch.setattr(config_loader, "save_printer_map",
+                        lambda m: {"ok": False, "error": "config write failed: disk full"})
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-1": {"printer_name": "X", "position": 0}}})
+    assert r.status_code == 500  # infra fault, not client bad-input
+
+
+def test_put_printer_map_validation_error_is_400(client, monkeypatch):
+    _ref_env(monkeypatch)
+    monkeypatch.setattr(config_loader, "save_printer_map",
+                        lambda m: {"ok": False, "error": "printer_map['XL-1']: printer name is required"})
+    r = client.put("/api/printer_map", json={"printer_map": {"XL-1": {"position": 0}}})
+    assert r.status_code == 400
+
+
+def test_save_printer_map_refuses_on_corrupt_existing(tmp_path, monkeypatch):
+    p = tmp_path / "config.json"
+    original = "{ corrupt json "
+    p.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
+    config_loader.LAST_CONFIG_ERROR = None
+    result = config_loader.save_printer_map({"XL-1": {"printer_name": "X", "position": 0}})
+    assert result["ok"] is False and "refusing to save" in result["error"]
+    assert p.read_text(encoding="utf-8") == original  # untouched
+
+
+def test_canonicalize_printer_map_rejects_bool_position():
+    _, err = config_loader._canonicalize_printer_map({"XL-1": {"printer_name": "X", "position": True}})
+    assert err and "boolean" in err.lower()

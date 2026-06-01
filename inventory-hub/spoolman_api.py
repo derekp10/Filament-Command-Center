@@ -1209,6 +1209,28 @@ def get_spools_at_location_detailed(loc_name):
 def get_spools_at_location(loc_name):
     return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
 
+
+def get_spools_at_location_strict(loc_name):
+    """Like get_spools_at_location but RAISES on Spoolman transport/HTTP failure
+    instead of silently returning [] — for safety-critical callers (the L18
+    printer_map removal guard) that must FAIL CLOSED when they cannot verify
+    whether a toolhead still holds spools. Matches by direct location AND by
+    physical_source (ghost), mirroring get_spools_at_location_detailed."""
+    sm_url, _ = config_loader.get_api_urls()
+    resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
+    resp.raise_for_status()  # raise on 4xx/5xx so the caller can fail closed
+    target = str(loc_name).strip().upper()
+    bare = "-" not in target
+    ids = []
+    for s in parse_inbound_data(resp.json()):
+        sloc = (s.get('location') or '').strip().upper()
+        extra = s.get('extra', {}) or {}
+        p_source = str(extra.get('physical_source', '')).strip().replace('"', '').upper()
+        if (sloc == target or p_source == target
+                or (bare and (sloc.startswith(target + "-") or p_source.startswith(target + "-")))):
+            ids.append(s['id'])
+    return ids
+
 def find_spools_by_legacy_id(legacy_id):
     """Return ALL spools attached to the filament with the given legacy
     (Spoolman `external_id`) value. Sorted: non-empty (>10g) first, then
