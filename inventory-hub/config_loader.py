@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import state
 import config_schema
 
@@ -14,6 +15,20 @@ LAST_CONFIG_ERROR = None
 
 # Logic to find the ROOT config.json (Go up one level)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# The app package dir (…/inventory-hub) — one level BELOW BASE_DIR. Used to
+# locate the persisted data/ dir for the rolling config backup
+# (see get_config_backup_path); kept distinct from BASE_DIR because inside the
+# container BASE_DIR resolves to the ephemeral '/' overlay.
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Serialize all config writes. Flask is multi-threaded; _write_merged_config is
+# a read-merge-write critical section on a shared file, and on a single-file
+# bind mount the final write is a NON-atomic in-place overwrite (see
+# _write_config_atomic). Without this lock two concurrent saves can lose an edit
+# (last-writer-wins on a stale snapshot) or tear the file mid-write. Specified in
+# the L18 design doc; restored after the post-ship audit found it had been dropped.
+_CONFIG_WRITE_LOCK = threading.Lock()
 
 def get_config_path():
     """Determines which config file to load based on Environment Variables."""
@@ -27,6 +42,40 @@ def get_config_path():
             return target, "DEV"
     
     return os.path.join(BASE_DIR, 'config.json'), "PROD"
+
+def get_config_backup_path():
+    """Durable path for the rolling last-known-good config backup.
+
+    The primary config.json is a SINGLE-FILE bind mount (../config.json:/config.json),
+    so inside the container its parent directory is '/', the EPHEMERAL overlay — a
+    .bak written there vanishes on container recreation, exactly when recovery is
+    needed. So when the config file sits at the filesystem root, redirect the
+    backup to the persisted, host-visible, gitignored data dir
+    (inventory-hub/data/). In dev tests / directory-mounted layouts the parent is
+    a normal directory, so the .bak stays beside the config file — and follows the
+    monkeypatched get_config_path automatically, keeping tests isolated."""
+    config_file, _mode = get_config_path()
+    parent = os.path.dirname(config_file)
+    if parent in ('', '/', os.sep):
+        return os.path.join(APP_DIR, 'data', 'config.json.bak')
+    return config_file + '.bak'
+
+
+def _try_load_backup():
+    """Best-effort parse of the rolling config backup. Returns the dict on
+    success, or None if it is missing / unreadable / not a JSON object. Lets
+    load_config() and _write_merged_config() auto-recover from a corrupt primary
+    config.json (the in-place-overwrite crash window)."""
+    bak = get_config_backup_path()
+    if not os.path.exists(bak):
+        return None
+    try:
+        with open(bak, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
 
 def load_config():
     defaults = {
@@ -79,8 +128,22 @@ def load_config():
                         pass
 
         except Exception as e: 
-            if hasattr(state, 'logger'):
-                state.logger.error(f"Config Load Error: {e}")
+            # config.json EXISTS but won't parse — e.g. corrupt or half-written
+            # by a crash during the non-atomic in-place overwrite. Do NOT silently
+            # fall through to localhost defaults (that turns a config-corruption
+            # incident into a baffling "Spoolman unreachable" outage). Auto-recover
+            # from the rolling backup if it parses, and log CRITICAL either way.
+            recovered = _try_load_backup()
+            if recovered is not None:
+                final_config.update(recovered)
+                if hasattr(state, 'logger'):
+                    state.logger.critical(
+                        f"config.json unreadable ({e}); RECOVERED from {get_config_backup_path()}. "
+                        "Re-save in the Config modal to repair the primary file.")
+            elif hasattr(state, 'logger'):
+                state.logger.critical(
+                    f"config.json unreadable ({e}) and no usable backup — running on DEFAULTS; "
+                    "Spoolman/FilaBridge hosts may be wrong until config.json is repaired.")
     else:
         if hasattr(state, 'logger'):
             state.logger.warning(f"Config file not found at {config_file}")
@@ -267,71 +330,94 @@ def _write_merged_config(changes):
     """Shared persist path used by save_config + save_printer_map. Passthrough-
     merges `changes` (already validated/canonicalized by the caller) onto the
     RAW on-disk config, then atomic write + exact-equality verify-after-write +
-    retry-once, with a rolling last-known-good .bak. Sets LAST_CONFIG_ERROR and
-    returns (ok: bool, error: str|None). Refuses to write when the existing
-    config can't be read as a JSON object (would silently drop other keys)."""
+    retry-once, with a DURABLE rolling last-known-good .bak. Sets LAST_CONFIG_ERROR
+    and returns (ok: bool, error: str|None).
+
+    The whole read-merge-write runs under _CONFIG_WRITE_LOCK so concurrent saves
+    can't lose an edit or tear the (non-atomic, on a single-file bind mount) write.
+    If the existing config is unreadable it tries to REPAIR from the rolling backup
+    rather than refuse outright (which would lock the operator out of every save);
+    it only refuses when there's no usable backup either."""
     global LAST_CONFIG_ERROR
     config_file, _mode = get_config_path()
-    existing = load_config_raw()
 
-    if existing is None:
-        LAST_CONFIG_ERROR = (
-            "refusing to save: the existing config could not be read as a JSON object "
-            "(saving would drop all other keys) — fix or remove the file first")
-        if hasattr(state, 'logger'):
-            state.logger.error(LAST_CONFIG_ERROR)
-        return False, LAST_CONFIG_ERROR
+    with _CONFIG_WRITE_LOCK:
+        existing = load_config_raw()
+        repaired_from_backup = False
 
-    if not existing and not os.path.exists(config_file):
-        # Genuinely fresh install (no file): seed from runtime defaults so the
-        # created file is complete, not a lone partial object.
-        merged = dict(load_config())
-    else:
-        merged = dict(existing)
+        if existing is None:
+            # Primary config.json is present but unreadable (corrupt / half-written
+            # by a crash mid in-place-overwrite). Rather than refuse and lock the
+            # operator out of ALL saves, repair from the durable rolling backup:
+            # merge the new change onto the last-known-good and write a clean file.
+            backup = _try_load_backup()
+            if backup is None:
+                LAST_CONFIG_ERROR = (
+                    "refusing to save: the existing config could not be read as a JSON object "
+                    "and no usable backup exists (saving would drop all other keys) — "
+                    "fix or remove config.json first")
+                if hasattr(state, 'logger'):
+                    state.logger.error(LAST_CONFIG_ERROR)
+                return False, LAST_CONFIG_ERROR
+            existing = backup
+            repaired_from_backup = True
+            if hasattr(state, 'logger'):
+                state.logger.critical(
+                    "config.json was unreadable; REPAIRING from backup and applying this save.")
 
-    # Rolling last-known-good snapshot: persist the PRE-EDIT config (which
-    # load_config_raw just confirmed parses) to .bak on EVERY save. Skip when
-    # there's nothing good to back up. Re-serialized from the parsed dict, so a
-    # corrupt file can never become the backup.
-    if existing:
-        try:
-            with open(config_file + ".bak", 'w', encoding='utf-8') as bf:
-                json.dump(existing, bf, indent=4, ensure_ascii=False)
-        except OSError:
-            pass  # best-effort
+        if not existing and not os.path.exists(config_file):
+            # Genuinely fresh install (no file): seed from runtime defaults so the
+            # created file is complete, not a lone partial object.
+            merged = dict(load_config())
+        else:
+            merged = dict(existing)
 
-    merged.update(changes)  # only the caller's keys overwritten; the rest preserved
+        # Rolling last-known-good snapshot: persist the PRE-EDIT readable config to
+        # a DURABLE, host-visible path (get_config_backup_path — NOT next to the
+        # single-file bind mount, whose parent is the container's ephemeral
+        # overlay). Skip when we just recovered FROM the backup (it already is the
+        # LKG) or when there's nothing good to back up.
+        if existing and not repaired_from_backup:
+            bak_path = get_config_backup_path()
+            try:
+                os.makedirs(os.path.dirname(bak_path) or '.', exist_ok=True)
+                with open(bak_path, 'w', encoding='utf-8') as bf:
+                    json.dump(existing, bf, indent=4, ensure_ascii=False)
+            except OSError:
+                pass  # best-effort
 
-    def _attempt():
-        _write_config_atomic(merged, config_file)
-        return _verify_config_file(merged, config_file)
+        merged.update(changes)  # only the caller's keys overwritten; the rest preserved
 
-    try:
-        ok, detail = _attempt()
-    except Exception as e:
-        LAST_CONFIG_ERROR = f"config write failed: {e}"
-        if hasattr(state, 'logger'):
-            state.logger.error(LAST_CONFIG_ERROR)
-        return False, LAST_CONFIG_ERROR
+        def _attempt():
+            _write_config_atomic(merged, config_file)
+            return _verify_config_file(merged, config_file)
 
-    if not ok:
-        if hasattr(state, 'logger'):
-            state.logger.critical(
-                f"config verify-after-write FAILED at {config_file!r}: {detail}. Retrying once.")
         try:
             ok, detail = _attempt()
         except Exception as e:
-            LAST_CONFIG_ERROR = f"config write failed on retry: {e}"
+            LAST_CONFIG_ERROR = f"config write failed: {e}"
             if hasattr(state, 'logger'):
-                state.logger.critical(LAST_CONFIG_ERROR)
-            return False, LAST_CONFIG_ERROR
-        if not ok:
-            LAST_CONFIG_ERROR = f"config verify-after-write failed twice: {detail}"
-            if hasattr(state, 'logger'):
-                state.logger.critical(LAST_CONFIG_ERROR)
+                state.logger.error(LAST_CONFIG_ERROR)
             return False, LAST_CONFIG_ERROR
 
-    return True, None
+        if not ok:
+            if hasattr(state, 'logger'):
+                state.logger.critical(
+                    f"config verify-after-write FAILED at {config_file!r}: {detail}. Retrying once.")
+            try:
+                ok, detail = _attempt()
+            except Exception as e:
+                LAST_CONFIG_ERROR = f"config write failed on retry: {e}"
+                if hasattr(state, 'logger'):
+                    state.logger.critical(LAST_CONFIG_ERROR)
+                return False, LAST_CONFIG_ERROR
+            if not ok:
+                LAST_CONFIG_ERROR = f"config verify-after-write failed twice: {detail}"
+                if hasattr(state, 'logger'):
+                    state.logger.critical(LAST_CONFIG_ERROR)
+                return False, LAST_CONFIG_ERROR
+
+        return True, None
 
 
 def _canonicalize_printer_map(new_map):

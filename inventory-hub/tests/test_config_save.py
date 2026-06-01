@@ -314,6 +314,70 @@ def test_bak_holds_pre_edit_state_and_rolls(cfg_file):
     assert bak2 != SEED
 
 
+# --- Durable backup + corrupt-primary recovery + write concurrency (post-audit) ---
+
+def test_concurrent_writes_no_lost_update(cfg_file):
+    # _CONFIG_WRITE_LOCK must serialize read-merge-write so concurrent saves of
+    # DIFFERENT keys don't lose one another (the dropped-lock regression).
+    import threading as _t
+    N = 12
+    errors = []
+
+    def writer(i):
+        ok, err = config_loader._write_merged_config({f"ck{i}": i})
+        if not ok:
+            errors.append(err)
+
+    threads = [_t.Thread(target=writer, args=(i,)) for i in range(N)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    on_disk = _read(cfg_file)
+    for i in range(N):
+        assert on_disk.get(f"ck{i}") == i, f"lost update: ck{i} missing"
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"  # seed survived too
+
+
+def test_load_recovers_from_backup_on_corrupt_primary(cfg_file):
+    # A corrupt primary must NOT silently degrade to localhost defaults — it
+    # recovers from the durable backup instead.
+    good = dict(SEED)
+    good["server_ip"] = "10.9.8.7"
+    with open(config_loader.get_config_backup_path(), "w", encoding="utf-8") as f:
+        json.dump(good, f)
+    cfg_file.write_text("{ not valid json", encoding="utf-8")
+    cfg = config_loader.load_config()
+    assert cfg["server_ip"] == "10.9.8.7"  # from backup, NOT the 127.0.0.1 default
+
+
+def test_save_repairs_corrupt_primary_from_backup(cfg_file):
+    # A save against a corrupt primary repairs it from the backup + applies the
+    # change, rather than locking the operator out of all saves.
+    good = dict(SEED)
+    good["sync_delay"] = 0.25
+    with open(config_loader.get_config_backup_path(), "w", encoding="utf-8") as f:
+        json.dump(good, f)
+    cfg_file.write_text("CORRUPT", encoding="utf-8")
+    result = config_loader.save_config({"sync_delay": 9.0})
+    assert result["ok"] is True, result["error"]
+    on_disk = _read(cfg_file)
+    assert on_disk["sync_delay"] == 9.0                     # change applied
+    assert on_disk["SCRAPER_API_KEY"] == "secret-key-123"   # backup's keys restored
+
+
+def test_save_refuses_when_corrupt_and_no_backup(cfg_file):
+    # Corrupt primary AND no usable backup -> still refuse (don't drop keys).
+    bak = config_loader.get_config_backup_path()
+    if os.path.exists(bak):
+        os.remove(bak)
+    cfg_file.write_text("CORRUPT", encoding="utf-8")
+    result = config_loader.save_config({"sync_delay": 9.0})
+    assert result["ok"] is False
+    assert "refus" in result["error"].lower()
+
+
 # --- HTTP endpoints (GET/PUT /api/config) via app.test_client ---
 
 @pytest.fixture
@@ -716,6 +780,14 @@ def test_export_include_secrets(client):
     r = client.get("/api/config/export?include_secrets=1")
     d = json.loads(r.get_data(as_text=True))
     assert d["SCRAPER_API_KEY"] == "secret-key-123"  # plaintext only when explicitly asked
+
+
+def test_export_corrupt_config_is_409(client, monkeypatch):
+    # A present-but-unreadable config must NOT export as an empty {} "backup".
+    monkeypatch.setattr(config_loader, "load_config_raw", lambda: None)
+    r = client.get("/api/config/export")
+    assert r.status_code == 409
+    assert r.get_json()["ok"] is False
 
 
 def test_import_dry_run_returns_diff_no_write(client, cfg_file):

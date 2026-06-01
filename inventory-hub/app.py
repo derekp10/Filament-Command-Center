@@ -3708,8 +3708,13 @@ def api_config_export():
     ?include_secrets=1, so an export is shareable without leaking the API key."""
     include_secrets = request.args.get('include_secrets', '').lower() in ('1', 'true', 'yes')
     raw = config_loader.load_config_raw()
-    if not isinstance(raw, dict):
-        raw = {}
+    if raw is None:
+        # Present-but-unreadable config: refuse rather than serving an EMPTY {}
+        # that masquerades as a full backup (the save/import paths already refuse
+        # on None for the same reason). {} only legitimately means "fresh install".
+        return jsonify({"ok": False,
+                        "error": "current config is unreadable — refusing to export an empty "
+                                 "backup; repair config.json first"}), 409
     out = dict(raw)
     if not include_secrets:
         for k in config_schema.SECRET_KEYS:
