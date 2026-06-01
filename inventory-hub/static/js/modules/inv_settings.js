@@ -30,7 +30,10 @@
         } catch (e) { return fallback; }
     }
     function writeClient(key, val) {
-        try { window.localStorage.setItem(key, String(val)); } catch (e) { /* private mode */ }
+        // Returns true on success, false if storage is unavailable (private
+        // mode / quota / disabled) so save() can be honest about what persisted.
+        try { window.localStorage.setItem(key, String(val)); return true; }
+        catch (e) { return false; }
     }
 
     function inputFor(f, value) {
@@ -134,6 +137,7 @@
         const btn = document.getElementById('cfgset-save');
         const serverValues = {};
         let reservedHit = false;
+        let clientAttempted = false, clientFailed = false;
         host.querySelectorAll('.cfgset-input').forEach((el) => {
             const key = el.dataset.key;
             const type = el.dataset.type;
@@ -152,7 +156,10 @@
                 // the displayed default unconditionally would pin it into
                 // localStorage and override any caller that passes a different
                 // defaultMode (weight_entry.js treats "unset" as "caller wins").
-                if (String(val) !== el.dataset.initial) writeClient(key, val);
+                if (String(val) !== el.dataset.initial) {
+                    clientAttempted = true;
+                    if (!writeClient(key, val)) clientFailed = true;
+                }
             } else {
                 serverValues[key] = val;
             }
@@ -172,8 +179,21 @@
             });
             const d = await r.json();
             if (d && d.ok) {
-                if (statusEl) { statusEl.style.color = '#7CFC00'; statusEl.textContent = '✓ Saved'; }
-                if (window.showToast) window.showToast('Settings saved', 'success', 4000);
+                const serverSaved = Array.isArray(d.saved) ? d.saved.length : 0;
+                if (clientFailed) {
+                    // server part (if any) succeeded, but the browser refused to
+                    // store a client pref — don't claim a clean save.
+                    const m = 'Saved, but a browser preference could not be stored (private mode / storage full).';
+                    if (statusEl) { statusEl.style.color = '#ffcc66'; statusEl.textContent = m; }
+                    if (window.showToast) window.showToast(m, 'warning', 7000);
+                } else if (serverSaved === 0 && !clientAttempted) {
+                    // genuine no-op (e.g. only the secret sentinel, or nothing changed)
+                    if (statusEl) { statusEl.style.color = 'rgba(255,255,255,0.6)'; statusEl.textContent = 'No changes'; }
+                    if (window.showToast) window.showToast('No changes to save', 'info', 3000);
+                } else {
+                    if (statusEl) { statusEl.style.color = '#7CFC00'; statusEl.textContent = '✓ Saved'; }
+                    if (window.showToast) window.showToast('Settings saved', 'success', 4000);
+                }
             } else {
                 const msg = (d && d.error) ? d.error : 'Settings save failed';
                 if (statusEl) { statusEl.style.color = '#ff6b6b'; statusEl.textContent = msg; }

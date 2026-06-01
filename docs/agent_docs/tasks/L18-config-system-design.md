@@ -259,3 +259,19 @@ The single dangerous primitive, proven before any framework rides on it.
 **Multi-host decoupling (Derek, 2026-05-31):** Spoolman and FilaBridge are NOT assumed to share a host. Added an **optional `filabridge_ip`** (blank ⇒ falls back to `server_ip`); `get_api_urls()` derives the FilaBridge host independently. Backward-compatible — existing single-host configs behave identically. Supersedes the single-`server_ip` assumption latent in `get_api_urls` pre-L18.
 
 **Open-question status:** Q1 ✅ (editable in P2). Q3 ✅ (real keys confirmed: `SCRAPER_API_KEY`, `spoolman_db_path`, `backup_directory`, `export_directory`, `print_settings`, `printer_map`, `dryer_slots`, `comment*` — all preserved by passthrough). Q2 (`printer_map` editor) deferred → Phase 3. Q5 (import/export) deferred → Phase 4. Q4 current taxonomy: Connection / Behavior / This-Browser.
+
+---
+
+## Post-ship audit (2026-06-01, adversarial workflow)
+
+The first real toolhead save in dev failed with `[Errno 16] Device or resource busy` — `config.json` is a **single-file bind mount** (`../config.json:/config.json`), so `os.replace` can't rename over the mount point (`locations.json` is unaffected — it's in a *directory* mount). Hotfix in `_write_config_atomic` (`de80238`): atomic `os.replace` primary path + in-place fsync overwrite fallback on EBUSY/EXDEV/EINVAL. A 30-agent adversarial workflow audit then surfaced sibling issues the diff-level review + `tmp_path` tests all missed because none exercised the real Docker mount topology. Confirmed + fixed:
+
+1. **`_CONFIG_WRITE_LOCK` regression** — the lock specified in *Risks & mitigations* above had been dropped. Restored: a module `threading.Lock` now serializes the entire read-merge-write in `_write_merged_config` (concurrent saves were losing edits and could tear the non-atomic in-place write).
+2. **Ephemeral `.bak`** — the rolling backup was `/config.json.bak` on the container's throwaway overlay (`BASE_DIR`=`/` for the single-file mount), gone on every recreate. Now `get_config_backup_path()` → `inventory-hub/data/config.json.bak` (persisted, host-visible, gitignored).
+3. **Silent corruption** — a corrupt `config.json` made `load_config()` quietly fall back to 127.0.0.1 defaults *and* bricked all saves (refuse-on-unreadable). Now both `load_config()` and `_write_merged_config()` AUTO-RECOVER from the backup (logging CRITICAL); a save repairs the primary from backup rather than refusing — it refuses only when no backup exists either.
+4. **Empty-`{}` export** — `GET /api/config/export` served `{}` as a "backup" on an unreadable config; now returns 409.
+5. **Dishonest save UI** — `inv_settings.js` showed "✓ Saved" for no-ops and swallowed `localStorage` failures; now reads the response `saved` list + tracks client writes → "No changes" / warning toast.
+
+Deferred: **(E)** redacted export writes the `__secret_set__` sentinel — only bites copy-into-place misuse (the import round-trip is verified safe), low priority. **(F)** the clean structural fix — bind-mount config.json's *parent directory* so `os.replace` stays atomic and the whole EBUSY-fallback + ephemeral-bak class disappears — recommended, but it changes the dev compose **and** the prod TrueNAS mount, so it's Derek's infra call.
+
+Tests: this commit adds 5 (concurrency no-lost-update, recover-from-backup, repair-on-save, refuse-without-backup, export-409) on top of the 2 EBUSY-fallback cases from the hotfix → **83 unit + 6 E2E green**, plus a live-container verification that the durable `.bak` lands on the persisted mount.
