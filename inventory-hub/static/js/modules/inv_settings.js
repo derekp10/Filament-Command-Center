@@ -40,7 +40,7 @@
         // always present (no fragile string-replace). data-initial lets save()
         // tell whether a CLIENT pref actually changed.
         const data = `id="${id}" data-key="${_esc(f.key)}" data-type="${_esc(f.type)}" `
-            + `data-scope="${_esc(f.scope)}" data-initial="${_esc(value)}"`;
+            + `data-scope="${_esc(f.scope)}" data-initial="${_esc(value)}" autocomplete="off"`;
         if (f.type === 'bool') {
             const checked = (value === true || value === 'true') ? 'checked' : '';
             return `<div class="form-check form-switch mb-0">
@@ -56,11 +56,17 @@
             // Rendered EMPTY (the plaintext never reaches the browser). The
             // placeholder reflects whether one is currently set; blank-on-save
             // keeps it. data-initial carries the sentinel, not the real key.
+            // type="text" + -webkit-text-security (NOT type=password) so Chrome's
+            // password manager never engages: no "save password?" prompt and no
+            // username-pairing autofill into the adjacent ip fields. The eye flips
+            // the CSS mask, not the input type. (Chromium/Edge/Safari mask; Firefox
+            // would show plaintext — acceptable for this Chromium app.)
             const isSet = String(value) === SECRET_SENTINEL;
             return `<div class="d-flex align-items-center gap-1">
                 <input class="form-control form-control-sm cfgset-input bg-dark text-white border-secondary"
-                       type="password" ${data} value="" autocomplete="off"
-                       placeholder="${isSet ? '•••••••• (set — blank keeps it)' : '(not set)'}" style="max-width:200px;">
+                       type="text" ${data} value="" autocapitalize="off" autocorrect="off" spellcheck="false"
+                       style="max-width:200px; -webkit-text-security:disc;"
+                       placeholder="${isSet ? '•••••••• (set — blank keeps it)' : '(not set)'}">
                 <button type="button" class="btn btn-sm btn-outline-secondary cfgset-eye" tabindex="-1" title="Show / hide">👁</button>
             </div>`;
         }
@@ -112,7 +118,11 @@
         host.querySelectorAll('.cfgset-eye').forEach((btn) => {
             btn.addEventListener('click', () => {
                 const inp = btn.parentElement.querySelector('.cfgset-input');
-                if (inp) inp.type = (inp.type === 'password') ? 'text' : 'password';
+                if (!inp) return;
+                // Toggle the CSS mask (the input stays type=text to dodge Chrome's
+                // password manager) — disc = hidden, none = revealed.
+                const masked = inp.style.webkitTextSecurity !== 'none';
+                inp.style.webkitTextSecurity = masked ? 'none' : 'disc';
             });
         });
     }

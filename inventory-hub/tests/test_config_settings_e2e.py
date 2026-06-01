@@ -106,14 +106,18 @@ def test_phase2_secret_and_connection_fields_render(page: Page, base_url: str, r
     _open_settings(page, base_url, reset_dom_state_js)
     sec = page.locator('.cfgset-input[data-key="SCRAPER_API_KEY"]')
     expect(sec).to_be_visible()
-    assert sec.evaluate("el => el.type") == "password"
+    # NOT type=password (so Chrome's password manager never engages); masked via CSS
+    assert sec.evaluate("el => el.type") == "text"
+    assert sec.evaluate("el => el.style.webkitTextSecurity") == "disc"
     assert sec.input_value() == ""  # plaintext is NEVER populated into the field
-    # the eye toggles password <-> text
+    # the eye toggles the CSS mask, not the input type
     eye = page.locator(".cfgset-eye").first
     eye.click()
-    assert sec.evaluate("el => el.type") == "text"
+    assert sec.evaluate("el => el.style.webkitTextSecurity") == "none"
     eye.click()
-    assert sec.evaluate("el => el.type") == "password"
+    assert sec.evaluate("el => el.style.webkitTextSecurity") == "disc"
+    # no type=password anywhere in the card -> Chrome's credential heuristic can't fire
+    assert page.locator('#config-generated-settings input[type="password"]').count() == 0
     # ip fields render as text, port as number
     assert page.locator('.cfgset-input[data-key="server_ip"]').evaluate("el => el.type") == "text"
     assert page.locator('.cfgset-input[data-key="filabridge_ip"]').evaluate("el => el.type") == "text"
