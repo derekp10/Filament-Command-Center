@@ -148,6 +148,14 @@ def load_config():
         if hasattr(state, 'logger'):
             state.logger.warning(f"Config file not found at {config_file}")
 
+    # Defensive: the redaction sentinel is a reserved marker, never a real secret.
+    # It only reaches disk if a REDACTED export was copied into place instead of
+    # imported (normal save/import strip it). Treat it as UNSET so nothing ever
+    # authenticates with the literal placeholder string. See config_schema.SECRET_KEYS.
+    for _sk in config_schema.SECRET_KEYS:
+        if final_config.get(_sk) == config_schema.SECRET_SENTINEL:
+            final_config[_sk] = ""
+
     # Force Uppercase Keys for Printer Map
     if 'printer_map' in final_config:
         final_config['printer_map'] = {k.upper(): v for k, v in final_config['printer_map'].items()}
