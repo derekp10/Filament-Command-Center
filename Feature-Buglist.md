@@ -22,6 +22,8 @@
 
 * Assigned filament attributes should appear in the spool detail modal as well as the filament modal.
 
+* Rename inventory hub to Filament Command Center.
+
 * **[Feature — L345 follow-up: automate dev-env reset for clean E2E runs]** The pytest+Playwright E2E suite can't go truly green because it runs against the SHARED, MUTATING dev backend — a full run (~986 tests) leaves dev contaminated, so reruns fail in clusters (manage-modal won't open, quickswap/locmgr/returns, buffer-card refresh, etc.). Found on `feature/scan-match-pipeline` (2026-05-30 full sweep = 77 failed / 986 passed / 24 skipped; an A/B against baseline `dev` reproduced the sampled failures *identically* → environmental, not the branch). **Goal: one `reset-dev` script** to restore dev to a clean, reproducible baseline before a sweep, so it can't be forgotten or done wrong by hand.
     - **Reset surface (mutable shared state a sweep corrupts):**
         - Dev **Spoolman DB** (`192.168.1.29:7913`) — spools/filaments/vendors + their `extra` (`container_slot`, `physical_source`, `needs_label_print`, `sample_printed`, temps, `product_url`…). The big one.
