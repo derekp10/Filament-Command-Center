@@ -378,6 +378,17 @@ def test_save_refuses_when_corrupt_and_no_backup(cfg_file):
     assert "refus" in result["error"].lower()
 
 
+def test_load_neutralizes_secret_sentinel_on_disk(cfg_file):
+    # If a REDACTED export is copied into place (instead of imported), the literal
+    # sentinel must NOT be served as the real key — load_config treats it as unset
+    # so the scraper never authenticates with the placeholder string.
+    raw = dict(SEED)
+    raw["SCRAPER_API_KEY"] = config_schema.SECRET_SENTINEL
+    cfg_file.write_text(json.dumps(raw), encoding="utf-8")
+    cfg = config_loader.load_config()
+    assert cfg["SCRAPER_API_KEY"] == ""  # neutralized, not the literal sentinel
+
+
 # --- HTTP endpoints (GET/PUT /api/config) via app.test_client ---
 
 @pytest.fixture
