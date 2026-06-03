@@ -336,6 +336,8 @@ There continues to be inconsistency with switching out spools when a box slot is
 
   _[IN PROGRESS — Phase 1A shipped 2026-04-25 on `feature/locations-parent-id-phase-1a`. Subsequent phases tracked below.]_
 
+  **📋 FULL PHASED IMPLEMENTATION PLAN (2026-06-03):** [docs/agent_docs/tasks/L271-location-manager-phase-plan.md](docs/agent_docs/tasks/L271-location-manager-phase-plan.md) — grounded in a verified 24-consumer code map; per-phase steps, exact file:line migrations, tests, prod-replication, and where Group 20 (20.1/20.2/20.3 orphan→room→UNASSIGNED) folds into Phase 4. Derek 2026-06-03 chose "write the full plan first" before coding Phases 2→5.
+
   **Phase tracker (kept here so we don't lose the thread between sessions):**
   - [x] **Phase 1A — additive plumbing** (2026-04-25). Added `parent_id` field, `derive_parent_id_from_prefix`, `resolve_parent`, and `migrate_parent_ids_if_needed` to [locations_db.py](inventory-hub/locations_db.py); wired the startup migration into [app.py](inventory-hub/app.py) with timestamped backup; added ~15 unit tests in [test_dryer_bindings.py](inventory-hub/tests/test_dryer_bindings.py) plus 3 integrity-contract tests in [test_locations_json_integrity.py](inventory-hub/tests/test_locations_json_integrity.py). **No consumer reads `parent_id` yet** — purely sets up the data so Phases 1B/2 can migrate consumers safely.
   - [ ] **Phase 1B — first consumer migration**: replace `split('-')[0]` at [app.py:879](inventory-hub/app.py#L879) (room-occupancy parent extraction in the synthesizer) with `locations_db.resolve_parent`. Smallest possible consumer change; proves the abstraction works in production.
