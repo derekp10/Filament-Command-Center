@@ -1,6 +1,7 @@
 import requests # type: ignore
 import state # type: ignore
 import config_loader # type: ignore
+import locations_db # type: ignore  # L271 Phase 2: single hierarchy resolver
 import json
 
 def parse_inbound_data(data):
@@ -1333,14 +1334,18 @@ def get_spools_at_location_strict(loc_name):
     resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
     resp.raise_for_status()  # raise on 4xx/5xx so the caller can fail closed
     target = str(loc_name).strip().upper()
-    bare = "-" not in target
     ids = []
     for s in parse_inbound_data(resp.json()):
         sloc = (s.get('location') or '').strip().upper()
         extra = s.get('extra', {}) or {}
         p_source = str(extra.get('physical_source', '')).strip().replace('"', '').upper()
+        # L271 Phase 2: child match via resolve_parent (prefix-fallback this
+        # phase, FK in Phase 5) instead of the old bare/startswith probe.
+        # resolve_parent returns a dash-free prefix, so a dashed target can
+        # never child-match — this folds in the old `bare` guard for free.
         if (sloc == target or p_source == target
-                or (bare and (sloc.startswith(target + "-") or p_source.startswith(target + "-")))):
+                or locations_db.resolve_parent(sloc) == target
+                or locations_db.resolve_parent(p_source) == target):
             ids.append(s['id'])
     return ids
 

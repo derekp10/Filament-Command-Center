@@ -14,9 +14,12 @@ rows, slots, dryer boxes) and are asserted against the migrated code here.
 
 These are pure-function pins — no running server required.
 """
+import types
+
 import pytest
 
 import logic
+import spoolman_api
 
 
 # ---------------------------------------------------------------------------
@@ -126,3 +129,62 @@ def test_smart_eject_bypass_skips_non_child_source(monkeypatch):
     assert len(captured["update"]) == 1
     _sid, payload = captured["update"][0]
     assert payload["location"] == "CR-CT-1"     # returned home — bypass did not fire
+
+
+# ---------------------------------------------------------------------------
+# Consumer 3 — spoolman_api.get_spools_at_location_strict
+# ---------------------------------------------------------------------------
+# Was: bare = "-" not in target; (... bare and sloc.startswith(target+"-") ...)
+# Now: resolve_parent(sloc) == target or resolve_parent(p_source) == target
+#
+# A/B against the OLD predicate as oracle over a representative tree, with the
+# Spoolman HTTP fetch stubbed. Covers direct / room-child / ghost (physical_
+# source) / ghost-child / dashed-exact / prefix-near-miss matches.
+
+_STRICT_SPOOLS = [
+    {"id": 1, "location": "LR-DB1",       "extra": {}},                          # direct + child of LR
+    {"id": 2, "location": "LR",           "extra": {}},                          # direct room
+    {"id": 3, "location": "XL-1",         "extra": {}},                          # child of XL
+    {"id": 4, "location": "CORE1-M0",     "extra": {"physical_source": "LR-DB1"}},  # ghost -> LR-DB1 / LR
+    {"id": 5, "location": "",             "extra": {}},                          # unassigned
+    {"id": 6, "location": "CR-CT-1-R1",   "extra": {}},                          # deep child of CR
+    {"id": 7, "location": "DR-CT-1-R2-L", "extra": {}},                          # split-side child of DR
+    {"id": 8, "location": "LRX-1",        "extra": {}},                          # prefix near-miss (NOT under LR)
+    {"id": 9, "location": "",             "extra": {"physical_source": "XL-2"}},    # ghost -> XL-2 / XL
+]
+
+STRICT_TARGETS = ["LR", "LR-DB1", "XL", "XL-2", "CORE1-M0", "CR", "DR", "CR-CT-1-R1", "LRX"]
+
+
+def _old_strict_match(s, target):
+    """Pre-migration matching predicate — the A/B oracle."""
+    target = str(target).strip().upper()
+    bare = "-" not in target
+    sloc = (s.get('location') or '').strip().upper()
+    extra = s.get('extra', {}) or {}
+    p_source = str(extra.get('physical_source', '')).strip().replace('"', '').upper()
+    return (sloc == target or p_source == target
+            or (bare and (sloc.startswith(target + "-") or p_source.startswith(target + "-"))))
+
+
+@pytest.mark.parametrize("target", STRICT_TARGETS)
+def test_strict_location_match_matches_legacy_predicate(monkeypatch, target):
+    """The migrated resolve_parent predicate returns the exact same id set as
+    the legacy bare/startswith probe for every target shape."""
+    import config_loader
+
+    payload = [dict(s, extra=dict(s["extra"])) for s in _STRICT_SPOOLS]
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return payload
+
+    monkeypatch.setattr(spoolman_api, "requests",
+                        types.SimpleNamespace(get=lambda url, timeout=5: _Resp()))
+    monkeypatch.setattr(config_loader, "get_api_urls", lambda: ("http://sm", "http://fb"))
+
+    expected = sorted(s["id"] for s in _STRICT_SPOOLS if _old_strict_match(s, target))
+    assert sorted(spoolman_api.get_spools_at_location_strict(target)) == expected
