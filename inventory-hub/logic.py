@@ -789,9 +789,14 @@ def get_room_from_location(loc_id):
     loc_id = loc_id.strip().upper()
     if "-" not in loc_id:
         return ""
-        
-    prefix = loc_id.split("-")[0]
-    
+
+    # L271 Phase 2: derive the parent via the single hierarchy resolver
+    # instead of an inline loc_id.split("-")[0]. resolve_parent still falls
+    # back to prefix-parsing in this phase, so the result is byte-identical
+    # to the old split until Phase 5 retires the fallback — this just routes
+    # the central room-deriver through the abstraction.
+    prefix = locations_db.resolve_parent(loc_id) or ""
+
     # Exclude known non-room prefixes we don't want to spawn virtual rooms for
     # PM = Polymaker portable boxes, PJ = Project Carts, TST = System Tests
     if prefix in ["TST", "TEST", "PM", "PJ"]:
