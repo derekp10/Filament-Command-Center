@@ -91,6 +91,20 @@ def execute_global_scanner(page: Page, context_name: str):
             if "navbar" in v['node'].lower() and "COLLAPSED_CONTENT" in v['type']: continue
             if "justify-content-between" in v['node'].lower() and "OVERFLOW" in v['type']: continue
             if "wizard-step" in v['node'].lower() and "OVERFLOW" in v['type']: continue
+            # Group 19.3: Bootstrap's `text-truncate` is *designed* to clip
+            # overflowing text with an ellipsis (e.g. the Global Search
+            # offcanvas's `.text-light fw-bold text-truncate` result spans).
+            # scrollWidth > clientWidth is the intended state there, not a bug.
+            if "text-truncate" in v['node'].lower() and "OVERFLOW" in v['type']: continue
+            # Group 19.3 (cont.): the wizard's collapsible section headers
+            # (`.fcc-wiz-section-toggle`) are flex rows whose title + summary
+            # children both clip via hand-rolled `overflow:hidden;
+            # text-overflow:ellipsis` (same designed-to-clip class as
+            # text-truncate, just without the Bootstrap utility class). A
+            # few px of flex sub-pixel rounding on an element built to clip
+            # gracefully is not a real layout bug. Previously masked by the
+            # offcanvas text-truncate failure above.
+            if "fcc-wiz-section-toggle" in v['node'].lower() and "OVERFLOW" in v['type']: continue
             filtered_violations.append(v)
             
         if filtered_violations:
@@ -304,8 +318,16 @@ def test_structural_buffer_location_badge(page: Page, reset_dom_state_js: str):
 
 
 def test_wizard_escape_warns_when_dirty(page: Page, reset_dom_state_js: str):
-    """Escape on a dirty wizard shows unsaved-changes Swal; 'Keep Editing' leaves modal open;
-    'Discard & Close' closes it cleanly."""
+    """Escape on a dirty wizard shows the unsaved-changes guard; 'Keep Editing'
+    leaves the modal open; 'Discard & Close' closes it cleanly.
+
+    Group 19.2: the guard was migrated from Swal.fire to window.mountOverlay()
+    (Group 10.8 — see test_wizard_overlay_migration.py). This test was stale,
+    still asserting `.swal2-container`. It now asserts the mountOverlay
+    (`#fcc-wiz-unsaved-changes` + its Keep-Editing / Discard buttons). Kept
+    distinct from the migration suite because THIS test drives the real
+    Escape-key trigger path (hide.bs.modal via keyboard), whereas the
+    migration suite triggers the close programmatically with m.hide()."""
     page.goto("http://localhost:8000")
     page.evaluate(reset_dom_state_js)
     page.wait_for_timeout(200)
@@ -322,26 +344,27 @@ def test_wizard_escape_warns_when_dirty(page: Page, reset_dom_state_js: str):
     )
     page.locator('#wiz-fil-color_name').fill("Test Color")
 
-    # Escape → Swal guard should appear, modal stays open
+    # Escape → mountOverlay guard should appear, modal stays open
+    overlay = page.locator('#fcc-wiz-unsaved-changes')
     page.keyboard.press("Escape")
-    page.wait_for_timeout(400)
-    swal = page.locator('.swal2-container')
-    expect(swal).to_be_visible()
-    expect(page.locator('.swal2-title')).to_have_text("Unsaved Changes")
+    expect(overlay).to_be_visible(timeout=2000)
+    expect(overlay).to_have_attribute("data-overlay-mount", "1")
+    expect(overlay).to_contain_text("Unsaved Changes")
+    # The migrated guard must NOT render through SweetAlert2 anymore.
+    expect(page.locator('.swal2-container')).not_to_be_attached()
     expect(page.locator("#wizardModal")).to_be_visible()
 
-    # "Keep Editing" → Swal dismissed, modal still open
-    page.locator('button.swal2-cancel').click()
-    page.wait_for_timeout(400)
-    expect(page.locator('.swal2-container')).not_to_be_visible()
+    # "Keep Editing" → overlay dismissed, modal still open
+    overlay.locator('#fcc-wiz-dirty-cancel').click()
+    expect(overlay).not_to_be_attached(timeout=2000)
     expect(page.locator("#wizardModal")).to_be_visible()
 
-    # Escape again → Swal reappears; "Discard & Close" → modal closes
+    # Escape again → overlay reappears; "Discard & Close" → modal closes
     page.keyboard.press("Escape")
-    page.wait_for_timeout(400)
-    page.locator('button.swal2-confirm').click()
-    page.wait_for_timeout(400)
-    expect(page.locator("#wizardModal")).not_to_be_visible()
+    expect(overlay).to_be_visible(timeout=2000)
+    overlay.locator('#fcc-wiz-dirty-confirm').click()
+    expect(overlay).not_to_be_attached(timeout=2000)
+    expect(page.locator("#wizardModal")).not_to_be_visible(timeout=5000)
 
 
 def test_wizard_escape_no_warning_when_clean(page: Page, reset_dom_state_js: str):

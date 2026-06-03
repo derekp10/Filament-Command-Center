@@ -25,7 +25,7 @@
 | 16 | 🧰 Testing Hardening & Helper Consolidation | 4 | ~3–4 hrs | `DONE` 2026-05-12 | [16-testing-hardening.md](tasks/16-testing-hardening.md) |
 | 17 | 🪟 Details Modal, Queue & Wizard End-State Polish | 5 | ~3–4 hrs | `DONE` 2026-05-14/15 (all 5 items shipped on `feature/buglist-sweep-2026-05-14`; 17.1 edit-toggle side completed 2026-05-15 by un-hiding `needs_label_print` from the wizard's hide list) | [17-details-queue-wizard-polish.md](tasks/17-details-queue-wizard-polish.md) |
 | 18 | 📍 Unknown Location + Audit Mode Refinement | 2 | ~4–6 hrs | `DONE` 2026-05-15/16 (18.1 Unknown bucket + 18.2 Part A auto-park + Part B visual panel + idle watchdog all shipped on `feature/buglist-sweep-2026-05-14`; parent/child rollup deferred as future enhancement on top of the multi-location audit) | [18-unknown-location-audit.md](tasks/18-unknown-location-audit.md) |
-| 19 | 🧪 Dev-Env Reset & E2E Test-Debt Triage | 5 | ~4–6 hrs | `READY` 2026-05-31 | [19-dev-env-reset-test-debt.md](tasks/19-dev-env-reset-test-debt.md) |
+| 19 | 🧪 Dev-Env Reset & E2E Test-Debt Triage | 5 | ~4–6 hrs | `DONE` 2026-06-02 (`feature/dev-env-reset-test-debt` — reset_dev.py + seed pair + 11 unit tests; 19.2–19.5 test-debt all green; 19.1a/b triage doc. Destructive `--prune` left for Derek to invoke per the non-destructive-default decision) | [19-dev-env-reset-test-debt.md](tasks/19-dev-env-reset-test-debt.md) · [triage notes](tasks/19-seed-readiness-and-failure-buckets.md) |
 
 ## Items NOT Grouped (Solo, Deferred, or On Hold)
 
