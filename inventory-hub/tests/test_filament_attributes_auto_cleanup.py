@@ -304,3 +304,98 @@ def test_post_failure_logs_and_returns(monkeypatch):
     # We tried POST (it failed) → no PATCH attempts after.
     assert "POST" in methods
     assert "PATCH" not in methods
+
+
+# ---------------------------------------------------------------------------
+# Post-cleanup verification (2026-06-03) — the "removed ['Wood']" line was
+# re-firing on every prod boot. The cleanup now re-fetches the field after the
+# DELETE+recreate and only claims success if the targets are ACTUALLY gone;
+# otherwise it logs an honest "could not remove" warning so the misleading
+# success line stops AND the next boot's log diagnoses the root cause.
+# ---------------------------------------------------------------------------
+
+def _stub_calls_stateful(field_choices, filaments, *, recreate_sticks=True,
+                         delete_status=200, post_status=200, patch_status=200):
+    """Like _stub_calls but the field-def GET reflects the POST recreate:
+    once the field is recreated, subsequent GETs return the POSTed choices
+    (recreate_sticks=True) or keep the original dirty choices
+    (recreate_sticks=False — simulating a Spoolman build that won't drop a
+    choice even across a recreate)."""
+    calls = []
+    box = {"recreated": False, "posted": None}
+
+    def fake_get(url, **_kw):
+        calls.append(("GET", url))
+        if "/api/v1/field/filament" in url:
+            if box["recreated"]:
+                choices = box["posted"] if recreate_sticks else list(field_choices)
+                return _mock_resp(payload=[_field_def(choices)])
+            return _mock_resp(payload=[_field_def(field_choices)])
+        if "/api/v1/filament" in url:
+            return _mock_resp(payload=list(filaments))
+        return _mock_resp(ok=False, status=404)
+
+    def fake_delete(url, **_kw):
+        calls.append(("DELETE", url))
+        return _mock_resp(ok=delete_status == 200, status=delete_status)
+
+    def fake_post(url, **_kw):
+        calls.append(("POST", url, _kw.get("json")))
+        box["recreated"] = True
+        box["posted"] = list((_kw.get("json") or {}).get("choices") or [])
+        return _mock_resp(ok=post_status == 200, status=post_status)
+
+    def fake_patch(url, **_kw):
+        calls.append(("PATCH", url, _kw.get("json")))
+        return _mock_resp(ok=patch_status == 200, status=patch_status)
+
+    return calls, fake_get, fake_delete, fake_post, fake_patch
+
+
+def _wire(monkeypatch, fake_get, fake_delete, fake_post, fake_patch):
+    monkeypatch.setattr(spoolman_api.requests, "get", fake_get)
+    monkeypatch.setattr(spoolman_api.requests, "delete", fake_delete)
+    monkeypatch.setattr(spoolman_api.requests, "post", fake_post)
+    monkeypatch.setattr(spoolman_api.requests, "patch", fake_patch)
+    monkeypatch.setattr(
+        spoolman_api.config_loader, "get_api_urls",
+        lambda: ("http://spoolman", "http://filabridge"),
+    )
+
+
+def test_verification_logs_success_when_removal_persists(monkeypatch):
+    dirty = ["+", "Basic", "Wood", "Wood Filled"]
+    filaments = [_filament(1, "Wood Filament", ["Wood", "Basic"])]
+    calls, fg, fd, fp, fpa = _stub_calls_stateful(dirty, filaments, recreate_sticks=True)
+    _wire(monkeypatch, fg, fd, fp, fpa)
+    logged = []
+    monkeypatch.setattr(spoolman_api.state, "add_log_entry",
+                        lambda msg, *a, **k: logged.append((msg, a)))
+
+    spoolman_api.ensure_filament_attributes_cleaned()
+
+    joined = " | ".join(m for m, _ in logged)
+    assert "cleaned" in joined.lower(), f"expected a success 'cleaned' log; got {logged}"
+    assert "could not remove" not in joined.lower()
+    # A second field-def GET (the post-cleanup verification) must have happened.
+    field_gets = [c for c in calls if c[0] == "GET" and "/field/filament" in c[1]]
+    assert len(field_gets) >= 2, f"expected a verification GET; got {field_gets}"
+
+
+def test_verification_warns_when_choice_survives_recreate(monkeypatch):
+    """Simulate prod: the choice survives the DELETE+recreate. The cleanup
+    must NOT claim success; it logs an honest warning instead."""
+    dirty = ["+", "Basic", "Wood", "Wood Filled"]
+    filaments = [_filament(1, "Wood Filament", ["Wood", "Basic"])]
+    calls, fg, fd, fp, fpa = _stub_calls_stateful(dirty, filaments, recreate_sticks=False)
+    _wire(monkeypatch, fg, fd, fp, fpa)
+    logged = []
+    monkeypatch.setattr(spoolman_api.state, "add_log_entry",
+                        lambda msg, *a, **k: logged.append((msg, a)))
+
+    spoolman_api.ensure_filament_attributes_cleaned()
+
+    joined = " | ".join(m for m, _ in logged)
+    assert "could not remove" in joined.lower(), f"expected honest failure log; got {logged}"
+    assert "🧹 Filament Attributes cleaned" not in joined, \
+        "must NOT print the misleading success line when the choice survived"

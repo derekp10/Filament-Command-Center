@@ -951,6 +951,21 @@ def ensure_filament_attributes_cleaned():
 
         new_choices = sorted(existing - effective_delete)
 
+        # Per-choice usage diagnostic. The "removed ['Wood'] (180 restored)"
+        # line re-firing on EVERY prod boot (Derek 2026-06-02 — "I thought we
+        # disabled/fixed this") means one of the to-delete choices is back in
+        # the field's `choices` at every boot. There are two distinct causes,
+        # and the only way to tell them apart is a prod boot log:
+        #   (a) Spoolman didn't actually drop the choice — the DELETE+recreate
+        #       didn't persist (prod Spoolman on :7912 may be a different build
+        #       than dev's :7913 and treat choices as append-only even across a
+        #       field recreate). Signature: usage == 0 yet choice survives the
+        #       recreate (see post-verify below).
+        #   (b) Filaments still reference the choice, so Spoolman re-seeds it
+        #       into `choices` on the next filament write. Signature: usage > 0.
+        usage_diag = {
+            c: [fid for (fid, _n) in usage.get(c, [])] for c in sorted(effective_delete)
+        }
         # Pre-flight log so the operator sees what's about to change
         # before the schema rebuild fires. State logger goes to hub.log
         # AND the Activity Log via the WARNING/INFO add_log_entry below.
@@ -958,7 +973,10 @@ def ensure_filament_attributes_cleaned():
             f"filament_attributes cleanup: "
             f"will delete {sorted(effective_delete)} "
             f"(promoted from flag: {sorted(promoted)}; "
-            f"kept-because-in-use: {sorted(kept_flagged.keys())})"
+            f"kept-because-in-use: {sorted(kept_flagged.keys())}); "
+            f"current usage per target: "
+            + "; ".join(f"{c}={len(ids)}{('→'+str(ids[:10])) if ids else ''}"
+                        for c, ids in usage_diag.items())
         )
 
         # DELETE the field, then POST it back with the cleaned choice list.
@@ -1015,16 +1033,60 @@ def ensure_filament_attributes_cleaned():
             except requests.RequestException:
                 failed += 1
 
-        # User-visible summary in the Activity Log (the hub.log line above
-        # is for debugging; this one shows on the dashboard).
-        state.add_log_entry(
-            f"🧹 Filament Attributes cleaned: removed {sorted(effective_delete)} "
-            f"({restored} filaments restored"
-            + (f", {failed} failed" if failed else "")
-            + ")",
-            "INFO",
-            "00ccff",
-        )
+        # Post-cleanup verification: re-fetch the field and confirm the
+        # targets are ACTUALLY gone from the choices. If they survived the
+        # DELETE+recreate, the "removed" claim is a lie (root cause (a) above)
+        # — say so honestly instead of printing a misleading success line on
+        # every boot. This is what turns the next prod boot into a definitive
+        # diagnosis of why the cleanup keeps re-firing.
+        survived = set()
+        try:
+            v = requests.get(f"{sm_url}/api/v1/field/filament", timeout=10)
+            if v.ok:
+                vfield = next(
+                    (f for f in (v.json() or []) if f.get("key") == "filament_attributes"),
+                    None,
+                )
+                if vfield is not None:
+                    survived = effective_delete & set(vfield.get("choices") or [])
+        except requests.RequestException:
+            survived = set()  # couldn't verify; fall through to the success path
+
+        if survived:
+            # Removal did NOT persist. Don't claim success — log a clear,
+            # actionable diagnostic. `usage_diag` (above) tells us whether any
+            # filament still references the survivors: zero-usage survivors
+            # mean this Spoolman build won't drop the choice even via recreate
+            # (needs a Spoolman upgrade or DB-level surgery); non-zero means
+            # the values must be cleaned first (the restore PATCHes ran, so a
+            # surviving non-zero count would itself be suspicious).
+            still_used = {c: len(usage_diag.get(c, [])) for c in sorted(survived)}
+            state.logger.warning(
+                "filament_attributes cleanup: DELETE+recreate did NOT remove "
+                f"{sorted(survived)} — they are STILL in the field's choices after "
+                f"recreate (pre-cleanup usage: {still_used}). This Spoolman build "
+                "likely treats choices as append-only across a field recreate; the "
+                "choice cannot be dropped via the API and needs a Spoolman upgrade "
+                "or a DB-level edit. Suppressing the misleading 'cleaned' log."
+            )
+            state.add_log_entry(
+                "⚠️ Filament Attributes cleanup could not remove "
+                f"{sorted(survived)} — Spoolman kept the choice after recreate "
+                "(see hub.log; needs a Spoolman-side fix).",
+                "WARNING",
+                "ffaa00",
+            )
+        else:
+            # User-visible summary in the Activity Log (the hub.log line above
+            # is for debugging; this one shows on the dashboard).
+            state.add_log_entry(
+                f"🧹 Filament Attributes cleaned: removed {sorted(effective_delete)} "
+                f"({restored} filaments restored"
+                + (f", {failed} failed" if failed else "")
+                + ")",
+                "INFO",
+                "00ccff",
+            )
     except requests.RequestException as e:
         state.logger.warning(f"ensure_filament_attributes_cleaned: network error: {e}")
     except Exception as e:
