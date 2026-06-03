@@ -1146,68 +1146,119 @@ def format_spool_display(spool_data):
         state.logger.error(f"Format Error: {e}")
         return {"text": f"#{spool_data.get('id', '?')} Error", "text_short": "Error", "color": "ff0000", "slot": ""}
 
+def _build_location_match(s, target_loc_upper, check_unassigned=False):
+    """Single source of truth for "is spool `s` at (or ghosted to)
+    `target_loc_upper`?" plus the display-shaped item dict on a hit.
+
+    Returns the detailed item dict (same shape get_spools_at_location_detailed
+    emits) when the spool matches, else None. Extracted so both the
+    per-location detailed lookup AND the bulk bucket_spools_by_location share
+    the exact match + ghost (physical_source) logic — no drift between the two
+    paths. `target_loc_upper` must already be upper-cased.
+    """
+    sloc = (s.get('location') or '').strip()
+    extra = s.get('extra', {}) or {}
+    match = False
+    is_ghost = False
+    ghost_slot = None
+
+    # 1. Direct Location Match
+    if check_unassigned:
+        if not sloc:
+            match = True
+    elif sloc.upper() == target_loc_upper:
+        match = True
+    elif "-" not in target_loc_upper and sloc.upper().startswith(target_loc_upper + "-"):
+        match = True
+
+    # 2. [ALEX FIX] Physical Source Match (The Ghost Logic)
+    # Strip the literal quotes that Spoolman adds to JSON String Fields!
+    p_source_raw = str(extra.get('physical_source', '')).strip().replace('"', '')
+    if not match and not check_unassigned:
+        p_source = p_source_raw.upper()
+        if p_source == target_loc_upper or ("-" not in target_loc_upper and p_source.startswith(target_loc_upper + "-")):
+            match = True
+            is_ghost = True
+            # Strip quotes from the slot too!
+            ghost_slot = str(extra.get('physical_source_slot', '')).strip('"')
+
+    if not match:
+        return None
+
+    info = format_spool_display(s)
+    # [ALEX FIX] If Ghost, override the slot so it appears in the grid correctly
+    final_slot = info['slot']
+    if is_ghost and ghost_slot:
+        final_slot = ghost_slot
+    return {
+        'id': s['id'],
+        'display': info['text'],
+        'color': info['color'],
+        'color_direction': info.get('color_direction', 'longitudinal'),
+        'slot': final_slot,
+        'location': p_source_raw if is_ghost else sloc,                 # [ALEX FIX] Ensure UI can access exact physical location
+        'archived': s.get('archived', False),
+        'is_ghost': is_ghost,             # Flag for UI
+        'deployed_to': sloc if is_ghost else None, # Where is it really?
+        'remaining_weight': s.get('remaining_weight'),
+        'details': info.get('details', {})
+    }
+
+
 def get_spools_at_location_detailed(loc_name):
-    sm_url, _ = config_loader.get_api_urls()
-    found = []
-    # [ALEX FIX] Handle Unassigned (No Location)
     check_unassigned = (str(loc_name).upper() == 'UNASSIGNED')
     target_loc_upper = str(loc_name).upper()
-
+    found = []
     try:
-        resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
-        if resp.ok:
-            for s in parse_inbound_data(resp.json()):
-                sloc = s.get('location', '').strip()
-                extra = s.get('extra', {})
-                match = False
-                is_ghost = False
-                ghost_slot = None
-                
-                # 1. Direct Location Match
-                if check_unassigned:
-                    if not sloc: match = True
-                elif sloc.upper() == target_loc_upper:
-                    match = True
-                elif "-" not in target_loc_upper and sloc.upper().startswith(target_loc_upper + "-"):
-                    match = True
-                    
-                # 2. [ALEX FIX] Physical Source Match (The Ghost Logic)
-                # Strip the literal quotes that Spoolman adds to JSON String Fields!
-                p_source_raw = str(extra.get('physical_source', '')).strip().replace('"', '')
-                if not match and not check_unassigned:
-                    p_source = p_source_raw.upper()
-                    if p_source == target_loc_upper or ("-" not in target_loc_upper and p_source.startswith(target_loc_upper + "-")):
-                        match = True
-                        is_ghost = True
-                        # Strip quotes from the slot too!
-                        ghost_slot = str(extra.get('physical_source_slot', '')).strip('"')
-
-                if match:
-                    info = format_spool_display(s)
-                    
-                    # [ALEX FIX] If Ghost, override the slot so it appears in the grid correctly
-                    final_slot = info['slot']
-                    if is_ghost and ghost_slot:
-                        final_slot = ghost_slot
-
-                    found.append({
-                        'id': s['id'], 
-                        'display': info['text'], 
-                        'color': info['color'], 
-                        'color_direction': info.get('color_direction', 'longitudinal'),
-                        'slot': final_slot,
-                        'location': p_source_raw if is_ghost else sloc,                 # [ALEX FIX] Ensure UI can access exact physical location
-                        'archived': s.get('archived', False),
-                        'is_ghost': is_ghost,             # Flag for UI
-                        'deployed_to': sloc if is_ghost else None, # Where is it really?
-                        'remaining_weight': s.get('remaining_weight'),
-                        'details': info.get('details', {})
-                    })
-    except: pass
+        # allow_archived=False mirrors the historical bare /api/v1/spool fetch
+        # this function used inline (Spoolman omits archived spools by default).
+        for s in get_all_spools(allow_archived=False):
+            item = _build_location_match(s, target_loc_upper, check_unassigned)
+            if item is not None:
+                found.append(item)
+    except Exception as e:
+        state.logger.error(f"get_spools_at_location_detailed failed: {e}")
     return found
 
 def get_spools_at_location(loc_name):
     return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
+
+
+def bucket_spools_by_location(loc_ids, spools=None):
+    """Bucket spools across MANY locations in ONE pass, sharing the exact
+    match + display logic of get_spools_at_location_detailed.
+
+    Returns {loc_id_upper: [item_dict, ...]}. Pass a pre-fetched `spools`
+    list (parse_inbound_data output, e.g. from get_all_spools) to reuse a
+    single HTTP round-trip; otherwise fetches the non-archived spool list
+    once. Lets callers needing contents for many locations (the Printer
+    Status widget) resolve every toolhead's occupancy in ONE Spoolman call
+    instead of one fetch per toolhead.
+
+    A spool matching more than one target (located at one toolhead but
+    ghosted to another via physical_source) appears in BOTH buckets — byte
+    -for-byte identical to calling get_spools_at_location_detailed per
+    location, so this is a drop-in batched replacement with no behavioral
+    drift.
+    """
+    targets = []
+    seen = set()
+    for l in (loc_ids or []):
+        t = str(l).strip().upper()
+        if t and t not in seen:
+            seen.add(t)
+            targets.append(t)
+    buckets = {t: [] for t in targets}
+    if not targets:
+        return buckets
+    if spools is None:
+        spools = get_all_spools(allow_archived=False)
+    for s in spools:
+        for t in targets:
+            item = _build_location_match(s, t, check_unassigned=(t == 'UNASSIGNED'))
+            if item is not None:
+                buckets[t].append(item)
+    return buckets
 
 
 def get_spools_at_location_strict(loc_name):

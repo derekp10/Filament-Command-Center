@@ -993,6 +993,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // populate without waiting ~5s for the first heartbeat tick.
     updateLogState(true);
 
+    // Prime state.allLocations on cold load. The L206 adaptive pulse only
+    // fetches /api/locations when the Location Manager TABLE is visible
+    // (see _buildPulseInclude), so on the bare dashboard allLocations would
+    // stay []. That silently broke openManage() from every dashboard surface
+    // (Printer Status widget tiles, spool-card location badges): openManage
+    // looks the id up in state.allLocations and returns early if it's missing,
+    // so clicks did nothing with no error. Pre-L206 the unconditional
+    // fetchLocations poll kept it populated — restore that guarantee here,
+    // and refresh whenever locations change so the cache can't go stale.
+    fetchLocations();
+    document.addEventListener('inventory:locations-changed', () => fetchLocations());
+
     // Initialize Wake Lock Handlers
     requestWakeLock();
 

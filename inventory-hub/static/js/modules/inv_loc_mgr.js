@@ -73,7 +73,17 @@ window.openManage = (id) => {
     setProcessing(true);
 
     const loc = state.allLocations.find(l => l.LocationID == id);
-    if (!loc) { setProcessing(false); return; }
+    if (!loc) {
+        // A silent bail here is exactly how the dashboard "clicking a Printer
+        // Status badge does nothing" regression hid: allLocations was empty on
+        // the dashboard (L206 only fetched locations when the manager table was
+        // visible). allLocations is now primed at startup + refreshed on
+        // inventory:locations-changed (inv_core.js); if the id is STILL missing,
+        // surface it instead of failing mutely.
+        console.warn(`openManage: "${id}" not found in state.allLocations (len=${state.allLocations.length})`);
+        setProcessing(false);
+        return;
+    }
 
     window.updateManageTitle(loc);
     document.getElementById('manage-loc-id').value = id;
