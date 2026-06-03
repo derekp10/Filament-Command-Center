@@ -18,11 +18,26 @@
 
 * Sometimes the inprogress printing update modal will have its QR codes on the right side of it. This seemed to happen when there was a toast up in the background, but could be unrelated.
 
-* Check to see if we fixed the box bounding issue on printer status. (The status seems to key off of attached dryerboxes, and not actual print heads. I thought we fixed this but maybe not?)
+*(Box-bounding on Printer Status — "status keyed off attached dryerboxes, not actual print heads" — DONE 2026-06-01 on `feature/core1-status-box-bounding`. Occupancy now keys off the toolhead LOCATION (new `spoolman_api.bucket_spools_by_location`, 6→1 fetch) instead of dryer-box `slot_targets`; loaded-but-unbound toolheads render as spool + 🔗 hint. FilaBridge auto-deduct confirmed already toolhead-driven. Full write-up in `completed-archive.md`.)*
+
+*(`_prune_locations_backups` import-time NameError — def lived ~900 lines below its module-import callers, so L347's startup prune never ran (`.bak` files accumulated). Moved the def above the callers — DONE 2026-06-01. Full write-up in `completed-archive.md`.)*
+
+*(Dashboard Printer Status / spool-card badge clicks did nothing — L206 regression: `state.allLocations` was never primed on the bare dashboard (pulse only fetched locations when the manager table was visible) so `openManage` silently bailed. Primed at startup + refresh on locations-changed — DONE 2026-06-01. Also turned 7 mis-attributed E2E failures green. Full write-up in `completed-archive.md`.)*
+
+*(Core One MMU rows cleanup — removed unused `CORE1-M1`..`CORE1-M5` from printer_map + locations.json; retyped `CORE1-M0` `No MMU Direct Load` → `Tool Head` — DONE 2026-06-01. Seed `locations.json.example` updated. **⚠️ Prod replication still needed** (delete M1-M5, edit M0 → Tool Head on prod). Full write-up in `completed-archive.md`.)*
 
 * Assigned filament attributes should appear in the spool detail modal as well as the filament modal.
 
 * Rename inventory hub to Filament Command Center.
+
+* Changing a spools location from a toolhead, or a non toolhead attached dryerbox or slot, should unload the filament from the tool head on assignment to another location.
+
+* Updates to the Main menu buffer spool cards are slow, taking (around 5 seconds) to update. This matches our pulling/sync rate, but changes in data to something in the active buffer should display almost instantly.
+
+* If a spool in a single slot drybox (PM (Polymaker), possibly others) is assigned to a toolhead, the dryerbox that the spool lives in should be assigned to the toolhead as a location, and removed when the the spool is unloaded/ejected from the toolhead. If a spool is ejected from a box, and that box is attached to a toolhead, the box should be removed from the toolhead. This should only apply to single slot boxes. This will help with the Core1's misisng box attachment notification, but the core one by designe doesn't always have a dryer box attached, and can take spools that are not in a dryerbox.
+
+* https://docs.google.com/spreadsheets/d/1Vb_9nodO1cr2-1qbtvkgYRNuNU_F3O62yayd7_uOIAg/edit?gid=304905527#gid=304905527&range=98:98 fails to link to a lagacy spool, give unknown error. Apparently because no active spools existed for the filament. We should handle this better by surfacing the filament. (the lagacy id could also link to a filament.) Not sure why this spools weight values were set to 0 and the spool archived, but that probably isn't a big issue, but it be nice to know if there was some coding logic behind it.
+
 
 * **[Feature — L345 follow-up: automate dev-env reset for clean E2E runs]** The pytest+Playwright E2E suite can't go truly green because it runs against the SHARED, MUTATING dev backend — a full run (~986 tests) leaves dev contaminated, so reruns fail in clusters (manage-modal won't open, quickswap/locmgr/returns, buffer-card refresh, etc.). Found on `feature/scan-match-pipeline` (2026-05-30 full sweep = 77 failed / 986 passed / 24 skipped; an A/B against baseline `dev` reproduced the sampled failures *identically* → environmental, not the branch). **Goal: one `reset-dev` script** to restore dev to a clean, reproducible baseline before a sweep, so it can't be forgotten or done wrong by hand.
     - **Reset surface (mutable shared state a sweep corrupts):**

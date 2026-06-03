@@ -141,12 +141,16 @@ def test_widget_visual_collapsed_baseline(page: Page, base_url, snapshot):
 
 @pytest.mark.usefixtures("require_server")
 def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url, api_base_url):
-    """L140 fix: with zero bound dryer-slots the widget previously hid
-    EVERY printer (the symptom that hid Core One on prod when only XL
-    had slot_targets). After the fix, every printer in printer_map
-    renders; toolheads without a bound source slot get a "🔗 no bound
-    slot" placeholder so the printer is discoverable + the hint is
-    actionable instead of mysteriously missing."""
+    """L140 + box-bounding fix: with zero bound dryer-slots the widget
+    previously hid EVERY printer (the symptom that hid Core One on prod
+    when only XL had slot_targets). After the fix, every printer in
+    printer_map renders. An unbound toolhead that is EMPTY gets the
+    "🔗 no bound slot" placeholder; an unbound toolhead that HOLDS a spool
+    surfaces the spool (occupancy keys off the toolhead, not the dryer
+    box) while keeping the fcc-ps-th-unbound class + 🔗 hint. Both kinds
+    carry the fcc-ps-th-unbound class, so the L140 assert below still
+    holds AND the box-bounding regression is pinned: a loaded toolhead
+    with no dryer box is no longer masked."""
     # Snapshot every dryer box's bindings, then clear them.
     boxes = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json().get("slots", [])
     box_originals = {}
@@ -179,11 +183,29 @@ def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url, ap
         # The widget should now show printers (rather than be hidden).
         rows = widget.locator(".fcc-ps-row")
         assert rows.count() > 0, "Widget should render rows even when no toolheads are bound"
-        # Every toolhead tile should be an unbound placeholder right now.
+        # Every rendered toolhead now carries the unbound class (bindings cleared),
+        # whether it's an empty placeholder OR a loaded-but-unbound tile.
         unbound = widget.locator(".fcc-ps-th-unbound")
         assert unbound.count() > 0, (
-            "With all bindings cleared, every rendered toolhead should be an unbound placeholder"
+            "With all bindings cleared, every rendered toolhead should carry the unbound class"
         )
+        # Box-bounding regression guard: any toolhead that physically holds a
+        # spool must still surface it (data-spool-id present on the unbound
+        # tile) — occupancy is NOT masked by the absence of a dryer-box
+        # binding. Tolerant of an empty dev: only asserts when the live
+        # payload reports a loaded toolhead.
+        ps = requests.get(
+            f"{api_base_url}/api/dashboard_pulse?include=printer_status", timeout=15
+        ).json().get("printer_status", {})
+        any_loaded = any(
+            th.get("item") for p in ps.values() for th in p.get("toolheads", [])
+        )
+        if any_loaded:
+            occupied_unbound = widget.locator(".fcc-ps-th-unbound[data-spool-id]")
+            assert occupied_unbound.count() > 0, (
+                "A loaded toolhead with no dryer-box binding must still render its "
+                "spool (box-bounding fix), not a bare placeholder"
+            )
     finally:
         for b, original in box_originals.items():
             requests.put(
@@ -194,14 +216,57 @@ def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url, ap
 
 
 @pytest.mark.usefixtures("require_server")
+def test_occupied_unbound_toolhead_shows_spool(page: Page, base_url):
+    """Box-bounding fix (deterministic, injected payload — no live-data
+    dependency): a toolhead with NO dryer-box binding (`unbound: true`) but
+    a spool loaded must render the SPOOL, not the bare "no bound slot"
+    placeholder, while keeping the fcc-ps-th-unbound class + a 🔗 hint. Pins
+    both the expanded tile and the collapsed compact chip."""
+    page.goto(base_url)
+    page.wait_for_selector("#printer-status-widget", timeout=10000)
+    page.wait_for_function(
+        "() => typeof window.refreshPrinterStatusWidgetFromAggregate === 'function'",
+        timeout=8000,
+    )
+    # Inject a synthetic printer whose only toolhead is unbound + loaded.
+    page.evaluate(
+        """() => window.refreshPrinterStatusWidgetFromAggregate({
+            'ZZ Test Printer': {
+                state: null,
+                toolheads: [{
+                    id: 'ZZ-1', position: 0, unbound: true,
+                    item: { id: 9001, color: '00AAFF', color_direction: 'longitudinal',
+                            remaining_weight: 712, display: '#9001 Test Spool' }
+                }]
+            }
+        })"""
+    )
+    widget = page.locator("#printer-status-widget")
+    # Expanded: the unbound tile carries the spool id (occupancy surfaced) AND
+    # the 🔗 "no bound slot" hint (discoverability retained).
+    tile = widget.locator(".fcc-ps-th-unbound[data-spool-id='9001']").first
+    expect(tile).to_be_visible(timeout=4000)
+    assert "no bound slot" in tile.inner_text(), "🔗 unbound hint must remain on the loaded tile"
+    # It must NOT be the bare placeholder (placeholder has no data-spool-id and
+    # no weight body); confirm the spool weight chip rendered.
+    assert "712" in tile.inner_text(), "loaded spool weight must render, not be masked"
+    # Collapsed: the compact chip shows the swatch + weight + 🔗, not just 🔗.
+    page.locator("#printer-status-widget .fcc-ps-header-bar").click()
+    chip = widget.locator(".fcc-ps-header-chips .fcc-ps-mini[data-toolhead='ZZ-1']").first
+    expect(chip).to_be_visible(timeout=3000)
+    chip_txt = chip.inner_text()
+    assert "712" in chip_txt, "collapsed chip must show occupancy weight for a loaded unbound toolhead"
+
+
+@pytest.mark.usefixtures("require_server")
 def test_l56_printer_status_payload_includes_state(api_base_url):
     """L56 — dashboard_pulse's printer_status section must carry each
-    printer's PrusaLink state alongside the toolhead list. Without this,
-    a dryer-box-less printer (e.g. Core One direct-feed) has no way to
-    show live PRINTING / IDLE / OFFLINE in the widget — the toolhead
-    weight only ticks after FilaBridge auto-deduct, which itself depends
-    on the dryer-box-mediated mapping. Probe direct from PrusaLink and
-    pass through; widget rendering tested separately."""
+    printer's PrusaLink state alongside the toolhead list, so a printer's
+    live PRINTING / IDLE / OFFLINE shows even between weight changes. The
+    state probe reads PrusaLink directly and has no dryer-box dependency
+    (neither does occupancy or auto-deduct — both key off the toolhead).
+    Probe direct from PrusaLink and pass through; widget rendering tested
+    separately."""
     r = requests.get(
         f"{api_base_url}/api/dashboard_pulse?include=printer_status", timeout=15
     )
@@ -280,4 +345,40 @@ def test_l361_toolhead_click_survives_rerender(page: Page, base_url):
         }"""
     )
     page.locator(f".fcc-ps-th[data-toolhead='{TEST_TOOLHEAD}']").first.click()
+    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_dashboard_primes_all_locations_for_openmanage(page: Page, base_url, api_base_url):
+    """Regression (2026-06-01): the L206 adaptive pulse only fetched
+    /api/locations when the Location Manager TABLE was visible, so on the
+    bare dashboard `state.allLocations` stayed [] — and openManage() looks the
+    id up in allLocations and bails silently if missing. That silently broke
+    clicking ANY dashboard surface that calls openManage (Printer Status
+    widget tiles, spool-card location badges): the click did nothing, no error.
+    Fix primes allLocations at startup. This pins it: WITHOUT opening the
+    Location Manager, openManage() on a real location must open the modal."""
+    # Pick a real location id from the live payload (prefer a toolhead — the
+    # reported surface — else any location).
+    loc_payload = requests.get(f"{api_base_url}/api/locations", timeout=10).json()
+    loc_list = loc_payload if isinstance(loc_payload, list) else loc_payload.get("locations", [])
+    toolhead_types = {"tool head", "no mmu direct load", "mmu slot"}
+    target = next(
+        (l.get("LocationID") for l in loc_list
+         if str(l.get("Type", "")).lower() in toolhead_types and l.get("LocationID")),
+        None,
+    ) or next((l.get("LocationID") for l in loc_list if l.get("LocationID")), None)
+    assert target, "no locations available to test openManage against"
+
+    page.goto(base_url)
+    page.wait_for_selector("#buffer-zone", timeout=10000)
+    page.wait_for_function("() => typeof window.openManage === 'function'", timeout=8000)
+    # Let the startup fetchLocations() prime land (single cold fetch populates
+    # the location table rows).
+    page.wait_for_function(
+        "() => document.querySelector('#location-table tr')", timeout=8000
+    )
+    # Crucially: do NOT open the Location Manager first. openManage must work
+    # straight off the dashboard.
+    page.evaluate("(id) => window.openManage(id)", target)
     expect(page.locator("#manageModal")).to_be_visible(timeout=5000)

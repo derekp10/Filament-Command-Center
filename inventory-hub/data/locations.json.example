@@ -4,23 +4,11 @@
         "Location": "Computer Room",
         "Device Identifier": "🦝",
         "Device Type": "Core One Upgraded",
-        "Type": "No MMU Direct Load",
+        "Type": "Tool Head",
         "Order": "0",
         "Row": "",
         "Max Spools": "1",
-        "Name": "🦝 Core One Upgraded No MMU Direct Load",
-        "Label Printed": "Yes"
-    },
-    {
-        "LocationID": "CORE1-M1",
-        "Location": "Computer Room",
-        "Device Identifier": "🦝",
-        "Device Type": "Core One Upgraded",
-        "Type": "MMU Slot",
-        "Order": "1",
-        "Row": "",
-        "Max Spools": "1",
-        "Name": "🦝 Core One Upgraded MMU Slot 1",
+        "Name": "🦝 Core One Upgraded Tool Head",
         "Label Printed": "Yes"
     },
     {

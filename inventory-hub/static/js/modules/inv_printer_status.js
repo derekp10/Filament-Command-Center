@@ -100,30 +100,29 @@
                 .slice()
                 .sort((a, b) => (a.position || 0) - (b.position || 0))
                 .map(e => ({ id: String(e.location_id).toUpperCase(), position: e.position || 0 }));
-            // L140 fix: previously skipped any printer with zero bound source
-            // slots — that hid Core One on prod entirely because Derek
-            // hadn't wired any dryer-box slot_targets to CORE1-M*. Show
-            // every registered printer now; flag unbound toolheads with
-            // an `unbound: true` marker so the renderer can show a
-            // "no bound slots yet" placeholder instead of a spool tile.
-            // Bound toolheads still render with current contents; the
-            // mix is fine (printer can be partially bound).
-            const bound = toolheadIds.filter(th => (bindings.toolheads[th.id] || []).length > 0);
-            const unbound = toolheadIds.filter(th => !((bindings.toolheads[th.id] || []).length > 0));
-            // Resolve current contents of each bound toolhead.
-            const filled = await Promise.all(bound.map(async th => {
+            // Box-bounding fix (mirrors the backend _pulse_section_printer_status
+            // change): resolve EVERY toolhead's contents, not just dryer-box-bound
+            // ones. `unbound` is a pure binding hint — a directly-fed toolhead with
+            // no bound slot must still surface the spool loaded on it (Core One's
+            // direct-feed setup). The renderer prefers the spool over the
+            // "🔗 no bound slot" placeholder when an item is present.
+            // (L140 origin: this fan-out used to skip whole printers with zero
+            // bound slots, hiding Core One entirely; that filter is long gone —
+            // now even the per-toolhead contents fetch is binding-independent.)
+            const allRows = await Promise.all(toolheadIds.map(async th => {
+                const unbound = !((bindings.toolheads[th.id] || []).length > 0);
+                let item = null;
                 try {
                     const r = await fetch(`/api/get_contents?id=${encodeURIComponent(th.id)}`);
                     const items = r.ok ? await r.json() : [];
-                    return { ...th, item: (items || [])[0] || null };
+                    item = (items || [])[0] || null;
                 } catch (e) {
-                    return { ...th, item: null };
+                    item = null;
                 }
+                return { ...th, item, unbound };
             }));
-            const unboundEntries = unbound.map(th => ({ ...th, item: null, unbound: true }));
-            // Merge + re-sort by position so the visual order matches
-            // printer layout regardless of bound/unbound mix.
-            const allRows = [...filled, ...unboundEntries].sort((a, b) => (a.position || 0) - (b.position || 0));
+            // Re-sort by position so the visual order matches printer layout.
+            allRows.sort((a, b) => (a.position || 0) - (b.position || 0));
             out[name] = { toolheads: allRows };
         }));
         return out;
@@ -138,7 +137,10 @@
                 : info.state ? String(info.state.state || '') : '';
             parts.push(name + '@' + stateFp + '|' + info.toolheads.map(th => {
                 const it = th.item;
-                return th.id + ':' + (it ? `${it.id}:${it.color || ''}:${Math.round(it.remaining_weight || 0)}` : 'empty');
+                // Include the unbound flag so binding a/unbinding a slot while a
+                // spool stays loaded still re-renders the 🔗 hint (occupancy no
+                // longer toggles with binding now that contents are ungated).
+                return th.id + (th.unbound ? '!u' : '') + ':' + (it ? `${it.id}:${it.color || ''}:${Math.round(it.remaining_weight || 0)}` : 'empty');
             }).join(','));
         });
         return parts.join('||');
@@ -162,7 +164,11 @@
         // dashboard with an actionable hint instead of mysteriously
         // missing. Clicking still opens the toolhead in the Location
         // Manager so the user can either bind a slot or quick-swap.
-        if (th.unbound) {
+        if (th.unbound && !it) {
+            // Unbound AND empty → the L140 "no bound slot" placeholder. (An
+            // unbound toolhead that DOES hold a spool falls through to the
+            // occupied tile below — the box-bounding fix: occupancy is no
+            // longer masked by the absence of a dryer-box binding.)
             return `
                 <div class="fcc-ps-th fcc-ps-th-unbound" ${positionAttr}
                      style="cursor:pointer; border:1px dashed #ffd54a;"
@@ -208,10 +214,20 @@
         const chipHtml = window.SpoolCardBuilder
             ? window.SpoolCardBuilder.buildCard(it, 'printer-status', {})
             : `<div class="fcc-ps-th-chip text-light">${weight}g</div>`;
+        // A loaded toolhead that ALSO has no dryer-box slot bound keeps the
+        // dashed accent + a 🔗 hint (preserves L140 discoverability) WHILE
+        // showing its real spool. The 🔗 chip sits on the dark tile area
+        // (not the colored body), so AA contrast holds — same #ffd54a the
+        // empty-placeholder uses and the contrast guard already accepts.
+        const unboundCls = th.unbound ? ' fcc-ps-th-unbound' : '';
+        const unboundBorder = th.unbound ? ' border:1px dashed #ffd54a;' : '';
+        const unboundHint = th.unbound
+            ? `<div class="fcc-ps-th-chip" style="font-size:0.72rem; color:#ffd54a;" title="No dryer-box slot is bound to this toolhead. Auto-deduct still works (it follows the toolhead); bind a slot in the Location Manager → Feeds editor to also track it as box-fed.">🔗 no bound slot</div>`
+            : '';
         return `
-            <div class="fcc-ps-th" ${positionAttr}
+            <div class="fcc-ps-th${unboundCls}" ${positionAttr}
                  data-spool-id="${it.id}"
-                 style="cursor:pointer;"
+                 style="cursor:pointer;${unboundBorder}"
                  title="${th.id} — ${(it.display || `#${it.id}`).replace(/"/g, '&quot;')} — ${Math.round(weight)}g remaining (click to Quick-Swap)">
                 <div class="fcc-ps-th-bar">
                     <div class="fcc-ps-th-bar-fill" style="width:${pct}%; background:${barColor};"></div>
@@ -220,6 +236,7 @@
                     <div class="fcc-ps-th-id text-truncate">${th.id}</div>
                 </div>
                 ${chipHtml}
+                ${unboundHint}
             </div>
         `;
     };
@@ -231,8 +248,10 @@
     // gray fallback) and contrast is consistent with all other chips.
     const _renderToolheadCompact = (th) => {
         const it = th.item;
-        if (th.unbound) {
-            // L140 fix companion — collapsed-mode chip for unbound toolheads.
+        if (th.unbound && !it) {
+            // L140 companion — collapsed-mode placeholder for unbound AND empty
+            // toolheads. An unbound toolhead that holds a spool falls through to
+            // the occupied chip below (box-bounding fix).
             return `<span class="fcc-ps-mini fcc-ps-mini-empty"
                           data-toolhead="${th.id}"
                           style="border:1px dashed #ffd54a;"
@@ -263,12 +282,20 @@
             ? Number(it.remaining_weight) : 0;
         const wColor = _weightPalette(weight);
         const safeDisplay = (it.display || `#${it.id}`).replace(/"/g, '&quot;');
-        return `<span class="fcc-ps-mini"
+        // Occupied chip; if the toolhead is also unbound, keep the dashed
+        // accent + a trailing 🔗 hint while still showing the swatch + weight.
+        const unboundMiniCls = th.unbound ? ' fcc-ps-mini-unbound' : '';
+        const unboundMiniBorder = th.unbound ? 'border:1px dashed #ffd54a;' : '';
+        const unboundMiniHint = th.unbound
+            ? ` <span class="fcc-ps-mini-unbound-hint" style="color:#ffd54a;" title="No dryer-box slot bound (auto-deduct still follows the toolhead)">🔗</span>`
+            : '';
+        return `<span class="fcc-ps-mini${unboundMiniCls}"
                       data-toolhead="${th.id}"
+                      style="${unboundMiniBorder}"
                       title="${th.id} — ${safeDisplay} — ${Math.round(weight)}g (click to Quick-Swap)">
             ${swatch}
             <span class="fcc-ps-mini-id">${th.id}</span>
-            <span class="fcc-ps-mini-weight" style="color:${wColor};">${Math.round(weight)}g</span>
+            <span class="fcc-ps-mini-weight" style="color:${wColor};">${Math.round(weight)}g</span>${unboundMiniHint}
         </span>`;
     };
 

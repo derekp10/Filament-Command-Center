@@ -129,6 +129,53 @@ def _format_version_from(sha, ts):
 VERSION = _format_version()
 app = Flask(__name__)
 
+# L347 follow-up — prune old locations.json.pre-*.bak migration backups.
+# Each migration that fires writes a timestamped .bak; nothing deletes
+# them. A long-running prod install with several schema migrations would
+# accumulate one per migration per restart-after-edit.
+#
+# MUST be defined ABOVE the startup migration/prune block below: that
+# block runs at import time and calls _prune_locations_backups(). Before
+# 2026-06-01 the def lived ~900 lines lower, so every boot the import-time
+# call raised `NameError: name '_prune_locations_backups' is not defined`
+# (caught + logged "backup prune skipped") and the prune never ran — .bak
+# files accumulated unbounded, defeating the cap. Keep it up here.
+MAX_LOCATIONS_BACKUPS = 5
+
+
+def _prune_locations_backups(json_file_path=None, keep=MAX_LOCATIONS_BACKUPS):
+    """Keep at most `keep` of the most-recently-modified
+    `locations.json.pre-*.bak` files alongside `json_file_path`. Returns
+    the list of deleted paths (empty when under the cap). Failures
+    swallow themselves so a permissions issue can't break startup."""
+    import glob
+    if json_file_path is None:
+        json_file_path = locations_db.JSON_FILE
+    pattern = f"{json_file_path}.pre-*.bak"
+    try:
+        matches = glob.glob(pattern)
+    except Exception:
+        return []
+    if len(matches) <= keep:
+        return []
+    try:
+        matches.sort(key=lambda p: os.path.getmtime(p))
+    except Exception:
+        # If mtime lookup fails (permissions / race) fall through to
+        # filename sort — the timestamp in the filename gives the right
+        # order as a backstop.
+        matches.sort()
+    victims = matches[:-keep]
+    deleted = []
+    for p in victims:
+        try:
+            os.remove(p)
+            deleted.append(p)
+        except Exception:
+            pass
+    return deleted
+
+
 # One-time feeder_map → slot_targets migration. Kept behind an explicit
 # `feeder_map` key check so old installs that still have it get upgraded
 # automatically the first time they boot the new code. No-op on modern
@@ -1006,47 +1053,6 @@ def _evict_old_fb_snapshots(snapshots, cap=MAX_FB_ERROR_SNAPSHOTS):
         return snapshots
     items = list(snapshots.items())
     return dict(items[-cap:])
-
-
-# L347 follow-up — prune old locations.json.pre-*.bak migration backups.
-# Each migration that fires writes a timestamped .bak; nothing deletes
-# them. Dev currently has 3 (pre-13.x-repair + 2 pre-parent-id); a
-# long-running prod install with several schema migrations would
-# accumulate one per migration per restart-after-edit.
-MAX_LOCATIONS_BACKUPS = 5
-
-
-def _prune_locations_backups(json_file_path=None, keep=MAX_LOCATIONS_BACKUPS):
-    """Keep at most `keep` of the most-recently-modified
-    `locations.json.pre-*.bak` files alongside `json_file_path`. Returns
-    the list of deleted paths (empty when under the cap). Failures
-    swallow themselves so a permissions issue can't break startup."""
-    import glob
-    if json_file_path is None:
-        json_file_path = locations_db.JSON_FILE
-    pattern = f"{json_file_path}.pre-*.bak"
-    try:
-        matches = glob.glob(pattern)
-    except Exception:
-        return []
-    if len(matches) <= keep:
-        return []
-    try:
-        matches.sort(key=lambda p: os.path.getmtime(p))
-    except Exception:
-        # If mtime lookup fails (permissions / race) fall through to
-        # filename sort — the timestamp in the filename gives the right
-        # order as a backstop.
-        matches.sort()
-    victims = matches[:-keep]
-    deleted = []
-    for p in victims:
-        try:
-            os.remove(p)
-            deleted.append(p)
-        except Exception:
-            pass
-    return deleted
 
 
 @app.route('/api/external/search', methods=['GET'])
@@ -4680,18 +4686,25 @@ def _pulse_section_manage(loc_id):
 def _pulse_section_printer_status():
     """Server-side aggregator for the Printer Status widget. Replaces
     the client-side fan-out of printer_map + N x toolhead_slots +
-    M x get_contents fetches with one parallel server-side call. Each
-    per-printer aggregation runs in its own thread (capped at 8) so a
-    slow Spoolman call for one toolhead doesn't serially block the rest.
+    M x get_contents fetches with one server-side call. Toolhead
+    occupancy for ALL toolheads is resolved in a single Spoolman fetch
+    via `bucket_spools_by_location`; the per-printer work (bindings +
+    PrusaLink state probe) then runs in its own thread (capped at 8) so
+    a slow/offline printer doesn't serially block the rest.
+
+    Occupancy keys off the toolhead LOCATION (the spool's own
+    `location` / `physical_source`), NOT dryer-box `slot_targets`, so a
+    dryer-box-less / direct-fed printer (Derek's Core One) shows the
+    spool actually loaded on each toolhead. `unbound` is a pure binding
+    hint (no dryer box feeds this toolhead) used only for the widget's
+    "🔗 no bound slot" affordance — it never gates contents. (FilaBridge
+    auto-deduct is likewise toolhead-driven, not box-mediated, so a
+    direct-fed spool's weight still ticks after a print.)
 
     L56: each printer's payload also carries a `state` dict pulled
-    directly from PrusaLink (`prusalink_api.get_printer_state`). This
-    is the only path that ticks live for a dryer-box-less printer
-    (e.g. Derek's Core One direct-feed setup) — the toolhead `item`
-    weight only changes when FilaBridge auto-deducts after a print,
-    which needs the dryer-box-mediated mapping. The state probe has
-    no such dependency. `state` is None when the printer is offline
-    or unreachable so the widget can show an offline indicator.
+    directly from PrusaLink (`prusalink_api.get_printer_state`), which
+    has no binding dependency. `state` is None when the printer is
+    offline or unreachable so the widget can show an offline indicator.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -4711,6 +4724,19 @@ def _pulse_section_printer_status():
     if not grouped:
         return {}
 
+    # Box-bounding fix: a toolhead's `item` (the spool physically loaded on
+    # it) must reflect ACTUAL occupancy at the toolhead location, NOT whether
+    # a dryer box happens to feed it. Previously the contents lookup was gated
+    # behind `is_bound` (a pure dryer-box slot_targets flag), so a directly-fed
+    # toolhead with no bound box — e.g. Core One run dryer-box-less — showed
+    # empty even with a spool loaded. We now bucket every printer_map toolhead's
+    # occupancy in ONE Spoolman fetch (instead of one per bound toolhead, which
+    # was both wrong AND an N-fetch fan-out) and keep `unbound` as a binding-only
+    # display hint. Occupancy matches get_spools_at_location_detailed exactly
+    # (direct location + physical_source ghost).
+    all_tids = [str(loc_id).upper() for loc_id in printer_map.keys()]
+    spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids)
+
     def fetch_for_printer(item):
         name, entries = item
         bindings_result = locations_db.get_bindings_for_machine(name, printer_map)
@@ -4719,10 +4745,8 @@ def _pulse_section_printer_status():
         for entry in entries:
             tid = entry['location_id']
             is_bound = bool(bindings.get(tid, []))
-            item_data = None
-            if is_bound:
-                contents = spoolman_api.get_spools_at_location_detailed(tid)
-                item_data = contents[0] if contents else None
+            contents = spools_by_tid.get(tid, [])
+            item_data = contents[0] if contents else None
             toolheads.append({
                 'id': tid,
                 'position': entry['position'],
