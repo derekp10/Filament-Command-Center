@@ -281,6 +281,13 @@ def resolve_scan(text):
         result = _resolve_legacy_spool_lookup(clean_id)
         if result is not None:
             return result
+        # A legacy id can map to a FILAMENT that currently has no spools (e.g.
+        # every spool used up + archived, or never created). Surface the
+        # filament instead of dead-ending — mirrors the pure-number branch's
+        # Priority-4 fallback (buglist 2026-06-02).
+        fid = spoolman_api.find_filament_by_legacy_id(clean_id)
+        if fid:
+            return {'type': 'filament', 'id': fid}
         return {'type': 'error', 'msg': f'Legacy Spool ID {clean_id} not found'}
 
     # 5. DIRECT SPOOL ID
@@ -308,13 +315,23 @@ def resolve_scan(text):
     # 6. LEGACY / URL PARSING
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
         m = re.search(r'range=(\d+)', decoded, re.IGNORECASE)
-        if m:
-            result = _resolve_legacy_spool_lookup(m.group(1))
+        legacy_candidate = m.group(1) if m else None
+        if legacy_candidate:
+            result = _resolve_legacy_spool_lookup(legacy_candidate)
             if result is not None:
                 return result
         result = _resolve_legacy_spool_lookup(text)
         if result is not None:
             return result
+        # Spool lookup came up empty. A legacy id can map to a FILAMENT that
+        # currently has no spools (Derek 2026-06-02 — a Google-Sheets `range=`
+        # link dead-ended with "unknown error" because the filament had zero
+        # active spools). Fall back to surfacing the filament itself rather
+        # than erroring out. Mirrors the pure-number branch's Priority 4.
+        if legacy_candidate:
+            fid = spoolman_api.find_filament_by_legacy_id(legacy_candidate)
+            if fid:
+                return {'type': 'filament', 'id': fid}
         return {'type': 'error', 'msg': 'Unknown/Invalid Link'}
 
     # 7. PURE NUMBER SCAN (Priority Stack)
