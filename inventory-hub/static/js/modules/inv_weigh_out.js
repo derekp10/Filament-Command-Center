@@ -169,7 +169,7 @@ const renderWeighOutList = () => {
             mainName = nameParts.slice(0, 2).join('-');
         }
 
-        let currentWeightDisplay = spool.remaining_weight ? Math.round(spool.remaining_weight) : '';
+        let currentWeightDisplay = spool.remaining_weight ? window.fmtGramsPrecise(spool.remaining_weight) : '';
 
         html += `
             <div class="card bg-dark border-secondary p-2 d-flex flex-row align-items-center gap-3 weigh-row" data-id="${spool.id}" style="border-left: 5px solid ${styles.frame};">
@@ -249,7 +249,7 @@ window.updateWeighRowPreview = (inputEl) => {
     let cap = '';
     if (r.capped === 'high') cap = ' <span style="color:#f5b342;">(capped)</span>';
     else if (r.capped === 'low') cap = ' <span style="color:#f5b342;">(clamped to 0)</span>';
-    previewEl.innerHTML = `→ used <strong>${Math.round(r.used_weight)}g</strong> · remaining <strong>${Math.round(r.remaining)}g</strong>${cap}`;
+    previewEl.innerHTML = `→ used <strong>${window.fmtGramsPrecise(r.used_weight)}g</strong> · remaining <strong>${window.fmtGramsPrecise(r.remaining)}g</strong>${cap}`;
 };
 
 window.handleWeighInput = (e, inputEl) => {

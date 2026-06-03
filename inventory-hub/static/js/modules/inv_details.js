@@ -165,8 +165,11 @@ const openSpoolDetails = (id, silent = false) => {
 
             const used = d.used_weight !== null ? d.used_weight : 0;
             const rem = d.remaining_weight !== null ? d.remaining_weight : 0;
-            document.getElementById('detail-used').innerText = Number(used).toFixed(1) + "g";
-            document.getElementById('detail-remaining').innerText = Number(rem).toFixed(1) + "g";
+            // PRECISE tier (buglist L51) — up to 1 decimal via the shared
+            // formatter, so the Details modal agrees with the wizard/weigh-out
+            // (was .toFixed(1), which forced a "850.0g" trailing zero).
+            document.getElementById('detail-used').innerText = window.fmtGramsPrecise(used) + "g";
+            document.getElementById('detail-remaining').innerText = window.fmtGramsPrecise(rem) + "g";
 
             document.getElementById('detail-color-name').innerText = fil.name || "Unknown";
             document.getElementById('detail-hex').innerText = (fil.color_hex || "").toUpperCase();
