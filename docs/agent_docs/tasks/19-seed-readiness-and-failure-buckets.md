@@ -43,10 +43,13 @@ record every run and never cleans up). That junk was filtered out of the
 baseline. The junk still sits in dev; `reset_dev.py --prune` will flag and
 delete it (gated behind the flag, Derek-invoked — see below).
 
-> Side-finding worth a follow-up: `test_wizard_manual_creation` is itself a
-> contamination *source* (creates an un-prefixed, un-cleaned real record each
-> run). Candidate fix: have it create with `TEST_RECORD_PREFIX` and tear down,
-> or assert via a stubbed `/api/create_inventory_wizard`. Not in Group 19 scope.
+> Side-finding — **FIXED 2026-06-02**: `test_wizard_manual_creation` was itself
+> the contamination *source* (it creates a real filament + spool every run and
+> left them behind — the origin of all 47 Pytest-PLA junk records). It now
+> captures the created ids from the wizard's create response and deletes them in
+> a `finally` (spool first, FK order), so the end-to-end create coverage stays
+> but dev no longer accumulates junk. Verified net-zero (before == after record
+> counts across a run). Mirrors `test_vendor_create_end_to_end.py`'s cleanup.
 
 ---
 
