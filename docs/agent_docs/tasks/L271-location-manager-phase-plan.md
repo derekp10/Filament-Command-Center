@@ -5,6 +5,8 @@
 **Risk:** escalates by phase — **2 = low, 2.5 = low/medium, 3 = HIGH, 4 = HIGH, 5 = medium.** Phases 3-4 change `locations.json` schema + retire `printer_map`, so they need a startup migration AND prod replication (TrueNAS, Spoolman :7912, `\\TRUENAS\App_Data\InventoryHub`).
 **Verify every phase against the LIVE Docker container** (real Spoolman :7913 + FilaBridge :5001) — unit tests alone don't hit the real topology (see [[feedback_adversarial_review_runtime_lens]]).
 
+> **▶ EXECUTION — start this in a FRESH chat.** This is a multi-session (~22-31h) architectural project; run it with a clean context window, not appended to a bugfix-sweep chat. This document is the complete, self-contained handoff — a new session needs nothing else. **To begin:** open a new chat and say *"start L271 Phase 2 — read `docs/agent_docs/tasks/L271-location-manager-phase-plan.md`"*. Work one consumer-migration per commit, merge each phase green before the next. The `Feature-Buglist.md` phase tracker + this plan are the source of truth between sessions.
+
 ---
 
 ## 1. Why this exists (the payoff)
@@ -127,14 +129,14 @@ Two concrete payoffs end the bug class:
 **Tests:** `test_dryer_bindings.py`, `test_filabridge_*`, a new `test_l271_toolhead_delete_cascade.py` (orphan → room vs UNASSIGNED), and the Group 20 live repro. **Heaviest test phase.**
 **Prod:** ⚠️ migration on prod config + locations.json; back up both; verify FilaBridge bindings + printer status post-deploy.
 
-> **20.3 early-exit option:** if the prod annoyance is pressing before Phase 4 lands, 20.3 can ship STANDALONE against the current model — in the `/api/locations` toolhead-row delete path, sweep Spoolman for spools whose `location` matches the deleted ID and relocate (room-from-`get_room_from_location` else UNASSIGNED). It folds into the Phase 4 cascade later. ~1-2 hrs, medium risk.
+> **20.3 timing — DECIDED (Derek 2026-06-03): fold into Phase 4, no standalone.** It's not pressing on prod, so it ships with the rest of the toolhead-delete cascade here rather than as an early one-off.
 
 ### Phase 5 — Retire prefix parsing + write-time validation (medium risk)
 **Steps:**
 1. Delete [locations_db.py:325](../../../inventory-hub/locations_db.py#L325) `derive_parent_id_from_prefix` and the prefix fallback inside `resolve_parent`. Any row missing `parent_id` is now a hard data error (the migrations guaranteed it's set).
 2. Remove all remaining `split('-')[0]` sites (grep must return zero).
 3. `save_locations_list` **rejects** rows with missing/orphan `parent_id` or missing `Type` (write-time validation — the empty-Type + orphan-parent bug classes cease to exist).
-4. Decouple printed barcodes from hierarchy: LocationID may become opaque; the hierarchy lives only in `parent_id`. (Optional — only if Derek wants portable-box relabeling.)
+4. ~~Decouple printed barcodes from hierarchy~~ — **DEFERRED (Derek 2026-06-03): keep human-readable `XX-YY-ZZ-NN` labels for now** (avoids reprints; revisit later). The hierarchy still moves to `parent_id` internally; the printed LocationID just stays readable. The PM single-slot boxes are the portable case (see Decision 2) but their label identifies the box, not its current feed. A label-generation/printing re-evaluation is a future companion task, not part of Phase 5.
 
 **Tests:** `test_locations_json_integrity.py` write-validation cases; a CI grep test asserting no `split('-')[0]` remains in the location code paths.
 **Prod:** low — by now prod data is already FK-clean from the earlier migrations.
@@ -153,10 +155,10 @@ Two concrete payoffs end the bug class:
 - **Rough effort:** Phase 2 ~3-4h, 2.5 ~2-3h, 3 ~6-8h, 4 ~8-12h (incl. Group 20), 5 ~3-4h. **Total ~22-31h** across several sessions.
 - **Each phase is independently shippable + reversible** (additive migrations with backups; dual-read windows on 3 and 4).
 
-## 6. Open decisions for Derek
-1. **20.3 timing:** fold into Phase 4 (clean) or ship the standalone early-exit now (faster relief)? *(Lean: standalone now if it's biting on prod, else Phase 4.)*
-2. **Barcode decoupling (Phase 5 step 4):** do you want opaque LocationIDs so portable boxes can change rooms without reprinting, or keep human-readable barcodes? *(Lean: keep readable unless portable-box moves become common.)*
-3. **Color Loadout start:** begin it right after Phase 3 (when `Printer.id` is stable), or wait for the full L271?
+## 6. Decisions (resolved by Derek 2026-06-03)
+1. **20.3 timing → FOLD INTO PHASE 4.** Not a priority; no standalone early-exit. The toolhead-delete orphan cascade ships as part of Phase 4 when bindings are first-class.
+2. **Barcode decoupling (Phase 5 step 4) → DEFERRED; keep human-readable labels.** Keep the current `XX-YY-ZZ-NN` scheme for now (avoids reprinting). Revisit in the future. **Important nuance Derek surfaced:** the boxes that *can* move are the **single-slot Polymaker (PM) dryer boxes** (they attach to a toolhead — this is exactly the 20.2 case), NOT the room/printer-anchored boxes (which he doesn't foresee moving). So a PM box's printed label identifies the *box*, while its dynamic "where is it feeding" lives in `parent_id`/binding — keeping readable labels + FK-tracked binding is consistent and needs no reprints. Derek also flagged that **the whole labeling/printing scheme will likely be re-evaluated** as this lands (the `XX-YY-ZZ-NN` format was chosen for unique-yet-findable-by-eye labels); treat label generation as a future companion task to Phase 5, not part of it.
+3. **Color Loadout start → WAIT.** Derek wants bugfixes + stabilization first before committing to the feature. Phase 3 *unblocks* it (gives a stable `Printer.id` to anchor `target_printer`) but does not require starting it. (Context: Project Color Loadout IS the color-tracking/profiles system — it binds a project's slicer slots to preferred filaments/colors/weights per printer, with a print queue + swap optimizer + reusable "palettes"; see `docs/Project-Color-Loadout/`. It just can't anchor reliably until Phase 3.)
 
 ## 7. Safety / rollback
 - Every migration takes a timestamped `locations.json` / `config.json` backup before writing (Phase 1A pattern).
