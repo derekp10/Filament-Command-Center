@@ -1039,8 +1039,14 @@ window.wizardCalcUsedWeight = () => {
     if (used < 0) used = 0;
     if (used > netWt) used = netWt; // [ALEX FIX] Spoolman crashes if used > initial_weight
 
-    document.getElementById('wiz-spool-used').value = used.toFixed(0);
-    document.getElementById('wiz-spool-remaining').value = (netWt - used).toFixed(0);
+    // buglist L51: 1-decimal (PRECISE tier) instead of .toFixed(0). The field
+    // value is what gets PERSISTED to Spoolman on submit, so rounding to a
+    // whole gram here silently lost the sub-gram tare component AND made `used`
+    // (shown raw on edit-load) disagree with the rounded `remaining`. Deriving
+    // both from the same exact `used` and trimming to 0.1g keeps them
+    // reconciled (used + remaining == netWt).
+    document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(used);
+    document.getElementById('wiz-spool-remaining').value = window.fmtGramsPrecise(netWt - used);
 };
 
 window.wizardCalcUsedFromRemaining = () => {
@@ -1055,8 +1061,8 @@ window.wizardCalcUsedFromRemaining = () => {
     let used = netWt - remaining;
     if (used < 0) used = 0;
     if (used > netWt) used = netWt;
-    
-    document.getElementById('wiz-spool-used').value = used.toFixed(0);
+
+    document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(used);
     document.getElementById('wiz-spool-scale').value = '';
 };
 
@@ -1071,8 +1077,8 @@ window.wizardCalcRemainingFromUsed = () => {
     
     let remaining = netWt - used;
     if (remaining < 0) remaining = 0;
-    
-    document.getElementById('wiz-spool-remaining').value = remaining.toFixed(0);
+
+    document.getElementById('wiz-spool-remaining').value = window.fmtGramsPrecise(remaining);
     document.getElementById('wiz-spool-scale').value = '';
 };
 
@@ -1083,8 +1089,8 @@ window.wizardCalcFromRecentUsage = () => {
     let baseUsed = wizardState.original_used_weight || 0;
     let newTotal = baseUsed + recent;
     if (newTotal < 0) newTotal = 0;
-    
-    document.getElementById('wiz-spool-used').value = newTotal.toFixed(0);
+
+    document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(newTotal);
     window.wizardCalcRemainingFromUsed();
 };
 
@@ -3113,7 +3119,10 @@ window.openEditWizard = async (spoolId) => {
                 window.wizardSetSpoolEmptyWeightInherited(value, source);
             }
             document.getElementById('wiz-spool-initial_weight').value = d.initial_weight !== null ? d.initial_weight : "";
-            document.getElementById('wiz-spool-used').value = d.used_weight || 0;
+            // buglist L51: format the prefilled used to the PRECISE tier so it
+            // (a) doesn't show float noise like "150.40000001" and (b) reconciles
+            // with the remaining field derived by wizardCalcRemainingFromUsed below.
+            document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(d.used_weight || 0);
             
             // WEIGH-OUT PROTOCOL: Store original value and show input
             wizardState.original_used_weight = d.used_weight || 0;

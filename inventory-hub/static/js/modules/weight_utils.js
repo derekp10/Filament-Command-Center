@@ -33,6 +33,43 @@ function resolveEmptySpoolWeightSource({ spoolWt, filamentWt, vendor } = {}) {
 }
 window.resolveEmptySpoolWeightSource = resolveEmptySpoolWeightSource;
 
+// --- Canonical weight display formatters (buglist line 51) --------------------
+//
+// Inconsistent rounding across surfaces made a sub-gram measurement variance
+// LOOK like a ~1g bug (e.g. a card showed a whole gram while the wizard showed
+// `used` raw next to a rounded `remaining`, so the two stopped reconciling).
+// Data is ALWAYS stored exact — these are DISPLAY-ONLY and split into two tiers
+// by Derek's decision (2026-06-03):
+//
+//   GLANCE  — spool cards, search results, buffer, quick-swap grid, printer-
+//             status widget: WHOLE grams. Low visual noise for at-a-glance
+//             "does this spool fit my print?" scanning.
+//   PRECISE — Spool Details modal, Add/Edit wizard weight fields, weigh-out
+//             modal, <WeightEntry>: up to 1 decimal (the realistic resolution
+//             of a whole-gram scale + a fractional empty-spool tare). Trailing
+//             ".0" is trimmed so a whole value still reads "850", not "850.0".
+//
+// The scale only reads whole grams, so the 0.x always originates in the tare
+// arithmetic; preserving 1 decimal keeps `used + remaining == initial` and
+// stops the surprise 1g jumps without forcing decimals onto the scan surfaces.
+// Note: guard null/undefined/'' explicitly — Number(null) and Number('') both
+// coerce to 0, which would render a missing weight as a misleading "0". A real
+// numeric 0 (e.g. an empty spool) still formats as "0".
+function fmtGramsGlance(v) {
+    if (v === null || v === undefined || v === '') return '';
+    const n = Number(v);
+    if (!isFinite(n)) return '';
+    return String(Math.round(n));
+}
+function fmtGramsPrecise(v) {
+    if (v === null || v === undefined || v === '') return '';
+    const n = Number(v);
+    if (!isFinite(n)) return '';
+    return String(Math.round(n * 10) / 10);
+}
+window.fmtGramsGlance = fmtGramsGlance;
+window.fmtGramsPrecise = fmtGramsPrecise;
+
 // Parse the +/- prefix delta syntax used by Additive mode. Accepts:
 //   "+50"  -> { value: 50, sign: '+' }
 //   "-20"  -> { value: -20, sign: '-' }

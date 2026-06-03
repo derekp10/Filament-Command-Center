@@ -4509,17 +4509,28 @@ def api_get_logs_route():
     try: sm_ok = requests.get(f"{sm_url}/api/v1/health", timeout=3).ok
     except: pass
     
-    try: 
-        fb_resp = requests.get(f"{fb_url}/status", timeout=3)
+    try:
+        # FilaBridge liveness probe (drives the status dot). Use /print-errors
+        # — the lightweight endpoint we need anyway — NOT /status. The dedicated
+        # /status endpoint polls every printer's live PrusaLink state and takes
+        # ~5-6s to return on a prod-sized fleet, well past the old timeout=3, so
+        # it timed out on EVERY heartbeat and pinned the dot RED even though
+        # FilaBridge was up and serving (Derek 2026-06-02 "constantly red, even
+        # though it's active"). It also added ~6s of latency to every dashboard
+        # pulse since this runs in the /api/logs heartbeat path. /print-errors
+        # returns ~instantly, so one fast call is both the liveness check AND
+        # the error poll.
+        fb_resp = requests.get(f"{fb_url}/print-errors", timeout=4)
         fb_ok = fb_resp.ok
-        
+
         # [NEW] Check for FilaBridge Print Errors
         if fb_ok:
             try:
-                err_resp = requests.get(f"{fb_url}/print-errors", timeout=2)
+                err_resp = fb_resp  # reuse the liveness response — no second fetch
                 if err_resp.ok:
-                    fb_errors = err_resp.json().get('errors', [])
-                    
+                    # `errors` can be null when there are none; coerce to [].
+                    fb_errors = err_resp.json().get('errors') or []
+
                     cfg = config_loader.load_config()
                     auto_recover = cfg.get("auto_recover_filabridge_errors", True)
                     

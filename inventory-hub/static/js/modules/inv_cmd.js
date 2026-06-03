@@ -786,7 +786,12 @@ const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoo
                 state.heldSpools = state.heldSpools.filter(s => !movedSet.has(String(s.id)));
                 renderBuffer();
                 if (document.getElementById('manage-loc-id').value === tid) refreshManageView(tid);
-                if (window.fetchLocations) window.fetchLocations();
+                // Dispatch the canonical "something moved" event instead of
+                // calling fetchLocations directly — its listeners refresh
+                // locations (inv_core) + printer status (inv_printer_status) +
+                // the buffer cards' data immediately (no 5s pulse wait). Mirrors
+                // the scan-assignment path above.
+                document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
             } else showToast(res.msg, 'error');
         })
         .catch(() => setProcessing(false));
@@ -978,6 +983,18 @@ document.addEventListener('inventory:sync-pulse', (e) => {
     if (e && e.detail && e.detail.source === 'dashboard_pulse') return;
     liveRefreshBuffer();
 });
+
+// Buffer-latency fix (buglist 2026-06-02): a local "something moved" signal
+// (scan-assign, context-assign, quick-swap, eject) should refresh the buffer
+// cards' underlying data IMMEDIATELY instead of waiting up to a full adaptive-
+// cadence window (5s / 15s / 30s) for the next dashboard pulse — Derek's
+// "changes in data to something in the active buffer should display almost
+// instantly". `liveRefreshBuffer` no-ops on an empty buffer and carries its own
+// in-flight guard, so fanning it out on every locations-changed is cheap.
+// Quick-Swap (inv_quickswap.js) and the scan-assign path already dispatch this
+// event; performContextAssign + doEject now do too (they used to call
+// fetchLocations directly without signalling the buffer).
+document.addEventListener('inventory:locations-changed', () => liveRefreshBuffer());
 
 // Heartbeat (Checks every 2 seconds)
 setInterval(loadBuffer, 2000);

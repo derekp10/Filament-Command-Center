@@ -1385,7 +1385,12 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
                 // [ALEX FIX] Force a re-render by clearing the hash.
                 // This ensures the UI updates to "Empty" even if the API data is cached/similar.
                 state.lastLocRenderHash = null;
-                if (window.fetchLocations) window.fetchLocations();
+                // Buffer-latency fix (buglist 2026-06-02): dispatch the canonical
+                // "something moved" event so the buffer cards + printer-status
+                // widget refresh immediately, in addition to fetchLocations.
+                // Ejecting a spool that's also held in the buffer used to leave
+                // the card's location/weight stale until the next 5s pulse.
+                document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
                 refreshManageView(loc);
             }
         })
