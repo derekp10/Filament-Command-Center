@@ -104,6 +104,53 @@ def _capture_create_wizard(page):
     return captured
 
 
+def _route_fields_with_attrs(page, required_attrs=("Blend", "Carbon Fiber")):
+    """Group 19.5 — make the wizard's `filament_attributes` *choices*
+    deterministic so material-split tests are hermetic.
+
+    `splitMaterialAndAttributes` only recognizes attribute tokens present in
+    the canonical `filament_attributes` choice list, which the wizard fetches
+    from `/api/external/fields`. That list mirrors ambient dev Spoolman
+    config, so a test asserting 'Blend' / 'Carbon Fiber' chips fails whenever
+    those choices aren't configured (e.g. after a dev reset or on a fresh
+    Spoolman). This helper fetches the REAL schema and merges the required
+    attrs into the filament_attributes choices — keeping the rest of the
+    schema real so the chip container still renders — making the split
+    independent of dev state.
+    """
+    def _handler(route):
+        try:
+            resp = route.fetch()
+            data = resp.json()
+        except Exception:
+            data = {"success": True, "fields": {"filament": [], "spool": []}}
+        fields = data.setdefault("fields", {}) or {}
+        data["fields"] = fields
+        fil = fields.get("filament") or []
+        fields.setdefault("spool", fields.get("spool") or [])
+        fa = next((f for f in fil if f.get("key") == "filament_attributes"), None)
+        if fa is None:
+            fa = {"key": "filament_attributes", "name": "Filament Attributes",
+                  "field_type": "choice", "multi_choice": True, "order": 99,
+                  "choices": []}
+            fil.append(fa)
+        choices = list(fa.get("choices") or [])
+        for a in required_attrs:
+            if a not in choices:
+                choices.append(a)
+        fa["choices"] = choices
+        fields["filament"] = fil
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps(data))
+    page.route("**/api/external/fields", _handler)
+    # Belt-and-suspenders: with the attrs merged into choices, the split's
+    # attrs are all "known" so no add_choice POST fires — but block the
+    # endpoint anyway so this hermetic test can never mutate dev Spoolman's
+    # field config (mirrors this file's `_block_real_update_filament` net).
+    page.route("**/api/external/fields/add_choice", lambda route: route.fulfill(
+        status=200, content_type="application/json", body='{"success": true}'))
+
+
 # --- tests -----------------------------------------------------------------
 
 def test_per_spool_scan_sends_overrides_and_fills_step2(page: Page):
@@ -378,6 +425,9 @@ def test_per_spool_scan_splits_material_into_base_plus_attribute_chips(page: Pag
         status=200, content_type="application/json",
         body=json.dumps({"success": True, "filaments": []}),
     ))
+    # Group 19.5: pin the filament_attributes choices so the base/attrs split
+    # recognizes 'Blend' + 'Carbon Fiber' regardless of ambient dev config.
+    _route_fields_with_attrs(page, ("Blend", "Carbon Fiber"))
     _route_external_search(page, lambda q: {
         "id": "fake",
         "name": "Prusament PC Blend Carbon Fiber Black",
@@ -473,6 +523,10 @@ def test_backfill_silent_patch_fires_on_autoswitch(page: Page):
         "settings_extruder_temp": 215, "settings_bed_temp": 60,
         "extra": {"nozzle_temp_max": '"225"', "bed_temp_max": '"60"'},
     })
+    # Group 19.5: the set-union assertion below depends on the base/attrs split
+    # recognizing 'Blend' + 'Carbon Fiber' as canonical filament_attributes —
+    # pin the choices so it's hermetic regardless of ambient dev config.
+    _route_fields_with_attrs(page, ("Blend", "Carbon Fiber"))
     patches = _route_update_filament(page)
 
     page.goto("http://localhost:8000")

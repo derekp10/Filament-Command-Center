@@ -31,13 +31,21 @@ def test_wizard_manual_creation(page: Page):
 
     # Locate the first wizard color hex input
     page.locator("#wiz-fil-color_hex_0").fill("#FF0044")
-    
+
+    # Group 19.4: Physical Specs (diameter/density/net/tare) now lives in a
+    # panel that wizardApplyCollapseDefaults('create') collapses on open —
+    # expand it before filling or the inputs are "not visible".
+    page.evaluate(
+        "() => { const el = document.getElementById('wiz-fil-physical-panel');"
+        " if (el && !el.classList.contains('show'))"
+        " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }"
+    )
     page.fill("#wiz-fil-density", "1.24")
     page.fill("#wiz-fil-diameter", "1.75")
-    
+
     # Fill the Net Weight
     page.fill("#wiz-fil-weight", "1000")
-    
+
     # Fill empty spool weight
     page.fill("#wiz-fil-empty_weight", "250")
 

@@ -227,6 +227,14 @@ def test_vendor_created_does_not_clobber_user_typed_empty_weight(page: Page):
     _wait_ready(page)
     _stub_wizard_vendors(page)
     _open_wizard(page)
+    # Group 19.4: #wiz-fil-empty_weight lives in the Physical Specs panel,
+    # which wizardApplyCollapseDefaults('create') collapses on open. Expand
+    # it before .fill() (which requires the input to be visible/editable).
+    page.evaluate(
+        "() => { const el = document.getElementById('wiz-fil-physical-panel');"
+        " if (el && !el.classList.contains('show'))"
+        " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }"
+    )
     # User types a specific empty weight first.
     page.locator("#wiz-fil-empty_weight").fill("250")
     page.locator("#wiz-fil-vendor-search").fill("Custom Spool Brand")
