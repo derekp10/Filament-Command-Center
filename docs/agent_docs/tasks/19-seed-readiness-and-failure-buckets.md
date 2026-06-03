@@ -68,6 +68,18 @@ bind-mounted locations.json; reaches dev Spoolman directly).
 behind a flag.** A plain run never deletes; `--prune` is the explicit opt-in
 for a fully pristine reconcile.
 
+> **⚠️ Who invokes this (Derek, 2026-06-02): NOT Derek.** Derek will not run
+> `reset_dev.py` from the CLI — and specifically **will never call `--prune`**
+> ("don't even know how to anyway"). Treat reset-dev as **agent-invoked**:
+> Claude runs it on Derek's behalf (e.g. when asked to do a clean sweep), and
+> only runs the destructive `--prune` with Derek's explicit OK *that time*. So
+> the accumulated Pytest-PLA junk is **not** cleaned by a human running prune —
+> it's cleaned the next time *Claude* is asked to prune. Any "run this yourself"
+> instruction below is really a Claude runbook, not a Derek to-do. If reset-dev
+> should run automatically before every sweep, wire it into a pytest
+> session-fixture / pre-sweep hook (future enhancement — it would remove the
+> manual-invocation assumption entirely).
+
 **Restored fields** (the contamination class, per `RESTORE_FIELDS`):
 - spool: `location`, `archived`, weight triple (`initial_weight` /
   `spool_weight` / `used_weight`), `lot_nr`, `comment`, and the whole `extra`
@@ -96,10 +108,12 @@ PATCH-restorable.
 ### Validation status
 - ✅ Read/compare/detect + idempotency: proven live (`--dry-run --prune` = 0 drift).
 - ✅ Restore-decision logic: `tests/test_reset_dev.py` (11 hermetic unit tests).
-- ⏳ Write paths (PATCH-back, DELETE, file-restore, docker-restart): exercised
-  when Derek runs a real `reset_dev.py` / `reset_dev.py --prune`. Not run by the
-  agent against shared dev (destructive shared-state mutation — left to the
-  human-invoked, non-default path, consistent with the reset-mode decision).
+- ⏳ Write paths (PATCH-back, DELETE, file-restore, docker-restart): not yet
+  exercised against shared dev. These run the next time **Claude** is asked to
+  reset/clean dev (Derek won't run the script himself — see the "Who invokes
+  this" note above). `--prune` in particular only fires when Claude runs it with
+  Derek's explicit per-time OK. The accumulated Pytest-PLA junk stays in dev
+  until then.
 
 ---
 
@@ -149,9 +163,12 @@ fixed and verified green against the live container:
 
 ---
 
-## Acceptance-test procedure (Derek, when convenient)
+## Acceptance-test procedure — a **Claude runbook**, not a Derek to-do
 
-Proves the DATA-caused bucket is actually eliminated end-to-end:
+Derek won't run these (see "Who invokes this" above). This is the sequence
+**Claude** runs when asked to validate that the DATA-caused bucket is actually
+eliminated end-to-end. The `--prune` steps are destructive against shared dev,
+so Claude runs them only with Derek's explicit OK that session:
 
 ```powershell
 # 1. From a clean tree, snapshot the baseline once (already committed):
@@ -170,4 +187,5 @@ cd inventory-hub ; & C:/Python314/python.exe -m pytest tests/test_loc_mgr_*.py t
 ```
 
 Idempotency check: run `reset-dev.ps1 --dry-run --prune` twice — the second run
-should report 0 drift / 0 would-prune.
+should report 0 drift / 0 would-prune. (`--dry-run` is read-only, so this one is
+safe for Claude to run unprompted.)

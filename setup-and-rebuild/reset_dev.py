@@ -9,6 +9,15 @@ and reruns fail in clusters that have nothing to do with the code under test
 This script restores dev to a committed seed baseline so the reset can't be
 forgotten or done wrong by hand.
 
+WHO RUNS THIS (Derek, 2026-06-02): NOT Derek. This is an *agent-invoked* tool —
+Claude runs it on Derek's behalf when asked to reset/clean dev. Derek will not
+run it from the CLI, and will **never call `--prune`** ("don't even know how to
+anyway"). So `--prune` (the destructive delete-sweep-junk path) only ever fires
+when Claude runs it with Derek's explicit OK that session; the accumulated
+Pytest-PLA junk stays in dev until then. If this ever needs to run automatically
+before every sweep, wire it into a pytest session-fixture instead of expecting a
+manual invocation.
+
 Two seed artifacts (captured from a known-good dev with `--capture`):
   - setup-and-rebuild/seeds/spoolman-dev-seed.json  (vendors/filaments/spools)
   - setup-and-rebuild/seeds/locations-seed.json      (full FCC locations.json)
@@ -394,7 +403,9 @@ def main() -> int:
     ap.add_argument("--capture", action="store_true",
                     help="Snapshot CURRENT dev Spoolman + locations.json into seeds/.")
     ap.add_argument("--prune", action="store_true",
-                    help="Also DELETE entities created during a sweep (absent from seed).")
+                    help="Also DELETE entities created during a sweep (absent from "
+                         "seed). DESTRUCTIVE + agent-invoked only — Derek never calls "
+                         "this; Claude runs it with Derek's explicit OK. See header.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Report what would change; write nothing.")
     ap.add_argument("--no-restart", action="store_true",
