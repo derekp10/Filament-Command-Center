@@ -38,6 +38,11 @@
 
 * https://docs.google.com/spreadsheets/d/1Vb_9nodO1cr2-1qbtvkgYRNuNU_F3O62yayd7_uOIAg/edit?gid=304905527#gid=304905527&range=98:98 fails to link to a lagacy spool, give unknown error. Apparently because no active spools existed for the filament. We should handle this better by surfacing the filament. (the lagacy id could also link to a filament.) Not sure why this spools weight values were set to 0 and the spool archived, but that probably isn't a big issue, but it be nice to know if there was some coding logic behind it.
 
+* I keep seeing this line in the activity log on prod "[19:49:05] 🧹 Filament Attributes cleaned: removed ['Wood'] (180 filaments restored)" I thought we disabled/fixed this.
+
+* May want to propigate toolhead removal to spoolmans locations. I was recently restructuring prod to match dev after the chnages to handling the Core One, relised that some of the locations still remainded even after the MMU locations were removed in location manager. I think the whole process could be a little more robust or user friendly.
+
+* Filabrige indicator light is constantly red, even though it's active. Needs to be looked into.
 
 * **[Feature — L345 follow-up: automate dev-env reset for clean E2E runs]** The pytest+Playwright E2E suite can't go truly green because it runs against the SHARED, MUTATING dev backend — a full run (~986 tests) leaves dev contaminated, so reruns fail in clusters (manage-modal won't open, quickswap/locmgr/returns, buffer-card refresh, etc.). Found on `feature/scan-match-pipeline` (2026-05-30 full sweep = 77 failed / 986 passed / 24 skipped; an A/B against baseline `dev` reproduced the sampled failures *identically* → environmental, not the branch). **Goal: one `reset-dev` script** to restore dev to a clean, reproducible baseline before a sweep, so it can't be forgotten or done wrong by hand.
     - **Reset surface (mutable shared state a sweep corrupts):**
