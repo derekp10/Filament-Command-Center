@@ -1,6 +1,6 @@
 # L271 — Location Manager Redesign: Full Phased Implementation Plan
 
-**Status:** PLAN (authored 2026-06-03 from a verified 24-consumer code map). Phases 1A + 1B shipped; 2 → 2.5 → 3 → 4 → 5 pending.
+**Status:** IN PROGRESS (authored 2026-06-03 from a verified 24-consumer code map). Phases 1A + 1B + 2 shipped; 2.5 → 3 → 4 → 5 pending.
 **Branch (per phase):** `feature/l271-phase-2`, `feature/l271-phase-2_5`, … (one branch per phase, each merged before the next starts).
 **Risk:** escalates by phase — **2 = low, 2.5 = low/medium, 3 = HIGH, 4 = HIGH, 5 = medium.** Phases 3-4 change `locations.json` schema + retire `printer_map`, so they need a startup migration AND prod replication (TrueNAS, Spoolman :7912, `\\TRUENAS\App_Data\InventoryHub`).
 **Verify every phase against the LIVE Docker container** (real Spoolman :7913 + FilaBridge :5001) — unit tests alone don't hit the real topology (see [[feedback_adversarial_review_runtime_lens]]).
@@ -29,18 +29,19 @@ Two concrete payoffs end the bug class:
 **Shipped:**
 - **Phase 1A** (2026-04-25): `parent_id` field added to each `locations.json` row; `derive_parent_id_from_prefix`, `resolve_parent`, `migrate_parent_ids_if_needed` in [locations_db.py](../../../inventory-hub/locations_db.py); startup migration wired in [app.py](../../../inventory-hub/app.py) with timestamped backup; ~15 unit tests. **No consumer reads `parent_id` yet.**
 - **Phase 1B** (2026-05-25): one consumer migrated — `resolve_parent` in the `/api/locations` synthesizer room-occupancy aggregation ([app.py:1427](../../../inventory-hub/app.py#L1427)).
+- **Phase 2** (2026-06-03, branch `feature/l271-phase-2`): all 4 **backend** consumers below routed through `resolve_parent`, one commit each. Each was verified IDENTICAL against the live 238-spool dev container (real Spoolman :7913) before committing, and pinned in [test_l271_phase2_consumers.py](../../../inventory-hub/tests/test_l271_phase2_consumers.py) (40 passed). Migrated: `get_room_from_location` (logic.py:786 — the central room deriver, so `perform_smart_eject`'s room fallback at logic.py:960 inherited it free), `perform_smart_eject` room-hierarchy bypass (logic.py:888), `get_spools_at_location_strict` (spoolman_api.py:1336/1343), `_build_location_match` (spoolman_api.py:1233/1241). `import locations_db` added to spoolman_api.py (no cycle).
 
-**The 24 prefix-parse / synthesis consumers still to migrate** (verified map 2026-06-03), grouped by target phase:
+**The remaining prefix-parse / synthesis consumers to migrate** (verified map 2026-06-03; ~~struck~~ rows shipped in Phase 2), grouped by target phase:
 
 | Phase | File:Line | Symbol | Current | Derives | Risk |
 |-------|-----------|--------|---------|---------|------|
-| **2** | [spoolman_api.py:1233](../../../inventory-hub/spoolman_api.py#L1233) | `_build_location_match` | `'-' not in target … sloc.startswith(target+'-')` | parent (child-of-parent loc match) | med |
-| **2** | [spoolman_api.py:1241](../../../inventory-hub/spoolman_api.py#L1241) | `_build_location_match` | same, for ghost `physical_source` | parent | med |
-| **2** | [spoolman_api.py:1336](../../../inventory-hub/spoolman_api.py#L1336) | `get_spools_at_location_strict` | `bare = '-' not in target` | parent (flag) | low |
-| **2** | [spoolman_api.py:1343](../../../inventory-hub/spoolman_api.py#L1343) | `get_spools_at_location_strict` | `bare and (sloc.startswith(target+'-') …)` | parent | med |
-| **2** | [logic.py:793](../../../inventory-hub/logic.py#L793) | `get_room_from_location` | `loc_id.split('-')[0]` | **room (central deriver)** | low |
-| **2** | [logic.py:889](../../../inventory-hub/logic.py#L889) | `perform_smart_eject` | `saved_source.startswith(current+'-')` | parent | med |
-| **2** | [logic.py:949](../../../inventory-hub/logic.py#L949) | `perform_smart_eject` | `get_room_from_location(current)` | room | low |
+| **2 ✅** | [spoolman_api.py:1233](../../../inventory-hub/spoolman_api.py#L1233) | `_build_location_match` | `'-' not in target … sloc.startswith(target+'-')` | parent (child-of-parent loc match) | med |
+| **2 ✅** | [spoolman_api.py:1241](../../../inventory-hub/spoolman_api.py#L1241) | `_build_location_match` | same, for ghost `physical_source` | parent | med |
+| **2 ✅** | [spoolman_api.py:1336](../../../inventory-hub/spoolman_api.py#L1336) | `get_spools_at_location_strict` | `bare = '-' not in target` | parent (flag) | low |
+| **2 ✅** | [spoolman_api.py:1343](../../../inventory-hub/spoolman_api.py#L1343) | `get_spools_at_location_strict` | `bare and (sloc.startswith(target+'-') …)` | parent | med |
+| **2 ✅** | [logic.py:793](../../../inventory-hub/logic.py#L793) | `get_room_from_location` | `loc_id.split('-')[0]` | **room (central deriver)** | low |
+| **2 ✅** | [logic.py:889](../../../inventory-hub/logic.py#L889) | `perform_smart_eject` | `saved_source.startswith(current+'-')` | parent | med |
+| **2 ✅** | [logic.py:949](../../../inventory-hub/logic.py#L949) | `perform_smart_eject` | `get_room_from_location(current)` | room | low |
 | **2.5** | [inv_core.js:461-462](../../../inventory-hub/static/js/modules/inv_core.js#L461) | sort comparator | `(LocationID||'').split('-')[0]` | parent | med |
 | **2.5** | [inv_core.js:555](../../../inventory-hub/static/js/modules/inv_core.js#L555) | tree-indent | `LocationID.split('-')[0]` | parent | med |
 | **2.5** | [app.py:1418](../../../inventory-hub/app.py#L1418) | synthesizer | `loc.split('-')[0]` (comment/legacy) | parent | low |

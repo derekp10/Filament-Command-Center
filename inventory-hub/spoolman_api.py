@@ -1,6 +1,7 @@
 import requests # type: ignore
 import state # type: ignore
 import config_loader # type: ignore
+import locations_db # type: ignore  # L271 Phase 2: single hierarchy resolver
 import json
 
 def parse_inbound_data(data):
@@ -1230,7 +1231,11 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
             match = True
     elif sloc.upper() == target_loc_upper:
         match = True
-    elif "-" not in target_loc_upper and sloc.upper().startswith(target_loc_upper + "-"):
+    # L271 Phase 2: child match via resolve_parent (prefix-fallback this
+    # phase). It returns a dash-free prefix, so a dashed target_loc_upper can
+    # never child-match — folding in the old `"-" not in target_loc_upper`
+    # guard for both the location and the ghost physical_source below.
+    elif locations_db.resolve_parent(sloc) == target_loc_upper:
         match = True
 
     # 2. [ALEX FIX] Physical Source Match (The Ghost Logic)
@@ -1238,7 +1243,7 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
     p_source_raw = str(extra.get('physical_source', '')).strip().replace('"', '')
     if not match and not check_unassigned:
         p_source = p_source_raw.upper()
-        if p_source == target_loc_upper or ("-" not in target_loc_upper and p_source.startswith(target_loc_upper + "-")):
+        if p_source == target_loc_upper or locations_db.resolve_parent(p_source) == target_loc_upper:
             match = True
             is_ghost = True
             # Strip quotes from the slot too!
@@ -1333,14 +1338,18 @@ def get_spools_at_location_strict(loc_name):
     resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
     resp.raise_for_status()  # raise on 4xx/5xx so the caller can fail closed
     target = str(loc_name).strip().upper()
-    bare = "-" not in target
     ids = []
     for s in parse_inbound_data(resp.json()):
         sloc = (s.get('location') or '').strip().upper()
         extra = s.get('extra', {}) or {}
         p_source = str(extra.get('physical_source', '')).strip().replace('"', '').upper()
+        # L271 Phase 2: child match via resolve_parent (prefix-fallback this
+        # phase, FK in Phase 5) instead of the old bare/startswith probe.
+        # resolve_parent returns a dash-free prefix, so a dashed target can
+        # never child-match — this folds in the old `bare` guard for free.
         if (sloc == target or p_source == target
-                or (bare and (sloc.startswith(target + "-") or p_source.startswith(target + "-")))):
+                or locations_db.resolve_parent(sloc) == target
+                or locations_db.resolve_parent(p_source) == target):
             ids.append(s['id'])
     return ids
 
