@@ -132,10 +132,12 @@ PATCH-restorable.
   `docker restart`ed inventory_hub, health-waited for recovery, then passed all
   11 tests. The fixture's no-op (no-flag) path is also proven (default run
   triggers nothing).
-- ⏳ DELETE (`--prune`) path: still not run against shared dev — only fires when
-  Claude runs `--prune` / `--reset-dev-prune` with Derek's explicit per-time OK.
-  The accumulated Pytest-PLA junk (47 filaments + 42 spools) stays in dev until
-  then.
+- ✅ DELETE (`--prune`) path: exercised live 2026-06-03 (with Derek's OK). A
+  read-only dev-vs-seed diff first confirmed the prune set was exactly the 47
+  Pytest-PLA junk filaments + 42 junk spools (0 real records at risk), then
+  `reset_dev.py --prune` deleted them (spool→filament order), restarted the
+  container, and left dev matching the seed baseline exactly (40 / 177 / 238,
+  0 Pytest-PLA). All reset-dev paths are now validated end-to-end.
 
 ---
 
