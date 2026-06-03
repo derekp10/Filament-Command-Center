@@ -40,6 +40,15 @@
                         <p class="text-light small" id="detail-hex"></p>
                     </div>
                 </div>
+                <!-- Filament Attributes (read-only, inherited from the parent
+                     filament). Hidden entirely when the filament has none.
+                     NB: no `d-flex` class — Bootstrap's `display:flex !important`
+                     would override the inline `display:none` toggle. The helper
+                     sets `display:flex`/`none` inline instead. -->
+                <p class="mb-1 mt-1 align-items-start" id="spool-detail-attributes-row" style="display:none;">
+                    <strong class="me-2">🏷️ Attributes:</strong>
+                    <span id="spool-detail-attributes" class="d-flex flex-wrap gap-1"></span>
+                </p>
                 <hr class="border-secondary">
                 <div id="detail-product-url-container" class="mb-3 d-none">
                     <a href="#" id="detail-btn-product-url" target="_blank"
@@ -146,6 +155,14 @@
                         <p class="text-light small" id="fil-detail-hex"></p>
                     </div>
                 </div>
+                <!-- Filament Attributes (read-only). Edited via the Edit
+                     Filament form; hidden entirely when there are none.
+                     NB: no `d-flex` class — see the spool modal's row for why
+                     (Bootstrap `!important` would defeat the inline toggle). -->
+                <p class="mb-1 mt-1 align-items-start" id="fil-detail-attributes-row" style="display:none;">
+                    <strong class="me-2">🏷️ Attributes:</strong>
+                    <span id="fil-detail-attributes" class="d-flex flex-wrap gap-1"></span>
+                </p>
                 <hr class="border-secondary">
                 <a href="#" id="fil-btn-buy-more" target="_blank" class="btn btn-outline-success w-100 fw-bold mb-3 d-none">
                     🛍️ Buy More
@@ -275,6 +292,21 @@
     margin-left: 2px;
 }
 #editFilamentModal .editfil-chip .chip-x:hover { opacity: 1; }
+/* Read-only attribute chip shared by the Spool Details and Filament Details
+   modals (no × removal affordance — these are inherited from the parent
+   filament and edited only via the Edit Filament form). Deliberately NOT
+   scoped to a single modal so both detail views render identical chips. */
+.fcc-attr-chip {
+    background: #2a4c5c;
+    border: 1px solid #4fa2c9;
+    color: #fff;
+    padding: 1px 9px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    display: inline-flex;
+    align-items: center;
+}
 /* Generic combobox dropdown used for Material, Vendor, and Filament
    Attributes — matches the wizard's `.autocomplete-dropdown` styling
    for visual parity. */

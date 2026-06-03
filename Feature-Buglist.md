@@ -27,6 +27,7 @@
 *(Core One MMU rows cleanup — removed unused `CORE1-M1`..`CORE1-M5` from printer_map + locations.json; retyped `CORE1-M0` `No MMU Direct Load` → `Tool Head` — DONE 2026-06-01. Seed `locations.json.example` updated. **⚠️ Prod replication still needed** (delete M1-M5, edit M0 → Tool Head on prod). Full write-up in `completed-archive.md`.)*
 
 * Assigned filament attributes should appear in the spool detail modal as well as the filament modal.
+  _[DONE 2026-06-03 on `feature/buglist-sweep-2026-06-03`. A read-only 🏷️ Attributes chip row now renders on BOTH the Spool Details modal (`#spool-detail-attributes`, inherited from the parent filament's `extra.filament_attributes`) AND the Filament Details modal (`#fil-detail-attributes`) — the attributes previously only appeared as editable chips in the Edit Filament form, not in either read-only detail view. Shared `parseFilamentAttributes` (JSON-array / quoted-string / bare-string tolerant) + `renderReadonlyAttributeChips` helpers in `inv_details.js`; generic `.fcc-attr-chip` style in `modals_details.html`. Each row hides itself entirely when the filament has no attributes (gotcha caught + documented: the outer `<p>` must NOT carry Bootstrap's `d-flex`, whose `display:flex !important` defeats the inline `display:none` toggle). Edits still flow only through the Edit Filament form. Regression coverage: `test_detail_modal_attributes.py` (4 tests — chips render on both modals incl. the JSON-string wire form, row hidden when none on both).]_
 
 * Rename inventory hub to Filament Command Center.
 

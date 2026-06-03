@@ -10,6 +10,42 @@ const unquoteExtra = (v) => {
     if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1);
     return s;
 };
+
+// Parse a Spoolman `filament_attributes` extra (JSON array, JSON-quoted
+// string, or bare string) into a clean array of trimmed non-empty strings.
+// Mirrors the parsing in _editfilOpenModal so the read-only detail modals and
+// the Edit Filament form agree on shape.
+const parseFilamentAttributes = (raw) => {
+    if (raw == null || raw === '') return [];
+    try {
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (Array.isArray(parsed)) return parsed.map(String).map(s => s.trim()).filter(Boolean);
+        if (parsed) return [String(parsed).trim()].filter(Boolean);
+    } catch (_) {
+        const fallback = String(raw).replace(/^"|"$/g, '').trim();
+        if (fallback) return [fallback];
+    }
+    return [];
+};
+
+// Populate a read-only attribute chip row (shared by the Spool Details and
+// Filament Details modals). Hides the wrapping row entirely when there are no
+// attributes so the modal never shows a dangling "Attributes:" label.
+const renderReadonlyAttributeChips = (rowId, hostId, attrs) => {
+    const host = document.getElementById(hostId);
+    const row = document.getElementById(rowId);
+    if (!host) return;
+    const list = Array.isArray(attrs) ? attrs : [];
+    if (!list.length) {
+        host.innerHTML = '';
+        if (row) row.style.display = 'none';
+        return;
+    }
+    const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    host.innerHTML = list.map(a => `<span class="fcc-attr-chip">${esc(a)}</span>`).join('');
+    if (row) row.style.display = 'flex';
+};
 console.log("🚀 Loaded Module: DETAILS");
 
 // 8.3 — Hide a sibling details modal robustly. BS5's modal silently
@@ -135,6 +171,13 @@ const openSpoolDetails = (id, silent = false) => {
             document.getElementById('detail-color-name').innerText = fil.name || "Unknown";
             document.getElementById('detail-hex').innerText = (fil.color_hex || "").toUpperCase();
             document.getElementById('detail-comment').value = d.comment || "";
+
+            // Filament attributes are a filament-level property; surface them
+            // read-only on the spool modal too (inherited from the parent
+            // filament's extra). Row hides itself when there are none.
+            renderReadonlyAttributeChips(
+                'spool-detail-attributes-row', 'spool-detail-attributes',
+                parseFilamentAttributes(filExtra.filament_attributes));
 
             // --- 2. Swatch Logic (Robust V3) ---
             const swatch = document.getElementById('detail-swatch');
@@ -335,6 +378,13 @@ const openFilamentDetails = (fid, silent = false) => {
                     fdLabelEl.innerHTML = '<span class="badge bg-dark border border-secondary text-muted">unknown</span>';
                 }
             }
+            // Read-only filament attributes chip row (Derek 2026-05-28 — also
+            // mirrored onto the Spool Details modal). Edited via the Edit
+            // Filament form; this view is display-only.
+            renderReadonlyAttributeChips(
+                'fil-detail-attributes-row', 'fil-detail-attributes',
+                parseFilamentAttributes(fdExtra.filament_attributes));
+
             document.getElementById('fil-detail-comment').value = d.comment || "";
 
             const swatch = document.getElementById('fil-detail-swatch');
