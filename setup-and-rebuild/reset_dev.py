@@ -14,9 +14,10 @@ Claude runs it on Derek's behalf when asked to reset/clean dev. Derek will not
 run it from the CLI, and will **never call `--prune`** ("don't even know how to
 anyway"). So `--prune` (the destructive delete-sweep-junk path) only ever fires
 when Claude runs it with Derek's explicit OK that session; the accumulated
-Pytest-PLA junk stays in dev until then. If this ever needs to run automatically
-before every sweep, wire it into a pytest session-fixture instead of expecting a
-manual invocation.
+Pytest-PLA junk stays in dev until then. It's also wired into pytest as an
+OPT-IN session step — `pytest --reset-dev` runs the non-destructive restore
+before a sweep, `pytest --reset-dev-prune` adds the delete; a flagless run is a
+no-op (see inventory-hub/tests/conftest.py).
 
 Two seed artifacts (captured from a known-good dev with `--capture`):
   - setup-and-rebuild/seeds/spoolman-dev-seed.json  (vendors/filaments/spools)

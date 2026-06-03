@@ -75,10 +75,25 @@ for a fully pristine reconcile.
 > only runs the destructive `--prune` with Derek's explicit OK *that time*. So
 > the accumulated Pytest-PLA junk is **not** cleaned by a human running prune —
 > it's cleaned the next time *Claude* is asked to prune. Any "run this yourself"
-> instruction below is really a Claude runbook, not a Derek to-do. If reset-dev
-> should run automatically before every sweep, wire it into a pytest
-> session-fixture / pre-sweep hook (future enhancement — it would remove the
-> manual-invocation assumption entirely).
+> instruction below is really a Claude runbook, not a Derek to-do.
+
+### Pytest integration (`--reset-dev`) — implemented 2026-06-02
+
+Rather than expect a manual pre-sweep invocation, reset-dev is wired into the
+test harness as an **opt-in** session step (`inventory-hub/tests/conftest.py`):
+
+- `pytest --reset-dev` (or `RESET_DEV_BEFORE_SWEEP=1`) — runs the
+  **non-destructive** restore once at session start, waits for the container to
+  come back, then runs the tests. For full sweeps.
+- `pytest --reset-dev-prune` (or `RESET_DEV_PRUNE=1`) — same but with `--prune`
+  (DESTRUCTIVE; agent-invoked with Derek's OK only).
+- **No flag → no-op.** A normal single-test run triggers nothing — no docker
+  restart, no Spoolman reconcile. (Deliberately *not* an unconditional autouse:
+  auto-resetting before every `pytest` would docker-restart the container on
+  every single-test run and yank dev state mid-use. Opt-in keeps the common
+  case fast while making a clean full sweep a one-flag command.)
+- If the reset fails, the session aborts (`pytest.exit`) rather than run on a
+  dirty baseline.
 
 **Restored fields** (the contamination class, per `RESTORE_FIELDS`):
 - spool: `location`, `archived`, weight triple (`initial_weight` /
@@ -108,12 +123,16 @@ PATCH-restorable.
 ### Validation status
 - ✅ Read/compare/detect + idempotency: proven live (`--dry-run --prune` = 0 drift).
 - ✅ Restore-decision logic: `tests/test_reset_dev.py` (11 hermetic unit tests).
-- ⏳ Write paths (PATCH-back, DELETE, file-restore, docker-restart): not yet
-  exercised against shared dev. These run the next time **Claude** is asked to
-  reset/clean dev (Derek won't run the script himself — see the "Who invokes
-  this" note above). `--prune` in particular only fires when Claude runs it with
-  Derek's explicit per-time OK. The accumulated Pytest-PLA junk stays in dev
-  until then.
+- ✅ Live restore + docker-restart + pytest `--reset-dev` wiring: exercised
+  end-to-end 2026-06-02 (with Derek's OK). `pytest --reset-dev tests/test_reset_dev.py`
+  ran the restore (0 drift, junk correctly *left* — non-destructive), actually
+  `docker restart`ed inventory_hub, health-waited for recovery, then passed all
+  11 tests. The fixture's no-op (no-flag) path is also proven (default run
+  triggers nothing).
+- ⏳ DELETE (`--prune`) path: still not run against shared dev — only fires when
+  Claude runs `--prune` / `--reset-dev-prune` with Derek's explicit per-time OK.
+  The accumulated Pytest-PLA junk (47 filaments + 42 spools) stays in dev until
+  then.
 
 ---
 
@@ -170,22 +189,22 @@ Derek won't run these (see "Who invokes this" above). This is the sequence
 eliminated end-to-end. The `--prune` steps are destructive against shared dev,
 so Claude runs them only with Derek's explicit OK that session:
 
+With the pytest integration the reset folds into the sweep command itself:
+
 ```powershell
-# 1. From a clean tree, snapshot the baseline once (already committed):
-#    setup-and-rebuild/seeds/*.json
+# Reset to baseline (incl. pruning the accumulated Pytest-PLA junk) AND run the
+# full sweep in one shot — the --reset-dev-prune fixture resets at session start:
+cd inventory-hub ; & C:/Python314/python.exe -m pytest --reset-dev-prune -p no:cacheprovider -q
 
-# 2. Reset to baseline (first run also prunes the accumulated Pytest-PLA junk):
-./setup-and-rebuild/reset-dev.ps1 --prune
-
-# 3. Run the full sweep (contaminates dev — expected):
-cd inventory-hub ; & C:/Python314/python.exe -m pytest -p no:cacheprovider -q
-
-# 4. Reset again and re-run ONLY the previously-DATA-failing clusters:
-./setup-and-rebuild/reset-dev.ps1 --prune
-cd inventory-hub ; & C:/Python314/python.exe -m pytest tests/test_loc_mgr_*.py tests/test_buffer_*.py tests/test_quickswap*.py -q
+# Then reset + re-run ONLY the previously-DATA-failing clusters:
+& C:/Python314/python.exe -m pytest --reset-dev-prune tests/test_loc_mgr_*.py tests/test_buffer_*.py tests/test_quickswap*.py -q
 #    Expect: the DATA-caused failures are gone; only genuine code failures remain.
 ```
 
-Idempotency check: run `reset-dev.ps1 --dry-run --prune` twice — the second run
-should report 0 drift / 0 would-prune. (`--dry-run` is read-only, so this one is
-safe for Claude to run unprompted.)
+(Or call the script directly — `./setup-and-rebuild/reset-dev.ps1 --prune` —
+between sweeps; same effect.) The `--prune` deletes are destructive against
+shared dev, so Claude runs these only with Derek's explicit OK that session.
+
+Idempotency check (safe / read-only — Claude may run unprompted):
+`./setup-and-rebuild/reset-dev.ps1 --dry-run --prune` twice — the second run
+should report 0 drift / 0 would-prune.

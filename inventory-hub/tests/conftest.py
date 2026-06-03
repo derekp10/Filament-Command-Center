@@ -14,7 +14,9 @@ imported or requested explicitly.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import time
 import typing
 import uuid
 
@@ -53,6 +55,27 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Run @pytest.mark.integration tests against the real dev Spoolman.",
+    )
+    # Group 19.1 — opt-in dev reset before a sweep. OFF by default so a
+    # single-test run never triggers a docker restart / Spoolman reconcile.
+    # For a FULL sweep, `pytest --reset-dev` restores the committed seed
+    # baseline first so cross-test contamination can't accumulate. See
+    # setup-and-rebuild/reset_dev.py + docs/agent_docs/tasks/19-*.md.
+    parser.addoption(
+        "--reset-dev",
+        action="store_true",
+        default=False,
+        help="Restore dev to the committed seed baseline (NON-destructive) "
+             "before the session. Use for full sweeps. Equivalent env: "
+             "RESET_DEV_BEFORE_SWEEP=1.",
+    )
+    parser.addoption(
+        "--reset-dev-prune",
+        action="store_true",
+        default=False,
+        help="Like --reset-dev but ALSO deletes sweep-created records "
+             "(DESTRUCTIVE; agent-invoked with explicit OK — Derek never runs "
+             "this). Equivalent env: RESET_DEV_PRUNE=1.",
     )
 
 
@@ -448,6 +471,80 @@ def scan(api_base_url: str):
         return r.json()
 
     return _scan
+
+
+# ---------------------------------------------------------------------------
+# Group 19.1 — opt-in dev-baseline reset before a sweep
+# ---------------------------------------------------------------------------
+
+def _wait_for_server(base_url: str, timeout: int = 60) -> None:
+    """Poll until the FCC app answers (reset_dev.py docker-restarts it)."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        try:
+            r = requests.get(base_url, timeout=3)
+            if r.status_code < 500:
+                return
+            last = r.status_code
+        except requests.RequestException as exc:
+            last = exc
+        time.sleep(1.5)
+    pytest.exit(
+        f"reset-dev: server at {base_url} did not come back within {timeout}s "
+        f"(last: {last}).",
+        returncode=3,
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _reset_dev_baseline(request):
+    """Restore dev to the committed seed baseline before the session — OPT-IN.
+
+    No-op unless `--reset-dev` / `--reset-dev-prune` (or RESET_DEV_BEFORE_SWEEP=1
+    / RESET_DEV_PRUNE=1) is set, so a normal single-test run never triggers a
+    docker restart or Spoolman reconcile. Intended for FULL sweeps: it runs the
+    host `reset_dev.py` (non-destructive restore by default; `--prune` deletes
+    sweep-created records too) and waits for the container to come back before
+    any test executes. If the reset fails, the session aborts rather than run
+    on a dirty baseline.
+
+    Agent-invoked: Derek doesn't run pytest with these flags himself — Claude
+    does, on his behalf, and only opts into `--reset-dev-prune` (destructive)
+    with Derek's explicit OK. See setup-and-rebuild/reset_dev.py.
+    """
+    prune = (
+        request.config.getoption("--reset-dev-prune")
+        or os.environ.get("RESET_DEV_PRUNE", "").lower() in ("1", "true", "yes")
+    )
+    want = (
+        prune
+        or request.config.getoption("--reset-dev")
+        or os.environ.get("RESET_DEV_BEFORE_SWEEP", "").lower() in ("1", "true", "yes")
+    )
+    if not want:
+        yield
+        return
+
+    script = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..",
+                     "setup-and-rebuild", "reset_dev.py")
+    )
+    if not os.path.exists(script):
+        pytest.exit(f"reset-dev requested but {script} not found.", returncode=3)
+    cmd = [sys.executable, script] + (["--prune"] if prune else [])
+    print(f"\n[reset-dev] restoring dev baseline before session: {' '.join(cmd)}")
+    try:
+        subprocess.run(cmd, check=True, timeout=300)
+    except Exception as exc:  # noqa: BLE001
+        pytest.exit(
+            f"reset-dev failed before sweep ({exc}); aborting so tests don't "
+            f"run on a dirty baseline.",
+            returncode=3,
+        )
+    # reset_dev.py docker-restarts inventory_hub — wait for it to answer again.
+    _wait_for_server(DEFAULT_BASE_URL)
+    yield
 
 
 # ---------------------------------------------------------------------------
