@@ -188,3 +188,63 @@ def test_strict_location_match_matches_legacy_predicate(monkeypatch, target):
 
     expected = sorted(s["id"] for s in _STRICT_SPOOLS if _old_strict_match(s, target))
     assert sorted(spoolman_api.get_spools_at_location_strict(target)) == expected
+
+
+# ---------------------------------------------------------------------------
+# Consumer 4 — spoolman_api._build_location_match (the canonical matcher
+# behind get_spools_at_location_detailed + the Printer Status widget)
+# ---------------------------------------------------------------------------
+# Was: "-" not in target_loc_upper and sloc.upper().startswith(target+"-")
+#      (same for the ghost physical_source clause)
+# Now: resolve_parent(sloc) == target_loc_upper / resolve_parent(p_source) == ...
+
+_BUILD_SPOOLS = [
+    {"id": 1, "location": "LR-DB1",     "extra": {"container_slot": "1"}},                                  # direct + child of LR
+    {"id": 2, "location": "XL-1",       "extra": {}},                                                       # child of XL
+    {"id": 3, "location": "CORE1-M0",   "extra": {"physical_source": "LR-DB1", "physical_source_slot": "2"}},  # ghost -> LR-DB1 / LR
+    {"id": 4, "location": "",           "extra": {}},                                                       # unassigned
+    {"id": 5, "location": "LRX-1",      "extra": {}},                                                       # prefix near-miss
+    {"id": 6, "location": "CR-CT-1-R1", "extra": {}},                                                       # deep child of CR
+]
+
+BUILD_TARGETS = ["LR", "LR-DB1", "XL", "CORE1-M0", "CR", "LRX", "UNASSIGNED"]
+
+
+def _old_build_match_decision(s, target_upper, check_unassigned=False):
+    """Pre-migration match + ghost decision — the A/B oracle."""
+    sloc = (s.get('location') or '').strip()
+    extra = s.get('extra', {}) or {}
+    match = False
+    is_ghost = False
+    if check_unassigned:
+        if not sloc:
+            match = True
+    elif sloc.upper() == target_upper:
+        match = True
+    elif "-" not in target_upper and sloc.upper().startswith(target_upper + "-"):
+        match = True
+    p_source = str(extra.get('physical_source', '')).strip().replace('"', '').upper()
+    if not match and not check_unassigned:
+        if p_source == target_upper or ("-" not in target_upper and p_source.startswith(target_upper + "-")):
+            match = True
+            is_ghost = True
+    return match, is_ghost
+
+
+@pytest.mark.parametrize("target", BUILD_TARGETS)
+def test_build_location_match_matches_legacy_predicate(target):
+    """The migrated matcher agrees with the legacy predicate on match / no-match
+    and the ghost flag for every spool, and a ghost hit still surfaces the
+    physical_source_slot as its slot."""
+    check_unassigned = (target == "UNASSIGNED")
+    target_upper = target.upper()
+    for s in _BUILD_SPOOLS:
+        exp_match, exp_ghost = _old_build_match_decision(s, target_upper, check_unassigned)
+        res = spoolman_api._build_location_match(
+            dict(s, extra=dict(s["extra"])), target_upper, check_unassigned)
+        assert (res is not None) == exp_match, f"target={target} spool={s['id']}"
+        if res is not None:
+            assert res["id"] == s["id"]
+            assert bool(res["is_ghost"]) == exp_ghost
+            if exp_ghost:
+                assert res["slot"] == str(s["extra"].get("physical_source_slot", "")).strip('"')

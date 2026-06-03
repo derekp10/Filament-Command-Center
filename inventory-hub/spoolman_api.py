@@ -1231,7 +1231,11 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
             match = True
     elif sloc.upper() == target_loc_upper:
         match = True
-    elif "-" not in target_loc_upper and sloc.upper().startswith(target_loc_upper + "-"):
+    # L271 Phase 2: child match via resolve_parent (prefix-fallback this
+    # phase). It returns a dash-free prefix, so a dashed target_loc_upper can
+    # never child-match — folding in the old `"-" not in target_loc_upper`
+    # guard for both the location and the ghost physical_source below.
+    elif locations_db.resolve_parent(sloc) == target_loc_upper:
         match = True
 
     # 2. [ALEX FIX] Physical Source Match (The Ghost Logic)
@@ -1239,7 +1243,7 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
     p_source_raw = str(extra.get('physical_source', '')).strip().replace('"', '')
     if not match and not check_unassigned:
         p_source = p_source_raw.upper()
-        if p_source == target_loc_upper or ("-" not in target_loc_upper and p_source.startswith(target_loc_upper + "-")):
+        if p_source == target_loc_upper or locations_db.resolve_parent(p_source) == target_loc_upper:
             match = True
             is_ghost = True
             # Strip quotes from the slot too!
