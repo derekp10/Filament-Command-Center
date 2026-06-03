@@ -16,7 +16,6 @@ These are pure-function pins — no running server required.
 """
 import pytest
 
-import locations_db  # noqa: F401  (import-side path wiring via conftest)
 import logic
 
 
@@ -64,3 +63,66 @@ def test_get_room_from_location_pins_baseline(loc_id, expected):
 def test_get_room_from_location_none_is_empty():
     """Falsy input short-circuits before any prefix logic."""
     assert logic.get_room_from_location(None) == ""
+
+
+# ---------------------------------------------------------------------------
+# Consumer 2 — logic.perform_smart_eject room-hierarchy bypass
+# ---------------------------------------------------------------------------
+# Was: saved_source.strip('"').upper().startswith(current_location + "-")
+# Now: locations_db.resolve_parent(saved_source.strip('"')) == current_location
+#
+# Driven end-to-end through perform_smart_eject with the Spoolman / filabridge
+# boundary monkeypatched, so the assertion lands on the real migrated branch
+# (not a re-implementation of the predicate).
+
+def _patch_eject_io(monkeypatch, *, location, physical_source, physical_source_slot=""):
+    """Stub every external boundary perform_smart_eject touches and capture
+    the resulting update_spool payload. Returns the capture dict."""
+    import config_loader
+    import spoolman_api as smapi
+
+    extra = {
+        "physical_source": physical_source,
+        "physical_source_slot": physical_source_slot,
+        "container_slot": "S1",
+    }
+    captured = {"update": []}
+
+    monkeypatch.setattr(
+        smapi, "get_spool",
+        lambda sid: {"id": 7, "location": location, "extra": dict(extra)},
+    )
+    monkeypatch.setattr(config_loader, "load_config", lambda: {"printer_map": {}})
+    monkeypatch.setattr(config_loader, "get_api_urls", lambda: ("http://sm", "http://fb"))
+    monkeypatch.setattr(logic, "_fb_spool_location", lambda sid, url: None)
+    monkeypatch.setattr(smapi, "get_spools_at_location_detailed", lambda loc: [])
+
+    def fake_update(sid, payload):
+        captured["update"].append((sid, payload))
+        return True
+
+    monkeypatch.setattr(smapi, "update_spool", fake_update)
+    return captured
+
+
+def test_smart_eject_bypass_fires_for_child_source(monkeypatch):
+    """Floating in room LR with physical_source LR-DB1 (an immediate child):
+    the bypass nulls the source so the spool ejects to Unassigned and never
+    bounces back down into the child box."""
+    captured = _patch_eject_io(monkeypatch, location="LR", physical_source="LR-DB1")
+    result = logic.perform_smart_eject(7, confirmed_unassign=True, confirm_active_print=True)
+    assert result is True
+    assert len(captured["update"]) == 1
+    _sid, payload = captured["update"][0]
+    assert payload["location"] == ""            # Unassigned — bypass fired
+
+
+def test_smart_eject_bypass_skips_non_child_source(monkeypatch):
+    """Floating in room LR with physical_source CR-CT-1 (NOT a child of LR):
+    the bypass must NOT fire — the spool returns home to its real source."""
+    captured = _patch_eject_io(monkeypatch, location="LR", physical_source="CR-CT-1")
+    result = logic.perform_smart_eject(7, confirmed_unassign=True, confirm_active_print=True)
+    assert result is True
+    assert len(captured["update"]) == 1
+    _sid, payload = captured["update"][0]
+    assert payload["location"] == "CR-CT-1"     # returned home — bypass did not fire

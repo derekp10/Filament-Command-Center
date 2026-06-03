@@ -890,8 +890,14 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
     # [ALEX FIX] Room hierarchy bypass
     # If we are currently floating in a room, and the saved_source is a CHILD of this room,
     # we NEVER bounce back down to the child box. We break the loop and eject to Unassigned.
+    # L271 Phase 2: "is saved_source a child of current_location" via the
+    # hierarchy resolver instead of an inline startswith(current + "-").
+    # resolve_parent falls back to prefix parsing this phase, so for the
+    # room-floating case (current_location is a dash-free room) this is
+    # exactly the old startswith — it just reads the relationship through
+    # the single deriver and matches the comment's "immediate CHILD" intent.
     if current_location and saved_source:
-        if saved_source.strip('"').upper().startswith(current_location + "-"):
+        if locations_db.resolve_parent(saved_source.strip('"')) == current_location:
             state.logger.info(f"🛑 Bypassing Saved Source: {saved_source} is a child of {current_location}. Ejecting to Unassigned.")
             saved_source = None
 
