@@ -444,6 +444,25 @@ def resolve_room(row_or_id, parent_map=None, loc_list=None):
     return top
 
 
+def ancestors_of(loc_id, parent_map, include_pseudo=False):
+    """Yield each ancestor LocationID (immediate-first) by walking the parent_id
+    chain upward. Stops BEFORE a pseudo-prefix (PM/PJ/TST) unless include_pseudo
+    is True — so a spool in a PM box never rolls up into a "PM room". Cycle
+    -guarded. Used by the /api/locations transitive subtree-occupancy rollup.
+    """
+    cur = str(loc_id or '').strip().upper()
+    if not cur:
+        return
+    seen = {cur}
+    nxt = _parent_of(cur, parent_map)
+    while nxt and nxt not in seen:
+        if not include_pseudo and nxt in PSEUDO_ROOM_PREFIXES:
+            return
+        yield nxt
+        seen.add(nxt)
+        nxt = _parent_of(nxt, parent_map)
+
+
 def migrate_parent_ids_if_needed(loc_list):
     """One-time backfill: every row gets a `parent_id` field derived from
     its LocationID prefix (or None for top-level rows). Idempotent — skips

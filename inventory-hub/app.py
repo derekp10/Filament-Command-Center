@@ -1472,35 +1472,43 @@ def api_get_locations():
     except: pass
 
     # [ALEX FIX] Support Room logic correctly by adding grouped floating data
-    room_occupancy: dict[str, int] = {}
-    room_floating: dict[str, int] = {}
     csv_rows = list(local_map.values())
-    
-    # 1. First Pass: Compute total Room occupancies
-    # Phase 1B (Location Manager redesign): resolve_parent prefers the
-    # explicit `parent_id` written by the Phase-1A migration over the
-    # legacy `loc.split('-')[0]` prefix trick. Behavior is identical for
-    # rows whose parent_id matches the prefix (the migration default),
-    # but a PM/PJ box that's been explicitly re-parented to a real room
-    # via parent_id will now correctly contribute to that room's count
-    # — pre-Phase-1B it was silently dropped on the PM/PJ exclusion.
+
+    # 1. First Pass: TRANSITIVE subtree occupancy (L271 Phase 3.5).
+    # parent_id now stores each row's IMMEDIATE parent, so a single-level
+    # rollup would drop a spool sitting in a cart-ROW from its room's total
+    # (the row rolls into the cart, not the room). Walk every spool location's
+    # ancestor chain and add its count to each ancestor's subtree total;
+    # `ancestors_of` stops at the PM/PJ/TST pseudo-prefixes so they never
+    # aggregate into a room. `direct_occ` is the count sitting AT a row (the
+    # "floating" figure for a parent); `subtree_occ` is direct + descendants.
+    parent_map = locations_db.build_parent_map(csv_rows)
+
+    # Immediate-child counts so a row can be classified parent-vs-leaf for the
+    # occupancy display (a real parent shows a subtree Total; a leaf shows
+    # curr/max). Pseudo-prefix parents never count as real parents.
+    children_count: dict[str, int] = {}
+    for _lid, _p in parent_map.items():
+        if _p and _p not in locations_db.PSEUDO_ROOM_PREFIXES:
+            children_count[_p] = children_count.get(_p, 0) + 1
+
+    direct_occ: dict[str, int] = {}
+    subtree_occ: dict[str, int] = {}
+    ancestor_hit: set[str] = set()  # non-row prefixes that need a Virtual Room
     for loc, count in occupancy_map.items():
         if not loc:
             continue
-        row = local_map.get(loc)
-        parent = locations_db.resolve_parent(row) if row else locations_db.resolve_parent(loc)
-        if parent:
-            # Skip pseudo-prefixes the prefix-derivation can produce.
-            # Once Phase 5 retires prefix parsing this exclusion becomes
-            # unnecessary (a real parent_id is always a real row).
-            if parent in ["TST", "TEST", "PM", "PJ"]:
-                continue
-            room_occupancy[parent] = room_occupancy.get(parent, 0) + count
-        else:
-            # No parent (top-level room/printer row, or unparented).
-            # Floating-in-parent count is the row contributing to itself.
-            room_occupancy[loc] = room_occupancy.get(loc, 0) + count
-            room_floating[loc] = room_floating.get(loc, 0) + count
+        direct_occ[loc] = direct_occ.get(loc, 0) + count
+        subtree_occ[loc] = subtree_occ.get(loc, 0) + count
+        ancs = list(locations_db.ancestors_of(loc, parent_map))
+        for anc in ancs:
+            subtree_occ[anc] = subtree_occ.get(anc, 0) + count
+            ancestor_hit.add(anc)
+        if not ancs:
+            # Top-level / unparented spool location — it is its own "room"
+            # candidate (mirrors the pre-3.5 else-branch that seeded a virtual
+            # room for a dash-free orphan occupancy).
+            ancestor_hit.add(loc)
 
     # 2. Inject Virtual Rooms for occupancy-only prefixes.
     #
@@ -1511,8 +1519,11 @@ def api_get_locations():
     # Virtual Room for a prefix that has spool occupancy today but no on-disk
     # parent row of its own. Any parent that already has a real on-disk row —
     # the first-class Printer rows included — is skipped by the existing-row
-    # check below, so they flow through from disk untouched.
-    for parent in set(room_occupancy.keys()):
+    # check below, so they flow through from disk untouched. `ancestor_hit` is
+    # the set of prefixes that received rollup (plus dash-free orphan spool
+    # locations) — the Phase 3.5 transitive equivalent of the old
+    # room_occupancy.keys() candidate set.
+    for parent in set(ancestor_hit):
         # Skip a parent that already has a real on-disk row. A blank-Type
         # placeholder (legacy/manual state that would otherwise strand the row
         # in "Unassigned" rendering) is promoted in place instead.
@@ -1570,21 +1581,27 @@ def api_get_locations():
         except (ValueError, TypeError):
             max_val = 0
             
-        curr_val = occupancy_map.get(lid, 0)
-        
-        # If this is a Room or parent, show aggregated plus floating
-        if lid in room_occupancy and "-" not in lid:
-            total_room = room_occupancy[lid]
-            floating = room_floating.get(lid, 0)
-            row['OccupancyRaw'] = total_room
-            if floating > 0:
-                row['Occupancy'] = f"{total_room} Total ({floating} floating)"
+        direct_cnt = direct_occ.get(lid, 0)
+        sub = subtree_occ.get(lid, direct_cnt)
+
+        # L271 Phase 3.5: a row that is a PARENT in the tree (has child rows, or
+        # is a synthesized Virtual Room) shows its TRANSITIVE subtree total +
+        # the count floating directly at it; a leaf shows curr/max. This
+        # replaces the old `"-" not in lid` dash-free gate, so nested parents
+        # (carts, printers) now show a real subtree total instead of looking
+        # empty when collapsed, and a room's total includes everything beneath
+        # it (incl. a nested printer's toolhead spools).
+        is_parent = bool(children_count.get(lid)) or str(row.get('Type', '')).strip() == 'Virtual Room'
+        if is_parent:
+            row['OccupancyRaw'] = sub
+            if direct_cnt > 0:
+                row['Occupancy'] = f"{sub} Total ({direct_cnt} floating)"
             else:
-                row['Occupancy'] = f"{total_room} Total"
+                row['Occupancy'] = f"{sub} Total"
         else:
-            row['OccupancyRaw'] = curr_val 
-            if max_val > 0: row['Occupancy'] = f"{curr_val}/{max_val}"
-            else: row['Occupancy'] = f"{curr_val} items"
+            row['OccupancyRaw'] = direct_cnt
+            if max_val > 0: row['Occupancy'] = f"{direct_cnt}/{max_val}"
+            else: row['Occupancy'] = f"{direct_cnt} items"
 
         final_list.append(row)
 
