@@ -53,6 +53,11 @@ def test_cross_toolhead_move_unmaps_origin_before_mapping_destination():
     ctx = [
         patch.object(logic.config_loader, "load_config",
                      return_value={"printer_map": printer_map}),
+        # L271 Phase 4: printer_map is read via locations_db.get_active_printer_map()
+        # (Printer-row toolheads[]); the config fallback was removed at the cutover,
+        # so inject through the accessor too.
+        patch.object(logic.locations_db, "get_active_printer_map",
+                     return_value=printer_map),
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
@@ -128,6 +133,11 @@ def test_bound_slot_move_preserves_two_step_semantics_and_orders_fb():
     ctx = [
         patch.object(logic.config_loader, "load_config",
                      return_value={"printer_map": printer_map}),
+        # L271 Phase 4: printer_map is read via locations_db.get_active_printer_map()
+        # (Printer-row toolheads[]); the config fallback was removed at the cutover,
+        # so inject through the accessor too.
+        patch.object(logic.locations_db, "get_active_printer_map",
+                     return_value=printer_map),
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
@@ -190,6 +200,11 @@ def test_filabridge_reject_on_unmap_aborts_destination_map():
     ctx = [
         patch.object(logic.config_loader, "load_config",
                      return_value={"printer_map": printer_map}),
+        # L271 Phase 4: printer_map is read via locations_db.get_active_printer_map()
+        # (Printer-row toolheads[]); the config fallback was removed at the cutover,
+        # so inject through the accessor too.
+        patch.object(logic.locations_db, "get_active_printer_map",
+                     return_value=printer_map),
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
@@ -267,6 +282,11 @@ def test_filabridge_authoritative_origin_wins_over_spoolman_lag():
     ctx = [
         patch.object(logic.config_loader, "load_config",
                      return_value={"printer_map": printer_map}),
+        # L271 Phase 4: printer_map is read via locations_db.get_active_printer_map()
+        # (Printer-row toolheads[]); the config fallback was removed at the cutover,
+        # so inject through the accessor too.
+        patch.object(logic.locations_db, "get_active_printer_map",
+                     return_value=printer_map),
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
@@ -321,6 +341,11 @@ def test_move_to_same_toolhead_does_not_double_unmap():
     ctx = [
         patch.object(logic.config_loader, "load_config",
                      return_value={"printer_map": printer_map}),
+        # L271 Phase 4: printer_map is read via locations_db.get_active_printer_map()
+        # (Printer-row toolheads[]); the config fallback was removed at the cutover,
+        # so inject through the accessor too.
+        patch.object(logic.locations_db, "get_active_printer_map",
+                     return_value=printer_map),
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
@@ -396,6 +421,11 @@ def test_l204_dryer_move_unmaps_filabridge_when_spool_was_on_toolhead():
     ctx = [
         patch.object(logic.config_loader, "load_config",
                      return_value={"printer_map": printer_map}),
+        # L271 Phase 4: printer_map is read via locations_db.get_active_printer_map()
+        # (Printer-row toolheads[]); the config fallback was removed at the cutover,
+        # so inject through the accessor too.
+        patch.object(logic.locations_db, "get_active_printer_map",
+                     return_value=printer_map),
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
@@ -451,6 +481,11 @@ def test_l204_eject_falls_back_to_filabridge_lookup_when_spoolman_lags():
     ctx = [
         patch.object(logic.config_loader, "load_config",
                      return_value={"printer_map": printer_map}),
+        # L271 Phase 4: printer_map is read via locations_db.get_active_printer_map()
+        # (Printer-row toolheads[]); the config fallback was removed at the cutover,
+        # so inject through the accessor too.
+        patch.object(logic.locations_db, "get_active_printer_map",
+                     return_value=printer_map),
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_240),
