@@ -62,9 +62,12 @@ def patched_search():
             return FAKE_SPOOLS
 
     def _runner(**kwargs):
+        # L271 Phase 4 (step 2): the deployed filter now reads printer_map via
+        # locations_db.get_active_printer_map() (Printer-row toolheads[]), so
+        # stub THAT rather than config_loader.load_config.
         with patch.object(spoolman_api, "requests") as mreq, \
-             patch.object(spoolman_api.config_loader, "load_config",
-                          return_value={"printer_map": FAKE_PRINTER_MAP}), \
+             patch.object(spoolman_api.locations_db, "get_active_printer_map",
+                          return_value=FAKE_PRINTER_MAP), \
              patch.object(spoolman_api.config_loader, "get_api_urls",
                           return_value=("http://sm", "http://fb")), \
              patch.object(spoolman_api, "parse_inbound_data", side_effect=lambda d: d):
@@ -102,8 +105,8 @@ def test_deployed_filter_ignored_for_filament_target(patched_search):
     """Filaments don't have a deployment state — filter must be a no-op."""
     # Swap the fake data to filaments (each item is itself the filament row).
     with patch.object(spoolman_api, "requests") as mreq, \
-         patch.object(spoolman_api.config_loader, "load_config",
-                      return_value={"printer_map": FAKE_PRINTER_MAP}), \
+         patch.object(spoolman_api.locations_db, "get_active_printer_map",
+                      return_value=FAKE_PRINTER_MAP), \
          patch.object(spoolman_api.config_loader, "get_api_urls",
                       return_value=("http://sm", "http://fb")), \
          patch.object(spoolman_api, "parse_inbound_data", side_effect=lambda d: d):

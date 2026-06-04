@@ -745,6 +745,31 @@ def build_printer_map_from_rows(loc_list=None):
     return pm
 
 
+def get_active_printer_map(loc_list=None):
+    """L271 Phase 4 consumer entrypoint — the active printer_map for read
+    consumers during the dual-read window. Prefers the first-class Printer rows'
+    toolheads[] (via build_printer_map_from_rows); falls back to
+    config.json:printer_map ONLY when the rows carry no toolheads yet (a printer
+    declared in config but not yet folded — e.g. before the startup migration
+    has run on a fresh checkout). Returns the same
+    {LOCATION_ID_UPPER:{printer_name,position}} shape either way, so a consumer
+    that swaps ``config_loader.load_config()['printer_map']`` →
+    ``locations_db.get_active_printer_map()`` is byte-identical on a migrated
+    system and never reads EMPTIER than config during rollout.
+
+    Phase 4 step 4 removes the config fallback; this then just returns the
+    row-derived map.
+    """
+    pm = build_printer_map_from_rows(loc_list)
+    if pm:
+        return pm
+    try:
+        import config_loader  # lazy: avoid a module-load dependency / any cycle
+        return config_loader.load_config().get('printer_map', {}) or {}
+    except Exception:
+        return {}
+
+
 # Recorded printer→room mapping (L271 plan, Derek 2026-06-03). Used ONLY as a
 # fallback when a printer's room can't be auto-derived from a toolhead child's
 # Location field — e.g. CORE1 is a dual-role printer with no toolhead children

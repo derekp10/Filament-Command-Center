@@ -172,6 +172,24 @@ def test_non_list_and_empty_map_are_noops():
 
 
 # --------------------------------------------------------------------------- #
+# get_active_printer_map — the dual-read consumer entrypoint (step 2)          #
+# --------------------------------------------------------------------------- #
+
+def test_get_active_printer_map_prefers_rows():
+    out, _ = locations_db.migrate_printer_map_to_toolheads_if_needed(_printer_rows(), PRINTER_MAP)
+    assert locations_db.get_active_printer_map(out) == PRINTER_MAP
+
+
+def test_get_active_printer_map_falls_back_to_config(monkeypatch):
+    """Rows carry no toolheads yet (pre-fold) → fall back to config.json so a
+    consumer never reads emptier than config during rollout."""
+    import config_loader
+    monkeypatch.setattr(config_loader, "load_config", lambda: {"printer_map": PRINTER_MAP})
+    rows_without_toolheads = [{"LocationID": "XL", "Type": "Printer", "Name": "🦝 XL"}]
+    assert locations_db.get_active_printer_map(rows_without_toolheads) == PRINTER_MAP
+
+
+# --------------------------------------------------------------------------- #
 # Source canaries (the migration must run at startup AND on the printer_map PUT) #
 # --------------------------------------------------------------------------- #
 
