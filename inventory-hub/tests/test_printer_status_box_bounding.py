@@ -109,6 +109,9 @@ def test_bucket_dedupes_and_uppercases_targets():
 def _patch_pulse(printer_map, bindings_toolheads, spools, get_all=None):
     return [
         patch.object(app.config_loader, 'load_config', return_value={'printer_map': printer_map}),
+        # L271 Phase 4 (step 2): the pulse aggregator reads printer_map via
+        # locations_db.get_active_printer_map() (Printer-row toolheads[]).
+        patch.object(app.locations_db, 'get_active_printer_map', return_value=printer_map),
         patch.object(app.config_loader, 'get_api_urls', return_value=('http://sm', 'http://fb')),
         patch.object(app.prusalink_api, 'get_printer_state', return_value=None),
         patch.object(app.locations_db, 'get_bindings_for_machine',

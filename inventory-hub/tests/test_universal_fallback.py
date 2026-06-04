@@ -7,6 +7,19 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import logic
 
+
+@pytest.fixture(autouse=True)
+def _printer_map_from_config(monkeypatch):
+    """L271 P4 step 2: logic.py reads printer_map via
+    locations_db.get_active_printer_map() now; these tests inject printer_map
+    through the config_loader.load_config stub, so make the accessor delegate to
+    it — mirrors the pre-swap `cfg.get('printer_map')` source exactly."""
+    monkeypatch.setattr(
+        logic.locations_db, "get_active_printer_map",
+        lambda loc_list=None: (logic.config_loader.load_config() or {}).get("printer_map", {}) or {},
+    )
+
+
 def test_universal_fallback_move():
     """Verify perform_smart_move records physical_source when moving from any location to a printer."""
     mock_loc_list = [

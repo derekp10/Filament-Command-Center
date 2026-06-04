@@ -48,6 +48,18 @@ def client():
 
 
 @pytest.fixture(autouse=True)
+def _printer_map_from_config(monkeypatch):
+    """L271 P4 step 2: logic.py reads printer_map via
+    locations_db.get_active_printer_map() now; these tests inject printer_map
+    through the config_loader.load_config stub, so make the accessor delegate to
+    it — mirrors the pre-swap `cfg.get('printer_map')` source exactly."""
+    monkeypatch.setattr(
+        logic.locations_db, "get_active_printer_map",
+        lambda loc_list=None: (logic.config_loader.load_config() or {}).get("printer_map", {}) or {},
+    )
+
+
+@pytest.fixture(autouse=True)
 def isolate_state():
     prior_buffer = list(state.GLOBAL_BUFFER)
     prior_logs = list(state.RECENT_LOGS)

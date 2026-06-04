@@ -633,6 +633,144 @@ def migrate_printers_to_rows_if_needed(loc_list, printer_map):
     return loc_list, changed
 
 
+def _pm_position(v):
+    """Coerce a toolhead position to an int, mirroring the /api/printer_map GET
+    `_posint` coercion so a hand-edited / legacy non-int value can't break the
+    stable sort. Falls back to 0."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def migrate_printer_map_to_toolheads_if_needed(loc_list, printer_map, prime_only=False):
+    """L271 Phase 4 (step 1): fold config.json:printer_map into a `toolheads`
+    array on each first-class Type:"Printer" row in locations.json.
+
+    Each printer_map entry ``{loc_id: {printer_name, position}}`` becomes a
+    ``{"location_id": loc_id, "position": position}`` dict appended to the
+    toolheads[] of the Printer row whose LocationID == that toolhead's PREFIX
+    (the first dash-segment, or the whole key for a dash-free dual-role printer
+    like CORE1). Grouping by prefix — not by printer_name — keys off the unique
+    LocationID, so two printers that happen to share a display name can't cross-
+    contaminate. ``printer_name`` is deliberately NOT stored per toolhead: the
+    owning Printer row's ``Name`` is the single source of truth, so there's no
+    cross-file drift to re-introduce (``build_printer_map_from_rows`` injects it
+    back when reconstructing the printer_map dict).
+
+    DUAL-READ: printer_map stays in config.json as the source of truth for one
+    release; NO consumer reads toolheads[] yet. This migration is purely additive
+    — it only writes the toolheads[] field, never Spoolman or any other field.
+
+    Idempotency + re-sync: a Printer row whose toolheads[] already equals the
+    printer_map-derived value is left untouched (changed=False on the second
+    boot). If it DIFFERS, the default (re-sync) mode overwrites it — this is the
+    EDIT path (the /api/printer_map PUT writes the edited map onto the rows). A
+    Printer row that never had a toolheads[] key AND has no printer_map entries is
+    left alone (no empty-array churn).
+
+    ``prime_only`` (L271 Phase 4 step 4 — the cutover): when True, an already-
+    folded row (one that HAS a ``toolheads`` key) is never overwritten — the fold
+    only PRIMES never-folded rows. This is the STARTUP mode: config:printer_map is
+    no longer an edit surface (the rows are authoritative for edits), so the boot
+    fold must never revert a UI edit from the now-vestigial config seed. The PUT
+    keeps the default re-sync mode so an edit actually applies.
+
+    Returns (mutated_list, changed_bool).
+    """
+    if not isinstance(loc_list, list) or not printer_map:
+        return loc_list, False
+
+    # Group printer_map entries by printer PREFIX → [{location_id, position}],
+    # each list sorted by (position, location_id) for a stable, deterministic
+    # array (so idempotency holds across a JSON round-trip).
+    by_prefix = {}
+    for loc_id, info in printer_map.items():
+        ku = str(loc_id).strip().upper()
+        if not ku:
+            continue
+        prefix = ku.split('-', 1)[0] if '-' in ku else ku
+        by_prefix.setdefault(prefix, []).append({
+            'location_id': ku,
+            'position': _pm_position((info or {}).get('position', 0)),
+        })
+    for entries in by_prefix.values():
+        entries.sort(key=lambda e: (e['position'], e['location_id']))
+
+    changed = False
+    for row in loc_list:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        pid = str(row.get('LocationID', '')).strip().upper()
+        desired = by_prefix.get(pid, [])
+        current = row.get('toolheads')
+        if current == desired:
+            continue
+        if prime_only and 'toolheads' in row:
+            continue  # already folded → rows are authoritative; never revert from (stale) config seed
+        if not desired and 'toolheads' not in row:
+            continue  # no map entries + never had toolheads → leave untouched
+        row['toolheads'] = desired
+        changed = True
+        state.logger.info(
+            f"🧩 Folded printer_map → toolheads[] on Printer {pid!r} "
+            f"({len(desired)} toolhead(s))"
+        )
+    return loc_list, changed
+
+
+def build_printer_map_from_rows(loc_list=None):
+    """L271 Phase 4 (step 2 accessor): reconstruct the config.json:printer_map
+    dict shape from the first-class Printer rows' toolheads[] arrays. Returns
+    ``{LOCATION_ID_UPPER: {"printer_name": <Printer.Name>, "position": <int>}}``
+    — byte-identical to ``config_loader.load_config()['printer_map']`` (which
+    also uppercases keys), so a consumer can swap its data source from config to
+    this accessor with NO downstream logic change (the Phase-2/3.5 de-risking
+    method). ``printer_name`` is taken from the owning Printer row's ``Name``
+    (the single source of truth); ``position`` from each toolhead entry.
+
+    Pass loc_list to avoid a reload; defaults to load_locations_list(). No
+    consumer reads this yet in step 1 — it lands additively so the step-2
+    consumer swaps are one-line data-source changes pinned A/B against config.
+    """
+    if loc_list is None:
+        loc_list = load_locations_list()
+    pm = {}
+    for row in (loc_list or []):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        name = str(row.get('Name', ''))
+        for th in (row.get('toolheads') or []):
+            if not isinstance(th, dict):
+                continue
+            key = str(th.get('location_id', '')).strip().upper()
+            if not key:
+                continue
+            pm[key] = {'printer_name': name, 'position': _pm_position(th.get('position', 0))}
+    return pm
+
+
+def get_active_printer_map(loc_list=None):
+    """L271 Phase 4 consumer entrypoint — the active printer_map for every read
+    consumer. Returns ``{LOCATION_ID_UPPER:{printer_name,position}}`` reconstructed
+    SOLELY from the first-class Printer rows' toolheads[] (via
+    build_printer_map_from_rows).
+
+    Phase 4 step 4 (the cutover, DONE) removed the dual-read config fallback: the
+    Printer rows are now the single source of truth. config:printer_map survives
+    in config.json only as the one-time startup priming seed (it folds into a
+    never-yet-folded row at boot — see migrate_printer_map_to_toolheads_if_needed
+    with prime_only) and as a rollback net; nothing READS it here anymore. A
+    Printer row with no toolheads[] therefore yields an empty entry, not a config
+    read.
+    """
+    return build_printer_map_from_rows(loc_list)
+
+
 # Recorded printer→room mapping (L271 plan, Derek 2026-06-03). Used ONLY as a
 # fallback when a printer's room can't be auto-derived from a toolhead child's
 # Location field — e.g. CORE1 is a dual-role printer with no toolhead children

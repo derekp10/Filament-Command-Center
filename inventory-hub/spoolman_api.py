@@ -1493,8 +1493,11 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
     deployed_targets = set()
     if deployed_state and deployed_state.lower() in ('deployed', 'undeployed'):
         try:
-            cfg = config_loader.load_config()
-            pm = cfg.get('printer_map', {}) or {}
+            # L271 Phase 4 (step 2): read the printer_map from the first-class
+            # Printer rows' toolheads[] (dual-read; falls back to config.json
+            # until the rows are folded). Byte-identical key set on a migrated
+            # system — this filter only consults pm.keys().
+            pm = locations_db.get_active_printer_map()
             deployed_targets = {str(k).strip().upper() for k in pm.keys()}
         except Exception:
             deployed_targets = set()

@@ -380,7 +380,11 @@ def test_api_get_bindings_404_on_non_dryer_box(client, sample_locs, tmp_location
 
 def test_api_put_bindings_round_trip(client, sample_locs, printer_map, tmp_locations_file):
     locations_db.save_locations_list(sample_locs)
-    with patch.object(app_module.config_loader, "load_config", return_value={"printer_map": printer_map}):
+    # L271 Phase 4 (step 4): these endpoints read the printer_map via
+    # locations_db.get_active_printer_map() (Printer-row toolheads[]) — the config
+    # fallback was removed at the cutover, so inject through the accessor.
+    with patch.object(app_module.config_loader, "load_config", return_value={"printer_map": printer_map}), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map):
         r = client.put(
             "/api/dryer_box/PM-DB-XL-L/bindings",
             json={"slot_targets": {"1": "XL-1", "2": "XL-2", "3": None}},
@@ -396,7 +400,11 @@ def test_api_put_bindings_round_trip(client, sample_locs, printer_map, tmp_locat
 
 def test_api_put_bindings_rejects_bad_target(client, sample_locs, printer_map, tmp_locations_file):
     locations_db.save_locations_list(sample_locs)
-    with patch.object(app_module.config_loader, "load_config", return_value={"printer_map": printer_map}):
+    # L271 Phase 4 (step 4): these endpoints read the printer_map via
+    # locations_db.get_active_printer_map() (Printer-row toolheads[]) — the config
+    # fallback was removed at the cutover, so inject through the accessor.
+    with patch.object(app_module.config_loader, "load_config", return_value={"printer_map": printer_map}), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map):
         r = client.put(
             "/api/dryer_box/PM-DB-XL-L/bindings",
             json={"slot_targets": {"1": "BOGUS", "2": "XL-2"}},
@@ -420,7 +428,11 @@ def test_api_machine_toolhead_slots(client, sample_locs, printer_map, tmp_locati
     sample_locs[0]["extra"] = {"slot_targets": {"1": "XL-1", "2": "XL-2"}}
     sample_locs[1]["extra"] = {"slot_targets": {"1": "XL-4"}}
     locations_db.save_locations_list(sample_locs)
-    with patch.object(app_module.config_loader, "load_config", return_value={"printer_map": printer_map}):
+    # L271 Phase 4 (step 4): these endpoints read the printer_map via
+    # locations_db.get_active_printer_map() (Printer-row toolheads[]) — the config
+    # fallback was removed at the cutover, so inject through the accessor.
+    with patch.object(app_module.config_loader, "load_config", return_value={"printer_map": printer_map}), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map):
         r = client.get("/api/machine/🦝 XL/toolhead_slots")
     assert r.status_code == 200
     body = r.get_json()
@@ -432,7 +444,11 @@ def test_api_machine_toolhead_slots(client, sample_locs, printer_map, tmp_locati
 
 def test_api_machine_toolhead_slots_404_on_unknown_printer(client, tmp_locations_file, printer_map):
     locations_db.save_locations_list([])
-    with patch.object(app_module.config_loader, "load_config", return_value={"printer_map": printer_map}):
+    # L271 Phase 4 (step 4): these endpoints read the printer_map via
+    # locations_db.get_active_printer_map() (Printer-row toolheads[]) — the config
+    # fallback was removed at the cutover, so inject through the accessor.
+    with patch.object(app_module.config_loader, "load_config", return_value={"printer_map": printer_map}), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map):
         r = client.get("/api/machine/nonexistent/toolhead_slots")
     assert r.status_code == 404
 

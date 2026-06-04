@@ -622,43 +622,50 @@ def test_canonicalize_printer_map_shape_validation():
     assert e3 and "position" in e3.lower()
 
 
-def test_save_printer_map_persists_uppercased_and_preserves_siblings(cfg_file):
-    result = config_loader.save_printer_map(
-        {"xl-1": {"printer_name": "🦝 XL", "position": 0},
-         "core1-m0": {"printer_name": "Core One", "position": 0}})
-    assert result["ok"] is True
-    on_disk = _read(cfg_file)
-    assert set(on_disk["printer_map"].keys()) == {"XL-1", "CORE1-M0"}  # uppercased
-    # full-dict equality: every OTHER key (nested print_settings, dryer_slots list,
-    # comments, secret, ports) preserved verbatim by the passthrough merge.
-    expected = dict(SEED)
-    expected["printer_map"] = {"XL-1": {"printer_name": "🦝 XL", "position": 0},
-                               "CORE1-M0": {"printer_name": "Core One", "position": 0}}
-    assert on_disk == expected
-
-
-def test_save_printer_map_rejects_bad_shape_no_disk_change(cfg_file):
-    before = cfg_file.read_text(encoding="utf-8")
-    result = config_loader.save_printer_map({"XL-1": {"position": 0}})  # missing name
-    assert result["ok"] is False
-    assert cfg_file.read_text(encoding="utf-8") == before
+# NOTE (L271 Phase 4 step 4 — the cutover): the `save_printer_map` writer was
+# RETIRED — printer_map is no longer written to config.json. Its on-disk-write
+# tests (persists-uppercased-and-preserves-siblings / rejects-bad-shape-no-disk-
+# change / refuses-on-corrupt-existing) were removed with it. The canonicalizer it
+# used (`_canonicalize_printer_map`) is KEPT as the editor PUT's validator and is
+# still covered by the three tests above; the row-write persistence is covered by
+# the /api/printer_map PUT tests below.
 
 
 def _ref_env(monkeypatch, slot_targets=None, spools_by_loc=None,
              spool_raises=False, locations_raises=False):
-    """Stub the two referential sources the PUT /api/printer_map guard consults.
+    """Stub the referential sources the PUT /api/printer_map guard consults.
     spool_raises / locations_raises simulate a dependency outage so the guard's
-    fail-CLOSED behavior can be tested."""
+    fail-CLOSED behavior can be tested.
+
+    L271 Phase 4 (step 4 — the cutover): the guard's `old_map` is now ROW-sourced
+    via locations_db.get_active_printer_map() (was config:printer_map). So seed a
+    first-class Type:"Printer" row carrying toolheads[]=[{XL-1, 0}] — the same
+    single XL-* toolhead the pre-cutover config SEED exposed — so removing /
+    renaming XL-1 is what the guard tests exercise. The Dryer Box row (added when
+    slot_targets is given) carries the bindings the guard's slot scan reads; a
+    single load_locations_list stub serves both the active-map read and the scan.
+    The save_locations_list no-op isolates the PUT's authoritative row write from
+    the real data/locations.json (the dev-data wipe documented in
+    reference_fcc_e2e_sweep_pollution — the "rename/bindings test", 53→2)."""
     import locations_db
     import spoolman_api
-    rows = ([{"LocationID": "PM-DB-1", "Type": "Dryer Box", "extra": {"slot_targets": slot_targets}}]
-            if slot_targets else [])
+    rows = [{"LocationID": "XL", "Type": "Printer", "Name": "🦝 XL",
+             "toolheads": [{"location_id": "XL-1", "position": 0}]}]
+    if slot_targets:
+        rows.append({"LocationID": "PM-DB-1", "Type": "Dryer Box",
+                     "extra": {"slot_targets": slot_targets}})
     if locations_raises:
         def _boom():
             raise RuntimeError("locations.json corrupt")
         monkeypatch.setattr(locations_db, "load_locations_list", _boom)
     else:
         monkeypatch.setattr(locations_db, "load_locations_list", lambda: rows)
+    # Isolate the PUT /api/printer_map post-save sync (it re-runs the Phase-3
+    # printer-rows + Phase-4 toolheads[] migrations and persists them). Without
+    # this no-op, save_locations_list would overwrite the REAL data/locations.json
+    # with the tiny `rows` stub above — the long-standing dev-data wipe documented
+    # in reference_fcc_e2e_sweep_pollution (the "rename/bindings test", 53→2).
+    monkeypatch.setattr(locations_db, "save_locations_list", lambda *_a, **_k: True)
     sbl = spools_by_loc or {}
     if spool_raises:
         def _sboom(loc):
@@ -743,30 +750,58 @@ def test_put_printer_map_lowercase_resubmit_is_not_a_removal(client, monkeypatch
 
 
 def test_put_printer_map_write_fault_is_500(client, monkeypatch):
+    # L271 Phase 4 (step 4): the PUT now persists onto the Printer rows; a failed
+    # locations.json write is the infra fault that yields 500 (was a config write).
+    import locations_db
     _ref_env(monkeypatch)
-    monkeypatch.setattr(config_loader, "save_printer_map",
-                        lambda m: {"ok": False, "error": "config write failed: disk full"})
+    monkeypatch.setattr(locations_db, "save_locations_list", lambda *_a, **_k: False)
     r = client.put("/api/printer_map", json={"printer_map": {"XL-1": {"printer_name": "X", "position": 0}}})
     assert r.status_code == 500  # infra fault, not client bad-input
 
 
 def test_put_printer_map_validation_error_is_400(client, monkeypatch):
+    # A genuinely bad shape (missing name) is rejected by the canonicalizer BEFORE
+    # any write — a client 400, no rows touched.
     _ref_env(monkeypatch)
-    monkeypatch.setattr(config_loader, "save_printer_map",
-                        lambda m: {"ok": False, "error": "printer_map['XL-1']: printer name is required"})
     r = client.put("/api/printer_map", json={"printer_map": {"XL-1": {"position": 0}}})
     assert r.status_code == 400
+    assert r.get_json()["ok"] is False
 
 
-def test_save_printer_map_refuses_on_corrupt_existing(tmp_path, monkeypatch):
-    p = tmp_path / "config.json"
-    original = "{ corrupt json "
-    p.write_text(original, encoding="utf-8")
-    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
-    config_loader.LAST_CONFIG_ERROR = None
-    result = config_loader.save_printer_map({"XL-1": {"printer_name": "X", "position": 0}})
-    assert result["ok"] is False and "refusing to save" in result["error"]
-    assert p.read_text(encoding="utf-8") == original  # untouched
+def test_put_printer_map_rename_propagates_to_printer_row(client, monkeypatch):
+    # L271 Phase 4 (step 4): printer_name is now the Printer row's Name (single
+    # source of truth). Editing it in the editor must propagate to the row Name —
+    # neither toolheads[] fold nor the rows migration touches Name, so the PUT
+    # syncs it explicitly. (Restores the rename behavior the Step-3 GET shim broke.)
+    import locations_db
+    captured = {}
+    _ref_env(monkeypatch)  # seeds XL Printer row Name "🦝 XL", toolheads [{XL-1, 0}]
+    monkeypatch.setattr(locations_db, "save_locations_list",
+                        lambda locs, *a, **k: (captured.__setitem__("locs", locs), True)[1])
+    r = client.put("/api/printer_map",
+                   json={"printer_map": {"XL-1": {"printer_name": "🦝 XL Pro", "position": 0}}})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    xl = next(row for row in captured["locs"] if row.get("LocationID") == "XL")
+    assert xl["Name"] == "🦝 XL Pro"  # rename propagated to the row
+
+
+def test_put_printer_map_preserves_arbitrary_positions_verbatim(client, monkeypatch):
+    # HARD CONSTRAINT: position IS the FilaBridge toolhead_id (0-based), sent
+    # verbatim. The PUT must store positions EXACTLY — never auto-renumber/compact.
+    # A deliberately NON-CONTIGUOUS set (gap at 2..6) proves no resequencing.
+    import locations_db
+    captured = {}
+    _ref_env(monkeypatch)  # old_map = {XL-1}; keeping XL-1 means no guarded removal
+    monkeypatch.setattr(locations_db, "save_locations_list",
+                        lambda locs, *a, **k: (captured.__setitem__("locs", locs), True)[1])
+    pm = {"XL-1": {"printer_name": "🦝 XL", "position": 0},
+          "XL-2": {"printer_name": "🦝 XL", "position": 1},
+          "XL-7": {"printer_name": "🦝 XL", "position": 7}}  # gap: no 2..6
+    r = client.put("/api/printer_map", json={"printer_map": pm})
+    assert r.status_code == 200
+    xl = next(row for row in captured["locs"] if row.get("LocationID") == "XL")
+    positions = {th["location_id"]: th["position"] for th in xl["toolheads"]}
+    assert positions == {"XL-1": 0, "XL-2": 1, "XL-7": 7}  # verbatim, gap preserved
 
 
 def test_canonicalize_printer_map_rejects_bool_position():

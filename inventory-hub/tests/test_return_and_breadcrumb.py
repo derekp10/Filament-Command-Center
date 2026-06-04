@@ -57,6 +57,8 @@ def test_return_prefers_physical_source_over_first_binding(client):
 
     with patch.object(app_module.config_loader, "load_config",
                       return_value={"printer_map": printer_map}), \
+         patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value=printer_map), \
          patch.object(app_module.locations_db, "load_locations_list", return_value=locs), \
          patch.object(app_module.spoolman_api, "get_spools_at_location", return_value=[77]), \
          patch.object(app_module.spoolman_api, "get_spool", return_value=fake_spool), \
@@ -89,6 +91,8 @@ def test_return_falls_back_to_first_binding_when_no_source(client):
 
     with patch.object(app_module.config_loader, "load_config",
                       return_value={"printer_map": printer_map}), \
+         patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value=printer_map), \
          patch.object(app_module.locations_db, "load_locations_list", return_value=locs), \
          patch.object(app_module.spoolman_api, "get_spools_at_location", return_value=[77]), \
          patch.object(app_module.spoolman_api, "get_spool", return_value=fake_spool), \
@@ -123,6 +127,8 @@ def test_return_from_virtual_printer_uses_first_loaded_toolhead_then_source(clie
 
     with patch.object(app_module.config_loader, "load_config",
                       return_value={"printer_map": printer_map}), \
+         patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value=printer_map), \
          patch.object(app_module.locations_db, "load_locations_list", return_value=locs), \
          patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=resident_for), \
          patch.object(app_module.spoolman_api, "get_spool", return_value=fake_spool), \
