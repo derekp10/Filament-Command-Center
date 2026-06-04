@@ -184,13 +184,45 @@ def test_get_active_printer_map_prefers_rows():
     assert locations_db.get_active_printer_map(out) == PRINTER_MAP
 
 
-def test_get_active_printer_map_falls_back_to_config(monkeypatch):
-    """Rows carry no toolheads yet (pre-fold) → fall back to config.json so a
-    consumer never reads emptier than config during rollout."""
+def test_get_active_printer_map_has_no_config_fallback(monkeypatch):
+    """L271 Phase 4 (step 4 — the cutover): the dual-read config fallback is GONE.
+    The Printer rows' toolheads[] are the sole source — a row with no toolheads[]
+    yields an empty map even when config.json STILL carries a printer_map (it
+    survives only as the boot-time priming seed, never read here)."""
     import config_loader
+    # Config still has a full printer_map; get_active_printer_map must IGNORE it.
     monkeypatch.setattr(config_loader, "load_config", lambda: {"printer_map": PRINTER_MAP})
     rows_without_toolheads = [{"LocationID": "XL", "Type": "Printer", "Name": "🦝 XL"}]
-    assert locations_db.get_active_printer_map(rows_without_toolheads) == PRINTER_MAP
+    assert locations_db.get_active_printer_map(rows_without_toolheads) == {}
+
+
+def test_prime_only_primes_unfolded_but_never_reverts_a_folded_row():
+    """L271 Phase 4 (step 4): the STARTUP fold runs prime_only=True. It PRIMES a
+    never-folded row (fresh deploy) but must NEVER overwrite an already-folded
+    toolheads[], or a UI edit (rows authoritative) would be reverted from the now-
+    stale config seed on the next reboot. The PUT path (prime_only=False) re-syncs."""
+    # (a) PRIME a never-folded row: no toolheads key yet → folds from the seed.
+    fresh = [{"LocationID": "XL", "Type": "Printer", "Name": "🦝 XL"}]
+    out, changed = locations_db.migrate_printer_map_to_toolheads_if_needed(
+        fresh, {"XL-1": {"printer_name": "🦝 XL", "position": 0}}, prime_only=True)
+    assert changed is True
+    assert out[0]["toolheads"] == [{"location_id": "XL-1", "position": 0}]
+
+    # (b) DO NOT revert an already-folded row that DIFFERS from the (stale) seed.
+    edited = [{"LocationID": "XL", "Type": "Printer", "Name": "🦝 XL",
+               "toolheads": [{"location_id": "XL-1", "position": 9}]}]  # a UI edit: pos 9
+    out2, changed2 = locations_db.migrate_printer_map_to_toolheads_if_needed(
+        edited, {"XL-1": {"printer_name": "🦝 XL", "position": 0}}, prime_only=True)
+    assert changed2 is False  # NOT reverted
+    assert out2[0]["toolheads"] == [{"location_id": "XL-1", "position": 9}]
+
+    # (c) The EDIT path (default re-sync) DOES overwrite the folded row.
+    edited2 = [{"LocationID": "XL", "Type": "Printer", "Name": "🦝 XL",
+                "toolheads": [{"location_id": "XL-1", "position": 9}]}]
+    out3, changed3 = locations_db.migrate_printer_map_to_toolheads_if_needed(
+        edited2, {"XL-1": {"printer_name": "🦝 XL", "position": 0}})
+    assert changed3 is True
+    assert out3[0]["toolheads"] == [{"location_id": "XL-1", "position": 0}]
 
 
 # --------------------------------------------------------------------------- #

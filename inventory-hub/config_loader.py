@@ -335,7 +335,7 @@ def save_config(new_values):
 
 
 def _write_merged_config(changes):
-    """Shared persist path used by save_config + save_printer_map. Passthrough-
+    """Shared persist path used by save_config. Passthrough-
     merges `changes` (already validated/canonicalized by the caller) onto the
     RAW on-disk config, then atomic write + exact-equality verify-after-write +
     retry-once, with a DURABLE rolling last-known-good .bak. Sets LAST_CONFIG_ERROR
@@ -459,21 +459,10 @@ def _canonicalize_printer_map(new_map):
     return canonical, None
 
 
-def save_printer_map(new_map):
-    """Persist an edited printer_map (L18 Phase 3). Canonicalizes + validates,
-    then passthrough-merges via the shared hardened writer. Does NOT perform the
-    referential-integrity check (a removed key still bound to a dryer-box slot or
-    holding spools) — that lives in the /api/printer_map PUT handler, which has
-    locations.json + Spoolman. Returns {ok, error, printer_map}."""
-    global LAST_CONFIG_ERROR
-    LAST_CONFIG_ERROR = None
-    canonical, err = _canonicalize_printer_map(new_map)
-    if err:
-        LAST_CONFIG_ERROR = err
-        return {"ok": False, "error": err}
-    ok, werr = _write_merged_config({"printer_map": canonical})
-    if not ok:
-        return {"ok": False, "error": werr}
-    if hasattr(state, 'logger'):
-        state.logger.info(f"💾 printer_map updated ({len(canonical)} toolheads)")
-    return {"ok": True, "error": None, "printer_map": canonical}
+# NOTE (L271 Phase 4 step 4 — the cutover): ``save_printer_map`` was RETIRED here.
+# printer_map is no longer written to config.json — the editor PUT
+# (/api/printer_map) now persists the edit onto each first-class Type:"Printer"
+# row's toolheads[] in locations.json (the single source of truth) via
+# locations_db. config:printer_map remains readable only as the one-time startup
+# priming seed. ``_canonicalize_printer_map`` above is KEPT — it is the shared
+# validator the PUT calls before the row write.

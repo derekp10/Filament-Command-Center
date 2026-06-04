@@ -643,7 +643,7 @@ def _pm_position(v):
         return 0
 
 
-def migrate_printer_map_to_toolheads_if_needed(loc_list, printer_map):
+def migrate_printer_map_to_toolheads_if_needed(loc_list, printer_map, prime_only=False):
     """L271 Phase 4 (step 1): fold config.json:printer_map into a `toolheads`
     array on each first-class Type:"Printer" row in locations.json.
 
@@ -664,10 +664,17 @@ def migrate_printer_map_to_toolheads_if_needed(loc_list, printer_map):
 
     Idempotency + re-sync: a Printer row whose toolheads[] already equals the
     printer_map-derived value is left untouched (changed=False on the second
-    boot). If it DIFFERS (a printer_map edit since the last run), it is re-synced
-    so printer_map stays authoritative during the dual-read window. A Printer row
-    that never had a toolheads[] key AND has no printer_map entries is left alone
-    (no empty-array churn).
+    boot). If it DIFFERS, the default (re-sync) mode overwrites it — this is the
+    EDIT path (the /api/printer_map PUT writes the edited map onto the rows). A
+    Printer row that never had a toolheads[] key AND has no printer_map entries is
+    left alone (no empty-array churn).
+
+    ``prime_only`` (L271 Phase 4 step 4 — the cutover): when True, an already-
+    folded row (one that HAS a ``toolheads`` key) is never overwritten — the fold
+    only PRIMES never-folded rows. This is the STARTUP mode: config:printer_map is
+    no longer an edit surface (the rows are authoritative for edits), so the boot
+    fold must never revert a UI edit from the now-vestigial config seed. The PUT
+    keeps the default re-sync mode so an edit actually applies.
 
     Returns (mutated_list, changed_bool).
     """
@@ -701,6 +708,8 @@ def migrate_printer_map_to_toolheads_if_needed(loc_list, printer_map):
         current = row.get('toolheads')
         if current == desired:
             continue
+        if prime_only and 'toolheads' in row:
+            continue  # already folded → rows are authoritative; never revert from (stale) config seed
         if not desired and 'toolheads' not in row:
             continue  # no map entries + never had toolheads → leave untouched
         row['toolheads'] = desired
@@ -746,28 +755,20 @@ def build_printer_map_from_rows(loc_list=None):
 
 
 def get_active_printer_map(loc_list=None):
-    """L271 Phase 4 consumer entrypoint — the active printer_map for read
-    consumers during the dual-read window. Prefers the first-class Printer rows'
-    toolheads[] (via build_printer_map_from_rows); falls back to
-    config.json:printer_map ONLY when the rows carry no toolheads yet (a printer
-    declared in config but not yet folded — e.g. before the startup migration
-    has run on a fresh checkout). Returns the same
-    {LOCATION_ID_UPPER:{printer_name,position}} shape either way, so a consumer
-    that swaps ``config_loader.load_config()['printer_map']`` →
-    ``locations_db.get_active_printer_map()`` is byte-identical on a migrated
-    system and never reads EMPTIER than config during rollout.
+    """L271 Phase 4 consumer entrypoint — the active printer_map for every read
+    consumer. Returns ``{LOCATION_ID_UPPER:{printer_name,position}}`` reconstructed
+    SOLELY from the first-class Printer rows' toolheads[] (via
+    build_printer_map_from_rows).
 
-    Phase 4 step 4 removes the config fallback; this then just returns the
-    row-derived map.
+    Phase 4 step 4 (the cutover, DONE) removed the dual-read config fallback: the
+    Printer rows are now the single source of truth. config:printer_map survives
+    in config.json only as the one-time startup priming seed (it folds into a
+    never-yet-folded row at boot — see migrate_printer_map_to_toolheads_if_needed
+    with prime_only) and as a rollback net; nothing READS it here anymore. A
+    Printer row with no toolheads[] therefore yields an empty entry, not a config
+    read.
     """
-    pm = build_printer_map_from_rows(loc_list)
-    if pm:
-        return pm
-    try:
-        import config_loader  # lazy: avoid a module-load dependency / any cycle
-        return config_loader.load_config().get('printer_map', {}) or {}
-    except Exception:
-        return {}
+    return build_printer_map_from_rows(loc_list)
 
 
 # Recorded printer→room mapping (L271 plan, Derek 2026-06-03). Used ONLY as a

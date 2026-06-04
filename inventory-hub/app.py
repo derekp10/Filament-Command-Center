@@ -292,19 +292,23 @@ try:
 except Exception as _p35_err:
     state.logger.error(f"immediate-parent migration skipped due to error: {_p35_err}")
 
-# L271 Phase 4 (step 1) — fold config.json:printer_map into a `toolheads[]`
-# array on each first-class Type:"Printer" row. DUAL-READ: printer_map stays in
-# config.json as the source of truth for one release; NO consumer reads
-# toolheads[] yet (this is purely additive, like the Phase-1A parent_id
-# backfill). MUST run AFTER the Phase 3 printer-rows migration (it keys off
-# Type:"Printer" rows). Idempotent on second boot (re-syncs only when
-# printer_map changed); timestamped backup before the first write for a
-# prod-restart recovery path.
+# L271 Phase 4 (step 1 → step 4) — fold config.json:printer_map into a
+# `toolheads[]` array on each first-class Type:"Printer" row. MUST run AFTER the
+# Phase 3 printer-rows migration (it keys off Type:"Printer" rows). Timestamped
+# backup before the first write for a prod-restart recovery path.
+#
+# step 4 (the cutover): PRIME-ONLY. The rows are now the single source of truth
+# for edits (the /api/printer_map PUT writes them); config:printer_map survives
+# only as the boot-time priming seed. So this fold may PRIME a never-folded row
+# (a fresh deploy — e.g. prod's first boot after the rows exist but carry no
+# toolheads[] yet) but must NEVER overwrite an already-folded row, or it would
+# revert a UI edit from the now-vestigial config seed on the next reboot.
 try:
     _p4_cfg = config_loader.load_config()
     _p4_pm = _p4_cfg.get('printer_map', {}) or {}
     _p4_locs = locations_db.load_locations_list()
-    _p4_migrated, _p4_changed = locations_db.migrate_printer_map_to_toolheads_if_needed(_p4_locs, _p4_pm)
+    _p4_migrated, _p4_changed = locations_db.migrate_printer_map_to_toolheads_if_needed(
+        _p4_locs, _p4_pm, prime_only=True)
     if _p4_changed:
         try:
             import shutil, time as _t
@@ -2802,10 +2806,20 @@ def _printer_map_blocked_removals(old_map, new_map):
 
 @app.route('/api/printer_map', methods=['PUT'])
 def api_put_printer_map():
-    """L18 Phase 3 — persist an edited printer_map. Adding toolheads + editing
-    name/position is free; removing/renaming a key still referenced by a
-    dryer-box slot or holding spools is BLOCKED (409). Canonicalization + the
-    atomic write live in config_loader.save_printer_map."""
+    """Persist an edited printer_map. Adding toolheads + editing name/position is
+    free; removing/renaming a key still referenced by a dryer-box slot or holding
+    spools is BLOCKED (409).
+
+    L271 Phase 4 (step 4 — the cutover): the printer_map now lives ON the first-
+    class Type:"Printer" rows as toolheads[] in locations.json — NOT in
+    config.json. This handler (1) validates/canonicalizes the edit, (2) runs the
+    referential guard against the ROW-sourced active map, then (3) writes the edit
+    onto the rows as the SOLE persistence: a Type:"Printer" row is created for any
+    brand-new printer, each row's toolheads[] is re-synced from the edited map
+    (positions stored VERBATIM — never auto-renumbered), and each row's Name is
+    synced from the edited printer_name (the row Name is the single source of truth
+    for the display name). config:printer_map is no longer written — it survives
+    only as the boot-time priming seed. Returns {ok, error, printer_map}."""
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         payload = {}
@@ -2813,44 +2827,67 @@ def api_put_printer_map():
     if not isinstance(new_map, dict):
         return jsonify({"ok": False, "error": "printer_map must be an object"}), 400
 
-    old_map = config_loader.load_config().get('printer_map', {}) or {}
-    blocked = _printer_map_blocked_removals(old_map, new_map)
+    # Validate + canonicalize (uppercase keys, require name, position >= 0, reject
+    # case-collisions). Pure validator, no I/O — a bad shape is a client 400.
+    canonical, verr = config_loader._canonicalize_printer_map(new_map)
+    if verr:
+        state.add_log_entry(f"⚙️ Printer-map save failed: {verr}", "ERROR", "ff4444")
+        return jsonify({"ok": False, "error": verr}), 400
+
+    # Referential guard vs the ROW-sourced active map (Step 4: rows are the source
+    # of truth — this was config-sourced during the dual-read window). If the
+    # active map can't be read (locations.json unreadable), FAIL CLOSED with a
+    # retryable 409 rather than risk an unguarded removal.
+    try:
+        old_map = locations_db.get_active_printer_map() or {}
+    except Exception as _read_err:
+        state.logger.warning(f"printer_map guard: could not read active map, failing closed: {_read_err}")
+        reason = "could not read the current printer map (locations unreadable) — refusing"
+        state.add_log_entry(f"⚙️ Printer-map save blocked — {reason}", "ERROR", "ff4444")
+        return jsonify({"ok": False, "error": reason,
+                        "blocked": [{"location_id": "*", "reasons": [reason]}]}), 409
+    blocked = _printer_map_blocked_removals(old_map, canonical)
     if blocked:
         msg = "Can't remove/rename toolhead(s) still in use: " + "; ".join(
             f"{b['location_id']} ({', '.join(b['reasons'])})" for b in blocked)
         state.add_log_entry(f"⚙️ Printer-map save blocked — {msg}", "ERROR", "ff4444")
         return jsonify({"ok": False, "error": msg, "blocked": blocked}), 409
 
-    result = config_loader.save_printer_map(new_map)
-    if result.get('ok'):
-        state.add_log_entry(
-            f"⚙️ Printer map updated ({len(result.get('printer_map') or {})} toolheads)", "INFO")
-        # L271 Phase 3: keep first-class Printer rows in sync with the edited
-        # printer_map so a newly-added printer appears immediately — no reboot.
-        # (The old runtime synthesizer injected printers on every request; that
-        # path is retired, so the migration must run on this write too.)
-        # Idempotent + best-effort; never block the printer_map save on it.
-        try:
-            _pm = result.get('printer_map') or new_map
-            _locs = locations_db.load_locations_list()
-            _locs, _chg_rows = locations_db.migrate_printers_to_rows_if_needed(_locs, _pm)
-            # L271 Phase 4 (step 1): keep each Printer row's toolheads[] in sync
-            # with the edited printer_map too (dual-read window). Runs on the same
-            # loaded list so a single save persists both, and AFTER the rows
-            # migration so a newly-added printer already has its Type:"Printer" row.
-            _locs, _chg_th = locations_db.migrate_printer_map_to_toolheads_if_needed(_locs, _pm)
-            if (_chg_rows or _chg_th) and not locations_db.save_locations_list(_locs):
-                state.logger.error("printer-rows/toolheads sync after printer_map save FAILED to persist.")
-        except Exception as _sync_err:
-            state.logger.warning(f"printer-rows sync after printer_map save skipped: {_sync_err}")
-        return jsonify(result)
-    # Validation errors (all start with "printer_map…") are a client 400; write/IO
-    # faults bubbled from the hardened writer ("config write failed…", "refusing
-    # to save…", "…verify-after-write failed…") are a server 500.
-    err = result.get('error') or ''
-    code = 400 if err.startswith('printer_map') else 500
-    state.add_log_entry(f"⚙️ Printer-map save failed: {err}", "ERROR", "ff4444")
-    return jsonify(result), code
+    # Persist the edit onto the Printer rows AUTHORITATIVELY — this is the only
+    # write now, so a failure to persist is a server 500 (not best-effort).
+    try:
+        _locs = locations_db.load_locations_list()
+        # Create a Type:"Printer" row for any brand-new printer first…
+        _locs, _ = locations_db.migrate_printers_to_rows_if_needed(_locs, canonical)
+        # …then re-sync every Printer row's toolheads[] from the edited map (full
+        # re-sync — NOT prime_only — so an edit actually applies; positions kept
+        # verbatim, no auto-renumber).
+        _locs, _ = locations_db.migrate_printer_map_to_toolheads_if_needed(_locs, canonical)
+        # …and sync each Printer row's Name from the edited printer_name (the row
+        # Name is the single source of truth for the display name, so a rename in
+        # the editor must propagate — neither migration above touches Name).
+        _names_by_prefix = {}
+        for _k, _info in canonical.items():
+            _pfx = _k.split('-', 1)[0] if '-' in _k else _k
+            _names_by_prefix.setdefault(_pfx, _info.get('printer_name', ''))
+        for _row in _locs:
+            if not isinstance(_row, dict) or str(_row.get('Type', '')).strip().lower() != 'printer':
+                continue
+            _pid = str(_row.get('LocationID', '')).strip().upper()
+            _new_name = _names_by_prefix.get(_pid)
+            if _new_name and _row.get('Name') != _new_name:
+                _row['Name'] = _new_name
+        if not locations_db.save_locations_list(_locs):
+            reason = "could not persist the printer rows"
+            state.add_log_entry(f"⚙️ Printer-map save failed: {reason}", "ERROR", "ff4444")
+            return jsonify({"ok": False, "error": reason}), 500
+    except Exception as _write_err:
+        state.logger.error(f"printer_map row write failed: {_write_err}")
+        state.add_log_entry(f"⚙️ Printer-map save failed: {_write_err}", "ERROR", "ff4444")
+        return jsonify({"ok": False, "error": str(_write_err)}), 500
+
+    state.add_log_entry(f"⚙️ Printer map updated ({len(canonical)} toolheads)", "INFO")
+    return jsonify({"ok": True, "error": None, "printer_map": canonical})
 
 
 @app.route('/api/dryer_boxes/slots', methods=['GET'])
