@@ -92,6 +92,69 @@ def test_printer_name_fallback():
     assert zz and zz[0]["Name"] == "ZZ System"
 
 
+def test_collision_non_toolhead_row_is_not_promoted():
+    """Review fix: a non-toolhead row (e.g. a Room) that shares a printer-prefix
+    LocationID must NOT be corrupted into a Printer, and no duplicate appended."""
+    rows = [{"LocationID": "XL", "Type": "Room", "Name": "Lounge", "parent_id": None}]
+    out, changed = locations_db.migrate_printers_to_rows_if_needed(
+        rows, {"XL-1": {"printer_name": "XL", "position": 0}})
+    assert changed is False
+    xl = [r for r in out if r["LocationID"] == "XL"]
+    assert len(xl) == 1 and xl[0]["Type"] == "Room", "the colliding Room must be left untouched"
+
+
+def test_collision_toolhead_plus_other_type_skips():
+    """A prefix with BOTH a toolhead and a conflicting non-toolhead row is
+    ambiguous — skip rather than guess."""
+    rows = [
+        {"LocationID": "XL", "Type": "Room", "Name": "Lounge"},
+        {"LocationID": "XL", "Type": "Tool Head", "Name": "th", "Max Spools": "1"},
+    ]
+    out, changed = locations_db.migrate_printers_to_rows_if_needed(
+        rows, {"XL-1": {"printer_name": "x", "position": 0}})
+    assert changed is False
+    assert not any(r["Type"] == "Printer" for r in out)
+
+
+def test_exact_key_name_wins_over_prefix():
+    """A dash-free exact key wins over a dashed toolhead-prefix match."""
+    pm = {"CORE1-M0": {"printer_name": "WRONG toolhead name", "position": 0},
+          "CORE1": {"printer_name": "🦦 Core One Upgraded", "position": 0}}
+    out, _ = locations_db.migrate_printers_to_rows_if_needed(
+        [{"LocationID": "CORE1", "Type": "Tool Head", "Name": "x", "Max Spools": "1"}], pm)
+    core1 = [r for r in out if r["LocationID"] == "CORE1"][0]
+    assert core1["Name"] == "🦦 Core One Upgraded"
+
+
+def test_multiple_blank_stubs_all_removed():
+    rows = [
+        {"LocationID": "CORE1", "Type": "Tool Head", "Name": "x", "Max Spools": "1"},
+        {"LocationID": "CORE1", "Type": "", "Name": "stub1"},
+        {"LocationID": "CORE1", "Type": "  ", "Name": "stub2"},
+    ]
+    out, changed = locations_db.migrate_printers_to_rows_if_needed(
+        rows, {"CORE1": {"printer_name": "C", "position": 0}})
+    assert changed is True
+    core1 = [r for r in out if r["LocationID"] == "CORE1"]
+    assert len(core1) == 1 and core1[0]["Type"] == "Printer"
+
+
+def test_printer_is_a_valid_slot_container_type():
+    """Review fix: 'Printer' must be an accepted slot-assignment target — a
+    dual-role printer (Core One) is its own deploy slot, else LOC:CORE1:SLOT:1
+    scans 400."""
+    import re
+    m = re.search(r"container_types = \{([^}]*)\}", _read_app())
+    assert m and "'Printer'" in m.group(1), "container_types must include 'Printer'"
+
+
+def test_printer_map_put_resyncs_printer_rows():
+    """Review fix: the /api/printer_map PUT handler must re-run the migration so
+    a newly-added printer becomes first-class without a reboot (the migration is
+    referenced in BOTH the startup block and the PUT handler)."""
+    assert _read_app().count("migrate_printers_to_rows_if_needed") >= 2
+
+
 def test_synthesizer_no_longer_injects_printers():
     """The /api/locations synthesizer must no longer conjure Type:'Printer'
     rows — printers are first-class on disk now. Guards against re-introducing

@@ -257,8 +257,10 @@ try:
             _prune_locations_backups()
         except Exception as _bk_err:
             state.logger.warning(f"Could not write pre-printer-rows-migration backup: {_bk_err}")
-        locations_db.save_locations_list(_p3_migrated)
-        state.logger.info("💾 First-class Printer rows written across locations.json — L271 Phase 3 migration complete.")
+        if locations_db.save_locations_list(_p3_migrated):
+            state.logger.info("💾 First-class Printer rows written across locations.json — L271 Phase 3 migration complete.")
+        else:
+            state.logger.error("❌ L271 Phase 3 printer-rows migration save FAILED — locations.json left unchanged; will retry next boot.")
 except Exception as _p3_err:
     state.logger.error(f"printer-rows migration skipped due to error: {_p3_err}")
 
@@ -2340,7 +2342,10 @@ def api_identify_scan():
         tgt_info = loc_info_map.get(target)
 
         # Validate target exists and is a container type.
-        container_types = {'Dryer Box', 'MMU Slot', 'Tool Head', 'No MMU Direct Load'}
+        # L271 Phase 3: "Printer" is a valid slot target — a dual-role printer
+        # like the Core One IS its own single deploy slot (Type:"Printer",
+        # Max Spools "1"). Without this, LOC:CORE1:SLOT:1 scans would 400.
+        container_types = {'Dryer Box', 'MMU Slot', 'Tool Head', 'No MMU Direct Load', 'Printer'}
         if not tgt_info or tgt_info.get('Type') not in container_types:
             found_type = tgt_info.get('Type') if tgt_info else 'missing'
             state.add_log_entry(
@@ -2705,6 +2710,19 @@ def api_put_printer_map():
     if result.get('ok'):
         state.add_log_entry(
             f"⚙️ Printer map updated ({len(result.get('printer_map') or {})} toolheads)", "INFO")
+        # L271 Phase 3: keep first-class Printer rows in sync with the edited
+        # printer_map so a newly-added printer appears immediately — no reboot.
+        # (The old runtime synthesizer injected printers on every request; that
+        # path is retired, so the migration must run on this write too.)
+        # Idempotent + best-effort; never block the printer_map save on it.
+        try:
+            _pm = result.get('printer_map') or new_map
+            _locs, _chg = locations_db.migrate_printers_to_rows_if_needed(
+                locations_db.load_locations_list(), _pm)
+            if _chg and not locations_db.save_locations_list(_locs):
+                state.logger.error("printer-rows sync after printer_map save FAILED to persist.")
+        except Exception as _sync_err:
+            state.logger.warning(f"printer-rows sync after printer_map save skipped: {_sync_err}")
         return jsonify(result)
     # Validation errors (all start with "printer_map…") are a client 400; write/IO
     # faults bubbled from the hardened writer ("config write failed…", "refusing
