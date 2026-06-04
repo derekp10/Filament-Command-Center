@@ -468,9 +468,13 @@ const _renderLocationsPayload = (d) => {
                     let typeA = '';
                     let typeB = '';
                     
-                    const rootAItem = d.find(l => l.LocationID === rootA);
+                    // L271 Phase 2.5 (review): match case-insensitively. rootA/B
+                    // come from parent_id (uppercased) while a LocationID may be
+                    // mixed-case (a Spoolman-native name or an unnormalized form
+                    // entry). No-op for all-uppercase data.
+                    const rootAItem = d.find(l => String(l.LocationID).toUpperCase() === String(rootA).toUpperCase());
                     if (rootAItem) typeA = rootAItem.Type || '';
-                    const rootBItem = d.find(l => l.LocationID === rootB);
+                    const rootBItem = d.find(l => String(l.LocationID).toUpperCase() === String(rootB).toUpperCase());
                     if (rootBItem) typeB = rootBItem.Type || '';
 
                     let isAPrinter = typeA.includes('Printer');
@@ -561,15 +565,22 @@ const _renderLocationsPayload = (d) => {
                     // (flat first-segment prefix this phase = identical to the
                     // old split; split kept only as a rollout fallback).
                     let parentId = l.parent_id != null ? l.parent_id : (l.LocationID.includes('-') ? l.LocationID.split('-')[0] : l.LocationID);
+                    // Case-insensitive grouping (review): parent_id is uppercased
+                    // but a LocationID may be mixed-case (Spoolman-native name /
+                    // unnormalized form). Uppercase both sides so the child test,
+                    // the loc-child-of-<id> class, and toggleLocNode's selector
+                    // stay consistent. No-op for all-uppercase data.
+                    const parentUC = String(parentId).toUpperCase();
+                    const lidUC = String(l.LocationID).toUpperCase();
                     let isChild = false;
                     let hasChildren = false;
 
                     if (state.locSortBy === 'LocationID') {
                         // A row is a child when its resolved parent differs from
-                        // its own LocationID — exactly equivalent to the old
+                        // its own LocationID — equivalent to the old
                         // LocationID.includes('-') because parentId already folds
                         // in the parent_id field / split fallback.
-                        isChild = (parentId !== l.LocationID) && !['TST','TEST','PM','PJ'].includes(parentId);
+                        isChild = (parentUC !== lidUC) && !['TST','TEST','PM','PJ'].includes(parentUC);
                         if (isChild) {
                             indent = '<span style="display:inline-block; width: 20px; border-left: 2px solid #555; border-bottom: 2px solid #555; height: 16px; margin-right: 8px; margin-bottom: 6px; margin-left: 10px;"></span>';
                         } else {
@@ -586,7 +597,7 @@ const _renderLocationsPayload = (d) => {
                         }
                     }
 
-                    const rowClass = isChild ? `loc-child-of-${parentId}` : '';
+                    const rowClass = isChild ? `loc-child-of-${parentUC}` : '';
 
                     return `
                 <tr class="${rowClass}" id="loc-row-${l.LocationID}">
@@ -634,7 +645,9 @@ window.toggleLocNode = (parentId, btnEl) => {
     const isExpanded = btnEl.innerText === '-';
     // Use .startsWith on ID rather than explicit classes to support deeper nesting dynamically
     // Actually our loc-child-of class is perfect as it targets immediate children implicitly
-    const rows = document.querySelectorAll(`.loc-child-of-${parentId}`);
+    // L271 Phase 2.5 (review): uppercase to match the loc-child-of-<id> class,
+    // which is built from the uppercased parent (parentUC). No-op for uppercase ids.
+    const rows = document.querySelectorAll(`.loc-child-of-${String(parentId).toUpperCase()}`);
     rows.forEach(r => {
         r.style.display = isExpanded ? 'none' : '';
     });

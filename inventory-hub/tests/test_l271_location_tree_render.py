@@ -131,8 +131,10 @@ def test_tree_indent_reads_parent_id():
     bare LocationID.split('-')[0]."""
     js = _read("static", "js", "modules", "inv_core.js")
     assert "l.parent_id != null ? l.parent_id" in js, "parentId must read l.parent_id"
-    assert "isChild = (parentId !== l.LocationID)" in js, \
-        "isChild must derive from the resolved parent, not LocationID.includes('-')"
+    # isChild derives from the resolved parent (case-insensitively, see
+    # test_tree_grouping_is_case_insensitive) — not from LocationID.includes('-').
+    assert "isChild = (parentUC !== lidUC)" in js, \
+        "isChild must derive from the resolved parent (uppercased)"
 
 
 def test_has_children_stays_descendant_query():
@@ -144,3 +146,16 @@ def test_has_children_stays_descendant_query():
     js = _read("static", "js", "modules", "inv_core.js")
     assert "c.LocationID.startsWith(l.LocationID + '-')" in js, \
         "hasChildren must stay a startsWith descendant query until Phase 3"
+
+
+def test_tree_grouping_is_case_insensitive():
+    """Review fix: parent_id is uppercased but a LocationID may be mixed-case
+    (Spoolman-native names / unnormalized form input). The tree grouping must
+    compare case-insensitively so the loc-child-of-<id> class, the isChild test,
+    and toggleLocNode's selector stay consistent."""
+    js = _read("static", "js", "modules", "inv_core.js")
+    assert "const parentUC = String(parentId).toUpperCase()" in js, "parentUC normalization missing"
+    assert "loc-child-of-${parentUC}" in js, "rowClass must use the uppercased parent"
+    assert "String(rootA).toUpperCase()" in js, "sort parent lookup must be case-insensitive"
+    assert "loc-child-of-${String(parentId).toUpperCase()}" in js, \
+        "toggleLocNode selector must uppercase to match the class"
