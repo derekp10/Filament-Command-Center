@@ -25,7 +25,11 @@
             <div class="modal-body p-0">
                 <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-dark">
                     <span id="loc-count" class="text-info fw-bold fcc-loc-count">Loading...</span>
-                    <button class="btn btn-success" onclick="openAddModal()">➕ Add Location</button>
+                    <div class="d-flex gap-2">
+                        <!-- L271 Phase 3.5: float printers to a pinned top group of the tree -->
+                        <button id="loc-pin-printers-btn" class="btn btn-outline-warning" onclick="window.toggleLocPinPrinters()" aria-pressed="false" title="Float printers to the top of the tree for quick access (when sorting by ID)">📌 Pin Printers</button>
+                        <button class="btn btn-success" onclick="openAddModal()">➕ Add Location</button>
+                    </div>
                 </div>
                 <div class="table-responsive max-h-70vh">
                     <table class="table table-dark table-hover mb-0">

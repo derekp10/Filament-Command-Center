@@ -1218,6 +1218,20 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
     per-location detailed lookup AND the bulk bucket_spools_by_location share
     the exact match + ghost (physical_source) logic — no drift between the two
     paths. `target_loc_upper` must already be upper-cased.
+
+    L271 Phase 3.5 (review fix): "what spools are physically AT/under this
+    location" is a LOCATION-STRING query, deliberately distinct from the nested
+    `parent_id` tree (which drives the Location-Manager render, the occupancy
+    rollup, and room resolution). The child match is the FLAT first-segment
+    (`derive_parent_id_from_prefix`), NOT a transitive `is_descendant` walk —
+    this preserves the exact pre-3.5 query behavior on the now-nested tree:
+      • a ROOM query reaches its cart-ROWS (their first segment IS the room) but
+        NOT a nested printer's toolheads (first segment is the printer) — so a
+        room-level clear/delete can't sweep an actively-printing toolhead spool;
+      • a CART query stays DIRECT-only (a row's first segment is the room, not
+        the cart) — so deleting a cart doesn't silently cascade to its rows.
+    The adversarial review (2026-06-04) flagged the transitive variant for
+    enlarging the destructive blast radius and bypassing the active-print guard.
     """
     sloc = (s.get('location') or '').strip()
     extra = s.get('extra', {}) or {}
@@ -1231,11 +1245,7 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
             match = True
     elif sloc.upper() == target_loc_upper:
         match = True
-    # L271 Phase 2: child match via resolve_parent (prefix-fallback this
-    # phase). It returns a dash-free prefix, so a dashed target_loc_upper can
-    # never child-match — folding in the old `"-" not in target_loc_upper`
-    # guard for both the location and the ghost physical_source below.
-    elif locations_db.resolve_parent(sloc) == target_loc_upper:
+    elif locations_db.derive_parent_id_from_prefix(sloc) == target_loc_upper:
         match = True
 
     # 2. [ALEX FIX] Physical Source Match (The Ghost Logic)
@@ -1243,7 +1253,7 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
     p_source_raw = str(extra.get('physical_source', '')).strip().replace('"', '')
     if not match and not check_unassigned:
         p_source = p_source_raw.upper()
-        if p_source == target_loc_upper or locations_db.resolve_parent(p_source) == target_loc_upper:
+        if p_source == target_loc_upper or locations_db.derive_parent_id_from_prefix(p_source) == target_loc_upper:
             match = True
             is_ghost = True
             # Strip quotes from the slot too!
@@ -1343,13 +1353,14 @@ def get_spools_at_location_strict(loc_name):
         sloc = (s.get('location') or '').strip().upper()
         extra = s.get('extra', {}) or {}
         p_source = str(extra.get('physical_source', '')).strip().replace('"', '').upper()
-        # L271 Phase 2: child match via resolve_parent (prefix-fallback this
-        # phase, FK in Phase 5) instead of the old bare/startswith probe.
-        # resolve_parent returns a dash-free prefix, so a dashed target can
-        # never child-match — this folds in the old `bare` guard for free.
+        # L271 Phase 3.5 (review fix): FLAT first-segment child match, matching
+        # _build_location_match — a location-string query, not a transitive
+        # parent_id walk. Keeps this fail-closed safety guard's scope exactly as
+        # pre-3.5 (e.g. a printer key reaches its toolheads; a room does NOT
+        # reach a nested printer's toolheads). See _build_location_match.
         if (sloc == target or p_source == target
-                or locations_db.resolve_parent(sloc) == target
-                or locations_db.resolve_parent(p_source) == target):
+                or locations_db.derive_parent_id_from_prefix(sloc) == target
+                or locations_db.derive_parent_id_from_prefix(p_source) == target):
             ids.append(s['id'])
     return ids
 

@@ -92,6 +92,17 @@ const logClientEvent = (msg, level = 'INFO') => {
 };
 window.logClientEvent = logClientEvent;
 
+// L271 Phase 3.5 (review fix #3): HTML/attribute escape for any user-controlled
+// value interpolated into innerHTML (LocationID + Name come from free-text edit
+// fields and from Spoolman-native location names — stored-XSS sources). Escapes
+// both text and attribute contexts; for JS-string contexts (onclick) we use
+// delegated listeners instead (see scripts.html location-table handler).
+const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+const escAttr = escHtml;
+window.escHtml = escHtml;
+
 const showToast = (msg, type = 'info', duration = 2000) => {
     let c = document.getElementById('toast-container');
     if (!c) { c = document.createElement('div'); c.id = 'toast-container'; document.body.appendChild(c); }
@@ -436,83 +447,130 @@ const _renderLocationsPayload = (d) => {
                 });
             }
 
-            // Apply Sort
-            d.sort((a, b) => {
-                // Ensure Unassigned is always solidly at the top
-                if (a.LocationID === 'Unassigned') return -1;
-                if (b.LocationID === 'Unassigned') return 1;
+            // L271 Phase 3.5 — TRUE multi-level tree. parent_id now stores each
+            // row's IMMEDIATE parent, so the table renders a recursive tree
+            // (room → printer → toolhead, cart → rows) instead of the old flat
+            // 2-level list. Tree mode applies only when sorting by LocationID;
+            // the other sort columns stay a flat sorted list.
+            if (!state.locCollapsed) state.locCollapsed = new Set();
+            const pinPrinters = _readPinPrinters();
+            const upper = (v) => String(v == null ? '' : v).toUpperCase();
+            const isPrinterRow = (r) => String(r.Type || '').toLowerCase() === 'printer';
 
+            // The always-pinned virtual rows live OUTSIDE the tree.
+            const unassignedRow = d.find(l => upper(l.LocationID) === 'UNASSIGNED');
+            const unknownRow = d.find(l => l !== unassignedRow && (upper(l.Type) === 'UNKNOWN' || upper(l.LocationID) === 'UNKNOWN'));
+            const bodyRows = d.filter(l => l !== unassignedRow && l !== unknownRow);
+
+            // Sibling / flat comparator: printers first (LocationID mode), then
+            // by the active column.
+            const cmp = (a, b) => {
+                if (state.locSortBy === 'LocationID') {
+                    const ap = isPrinterRow(a), bp = isPrinterRow(b);
+                    if (ap !== bp) return (ap ? -1 : 1) * state.locSortDir;
+                }
                 let valA = a[state.locSortBy] || '';
                 let valB = b[state.locSortBy] || '';
-
                 if (state.locSortBy === 'Occupancy') {
                     const parseOcc = (v) => {
-                        if (!v || v === '--') return -1;
-                        if (typeof v === 'string') {
-                            const firstPart = v.split('/')[0];
-                            return parseInt(firstPart) || 0;
-                        }
+                        if (v == null || v === '--' || v === '') return -1;
+                        if (typeof v === 'string') return parseInt(v.split('/')[0]) || 0;
                         return v;
                     };
-                    valA = parseOcc(valA);
-                    valB = parseOcc(valB);
-                } else if (state.locSortBy === 'LocationID') {
-                    // Extract tree root for parent-child grouping.
-                    // L271 Phase 2.5: read the parent_id field that /api/locations
-                    // now exposes on every row. It is the flat first-segment
-                    // prefix this phase, so it is identical to the old
-                    // LocationID.split('-')[0]; the split is kept only as a
-                    // rollout fallback for a payload that predates the field.
-                    let rootA = a.parent_id != null ? a.parent_id : (a.LocationID || '').split('-')[0];
-                    let rootB = b.parent_id != null ? b.parent_id : (b.LocationID || '').split('-')[0];
-                    let typeA = '';
-                    let typeB = '';
-                    
-                    // L271 Phase 2.5 (review): match case-insensitively. rootA/B
-                    // come from parent_id (uppercased) while a LocationID may be
-                    // mixed-case (a Spoolman-native name or an unnormalized form
-                    // entry). No-op for all-uppercase data.
-                    const rootAItem = d.find(l => String(l.LocationID).toUpperCase() === String(rootA).toUpperCase());
-                    if (rootAItem) typeA = rootAItem.Type || '';
-                    const rootBItem = d.find(l => String(l.LocationID).toUpperCase() === String(rootB).toUpperCase());
-                    if (rootBItem) typeB = rootBItem.Type || '';
-
-                    let isAPrinter = typeA.includes('Printer');
-                    let isBPrinter = typeB.includes('Printer');
-
-                    if (isAPrinter !== isBPrinter) {
-                        return (isAPrinter ? -1 : 1) * state.locSortDir;
-                    }
-
-                    if (typeof valA === 'string') valA = valA.toLowerCase();
-                    if (typeof valB === 'string') valB = valB.toLowerCase();
+                    valA = parseOcc(a.OccupancyRaw != null ? a.OccupancyRaw : valA);
+                    valB = parseOcc(b.OccupancyRaw != null ? b.OccupancyRaw : valB);
                 } else {
                     if (typeof valA === 'string') valA = valA.toLowerCase();
                     if (typeof valB === 'string') valB = valB.toLowerCase();
                 }
-                
                 if (valA < valB) return -1 * state.locSortDir;
                 if (valA > valB) return 1 * state.locSortDir;
                 return 0;
-            });
+            };
 
-            const finalList = d;
-            state.allLocations = finalList;
+            // Build the display order: tree DFS (LocationID) or flat (others).
+            // Each entry is {row, depth, ancestors:[upperIds], hasKids} or
+            // {divider: label}.
+            const display = [];
+            if (state.locSortBy === 'LocationID') {
+                const byId = new Map();
+                bodyRows.forEach(r => byId.set(upper(r.LocationID), r));
+                const childrenOf = new Map();
+                const roots = [];
+                bodyRows.forEach(r => {
+                    const pid = r.parent_id != null ? upper(r.parent_id) : null;
+                    // A row attaches to its parent UNLESS the parent isn't a real
+                    // row (orphan → root) or pin-mode floats printers to the top.
+                    const attach = pid && byId.has(pid) && !(pinPrinters && isPrinterRow(r));
+                    if (attach) {
+                        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+                        childrenOf.get(pid).push(r);
+                    } else {
+                        roots.push(r);
+                    }
+                });
+                const visited = new Set();
+                const visit = (row, depth, ancestors) => {
+                    const id = upper(row.LocationID);
+                    if (visited.has(id)) return;  // cycle / dup guard
+                    visited.add(id);
+                    const kids = (childrenOf.get(id) || []).slice().sort(cmp);
+                    display.push({ row, depth, ancestors, hasKids: kids.length > 0 });
+                    const childAnc = ancestors.concat([id]);
+                    kids.forEach(k => visit(k, depth + 1, childAnc));
+                };
+                if (pinPrinters) {
+                    const printerRoots = roots.filter(isPrinterRow).sort(cmp);
+                    const otherRoots = roots.filter(r => !isPrinterRow(r)).sort(cmp);
+                    if (printerRoots.length) {
+                        display.push({ divider: '🖨️ Printers' });
+                        printerRoots.forEach(r => visit(r, 0, []));
+                        display.push({ divider: '📍 Rooms & Storage' });
+                    }
+                    otherRoots.forEach(r => visit(r, 0, []));
+                } else {
+                    roots.sort(cmp).forEach(r => visit(r, 0, []));
+                }
+                // Safety net: a cycle would orphan its members from every root.
+                // Append anything unvisited as a flat root so no row vanishes.
+                bodyRows.forEach(r => { if (!visited.has(upper(r.LocationID))) visit(r, 0, []); });
+            } else {
+                bodyRows.slice().sort(cmp).forEach(r => display.push({ row: r, depth: 0, ancestors: [] }));
+            }
 
-            // --- NO WIGGLE CHECK ---
-            const contentHash = JSON.stringify(finalList) + "|" + state.locSortBy + "|" + state.locSortDir;
-            if (state.lastLocationsHash === contentHash) return;
+            // Assemble: Unassigned (top) → body → UNKNOWN (bottom).
+            const ordered = [];
+            if (unassignedRow) ordered.push({ row: unassignedRow, depth: 0, ancestors: [] });
+            ordered.push(...display);
+            if (unknownRow) ordered.push({ row: unknownRow, depth: 0, ancestors: [] });
+
+            const rowOnly = ordered.filter(e => e.row).map(e => e.row);
+            state.allLocations = rowOnly;
+
+            // L271 Phase 3.5 (review fix #15): prune collapse state to live parent
+            // nodes so a deleted/renamed id can't resurrect as collapsed on a
+            // later row that reuses the same id.
+            const _liveParents = new Set(display.filter(e => e.hasKids).map(e => upper(e.row.LocationID)));
+            state.locCollapsed = new Set([...state.locCollapsed].filter(id => _liveParents.has(id)));
+
+            // --- NO WIGGLE CHECK (include tree-affecting UI state) ---
+            const contentHash = JSON.stringify(rowOnly) + "|" + state.locSortBy + "|" + state.locSortDir + "|pin:" + pinPrinters;
+            if (state.lastLocationsHash === contentHash) { applyLocCollapse(); _syncPinPrintersBtn(); return; }
             state.lastLocationsHash = contentHash;
             // -----------------------
 
             // 2. Update Total Count with Pop Style
             const countEl = document.getElementById('loc-count');
-            // Subtract 1 for Unassigned so it doesn't inflate the Physical box count
-            if (countEl) countEl.innerText = "Total Locations: " + (finalList.length > 0 ? finalList.length - 1 : 0);
+            // Subtract the virtual Unassigned/UNKNOWN so they don't inflate the count.
+            if (countEl) countEl.innerText = "Total Locations: " + Math.max(0, rowOnly.length - (unassignedRow ? 1 : 0) - (unknownRow ? 1 : 0));
 
             const table = document.getElementById('location-table');
             if (table) {
-                table.innerHTML = finalList.map(l => {
+                table.innerHTML = ordered.map(entry => {
+                    if (entry.divider) {
+                        return `<tr class="loc-divider"><td colspan="5" style="background:#15151f; color:#9aa; font-weight:800; letter-spacing:1px; padding:6px 14px; border-top:2px solid #444; border-bottom:1px solid #2a2a3a; font-size:0.8rem; text-transform:uppercase;">${entry.divider}</td></tr>`;
+                    }
+                    const l = entry.row;
                     // 3. Status Pop Logic (Red/Green/White)
                     let statusHtml = '';
                     let occColor = '#fff'; // Default White (Under Capacity)
@@ -558,64 +616,98 @@ const _renderLocationsPayload = (d) => {
                     // stands out at the bottom of the table.
                     else if (t.includes('Unknown')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #ffd54a; box-shadow: 0 0 6px rgba(255,193,7,0.6);'; }
 
-                    const typeBadge = `<span class="badge ${badgeClass}" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
+                    const typeBadge = `<span class="badge ${badgeClass}" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${escHtml(l.Type)}</span>`;
 
+                    // L271 Phase 3.5: depth-based indent + a real expand/collapse
+                    // toggle driven by the tree (entry.hasKids), replacing the
+                    // flat startsWith descendant probe. data-locid + data-ancestors
+                    // let applyLocCollapse() hide a whole subtree when any ancestor
+                    // is collapsed (nested collapse), independent of re-renders.
+                    const lidUC = upper(l.LocationID);
+                    const depth = entry.depth || 0;
+                    const hasKids = !!entry.hasKids;
                     let indent = '';
-                    // L271 Phase 2.5: resolve the tree root from row.parent_id
-                    // (flat first-segment prefix this phase = identical to the
-                    // old split; split kept only as a rollout fallback).
-                    let parentId = l.parent_id != null ? l.parent_id : (l.LocationID.includes('-') ? l.LocationID.split('-')[0] : l.LocationID);
-                    // Case-insensitive grouping (review): parent_id is uppercased
-                    // but a LocationID may be mixed-case (Spoolman-native name /
-                    // unnormalized form). Uppercase both sides so the child test,
-                    // the loc-child-of-<id> class, and toggleLocNode's selector
-                    // stay consistent. No-op for all-uppercase data.
-                    const parentUC = String(parentId).toUpperCase();
-                    const lidUC = String(l.LocationID).toUpperCase();
-                    let isChild = false;
-                    let hasChildren = false;
-
                     if (state.locSortBy === 'LocationID') {
-                        // A row is a child when its resolved parent differs from
-                        // its own LocationID — equivalent to the old
-                        // LocationID.includes('-') because parentId already folds
-                        // in the parent_id field / split fallback.
-                        isChild = (parentUC !== lidUC) && !['TST','TEST','PM','PJ'].includes(parentUC);
-                        if (isChild) {
-                            indent = '<span style="display:inline-block; width: 20px; border-left: 2px solid #555; border-bottom: 2px solid #555; height: 16px; margin-right: 8px; margin-bottom: 6px; margin-left: 10px;"></span>';
+                        const pad = depth * 22;
+                        let knob;
+                        if (hasKids) {
+                            // L271 Phase 3.5 (review fix #3): no inline onclick — the
+                            // toggle is delegated off .loc-toggle + the row's data-locid
+                            // (see scripts.html), so a quote in a LocationID can't break
+                            // out into script.
+                            knob = `<span class="loc-toggle" title="Collapse / expand" style="cursor:pointer; font-family: monospace; border: 1px solid #555; border-radius: 3px; padding: 0 4px; margin-right: 6px; color:#aaa; background:#222; user-select:none; font-size:1rem; box-shadow:inset 0 0 3px #000;">-</span>`;
+                        } else if (depth > 0) {
+                            knob = `<span style="display:inline-block; width: 20px; border-left: 2px solid #555; border-bottom: 2px solid #555; height: 16px; margin-right: 8px; margin-bottom: 6px;"></span>`;
                         } else {
-                            // L271 Phase 2.5: hasChildren stays a startsWith
-                            // descendant query — NOT a parent_id check. parent_id
-                            // is the flat first-segment prefix this phase, and
-                            // synthesized descendant rows carry parent_id:null, so
-                            // a parent_id-equality test would diverge here. This
-                            // migrates in Phase 3 when hierarchy becomes truly nested.
-                            hasChildren = finalList.some(c => c.LocationID !== l.LocationID && c.LocationID.startsWith(l.LocationID + '-'));
-                            if (hasChildren && !['TST','TEST','PM','PJ'].includes(l.LocationID)) {
-                                indent = `<span onclick="window.toggleLocNode('${l.LocationID}', this)" style="cursor:pointer; font-family: monospace; border: 1px solid #555; border-radius: 3px; padding: 0 4px; margin-right: 6px; color:#aaa; background:#222; user-select:none; font-size:1rem; box-shadow:inset 0 0 3px #000;" class="text-pop-light">-</span>`;
-                            }
+                            knob = `<span style="display:inline-block; width: 22px;"></span>`;
                         }
+                        indent = `<span style="display:inline-block; width:${pad}px;"></span>${knob}`;
                     }
 
-                    const rowClass = isChild ? `loc-child-of-${parentUC}` : '';
+                    // L271 Phase 3.5 (review fix #3/#8): JSON-encode the ancestor
+                    // chain (escaped for the attribute) so a LocationID containing a
+                    // space — Spoolman-native names can — survives round-trip
+                    // (split(' ') would have shredded it), and a quote can't break the
+                    // attribute. Every interpolated user value is escaped (stored XSS
+                    // via Name / LocationID).
+                    const ancAttr = escAttr(JSON.stringify(entry.ancestors || []));
+                    const lidEsc = escAttr(l.LocationID);
 
                     return `
-                <tr class="${rowClass}" id="loc-row-${l.LocationID}">
-                    <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem; white-space: nowrap;">${indent}${l.LocationID}</td>
-                    <td class="col-name text-pop-light" style="font-weight:800; font-size:1.1rem; color:#fff;">${l.Name}</td>
+                <tr data-locid="${escAttr(lidUC)}" data-ancestors="${ancAttr}" id="loc-row-${lidEsc}">
+                    <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem; white-space: nowrap;">${indent}${escHtml(l.LocationID)}</td>
+                    <td class="col-name text-pop-light" style="font-weight:800; font-size:1.1rem; color:#fff;">${escHtml(l.Name)}</td>
                     <td class="col-type">${typeBadge}</td>
                     <td class="col-status">${statusHtml}</td>
                     <td class="col-actions text-end" style="white-space: nowrap;">
-                        <button class="btn btn-sm btn-outline-light me-1 btn-qr" onclick="window.showGlobalQrModal('${l.LocationID}')" title="Show QR">📱 QR</button>
+                        <button class="btn btn-sm btn-outline-light me-1 btn-qr" data-id="${lidEsc}" title="Show QR">📱 QR</button>
                         ${l.Type !== 'Virtual' ? `
-                        <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${l.LocationID}">✏️</button>
-                        <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${l.LocationID}">🗑️</button>
+                        <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>
+                        <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>
                         ` : ''}
-                        <button class="btn btn-sm btn-info btn-manage fw-bold" data-id="${l.LocationID}">Manage</button>
+                        <button class="btn btn-sm btn-info btn-manage fw-bold" data-id="${lidEsc}">Manage</button>
                     </td>
                 </tr>`;
                 }).join('');
+                applyLocCollapse();
+                _syncPinPrintersBtn();
             }
+};
+
+// L271 Phase 3.5 — pin-printers-to-top toggle (persisted, per the
+// pre-Config-system localStorage convention). When ON, printer subtrees float
+// to a pinned group at the top of the Location Manager tree for quick access.
+const PIN_PRINTERS_KEY = 'fcc.locMgr.pinPrintersTop';
+const _readPinPrinters = () => {
+    try { return localStorage.getItem(PIN_PRINTERS_KEY) === '1'; } catch (_) { return false; }
+};
+const _syncPinPrintersBtn = () => {
+    const btn = document.getElementById('loc-pin-printers-btn');
+    if (!btn) return;
+    const on = _readPinPrinters();
+    // L271 Phase 3.5 (review fix #16): pin only affects the LocationID tree
+    // view. In any other sort, disable + grey the button (and don't show the
+    // lit "Pinned" state) so it isn't a confusing no-op.
+    const treeMode = state.locSortBy === 'LocationID';
+    btn.disabled = !treeMode;
+    btn.style.opacity = treeMode ? '' : '0.5';
+    btn.title = treeMode
+        ? 'Float printers to the top of the tree for quick access'
+        : 'Sort by ID to pin printers';
+    const lit = on && treeMode;
+    btn.classList.toggle('active', lit);
+    btn.classList.toggle('btn-warning', lit);
+    btn.classList.toggle('btn-outline-warning', !lit);
+    btn.setAttribute('aria-pressed', lit ? 'true' : 'false');
+    btn.innerHTML = on ? '📌 Printers Pinned' : '📌 Pin Printers';
+};
+window.toggleLocPinPrinters = () => {
+    if (state.locSortBy !== 'LocationID') return;  // no-op outside the tree view
+    const next = _readPinPrinters() ? '0' : '1';
+    try { localStorage.setItem(PIN_PRINTERS_KEY, next); } catch (_) { /* private mode */ }
+    state.lastLocationsHash = null;  // force a full re-render (tree shape changes)
+    _syncPinPrintersBtn();
+    fetchLocations();
 };
 
 const fetchLocations = () => {
@@ -641,24 +733,38 @@ window.sortLocations = (col) => {
     fetchLocations();
 };
 
-window.toggleLocNode = (parentId, btnEl) => {
-    const isExpanded = btnEl.innerText === '-';
-    // Use .startsWith on ID rather than explicit classes to support deeper nesting dynamically
-    // Actually our loc-child-of class is perfect as it targets immediate children implicitly
-    // L271 Phase 2.5 (review): uppercase to match the loc-child-of-<id> class,
-    // which is built from the uppercased parent (parentUC). No-op for uppercase ids.
-    const rows = document.querySelectorAll(`.loc-child-of-${String(parentId).toUpperCase()}`);
-    rows.forEach(r => {
-        r.style.display = isExpanded ? 'none' : '';
+// L271 Phase 3.5: nested collapse. State lives in state.locCollapsed (a Set of
+// uppercased LocationIDs) so it survives the periodic re-render. A row is hidden
+// when ANY of its ancestors is collapsed — so collapsing a room hides its
+// printer AND that printer's toolheads, and re-expanding the room restores each
+// descendant to its own collapsed/expanded state. function-declared (hoisted)
+// so _renderLocationsPayload can call it regardless of source order.
+function applyLocCollapse() {
+    if (!state.locCollapsed) state.locCollapsed = new Set();
+    const collapsed = state.locCollapsed;
+    document.querySelectorAll('#location-table tr[data-locid]').forEach(tr => {
+        // L271 Phase 3.5 (review fix #8): ancestors are JSON-encoded so a
+        // LocationID containing a space round-trips intact (a space delimiter
+        // would have split it and broken collapse).
+        let anc = [];
+        try { anc = JSON.parse(tr.dataset.ancestors || '[]'); } catch (_) { anc = []; }
+        tr.style.display = anc.some(a => collapsed.has(a)) ? 'none' : '';
+        const btn = tr.querySelector('.loc-toggle');
+        if (btn) {
+            const isColl = collapsed.has(tr.dataset.locid);
+            btn.textContent = isColl ? '+' : '-';
+            btn.style.color = isColl ? '#fff' : '#aaa';
+            btn.style.background = isColl ? '#444' : '#222';
+        }
     });
-    btnEl.innerText = isExpanded ? '+' : '-';
-    if(isExpanded) {
-        btnEl.style.color = '#fff';
-        btnEl.style.background = '#444';
-    } else {
-        btnEl.style.color = '#aaa';
-        btnEl.style.background = '#222';
-    }
+}
+
+window.toggleLocNode = (locId) => {
+    if (!state.locCollapsed) state.locCollapsed = new Set();
+    const id = String(locId).toUpperCase();
+    if (state.locCollapsed.has(id)) state.locCollapsed.delete(id);
+    else state.locCollapsed.add(id);
+    applyLocCollapse();
 };
 
 window.showGlobalQrModal = (locId) => {

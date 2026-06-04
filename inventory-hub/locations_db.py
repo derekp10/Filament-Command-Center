@@ -351,6 +351,118 @@ def resolve_parent(row_or_id, loc_list=None):
     return derive_parent_id_from_prefix(row_or_id)
 
 
+# Prefixes that are NOT real rooms — the prefix-derivation can produce them, but
+# they must never be treated as a room (no virtual room, no room rollup, no eject
+# "return to room"). PM = Polymaker portable boxes, PJ = Project carts, TST/TEST
+# = system tests. Single source of truth for the exclusion list that was
+# previously inlined in app.py / logic.py / inv_core.js.
+PSEUDO_ROOM_PREFIXES = frozenset({"TST", "TEST", "PM", "PJ"})
+
+
+def build_parent_map(loc_list=None):
+    """Return {LocationID_upper: parent_id_upper_or_None} for fast repeated
+    hierarchy walks (is_descendant / resolve_room) without re-reading disk per
+    call. Honors explicit parent_id via resolve_parent (with prefix fallback).
+    Callers in per-spool loops should build this ONCE and pass it down.
+    """
+    if loc_list is None:
+        loc_list = load_locations_list()
+    pmap = {}
+    for r in loc_list:
+        if not isinstance(r, dict):
+            continue
+        lid = str(r.get('LocationID', '')).strip().upper()
+        if not lid:
+            continue
+        pmap[lid] = resolve_parent(r)  # immediate parent (upper) or None
+    return pmap
+
+
+def _parent_of(loc_upper, parent_map):
+    """One hop up the hierarchy for an already-uppercased LocationID. Uses the
+    on-disk parent_map when the id is a known row; falls back to prefix
+    derivation for an id with no row (a spool sitting at a not-yet-created
+    LocationID, or a pseudo-prefix ancestor).
+    """
+    if loc_upper in parent_map:
+        return parent_map[loc_upper]
+    return derive_parent_id_from_prefix(loc_upper)
+
+
+def is_descendant(child, ancestor, parent_map=None, loc_list=None):
+    """True if `child` sits STRICTLY beneath `ancestor` anywhere in the
+    parent_id chain (self does NOT count — callers test exact equality
+    separately). Both compared upper-cased. Cycle-guarded.
+
+    Phase 3.5: replaces the flat ``resolve_parent(child) == ancestor`` child
+    test. On a 2-level tree this reduces to the old single-hop equality (a
+    row's only ancestor IS its first-segment parent); on a nested tree it
+    walks the full chain so a room query reaches its cart-rows / a printer's
+    toolheads.
+    """
+    child_u = str(child or '').strip().upper()
+    anc_u = str(ancestor or '').strip().upper()
+    if not child_u or not anc_u or child_u == anc_u:
+        return False
+    if parent_map is None:
+        parent_map = build_parent_map(loc_list)
+    seen = {child_u}
+    cur = _parent_of(child_u, parent_map)
+    while cur and cur not in seen:
+        if cur == anc_u:
+            return True
+        seen.add(cur)
+        cur = _parent_of(cur, parent_map)
+    return False
+
+
+def resolve_room(row_or_id, parent_map=None, loc_list=None):
+    """Walk the parent_id chain up to the TOP-LEVEL ancestor (the room) and
+    return its LocationID (upper-cased). Returns "" when the input is empty.
+
+    Phase 3.5: with parent_id storing the IMMEDIATE parent, a deeply-nested
+    row's room is its topmost ancestor, not its direct parent — e.g.
+    ``CR-CT-1-R1`` → CR-CT-1 → CR. A top-level input (a room/printer root)
+    returns itself. Cycle-guarded. Pseudo-prefix exclusion (PM/PJ/TST) is the
+    CALLER's contract (see get_room_from_location), not applied here.
+    """
+    if isinstance(row_or_id, dict):
+        start = str(row_or_id.get('LocationID', '')).strip().upper()
+    else:
+        start = str(row_or_id or '').strip().upper()
+    if not start:
+        return ""
+    if parent_map is None:
+        parent_map = build_parent_map(loc_list)
+    seen = {start}
+    top = start
+    cur = _parent_of(start, parent_map)
+    while cur and cur not in seen:
+        top = cur
+        seen.add(cur)
+        cur = _parent_of(cur, parent_map)
+    return top
+
+
+def ancestors_of(loc_id, parent_map, include_pseudo=False):
+    """Yield each ancestor LocationID (immediate-first) by walking the parent_id
+    chain upward. Stops BEFORE a pseudo-prefix (PM/PJ/TST) unless include_pseudo
+    is True — so a spool in a PM box never rolls up into a "PM room". Cycle
+    -guarded. Used by the /api/locations transitive subtree-occupancy rollup.
+    """
+    cur = str(loc_id or '').strip().upper()
+    if not cur:
+        return
+    seen = {cur}
+    nxt = _parent_of(cur, parent_map)
+    while nxt and nxt not in seen:
+        if not include_pseudo and nxt in PSEUDO_ROOM_PREFIXES:
+            return
+        yield nxt
+        seen.add(nxt)
+        nxt = _parent_of(nxt, parent_map)
+
+
 def migrate_parent_ids_if_needed(loc_list):
     """One-time backfill: every row gets a `parent_id` field derived from
     its LocationID prefix (or None for top-level rows). Idempotent — skips
@@ -517,6 +629,162 @@ def migrate_printers_to_rows_if_needed(loc_list, printer_map):
             loc_list[:] = [r for r in loc_list if r is not b]
             changed = True
             state.logger.info(f"🧹 Removed duplicate blank-Type row for {pid}")
+
+    return loc_list, changed
+
+
+# Recorded printer→room mapping (L271 plan, Derek 2026-06-03). Used ONLY as a
+# fallback when a printer's room can't be auto-derived from a toolhead child's
+# Location field — e.g. CORE1 is a dual-role printer with no toolhead children
+# and no Location of its own. XL is here too as a belt-and-suspenders, but it
+# auto-derives from its XL-* toolheads ("Living Room" → LR).
+PRINTER_ROOM_OVERRIDES = {"XL": "LR", "CORE1": "CR"}
+
+
+def _immediate_parent_from_rows(loc_id, existing_upper):
+    """The IMMEDIATE parent of a LocationID = the longest dash-trimmed prefix
+    that exists as a real on-disk row. ``CR-CT-1-R1`` → ``CR-CT-1`` (a real
+    cart) rather than the flat first-segment ``CR``. Returns None when no
+    ancestor prefix is a row (caller falls back to the flat first-segment so a
+    PM/PJ/TST box keeps pointing at its virtual-room prefix).
+    """
+    s = str(loc_id or '').strip().upper()
+    if '-' not in s:
+        return None
+    parts = s.split('-')
+    for i in range(len(parts) - 1, 0, -1):
+        cand = '-'.join(parts[:i])
+        if cand in existing_upper:
+            return cand
+    return None
+
+
+def immediate_parent_for(loc_id, loc_list=None):
+    """Public: the IMMEDIATE parent_id for a LocationID against the current
+    on-disk rows — the longest existing-row prefix, falling back to the flat
+    first-segment when no ancestor row exists. Used by api_save_location so a
+    freshly created/edited row carries its immediate parent right away (not
+    only after the next startup migration). Pass loc_list with the row's own
+    (old) id excluded so an edit can't make a row its own parent.
+    """
+    if loc_list is None:
+        loc_list = load_locations_list()
+    existing_upper = {
+        str(r.get('LocationID', '')).strip().upper()
+        for r in loc_list
+        if isinstance(r, dict) and str(r.get('LocationID', '')).strip()
+    }
+    return _immediate_parent_from_rows(loc_id, existing_upper) or derive_parent_id_from_prefix(loc_id)
+
+
+def _derive_printer_room(printer_row, loc_list, room_by_name):
+    """Best-effort room LocationID for a Printer row. Order:
+      1. the printer's own `Location` field matched to a Room row's Name;
+      2. a toolhead child's `Location` field (XL-* carry "Living Room" → LR);
+      3. the recorded PRINTER_ROOM_OVERRIDES fallback (CORE1 → CR).
+    Returns None when nothing resolves (caller leaves parent_id unchanged + warns).
+    """
+    pid = str(printer_row.get('LocationID', '')).strip().upper()
+
+    own_loc = str(printer_row.get('Location', '')).strip().upper()
+    if own_loc and own_loc in room_by_name:
+        return room_by_name[own_loc]
+
+    for r in loc_list:
+        if not isinstance(r, dict):
+            continue
+        if str(r.get('Type', '')).strip() not in TOOLHEAD_TYPES:
+            continue
+        rid = str(r.get('LocationID', '')).strip().upper()
+        if not rid.startswith(pid + '-'):
+            continue
+        loc = str(r.get('Location', '')).strip().upper()
+        if loc and loc in room_by_name:
+            return room_by_name[loc]
+
+    return PRINTER_ROOM_OVERRIDES.get(pid)
+
+
+def migrate_immediate_parent_ids_if_needed(loc_list):
+    """L271 Phase 3.5: re-derive every row's `parent_id` from the flat
+    first-segment (Phase 1A/2.5) to its IMMEDIATE parent, and nest printers
+    under their room — so the tree is genuinely multi-level (room→printer→
+    toolhead, cart→cart-rows) instead of flat-2-level.
+
+    - Non-printer row → `_immediate_parent_from_rows(lid)` (longest on-disk
+      prefix), falling back to the flat first-segment when no ancestor row
+      exists (keeps PM/PJ/TST boxes on their virtual-room prefix).
+    - Printer row (`Type:"Printer"`) → its room via `_derive_printer_room`.
+      A resolved room with no on-disk Room row is rejected (warn, leave as-is).
+    - **Idempotent + respects operator overrides:** a row is re-parented ONLY
+      when its current `parent_id` still equals its OLD default
+      (`derive_parent_id_from_prefix`, i.e. the flat value the earlier
+      migrations wrote) AND the new target differs. A row already at its
+      immediate target, or carrying a deliberate value that differs from both,
+      is left untouched. So the 2nd boot is a no-op (changed=False), and a hand
+      re-parent is never clobbered. A pre-1A row with no `parent_id` key at all
+      gets the immediate target outright.
+
+    Returns (mutated_list, changed_bool). Pure locations.json transform.
+    """
+    if not isinstance(loc_list, list):
+        return loc_list, False
+
+    existing_upper = {
+        str(r.get('LocationID', '')).strip().upper()
+        for r in loc_list
+        if isinstance(r, dict) and str(r.get('LocationID', '')).strip()
+    }
+    room_by_name = {}
+    for r in loc_list:
+        if isinstance(r, dict) and str(r.get('Type', '')).strip().lower() == 'room':
+            nm = str(r.get('Name', '')).strip().upper()
+            rid = str(r.get('LocationID', '')).strip().upper()
+            if nm and rid:
+                room_by_name.setdefault(nm, rid)
+
+    changed = False
+    for row in loc_list:
+        if not isinstance(row, dict):
+            continue
+        lid = str(row.get('LocationID', '')).strip()
+        if not lid:
+            continue
+
+        if str(row.get('Type', '')).strip().lower() == 'printer':
+            target = _derive_printer_room(row, loc_list, room_by_name)
+            # Review fix #6: leave parent_id unchanged when the room can't be
+            # resolved (None) OR resolves to a non-existent row. Without the
+            # `target is None` arm, a DASHED printer id carrying the flat default
+            # (e.g. an imported 'LR-P1' with parent_id='LR') would fall through
+            # and get orphaned to None. dash-free printers (XL/CORE1) are
+            # unaffected (their old_default is already None).
+            if target is None or target not in existing_upper:
+                state.logger.warning(
+                    f"⚠️ Printer {lid}: room could not be resolved to an on-disk Room row "
+                    f"(target={target!r}); leaving parent_id unchanged."
+                )
+                continue
+        else:
+            target = _immediate_parent_from_rows(lid, existing_upper) or derive_parent_id_from_prefix(lid)
+
+        old_default = derive_parent_id_from_prefix(lid)  # the flat value Phase 1A/2.5 wrote
+
+        if 'parent_id' not in row:
+            # Pre-1A row that never got backfilled — set the immediate target now.
+            row['parent_id'] = target
+            changed = True
+            state.logger.info(f"🪜 parent_id set (immediate): {lid} → {target!r}")
+            continue
+
+        cur = row.get('parent_id')
+        cur_norm = None if cur in (None, '') else str(cur).strip().upper()
+
+        # Only re-derive rows still carrying the OLD flat default; respect overrides.
+        if cur_norm == old_default and cur_norm != target:
+            row['parent_id'] = target
+            changed = True
+            state.logger.info(f"🪜 Re-parented {lid}: {cur_norm!r} → {target!r}")
 
     return loc_list, changed
 

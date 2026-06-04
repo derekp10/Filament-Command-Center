@@ -266,24 +266,28 @@ def test_parent_id_is_string_or_none_after_migration(locations_data):
         )
 
 
-def test_parent_id_matches_prefix_for_pre_migration_rows(locations_data):
-    """For any row whose parent_id was derived (not operator-set), the
-    value must equal the LocationID prefix. Cross-check that catches a
-    drift between the migration logic and the prefix-parsing fallback
-    that remaining consumers still use during Phases 1B/2."""
+def test_parent_id_is_immediate_parent_fixpoint(locations_data):
+    """L271 Phase 3.5: parent_id is now each row's IMMEDIATE parent (cart-row →
+    cart) and printers nest under their room — NOT the flat first-segment of
+    Phase 1A. The committed locations.json must be at the immediate-parent
+    *fixpoint*: re-running the Phase 3.5 migration makes no change. Also: every
+    non-null parent_id points to a real row or a known pseudo-prefix (no
+    dangling FKs)."""
+    import copy
     _, data = locations_data
-    migrated, _ = locations_db.migrate_parent_ids_if_needed(list(data))
-    for row in migrated:
+    _, changed = locations_db.migrate_immediate_parent_ids_if_needed(copy.deepcopy(list(data)))
+    assert not changed, (
+        "committed locations.json is not at the immediate-parent fixpoint — "
+        "the Phase 3.5 migration would still re-parent rows."
+    )
+    ids = {str(r.get("LocationID", "")).upper() for r in data if isinstance(r, dict)}
+    pseudo = locations_db.PSEUDO_ROOM_PREFIXES
+    for row in data:
         if not isinstance(row, dict):
             continue
-        loc_id = row.get("LocationID")
-        if not isinstance(loc_id, str):
-            continue
-        expected = locations_db.derive_parent_id_from_prefix(loc_id)
-        actual = row.get("parent_id")
-        assert actual == expected, (
-            f"row LocationID={loc_id!r} has parent_id={actual!r} but "
-            f"prefix derivation expects {expected!r}. If this row was "
-            "operator-edited, that's fine — but the committed file should "
-            "match prefix-derivation in Phase 1A."
-        )
+        pid = row.get("parent_id")
+        if pid:
+            pu = str(pid).upper()
+            assert pu in ids or pu in pseudo, (
+                f"row LocationID={row.get('LocationID')!r} has dangling parent_id={pid!r}"
+            )

@@ -790,19 +790,22 @@ def get_room_from_location(loc_id):
     if "-" not in loc_id:
         return ""
 
-    # L271 Phase 2: derive the parent via the single hierarchy resolver
-    # instead of an inline loc_id.split("-")[0]. resolve_parent still falls
-    # back to prefix-parsing in this phase, so the result is byte-identical
-    # to the old split until Phase 5 retires the fallback — this just routes
-    # the central room-deriver through the abstraction.
-    prefix = locations_db.resolve_parent(loc_id) or ""
+    # L271 Phase 3.5: walk to the TOP-LEVEL room. `parent_id` now stores each
+    # row's IMMEDIATE parent, so resolve_parent (a single hop) no longer reaches
+    # the room for a nested row (cart-row -> cart, toolhead -> printer);
+    # resolve_room walks the chain to the topmost ancestor. On the pre-3.5 flat
+    # tree this is byte-identical to the old single-hop split (a dashed row's
+    # only ancestor IS its first-segment room). After the immediate-parent
+    # migration, a toolhead's room correctly resolves to the printer's room
+    # (XL-1 -> XL -> LR) instead of stopping at the printer.
+    room = locations_db.resolve_room(loc_id) or ""
 
     # Exclude known non-room prefixes we don't want to spawn virtual rooms for
-    # PM = Polymaker portable boxes, PJ = Project Carts, TST = System Tests
-    if prefix in ["TST", "TEST", "PM", "PJ"]:
+    # PM = Polymaker portable boxes, PJ = Project Carts, TST = System Tests.
+    if room in locations_db.PSEUDO_ROOM_PREFIXES:
         return ""
-            
-    return prefix
+
+    return room
 
 def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print=False):
     """Remove `spool_id` from its current location.
@@ -890,15 +893,17 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
     # [ALEX FIX] Room hierarchy bypass
     # If we are currently floating in a room, and the saved_source is a CHILD of this room,
     # we NEVER bounce back down to the child box. We break the loop and eject to Unassigned.
-    # L271 Phase 2: "is saved_source a child of current_location" via the
-    # hierarchy resolver instead of an inline startswith(current + "-").
-    # resolve_parent falls back to prefix parsing this phase, so for the
-    # room-floating case (current_location is a dash-free room) this is
-    # exactly the old startswith — it just reads the relationship through
-    # the single deriver and matches the comment's "immediate CHILD" intent.
+    # L271 Phase 3.5: "is saved_source anywhere BENEATH current_location" via
+    # is_descendant instead of a single-hop resolve_parent equality. parent_id
+    # now stores the immediate parent, so a one-hop check would only catch a
+    # DIRECT child — but a saved_source can be a grandchild of the room we're
+    # floating in (room -> cart -> cart-row). is_descendant walks the chain so
+    # the loop-break fires for the whole subtree. On the pre-3.5 flat tree this
+    # reduces to the old single-hop equality (a row's only ancestor is its
+    # first-segment room), so it's byte-identical until the data flip.
     if current_location and saved_source:
-        if locations_db.resolve_parent(saved_source.strip('"')) == current_location:
-            state.logger.info(f"🛑 Bypassing Saved Source: {saved_source} is a child of {current_location}. Ejecting to Unassigned.")
+        if locations_db.is_descendant(saved_source.strip('"'), current_location):
+            state.logger.info(f"🛑 Bypassing Saved Source: {saved_source} is inside {current_location}. Ejecting to Unassigned.")
             saved_source = None
 
     if saved_source:

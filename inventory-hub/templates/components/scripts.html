@@ -135,6 +135,17 @@
         const locTable = document.getElementById('location-table');
         if (locTable) {
             locTable.addEventListener('click', (e) => {
+                // L271 Phase 3.5 (review fix #3): toggle + QR are delegated off
+                // data attributes — no inline onclick carrying a raw LocationID
+                // (which a quote in the id could break out of into script).
+                const tog = e.target.closest('.loc-toggle');
+                if (tog) {
+                    const row = tog.closest('tr[data-locid]');
+                    if (row) window.toggleLocNode(row.dataset.locid);
+                    return;
+                }
+                const qr = e.target.closest('.btn-qr');
+                if (qr) { window.showGlobalQrModal(qr.dataset.id); return; }
                 const btn = e.target.closest('.btn-manage');
                 if (btn) window.openManage(btn.dataset.id);
                 else if (e.target.closest('.btn-edit')) window.openEdit(e.target.closest('.btn-edit').dataset.id);
