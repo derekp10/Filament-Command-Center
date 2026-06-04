@@ -659,6 +659,24 @@ def _immediate_parent_from_rows(loc_id, existing_upper):
     return None
 
 
+def immediate_parent_for(loc_id, loc_list=None):
+    """Public: the IMMEDIATE parent_id for a LocationID against the current
+    on-disk rows — the longest existing-row prefix, falling back to the flat
+    first-segment when no ancestor row exists. Used by api_save_location so a
+    freshly created/edited row carries its immediate parent right away (not
+    only after the next startup migration). Pass loc_list with the row's own
+    (old) id excluded so an edit can't make a row its own parent.
+    """
+    if loc_list is None:
+        loc_list = load_locations_list()
+    existing_upper = {
+        str(r.get('LocationID', '')).strip().upper()
+        for r in loc_list
+        if isinstance(r, dict) and str(r.get('LocationID', '')).strip()
+    }
+    return _immediate_parent_from_rows(loc_id, existing_upper) or derive_parent_id_from_prefix(loc_id)
+
+
 def _derive_printer_room(printer_row, loc_list, room_by_name):
     """Best-effort room LocationID for a Printer row. Order:
       1. the printer's own `Location` field matched to a Room row's Name;

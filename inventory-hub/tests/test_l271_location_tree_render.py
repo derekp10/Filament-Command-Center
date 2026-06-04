@@ -1,20 +1,12 @@
-"""L271 Phase 2.5 — location-tree frontend migration regression pins.
+"""L271 — location-tree frontend regression pins.
 
-Phase 2.5 moves the Location Manager tree (sort root + indent / child grouping)
-off LocationID string-splitting onto the `parent_id` field that /api/locations
-now exposes on EVERY row. In this phase parent_id is still the flat first-segment
-prefix (Phase 1A derivation), so reading it is byte-for-byte equivalent to the
-old `LocationID.split('-')[0]` — the migration is behavior-preserving and the
-rendered tree must be visually identical (see test_visual_baseline.py
-locations-modal-default).
-
-These pins guard:
-  1. the backend exposes parent_id on every row (incl. the 3 synthesized rows);
-  2. the frontend reads row.parent_id (with a split fallback during rollout);
-  3. line 564 hasChildren stays a startsWith descendant query — it is NOT a
-     split('-')[0] parent derivation and parent_id (flat in this phase) cannot
-     express it without diverging on synthesized descendant rows; it migrates
-     in Phase 3 when hierarchy becomes truly multi-level.
+Phase 2.5 moved the tree off LocationID string-splitting onto `parent_id`
+(then a flat first-segment prefix). **Phase 3.5 supersedes that**: parent_id is
+now each row's IMMEDIATE parent, the renderer is a true recursive multi-level
+tree (room → printer → toolhead, cart → rows), `hasChildren` migrated off the
+startsWith descendant probe onto the parent_id child-map, and a pin-printers
+toggle + nested collapse were added. These pins guard the Phase 3.5 shape; the
+hierarchy-walk helpers + migration are pinned in test_l271_phase35_*.py.
 """
 import os
 
@@ -22,6 +14,7 @@ import pytest
 import requests
 
 _HUB = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_PSEUDO = {"TST", "TEST", "PM", "PJ"}
 
 
 def _read(*parts):
@@ -31,131 +24,167 @@ def _read(*parts):
         return f.read()
 
 
-def _old_parent(lid):
-    """The pre-migration frontend parentId derivation (the A/B oracle)."""
-    return lid.split("-")[0] if "-" in lid else lid
-
-
 # ---------------------------------------------------------------------------
-# Backend — /api/locations exposes parent_id on every row
+# Backend — /api/locations parent_id write paths
 # ---------------------------------------------------------------------------
 
 def test_synthesized_rows_expose_parent_id():
-    """Cheap source canary: the 3 synthesized /api/locations rows (synthetic
-    printer/room, Unassigned, UNKNOWN) must each carry parent_id so the frontend
-    can read row.parent_id uniformly."""
+    """The 3 synthesized /api/locations rows (synthetic Virtual Room,
+    Unassigned, UNKNOWN) each carry parent_id:None so the frontend reads
+    row.parent_id uniformly."""
     app = _read("app.py")
-    assert app.count('"parent_id": None') >= 3, (
-        "expected parent_id:None on all 3 synthesized /api/locations rows "
-        "(synthetic printer/room, Unassigned, UNKNOWN)"
-    )
+    assert app.count('"parent_id": None') >= 3
 
 
-def test_all_row_write_paths_set_parent_id_source():
-    """Canary for the review finding: parent_id must be set on EVERY /api/locations
-    row-write path, not just the 3 synthesized dicts — the Spoolman-native row and
-    the api_save_location POST/edit handler both derive it from the prefix."""
+def test_post_stamps_immediate_parent():
+    """Phase 3.5: api_save_location stamps the IMMEDIATE parent at write time
+    (longest existing-row prefix), while the Spoolman-native synthesized row
+    still derives the flat prefix."""
     app = _read("app.py")
-    assert "new_entry['parent_id'] = locations_db.derive_parent_id_from_prefix" in app, (
-        "api_save_location must stamp parent_id at write time"
+    assert "locations_db.immediate_parent_for(" in app, (
+        "api_save_location must stamp the immediate parent at write time"
     )
-    # Spoolman-native dict derives parent_id too (so it + the POST handler both call derive)
-    assert app.count("derive_parent_id_from_prefix") >= 2, (
-        "Spoolman-native row and POST handler should both derive parent_id"
+    assert "derive_parent_id_from_prefix" in app, (
+        "the Spoolman-native synthesized row still derives a prefix parent_id"
     )
 
 
 @pytest.mark.integration
-def test_api_locations_every_row_has_parent_id(api_base_url, require_server):
-    """Live: every row carries parent_id, and the migrated frontend derivation
-    `(parent_id ?? split-fallback)` equals the old split derivation for ALL rows
-    — the behavior-preservation invariant for the tree sort + indent."""
-    resp = requests.get(f"{api_base_url}/api/locations", timeout=10)
-    resp.raise_for_status()
-    rows = resp.json()
-    assert rows, "no location rows returned"
-
-    missing = [r.get("LocationID") for r in rows if "parent_id" not in r]
-    assert not missing, f"rows missing parent_id: {missing}"
-
+def test_api_locations_parent_id_is_valid_tree(api_base_url, require_server):
+    """Live nested invariant: every row carries parent_id; every non-null
+    parent_id points to a real on-disk row OR a known pseudo-prefix
+    (PM/PJ/TST); and the hierarchy is acyclic (every row walks to a root)."""
+    rows = requests.get(f"{api_base_url}/api/locations", timeout=10).json()
+    assert rows, "no rows returned"
+    ids = {str(r.get("LocationID", "")).upper() for r in rows}
+    parent_of = {}
     for r in rows:
-        lid = str(r.get("LocationID", ""))
+        lid = str(r.get("LocationID", "")).upper()
+        assert "parent_id" in r, f"{lid} missing parent_id"
         pid = r.get("parent_id")
-        migrated = pid if pid is not None else _old_parent(lid)
-        assert migrated == _old_parent(lid), (
-            f"parentId divergence at {lid}: parent_id={pid!r} old={_old_parent(lid)!r}"
+        parent_of[lid] = (str(pid).upper() if pid else None)
+        if pid:
+            pu = str(pid).upper()
+            assert pu in ids or pu in _PSEUDO, f"{lid} parent_id {pu!r} is a dangling FK"
+    # acyclic: every row reaches a root (None) without revisiting
+    for start in parent_of:
+        seen, cur, steps = set(), start, 0
+        while cur and cur in parent_of and parent_of[cur] is not None:
+            assert cur not in seen, f"cycle detected at {cur}"
+            seen.add(cur)
+            cur = parent_of[cur]
+            steps += 1
+            assert steps < 50, f"runaway chain from {start}"
+
+
+@pytest.mark.integration
+def test_api_locations_printers_nested_under_rooms(api_base_url, require_server):
+    """Phase 3.5: printers are nested under a Room row (XL→LR, CORE1→CR)."""
+    rows = {str(r.get("LocationID", "")).upper(): r for r in
+            requests.get(f"{api_base_url}/api/locations", timeout=10).json()}
+    for pid in ("XL", "CORE1"):
+        if pid not in rows:
+            continue
+        parent = rows[pid].get("parent_id")
+        assert parent, f"{pid} should be nested under a room (parent_id set)"
+        room = rows.get(str(parent).upper())
+        assert room and str(room.get("Type", "")).lower() == "room", (
+            f"{pid} parent {parent!r} should be a Room row"
         )
 
 
 @pytest.mark.integration
-def test_new_location_carries_parent_id(api_base_url, require_server):
-    """Review regression: a freshly POSTed location must carry parent_id
-    immediately (write-time stamp), not only after the next startup migration."""
-    test_id = "ZZL271TEST-CT-1"
-    expected_parent = "ZZL271TEST"
+def test_api_locations_transitive_occupancy_consistent(api_base_url, require_server):
+    """Phase 3.5: a parent's OccupancyRaw == its floating count + the sum of its
+    immediate children's OccupancyRaw (transitive subtree rollup is internally
+    consistent at every level)."""
+    import re
+    rows = requests.get(f"{api_base_url}/api/locations", timeout=10).json()
+    by_id = {str(r.get("LocationID", "")).upper(): r for r in rows}
+    children = {}
+    for r in rows:
+        pid = r.get("parent_id")
+        if pid:
+            children.setdefault(str(pid).upper(), []).append(r)
+    for lid, kids in children.items():
+        parent = by_id.get(lid)
+        if not parent:
+            continue  # pseudo-prefix parent (PM/PJ/TST) has no row — skip
+        raw = parent.get("OccupancyRaw")
+        if raw is None:
+            continue
+        occ = str(parent.get("Occupancy", ""))
+        m = re.search(r"\((\d+) floating\)", occ)
+        floating = int(m.group(1)) if m else (raw if "Total" not in occ else 0)
+        child_sum = sum(int(k.get("OccupancyRaw") or 0) for k in kids)
+        assert int(raw) == floating + child_sum, (
+            f"{lid}: OccupancyRaw {raw} != floating {floating} + children {child_sum} (occ={occ!r})"
+        )
+
+
+@pytest.mark.integration
+def test_new_location_nests_under_immediate_parent(api_base_url, require_server):
+    """A freshly POSTed row carries its IMMEDIATE parent right away: a cart-row
+    created under an existing cart nests under the cart, not the room."""
+    room, cart, row = "ZZL271T", "ZZL271T-CT-1", "ZZL271T-CT-1-R1"
     try:
-        resp = requests.post(
-            f"{api_base_url}/api/locations",
-            json={"old_id": "", "new_data": {
-                "LocationID": test_id, "Name": "L271 P2.5 test",
-                "Type": "Cart", "Max Spools": "1"}},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        rows = requests.get(f"{api_base_url}/api/locations", timeout=10).json()
-        row = next((x for x in rows if str(x.get("LocationID")) == test_id), None)
-        assert row is not None, "created location not returned by /api/locations"
-        assert "parent_id" in row, "freshly-created location is missing parent_id key"
-        assert row["parent_id"] == expected_parent, (
-            f"parent_id should be {expected_parent!r}, got {row.get('parent_id')!r}"
-        )
+        for lid, typ in ((room, "Room"), (cart, "Cart"), (row, "Cart")):
+            requests.post(f"{api_base_url}/api/locations", json={
+                "old_id": "", "new_data": {
+                    "LocationID": lid, "Name": f"t {lid}", "Type": typ, "Max Spools": "1"}},
+                timeout=10).raise_for_status()
+        got = {str(x.get("LocationID")): x for x in
+               requests.get(f"{api_base_url}/api/locations", timeout=10).json()}
+        assert got[cart]["parent_id"] == room, f"cart should nest under room, got {got[cart]['parent_id']!r}"
+        assert got[row]["parent_id"] == cart, f"cart-row should nest under cart, got {got[row]['parent_id']!r}"
     finally:
-        requests.delete(f"{api_base_url}/api/locations", params={"id": test_id}, timeout=10)
+        for lid in (row, cart, room):
+            requests.delete(f"{api_base_url}/api/locations", params={"id": lid}, timeout=10)
 
 
 # ---------------------------------------------------------------------------
-# Frontend — inv_core.js tree derives parent from row.parent_id (not split)
+# Frontend — inv_core.js renders a recursive parent_id tree
 # ---------------------------------------------------------------------------
 
-def test_sort_comparator_reads_parent_id():
-    """The LocationID sort comparator derives the tree root from row.parent_id
-    (with a split fallback for an old payload), not a bare split('-')[0]."""
-    js = _read("static", "js", "modules", "inv_core.js")
-    assert "a.parent_id != null ? a.parent_id" in js, "sort rootA must read a.parent_id"
-    assert "b.parent_id != null ? b.parent_id" in js, "sort rootB must read b.parent_id"
+def _js():
+    return _read("static", "js", "modules", "inv_core.js")
 
 
-def test_tree_indent_reads_parent_id():
-    """The tree-indent parentId derivation reads row.parent_id (with a split
-    fallback), and isChild is derived from the resolved parent rather than a
-    bare LocationID.split('-')[0]."""
-    js = _read("static", "js", "modules", "inv_core.js")
-    assert "l.parent_id != null ? l.parent_id" in js, "parentId must read l.parent_id"
-    # isChild derives from the resolved parent (case-insensitively, see
-    # test_tree_grouping_is_case_insensitive) — not from LocationID.includes('-').
-    assert "isChild = (parentUC !== lidUC)" in js, \
-        "isChild must derive from the resolved parent (uppercased)"
+def test_tree_built_from_parent_id_children_map():
+    js = _js()
+    assert "const childrenOf = new Map()" in js, "tree must group children by parent_id"
+    assert "r.parent_id != null ? upper(r.parent_id)" in js, "tree must read row.parent_id"
+    assert "const visit = (row, depth, ancestors)" in js, "must DFS-render with depth"
 
 
-def test_has_children_stays_descendant_query():
-    """DELIBERATE Phase 2.5 scope guard: hasChildren must remain a startsWith
-    descendant query. parent_id is the flat first-segment prefix this phase and
-    synthesized descendant rows carry parent_id:null, so a `c.parent_id === l`
-    rewrite would diverge (a printer could lose its expand toggle). It migrates
-    in Phase 3 when hierarchy becomes truly nested."""
-    js = _read("static", "js", "modules", "inv_core.js")
-    assert "c.LocationID.startsWith(l.LocationID + '-')" in js, \
-        "hasChildren must stay a startsWith descendant query until Phase 3"
+def test_has_children_uses_tree_not_startswith():
+    """Phase 3.5: hasChildren migrated OFF the startsWith descendant probe onto
+    the parent_id child-map (entry.hasKids). The old probe must be GONE."""
+    js = _js()
+    assert "hasKids: kids.length > 0" in js, "toggle must derive from the child-map"
+    assert "startsWith(l.LocationID + '-')" not in js, (
+        "the flat startsWith descendant probe must be retired in Phase 3.5"
+    )
+    assert ".loc-child-of-" not in js, "the flat loc-child-of class scheme is retired"
 
 
-def test_tree_grouping_is_case_insensitive():
-    """Review fix: parent_id is uppercased but a LocationID may be mixed-case
-    (Spoolman-native names / unnormalized form input). The tree grouping must
-    compare case-insensitively so the loc-child-of-<id> class, the isChild test,
-    and toggleLocNode's selector stay consistent."""
-    js = _read("static", "js", "modules", "inv_core.js")
-    assert "const parentUC = String(parentId).toUpperCase()" in js, "parentUC normalization missing"
-    assert "loc-child-of-${parentUC}" in js, "rowClass must use the uppercased parent"
-    assert "String(rootA).toUpperCase()" in js, "sort parent lookup must be case-insensitive"
-    assert "loc-child-of-${String(parentId).toUpperCase()}" in js, \
-        "toggleLocNode selector must uppercase to match the class"
+def test_nested_collapse_via_ancestors():
+    js = _js()
+    assert "data-ancestors" in js, "rows must carry their ancestor chain"
+    assert "function applyLocCollapse()" in js, "nested collapse helper must exist"
+    assert "state.locCollapsed" in js, "collapse state must persist across re-renders"
+
+
+def test_pin_printers_toggle():
+    js = _js()
+    assert "fcc.locMgr.pinPrintersTop" in js, "pin state persisted in localStorage"
+    assert "window.toggleLocPinPrinters" in js, "pin toggle handler must exist"
+    html = _read("templates", "components", "modals_loc_mgr.html")
+    assert "loc-pin-printers-btn" in html, "pin button must be in the loc-mgr header"
+
+
+def test_tree_grouping_case_insensitive():
+    """parent_id is uppercased but a LocationID may be mixed-case; the tree
+    normalizes both sides via upper()."""
+    js = _js()
+    assert "const upper = (v) =>" in js and "toUpperCase()" in js

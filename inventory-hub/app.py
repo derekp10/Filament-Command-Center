@@ -1628,20 +1628,22 @@ def api_save_location():
     data = request.json
     old_id = data.get('old_id')
     new_entry = data.get('new_data')
-    # L271 Phase 2.5: stamp parent_id at write time so a freshly created or
-    # edited row carries it immediately — not only after the next startup
-    # migrate_parent_ids_if_needed. Mirror that migration's contract: derive
-    # from the LocationID prefix, but respect an explicitly-supplied value.
-    # parent_id is purely prefix-derived this phase, so deriving from the
-    # (possibly renamed) LocationID is correct for both create and edit.
-    if isinstance(new_entry, dict) and 'parent_id' not in new_entry:
-        new_entry['parent_id'] = locations_db.derive_parent_id_from_prefix(new_entry.get('LocationID'))
     current_list = locations_db.load_locations_list()
     if old_id:
         current_list = [row for row in current_list if row['LocationID'] != old_id]
         state.add_log_entry(f"📝 Updated: {new_entry['LocationID']}")
     else:
         state.add_log_entry(f"✨ Created: {new_entry['LocationID']}")
+    # L271 Phase 3.5: stamp the IMMEDIATE parent_id at write time so a freshly
+    # created or edited row nests correctly right away — not only after the next
+    # startup migration. immediate_parent_for resolves the longest existing-row
+    # prefix (flat first-segment fallback) against current_list, which already
+    # has the row's own old id removed, so an edit can't make a row its own
+    # parent. Respect an explicitly-supplied parent_id. (A Printer row's room is
+    # resolved by the startup migration, not here.)
+    if isinstance(new_entry, dict) and 'parent_id' not in new_entry:
+        new_entry['parent_id'] = locations_db.immediate_parent_for(
+            new_entry.get('LocationID'), current_list)
     current_list.append(new_entry)
     current_list.sort(key=lambda x: str(x.get('LocationID', '')))
     locations_db.save_locations_list(current_list)
