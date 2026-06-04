@@ -1437,6 +1437,12 @@ def api_get_locations():
             
     csv_rows = list(local_map.values())
     occupancy_map: dict[str, int] = {}
+    # L271 Phase 3.5 (review fix #2): per-spool (id, loc, ghost) so the ancestor
+    # rollup can count DISTINCT physical spools — a deployed spool sits in
+    # occupancy_map twice (toolhead loc + ghost home-box) and, now that a printer
+    # nests under its home box's room, both rolled into the same room and
+    # double-counted its Total. Dedup by spool id fixes that.
+    spool_entries: list = []  # (sid, loc_or_'', ghost_or_'')
     unassigned_count: int = 0
     unknown_count: int = 0  # 18.1 — spools sitting at the virtual UNKNOWN bucket
 
@@ -1469,19 +1475,33 @@ def api_get_locations():
                 if p_source and p_source != loc:
                     occupancy_map[p_source] = occupancy_map.get(p_source, 0) + 1
 
+                # L271 Phase 3.5 (review fix #2): record this spool for the
+                # distinct-count ancestor rollup. loc is '' for unassigned and
+                # 'UNKNOWN' for the lost bucket — neither rolls into a room.
+                spool_entries.append((
+                    s.get('id'),
+                    loc if (loc and loc != 'UNKNOWN') else '',
+                    p_source,
+                ))
+
     except: pass
 
     # [ALEX FIX] Support Room logic correctly by adding grouped floating data
     csv_rows = list(local_map.values())
 
     # 1. First Pass: TRANSITIVE subtree occupancy (L271 Phase 3.5).
-    # parent_id now stores each row's IMMEDIATE parent, so a single-level
-    # rollup would drop a spool sitting in a cart-ROW from its room's total
-    # (the row rolls into the cart, not the room). Walk every spool location's
-    # ancestor chain and add its count to each ancestor's subtree total;
+    # parent_id now stores each row's IMMEDIATE parent, so a single-level rollup
+    # would drop a spool sitting in a cart-ROW from its room's total (the row
+    # rolls into the cart, not the room). For each spool, add its id to every
+    # ancestor of BOTH its location and its ghost home-box, then a parent's
+    # Total is the count of DISTINCT spool ids in its subtree. Deduping by id is
+    # essential: a deployed spool appears at its toolhead loc AND its ghost
+    # home-box, which (with the printer nested under the home-box's room) both
+    # resolve into the same room — summing would double-count it (review fix #2).
     # `ancestors_of` stops at the PM/PJ/TST pseudo-prefixes so they never
-    # aggregate into a room. `direct_occ` is the count sitting AT a row (the
-    # "floating" figure for a parent); `subtree_occ` is direct + descendants.
+    # aggregate into a room. Leaf display + the "floating" figure still use
+    # occupancy_map (loc + ghost at the exact row) so a box keeps showing its
+    # deployed ghosts.
     parent_map = locations_db.build_parent_map(csv_rows)
 
     # Immediate-child counts so a row can be classified parent-vs-leaf for the
@@ -1492,23 +1512,30 @@ def api_get_locations():
         if _p and _p not in locations_db.PSEUDO_ROOM_PREFIXES:
             children_count[_p] = children_count.get(_p, 0) + 1
 
-    direct_occ: dict[str, int] = {}
-    subtree_occ: dict[str, int] = {}
-    ancestor_hit: set[str] = set()  # non-row prefixes that need a Virtual Room
-    for loc, count in occupancy_map.items():
-        if not loc:
-            continue
-        direct_occ[loc] = direct_occ.get(loc, 0) + count
-        subtree_occ[loc] = subtree_occ.get(loc, 0) + count
-        ancs = list(locations_db.ancestors_of(loc, parent_map))
-        for anc in ancs:
-            subtree_occ[anc] = subtree_occ.get(anc, 0) + count
-            ancestor_hit.add(anc)
-        if not ancs:
-            # Top-level / unparented spool location — it is its own "room"
-            # candidate (mirrors the pre-3.5 else-branch that seeded a virtual
-            # room for a dash-free orphan occupancy).
-            ancestor_hit.add(loc)
+    subtree_ids: dict[str, set] = {}   # ancestor -> set of distinct spool ids
+    ancestor_hit: set[str] = set()     # non-row prefixes that need a Virtual Room
+    for sid, loc, ghost in spool_entries:
+        touched: set[str] = set()
+        for base in (loc, ghost):
+            if not base:
+                continue
+            ancs = list(locations_db.ancestors_of(base, parent_map))
+            touched.add(base)
+            touched.update(ancs)
+            for anc in ancs:
+                ancestor_hit.add(anc)
+            if not ancs:
+                # Top-level / unparented occupancy — its own "room" candidate
+                # (mirrors the pre-3.5 seed of a virtual room for a dash-free
+                # orphan). A pseudo-prefixed base (PM/PJ/TST box) yields no
+                # ancestors and is itself a real row, so synthesis skips it.
+                ancestor_hit.add(base)
+        for t in touched:
+            subtree_ids.setdefault(t, set()).add(sid)
+    # subtree_occ = distinct spool count per row; direct/floating stays the
+    # loc+ghost count at the exact row (occupancy_map).
+    subtree_occ = {k: len(v) for k, v in subtree_ids.items()}
+    direct_occ = occupancy_map
 
     # 2. Inject Virtual Rooms for occupancy-only prefixes.
     #

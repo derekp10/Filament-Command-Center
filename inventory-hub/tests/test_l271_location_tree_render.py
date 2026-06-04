@@ -94,32 +94,60 @@ def test_api_locations_printers_nested_under_rooms(api_base_url, require_server)
 
 
 @pytest.mark.integration
-def test_api_locations_transitive_occupancy_consistent(api_base_url, require_server):
-    """Phase 3.5: a parent's OccupancyRaw == its floating count + the sum of its
-    immediate children's OccupancyRaw (transitive subtree rollup is internally
-    consistent at every level)."""
-    import re
+def test_api_locations_room_total_is_distinct_spool_count(api_base_url, dev_spoolman_url, require_server):
+    """Phase 3.5 (review fix #2): a parent's OccupancyRaw equals the number of
+    DISTINCT physical spools whose location OR ghost physical_source resolves
+    into its subtree — NOT a naive sum (which double-counts a deployed spool
+    that sits at a toolhead AND is ghost-reserved at a home box, both nesting
+    under the same room). Independent oracle: re-walk parent_id from the payload
+    and dedup by spool id."""
     rows = requests.get(f"{api_base_url}/api/locations", timeout=10).json()
     by_id = {str(r.get("LocationID", "")).upper(): r for r in rows}
-    children = {}
-    for r in rows:
-        pid = r.get("parent_id")
-        if pid:
-            children.setdefault(str(pid).upper(), []).append(r)
-    for lid, kids in children.items():
-        parent = by_id.get(lid)
-        if not parent:
-            continue  # pseudo-prefix parent (PM/PJ/TST) has no row — skip
-        raw = parent.get("OccupancyRaw")
-        if raw is None:
-            continue
-        occ = str(parent.get("Occupancy", ""))
-        m = re.search(r"\((\d+) floating\)", occ)
-        floating = int(m.group(1)) if m else (raw if "Total" not in occ else 0)
-        child_sum = sum(int(k.get("OccupancyRaw") or 0) for k in kids)
-        assert int(raw) == floating + child_sum, (
-            f"{lid}: OccupancyRaw {raw} != floating {floating} + children {child_sum} (occ={occ!r})"
-        )
+    parent = {
+        str(r["LocationID"]).upper(): (str(r["parent_id"]).upper() if r.get("parent_id") else None)
+        for r in rows
+    }
+
+    def _hop(x):
+        # mirror locations_db._parent_of: on-disk parent, else first-segment prefix
+        x = (x or "").upper()
+        if x in parent:
+            return parent[x]
+        return x.split("-", 1)[0] if "-" in x else None
+
+    def ancestors(x):
+        out, seen, cur = [], {(x or "").upper()}, _hop(x)
+        while cur and cur not in seen:
+            if cur in _PSEUDO:
+                break
+            out.append(cur)
+            seen.add(cur)
+            cur = _hop(cur)
+        return out
+
+    spools = requests.get(f"{dev_spoolman_url}/api/v1/spool", timeout=10).json()
+    distinct = {}
+    for s in spools:
+        sid = s["id"]
+        loc = str(s.get("location") or "").upper().strip()
+        if loc in ("UNASSIGNED", "UNKNOWN"):
+            loc = ""
+        ghost = str((s.get("extra") or {}).get("physical_source", "")).replace('"', "").upper().strip()
+        touched = set()
+        for base in (loc, ghost):
+            if not base:
+                continue
+            touched.add(base)
+            touched.update(ancestors(base))
+        for t in touched:
+            distinct.setdefault(t, set()).add(sid)
+
+    for lid, row in by_id.items():
+        if "Total" in str(row.get("Occupancy", "")):  # parent rows show a subtree Total
+            assert row.get("OccupancyRaw") == len(distinct.get(lid, set())), (
+                f"{lid}: OccupancyRaw {row.get('OccupancyRaw')} != distinct spool count "
+                f"{len(distinct.get(lid, set()))} (double-count regression)"
+            )
 
 
 @pytest.mark.integration
