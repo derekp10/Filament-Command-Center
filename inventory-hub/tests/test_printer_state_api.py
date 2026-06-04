@@ -46,6 +46,8 @@ def test_printer_state_case_insensitive_toolhead_lookup(client):
     with patch.object(
         app_module.config_loader, "load_config", return_value={"printer_map": fake_map}
     ), patch.object(
+        app_module.locations_db, "get_active_printer_map", return_value=fake_map
+    ), patch.object(
         app_module.prusalink_api, "get_printer_state",
         return_value={"state": "IDLE", "is_active": False},
     ):
@@ -64,6 +66,8 @@ def test_printer_state_unreachable_reports_known_false(client):
     with patch.object(
         app_module.config_loader, "load_config", return_value={"printer_map": fake_map}
     ), patch.object(
+        app_module.locations_db, "get_active_printer_map", return_value=fake_map
+    ), patch.object(
         app_module.prusalink_api, "get_printer_state", return_value=None
     ):
         resp = client.get("/api/printer_state/CORE1-M0")
@@ -77,6 +81,8 @@ def test_printer_state_active_state_is_flagged(client):
     fake_map = {"XL-3": {"printer_name": "XL", "position": 2}}
     with patch.object(
         app_module.config_loader, "load_config", return_value={"printer_map": fake_map}
+    ), patch.object(
+        app_module.locations_db, "get_active_printer_map", return_value=fake_map
     ), patch.object(
         app_module.prusalink_api, "get_printer_state",
         return_value={"state": "PRINTING", "is_active": True},

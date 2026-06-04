@@ -2623,8 +2623,7 @@ def api_dryer_box_bindings_put(loc_id):
             "ERROR", "ff0000"
         )
         return jsonify({"error": "missing_slot_targets"}), 400
-    cfg = config_loader.load_config()
-    printer_map = cfg.get('printer_map', {}) or {}
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     ok, errors, warnings = locations_db.set_dryer_box_bindings(loc_id, slot_targets, printer_map)
     if not ok:
         reasons = "; ".join(f"slot {e[0]} → {e[1]}: {e[2]}" for e in errors) or "validation failed"
@@ -2671,8 +2670,7 @@ def api_printer_state(toolhead_id):
     printer, wrong API key, or missing filabridge entry.
     """
     import prusalink_api  # local import keeps the module optional at module load
-    cfg = config_loader.load_config()
-    printer_map = cfg.get('printer_map', {}) or {}
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     info = printer_map.get((toolhead_id or '').strip().upper())
     if not info:
         return jsonify({"known": False, "reason": "not_in_printer_map"})
@@ -2905,8 +2903,7 @@ def api_single_slot_binding_put(loc_id, slot):
     else:
         next_targets[str(slot)] = str(target)
 
-    cfg = config_loader.load_config()
-    printer_map = cfg.get('printer_map', {}) or {}
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     ok, errors, warnings = locations_db.set_dryer_box_bindings(loc_id, next_targets, printer_map)
     if not ok:
         reasons = "; ".join(f"slot {e[0]} → {e[1]}: {e[2]}" for e in errors) or "validation failed"
@@ -3169,8 +3166,7 @@ def api_machine_toolhead_slots(printer_name):
     """Reverse lookup: for a printer, return every (box, slot) pair that
     feeds each of its toolheads. `printer_name` may contain emoji and
     spaces — the <path:> converter keeps them intact across the URL."""
-    cfg = config_loader.load_config()
-    printer_map = cfg.get('printer_map', {}) or {}
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     result = locations_db.get_bindings_for_machine(printer_name, printer_map)
     # 404 when the printer_name matches zero printer_map entries.
     if not result['toolheads']:
@@ -3600,9 +3596,8 @@ def api_fb_recovery_spools():
         # toolhead at the moment FilaBridge errored" reference. Missing
         # snapshot is NOT an error — only a missing printer_name is.
     
-    cfg = config_loader.load_config()
-    printer_map = cfg.get("printer_map", {})
-    
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
+
     # Find which FilaBridge toolheads map to which spoolman location keys
     # Typically, the location ID is the key in printer_map, and it has 'printer_name'
     target_locations = []
@@ -3956,8 +3951,7 @@ def api_filabridge_reconcile():
     except requests.RequestException as e:
         return jsonify({"success": False, "msg": f"FilaBridge unreachable: {e}"})
 
-    cfg = config_loader.load_config()
-    printer_map = cfg.get('printer_map', {}) or {}
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     # Build a reverse: (printer_name, position) → location_id, for the
     # mapping side that FB exposes as raw position numbers.
     pos_to_loc = {}
@@ -4696,7 +4690,7 @@ def api_get_logs_route():
                                 try:
                                     import os
                                     target_locations = []
-                                    printer_map = config_loader.load_config().get("printer_map", {})
+                                    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: dual-read
                                     for loc_id, p_info in printer_map.items():
                                         if p_info.get('printer_name') == p_name:
                                             target_locations.append(loc_id)
@@ -4868,7 +4862,7 @@ def _pulse_section_printer_status():
     from concurrent.futures import ThreadPoolExecutor
 
     cfg = config_loader.load_config()
-    printer_map = cfg.get('printer_map', {}) or {}
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     _, fb_url = config_loader.get_api_urls()
     grouped = {}
     for loc_id, info in printer_map.items():
