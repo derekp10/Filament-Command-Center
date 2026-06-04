@@ -790,19 +790,22 @@ def get_room_from_location(loc_id):
     if "-" not in loc_id:
         return ""
 
-    # L271 Phase 2: derive the parent via the single hierarchy resolver
-    # instead of an inline loc_id.split("-")[0]. resolve_parent still falls
-    # back to prefix-parsing in this phase, so the result is byte-identical
-    # to the old split until Phase 5 retires the fallback — this just routes
-    # the central room-deriver through the abstraction.
-    prefix = locations_db.resolve_parent(loc_id) or ""
+    # L271 Phase 3.5: walk to the TOP-LEVEL room. `parent_id` now stores each
+    # row's IMMEDIATE parent, so resolve_parent (a single hop) no longer reaches
+    # the room for a nested row (cart-row -> cart, toolhead -> printer);
+    # resolve_room walks the chain to the topmost ancestor. On the pre-3.5 flat
+    # tree this is byte-identical to the old single-hop split (a dashed row's
+    # only ancestor IS its first-segment room). After the immediate-parent
+    # migration, a toolhead's room correctly resolves to the printer's room
+    # (XL-1 -> XL -> LR) instead of stopping at the printer.
+    room = locations_db.resolve_room(loc_id) or ""
 
     # Exclude known non-room prefixes we don't want to spawn virtual rooms for
-    # PM = Polymaker portable boxes, PJ = Project Carts, TST = System Tests
-    if prefix in ["TST", "TEST", "PM", "PJ"]:
+    # PM = Polymaker portable boxes, PJ = Project Carts, TST = System Tests.
+    if room in locations_db.PSEUDO_ROOM_PREFIXES:
         return ""
-            
-    return prefix
+
+    return room
 
 def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print=False):
     """Remove `spool_id` from its current location.
