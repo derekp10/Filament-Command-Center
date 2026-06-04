@@ -12,9 +12,23 @@
 
 **Bonus fix (in the same commit):** the long-standing dev-data wipe ([[reference_fcc_e2e_sweep_pollution]] "53→2 via the rename/bindings test") was `test_config_save.py`'s printer_map PUT tests stubbing `load_locations_list` but NOT `save_locations_list`, so the PUT post-save sync overwrote the real `data/locations.json` with a 2-row stub. `_ref_env` now no-ops `save_locations_list`. Dev locations.json stays 53 rows across the full sweep.
 
+## ✅ Step 2 (safe reads) PARTIAL — `ef285c9` (2a) + `395493c` (2b)
+
+Swap pattern: `config_loader.load_config()['printer_map']` → **`locations_db.get_active_printer_map(loc_list)`** (the dual-read wrapper: rows' toolheads[] with config fallback). The `locations_db` helpers that take `printer_map` as a *param* (`_known_printer_prefixes`, `_resolve_printer_name`, `validate_slot_targets`, `get_bindings_for_machine`) need NO change — their callers now pass the accessor's dict.
+
+- **2a (`ef285c9`)** — added `get_active_printer_map`; swapped `spoolman_api.search_inventory` deployed-state filter. Live: `deployed_targets` identical, `/api/search?deployed=deployed` → same 6 spools.
+- **2b (`395493c`)** — swapped **8 read-only app.py consumers**: dryer-binding validation (`api_dryer_box_bindings_put`, `api_single_slot_binding_put`), `api_printer_state`, `api_machine_toolhead_slots`, the 2 FilaBridge error-recovery snapshots, the FB `/status` reverse-map, `_pulse_section_printer_status`. Live: 200s + correct data; 179 tests green; dev locations.json stays 53 rows.
+- **Test-seam note:** tests that stubbed `config_loader.load_config` to inject a printer_map for a swapped endpoint now stub `locations_db.get_active_printer_map` instead (`test_search_deployed_filter`, `test_printer_status_box_bounding`, `test_printer_state_api`). The live A/B proved real behavior is unchanged; only the unit seam moved.
+
+### ⛔ Step 2 REMAINING — the fragile / write batch (DEFERRED, needs live FilaBridge repro + its own focused session)
+All still read `cfg.get('printer_map')` (untouched, dual-read keeps them correct):
+- **`logic.py`** move/eject/undo/force-unassign + helpers (`_active_print_info_for_location`, `_toolhead_of`) — outage-prone; migrate with a real ghost-trail spool on the live container, **NOT unit tests alone**.
+- **app.py weight/MMU paths**: `api_quickswap_return` (2958), `api_fb_aggressive_parse` (3653), the auto-recover task (4721) — these call `_resolve_active_locs_for_printer` (MMU M0/M1 dedup) and DEDUCT weight. Migrate `_resolve_active_locs_for_printer`'s callers to pass `get_active_printer_map()`; the helper keeps `position` (the dedup key).
+- **Editor** `/api/printer_map` GET (2703) + PUT (2812) + `_printer_map_blocked_removals` → that's **Step 3** (compat shim), not step 2.
+
 ## Verified consumer inventory (2026-06-04, 6-agent workflow vs live code — line numbers CONFIRMED)
 
-> All of these stay UNCHANGED in step 1 (dual-read). Step 2 swaps each `cfg.get('printer_map')` → `build_printer_map_from_rows(loc_list)`, one commit each, A/B byte-identical, **safe reads first, fragile `logic.py` move/eject LAST with live FilaBridge repro.**
+> Step-1 baseline lines (pre Step-2 edits; the 2b swaps shifted a few by ±2). Step 2 swaps each `cfg.get('printer_map')` → `get_active_printer_map(loc_list)`, **safe reads first (DONE), fragile `logic.py` move/eject LAST with live FilaBridge repro.**
 
 - **locations_db.py**: `_known_printer_prefixes`@497, `_resolve_printer_name`@515, `migrate_printers_to_rows_if_needed`@544 (keep), `validate_slot_targets`@799/837, `set_dryer_box_bindings`@886, `get_bindings_for_machine`@953 (reverse name→toolheads).
 - **app.py (16)**: startup migration@247, `_resolve_active_locs_for_printer`@400 (**MMU M0/M1 dedup** — keep `position`!), dryer bindings PUT@2597/2874, `api_printer_state`@2646, `/api/printer_map` GET@2665 / PUT@2772 / `_printer_map_blocked_removals`@2711, quickswap return@2931, `/api/machine/<name>/toolhead_slots`@3139, fb recovery@3574, auto-deduct@3626, fb-status reverse-lookup@3929, fb error-recovery snapshot@4664, fb auto-recover task@4695, `_pulse_section_printer_status`@4836.
