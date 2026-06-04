@@ -351,6 +351,99 @@ def resolve_parent(row_or_id, loc_list=None):
     return derive_parent_id_from_prefix(row_or_id)
 
 
+# Prefixes that are NOT real rooms — the prefix-derivation can produce them, but
+# they must never be treated as a room (no virtual room, no room rollup, no eject
+# "return to room"). PM = Polymaker portable boxes, PJ = Project carts, TST/TEST
+# = system tests. Single source of truth for the exclusion list that was
+# previously inlined in app.py / logic.py / inv_core.js.
+PSEUDO_ROOM_PREFIXES = frozenset({"TST", "TEST", "PM", "PJ"})
+
+
+def build_parent_map(loc_list=None):
+    """Return {LocationID_upper: parent_id_upper_or_None} for fast repeated
+    hierarchy walks (is_descendant / resolve_room) without re-reading disk per
+    call. Honors explicit parent_id via resolve_parent (with prefix fallback).
+    Callers in per-spool loops should build this ONCE and pass it down.
+    """
+    if loc_list is None:
+        loc_list = load_locations_list()
+    pmap = {}
+    for r in loc_list:
+        if not isinstance(r, dict):
+            continue
+        lid = str(r.get('LocationID', '')).strip().upper()
+        if not lid:
+            continue
+        pmap[lid] = resolve_parent(r)  # immediate parent (upper) or None
+    return pmap
+
+
+def _parent_of(loc_upper, parent_map):
+    """One hop up the hierarchy for an already-uppercased LocationID. Uses the
+    on-disk parent_map when the id is a known row; falls back to prefix
+    derivation for an id with no row (a spool sitting at a not-yet-created
+    LocationID, or a pseudo-prefix ancestor).
+    """
+    if loc_upper in parent_map:
+        return parent_map[loc_upper]
+    return derive_parent_id_from_prefix(loc_upper)
+
+
+def is_descendant(child, ancestor, parent_map=None, loc_list=None):
+    """True if `child` sits STRICTLY beneath `ancestor` anywhere in the
+    parent_id chain (self does NOT count — callers test exact equality
+    separately). Both compared upper-cased. Cycle-guarded.
+
+    Phase 3.5: replaces the flat ``resolve_parent(child) == ancestor`` child
+    test. On a 2-level tree this reduces to the old single-hop equality (a
+    row's only ancestor IS its first-segment parent); on a nested tree it
+    walks the full chain so a room query reaches its cart-rows / a printer's
+    toolheads.
+    """
+    child_u = str(child or '').strip().upper()
+    anc_u = str(ancestor or '').strip().upper()
+    if not child_u or not anc_u or child_u == anc_u:
+        return False
+    if parent_map is None:
+        parent_map = build_parent_map(loc_list)
+    seen = {child_u}
+    cur = _parent_of(child_u, parent_map)
+    while cur and cur not in seen:
+        if cur == anc_u:
+            return True
+        seen.add(cur)
+        cur = _parent_of(cur, parent_map)
+    return False
+
+
+def resolve_room(row_or_id, parent_map=None, loc_list=None):
+    """Walk the parent_id chain up to the TOP-LEVEL ancestor (the room) and
+    return its LocationID (upper-cased). Returns "" when the input is empty.
+
+    Phase 3.5: with parent_id storing the IMMEDIATE parent, a deeply-nested
+    row's room is its topmost ancestor, not its direct parent — e.g.
+    ``CR-CT-1-R1`` → CR-CT-1 → CR. A top-level input (a room/printer root)
+    returns itself. Cycle-guarded. Pseudo-prefix exclusion (PM/PJ/TST) is the
+    CALLER's contract (see get_room_from_location), not applied here.
+    """
+    if isinstance(row_or_id, dict):
+        start = str(row_or_id.get('LocationID', '')).strip().upper()
+    else:
+        start = str(row_or_id or '').strip().upper()
+    if not start:
+        return ""
+    if parent_map is None:
+        parent_map = build_parent_map(loc_list)
+    seen = {start}
+    top = start
+    cur = _parent_of(start, parent_map)
+    while cur and cur not in seen:
+        top = cur
+        seen.add(cur)
+        cur = _parent_of(cur, parent_map)
+    return top
+
+
 def migrate_parent_ids_if_needed(loc_list):
     """One-time backfill: every row gets a `parent_id` field derived from
     its LocationID prefix (or None for top-level rows). Idempotent — skips
