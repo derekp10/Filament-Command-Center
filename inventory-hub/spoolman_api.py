@@ -1209,7 +1209,7 @@ def format_spool_display(spool_data):
         state.logger.error(f"Format Error: {e}")
         return {"text": f"#{spool_data.get('id', '?')} Error", "text_short": "Error", "color": "ff0000", "slot": ""}
 
-def _build_location_match(s, target_loc_upper, check_unassigned=False):
+def _build_location_match(s, target_loc_upper, check_unassigned=False, parent_map=None):
     """Single source of truth for "is spool `s` at (or ghosted to)
     `target_loc_upper`?" plus the display-shaped item dict on a hit.
 
@@ -1218,7 +1218,13 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
     per-location detailed lookup AND the bulk bucket_spools_by_location share
     the exact match + ghost (physical_source) logic — no drift between the two
     paths. `target_loc_upper` must already be upper-cased.
+
+    `parent_map` (locations_db.build_parent_map output) is built ONCE by the
+    caller and threaded through the per-spool loop so the hierarchy walk never
+    re-reads disk. When omitted it is built lazily (single-call convenience).
     """
+    if parent_map is None:
+        parent_map = locations_db.build_parent_map()
     sloc = (s.get('location') or '').strip()
     extra = s.get('extra', {}) or {}
     match = False
@@ -1231,11 +1237,15 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
             match = True
     elif sloc.upper() == target_loc_upper:
         match = True
-    # L271 Phase 2: child match via resolve_parent (prefix-fallback this
-    # phase). It returns a dash-free prefix, so a dashed target_loc_upper can
-    # never child-match — folding in the old `"-" not in target_loc_upper`
-    # guard for both the location and the ghost physical_source below.
-    elif locations_db.resolve_parent(sloc) == target_loc_upper:
+    # L271 Phase 3.5: child match via is_descendant (walks the parent_id chain)
+    # instead of a single-hop resolve_parent equality. parent_id now stores the
+    # immediate parent, so a one-hop test would miss grandchildren — a query for
+    # a room must still reach its cart-ROWS (room -> cart -> row), and a query
+    # for a cart now reaches its rows. On the pre-3.5 flat tree is_descendant
+    # reduces to the old single-hop equality, so this is byte-identical until
+    # the data flip. is_descendant is strict (self excluded), and exact matches
+    # are handled above / below, so there's no double-count.
+    elif locations_db.is_descendant(sloc, target_loc_upper, parent_map):
         match = True
 
     # 2. [ALEX FIX] Physical Source Match (The Ghost Logic)
@@ -1243,7 +1253,7 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
     p_source_raw = str(extra.get('physical_source', '')).strip().replace('"', '')
     if not match and not check_unassigned:
         p_source = p_source_raw.upper()
-        if p_source == target_loc_upper or locations_db.resolve_parent(p_source) == target_loc_upper:
+        if p_source == target_loc_upper or locations_db.is_descendant(p_source, target_loc_upper, parent_map):
             match = True
             is_ghost = True
             # Strip quotes from the slot too!
@@ -1276,11 +1286,12 @@ def get_spools_at_location_detailed(loc_name):
     check_unassigned = (str(loc_name).upper() == 'UNASSIGNED')
     target_loc_upper = str(loc_name).upper()
     found = []
+    parent_map = locations_db.build_parent_map()  # L271 P3.5: build once, reuse per spool
     try:
         # allow_archived=False mirrors the historical bare /api/v1/spool fetch
         # this function used inline (Spoolman omits archived spools by default).
         for s in get_all_spools(allow_archived=False):
-            item = _build_location_match(s, target_loc_upper, check_unassigned)
+            item = _build_location_match(s, target_loc_upper, check_unassigned, parent_map)
             if item is not None:
                 found.append(item)
     except Exception as e:
@@ -1320,9 +1331,10 @@ def bucket_spools_by_location(loc_ids, spools=None):
         return buckets
     if spools is None:
         spools = get_all_spools(allow_archived=False)
+    parent_map = locations_db.build_parent_map()  # L271 P3.5: build once, reuse per (spool, target)
     for s in spools:
         for t in targets:
-            item = _build_location_match(s, t, check_unassigned=(t == 'UNASSIGNED'))
+            item = _build_location_match(s, t, check_unassigned=(t == 'UNASSIGNED'), parent_map=parent_map)
             if item is not None:
                 buckets[t].append(item)
     return buckets
@@ -1338,18 +1350,21 @@ def get_spools_at_location_strict(loc_name):
     resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
     resp.raise_for_status()  # raise on 4xx/5xx so the caller can fail closed
     target = str(loc_name).strip().upper()
+    parent_map = locations_db.build_parent_map()  # L271 P3.5: build once, reuse per spool
     ids = []
     for s in parse_inbound_data(resp.json()):
         sloc = (s.get('location') or '').strip().upper()
         extra = s.get('extra', {}) or {}
         p_source = str(extra.get('physical_source', '')).strip().replace('"', '').upper()
-        # L271 Phase 2: child match via resolve_parent (prefix-fallback this
-        # phase, FK in Phase 5) instead of the old bare/startswith probe.
-        # resolve_parent returns a dash-free prefix, so a dashed target can
-        # never child-match — this folds in the old `bare` guard for free.
+        # L271 Phase 3.5: child match via is_descendant (walks the parent_id
+        # chain) instead of a single-hop resolve_parent. parent_id now stores
+        # the immediate parent, so a one-hop test would miss grandchildren —
+        # this safety guard must reach every spool beneath the target. On the
+        # pre-3.5 flat tree is_descendant reduces to the old single-hop, so it's
+        # byte-identical until the data flip.
         if (sloc == target or p_source == target
-                or locations_db.resolve_parent(sloc) == target
-                or locations_db.resolve_parent(p_source) == target):
+                or locations_db.is_descendant(sloc, target, parent_map)
+                or locations_db.is_descendant(p_source, target, parent_map)):
             ids.append(s['id'])
     return ids
 
