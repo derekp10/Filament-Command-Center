@@ -23,8 +23,7 @@ def _active_print_info_for_location(location_str, printer_map=None):
         return None
     loc_up = str(location_str).strip().strip('"').upper()
     if printer_map is None:
-        cfg = config_loader.load_config()
-        printer_map = cfg.get("printer_map", {}) or {}
+        printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     info = printer_map.get(loc_up)
     if not info:
         return None
@@ -58,8 +57,7 @@ def _toolhead_of(location_str, printer_map=None):
     if not location_str:
         return None
     if printer_map is None:
-        cfg = config_loader.load_config()
-        printer_map = cfg.get("printer_map", {})
+        printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     loc = str(location_str).strip().strip('"').upper()
     if loc in printer_map:
         p = printer_map[loc]
@@ -396,7 +394,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     """
     target = target.strip().upper()
     cfg = config_loader.load_config()
-    printer_map = cfg.get("printer_map", {})
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     loc_list = locations_db.load_locations_list()
     loc_info_map = {row['LocationID'].upper(): row for row in loc_list}
     _, fb_url = config_loader.get_api_urls()
@@ -830,7 +828,7 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
     extra = spool_data.get('extra', {})
 
     cfg = config_loader.load_config()
-    printer_map = cfg.get("printer_map", {})
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     sm_url, fb_url = config_loader.get_api_urls()
 
     # Active-print safety: ejecting a spool from a printing toolhead is
@@ -992,7 +990,7 @@ def perform_force_unassign(spool_id, confirm_active_print=False):
     current_location = spool_data.get('location', '').strip().upper()
 
     cfg = config_loader.load_config()
-    printer_map = cfg.get("printer_map", {})
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     sm_url, fb_url = config_loader.get_api_urls()
 
     # Active-print safety: force-unassign from a printing toolhead disrupts
@@ -1046,7 +1044,7 @@ def perform_undo():
     moves = last['moves']
     target = last.get('target')
     origin = last.get('origin', '')
-    cfg = config_loader.load_config(); printer_map = cfg.get("printer_map", {})
+    cfg = config_loader.load_config(); printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2 (dual-read)
     sm_url, fb_url = config_loader.get_api_urls()
     
     # UNDO ordering: unmap the target toolhead FIRST so filabridge sees it
