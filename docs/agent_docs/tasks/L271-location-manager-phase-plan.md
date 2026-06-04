@@ -1,6 +1,6 @@
 # L271 — Location Manager Redesign: Full Phased Implementation Plan
 
-**Status:** IN PROGRESS (authored 2026-06-03 from a verified 24-consumer code map). Phases 1A + 1B + 2 + 2.5 + 3 shipped — **Phase 3 deployed to prod + verified 2026-06-03** (`main` 31bdd3c); **3.5 (tree nesting, deferred)** → 4 → 5 pending.
+**Status:** IN PROGRESS (authored 2026-06-03 from a verified 24-consumer code map). Phases 1A + 1B + 2 + 2.5 + 3 shipped — **Phase 3 deployed to prod + verified 2026-06-03** (`main` 31bdd3c); **3.5 (true multi-level nesting) IN PROGRESS** (branch `feature/l271-phase-3_5`, decisions resolved 2026-06-03 — see the Phase 3.5 section); 4 → 5 pending.
 **Branch (per phase):** `feature/l271-phase-2`, `feature/l271-phase-2_5`, … (one branch per phase, each merged before the next starts).
 **Risk:** escalates by phase — **2 = low, 2.5 = low/medium, 3 = HIGH, 4 = HIGH, 5 = medium.** Phases 3-4 change `locations.json` schema + retire `printer_map`, so they need a startup migration AND prod replication (TrueNAS, Spoolman :7912, `\\TRUENAS\App_Data\InventoryHub`).
 **Verify every phase against the LIVE Docker container** (real Spoolman :7913 + FilaBridge :5001) — unit tests alone don't hit the real topology (see [[feedback_adversarial_review_runtime_lens]]).
@@ -56,6 +56,8 @@ Two concrete payoffs end the bug class:
 | **4** | [locations_db.py:587](../../../inventory-hub/locations_db.py#L587) | `get_bindings_for_machine` | `th_id.split('-',1)[0]` | printer | low |
 | **4** | [app.py:2608](../../../inventory-hub/app.py#L2608) | `_printer_prefix` | `k.split('-',1)[0]` | printer | med |
 | **5** | [locations_db.py:325](../../../inventory-hub/locations_db.py#L325) | `derive_parent_id_from_prefix` | `s.split('-',1)[0]` | parent (the engine) | — |
+
+> **⚠️ Phase 3.5 re-migrates the 4 Phase-2 backend consumers.** They read `resolve_parent` as "the room" — true only while `parent_id` is the flat first-segment. When Phase 3.5 flips `parent_id` to the *immediate* parent, `get_room_from_location` (logic.py:798) moves to `resolve_room`, and the `perform_smart_eject` bypass (logic.py:900) + `_build_location_match` (spoolman_api.py:1238/1246) + `get_spools_at_location_strict` (spoolman_api.py:1351) move to `is_descendant`. See the Phase 3.5 section for the de-risking strategy.
 
 ---
 
@@ -121,6 +123,40 @@ Two concrete payoffs end the bug class:
 **Tests:** `test_locations_json_integrity.py` extended for the Printer Type; `test_printer_status_widget.py` must stay green (it consumes the synthesized printers today); a migration test (dirty printer_map → Printer rows on disk, idempotent on 2nd boot). **Full live E2E** — the dashboard printer status + Location Manager grouping are the highest-traffic consumers.
 **Prod:** ⚠️ run the migration on prod `locations.json`. Back up `\\TRUENAS\App_Data\InventoryHub\locations.json` first. The startup migration handles it, but verify the prod render after deploy.
 
+### Phase 3.5 — True multi-level nesting (HIGH risk — touches the eject + location-query paths) — IN PROGRESS
+
+> **Carved out of Phase 3** (Derek 2026-06-03: "first-class Printers now, nest later"). Phase 3 left printers as top-level roots (`parent_id=None`) and the tree as a **flat 2-level** model (every row sits at one indent under its first-segment root). Phase 3.5 makes the hierarchy *genuinely nested* — `parent_id` becomes each row's **immediate** parent (room→printer→toolhead, cart→rows, …) — and rebuilds the renderer + occupancy + the room/child backend resolvers to walk that multi-level tree.
+
+**Decisions (Derek 2026-06-03, via AskUserQuestion):**
+1. **Nesting depth → FULL immediate-parent.** Re-derive *every* row to its immediate parent (room→printer→toolhead AND cart→cart-rows, etc.), not printers-only.
+2. **"Pin printers to top" → a TOGGLE that lifts printers to a pinned top group.** ON = printers (+ their toolheads) float to a pinned group at the very top for quick access; OFF (default) = printers nest under their room. Persisted in `localStorage` (`fcc.locMgr.pinPrintersTop`) per the pre-Config-system preference convention.
+3. **Room occupancy → TRANSITIVE.** A room's "X Total" includes ALL descendants transitively (incl. the nested printer's toolhead spools). This is also *required* to avoid a regression: once cart-rows re-parent to carts, the old single-level rollup would drop them from the room total (verified: CR "89 Total" today == sum of every CR descendant + 5 floating).
+
+**The consequence the original plan under-scoped — 4 backend consumers break under immediate-parent `parent_id`.** Phase 2 migrated these to `resolve_parent`, which today returns the ROOM only because `parent_id` is the flat first-segment. Once `parent_id` is the *immediate* parent, `resolve_parent(CR-CT-1-R1)` returns `CR-CT-1` (the cart), not `CR` (the room) — so all four must walk the chain instead:
+
+| File:Line | Symbol | Needs | Why it breaks on flat→immediate |
+|-----------|--------|-------|----------------------------------|
+| [logic.py:798](../../../inventory-hub/logic.py#L798) | `get_room_from_location` | `resolve_room` (walk to top-level room) | returns the cart, not the room → eject relocates a cart-row spool to the cart |
+| [logic.py:900](../../../inventory-hub/logic.py#L900) | `perform_smart_eject` bypass | `is_descendant` | only direct children match → eject-loop guard stops firing for grandchildren |
+| [spoolman_api.py:1238/1246](../../../inventory-hub/spoolman_api.py#L1238) | `_build_location_match` | `is_descendant` | a room query misses spools in cart-rows (dashboard / printer status / grids) |
+| [spoolman_api.py:1351](../../../inventory-hub/spoolman_api.py#L1351) | `get_spools_at_location_strict` | `is_descendant` | the printer_map-removal safety guard under-counts |
+
+**De-risking strategy (the Phase 2 method, reused):** land the hierarchy-walk helpers + migrate each consumer **proving byte-identical behavior on the current flat tree FIRST** (where room == immediate parent, so `resolve_room`/`is_descendant` reduce to the old equality), one commit each. THEN flip the data — the same helpers are correct in the nested world (`resolve_room(CR-CT-1-R1)`: CR-CT-1-R1→CR-CT-1→CR→None = CR ✓; `is_descendant(CR-CT-1-R1, CR)` walks the chain ✓). A defect can't hide: the A/B pins identity pre-flip; the live container verifies post-flip.
+
+**Steps (one commit each, verified against the live :7913 / 238-spool container):**
+1. **Helpers** — `resolve_room(row_or_id, loc_list)` (walk `parent_id` up to the top-level room, skipping the `TST/TEST/PM/PJ` pseudo-prefixes; cycle-guarded) and `is_descendant(child, ancestor, loc_list)` (walk up; cycle-guarded) in [locations_db.py](../../../inventory-hub/locations_db.py). Pure additive; no consumer reads them yet.
+2. **Migrate `get_room_from_location`** → `resolve_room` (logic.py). A/B identical on current tree.
+3. **Migrate `perform_smart_eject` bypass** → `is_descendant` (logic.py). ⚠️ fragile eject path — test with a real ghost-trail spool on the live container.
+4. **Migrate `_build_location_match` + `get_spools_at_location_strict`** → `is_descendant` (spoolman_api.py). ⚠️ feeds dashboard/printer-status/grids — A/B counts on the live container.
+5. **Data migration** `migrate_immediate_parent_ids_if_needed(loc_list, printer_map)` (locations_db, startup, timestamped backup like Phase 1A):
+   - **Immediate parent** = the longest LocationID prefix (strip trailing `-SEGMENT` repeatedly) that matches an existing on-disk row; fall back to `derive_parent_id_from_prefix` (flat first-segment) when no on-disk ancestor exists — keeps the `PM/PJ/TST` boxes pointing at their (virtual-room) prefix exactly as today.
+   - **Printers** (`Type:"Printer"`) → their room: auto-derive from a toolhead child's `Location` field matched to a `Room` row's `Name` (XL toolheads carry "Living Room" → `LR`); fall back to the recorded override map `{XL: LR, CORE1: CR}` for printers with no derivable Location (CORE1 is dual-role with no toolhead children); else `None` + WARN. Validate the resolved room is a real on-disk Room row before assigning.
+   - **Idempotency + respect-override rule:** only re-derive a row whose current `parent_id` still equals its OLD default (`derive_parent_id_from_prefix`, i.e. it carries the Phase-1A/2.5 flat value) AND whose target differs. Rows already at their immediate target, or carrying an operator-set value that differs from both, are left alone. This is idempotent (2nd boot = no-op) and never clobbers a deliberate re-parent.
+6. **Transitive occupancy** (app.py `/api/locations` synthesizer): replace the single-level `room_occupancy` rollup with a transitive subtree walk (`subtree_total[anc] += count` for every ancestor, skipping `TST/PM/PJ`, cycle-guarded). Switch the "X Total (Y floating)" display from the `"-" not in lid` (dash-free) test to **`has_children(lid)`** (a real parent in the tree) so every parent — room, printer, AND cart — shows its subtree total + floating, while leaves (dryer boxes, drawers, shelves, the dual-role CORE1) show `curr/max` or `n items`. **Expected /api diff** (pin in a test): `LR` 7→**9** (XL's 2 toolheads fold in), `CR` 89→**90** (CORE1's 1 spool folds in), `CORE1` "1 Total (1 floating)"→**"1/1"** (now a childless leaf under CR), carts gain subtree totals (`CR-CT-1` "3 items"→**"19 Total (3 floating)"**), `DR`/`XL`/PM/PJ/TST unchanged.
+7. **Multi-level renderer** ([inv_core.js](../../../inventory-hub/static/js/modules/inv_core.js) `_renderLocationsPayload`, tree branch — only when `sortBy==='LocationID'`): build a `parent_id`→children map (case-insensitive); DFS render with depth-based indent; **nested collapse** via a `state.locCollapsed` set + a per-row ancestor chain (`data-ancestors`) so collapsing a room hides its printer AND toolheads, and re-expanding restores each node's own collapsed state; migrate `hasChildren` (564/593) OFF `startsWith` ONTO the parent_id child-map (now safe — hierarchy is genuinely nested). **Pin toggle** in the Location Manager header (`modals_loc_mgr.html`): when ON, render printer subtrees first under a "★ Printers" divider and drop them from their room's children. Register the toggle's keyboard story via `window.registerShortcut` if it gets a hotkey.
+8. **Tests + visual baseline:** migration unit tests (immediate-parent algorithm, printer-room derivation, idempotency, override-respect, PM/PJ/TST fallback), transitive-occupancy A/B, `resolve_room`/`is_descendant` unit tests, a `test_l271_phase35_*` pin/tree-render test, and a **fresh visual baseline** for the nested tree (`UPDATE_VISUAL_BASELINES=1`). `test_l271_phase2_consumers.py` + `test_l271_location_tree_render.py` must stay green.
+**Prod:** ⚠️ same as Phase 3 — back up `\\TRUENAS\App_Data\InventoryHub\locations.json`; the startup migration re-derives parent_ids + sets printer rooms; verify the prod render (nesting + room totals) after deploy.
+
 ### Phase 4 — Fold `printer_map` into `locations.json` (HIGH risk) — **dissolves Group 20**
 **Goal:** the Printer row owns a `toolheads: [{position, LocationID, mmu_routed}]` array; retire `config.json:printer_map`.
 
@@ -152,10 +188,10 @@ Two concrete payoffs end the bug class:
 ## 5. Sequencing, dependencies, and effort
 
 ```
-1A ✅ → 1B ✅ → [2] → [2.5] → [3 *] → [4 **] → [5]
-                                  ↑          ↑
-                       unblocks Color    dissolves Group 20
-                          Loadout        (20.1/20.2/20.3)
+1A ✅ → 1B ✅ → 2 ✅ → 2.5 ✅ → 3 ✅* → [3.5] → [4 **] → [5]
+                                   ↑                ↑
+                        unblocks Color         dissolves Group 20
+                           Loadout             (20.1/20.2/20.3)
 ```
 - **Hard dependency:** 2 before 2.5 (frontend needs the field surfaced + backend proven); 2.5 before 3 (don't retire the synthesizer while consumers still prefix-parse); 3 before 4 (toolheads attach to real Printer rows); 4 before 5 (don't delete the fallback until everything reads FKs).
 - **Rough effort:** Phase 2 ~3-4h, 2.5 ~2-3h, 3 ~6-8h, 4 ~8-12h (incl. Group 20), 5 ~3-4h. **Total ~22-31h** across several sessions.
