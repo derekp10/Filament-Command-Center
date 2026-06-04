@@ -29,7 +29,11 @@ def _read_app():
         return f.read()
 
 
-# Mirrors prod config.json:printer_map (note the position GAP — XL-5 is 5, no 4).
+# A deliberately NON-CONTIGUOUS example (XL-5 at position 5) — proves the migration
+# preserves `position` VERBATIM and never renumbers to 0..N-1. NOTE: this is synthetic,
+# NOT XL's real data. Real XL is contiguous 0..4 (`position` = FilaBridge toolhead_id,
+# 0-based); the prod "5" was a typo Derek fixed to 4 on 2026-06-04. We keep a synthetic
+# gap here purely to lock in the no-auto-resequence guarantee (matters for the Step-4 PUT).
 PRINTER_MAP = {
     "XL-1": {"printer_name": "🦝 XL", "position": 0},
     "XL-2": {"printer_name": "🦝 XL", "position": 1},
@@ -64,7 +68,7 @@ def test_fold_writes_sorted_toolheads_with_position_gap():
         {"location_id": "XL-2", "position": 1},
         {"location_id": "XL-3", "position": 2},
         {"location_id": "XL-4", "position": 3},
-        {"location_id": "XL-5", "position": 5},   # gap at 4 preserved, not 0..N-1
+        {"location_id": "XL-5", "position": 5},   # synthetic non-contiguous position preserved verbatim (no auto-renumber)
     ]
     core1 = [r for r in out if r["LocationID"] == "CORE1"][0]
     assert core1["toolheads"] == [{"location_id": "CORE1", "position": 0}]
