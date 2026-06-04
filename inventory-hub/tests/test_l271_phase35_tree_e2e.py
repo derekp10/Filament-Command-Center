@@ -6,7 +6,6 @@ hides its printer AND that printer's toolheads), and the pin-printers toggle
 floating printer subtrees to the top. Skips cleanly when the dev server is
 down (require_server).
 """
-import pytest
 from playwright.sync_api import Page
 
 
@@ -19,9 +18,10 @@ def _open_mgr(page: Page, base_url: str):
 
 
 def _rows(page: Page):
+    # data-ancestors is JSON-encoded (review fix #8: survives space-containing ids)
     return page.evaluate("""() => [...document.querySelectorAll('#location-table tr')].map(tr => ({
         id: tr.dataset.locid || '',
-        anc: tr.dataset.ancestors || '',
+        anc: (() => { try { return JSON.parse(tr.dataset.ancestors || '[]'); } catch (e) { return []; } })(),
         divider: tr.classList.contains('loc-divider') ? tr.textContent.trim() : null,
         hidden: tr.style.display === 'none',
         toggle: !!tr.querySelector('.loc-toggle'),
@@ -33,10 +33,10 @@ def test_tree_is_multilevel(page: Page, base_url: str, require_server):
     _open_mgr(page, base_url)
     rows = {r["id"]: r for r in _rows(page) if r["id"]}
     if "XL-1" in rows:  # depends on the seeded printer
-        assert rows["XL-1"]["anc"].split() == ["LR", "XL"], (
+        assert rows["XL-1"]["anc"] == ["LR", "XL"], (
             f"XL-1 should nest LR>XL>XL-1, got ancestors {rows['XL-1']['anc']!r}"
         )
-        assert rows["XL"]["anc"].split() == ["LR"], "XL should nest under LR"
+        assert rows["XL"]["anc"] == ["LR"], "XL should nest under LR"
         assert rows["XL"]["toggle"], "XL has toolhead children → expand toggle"
 
 
@@ -47,14 +47,14 @@ def test_collapse_room_hides_whole_subtree(page: Page, base_url: str, require_se
     page.evaluate("window.toggleLocNode('CR')")
     page.wait_for_timeout(200)
     after = _rows(page)
-    leaked = [r["id"] for r in after if r["id"] and not r["hidden"] and "CR" in r["anc"].split()]
+    leaked = [r["id"] for r in after if r["id"] and not r["hidden"] and "CR" in r["anc"]]
     assert not leaked, f"CR descendants still visible after collapse: {leaked}"
-    hidden = [r for r in after if r["id"] and r["hidden"] and "CR" in r["anc"].split()]
+    hidden = [r for r in after if r["id"] and r["hidden"] and "CR" in r["anc"]]
     assert len(hidden) >= 5, "expected the whole CR subtree hidden"
     # re-expand
     page.evaluate("window.toggleLocNode('CR')")
     page.wait_for_timeout(200)
-    reshown = [r["id"] for r in _rows(page) if r["id"] and not r["hidden"] and "CR" in r["anc"].split()]
+    reshown = [r["id"] for r in _rows(page) if r["id"] and not r["hidden"] and "CR" in r["anc"]]
     assert reshown, "re-expanding CR should restore its descendants"
 
 

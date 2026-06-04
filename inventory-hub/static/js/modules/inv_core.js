@@ -92,6 +92,17 @@ const logClientEvent = (msg, level = 'INFO') => {
 };
 window.logClientEvent = logClientEvent;
 
+// L271 Phase 3.5 (review fix #3): HTML/attribute escape for any user-controlled
+// value interpolated into innerHTML (LocationID + Name come from free-text edit
+// fields and from Spoolman-native location names — stored-XSS sources). Escapes
+// both text and attribute contexts; for JS-string contexts (onclick) we use
+// delegated listeners instead (see scripts.html location-table handler).
+const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+const escAttr = escHtml;
+window.escHtml = escHtml;
+
 const showToast = (msg, type = 'info', duration = 2000) => {
     let c = document.getElementById('toast-container');
     if (!c) { c = document.createElement('div'); c.id = 'toast-container'; document.body.appendChild(c); }
@@ -536,6 +547,12 @@ const _renderLocationsPayload = (d) => {
             const rowOnly = ordered.filter(e => e.row).map(e => e.row);
             state.allLocations = rowOnly;
 
+            // L271 Phase 3.5 (review fix #15): prune collapse state to live parent
+            // nodes so a deleted/renamed id can't resurrect as collapsed on a
+            // later row that reuses the same id.
+            const _liveParents = new Set(display.filter(e => e.hasKids).map(e => upper(e.row.LocationID)));
+            state.locCollapsed = new Set([...state.locCollapsed].filter(id => _liveParents.has(id)));
+
             // --- NO WIGGLE CHECK (include tree-affecting UI state) ---
             const contentHash = JSON.stringify(rowOnly) + "|" + state.locSortBy + "|" + state.locSortDir + "|pin:" + pinPrinters;
             if (state.lastLocationsHash === contentHash) { applyLocCollapse(); _syncPinPrintersBtn(); return; }
@@ -599,7 +616,7 @@ const _renderLocationsPayload = (d) => {
                     // stands out at the bottom of the table.
                     else if (t.includes('Unknown')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #ffd54a; box-shadow: 0 0 6px rgba(255,193,7,0.6);'; }
 
-                    const typeBadge = `<span class="badge ${badgeClass}" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
+                    const typeBadge = `<span class="badge ${badgeClass}" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${escHtml(l.Type)}</span>`;
 
                     // L271 Phase 3.5: depth-based indent + a real expand/collapse
                     // toggle driven by the tree (entry.hasKids), replacing the
@@ -614,7 +631,11 @@ const _renderLocationsPayload = (d) => {
                         const pad = depth * 22;
                         let knob;
                         if (hasKids) {
-                            knob = `<span class="loc-toggle" onclick="window.toggleLocNode('${lidUC}')" title="Collapse / expand" style="cursor:pointer; font-family: monospace; border: 1px solid #555; border-radius: 3px; padding: 0 4px; margin-right: 6px; color:#aaa; background:#222; user-select:none; font-size:1rem; box-shadow:inset 0 0 3px #000;">-</span>`;
+                            // L271 Phase 3.5 (review fix #3): no inline onclick — the
+                            // toggle is delegated off .loc-toggle + the row's data-locid
+                            // (see scripts.html), so a quote in a LocationID can't break
+                            // out into script.
+                            knob = `<span class="loc-toggle" title="Collapse / expand" style="cursor:pointer; font-family: monospace; border: 1px solid #555; border-radius: 3px; padding: 0 4px; margin-right: 6px; color:#aaa; background:#222; user-select:none; font-size:1rem; box-shadow:inset 0 0 3px #000;">-</span>`;
                         } else if (depth > 0) {
                             knob = `<span style="display:inline-block; width: 20px; border-left: 2px solid #555; border-bottom: 2px solid #555; height: 16px; margin-right: 8px; margin-bottom: 6px;"></span>`;
                         } else {
@@ -623,21 +644,28 @@ const _renderLocationsPayload = (d) => {
                         indent = `<span style="display:inline-block; width:${pad}px;"></span>${knob}`;
                     }
 
-                    const ancAttr = (entry.ancestors || []).join(' ');
+                    // L271 Phase 3.5 (review fix #3/#8): JSON-encode the ancestor
+                    // chain (escaped for the attribute) so a LocationID containing a
+                    // space — Spoolman-native names can — survives round-trip
+                    // (split(' ') would have shredded it), and a quote can't break the
+                    // attribute. Every interpolated user value is escaped (stored XSS
+                    // via Name / LocationID).
+                    const ancAttr = escAttr(JSON.stringify(entry.ancestors || []));
+                    const lidEsc = escAttr(l.LocationID);
 
                     return `
-                <tr data-locid="${lidUC}" data-ancestors="${ancAttr}" id="loc-row-${l.LocationID}">
-                    <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem; white-space: nowrap;">${indent}${l.LocationID}</td>
-                    <td class="col-name text-pop-light" style="font-weight:800; font-size:1.1rem; color:#fff;">${l.Name}</td>
+                <tr data-locid="${escAttr(lidUC)}" data-ancestors="${ancAttr}" id="loc-row-${lidEsc}">
+                    <td class="col-id" style="font-weight:bold; color:#00d4ff; font-size:1.1rem; white-space: nowrap;">${indent}${escHtml(l.LocationID)}</td>
+                    <td class="col-name text-pop-light" style="font-weight:800; font-size:1.1rem; color:#fff;">${escHtml(l.Name)}</td>
                     <td class="col-type">${typeBadge}</td>
                     <td class="col-status">${statusHtml}</td>
                     <td class="col-actions text-end" style="white-space: nowrap;">
-                        <button class="btn btn-sm btn-outline-light me-1 btn-qr" onclick="window.showGlobalQrModal('${l.LocationID}')" title="Show QR">📱 QR</button>
+                        <button class="btn btn-sm btn-outline-light me-1 btn-qr" data-id="${lidEsc}" title="Show QR">📱 QR</button>
                         ${l.Type !== 'Virtual' ? `
-                        <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${l.LocationID}">✏️</button>
-                        <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${l.LocationID}">🗑️</button>
+                        <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>
+                        <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>
                         ` : ''}
-                        <button class="btn btn-sm btn-info btn-manage fw-bold" data-id="${l.LocationID}">Manage</button>
+                        <button class="btn btn-sm btn-info btn-manage fw-bold" data-id="${lidEsc}">Manage</button>
                     </td>
                 </tr>`;
                 }).join('');
@@ -657,13 +685,24 @@ const _syncPinPrintersBtn = () => {
     const btn = document.getElementById('loc-pin-printers-btn');
     if (!btn) return;
     const on = _readPinPrinters();
-    btn.classList.toggle('active', on);
-    btn.classList.toggle('btn-warning', on);
-    btn.classList.toggle('btn-outline-warning', !on);
-    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    // L271 Phase 3.5 (review fix #16): pin only affects the LocationID tree
+    // view. In any other sort, disable + grey the button (and don't show the
+    // lit "Pinned" state) so it isn't a confusing no-op.
+    const treeMode = state.locSortBy === 'LocationID';
+    btn.disabled = !treeMode;
+    btn.style.opacity = treeMode ? '' : '0.5';
+    btn.title = treeMode
+        ? 'Float printers to the top of the tree for quick access'
+        : 'Sort by ID to pin printers';
+    const lit = on && treeMode;
+    btn.classList.toggle('active', lit);
+    btn.classList.toggle('btn-warning', lit);
+    btn.classList.toggle('btn-outline-warning', !lit);
+    btn.setAttribute('aria-pressed', lit ? 'true' : 'false');
     btn.innerHTML = on ? '📌 Printers Pinned' : '📌 Pin Printers';
 };
 window.toggleLocPinPrinters = () => {
+    if (state.locSortBy !== 'LocationID') return;  // no-op outside the tree view
     const next = _readPinPrinters() ? '0' : '1';
     try { localStorage.setItem(PIN_PRINTERS_KEY, next); } catch (_) { /* private mode */ }
     state.lastLocationsHash = null;  // force a full re-render (tree shape changes)
@@ -704,7 +743,11 @@ function applyLocCollapse() {
     if (!state.locCollapsed) state.locCollapsed = new Set();
     const collapsed = state.locCollapsed;
     document.querySelectorAll('#location-table tr[data-locid]').forEach(tr => {
-        const anc = (tr.dataset.ancestors || '').split(' ').filter(Boolean);
+        // L271 Phase 3.5 (review fix #8): ancestors are JSON-encoded so a
+        // LocationID containing a space round-trips intact (a space delimiter
+        // would have split it and broken collapse).
+        let anc = [];
+        try { anc = JSON.parse(tr.dataset.ancestors || '[]'); } catch (_) { anc = []; }
         tr.style.display = anc.some(a => collapsed.has(a)) ? 'none' : '';
         const btn = tr.querySelector('.loc-toggle');
         if (btn) {

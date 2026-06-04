@@ -216,3 +216,18 @@ def test_tree_grouping_case_insensitive():
     normalizes both sides via upper()."""
     js = _js()
     assert "const upper = (v) =>" in js and "toUpperCase()" in js
+
+
+def test_row_markup_escapes_user_values():
+    """Review fix #3/#8: LocationID/Name/Type are escaped into innerHTML, the
+    ancestor chain is JSON-encoded (not space-joined), and the toggle/QR carry
+    no inline onclick with a raw LocationID (delegated off data attributes)."""
+    js = _js()
+    assert "const escHtml = " in js, "escape helper must exist"
+    assert "${escHtml(l.Name)}" in js and "${escHtml(l.Type)}" in js, "cells must be escaped"
+    assert "escAttr(JSON.stringify(entry.ancestors" in js, "ancestors must be JSON-encoded + escaped"
+    assert "toggleLocNode('${" not in js, "toggle must NOT inline a raw LocationID into onclick"
+    assert "showGlobalQrModal('${" not in js, "QR must NOT inline a raw LocationID into onclick"
+    html = _read("templates", "components", "scripts.html")
+    assert ".loc-toggle" in html and "row.dataset.locid" in html, "toggle must be delegated"
+    assert "JSON.parse(tr.dataset.ancestors" in js, "collapse must JSON-parse ancestors"
