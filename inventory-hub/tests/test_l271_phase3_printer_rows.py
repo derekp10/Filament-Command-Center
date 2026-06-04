@@ -10,8 +10,17 @@ Covers the two real-world shapes: XL (no on-disk row → append) and CORE1
 in place + drop the stub), plus idempotency and name resolution.
 """
 import copy
+import os
+
+import pytest
 
 import locations_db
+
+
+def _read_app():
+    here = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    with open(os.path.join(here, "app.py"), "r", encoding="utf-8") as f:
+        return f.read()
 
 
 PRINTER_MAP = {
@@ -81,3 +90,28 @@ def test_printer_name_fallback():
     out, changed = locations_db.migrate_printers_to_rows_if_needed([], {"ZZ-1": {"position": 0}})
     zz = [r for r in out if r["LocationID"] == "ZZ"]
     assert zz and zz[0]["Name"] == "ZZ System"
+
+
+def test_synthesizer_no_longer_injects_printers():
+    """The /api/locations synthesizer must no longer conjure Type:'Printer'
+    rows — printers are first-class on disk now. Guards against re-introducing
+    the prefix-grouping printer synthesis (the source of the CORE1 'Virtual
+    Room' quirk)."""
+    app = _read_app()
+    assert "printer_prefixes_to_inject" not in app, "the printer-prefix synthesis seed must stay retired"
+    assert '"Type": "Printer" if is_printer' not in app, "the synthesizer must not set Type:Printer"
+
+
+@pytest.mark.integration
+def test_printers_are_first_class_on_disk(api_base_url, require_server):
+    """Live: XL and the Core One surface as Type:'Printer' rows, and CORE1
+    carries its real printer name (the fixed quirk), not 'CORE1 (Room)'."""
+    import requests
+    rows = requests.get(f"{api_base_url}/api/locations", timeout=10).json()
+    by = {str(r.get("LocationID")): r for r in rows}
+    assert by.get("XL", {}).get("Type") == "Printer"
+    core1 = by.get("CORE1", {})
+    assert core1.get("Type") == "Printer", f"CORE1 should be a Printer, got {core1.get('Type')!r}"
+    assert "(Room)" not in str(core1.get("Name", "")), (
+        f"CORE1 still shows the room-quirk name: {core1.get('Name')!r}"
+    )

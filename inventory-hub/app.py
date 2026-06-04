@@ -1472,76 +1472,38 @@ def api_get_locations():
             room_occupancy[loc] = room_occupancy.get(loc, 0) + count
             room_floating[loc] = room_floating.get(loc, 0) + count
 
-    # 2. Inject Virtual Rooms/Printers if they don't exist
+    # 2. Inject Virtual Rooms for occupancy-only prefixes.
     #
-    # Two seeds: any prefix that has spool occupancy today (room_occupancy),
-    # AND every printer prefix declared in config.json's printer_map (even
-    # when no spool is currently deployed). The printer_map seed makes
-    # "🦝 Core One Upgraded" show up as a Printer parent in the Location
-    # Manager even if every CORE1 toolhead is empty — without it, an
-    # all-idle printer disappears from the grouping until a spool lands.
-    cfg_for_synth = config_loader.load_config()
-    pm_for_synth = cfg_for_synth.get('printer_map', {}) or {}
-    printer_prefixes_to_inject = {
-        str(loc_id).upper().split('-', 1)[0]
-        for loc_id in pm_for_synth.keys()
-        if '-' in str(loc_id)
-    }
-
-    parents_to_consider = set(room_occupancy.keys()) | printer_prefixes_to_inject
-
-    for parent in parents_to_consider:
-        # Promote a row that exists with an empty/missing Type to a real
-        # Printer/Virtual Room — locations.json sometimes carries a
-        # parent placeholder (manual edit or legacy state) with Type=""
-        # which strands the row in "Unassigned" rendering. Treat empty
-        # Type the same as "not in local_map" for the inject decision.
+    # L271 Phase 3: printers are now first-class on-disk Type:"Printer" rows
+    # (written by locations_db.migrate_printers_to_rows_if_needed at startup),
+    # so this no longer synthesizes them — the printer-prefix seed and the
+    # is_printer / printer_name detection were RETIRED. It now only conjures a
+    # Virtual Room for a prefix that has spool occupancy today but no on-disk
+    # parent row of its own. Any parent that already has a real on-disk row —
+    # the first-class Printer rows included — is skipped by the existing-row
+    # check below, so they flow through from disk untouched.
+    for parent in set(room_occupancy.keys()):
+        # Skip a parent that already has a real on-disk row. A blank-Type
+        # placeholder (legacy/manual state that would otherwise strand the row
+        # in "Unassigned" rendering) is promoted in place instead.
         existing = local_map.get(parent)
         existing_type_blank = bool(existing) and not str(existing.get('Type', '')).strip()
         if existing and not existing_type_blank:
             continue
 
-        # Check children types AND printer_map to determine if this is a
-        # Printer or a Room. printer_map is authoritative — if the parent
-        # has any toolhead registered there, it's a Printer.
-        is_printer = parent in printer_prefixes_to_inject
-        if not is_printer:
-            for c_loc, meta in local_map.items():
-                if c_loc.startswith(parent + "-"):
-                    t = str(meta.get('Type', '')).lower()
-                    if 'printer' in t or 'tool head' in t or 'mmu' in t:
-                        is_printer = True
-                        break
-
-        # Pick a friendly name from printer_map's printer_name when it's
-        # a printer (so we get "🦝 Core One Upgraded" instead of "CORE1
-        # System"). Fall back to the legacy synthetic name otherwise.
-        synthetic_name = None
-        if is_printer:
-            for loc_id, info in pm_for_synth.items():
-                if str(loc_id).upper().startswith(parent + '-') or str(loc_id).upper() == parent:
-                    if info.get('printer_name'):
-                        synthetic_name = info['printer_name']
-                        break
-        if not synthetic_name:
-            synthetic_name = f"{parent} System" if is_printer else f"{parent} (Room)"
-
         synthetic_row = {
             "LocationID": parent,
-            "Name": synthetic_name,
-            "Type": "Printer" if is_printer else "Virtual Room",
+            "Name": f"{parent} (Room)",
+            "Type": "Virtual Room",
             "Max Spools": 0,
             "OccupancyRaw": 0,
-            # L271 Phase 2.5: expose parent_id so the frontend tree can read
-            # row.parent_id uniformly. `parent` is always a dash-free first
-            # segment (a top-level root), so parent_id is null here — this
-            # preserves the old "synthetic printer/room renders as a root"
-            # behavior. Phase 3 will give a first-class Printer its real room.
+            # L271 Phase 2.5: expose parent_id so the frontend tree reads it
+            # uniformly. `parent` is a dash-free top-level prefix → null.
             "parent_id": None,
         }
 
         if existing_type_blank:
-            # Replace the broken existing row in-place rather than appending
+            # Replace the broken blank-Type row in-place rather than appending
             # a duplicate (would trip duplicate-LocationID guards downstream).
             for i, r in enumerate(csv_rows):
                 if str(r.get('LocationID', '')).upper() == parent:
