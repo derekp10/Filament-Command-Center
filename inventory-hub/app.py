@@ -1498,6 +1498,12 @@ def api_get_locations():
             "Type": "Printer" if is_printer else "Virtual Room",
             "Max Spools": 0,
             "OccupancyRaw": 0,
+            # L271 Phase 2.5: expose parent_id so the frontend tree can read
+            # row.parent_id uniformly. `parent` is always a dash-free first
+            # segment (a top-level root), so parent_id is null here — this
+            # preserves the old "synthetic printer/room renders as a root"
+            # behavior. Phase 3 will give a first-class Printer its real room.
+            "parent_id": None,
         }
 
         if existing_type_blank:
@@ -1517,7 +1523,8 @@ def api_get_locations():
         "Name": "Workbench / Unsorted",
         "Type": "Virtual",
         "Occupancy": f"{unassigned_count} items",
-        "Max Spools": 0
+        "Max Spools": 0,
+        "parent_id": None,  # L271 Phase 2.5 — virtual top-level row
     })
 
     for row in csv_rows:
@@ -1569,6 +1576,7 @@ def api_get_locations():
         "Type": "Unknown",
         "Occupancy": f"{unknown_count} items",
         "Max Spools": 0,
+        "parent_id": None,  # L271 Phase 2.5 — virtual top-level row
     })
     return jsonify(final_list)
 
