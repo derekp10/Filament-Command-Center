@@ -457,15 +457,24 @@ const _renderLocationsPayload = (d) => {
                     valA = parseOcc(valA);
                     valB = parseOcc(valB);
                 } else if (state.locSortBy === 'LocationID') {
-                    // Extract tree root for parent-child grouping
-                    let rootA = (a.LocationID || '').split('-')[0];
-                    let rootB = (b.LocationID || '').split('-')[0];
+                    // Extract tree root for parent-child grouping.
+                    // L271 Phase 2.5: read the parent_id field that /api/locations
+                    // now exposes on every row. It is the flat first-segment
+                    // prefix this phase, so it is identical to the old
+                    // LocationID.split('-')[0]; the split is kept only as a
+                    // rollout fallback for a payload that predates the field.
+                    let rootA = a.parent_id != null ? a.parent_id : (a.LocationID || '').split('-')[0];
+                    let rootB = b.parent_id != null ? b.parent_id : (b.LocationID || '').split('-')[0];
                     let typeA = '';
                     let typeB = '';
                     
-                    const rootAItem = d.find(l => l.LocationID === rootA);
+                    // L271 Phase 2.5 (review): match case-insensitively. rootA/B
+                    // come from parent_id (uppercased) while a LocationID may be
+                    // mixed-case (a Spoolman-native name or an unnormalized form
+                    // entry). No-op for all-uppercase data.
+                    const rootAItem = d.find(l => String(l.LocationID).toUpperCase() === String(rootA).toUpperCase());
                     if (rootAItem) typeA = rootAItem.Type || '';
-                    const rootBItem = d.find(l => l.LocationID === rootB);
+                    const rootBItem = d.find(l => String(l.LocationID).toUpperCase() === String(rootB).toUpperCase());
                     if (rootBItem) typeB = rootBItem.Type || '';
 
                     let isAPrinter = typeA.includes('Printer');
@@ -552,15 +561,35 @@ const _renderLocationsPayload = (d) => {
                     const typeBadge = `<span class="badge ${badgeClass}" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
 
                     let indent = '';
-                    let parentId = l.LocationID.includes('-') ? l.LocationID.split('-')[0] : l.LocationID;
+                    // L271 Phase 2.5: resolve the tree root from row.parent_id
+                    // (flat first-segment prefix this phase = identical to the
+                    // old split; split kept only as a rollout fallback).
+                    let parentId = l.parent_id != null ? l.parent_id : (l.LocationID.includes('-') ? l.LocationID.split('-')[0] : l.LocationID);
+                    // Case-insensitive grouping (review): parent_id is uppercased
+                    // but a LocationID may be mixed-case (Spoolman-native name /
+                    // unnormalized form). Uppercase both sides so the child test,
+                    // the loc-child-of-<id> class, and toggleLocNode's selector
+                    // stay consistent. No-op for all-uppercase data.
+                    const parentUC = String(parentId).toUpperCase();
+                    const lidUC = String(l.LocationID).toUpperCase();
                     let isChild = false;
                     let hasChildren = false;
 
                     if (state.locSortBy === 'LocationID') {
-                        isChild = l.LocationID.includes('-') && !['TST','TEST','PM','PJ'].includes(parentId);
+                        // A row is a child when its resolved parent differs from
+                        // its own LocationID — equivalent to the old
+                        // LocationID.includes('-') because parentId already folds
+                        // in the parent_id field / split fallback.
+                        isChild = (parentUC !== lidUC) && !['TST','TEST','PM','PJ'].includes(parentUC);
                         if (isChild) {
                             indent = '<span style="display:inline-block; width: 20px; border-left: 2px solid #555; border-bottom: 2px solid #555; height: 16px; margin-right: 8px; margin-bottom: 6px; margin-left: 10px;"></span>';
                         } else {
+                            // L271 Phase 2.5: hasChildren stays a startsWith
+                            // descendant query — NOT a parent_id check. parent_id
+                            // is the flat first-segment prefix this phase, and
+                            // synthesized descendant rows carry parent_id:null, so
+                            // a parent_id-equality test would diverge here. This
+                            // migrates in Phase 3 when hierarchy becomes truly nested.
                             hasChildren = finalList.some(c => c.LocationID !== l.LocationID && c.LocationID.startsWith(l.LocationID + '-'));
                             if (hasChildren && !['TST','TEST','PM','PJ'].includes(l.LocationID)) {
                                 indent = `<span onclick="window.toggleLocNode('${l.LocationID}', this)" style="cursor:pointer; font-family: monospace; border: 1px solid #555; border-radius: 3px; padding: 0 4px; margin-right: 6px; color:#aaa; background:#222; user-select:none; font-size:1rem; box-shadow:inset 0 0 3px #000;" class="text-pop-light">-</span>`;
@@ -568,7 +597,7 @@ const _renderLocationsPayload = (d) => {
                         }
                     }
 
-                    const rowClass = isChild ? `loc-child-of-${parentId}` : '';
+                    const rowClass = isChild ? `loc-child-of-${parentUC}` : '';
 
                     return `
                 <tr class="${rowClass}" id="loc-row-${l.LocationID}">
@@ -616,7 +645,9 @@ window.toggleLocNode = (parentId, btnEl) => {
     const isExpanded = btnEl.innerText === '-';
     // Use .startsWith on ID rather than explicit classes to support deeper nesting dynamically
     // Actually our loc-child-of class is perfect as it targets immediate children implicitly
-    const rows = document.querySelectorAll(`.loc-child-of-${parentId}`);
+    // L271 Phase 2.5 (review): uppercase to match the loc-child-of-<id> class,
+    // which is built from the uppercased parent (parentUC). No-op for uppercase ids.
+    const rows = document.querySelectorAll(`.loc-child-of-${String(parentId).toUpperCase()}`);
     rows.forEach(r => {
         r.style.display = isExpanded ? 'none' : '';
     });

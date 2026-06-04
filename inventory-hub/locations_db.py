@@ -216,18 +216,23 @@ def save_locations_list(new_list):
     final critical log if it still fails — the caller already got
     "success" by then, so we don't raise.
     """
+    # Returns True when the new list is durably persisted + verified, False on
+    # any failure path (refused-empty, atomic-write error, or verify-after-write
+    # never recovering). Historically returned None everywhere; callers that
+    # ignore the result are unaffected, but a migration can now log honestly
+    # instead of claiming success after a silent save failure.
     if not new_list:
-        return
+        return False
     try:
         _write_locations_atomic(new_list)
     except Exception as e:
         state.logger.error(f"JSON Write Error (atomic-replace failed): {e}")
-        return
+        return False
 
     ok, detail = _verify_locations_file(new_list)
     if ok:
         state.logger.info("💾 Locations JSON updated")
-        return
+        return True
 
     # Tripwire — the file replaced cleanly but the on-disk content doesn't
     # parse. Log critical with diagnostics, then retry the write once.
@@ -241,16 +246,17 @@ def save_locations_list(new_list):
         state.logger.critical(
             f"locations.json verify-after-write retry ALSO failed (atomic-replace error): {e}"
         )
-        return
+        return False
 
     ok2, detail2 = _verify_locations_file(new_list)
     if ok2:
         state.logger.warning("locations.json verify-after-write recovered on retry.")
-    else:
-        state.logger.critical(
-            f"locations.json verify-after-write retry STILL failed: {detail2}. "
-            f"On-disk state may be corrupt — operator inspection required."
-        )
+        return True
+    state.logger.critical(
+        f"locations.json verify-after-write retry STILL failed: {detail2}. "
+        f"On-disk state may be corrupt — operator inspection required."
+    )
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -383,9 +389,136 @@ def _known_printer_prefixes(printer_map):
     """
     prefixes = set()
     for key in (printer_map or {}).keys():
-        ku = str(key).upper()
+        ku = str(key).strip().upper()   # strip so a padded key can't yield a "  XL" prefix
         prefixes.add(ku.split('-', 1)[0] if '-' in ku else ku)
     return prefixes
+
+
+# Location types that legitimately ARE (or hold) a printer's deploy slot, and so
+# may be promoted in place to a first-class Printer row. Any OTHER typed row that
+# happens to share a printer-prefix LocationID is a collision — left untouched.
+TOOLHEAD_TYPES = frozenset({"Tool Head", "MMU Slot", "No MMU Direct Load"})
+
+
+def _resolve_printer_name(printer_id, printer_map):
+    """Friendly display name for a printer LocationID, pulled from printer_map.
+    An EXACT key match (e.g. 'CORE1') wins over a toolhead-prefix match
+    (e.g. 'XL' ← 'XL-1'.printer_name) so a config that carries both a dash-free
+    and dashed key for the same prefix resolves deterministically. Logs a
+    warning and falls back to '<id> System' when no printer_name is set.
+    """
+    pid_u = str(printer_id).strip().upper()
+    exact = None
+    prefix = None
+    for loc_id, info in (printer_map or {}).items():
+        name = (info or {}).get('printer_name')
+        if not name:
+            continue
+        lu = str(loc_id).strip().upper()
+        if lu == pid_u:
+            exact = name
+            break
+        if prefix is None and lu.startswith(pid_u + '-'):
+            prefix = name
+    chosen = exact or prefix
+    if chosen:
+        return chosen
+    state.logger.warning(
+        f"⚠️ No printer_name in printer_map for {printer_id!r}; using fallback '{printer_id} System'"
+    )
+    return f"{printer_id} System"
+
+
+def migrate_printers_to_rows_if_needed(loc_list, printer_map):
+    """L271 Phase 3: persist each printer in config.json:printer_map as a
+    first-class Type:"Printer" row in locations.json, instead of synthesizing
+    it at runtime in /api/locations.
+
+    - Printer set = `_known_printer_prefixes(printer_map)`: the first segment of
+      each dashed toolhead key PLUS each dash-free key (e.g. {"XL", "CORE1"}).
+    - `parent_id` stays None for now — printers render as top-level roots
+      exactly as the synthesizer did (Derek 2026-06-03: "first-class Printers
+      now, nest under rooms later"). The nest-later phase sets parent_id to the
+      room (recorded: XL → LR, CORE1 → CR) once the tree renders true nesting.
+    - XL (no on-disk row): append a fresh Printer row, `Max Spools` "0" (it
+      aggregates its 5 XL-* toolhead children).
+    - CORE1 (dash-free dual-role: one Tool Head row + a duplicate blank-Type
+      stub): promote the typed row in place to Type:"Printer" (keeping its
+      `Max Spools` "1" — it IS the single deploy slot) and DELETE the blank
+      duplicate. Spools stay at "CORE1" (no Spoolman migration). Extensible to
+      N toolhead children later (the planned INDX upgrade) with no schema change.
+    - Idempotent: a printer that already has a Type:"Printer" row is skipped, so
+      the second boot is a no-op (changed=False).
+
+    Returns (mutated_list, changed_bool). Pure locations.json transform — it
+    does NOT touch Spoolman spool locations.
+    """
+    if not isinstance(loc_list, list):
+        return loc_list, False
+
+    printers = _known_printer_prefixes(printer_map)
+    if not printers:
+        return loc_list, False
+
+    changed = False
+    for pid in sorted(printers):
+        matches = [
+            r for r in loc_list
+            if isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == pid
+        ]
+        # Idempotency gate: already first-class → nothing to do for this printer.
+        if any(str(r.get('Type', '')).strip().lower() == 'printer' for r in matches):
+            continue
+
+        toolheads = [r for r in matches if str(r.get('Type', '')).strip() in TOOLHEAD_TYPES]
+        blanks = [r for r in matches if not str(r.get('Type', '')).strip()]
+        # Collision guard: a typed row that is NEITHER a toolhead NOR a Printer
+        # owns this LocationID (e.g. a Room/Cart hand-given a printer-prefix id).
+        # Do NOT corrupt it into a Printer and do NOT append a duplicate — skip
+        # and let the operator resolve the clash. (Can't happen for the current
+        # XL/CORE1 data; this guards hand-edited / imported prod state.)
+        collisions = [
+            r for r in matches
+            if str(r.get('Type', '')).strip() and str(r.get('Type', '')).strip() not in TOOLHEAD_TYPES
+        ]
+        if collisions:
+            state.logger.warning(
+                f"⚠️ Skipping Printer promotion for {pid}: LocationID already exists as a "
+                f"{collisions[0].get('Type')!r} row — resolve the collision manually."
+            )
+            continue
+
+        name = _resolve_printer_name(pid, printer_map)
+        if toolheads:
+            # Promote the first toolhead row in place (CORE1's Tool Head row),
+            # preserving its Max Spools so the deploy-slot capacity survives.
+            row = toolheads[0]
+            row['Type'] = 'Printer'
+            row['Name'] = name
+            if 'parent_id' not in row:
+                row['parent_id'] = None
+            changed = True
+            state.logger.info(f"🖨️ Promoted {pid} → first-class Printer row ('{name}')")
+        else:
+            # No on-disk toolhead row (XL): append a fresh Printer row.
+            loc_list.append({
+                'LocationID': pid,
+                'Name': name,
+                'Type': 'Printer',
+                'Max Spools': '0',
+                'parent_id': None,
+            })
+            changed = True
+            state.logger.info(f"🖨️ Created first-class Printer row {pid} ('{name}')")
+
+        # Drop any blank-Type stub rows for this printer LocationID (identity-based
+        # so a value-equal kept row can never be removed by accident).
+        for b in blanks:
+            loc_list[:] = [r for r in loc_list if r is not b]
+            changed = True
+            state.logger.info(f"🧹 Removed duplicate blank-Type row for {pid}")
+
+    return loc_list, changed
 
 
 def is_printer_sentinel(target):

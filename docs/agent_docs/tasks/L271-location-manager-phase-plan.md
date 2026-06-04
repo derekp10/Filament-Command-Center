@@ -1,6 +1,6 @@
 # L271 — Location Manager Redesign: Full Phased Implementation Plan
 
-**Status:** PLAN (authored 2026-06-03 from a verified 24-consumer code map). Phases 1A + 1B shipped; 2 → 2.5 → 3 → 4 → 5 pending.
+**Status:** IN PROGRESS (authored 2026-06-03 from a verified 24-consumer code map). Phases 1A + 1B + 2 + 2.5 + 3(dev) shipped; **3-prod** → **3.5 (tree nesting, deferred)** → 4 → 5 pending.
 **Branch (per phase):** `feature/l271-phase-2`, `feature/l271-phase-2_5`, … (one branch per phase, each merged before the next starts).
 **Risk:** escalates by phase — **2 = low, 2.5 = low/medium, 3 = HIGH, 4 = HIGH, 5 = medium.** Phases 3-4 change `locations.json` schema + retire `printer_map`, so they need a startup migration AND prod replication (TrueNAS, Spoolman :7912, `\\TRUENAS\App_Data\InventoryHub`).
 **Verify every phase against the LIVE Docker container** (real Spoolman :7913 + FilaBridge :5001) — unit tests alone don't hit the real topology (see [[feedback_adversarial_review_runtime_lens]]).
@@ -29,26 +29,29 @@ Two concrete payoffs end the bug class:
 **Shipped:**
 - **Phase 1A** (2026-04-25): `parent_id` field added to each `locations.json` row; `derive_parent_id_from_prefix`, `resolve_parent`, `migrate_parent_ids_if_needed` in [locations_db.py](../../../inventory-hub/locations_db.py); startup migration wired in [app.py](../../../inventory-hub/app.py) with timestamped backup; ~15 unit tests. **No consumer reads `parent_id` yet.**
 - **Phase 1B** (2026-05-25): one consumer migrated — `resolve_parent` in the `/api/locations` synthesizer room-occupancy aggregation ([app.py:1427](../../../inventory-hub/app.py#L1427)).
+- **Phase 2** (2026-06-03, branch `feature/l271-phase-2`): all 4 **backend** consumers below routed through `resolve_parent`, one commit each. Each was verified IDENTICAL against the live 238-spool dev container (real Spoolman :7913) before committing, and pinned in [test_l271_phase2_consumers.py](../../../inventory-hub/tests/test_l271_phase2_consumers.py) (40 passed). Migrated: `get_room_from_location` (logic.py:786 — the central room deriver, so `perform_smart_eject`'s room fallback at logic.py:960 inherited it free), `perform_smart_eject` room-hierarchy bypass (logic.py:888), `get_spools_at_location_strict` (spoolman_api.py:1336/1343), `_build_location_match` (spoolman_api.py:1233/1241). `import locations_db` added to spoolman_api.py (no cycle).
+- **Phase 2.5** (2026-06-03, branch `feature/l271-phase-2_5`): the **frontend** tree consumers. A discovery sweep + completeness critic found the tree logic is **5 sites** in [inv_core.js](../../../inventory-hub/static/js/modules/inv_core.js) `_renderLocationsPayload` (not the 2 originally scoped). Migrated to read `row.parent_id` with a split fallback: sort comparator (461-462) and tree-indent `parentId`/`isChild` (555/560). **`hasChildren` (564) deliberately NOT migrated** — it's a `startsWith` descendant query, and parent_id is flat (first-segment) this phase while synthesized descendant rows are null, so a parent_id-equality rewrite would diverge (a synthesized printer could lose its expand toggle); it moves to Phase 3 when hierarchy is truly nested. **Backend prereq**: `parent_id` is now on *every* `/api/locations` row — the 3 synthesized dicts + the Spoolman-native row + a write-time stamp in `api_save_location` (so created/edited rows carry it immediately). Tree grouping compares **case-insensitively** (a Spoolman name / unnormalized form entry can be mixed-case while `parent_id` is uppercased). Verified: logic A/B 0 diffs over 55 live rows + pixel-identical visual baseline + POST→GET integration test. **Adversarially reviewed** (19-agent workflow: 14 findings → 2 root issues — non-uniform `parent_id` + case-sensitivity — both fixed). Pinned in [test_l271_location_tree_render.py](../../../inventory-hub/tests/test_l271_location_tree_render.py).
+- **Phase 3 — DEV** (2026-06-03, branch `feature/l271-phase-3`; ⏸ prod migration pending): first-class on-disk `Type:"Printer"` rows via `migrate_printers_to_rows_if_needed` (XL appended; Core One promoted in place + blank-stub deleted), and the **printer half** of the `/api/locations` synthesizer retired (now Virtual-Rooms-only). Printers stay top-level roots (`parent_id=None`); room-nesting deferred to Phase 3.5. See the boxed note in the Phase 3 section below for the full scope + decisions. Pinned in [test_l271_phase3_printer_rows.py](../../../inventory-hub/tests/test_l271_phase3_printer_rows.py).
 
-**The 24 prefix-parse / synthesis consumers still to migrate** (verified map 2026-06-03), grouped by target phase:
+**The remaining prefix-parse / synthesis consumers to migrate** (verified map 2026-06-03; ~~struck~~ rows shipped in Phase 2), grouped by target phase:
 
 | Phase | File:Line | Symbol | Current | Derives | Risk |
 |-------|-----------|--------|---------|---------|------|
-| **2** | [spoolman_api.py:1233](../../../inventory-hub/spoolman_api.py#L1233) | `_build_location_match` | `'-' not in target … sloc.startswith(target+'-')` | parent (child-of-parent loc match) | med |
-| **2** | [spoolman_api.py:1241](../../../inventory-hub/spoolman_api.py#L1241) | `_build_location_match` | same, for ghost `physical_source` | parent | med |
-| **2** | [spoolman_api.py:1336](../../../inventory-hub/spoolman_api.py#L1336) | `get_spools_at_location_strict` | `bare = '-' not in target` | parent (flag) | low |
-| **2** | [spoolman_api.py:1343](../../../inventory-hub/spoolman_api.py#L1343) | `get_spools_at_location_strict` | `bare and (sloc.startswith(target+'-') …)` | parent | med |
-| **2** | [logic.py:793](../../../inventory-hub/logic.py#L793) | `get_room_from_location` | `loc_id.split('-')[0]` | **room (central deriver)** | low |
-| **2** | [logic.py:889](../../../inventory-hub/logic.py#L889) | `perform_smart_eject` | `saved_source.startswith(current+'-')` | parent | med |
-| **2** | [logic.py:949](../../../inventory-hub/logic.py#L949) | `perform_smart_eject` | `get_room_from_location(current)` | room | low |
-| **2.5** | [inv_core.js:461-462](../../../inventory-hub/static/js/modules/inv_core.js#L461) | sort comparator | `(LocationID||'').split('-')[0]` | parent | med |
-| **2.5** | [inv_core.js:555](../../../inventory-hub/static/js/modules/inv_core.js#L555) | tree-indent | `LocationID.split('-')[0]` | parent | med |
-| **2.5** | [app.py:1418](../../../inventory-hub/app.py#L1418) | synthesizer | `loc.split('-')[0]` (comment/legacy) | parent | low |
-| **2.5** | [spoolman_api.py:1478](../../../inventory-hub/spoolman_api.py#L1478) | `search_inventory` | builds toolhead set from `printer_map` keys | printer (already correct) | low |
-| **3** | [app.py:1452](../../../inventory-hub/app.py#L1452) | synthesizer (printer injection) | `str(loc_id).upper().split('-',1)[0]` | printer | **high** |
-| **3** | [app.py:1476](../../../inventory-hub/app.py#L1476) | printer-type detection | `c_loc.startswith(parent+'-')` | printer | high |
-| **3** | [app.py:1488](../../../inventory-hub/app.py#L1488) | synthetic name lookup | prefix match for `printer_name` | printer | high |
-| **3** | [inv_loc_mgr.js:358](../../../inventory-hub/static/js/modules/inv_loc_mgr.js#L358) | `_printerSentinelOptions` | `firstId.split('-',1)[0]` | printer | high |
+| **2 ✅** | [spoolman_api.py:1233](../../../inventory-hub/spoolman_api.py#L1233) | `_build_location_match` | `'-' not in target … sloc.startswith(target+'-')` | parent (child-of-parent loc match) | med |
+| **2 ✅** | [spoolman_api.py:1241](../../../inventory-hub/spoolman_api.py#L1241) | `_build_location_match` | same, for ghost `physical_source` | parent | med |
+| **2 ✅** | [spoolman_api.py:1336](../../../inventory-hub/spoolman_api.py#L1336) | `get_spools_at_location_strict` | `bare = '-' not in target` | parent (flag) | low |
+| **2 ✅** | [spoolman_api.py:1343](../../../inventory-hub/spoolman_api.py#L1343) | `get_spools_at_location_strict` | `bare and (sloc.startswith(target+'-') …)` | parent | med |
+| **2 ✅** | [logic.py:793](../../../inventory-hub/logic.py#L793) | `get_room_from_location` | `loc_id.split('-')[0]` | **room (central deriver)** | low |
+| **2 ✅** | [logic.py:889](../../../inventory-hub/logic.py#L889) | `perform_smart_eject` | `saved_source.startswith(current+'-')` | parent | med |
+| **2 ✅** | [logic.py:949](../../../inventory-hub/logic.py#L949) | `perform_smart_eject` | `get_room_from_location(current)` | room | low |
+| **2.5 ✅** | [inv_core.js:461-462](../../../inventory-hub/static/js/modules/inv_core.js#L461) | sort comparator | `(LocationID||'').split('-')[0]` → `row.parent_id` (case-insensitive) | parent | med |
+| **2.5 ✅** | [inv_core.js:555+560](../../../inventory-hub/static/js/modules/inv_core.js#L555) | tree-indent | `parentId`/`isChild` → `row.parent_id`; `hasChildren`@564 startsWith stays → **Phase 3** | parent | med |
+| ~~2.5~~ done@1B | [app.py:1418](../../../inventory-hub/app.py#L1418) | synthesizer | live code already `resolve_parent` (Phase 1B); only a legacy comment names the split | parent | — |
+| → **4** | [spoolman_api.py:1478](../../../inventory-hub/spoolman_api.py#L1478) | `search_inventory` | builds toolhead set from `printer_map` keys — no parent split, correct as-is; folds in when `printer_map` dissolves | printer | low |
+| **3 ✅** | [app.py:1452](../../../inventory-hub/app.py#L1452) | synthesizer (printer injection) | **RETIRED** — printers are first-class on-disk rows | printer | **high** |
+| **3 ✅** | [app.py:1476](../../../inventory-hub/app.py#L1476) | printer-type detection | **RETIRED** — `is_printer` detection removed | printer | high |
+| **3 ✅** | [app.py:1488](../../../inventory-hub/app.py#L1488) | synthetic name lookup | **RETIRED** — `printer_name` lookup removed | printer | high |
+| → **4** | [inv_loc_mgr.js:358](../../../inventory-hub/static/js/modules/inv_loc_mgr.js#L358) | `_printerSentinelOptions` | reads `printer_map` (not synthesized rows); folds in when `printer_map` dissolves | printer | high |
 | **4** | [locations_db.py:387](../../../inventory-hub/locations_db.py#L387) | `_known_printer_prefixes` | `ku.split('-',1)[0]` | printer | low |
 | **4** | [locations_db.py:587](../../../inventory-hub/locations_db.py#L587) | `get_bindings_for_machine` | `th_id.split('-',1)[0]` | printer | low |
 | **4** | [app.py:2608](../../../inventory-hub/app.py#L2608) | `_printer_prefix` | `k.split('-',1)[0]` | printer | med |
@@ -103,6 +106,9 @@ Two concrete payoffs end the bug class:
 **Prod:** none (API stays same; field is additive).
 
 ### Phase 3 — First-class Printer rows; retire the synthesizer (HIGH risk) — **unblocks Color Loadout**
+
+> **✅ SHIPPED ON DEV 2026-06-03** (`feature/l271-phase-3`) — ⏸ **PROD MIGRATION NOT YET RUN.** Implemented as `migrate_printers_to_rows_if_needed` (locations_db) + the printer-half retirement of the synthesizer. **Scope was trimmed by Derek's decisions:** (a) Core One stays **dual-role** — promoted in place to `Type:"Printer"`, spools stay at `CORE1`, no Spoolman migration; extensible to N toolheads for the INDX upgrade. (b) Printers stay **top-level roots** (`parent_id=None`) — true **room-nesting was deferred to a new Phase 3.5** because the tree is currently flat 2-level and nesting requires a full multi-level renderer (recorded rooms: XL→`LR`, Core One→`CR`; plus a wanted "pin printers to top" option). (c) `model`/`mmu_attached` → Phase 4; orphan-`parent_id` validation → Phase 5 (would noise on PM/PJ/TST). The duplicate/blank-Type CORE1 corruption is auto-repaired by the migration. Verified: `/api/locations` byte-identical except the intended CORE1 fix; idempotent; visual baseline refreshed; 127 tests. **Prod step below is still required.**
+
 **Goal:** persist what [app.py:1452-1488](../../../inventory-hub/app.py#L1452) currently conjures at runtime.
 
 **Steps:**

@@ -234,6 +234,36 @@ try:
 except Exception as _p1a_err:
     state.logger.error(f"parent_id migration skipped due to error: {_p1a_err}")
 
+# L271 Phase 3 — first-class Printer rows. Persist each printer declared in
+# config.json:printer_map as a Type:"Printer" row in locations.json so the
+# /api/locations synthesizer no longer has to conjure them at runtime. Sits
+# after the parent_id backfill so the new rows are parent_id-stamped (None for
+# now — printers stay top-level roots; room-nesting is a later phase per
+# Derek 2026-06-03). Also cleans the duplicate blank-Type CORE1 stub. Idempotent
+# on second boot (a printer that already has a Type:"Printer" row is skipped);
+# timestamped backup before the first write for a prod-restart recovery path.
+try:
+    _p3_cfg = config_loader.load_config()
+    _p3_pm = _p3_cfg.get('printer_map', {}) or {}
+    _p3_locs = locations_db.load_locations_list()
+    _p3_migrated, _p3_changed = locations_db.migrate_printers_to_rows_if_needed(_p3_locs, _p3_pm)
+    if _p3_changed:
+        try:
+            import shutil, time as _t
+            _stamp = _t.strftime('%Y%m%d-%H%M%S')
+            _backup = f"{locations_db.JSON_FILE}.pre-printer-rows-migration-{_stamp}.bak"
+            shutil.copy2(locations_db.JSON_FILE, _backup)
+            state.logger.info(f"📦 Backed up locations.json → {_backup}")
+            _prune_locations_backups()
+        except Exception as _bk_err:
+            state.logger.warning(f"Could not write pre-printer-rows-migration backup: {_bk_err}")
+        if locations_db.save_locations_list(_p3_migrated):
+            state.logger.info("💾 First-class Printer rows written across locations.json — L271 Phase 3 migration complete.")
+        else:
+            state.logger.error("❌ L271 Phase 3 printer-rows migration save FAILED — locations.json left unchanged; will retry next boot.")
+except Exception as _p3_err:
+    state.logger.error(f"printer-rows migration skipped due to error: {_p3_err}")
+
 # L347 follow-up — also prune at startup so accumulated backups from
 # previous boots get trimmed even when no migration fires this boot.
 # Cheap glob; idempotent under the cap.
@@ -1368,7 +1398,13 @@ def api_get_locations():
                 "LocationID": loc_name,
                 "Name": loc_name,
                 "Type": "Spoolman Native",
-                "Max Spools": 0
+                "Max Spools": 0,
+                # L271 Phase 2.5: carry parent_id like every other row so the
+                # frontend tree reads it uniformly. Derived from the prefix
+                # (uppercased); None for a dash-free native name. A Spoolman
+                # name can be mixed-case, so the tree grouping in inv_core.js
+                # compares parent_id vs LocationID case-insensitively.
+                "parent_id": locations_db.derive_parent_id_from_prefix(loc_name),
             }
             
     csv_rows = list(local_map.values())
@@ -1438,70 +1474,38 @@ def api_get_locations():
             room_occupancy[loc] = room_occupancy.get(loc, 0) + count
             room_floating[loc] = room_floating.get(loc, 0) + count
 
-    # 2. Inject Virtual Rooms/Printers if they don't exist
+    # 2. Inject Virtual Rooms for occupancy-only prefixes.
     #
-    # Two seeds: any prefix that has spool occupancy today (room_occupancy),
-    # AND every printer prefix declared in config.json's printer_map (even
-    # when no spool is currently deployed). The printer_map seed makes
-    # "🦝 Core One Upgraded" show up as a Printer parent in the Location
-    # Manager even if every CORE1 toolhead is empty — without it, an
-    # all-idle printer disappears from the grouping until a spool lands.
-    cfg_for_synth = config_loader.load_config()
-    pm_for_synth = cfg_for_synth.get('printer_map', {}) or {}
-    printer_prefixes_to_inject = {
-        str(loc_id).upper().split('-', 1)[0]
-        for loc_id in pm_for_synth.keys()
-        if '-' in str(loc_id)
-    }
-
-    parents_to_consider = set(room_occupancy.keys()) | printer_prefixes_to_inject
-
-    for parent in parents_to_consider:
-        # Promote a row that exists with an empty/missing Type to a real
-        # Printer/Virtual Room — locations.json sometimes carries a
-        # parent placeholder (manual edit or legacy state) with Type=""
-        # which strands the row in "Unassigned" rendering. Treat empty
-        # Type the same as "not in local_map" for the inject decision.
+    # L271 Phase 3: printers are now first-class on-disk Type:"Printer" rows
+    # (written by locations_db.migrate_printers_to_rows_if_needed at startup),
+    # so this no longer synthesizes them — the printer-prefix seed and the
+    # is_printer / printer_name detection were RETIRED. It now only conjures a
+    # Virtual Room for a prefix that has spool occupancy today but no on-disk
+    # parent row of its own. Any parent that already has a real on-disk row —
+    # the first-class Printer rows included — is skipped by the existing-row
+    # check below, so they flow through from disk untouched.
+    for parent in set(room_occupancy.keys()):
+        # Skip a parent that already has a real on-disk row. A blank-Type
+        # placeholder (legacy/manual state that would otherwise strand the row
+        # in "Unassigned" rendering) is promoted in place instead.
         existing = local_map.get(parent)
         existing_type_blank = bool(existing) and not str(existing.get('Type', '')).strip()
         if existing and not existing_type_blank:
             continue
 
-        # Check children types AND printer_map to determine if this is a
-        # Printer or a Room. printer_map is authoritative — if the parent
-        # has any toolhead registered there, it's a Printer.
-        is_printer = parent in printer_prefixes_to_inject
-        if not is_printer:
-            for c_loc, meta in local_map.items():
-                if c_loc.startswith(parent + "-"):
-                    t = str(meta.get('Type', '')).lower()
-                    if 'printer' in t or 'tool head' in t or 'mmu' in t:
-                        is_printer = True
-                        break
-
-        # Pick a friendly name from printer_map's printer_name when it's
-        # a printer (so we get "🦝 Core One Upgraded" instead of "CORE1
-        # System"). Fall back to the legacy synthetic name otherwise.
-        synthetic_name = None
-        if is_printer:
-            for loc_id, info in pm_for_synth.items():
-                if str(loc_id).upper().startswith(parent + '-') or str(loc_id).upper() == parent:
-                    if info.get('printer_name'):
-                        synthetic_name = info['printer_name']
-                        break
-        if not synthetic_name:
-            synthetic_name = f"{parent} System" if is_printer else f"{parent} (Room)"
-
         synthetic_row = {
             "LocationID": parent,
-            "Name": synthetic_name,
-            "Type": "Printer" if is_printer else "Virtual Room",
+            "Name": f"{parent} (Room)",
+            "Type": "Virtual Room",
             "Max Spools": 0,
             "OccupancyRaw": 0,
+            # L271 Phase 2.5: expose parent_id so the frontend tree reads it
+            # uniformly. `parent` is a dash-free top-level prefix → null.
+            "parent_id": None,
         }
 
         if existing_type_blank:
-            # Replace the broken existing row in-place rather than appending
+            # Replace the broken blank-Type row in-place rather than appending
             # a duplicate (would trip duplicate-LocationID guards downstream).
             for i, r in enumerate(csv_rows):
                 if str(r.get('LocationID', '')).upper() == parent:
@@ -1517,7 +1521,8 @@ def api_get_locations():
         "Name": "Workbench / Unsorted",
         "Type": "Virtual",
         "Occupancy": f"{unassigned_count} items",
-        "Max Spools": 0
+        "Max Spools": 0,
+        "parent_id": None,  # L271 Phase 2.5 — virtual top-level row
     })
 
     for row in csv_rows:
@@ -1569,6 +1574,7 @@ def api_get_locations():
         "Type": "Unknown",
         "Occupancy": f"{unknown_count} items",
         "Max Spools": 0,
+        "parent_id": None,  # L271 Phase 2.5 — virtual top-level row
     })
     return jsonify(final_list)
 
@@ -1577,6 +1583,14 @@ def api_save_location():
     data = request.json
     old_id = data.get('old_id')
     new_entry = data.get('new_data')
+    # L271 Phase 2.5: stamp parent_id at write time so a freshly created or
+    # edited row carries it immediately — not only after the next startup
+    # migrate_parent_ids_if_needed. Mirror that migration's contract: derive
+    # from the LocationID prefix, but respect an explicitly-supplied value.
+    # parent_id is purely prefix-derived this phase, so deriving from the
+    # (possibly renamed) LocationID is correct for both create and edit.
+    if isinstance(new_entry, dict) and 'parent_id' not in new_entry:
+        new_entry['parent_id'] = locations_db.derive_parent_id_from_prefix(new_entry.get('LocationID'))
     current_list = locations_db.load_locations_list()
     if old_id:
         current_list = [row for row in current_list if row['LocationID'] != old_id]
@@ -2328,7 +2342,10 @@ def api_identify_scan():
         tgt_info = loc_info_map.get(target)
 
         # Validate target exists and is a container type.
-        container_types = {'Dryer Box', 'MMU Slot', 'Tool Head', 'No MMU Direct Load'}
+        # L271 Phase 3: "Printer" is a valid slot target — a dual-role printer
+        # like the Core One IS its own single deploy slot (Type:"Printer",
+        # Max Spools "1"). Without this, LOC:CORE1:SLOT:1 scans would 400.
+        container_types = {'Dryer Box', 'MMU Slot', 'Tool Head', 'No MMU Direct Load', 'Printer'}
         if not tgt_info or tgt_info.get('Type') not in container_types:
             found_type = tgt_info.get('Type') if tgt_info else 'missing'
             state.add_log_entry(
@@ -2693,6 +2710,19 @@ def api_put_printer_map():
     if result.get('ok'):
         state.add_log_entry(
             f"⚙️ Printer map updated ({len(result.get('printer_map') or {})} toolheads)", "INFO")
+        # L271 Phase 3: keep first-class Printer rows in sync with the edited
+        # printer_map so a newly-added printer appears immediately — no reboot.
+        # (The old runtime synthesizer injected printers on every request; that
+        # path is retired, so the migration must run on this write too.)
+        # Idempotent + best-effort; never block the printer_map save on it.
+        try:
+            _pm = result.get('printer_map') or new_map
+            _locs, _chg = locations_db.migrate_printers_to_rows_if_needed(
+                locations_db.load_locations_list(), _pm)
+            if _chg and not locations_db.save_locations_list(_locs):
+                state.logger.error("printer-rows sync after printer_map save FAILED to persist.")
+        except Exception as _sync_err:
+            state.logger.warning(f"printer-rows sync after printer_map save skipped: {_sync_err}")
         return jsonify(result)
     # Validation errors (all start with "printer_map…") are a client 400; write/IO
     # faults bubbled from the hardened writer ("config write failed…", "refusing
