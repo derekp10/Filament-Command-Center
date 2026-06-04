@@ -159,3 +159,26 @@ def test_resolve_room_cycle_guard():
     pmap = L.build_parent_map(cyclic)
     # terminates; returns one of the cycle members, never hangs
     assert L.resolve_room("A", pmap) in ("A", "B")
+
+
+# --- logic.get_room_from_location through the nested chain -----------------
+# The eject room-deriver consumer: on the nested tree it must walk to the
+# top-level room, NOT stop at the immediate parent. Pinned against an explicit
+# nested fixture so it's independent of live data.
+
+import logic  # noqa: E402
+
+
+@pytest.mark.parametrize("loc,expected", [
+    ("CR-CT-1-R1", "CR"),   # cart-row -> cart -> room
+    ("CR-CT-1", "CR"),
+    ("XL-1", "LR"),          # toolhead -> printer -> room (the Phase 3.5 change)
+    ("LR-MDB-1", "LR"),
+    ("XL", ""),              # dash-free root -> no room above (guard)
+    ("CORE1", ""),
+    ("PM-DB-1", ""),         # pseudo-prefix excluded
+    ("", ""),
+])
+def test_get_room_from_location_nested(monkeypatch, loc, expected):
+    monkeypatch.setattr(L, "load_locations_list", lambda: list(NESTED_TREE))
+    assert logic.get_room_from_location(loc) == expected

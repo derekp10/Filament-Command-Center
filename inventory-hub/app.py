@@ -264,6 +264,34 @@ try:
 except Exception as _p3_err:
     state.logger.error(f"printer-rows migration skipped due to error: {_p3_err}")
 
+# L271 Phase 3.5 — true multi-level nesting. Re-derive every row's parent_id
+# from the flat first-segment to its IMMEDIATE parent (cart-row→cart, …) and
+# nest printers under their room (XL→LR auto-derived from its toolheads'
+# Location; CORE1→CR via the recorded override). MUST run AFTER the Phase 3
+# printer-rows migration (it keys printers off Type:"Printer") and after the
+# Phase 1A backfill (it only re-derives rows still carrying the flat default).
+# Idempotent on second boot (changed=False); respects operator-set parent_ids;
+# timestamped backup before the first write for a prod-restart recovery path.
+try:
+    _p35_locs = locations_db.load_locations_list()
+    _p35_migrated, _p35_changed = locations_db.migrate_immediate_parent_ids_if_needed(_p35_locs)
+    if _p35_changed:
+        try:
+            import shutil, time as _t
+            _stamp = _t.strftime('%Y%m%d-%H%M%S')
+            _backup = f"{locations_db.JSON_FILE}.pre-immediate-parent-migration-{_stamp}.bak"
+            shutil.copy2(locations_db.JSON_FILE, _backup)
+            state.logger.info(f"📦 Backed up locations.json → {_backup}")
+            _prune_locations_backups()
+        except Exception as _bk_err:
+            state.logger.warning(f"Could not write pre-immediate-parent-migration backup: {_bk_err}")
+        if locations_db.save_locations_list(_p35_migrated):
+            state.logger.info("💾 parent_id re-derived to immediate parents + printers nested under rooms — L271 Phase 3.5 migration complete.")
+        else:
+            state.logger.error("❌ L271 Phase 3.5 immediate-parent migration save FAILED — locations.json left unchanged; will retry next boot.")
+except Exception as _p35_err:
+    state.logger.error(f"immediate-parent migration skipped due to error: {_p35_err}")
+
 # L347 follow-up — also prune at startup so accumulated backups from
 # previous boots get trimmed even when no migration fires this boot.
 # Cheap glob; idempotent under the cap.

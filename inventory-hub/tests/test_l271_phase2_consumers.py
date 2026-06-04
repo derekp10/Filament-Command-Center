@@ -19,7 +19,24 @@ import types
 import pytest
 
 import logic
+import locations_db
 import spoolman_api
+
+
+@pytest.fixture(autouse=True)
+def _flat_tree(monkeypatch):
+    """L271 Phase 3.5: these are Phase-2 *byte-identity* pins — they assert the
+    FLAT (first-segment) hierarchy behavior that the resolve_parent migration
+    preserved. Phase 3.5 flips the live locations.json to IMMEDIATE parents and
+    nests printers under rooms, so the hierarchy walkers (is_descendant /
+    resolve_room) would otherwise read that nested tree and legitimately
+    diverge from the flat startswith oracle below (e.g. XL-1 now resolves under
+    LR). Pin load_locations_list to [] so build_parent_map yields an empty map
+    and the walkers fall back to pure prefix parsing — decoupling these pins
+    from the live data. The nested behavior is pinned in
+    test_l271_phase35_hierarchy.py / the Phase 3.5 occupancy tests.
+    """
+    monkeypatch.setattr(locations_db, "load_locations_list", lambda: [])
 
 
 # ---------------------------------------------------------------------------
