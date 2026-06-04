@@ -192,6 +192,17 @@ Two concrete payoffs end the bug class:
 **Tests:** `test_locations_json_integrity.py` write-validation cases; a CI grep test asserting no `split('-')[0]` remains in the location code paths.
 **Prod:** low — by now prod data is already FK-clean from the earlier migrations.
 
+#### Phase 5 scope ADDITIONS — Edit-UI + shelf nesting (Derek 2026-06-04, after 3.5 hit prod)
+
+> **Unifying theme:** today the hierarchy is *implicit in the LocationID string* — `parent_id` is **derived from the dash-prefix at save time** (`api_save_location` → `immediate_parent_for`; the edit modal sends only ID/Name/Type/Max, never `parent_id`) and is **never shown or editable**. Phase 5 flips this: `parent_id` becomes the **explicit, visible, editable** source of truth and the ID becomes just a label. Derek's three observations below are all symptoms of the implicit model; they're the UI/data-model slice of Phase 5 and should be scoped together here.
+
+1. **Explicit Parent selector + show `parent_id` in the Edit Location modal** (folds observations *(a)* + *(c)* into one). Today `modals_loc_mgr.html#locModal` shows only ID / Name / Type / Max Spools. Add: (i) a read-out of the current `parent_id` + ancestor breadcrumb (the DB-structure visibility Derek wants), and (ii) an editable **Parent** dropdown (valid parents grouped by kind: Room → Printer → Cart → …) that SENDS `parent_id` on save. The migrations already "respect operator-set `parent_id`" (3.5 review fix #4 only re-derives rows still at the default), so an explicit editor is safe with the existing logic. This is effectively the first real slice of "explicit parent_id".
+2. **Add `"Printer"` to the Type dropdown** *(observation (a), 2nd half)*. Phase 3 made printers first-class rows but `edit-type` was never updated — its options are Storage / Dryer Box / Shelf / Room / Cart / Tool Head / MMU Slot / Virtual Room, **no Printer**. Add it (and reconcile with Phase-4 toolheads[] ownership — hand-creating a Printer shouldn't fight the printer_map fold).
+3. **Real intermediate Wall/Row rows for shelf nesting** *(observation (b) — DECISION: REAL ROWS, Derek 2026-06-04).* Shelf sections (`CR-WLN-R1-SC1`…) sit **flat under the room** because the wall (`WLN`) and row (`R1`/`R2`) levels live ONLY in the ID string — no node exists, so `immediate_parent_for` parents each section to the longest *real-row* prefix = `CR`. Fix: a migration that **creates the intermediate Wall + Row rows** (e.g. `CR-WLN` "Computer Room Wall North", `CR-WLN-R1` "… Row 1") so the tree nests Room → Wall → Row → Section. **Open scope-time question:** reuse the existing `Shelf` Type for the grouping nodes vs. add a `Zone`/`Wall`/`Row` grouping Type. **Reference data = PROD** (8 Shelf rows: `CR-WLN-R1/R2-SC1–4`; dev only seeded R1×4 — a thin seed). The renderer + transitive occupancy already handle arbitrary depth (3.5), so this is mostly a data-migration + Type decision, not a renderer change.
+4. **Prod data cleanup (trivial):** `CR-WLN-R2-SC3`'s *Name* reads "…Row 2 Section **1**" (copy-paste typo; the ID is correct). Fix the friendly name during the shelf-nesting pass.
+
+**Note (Derek 2026-06-04):** do NOT implement these now — they're parked for Phase 5 where they're actively scoped. Captured here so nothing is lost.
+
 ---
 
 ## 5. Sequencing, dependencies, and effort
