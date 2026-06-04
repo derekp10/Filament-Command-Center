@@ -264,6 +264,34 @@ try:
 except Exception as _p3_err:
     state.logger.error(f"printer-rows migration skipped due to error: {_p3_err}")
 
+# L271 Phase 3.5 — true multi-level nesting. Re-derive every row's parent_id
+# from the flat first-segment to its IMMEDIATE parent (cart-row→cart, …) and
+# nest printers under their room (XL→LR auto-derived from its toolheads'
+# Location; CORE1→CR via the recorded override). MUST run AFTER the Phase 3
+# printer-rows migration (it keys printers off Type:"Printer") and after the
+# Phase 1A backfill (it only re-derives rows still carrying the flat default).
+# Idempotent on second boot (changed=False); respects operator-set parent_ids;
+# timestamped backup before the first write for a prod-restart recovery path.
+try:
+    _p35_locs = locations_db.load_locations_list()
+    _p35_migrated, _p35_changed = locations_db.migrate_immediate_parent_ids_if_needed(_p35_locs)
+    if _p35_changed:
+        try:
+            import shutil, time as _t
+            _stamp = _t.strftime('%Y%m%d-%H%M%S')
+            _backup = f"{locations_db.JSON_FILE}.pre-immediate-parent-migration-{_stamp}.bak"
+            shutil.copy2(locations_db.JSON_FILE, _backup)
+            state.logger.info(f"📦 Backed up locations.json → {_backup}")
+            _prune_locations_backups()
+        except Exception as _bk_err:
+            state.logger.warning(f"Could not write pre-immediate-parent-migration backup: {_bk_err}")
+        if locations_db.save_locations_list(_p35_migrated):
+            state.logger.info("💾 parent_id re-derived to immediate parents + printers nested under rooms — L271 Phase 3.5 migration complete.")
+        else:
+            state.logger.error("❌ L271 Phase 3.5 immediate-parent migration save FAILED — locations.json left unchanged; will retry next boot.")
+except Exception as _p35_err:
+    state.logger.error(f"immediate-parent migration skipped due to error: {_p35_err}")
+
 # L347 follow-up — also prune at startup so accumulated backups from
 # previous boots get trimmed even when no migration fires this boot.
 # Cheap glob; idempotent under the cap.
@@ -1409,6 +1437,12 @@ def api_get_locations():
             
     csv_rows = list(local_map.values())
     occupancy_map: dict[str, int] = {}
+    # L271 Phase 3.5 (review fix #2): per-spool (id, loc, ghost) so the ancestor
+    # rollup can count DISTINCT physical spools — a deployed spool sits in
+    # occupancy_map twice (toolhead loc + ghost home-box) and, now that a printer
+    # nests under its home box's room, both rolled into the same room and
+    # double-counted its Total. Dedup by spool id fixes that.
+    spool_entries: list = []  # (sid, loc_or_'', ghost_or_'')
     unassigned_count: int = 0
     unknown_count: int = 0  # 18.1 — spools sitting at the virtual UNKNOWN bucket
 
@@ -1441,38 +1475,67 @@ def api_get_locations():
                 if p_source and p_source != loc:
                     occupancy_map[p_source] = occupancy_map.get(p_source, 0) + 1
 
+                # L271 Phase 3.5 (review fix #2): record this spool for the
+                # distinct-count ancestor rollup. loc is '' for unassigned and
+                # 'UNKNOWN' for the lost bucket — neither rolls into a room.
+                spool_entries.append((
+                    s.get('id'),
+                    loc if (loc and loc != 'UNKNOWN') else '',
+                    p_source,
+                ))
+
     except: pass
 
     # [ALEX FIX] Support Room logic correctly by adding grouped floating data
-    room_occupancy: dict[str, int] = {}
-    room_floating: dict[str, int] = {}
     csv_rows = list(local_map.values())
-    
-    # 1. First Pass: Compute total Room occupancies
-    # Phase 1B (Location Manager redesign): resolve_parent prefers the
-    # explicit `parent_id` written by the Phase-1A migration over the
-    # legacy `loc.split('-')[0]` prefix trick. Behavior is identical for
-    # rows whose parent_id matches the prefix (the migration default),
-    # but a PM/PJ box that's been explicitly re-parented to a real room
-    # via parent_id will now correctly contribute to that room's count
-    # — pre-Phase-1B it was silently dropped on the PM/PJ exclusion.
-    for loc, count in occupancy_map.items():
-        if not loc:
-            continue
-        row = local_map.get(loc)
-        parent = locations_db.resolve_parent(row) if row else locations_db.resolve_parent(loc)
-        if parent:
-            # Skip pseudo-prefixes the prefix-derivation can produce.
-            # Once Phase 5 retires prefix parsing this exclusion becomes
-            # unnecessary (a real parent_id is always a real row).
-            if parent in ["TST", "TEST", "PM", "PJ"]:
+
+    # 1. First Pass: TRANSITIVE subtree occupancy (L271 Phase 3.5).
+    # parent_id now stores each row's IMMEDIATE parent, so a single-level rollup
+    # would drop a spool sitting in a cart-ROW from its room's total (the row
+    # rolls into the cart, not the room). For each spool, add its id to every
+    # ancestor of BOTH its location and its ghost home-box, then a parent's
+    # Total is the count of DISTINCT spool ids in its subtree. Deduping by id is
+    # essential: a deployed spool appears at its toolhead loc AND its ghost
+    # home-box, which (with the printer nested under the home-box's room) both
+    # resolve into the same room — summing would double-count it (review fix #2).
+    # `ancestors_of` stops at the PM/PJ/TST pseudo-prefixes so they never
+    # aggregate into a room. Leaf display + the "floating" figure still use
+    # occupancy_map (loc + ghost at the exact row) so a box keeps showing its
+    # deployed ghosts.
+    parent_map = locations_db.build_parent_map(csv_rows)
+
+    # Immediate-child counts so a row can be classified parent-vs-leaf for the
+    # occupancy display (a real parent shows a subtree Total; a leaf shows
+    # curr/max). Pseudo-prefix parents never count as real parents.
+    children_count: dict[str, int] = {}
+    for _lid, _p in parent_map.items():
+        if _p and _p not in locations_db.PSEUDO_ROOM_PREFIXES:
+            children_count[_p] = children_count.get(_p, 0) + 1
+
+    subtree_ids: dict[str, set] = {}   # ancestor -> set of distinct spool ids
+    ancestor_hit: set[str] = set()     # non-row prefixes that need a Virtual Room
+    for sid, loc, ghost in spool_entries:
+        touched: set[str] = set()
+        for base in (loc, ghost):
+            if not base:
                 continue
-            room_occupancy[parent] = room_occupancy.get(parent, 0) + count
-        else:
-            # No parent (top-level room/printer row, or unparented).
-            # Floating-in-parent count is the row contributing to itself.
-            room_occupancy[loc] = room_occupancy.get(loc, 0) + count
-            room_floating[loc] = room_floating.get(loc, 0) + count
+            ancs = list(locations_db.ancestors_of(base, parent_map))
+            touched.add(base)
+            touched.update(ancs)
+            for anc in ancs:
+                ancestor_hit.add(anc)
+            if not ancs:
+                # Top-level / unparented occupancy — its own "room" candidate
+                # (mirrors the pre-3.5 seed of a virtual room for a dash-free
+                # orphan). A pseudo-prefixed base (PM/PJ/TST box) yields no
+                # ancestors and is itself a real row, so synthesis skips it.
+                ancestor_hit.add(base)
+        for t in touched:
+            subtree_ids.setdefault(t, set()).add(sid)
+    # subtree_occ = distinct spool count per row; direct/floating stays the
+    # loc+ghost count at the exact row (occupancy_map).
+    subtree_occ = {k: len(v) for k, v in subtree_ids.items()}
+    direct_occ = occupancy_map
 
     # 2. Inject Virtual Rooms for occupancy-only prefixes.
     #
@@ -1483,8 +1546,11 @@ def api_get_locations():
     # Virtual Room for a prefix that has spool occupancy today but no on-disk
     # parent row of its own. Any parent that already has a real on-disk row —
     # the first-class Printer rows included — is skipped by the existing-row
-    # check below, so they flow through from disk untouched.
-    for parent in set(room_occupancy.keys()):
+    # check below, so they flow through from disk untouched. `ancestor_hit` is
+    # the set of prefixes that received rollup (plus dash-free orphan spool
+    # locations) — the Phase 3.5 transitive equivalent of the old
+    # room_occupancy.keys() candidate set.
+    for parent in set(ancestor_hit):
         # Skip a parent that already has a real on-disk row. A blank-Type
         # placeholder (legacy/manual state that would otherwise strand the row
         # in "Unassigned" rendering) is promoted in place instead.
@@ -1542,21 +1608,27 @@ def api_get_locations():
         except (ValueError, TypeError):
             max_val = 0
             
-        curr_val = occupancy_map.get(lid, 0)
-        
-        # If this is a Room or parent, show aggregated plus floating
-        if lid in room_occupancy and "-" not in lid:
-            total_room = room_occupancy[lid]
-            floating = room_floating.get(lid, 0)
-            row['OccupancyRaw'] = total_room
-            if floating > 0:
-                row['Occupancy'] = f"{total_room} Total ({floating} floating)"
+        direct_cnt = direct_occ.get(lid, 0)
+        sub = subtree_occ.get(lid, direct_cnt)
+
+        # L271 Phase 3.5: a row that is a PARENT in the tree (has child rows, or
+        # is a synthesized Virtual Room) shows its TRANSITIVE subtree total +
+        # the count floating directly at it; a leaf shows curr/max. This
+        # replaces the old `"-" not in lid` dash-free gate, so nested parents
+        # (carts, printers) now show a real subtree total instead of looking
+        # empty when collapsed, and a room's total includes everything beneath
+        # it (incl. a nested printer's toolhead spools).
+        is_parent = bool(children_count.get(lid)) or str(row.get('Type', '')).strip() == 'Virtual Room'
+        if is_parent:
+            row['OccupancyRaw'] = sub
+            if direct_cnt > 0:
+                row['Occupancy'] = f"{sub} Total ({direct_cnt} floating)"
             else:
-                row['Occupancy'] = f"{total_room} Total"
+                row['Occupancy'] = f"{sub} Total"
         else:
-            row['OccupancyRaw'] = curr_val 
-            if max_val > 0: row['Occupancy'] = f"{curr_val}/{max_val}"
-            else: row['Occupancy'] = f"{curr_val} items"
+            row['OccupancyRaw'] = direct_cnt
+            if max_val > 0: row['Occupancy'] = f"{direct_cnt}/{max_val}"
+            else: row['Occupancy'] = f"{direct_cnt} items"
 
         final_list.append(row)
 
@@ -1583,20 +1655,31 @@ def api_save_location():
     data = request.json
     old_id = data.get('old_id')
     new_entry = data.get('new_data')
-    # L271 Phase 2.5: stamp parent_id at write time so a freshly created or
-    # edited row carries it immediately — not only after the next startup
-    # migrate_parent_ids_if_needed. Mirror that migration's contract: derive
-    # from the LocationID prefix, but respect an explicitly-supplied value.
-    # parent_id is purely prefix-derived this phase, so deriving from the
-    # (possibly renamed) LocationID is correct for both create and edit.
-    if isinstance(new_entry, dict) and 'parent_id' not in new_entry:
-        new_entry['parent_id'] = locations_db.derive_parent_id_from_prefix(new_entry.get('LocationID'))
     current_list = locations_db.load_locations_list()
+    old_row = None
     if old_id:
+        old_row = next((r for r in current_list if r.get('LocationID') == old_id), None)
         current_list = [row for row in current_list if row['LocationID'] != old_id]
         state.add_log_entry(f"📝 Updated: {new_entry['LocationID']}")
     else:
         state.add_log_entry(f"✨ Created: {new_entry['LocationID']}")
+    # L271 Phase 3.5 (review fix #4): stamp parent_id at write time, but PRESERVE
+    # the existing parent_id on an IN-PLACE edit (same LocationID). The edit
+    # modal only sends LocationID/Name/Type/Max Spools — never parent_id — so a
+    # naive recompute would un-nest a Printer (immediate_parent_for('XL') → None,
+    # there's no dashed ancestor) and silently revert an operator-set parent_id
+    # on every field edit. Only CREATE or RENAME (re)derives the immediate parent
+    # from the new LocationID; a Printer's room is then (re)resolved by the
+    # startup migration. Respect an explicitly-supplied parent_id.
+    if isinstance(new_entry, dict) and 'parent_id' not in new_entry:
+        same_id = (old_row is not None
+                   and str(old_row.get('LocationID', '')) == str(new_entry.get('LocationID', ''))
+                   and 'parent_id' in old_row)
+        if same_id:
+            new_entry['parent_id'] = old_row.get('parent_id')
+        else:
+            new_entry['parent_id'] = locations_db.immediate_parent_for(
+                new_entry.get('LocationID'), current_list)
     current_list.append(new_entry)
     current_list.sort(key=lambda x: str(x.get('LocationID', '')))
     locations_db.save_locations_list(current_list)
