@@ -1368,7 +1368,13 @@ def api_get_locations():
                 "LocationID": loc_name,
                 "Name": loc_name,
                 "Type": "Spoolman Native",
-                "Max Spools": 0
+                "Max Spools": 0,
+                # L271 Phase 2.5: carry parent_id like every other row so the
+                # frontend tree reads it uniformly. Derived from the prefix
+                # (uppercased); None for a dash-free native name. A Spoolman
+                # name can be mixed-case, so the tree grouping in inv_core.js
+                # compares parent_id vs LocationID case-insensitively.
+                "parent_id": locations_db.derive_parent_id_from_prefix(loc_name),
             }
             
     csv_rows = list(local_map.values())
@@ -1585,6 +1591,14 @@ def api_save_location():
     data = request.json
     old_id = data.get('old_id')
     new_entry = data.get('new_data')
+    # L271 Phase 2.5: stamp parent_id at write time so a freshly created or
+    # edited row carries it immediately — not only after the next startup
+    # migrate_parent_ids_if_needed. Mirror that migration's contract: derive
+    # from the LocationID prefix, but respect an explicitly-supplied value.
+    # parent_id is purely prefix-derived this phase, so deriving from the
+    # (possibly renamed) LocationID is correct for both create and edit.
+    if isinstance(new_entry, dict) and 'parent_id' not in new_entry:
+        new_entry['parent_id'] = locations_db.derive_parent_id_from_prefix(new_entry.get('LocationID'))
     current_list = locations_db.load_locations_list()
     if old_id:
         current_list = [row for row in current_list if row['LocationID'] != old_id]
