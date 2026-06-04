@@ -659,6 +659,12 @@ def _ref_env(monkeypatch, slot_targets=None, spools_by_loc=None,
         monkeypatch.setattr(locations_db, "load_locations_list", _boom)
     else:
         monkeypatch.setattr(locations_db, "load_locations_list", lambda: rows)
+    # Isolate the PUT /api/printer_map post-save sync (it re-runs the Phase-3
+    # printer-rows + Phase-4 toolheads[] migrations and persists them). Without
+    # this no-op, save_locations_list would overwrite the REAL data/locations.json
+    # with the tiny `rows` stub above — the long-standing dev-data wipe documented
+    # in reference_fcc_e2e_sweep_pollution (the "rename/bindings test", 53→2).
+    monkeypatch.setattr(locations_db, "save_locations_list", lambda *_a, **_k: True)
     sbl = spools_by_loc or {}
     if spool_raises:
         def _sboom(loc):

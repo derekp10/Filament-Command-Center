@@ -292,6 +292,36 @@ try:
 except Exception as _p35_err:
     state.logger.error(f"immediate-parent migration skipped due to error: {_p35_err}")
 
+# L271 Phase 4 (step 1) — fold config.json:printer_map into a `toolheads[]`
+# array on each first-class Type:"Printer" row. DUAL-READ: printer_map stays in
+# config.json as the source of truth for one release; NO consumer reads
+# toolheads[] yet (this is purely additive, like the Phase-1A parent_id
+# backfill). MUST run AFTER the Phase 3 printer-rows migration (it keys off
+# Type:"Printer" rows). Idempotent on second boot (re-syncs only when
+# printer_map changed); timestamped backup before the first write for a
+# prod-restart recovery path.
+try:
+    _p4_cfg = config_loader.load_config()
+    _p4_pm = _p4_cfg.get('printer_map', {}) or {}
+    _p4_locs = locations_db.load_locations_list()
+    _p4_migrated, _p4_changed = locations_db.migrate_printer_map_to_toolheads_if_needed(_p4_locs, _p4_pm)
+    if _p4_changed:
+        try:
+            import shutil, time as _t
+            _stamp = _t.strftime('%Y%m%d-%H%M%S')
+            _backup = f"{locations_db.JSON_FILE}.pre-toolheads-migration-{_stamp}.bak"
+            shutil.copy2(locations_db.JSON_FILE, _backup)
+            state.logger.info(f"📦 Backed up locations.json → {_backup}")
+            _prune_locations_backups()
+        except Exception as _bk_err:
+            state.logger.warning(f"Could not write pre-toolheads-migration backup: {_bk_err}")
+        if locations_db.save_locations_list(_p4_migrated):
+            state.logger.info("💾 printer_map folded into Printer-row toolheads[] — L271 Phase 4 step-1 migration complete.")
+        else:
+            state.logger.error("❌ L271 Phase 4 toolheads migration save FAILED — locations.json left unchanged; will retry next boot.")
+except Exception as _p4_err:
+    state.logger.error(f"toolheads migration skipped due to error: {_p4_err}")
+
 # L347 follow-up — also prune at startup so accumulated backups from
 # previous boots get trimmed even when no migration fires this boot.
 # Cheap glob; idempotent under the cap.
@@ -2800,10 +2830,15 @@ def api_put_printer_map():
         # Idempotent + best-effort; never block the printer_map save on it.
         try:
             _pm = result.get('printer_map') or new_map
-            _locs, _chg = locations_db.migrate_printers_to_rows_if_needed(
-                locations_db.load_locations_list(), _pm)
-            if _chg and not locations_db.save_locations_list(_locs):
-                state.logger.error("printer-rows sync after printer_map save FAILED to persist.")
+            _locs = locations_db.load_locations_list()
+            _locs, _chg_rows = locations_db.migrate_printers_to_rows_if_needed(_locs, _pm)
+            # L271 Phase 4 (step 1): keep each Printer row's toolheads[] in sync
+            # with the edited printer_map too (dual-read window). Runs on the same
+            # loaded list so a single save persists both, and AFTER the rows
+            # migration so a newly-added printer already has its Type:"Printer" row.
+            _locs, _chg_th = locations_db.migrate_printer_map_to_toolheads_if_needed(_locs, _pm)
+            if (_chg_rows or _chg_th) and not locations_db.save_locations_list(_locs):
+                state.logger.error("printer-rows/toolheads sync after printer_map save FAILED to persist.")
         except Exception as _sync_err:
             state.logger.warning(f"printer-rows sync after printer_map save skipped: {_sync_err}")
         return jsonify(result)
