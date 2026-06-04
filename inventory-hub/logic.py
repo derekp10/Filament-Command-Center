@@ -620,6 +620,16 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
                 fb_outcomes.append((ok, detail))
                 if ok:
                     state.add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
+                    # Group 20.2: a spool deployed FROM a single-slot dryer box
+                    # attaches that box to this toolhead so the box follows its
+                    # spool (Core One "missing box" aid). current_loc is where the
+                    # spool lived before this move. Best-effort — never fail the move.
+                    try:
+                        _att, _ad = locations_db.attach_single_slot_box_to_toolhead(current_loc, target)
+                        if _att and _ad != "already attached":
+                            state.add_log_entry(f"🔗 Single-slot box auto-attached → {target} ({_ad})", "INFO")
+                    except Exception as _ae:
+                        state.logger.warning(f"20.2 box auto-attach skipped: {_ae}")
                 else:
                     state.add_log_entry(f"⚠️ Filabridge map {target} <- #{sid} FAILED: {detail}", "ERROR", "ff4444")
             else:
@@ -870,6 +880,19 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
                     f"⚠️ Filabridge unmap {fb_origin[0]}-{fb_origin[1]} FAILED: {detail}",
                     "ERROR", "ff4444",
                 )
+
+    # Group 20.2: ejecting off a toolhead detaches any single-slot dryer box that
+    # was following its spool onto this toolhead (the lifecycle pair of the
+    # auto-attach in perform_smart_move). Best-effort — never fail the eject.
+    if current_location in printer_map:
+        try:
+            _detached = locations_db.detach_single_slot_boxes_from_toolhead(current_location)
+            if _detached:
+                state.add_log_entry(
+                    f"🔓 Single-slot box(es) auto-detached from {current_location}: "
+                    f"{', '.join(str(d) for d in _detached)}", "INFO")
+        except Exception as _de:
+            state.logger.warning(f"20.2 box auto-detach skipped: {_de}")
 
     # Save the original slot before we wipe it for processing
     orig_container_slot = extra.get('container_slot', '')
