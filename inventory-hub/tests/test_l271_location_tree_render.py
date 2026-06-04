@@ -83,3 +83,24 @@ def test_sort_comparator_reads_parent_id():
     js = _read("static", "js", "modules", "inv_core.js")
     assert "a.parent_id != null ? a.parent_id" in js, "sort rootA must read a.parent_id"
     assert "b.parent_id != null ? b.parent_id" in js, "sort rootB must read b.parent_id"
+
+
+def test_tree_indent_reads_parent_id():
+    """The tree-indent parentId derivation reads row.parent_id (with a split
+    fallback), and isChild is derived from the resolved parent rather than a
+    bare LocationID.split('-')[0]."""
+    js = _read("static", "js", "modules", "inv_core.js")
+    assert "l.parent_id != null ? l.parent_id" in js, "parentId must read l.parent_id"
+    assert "isChild = (parentId !== l.LocationID)" in js, \
+        "isChild must derive from the resolved parent, not LocationID.includes('-')"
+
+
+def test_has_children_stays_descendant_query():
+    """DELIBERATE Phase 2.5 scope guard: hasChildren must remain a startsWith
+    descendant query. parent_id is the flat first-segment prefix this phase and
+    synthesized descendant rows carry parent_id:null, so a `c.parent_id === l`
+    rewrite would diverge (a printer could lose its expand toggle). It migrates
+    in Phase 3 when hierarchy becomes truly nested."""
+    js = _read("static", "js", "modules", "inv_core.js")
+    assert "c.LocationID.startsWith(l.LocationID + '-')" in js, \
+        "hasChildren must stay a startsWith descendant query until Phase 3"

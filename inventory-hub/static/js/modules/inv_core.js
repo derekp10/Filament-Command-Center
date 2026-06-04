@@ -557,15 +557,28 @@ const _renderLocationsPayload = (d) => {
                     const typeBadge = `<span class="badge ${badgeClass}" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); ${badgeStyle}">${l.Type}</span>`;
 
                     let indent = '';
-                    let parentId = l.LocationID.includes('-') ? l.LocationID.split('-')[0] : l.LocationID;
+                    // L271 Phase 2.5: resolve the tree root from row.parent_id
+                    // (flat first-segment prefix this phase = identical to the
+                    // old split; split kept only as a rollout fallback).
+                    let parentId = l.parent_id != null ? l.parent_id : (l.LocationID.includes('-') ? l.LocationID.split('-')[0] : l.LocationID);
                     let isChild = false;
                     let hasChildren = false;
 
                     if (state.locSortBy === 'LocationID') {
-                        isChild = l.LocationID.includes('-') && !['TST','TEST','PM','PJ'].includes(parentId);
+                        // A row is a child when its resolved parent differs from
+                        // its own LocationID — exactly equivalent to the old
+                        // LocationID.includes('-') because parentId already folds
+                        // in the parent_id field / split fallback.
+                        isChild = (parentId !== l.LocationID) && !['TST','TEST','PM','PJ'].includes(parentId);
                         if (isChild) {
                             indent = '<span style="display:inline-block; width: 20px; border-left: 2px solid #555; border-bottom: 2px solid #555; height: 16px; margin-right: 8px; margin-bottom: 6px; margin-left: 10px;"></span>';
                         } else {
+                            // L271 Phase 2.5: hasChildren stays a startsWith
+                            // descendant query — NOT a parent_id check. parent_id
+                            // is the flat first-segment prefix this phase, and
+                            // synthesized descendant rows carry parent_id:null, so
+                            // a parent_id-equality test would diverge here. This
+                            // migrates in Phase 3 when hierarchy becomes truly nested.
                             hasChildren = finalList.some(c => c.LocationID !== l.LocationID && c.LocationID.startsWith(l.LocationID + '-'));
                             if (hasChildren && !['TST','TEST','PM','PJ'].includes(l.LocationID)) {
                                 indent = `<span onclick="window.toggleLocNode('${l.LocationID}', this)" style="cursor:pointer; font-family: monospace; border: 1px solid #555; border-radius: 3px; padding: 0 4px; margin-right: 6px; color:#aaa; background:#222; user-select:none; font-size:1rem; box-shadow:inset 0 0 3px #000;" class="text-pop-light">-</span>`;
