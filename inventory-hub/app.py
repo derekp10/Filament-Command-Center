@@ -2955,7 +2955,7 @@ def api_quickswap_return():
         return jsonify({"action": "return_bad_request", "error": "toolhead required"}), 400
 
     cfg = config_loader.load_config()
-    printer_map = cfg.get('printer_map', {}) or {}
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
 
     # Build the list of toolhead IDs we should check. For a virtual
     # printer prefix, this is every toolhead in printer_map that starts
@@ -3650,8 +3650,8 @@ def api_fb_aggressive_parse():
         
     # 3. Apply weights to mapped spools
     cfg = config_loader.load_config()
-    printer_map = cfg.get("printer_map", {})
-    
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
+
     _, _fb_url_for_mmu = config_loader.get_api_urls()
     active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, _fb_url_for_mmu)
     spools_updated = 0
@@ -4718,7 +4718,7 @@ def api_get_logs_route():
                                     if creds:
                                         usage_map = prusalink_api.download_gcode_and_parse_usage(creds['ip_address'], creds['api_key'], filename)
                                         if usage_map:
-                                            printer_map = config_loader.load_config().get("printer_map", {})
+                                            printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2 (dual-read)
                                             spools_updated = 0
                                             # Same MMU-alias dedup as the primary auto-deduct path.
                                             ar_active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
