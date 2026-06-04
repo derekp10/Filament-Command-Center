@@ -1656,21 +1656,30 @@ def api_save_location():
     old_id = data.get('old_id')
     new_entry = data.get('new_data')
     current_list = locations_db.load_locations_list()
+    old_row = None
     if old_id:
+        old_row = next((r for r in current_list if r.get('LocationID') == old_id), None)
         current_list = [row for row in current_list if row['LocationID'] != old_id]
         state.add_log_entry(f"📝 Updated: {new_entry['LocationID']}")
     else:
         state.add_log_entry(f"✨ Created: {new_entry['LocationID']}")
-    # L271 Phase 3.5: stamp the IMMEDIATE parent_id at write time so a freshly
-    # created or edited row nests correctly right away — not only after the next
-    # startup migration. immediate_parent_for resolves the longest existing-row
-    # prefix (flat first-segment fallback) against current_list, which already
-    # has the row's own old id removed, so an edit can't make a row its own
-    # parent. Respect an explicitly-supplied parent_id. (A Printer row's room is
-    # resolved by the startup migration, not here.)
+    # L271 Phase 3.5 (review fix #4): stamp parent_id at write time, but PRESERVE
+    # the existing parent_id on an IN-PLACE edit (same LocationID). The edit
+    # modal only sends LocationID/Name/Type/Max Spools — never parent_id — so a
+    # naive recompute would un-nest a Printer (immediate_parent_for('XL') → None,
+    # there's no dashed ancestor) and silently revert an operator-set parent_id
+    # on every field edit. Only CREATE or RENAME (re)derives the immediate parent
+    # from the new LocationID; a Printer's room is then (re)resolved by the
+    # startup migration. Respect an explicitly-supplied parent_id.
     if isinstance(new_entry, dict) and 'parent_id' not in new_entry:
-        new_entry['parent_id'] = locations_db.immediate_parent_for(
-            new_entry.get('LocationID'), current_list)
+        same_id = (old_row is not None
+                   and str(old_row.get('LocationID', '')) == str(new_entry.get('LocationID', ''))
+                   and 'parent_id' in old_row)
+        if same_id:
+            new_entry['parent_id'] = old_row.get('parent_id')
+        else:
+            new_entry['parent_id'] = locations_db.immediate_parent_for(
+                new_entry.get('LocationID'), current_list)
     current_list.append(new_entry)
     current_list.sort(key=lambda x: str(x.get('LocationID', '')))
     locations_db.save_locations_list(current_list)

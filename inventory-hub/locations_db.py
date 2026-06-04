@@ -753,10 +753,16 @@ def migrate_immediate_parent_ids_if_needed(loc_list):
 
         if str(row.get('Type', '')).strip().lower() == 'printer':
             target = _derive_printer_room(row, loc_list, room_by_name)
-            if target is not None and target not in existing_upper:
+            # Review fix #6: leave parent_id unchanged when the room can't be
+            # resolved (None) OR resolves to a non-existent row. Without the
+            # `target is None` arm, a DASHED printer id carrying the flat default
+            # (e.g. an imported 'LR-P1' with parent_id='LR') would fall through
+            # and get orphaned to None. dash-free printers (XL/CORE1) are
+            # unaffected (their old_default is already None).
+            if target is None or target not in existing_upper:
                 state.logger.warning(
-                    f"⚠️ Printer {lid}: resolved room {target!r} has no on-disk Room row; "
-                    f"leaving parent_id unchanged."
+                    f"⚠️ Printer {lid}: room could not be resolved to an on-disk Room row "
+                    f"(target={target!r}); leaving parent_id unchanged."
                 )
                 continue
         else:

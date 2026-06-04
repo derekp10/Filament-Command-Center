@@ -170,6 +170,34 @@ def test_new_location_nests_under_immediate_parent(api_base_url, require_server)
             requests.delete(f"{api_base_url}/api/locations", params={"id": lid}, timeout=10)
 
 
+@pytest.mark.integration
+def test_edit_preserves_parent_id_in_place(api_base_url, require_server):
+    """Review fix #4: an in-place edit (same LocationID, no parent_id in the
+    payload — what the edit modal sends) must PRESERVE the existing parent_id,
+    not recompute it. Otherwise editing a printer's name un-nests it (recompute
+    → None) and an operator override is silently reverted."""
+    room, printer = "ZZRM", "ZZPRN"
+    try:
+        requests.post(f"{api_base_url}/api/locations", json={"old_id": "", "new_data": {
+            "LocationID": room, "Name": "t room", "Type": "Room", "Max Spools": "0"}}, timeout=10).raise_for_status()
+        # create with an explicit parent_id (api respects a supplied value)
+        requests.post(f"{api_base_url}/api/locations", json={"old_id": "", "new_data": {
+            "LocationID": printer, "Name": "t printer", "Type": "Printer",
+            "Max Spools": "1", "parent_id": room}}, timeout=10).raise_for_status()
+        # edit in place WITHOUT parent_id (the modal's payload shape)
+        requests.post(f"{api_base_url}/api/locations", json={"old_id": printer, "new_data": {
+            "LocationID": printer, "Name": "t printer RENAMED", "Type": "Printer",
+            "Max Spools": "1"}}, timeout=10).raise_for_status()
+        got = {str(x.get("LocationID")): x for x in
+               requests.get(f"{api_base_url}/api/locations", timeout=10).json()}
+        assert got[printer]["parent_id"] == room, (
+            f"in-place edit must preserve parent_id, got {got[printer]['parent_id']!r}"
+        )
+    finally:
+        for lid in (printer, room):
+            requests.delete(f"{api_base_url}/api/locations", params={"id": lid}, timeout=10)
+
+
 # ---------------------------------------------------------------------------
 # Frontend — inv_core.js renders a recursive parent_id tree
 # ---------------------------------------------------------------------------

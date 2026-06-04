@@ -9,8 +9,6 @@ Pure-function — operates on in-memory fixture lists, no disk / no server.
 """
 import copy
 
-import pytest
-
 import locations_db as L
 
 
@@ -145,3 +143,37 @@ def test_non_list_input_safe():
     out, changed = L.migrate_immediate_parent_ids_if_needed("not a list")
     assert out == "not a list"
     assert changed is False
+
+
+def test_dashed_printer_unresolvable_room_not_orphaned():
+    """Review fix #6: a DASHED printer id carrying the flat default whose room
+    can't be resolved must be LEFT UNCHANGED, never orphaned to None."""
+    rows = [
+        # No Room rows, no toolhead Location, not in the override map → unresolvable.
+        {"LocationID": "LR-P1", "Type": "Printer", "parent_id": "LR"},
+    ]
+    out, changed = L.migrate_immediate_parent_ids_if_needed(rows)
+    assert _pid(out)["LR-P1"] == "LR", "must not orphan a dashed printer to None"
+    assert changed is False
+
+
+# --- immediate_parent_for (public write-time helper, review #10) -------------
+
+def test_immediate_parent_for_cart_row_to_cart():
+    rows = _flat_tree()
+    assert L.immediate_parent_for("CR-CT-1-R1", rows) == "CR-CT-1"
+
+
+def test_immediate_parent_for_cart_to_room():
+    rows = _flat_tree()
+    assert L.immediate_parent_for("CR-CT-1", rows) == "CR"
+
+
+def test_immediate_parent_for_printer_is_none():
+    rows = _flat_tree()
+    assert L.immediate_parent_for("XL", rows) is None  # dash-free → no prefix ancestor
+
+
+def test_immediate_parent_for_no_ancestor_falls_back_to_first_segment():
+    rows = _flat_tree()
+    assert L.immediate_parent_for("GAR-SHELF-9", rows) == "GAR"  # GAR not a row → flat prefix

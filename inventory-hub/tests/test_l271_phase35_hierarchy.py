@@ -161,6 +161,42 @@ def test_resolve_room_cycle_guard():
     assert L.resolve_room("A", pmap) in ("A", "B")
 
 
+# --- ancestors_of (transitive rollup walker, review #10) ------------------
+
+def test_ancestors_of_walks_chain_immediate_first():
+    pmap = L.build_parent_map(NESTED_TREE)
+    assert list(L.ancestors_of("XL-1", pmap)) == ["XL", "LR"]
+    assert list(L.ancestors_of("CR-CT-1-R1", pmap)) == ["CR-CT-1", "CR"]
+
+
+def test_ancestors_of_stops_before_pseudo_prefix():
+    pmap = L.build_parent_map(NESTED_TREE)
+    # PM-DB-1's only ancestor is PM (pseudo) — excluded so a PM box never rolls
+    # into a room. Default stops before it.
+    assert list(L.ancestors_of("PM-DB-1", pmap)) == []
+    assert list(L.ancestors_of("PM-DB-1", pmap, include_pseudo=True)) == ["PM"]
+
+
+def test_ancestors_of_empty_and_top_level():
+    pmap = L.build_parent_map(NESTED_TREE)
+    assert list(L.ancestors_of("", pmap)) == []
+    assert list(L.ancestors_of("CR", pmap)) == []  # a root has no ancestors
+
+
+def test_ancestors_of_prefix_fallback_for_unknown_id():
+    pmap = L.build_parent_map(NESTED_TREE)
+    # GAR-SHELF-1 isn't a row → first hop derives GAR (also not a row → stop).
+    assert list(L.ancestors_of("GAR-SHELF-1", pmap)) == ["GAR"]
+
+
+def test_ancestors_of_cycle_guard():
+    cyclic = [_row("A", "B"), _row("B", "A")]
+    pmap = L.build_parent_map(cyclic)
+    # must terminate (cycle-guarded), not hang
+    out = list(L.ancestors_of("A", pmap))
+    assert out and len(out) <= 2
+
+
 # --- logic.get_room_from_location through the nested chain -----------------
 # The eject room-deriver consumer: on the nested tree it must walk to the
 # top-level room, NOT stop at the immediate parent. Pinned against an explicit
