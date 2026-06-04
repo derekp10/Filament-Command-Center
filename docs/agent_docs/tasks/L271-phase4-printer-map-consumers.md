@@ -1,6 +1,30 @@
 # L271 Phase 4 — prep: `printer_map` consumer map + plan (for a FRESH chat)
 
-**Status:** SCOPED 2026-06-04, NOT started. Phase 3.5 is merged to `dev` (`c889102`). Phase 4 is the **heaviest, HIGH-risk** phase — it touches the eject / FilaBridge / one-spool-one-toolhead subsystem behind multiple past prod outages, and Group 20.1 explicitly **needs live FilaBridge repro** ("do NOT patch blind"). Start it in a fresh chat: *"start L271 Phase 4 — read `docs/agent_docs/tasks/L271-location-manager-phase-plan.md` + `docs/agent_docs/tasks/L271-phase4-printer-map-consumers.md`"*.
+**Status:** **STEP 1 SHIPPED to dev 2026-06-04** (`feature/l271-phase-4`, `4287ed6`); steps 2–5 pending. Phase 3.5 merged to `dev` (`c889102`). Phase 4 is the **heaviest, HIGH-risk** phase — it touches the eject / FilaBridge / one-spool-one-toolhead subsystem behind multiple past prod outages, and Group 20.1 explicitly **needs live FilaBridge repro** ("do NOT patch blind"). Resume in a fresh chat: *"continue L271 Phase 4 step 2 — read `docs/agent_docs/tasks/L271-location-manager-phase-plan.md` + `docs/agent_docs/tasks/L271-phase4-printer-map-consumers.md`"*.
+
+## ✅ Step 1 COMPLETE — schema + accessor + dual-read migration (`4287ed6`)
+
+**Schema (LOCKED):** each first-class `Type:"Printer"` row gets `toolheads:[{location_id, position}]`. **`printer_name` is NOT stored per toolhead** — the Printer row's `Name` is the single source of truth (kills the cross-file drift class). Grouping is by printer **PREFIX** = the row's unique `LocationID` (not by name → two printers sharing a display name can't cross-contaminate). Live result: `XL → [{XL-1,0}…{XL-5,5}]` (position gap at 4 preserved), `CORE1 → [{CORE1,0}]` (dual-role single toolhead).
+
+**The de-risking lever (`locations_db.build_printer_map_from_rows`):** an inverse accessor that reconstructs the **byte-identical** `{LOCID_UPPER:{printer_name,position}}` dict that `config_loader.load_config()['printer_map']` exposes today (printer_name injected from the row `Name`; keys uppercased). **Verified on the live :7913 container: `build_printer_map_from_rows() == config printer_map` exactly.** So every step-2 consumer is a **one-line data-source swap** (`cfg.get('printer_map')` → `locations_db.build_printer_map_from_rows(loc_list)`) with provably identical output — the Phase-2/3.5 method. No consumer reads it yet (dual-read; printer_map still authoritative).
+
+**Shipped:** `migrate_printer_map_to_toolheads_if_needed` (startup, after Phase 3.5; idempotent + re-syncs on a printer_map edit; clears stale; backup) + the `/api/printer_map` PUT post-save sync (keeps toolheads[] current on edit, no reboot). 13 tests in `test_l271_phase4_toolheads.py` (incl. live round-trip, MMU-alias `position` preservation, drift-resolution). Verified idempotent (re-run `changed=False` on real on-disk data) + `/api/printer_map` byte-identical vs baseline.
+
+**Bonus fix (in the same commit):** the long-standing dev-data wipe ([[reference_fcc_e2e_sweep_pollution]] "53→2 via the rename/bindings test") was `test_config_save.py`'s printer_map PUT tests stubbing `load_locations_list` but NOT `save_locations_list`, so the PUT post-save sync overwrote the real `data/locations.json` with a 2-row stub. `_ref_env` now no-ops `save_locations_list`. Dev locations.json stays 53 rows across the full sweep.
+
+## Verified consumer inventory (2026-06-04, 6-agent workflow vs live code — line numbers CONFIRMED)
+
+> All of these stay UNCHANGED in step 1 (dual-read). Step 2 swaps each `cfg.get('printer_map')` → `build_printer_map_from_rows(loc_list)`, one commit each, A/B byte-identical, **safe reads first, fragile `logic.py` move/eject LAST with live FilaBridge repro.**
+
+- **locations_db.py**: `_known_printer_prefixes`@497, `_resolve_printer_name`@515, `migrate_printers_to_rows_if_needed`@544 (keep), `validate_slot_targets`@799/837, `set_dryer_box_bindings`@886, `get_bindings_for_machine`@953 (reverse name→toolheads).
+- **app.py (16)**: startup migration@247, `_resolve_active_locs_for_printer`@400 (**MMU M0/M1 dedup** — keep `position`!), dryer bindings PUT@2597/2874, `api_printer_state`@2646, `/api/printer_map` GET@2665 / PUT@2772 / `_printer_map_blocked_removals`@2711, quickswap return@2931, `/api/machine/<name>/toolhead_slots`@3139, fb recovery@3574, auto-deduct@3626, fb-status reverse-lookup@3929, fb error-recovery snapshot@4664, fb auto-recover task@4695, `_pulse_section_printer_status`@4836.
+- **logic.py (FRAGILE — outage-prone, migrate LAST)**: `_active_print_info_for_location`@28, `_toolhead_of`@64, `perform_smart_move`@399 (`target in printer_map`@497/555, `printer_map[target]`@593, reverse-lookup@749), `perform_smart_eject`@833 (@851/852/962), `perform_force_unassign`@995 (@1010/1011), `perform_undo`@1049 (@1055/1056/1063/1064/1072/1073). All use membership / index / `.items()` on the dict → the accessor serves them byte-identically.
+- **spoolman_api.py**: `search()` deployed filter@1498 (`{k.upper() for k in pm.keys()}`).
+- **config_loader.py (STORAGE layer — dissolves in step 4)**: `load_config` uppercases keys@161, `_canonicalize_printer_map`@431, `save_printer_map`@462.
+- **prusalink_api.py**: no direct printer_map read (consumes `printer_name` as a param — no change).
+- **Frontend (5, all fetch `/api/printer_map`)**: `inv_loc_mgr.js` `fetchPrinterMap`@305 + `_printerSentinelOptions`@348 (builds `PRINTER:<prefix>` via `split('-',1)[0]`) + feeds combobox@371, `inv_printer_status.js` `_aggregate`@80, `inv_quickswap.js` `resolvePrinterNameForToolhead`@20 + section@86, `inv_settings.js` `pmRender`/`pmSave`@249/274 (the EDITOR). **Step-3 strategy: keep `/api/printer_map` GET/PUT as a compat SHIM reading/writing the Printer rows' toolheads[] — the 4 read modules stay unchanged; only the editor's writer + the referential guard move to the row-backed store.**
+
+**Original prep notes (for context) below.**
 
 **Goal:** fold `config.json:printer_map` into a `toolheads[]` array on each first-class `Type:"Printer"` row in `locations.json`, retire `printer_map`, and dissolve Group 20 (20.1/20.2/20.3). Keep `printer_map` readable for one release (**dual-read**) as a safety net, then remove.
 
