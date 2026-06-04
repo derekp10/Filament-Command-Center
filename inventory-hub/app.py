@@ -234,6 +234,34 @@ try:
 except Exception as _p1a_err:
     state.logger.error(f"parent_id migration skipped due to error: {_p1a_err}")
 
+# L271 Phase 3 — first-class Printer rows. Persist each printer declared in
+# config.json:printer_map as a Type:"Printer" row in locations.json so the
+# /api/locations synthesizer no longer has to conjure them at runtime. Sits
+# after the parent_id backfill so the new rows are parent_id-stamped (None for
+# now — printers stay top-level roots; room-nesting is a later phase per
+# Derek 2026-06-03). Also cleans the duplicate blank-Type CORE1 stub. Idempotent
+# on second boot (a printer that already has a Type:"Printer" row is skipped);
+# timestamped backup before the first write for a prod-restart recovery path.
+try:
+    _p3_cfg = config_loader.load_config()
+    _p3_pm = _p3_cfg.get('printer_map', {}) or {}
+    _p3_locs = locations_db.load_locations_list()
+    _p3_migrated, _p3_changed = locations_db.migrate_printers_to_rows_if_needed(_p3_locs, _p3_pm)
+    if _p3_changed:
+        try:
+            import shutil, time as _t
+            _stamp = _t.strftime('%Y%m%d-%H%M%S')
+            _backup = f"{locations_db.JSON_FILE}.pre-printer-rows-migration-{_stamp}.bak"
+            shutil.copy2(locations_db.JSON_FILE, _backup)
+            state.logger.info(f"📦 Backed up locations.json → {_backup}")
+            _prune_locations_backups()
+        except Exception as _bk_err:
+            state.logger.warning(f"Could not write pre-printer-rows-migration backup: {_bk_err}")
+        locations_db.save_locations_list(_p3_migrated)
+        state.logger.info("💾 First-class Printer rows written across locations.json — L271 Phase 3 migration complete.")
+except Exception as _p3_err:
+    state.logger.error(f"printer-rows migration skipped due to error: {_p3_err}")
+
 # L347 follow-up — also prune at startup so accumulated backups from
 # previous boots get trimmed even when no migration fires this boot.
 # Cheap glob; idempotent under the cap.

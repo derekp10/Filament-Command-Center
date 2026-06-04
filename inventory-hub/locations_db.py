@@ -388,6 +388,98 @@ def _known_printer_prefixes(printer_map):
     return prefixes
 
 
+def _resolve_printer_name(printer_id, printer_map):
+    """Friendly display name for a printer LocationID, pulled from the
+    printer_map entry whose key equals the id OR is a toolhead under it
+    (e.g. 'XL' ← 'XL-1'.printer_name). Mirrors the /api/locations synthesizer's
+    name lookup. Falls back to '<id> System' when no printer_name is set.
+    """
+    pid_u = str(printer_id).strip().upper()
+    for loc_id, info in (printer_map or {}).items():
+        lu = str(loc_id).strip().upper()
+        if lu == pid_u or lu.startswith(pid_u + '-'):
+            name = (info or {}).get('printer_name')
+            if name:
+                return name
+    return f"{printer_id} System"
+
+
+def migrate_printers_to_rows_if_needed(loc_list, printer_map):
+    """L271 Phase 3: persist each printer in config.json:printer_map as a
+    first-class Type:"Printer" row in locations.json, instead of synthesizing
+    it at runtime in /api/locations.
+
+    - Printer set = `_known_printer_prefixes(printer_map)`: the first segment of
+      each dashed toolhead key PLUS each dash-free key (e.g. {"XL", "CORE1"}).
+    - `parent_id` stays None for now — printers render as top-level roots
+      exactly as the synthesizer did (Derek 2026-06-03: "first-class Printers
+      now, nest under rooms later"). The nest-later phase sets parent_id to the
+      room (recorded: XL → LR, CORE1 → CR) once the tree renders true nesting.
+    - XL (no on-disk row): append a fresh Printer row, `Max Spools` "0" (it
+      aggregates its 5 XL-* toolhead children).
+    - CORE1 (dash-free dual-role: one Tool Head row + a duplicate blank-Type
+      stub): promote the typed row in place to Type:"Printer" (keeping its
+      `Max Spools` "1" — it IS the single deploy slot) and DELETE the blank
+      duplicate. Spools stay at "CORE1" (no Spoolman migration). Extensible to
+      N toolhead children later (the planned INDX upgrade) with no schema change.
+    - Idempotent: a printer that already has a Type:"Printer" row is skipped, so
+      the second boot is a no-op (changed=False).
+
+    Returns (mutated_list, changed_bool). Pure locations.json transform — it
+    does NOT touch Spoolman spool locations.
+    """
+    if not isinstance(loc_list, list):
+        return loc_list, False
+
+    printers = _known_printer_prefixes(printer_map)
+    if not printers:
+        return loc_list, False
+
+    changed = False
+    for pid in sorted(printers):
+        matches = [
+            r for r in loc_list
+            if isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == pid
+        ]
+        # Idempotency gate: already first-class → nothing to do for this printer.
+        if any(str(r.get('Type', '')).strip().lower() == 'printer' for r in matches):
+            continue
+
+        name = _resolve_printer_name(pid, printer_map)
+        typed = [r for r in matches if str(r.get('Type', '')).strip()]
+        blanks = [r for r in matches if not str(r.get('Type', '')).strip()]
+
+        if typed:
+            # Promote the first typed row in place (CORE1's Tool Head row),
+            # preserving its Max Spools so the deploy-slot capacity survives.
+            row = typed[0]
+            row['Type'] = 'Printer'
+            row['Name'] = name
+            if 'parent_id' not in row:
+                row['parent_id'] = None
+            changed = True
+            state.logger.info(f"🖨️ Promoted {pid} → first-class Printer row ('{name}')")
+        else:
+            # No on-disk row (XL): append a fresh Printer row.
+            loc_list.append({
+                'LocationID': pid,
+                'Name': name,
+                'Type': 'Printer',
+                'Max Spools': '0',
+                'parent_id': None,
+            })
+            changed = True
+            state.logger.info(f"🖨️ Created first-class Printer row {pid} ('{name}')")
+
+        # Drop any duplicate blank-Type stub rows for this printer LocationID.
+        for b in blanks:
+            loc_list.remove(b)
+            changed = True
+            state.logger.info(f"🧹 Removed duplicate blank-Type row for {pid}")
+
+    return loc_list, changed
+
+
 def is_printer_sentinel(target):
     """True if `target` is a `PRINTER:<id>` sentinel slot_target."""
     if not isinstance(target, str):
