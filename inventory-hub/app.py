@@ -2691,16 +2691,20 @@ def api_printer_state(toolhead_id):
 
 @app.route('/api/printer_map', methods=['GET'])
 def api_printer_map():
-    """Read-only view of config.json's printer_map, grouped for UI use:
+    """Read-only view of the printer_map, grouped for UI use:
     {
       "printers": {
         "🦝 XL": [{"location_id": "XL-1", "position": 0}, ...],
         "🦝 Core One": [...]
       }
     }
+
+    L271 Phase 4 (step 3): now sourced from the first-class Printer rows'
+    toolheads[] (via get_active_printer_map) instead of config.json — the same
+    {entries, printers} shape, so the 4 JS modules that fetch /api/printer_map
+    are unchanged (compat shim). Dual-read: falls back to config until folded.
     """
-    cfg = config_loader.load_config()
-    printer_map = cfg.get('printer_map', {}) or {}
+    printer_map = locations_db.get_active_printer_map()
     grouped = {}
     for loc_id, info in printer_map.items():
         name = info.get('printer_name', 'Unknown')
