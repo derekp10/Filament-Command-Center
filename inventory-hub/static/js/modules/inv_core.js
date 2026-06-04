@@ -457,9 +457,14 @@ const _renderLocationsPayload = (d) => {
                     valA = parseOcc(valA);
                     valB = parseOcc(valB);
                 } else if (state.locSortBy === 'LocationID') {
-                    // Extract tree root for parent-child grouping
-                    let rootA = (a.LocationID || '').split('-')[0];
-                    let rootB = (b.LocationID || '').split('-')[0];
+                    // Extract tree root for parent-child grouping.
+                    // L271 Phase 2.5: read the parent_id field that /api/locations
+                    // now exposes on every row. It is the flat first-segment
+                    // prefix this phase, so it is identical to the old
+                    // LocationID.split('-')[0]; the split is kept only as a
+                    // rollout fallback for a payload that predates the field.
+                    let rootA = a.parent_id != null ? a.parent_id : (a.LocationID || '').split('-')[0];
+                    let rootB = b.parent_id != null ? b.parent_id : (b.LocationID || '').split('-')[0];
                     let typeA = '';
                     let typeB = '';
                     

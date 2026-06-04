@@ -71,3 +71,15 @@ def test_api_locations_every_row_has_parent_id(api_base_url, require_server):
         assert migrated == _old_parent(lid), (
             f"parentId divergence at {lid}: parent_id={pid!r} old={_old_parent(lid)!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Frontend — inv_core.js tree derives parent from row.parent_id (not split)
+# ---------------------------------------------------------------------------
+
+def test_sort_comparator_reads_parent_id():
+    """The LocationID sort comparator derives the tree root from row.parent_id
+    (with a split fallback for an old payload), not a bare split('-')[0]."""
+    js = _read("static", "js", "modules", "inv_core.js")
+    assert "a.parent_id != null ? a.parent_id" in js, "sort rootA must read a.parent_id"
+    assert "b.parent_id != null ? b.parent_id" in js, "sort rootB must read b.parent_id"
