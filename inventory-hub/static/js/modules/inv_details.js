@@ -947,6 +947,8 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                 locs.forEach(l => {
                     const type = (l.Type || '').toLowerCase();
                     if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return;
+                    // L271 Phase 5: Wall Shelf/Row are structural grouping nodes, never spool targets.
+                    if (type === 'wall shelf' || type === 'row') return;
                     if (l.LocationID === 'Unassigned') return;
                     validLocs.push({id: l.LocationID, name: `${l.Name} (${l.LocationID})`});
                 });

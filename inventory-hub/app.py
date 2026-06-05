@@ -292,6 +292,33 @@ try:
 except Exception as _p35_err:
     state.logger.error(f"immediate-parent migration skipped due to error: {_p35_err}")
 
+# L271 Phase 5 — shelf grouping. Synthesize the intermediate Wall + Row rows so
+# shelf sections nest Room → Wall → Row → Shelf instead of flat under the room
+# (the wall/row levels previously lived only in the LocationID string). Runs
+# AFTER the Phase 3.5 immediate-parent pass; self-contained (sets the sections'
+# parent_id itself) so order is non-critical and the result is a fixpoint for
+# 3.5 too. Idempotent on second boot; respects operator-set parent_ids;
+# timestamped backup before the first write for a prod-restart recovery path.
+try:
+    _p5_locs = locations_db.load_locations_list()
+    _p5_migrated, _p5_changed = locations_db.migrate_shelf_grouping_rows_if_needed(_p5_locs)
+    if _p5_changed:
+        try:
+            import shutil, time as _t
+            _stamp = _t.strftime('%Y%m%d-%H%M%S')
+            _backup = f"{locations_db.JSON_FILE}.pre-wall-row-synthesis-migration-{_stamp}.bak"
+            shutil.copy2(locations_db.JSON_FILE, _backup)
+            state.logger.info(f"📦 Backed up locations.json → {_backup}")
+            _prune_locations_backups()
+        except Exception as _bk_err:
+            state.logger.warning(f"Could not write pre-wall-row-synthesis-migration backup: {_bk_err}")
+        if locations_db.save_locations_list(_p5_migrated):
+            state.logger.info("💾 Wall/Row grouping rows synthesized + shelves nested — L271 Phase 5 migration complete.")
+        else:
+            state.logger.error("❌ L271 Phase 5 shelf-grouping migration save FAILED — locations.json left unchanged; will retry next boot.")
+except Exception as _p5_err:
+    state.logger.error(f"shelf-grouping migration skipped due to error: {_p5_err}")
+
 # L271 Phase 4 (step 1 → step 4) — fold config.json:printer_map into a
 # `toolheads[]` array on each first-class Type:"Printer" row. MUST run AFTER the
 # Phase 3 printer-rows migration (it keys off Type:"Printer" rows). Timestamped
@@ -1694,6 +1721,49 @@ def api_save_location():
     if old_id:
         old_row = next((r for r in current_list if r.get('LocationID') == old_id), None)
         current_list = [row for row in current_list if row['LocationID'] != old_id]
+
+    # L271 Phase 5 (review #7): reject a create/rename onto an id that already
+    # exists — current_list has the row's own (old) id removed, so any remaining
+    # match is a genuine duplicate (the hard invariant test_no_duplicate_LocationIDs
+    # guards). Editable #edit-id + the new Parent selector make rename reachable.
+    if isinstance(new_entry, dict):
+        _new_lid_dup = str(new_entry.get('LocationID', '')).strip().upper()
+        if _new_lid_dup and any(str(r.get('LocationID', '')).strip().upper() == _new_lid_dup
+                                for r in current_list if isinstance(r, dict)):
+            return jsonify({"success": False,
+                            "error": f"LocationID '{new_entry.get('LocationID')}' already exists."}), 400
+
+    # L271 Phase 5: when the Edit modal sends an EXPLICIT parent_id (the new
+    # Parent selector), validate it before persisting — it must reference an
+    # existing row and must not create a cycle (self, or a descendant of this
+    # row). An empty/None explicit value means "top level" and is allowed. The
+    # auto-derive path (parent_id absent) is already safe and is untouched.
+    # current_list already has the row's own (old) id filtered out above.
+    if isinstance(new_entry, dict) and 'parent_id' in new_entry:
+        _pid = new_entry.get('parent_id')
+        _pid_norm = None if _pid in (None, '') else str(_pid).strip().upper()
+        if _pid_norm is not None:
+            _new_lid = str(new_entry.get('LocationID', '')).strip().upper()
+            _existing = {str(r.get('LocationID', '')).strip().upper()
+                         for r in current_list if isinstance(r, dict)}
+            if _pid_norm == _new_lid:
+                return jsonify({"success": False, "error": "A location can't be its own parent."}), 400
+            # A valid parent is an on-disk row OR a known pseudo-room prefix
+            # (PM/PJ/TST → virtual rooms with no real row), matching the
+            # dangling-FK contract in test_locations_json_integrity.
+            if _pid_norm not in _existing and _pid_norm not in locations_db.PSEUDO_ROOM_PREFIXES:
+                return jsonify({"success": False, "error": f"Parent '{_pid}' is not an existing location."}), 400
+            # strict=True so a DANGLING dashed parent_id elsewhere can't prefix-
+            # derive a phantom ancestor and spuriously reject a valid move (review #5).
+            _pmap = locations_db.build_parent_map(current_list + [new_entry])
+            if locations_db.is_descendant(_pid_norm, _new_lid, parent_map=_pmap, strict=True):
+                return jsonify({"success": False,
+                                "error": "Can't parent a location under its own descendant (would create a cycle)."}), 400
+        # Canonicalize the stored value (review #6): None for top-level, else the
+        # upper-cased id — consistent with how every other write path stores it.
+        new_entry['parent_id'] = _pid_norm
+
+    if old_id:
         state.add_log_entry(f"📝 Updated: {new_entry['LocationID']}")
     else:
         state.add_log_entry(f"✨ Created: {new_entry['LocationID']}")
