@@ -387,18 +387,25 @@ def build_parent_map(loc_list=None):
     return pmap
 
 
-def _parent_of(loc_upper, parent_map):
+def _parent_of(loc_upper, parent_map, strict=False):
     """One hop up the hierarchy for an already-uppercased LocationID. Uses the
     on-disk parent_map when the id is a known row; falls back to prefix
     derivation for an id with no row (a spool sitting at a not-yet-created
     LocationID, or a pseudo-prefix ancestor).
+
+    `strict=True` disables the prefix fallback — an id absent from the map
+    terminates the walk (parent=None). Used by the write-time cycle check so a
+    DANGLING parent_id value (e.g. a row pointing at a deleted toolhead) can't
+    fabricate a phantom ancestor edge via prefix derivation (review #5).
     """
     if loc_upper in parent_map:
         return parent_map[loc_upper]
+    if strict:
+        return None
     return derive_parent_id_from_prefix(loc_upper)
 
 
-def is_descendant(child, ancestor, parent_map=None, loc_list=None):
+def is_descendant(child, ancestor, parent_map=None, loc_list=None, strict=False):
     """True if `child` sits STRICTLY beneath `ancestor` anywhere in the
     parent_id chain (self does NOT count — callers test exact equality
     separately). Both compared upper-cased. Cycle-guarded.
@@ -408,6 +415,9 @@ def is_descendant(child, ancestor, parent_map=None, loc_list=None):
     row's only ancestor IS its first-segment parent); on a nested tree it
     walks the full chain so a room query reaches its cart-rows / a printer's
     toolheads.
+
+    `strict=True` (write-time cycle validation) walks only real parent_map
+    edges — see `_parent_of`.
     """
     child_u = str(child or '').strip().upper()
     anc_u = str(ancestor or '').strip().upper()
@@ -416,12 +426,12 @@ def is_descendant(child, ancestor, parent_map=None, loc_list=None):
     if parent_map is None:
         parent_map = build_parent_map(loc_list)
     seen = {child_u}
-    cur = _parent_of(child_u, parent_map)
+    cur = _parent_of(child_u, parent_map, strict=strict)
     while cur and cur not in seen:
         if cur == anc_u:
             return True
         seen.add(cur)
-        cur = _parent_of(cur, parent_map)
+        cur = _parent_of(cur, parent_map, strict=strict)
     return False
 
 
@@ -1015,10 +1025,20 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
         for r in loc_list
         if isinstance(r, dict) and str(r.get('LocationID', '')).strip()
     }
+    # Track Type + Name per id (updated as we synthesize) so we never (a) treat a
+    # pre-existing NON-grouping row at a Wall/Row id as a usable grouping node,
+    # nor (b) re-point a section under one (review #1), and so the Row-name
+    # fallback can resolve a freshly-created Wall's friendly name (review #3).
+    type_by_id, name_by_id = {}, {}
+    for r in loc_list:
+        if not isinstance(r, dict):
+            continue
+        rid = str(r.get('LocationID', '')).strip().upper()
+        if rid:
+            type_by_id[rid] = str(r.get('Type', '')).strip()
+            name_by_id[rid] = str(r.get('Name', '')).strip()
     room_name_by_id = {
-        str(r.get('LocationID', '')).strip().upper(): str(r.get('Name', '')).strip()
-        for r in loc_list
-        if isinstance(r, dict) and str(r.get('Type', '')).strip().lower() == 'room'
+        rid: name_by_id[rid] for rid, t in type_by_id.items() if t.lower() == 'room'
     }
 
     shelves = [
@@ -1026,8 +1046,14 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
         if isinstance(r, dict) and str(r.get('Type', '')).strip().lower() == 'shelf'
     ]
 
+    def _grouping_collision(gid):
+        # A real row already owns this id but it isn't a grouping Type — don't
+        # synthesize/nest under a foreign Shelf/Dryer Box/etc. row.
+        return gid in type_by_id and type_by_id[gid] not in GROUPING_TYPES
+
     # Pass 1 — collect the Wall/Row grouping rows implied by the section ids,
-    # plus a representative child name per prefix for Name derivation.
+    # plus a representative child name per prefix for Name derivation. Sections
+    # whose computed grouping id collides with a non-grouping row are left flat.
     want_walls = {}   # CR-WLN  -> {'parent': 'CR',     'sample': <shelf Name>, 'wall_seg': 'WLN', 'room': 'CR'}
     want_rows = {}    # CR-WLN-R1 -> {'parent': 'CR-WLN', 'sample': <shelf Name>, 'row_seg': 'R1'}
     for sh in shelves:
@@ -1043,6 +1069,12 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
             continue
         wall_id = f"{room}-{wall}".upper()
         row_id = f"{room}-{wall}-{row}".upper()
+        if _grouping_collision(wall_id) or _grouping_collision(row_id):
+            state.logger.warning(
+                f"⚠️ Shelf {lid}: grouping id collides with an existing non-grouping row "
+                f"({wall_id if _grouping_collision(wall_id) else row_id}) — left flat."
+            )
+            continue
         want_walls.setdefault(wall_id, {
             'parent': room, 'sample': str(sh.get('Name', '')).strip(),
             'wall_seg': wall, 'room': room,
@@ -1071,6 +1103,8 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
             'parent_id': info['parent'].upper(),
         })
         existing_upper.add(wall_id)
+        type_by_id[wall_id] = WALL_TYPE
+        name_by_id[wall_id] = name
         changed = True
         state.logger.info(f"🧱 Created Wall grouping row {wall_id} ('{name}')")
 
@@ -1080,7 +1114,9 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
             continue
         name = _name_before_token(info['sample'], 'Section')
         if not name:
-            wall_name = room_name_by_id.get(info['parent'], info['parent'])
+            # Fall back to the wall's friendly name (review #3: info['parent'] is
+            # the WALL id, which lives in name_by_id, NOT the Room-only dict).
+            wall_name = name_by_id.get(info['parent']) or info['parent']
             n = info['row_seg'].upper().lstrip('R')
             name = f"{wall_name} Row {n}".strip()
         loc_list.append({
@@ -1091,19 +1127,27 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
             'parent_id': info['parent'].upper(),
         })
         existing_upper.add(row_id)
+        type_by_id[row_id] = ROW_TYPE
+        name_by_id[row_id] = name
         changed = True
         state.logger.info(f"🪜 Created Row grouping row {row_id} ('{name}')")
 
     # Pass 3 — re-point each qualifying section at its Row row (respecting any
     # operator-set parent_id: only move a section still on its flat default).
+    # NOTE (review #2): the override guard treats "operator deliberately set
+    # parent_id back to the Room" the same as "never migrated" (both equal
+    # old_default), so such a deliberate flatten is re-nested on the next boot.
+    # Accepted as benign — resolve_room still returns the same Room either way.
     for sh in shelves:
         lid = str(sh.get('LocationID', '')).strip()
         parts = lid.split('-')
         if len(parts) < 4 or not _is_wall_segment(parts[1]) or not _is_row_segment(parts[2]):
             continue
         row_id = f"{parts[0]}-{parts[1]}-{parts[2]}".upper()
-        if row_id not in existing_upper:
-            continue  # shouldn't happen (we just created it), but be safe
+        # Only ever nest under a GENUINE grouping Row row (created here or a real
+        # Row), never under a colliding foreign-Type row (review #1).
+        if type_by_id.get(row_id) not in GROUPING_TYPES:
+            continue
         cur = sh.get('parent_id')
         cur_norm = None if cur in (None, '') else str(cur).strip().upper()
         old_default = derive_parent_id_from_prefix(lid)  # the flat first-segment room

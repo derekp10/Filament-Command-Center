@@ -180,6 +180,60 @@ def test_segment_and_name_helpers():
     assert L._name_before_token("no marker here", "Row") == ""
 
 
+# --- review fixes ----------------------------------------------------------
+
+def test_collision_with_non_grouping_row_at_row_id_leaves_sections_flat():
+    """review #1: a pre-existing NON-grouping row at the computed Row id must
+    NOT be treated as a Row, and the sections must stay flat (not nested under
+    a Dryer Box etc.)."""
+    rows = _dev_tree()
+    rows.append({"LocationID": "CR-WLN-R1", "Name": "squatter", "Type": "Dryer Box",
+                 "Max Spools": "4", "parent_id": "CR"})
+    out, _ = L.migrate_shelf_grouping_rows_if_needed(rows)
+    by = _by_id(out)
+    assert by["CR-WLN-R1"]["Type"] == "Dryer Box"          # untouched
+    assert not any(r.get("Type") == "Row" for r in out)    # no Row synthesized
+    for n in (1, 2, 3, 4):
+        assert by[f"CR-WLN-R1-SC{n}"]["parent_id"] == "CR"  # left flat
+
+
+def test_collision_with_non_grouping_row_at_wall_id_leaves_sections_flat():
+    rows = _dev_tree()
+    rows.append({"LocationID": "CR-WLN", "Name": "squatter", "Type": "Storage",
+                 "Max Spools": "1", "parent_id": "CR"})
+    out, _ = L.migrate_shelf_grouping_rows_if_needed(rows)
+    by = _by_id(out)
+    assert by["CR-WLN"]["Type"] == "Storage"
+    assert not any(r.get("Type") in ("Wall", "Row") for r in out)
+    for n in (1, 2, 3, 4):
+        assert by[f"CR-WLN-R1-SC{n}"]["parent_id"] == "CR"
+
+
+def test_row_name_fallback_uses_wall_name_not_raw_id():
+    """review #3: when a shelf Name lacks the 'Section' token, the Row name must
+    fall back to the WALL's friendly name, not the raw 'CR-WLN' id."""
+    rows = [{"LocationID": "CR", "Name": "Computer Room", "Type": "Room", "parent_id": None}]
+    for n in (1, 2):
+        rows.append({"LocationID": f"CR-WLN-R1-SC{n}", "Name": "unlabeled",
+                     "Type": "Shelf", "Max Spools": "0", "parent_id": "CR"})
+    by = _by_id(L.migrate_shelf_grouping_rows_if_needed(rows)[0])
+    assert by["CR-WLN"]["Name"] == "Computer Room Wall North"      # decoded from segment
+    assert by["CR-WLN-R1"]["Name"] == "Computer Room Wall North Row 1"  # NOT "CR-WLN Row 1"
+
+
+def test_is_descendant_strict_ignores_dangling_dashed_fk():
+    """review #5: a dangling dashed parent_id (row points at a deleted toolhead)
+    must not fabricate a phantom ancestor via prefix-derivation under strict."""
+    rows = [
+        {"LocationID": "LR", "Type": "Room", "parent_id": None},
+        {"LocationID": "XL", "Type": "Printer", "parent_id": "LR"},
+        {"LocationID": "BAR", "Type": "Cart", "parent_id": "XL-2"},  # XL-2 no longer a row
+    ]
+    pmap = L.build_parent_map(rows)
+    assert L.is_descendant("BAR", "XL", parent_map=pmap) is True          # phantom (non-strict)
+    assert L.is_descendant("BAR", "XL", parent_map=pmap, strict=True) is False  # fixed
+
+
 # ---------------------------------------------------------------------------
 # (a) explicit-parent write-time validation — LIVE integration
 # ---------------------------------------------------------------------------
@@ -282,6 +336,40 @@ def test_explicit_top_level_null(api_base_url, require_server):
         _cleanup(api_base_url, shelf, room)
 
 
+@pytest.mark.integration
+def test_explicit_parent_id_is_canonicalized(api_base_url, require_server):
+    """review #6: a non-canonical (lowercase) parent_id passes validation but is
+    stored upper-cased."""
+    room, shelf = "ZZP5CAN", "ZZP5CAN-S1"
+    try:
+        requests.post(f"{api_base_url}/api/locations", json={"old_id": "", "new_data": {
+            "LocationID": room, "Name": "t room", "Type": "Room", "Max Spools": "0"}}, timeout=10).raise_for_status()
+        r = requests.post(f"{api_base_url}/api/locations", json={"old_id": "", "new_data": {
+            "LocationID": shelf, "Name": "t", "Type": "Shelf", "Max Spools": "0",
+            "parent_id": room.lower()}}, timeout=10)
+        r.raise_for_status()
+        assert _all(api_base_url)[shelf]["parent_id"] == room  # stored upper-cased
+    finally:
+        _cleanup(api_base_url, shelf, room)
+
+
+@pytest.mark.integration
+def test_reject_duplicate_locationid(api_base_url, require_server):
+    """review #7: creating/renaming onto an existing LocationID is rejected (no
+    duplicate row on disk)."""
+    a = "ZZP5DUP"
+    try:
+        requests.post(f"{api_base_url}/api/locations", json={"old_id": "", "new_data": {
+            "LocationID": a, "Name": "first", "Type": "Shelf", "Max Spools": "0"}}, timeout=10).raise_for_status()
+        r = requests.post(f"{api_base_url}/api/locations", json={"old_id": "", "new_data": {
+            "LocationID": a, "Name": "dup", "Type": "Shelf", "Max Spools": "0"}}, timeout=10)
+        assert r.status_code == 400
+        rows = requests.get(f"{api_base_url}/api/locations", timeout=10).json()
+        assert sum(1 for x in rows if str(x.get("LocationID")) == a) == 1
+    finally:
+        _cleanup(api_base_url, a)
+
+
 # ---------------------------------------------------------------------------
 # (a)+(b)+(c) source canaries — guard the wiring without a server
 # ---------------------------------------------------------------------------
@@ -323,3 +411,12 @@ def test_wall_row_badges_and_wizard_exclusion():
     assert "t === 'Wall'" in core and "t === 'Row'" in core, "Wall/Row need distinct badges"
     wiz = _read("static", "js", "modules", "inv_wizard.js")
     assert "type === 'wall' || type === 'row'" in wiz, "grouping nodes excluded from wizard picker"
+
+
+def test_grouping_excluded_from_all_spool_pickers():
+    """review #8: Wall/Row are excluded from EVERY spool-assignment surface, not
+    just the wizard (force-location picker + scan-assign)."""
+    det = _read("static", "js", "modules", "inv_details.js")
+    cmd = _read("static", "js", "modules", "inv_cmd.js")
+    assert "type === 'wall' || type === 'row'" in det, "force-location picker must exclude grouping nodes"
+    assert "locType === 'wall' || locType === 'row'" in cmd, "scan-assign must reject grouping nodes"

@@ -1722,6 +1722,17 @@ def api_save_location():
         old_row = next((r for r in current_list if r.get('LocationID') == old_id), None)
         current_list = [row for row in current_list if row['LocationID'] != old_id]
 
+    # L271 Phase 5 (review #7): reject a create/rename onto an id that already
+    # exists — current_list has the row's own (old) id removed, so any remaining
+    # match is a genuine duplicate (the hard invariant test_no_duplicate_LocationIDs
+    # guards). Editable #edit-id + the new Parent selector make rename reachable.
+    if isinstance(new_entry, dict):
+        _new_lid_dup = str(new_entry.get('LocationID', '')).strip().upper()
+        if _new_lid_dup and any(str(r.get('LocationID', '')).strip().upper() == _new_lid_dup
+                                for r in current_list if isinstance(r, dict)):
+            return jsonify({"success": False,
+                            "error": f"LocationID '{new_entry.get('LocationID')}' already exists."}), 400
+
     # L271 Phase 5: when the Edit modal sends an EXPLICIT parent_id (the new
     # Parent selector), validate it before persisting — it must reference an
     # existing row and must not create a cycle (self, or a descendant of this
@@ -1742,10 +1753,15 @@ def api_save_location():
             # dangling-FK contract in test_locations_json_integrity.
             if _pid_norm not in _existing and _pid_norm not in locations_db.PSEUDO_ROOM_PREFIXES:
                 return jsonify({"success": False, "error": f"Parent '{_pid}' is not an existing location."}), 400
+            # strict=True so a DANGLING dashed parent_id elsewhere can't prefix-
+            # derive a phantom ancestor and spuriously reject a valid move (review #5).
             _pmap = locations_db.build_parent_map(current_list + [new_entry])
-            if locations_db.is_descendant(_pid_norm, _new_lid, parent_map=_pmap):
+            if locations_db.is_descendant(_pid_norm, _new_lid, parent_map=_pmap, strict=True):
                 return jsonify({"success": False,
                                 "error": "Can't parent a location under its own descendant (would create a cycle)."}), 400
+        # Canonicalize the stored value (review #6): None for top-level, else the
+        # upper-cased id — consistent with how every other write path stores it.
+        new_entry['parent_id'] = _pid_norm
 
     if old_id:
         state.add_log_entry(f"📝 Updated: {new_entry['LocationID']}")
