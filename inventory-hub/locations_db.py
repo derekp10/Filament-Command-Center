@@ -19,6 +19,15 @@ CSV_FILE = '3D Print Supplies - Locations.csv'
 DRYER_BOX_TYPE = 'Dryer Box'
 TOOLHEAD_TYPES = {'Tool Head', 'MMU Slot', 'No MMU Direct Load'}
 
+# L271 Phase 5 — structural grouping rows. A Wall groups Rows; a Row groups
+# Shelf sections (Room → Wall → Row → Shelf). Like Rooms/Carts they hold NO
+# spools directly — they only nest children for the tree — so they're excluded
+# from the spool-assignment pickers (inv_wizard) the same way toolheads and
+# virtual rows are. Created by migrate_shelf_grouping_rows_if_needed.
+WALL_TYPE = 'Wall'
+ROW_TYPE = 'Row'
+GROUPING_TYPES = {WALL_TYPE, ROW_TYPE}
+
 
 def _ensure_data_dir():
     """Make sure the parent directory of JSON_FILE exists before any
@@ -923,6 +932,185 @@ def migrate_immediate_parent_ids_if_needed(loc_list):
             row['parent_id'] = target
             changed = True
             state.logger.info(f"🪜 Re-parented {lid}: {cur_norm!r} → {target!r}")
+
+    return loc_list, changed
+
+
+# --- L271 Phase 5: shelf grouping (Room → Wall → Row → Shelf) ----------------
+
+_WALL_DIRECTIONS = {'N': 'North', 'S': 'South', 'E': 'East', 'W': 'West'}
+
+
+def _decode_wall_segment(seg):
+    """``WLN`` → ``"Wall North"`` (the shelf-label scheme). Returns None for a
+    segment that isn't a WL[NSEW] wall code, so callers can tell wall segments
+    apart from rows/sections."""
+    s = str(seg or '').strip().upper()
+    if len(s) == 3 and s.startswith('WL') and s[2] in _WALL_DIRECTIONS:
+        return f"Wall {_WALL_DIRECTIONS[s[2]]}"
+    return None
+
+
+def _is_wall_segment(seg):
+    return _decode_wall_segment(seg) is not None
+
+
+def _is_row_segment(seg):
+    """``R1`` / ``R12`` — an ``R`` followed by digits."""
+    s = str(seg or '').strip().upper()
+    return len(s) >= 2 and s.startswith('R') and s[1:].isdigit()
+
+
+def _name_before_token(name, token):
+    """Friendly name truncated just before the first standalone-word ``token``.
+    ``("Computer Room Wall North Row 1 Section 1", "Row")`` → ``"Computer Room
+    Wall North"``. Faithfully reuses the operator's own wording and is robust to
+    a trailing Section-number typo (the cut happens before it). Returns '' when
+    the token isn't present as a whole word."""
+    out = []
+    for w in str(name or '').split():
+        if w.lower() == str(token).lower():
+            return ' '.join(out)
+        out.append(w)
+    return ''
+
+
+def migrate_shelf_grouping_rows_if_needed(loc_list):
+    """L271 Phase 5: synthesize REAL intermediate Wall + Row grouping rows so
+    shelf sections nest **Room → Wall → Row → Shelf** instead of sitting flat
+    under the room.
+
+    A shelf section LocationID follows ``ROOM-WALL-ROW-SECTION`` (e.g.
+    ``CR-WLN-R1-SC1``: room CR, wall WLN, row R1, section SC1). The wall
+    (``CR-WLN``) and row (``CR-WLN-R1``) levels live ONLY in the ID string — no
+    row exists for them — so ``_immediate_parent_from_rows`` lands every section
+    flat on the room. This migration CREATES the missing Wall + Row rows
+    (Type ``Wall``/``Row``, ``Max Spools`` ``"0"``, ``parent_id`` = their own
+    immediate parent) and re-points each section's ``parent_id`` at its Row row,
+    so the renderer draws the full Room → Wall → Row → Section hierarchy. No
+    renderer/occupancy change is needed — Phase 3.5 already nests arbitrary depth
+    and rolls a subtree total up to every ancestor.
+
+    **Self-contained + order-independent:** it sets the sections' ``parent_id``
+    itself rather than relying on a later re-parent pass, so it's correct whether
+    it runs before or after ``migrate_immediate_parent_ids_if_needed`` (the
+    migrated state is a fixpoint for that pass too). **Generic:** the Wall/Row
+    ids and Names are derived from each shelf's own segments + friendly Name, so
+    it works on dev (R1 only) and prod (R1+R2) alike without hardcoding ``CR``.
+
+    Only Shelf rows matching the ``WALL=WL[NSEW]`` + ``ROW=R<n>`` scheme are
+    nested; a Shelf with any other ID shape is left flat (logged). **Idempotent
+    + respects operator overrides:** skips creating a grouping row whose
+    LocationID already exists, and only re-points a section whose ``parent_id``
+    is still its flat first-segment default (a hand re-parent is never
+    clobbered). 2nd boot → no-op (changed=False).
+
+    Returns (mutated_list, changed_bool). Pure locations.json transform.
+    """
+    if not isinstance(loc_list, list):
+        return loc_list, False
+
+    existing_upper = {
+        str(r.get('LocationID', '')).strip().upper()
+        for r in loc_list
+        if isinstance(r, dict) and str(r.get('LocationID', '')).strip()
+    }
+    room_name_by_id = {
+        str(r.get('LocationID', '')).strip().upper(): str(r.get('Name', '')).strip()
+        for r in loc_list
+        if isinstance(r, dict) and str(r.get('Type', '')).strip().lower() == 'room'
+    }
+
+    shelves = [
+        r for r in loc_list
+        if isinstance(r, dict) and str(r.get('Type', '')).strip().lower() == 'shelf'
+    ]
+
+    # Pass 1 — collect the Wall/Row grouping rows implied by the section ids,
+    # plus a representative child name per prefix for Name derivation.
+    want_walls = {}   # CR-WLN  -> {'parent': 'CR',     'sample': <shelf Name>, 'wall_seg': 'WLN', 'room': 'CR'}
+    want_rows = {}    # CR-WLN-R1 -> {'parent': 'CR-WLN', 'sample': <shelf Name>, 'row_seg': 'R1'}
+    for sh in shelves:
+        lid = str(sh.get('LocationID', '')).strip()
+        parts = lid.split('-')
+        if len(parts) < 4:
+            continue  # too shallow to have a Wall+Row level
+        room, wall, row = parts[0].upper(), parts[1], parts[2]
+        if not _is_wall_segment(wall) or not _is_row_segment(row):
+            state.logger.info(
+                f"📐 Shelf {lid} doesn't match ROOM-WALL-ROW-SECTION — left flat under {room}."
+            )
+            continue
+        wall_id = f"{room}-{wall}".upper()
+        row_id = f"{room}-{wall}-{row}".upper()
+        want_walls.setdefault(wall_id, {
+            'parent': room, 'sample': str(sh.get('Name', '')).strip(),
+            'wall_seg': wall, 'room': room,
+        })
+        want_rows.setdefault(row_id, {
+            'parent': wall_id, 'sample': str(sh.get('Name', '')).strip(),
+            'row_seg': row,
+        })
+
+    changed = False
+
+    # Pass 2a — create missing Wall rows (parent = room).
+    for wall_id, info in sorted(want_walls.items()):
+        if wall_id in existing_upper:
+            continue
+        name = _name_before_token(info['sample'], 'Row')
+        if not name:
+            rn = room_name_by_id.get(info['room'], info['room'])
+            decoded = _decode_wall_segment(info['wall_seg']) or info['wall_seg']
+            name = f"{rn} {decoded}".strip()
+        loc_list.append({
+            'LocationID': wall_id,
+            'Name': name,
+            'Type': WALL_TYPE,
+            'Max Spools': '0',
+            'parent_id': info['parent'].upper(),
+        })
+        existing_upper.add(wall_id)
+        changed = True
+        state.logger.info(f"🧱 Created Wall grouping row {wall_id} ('{name}')")
+
+    # Pass 2b — create missing Row rows (parent = wall).
+    for row_id, info in sorted(want_rows.items()):
+        if row_id in existing_upper:
+            continue
+        name = _name_before_token(info['sample'], 'Section')
+        if not name:
+            wall_name = room_name_by_id.get(info['parent'], info['parent'])
+            n = info['row_seg'].upper().lstrip('R')
+            name = f"{wall_name} Row {n}".strip()
+        loc_list.append({
+            'LocationID': row_id,
+            'Name': name,
+            'Type': ROW_TYPE,
+            'Max Spools': '0',
+            'parent_id': info['parent'].upper(),
+        })
+        existing_upper.add(row_id)
+        changed = True
+        state.logger.info(f"🪜 Created Row grouping row {row_id} ('{name}')")
+
+    # Pass 3 — re-point each qualifying section at its Row row (respecting any
+    # operator-set parent_id: only move a section still on its flat default).
+    for sh in shelves:
+        lid = str(sh.get('LocationID', '')).strip()
+        parts = lid.split('-')
+        if len(parts) < 4 or not _is_wall_segment(parts[1]) or not _is_row_segment(parts[2]):
+            continue
+        row_id = f"{parts[0]}-{parts[1]}-{parts[2]}".upper()
+        if row_id not in existing_upper:
+            continue  # shouldn't happen (we just created it), but be safe
+        cur = sh.get('parent_id')
+        cur_norm = None if cur in (None, '') else str(cur).strip().upper()
+        old_default = derive_parent_id_from_prefix(lid)  # the flat first-segment room
+        if cur_norm in (None, old_default) and cur_norm != row_id:
+            sh['parent_id'] = row_id
+            changed = True
+            state.logger.info(f"🪜 Nested shelf {lid}: {cur_norm!r} → {row_id!r}")
 
     return loc_list, changed
 

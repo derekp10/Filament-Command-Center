@@ -57,6 +57,9 @@ window.updateManageTitle = (loc, itemArray = null) => {
     else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
     else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
     else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
+    // L271 Phase 5 — structural grouping nodes (Room > Wall > Row > Shelf).
+    else if (t === 'Wall') { badgeClass = 'bg-secondary'; badgeStyle = 'border:1px solid #6dd5c9; background-color:#1f5a52 !important; color:#fff;'; }
+    else if (t === 'Row') { badgeClass = 'bg-secondary'; badgeStyle = 'border:1px solid #9ad0ff; background-color:#34506e !important; color:#fff;'; }
     else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
     else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
     else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
@@ -1434,6 +1437,149 @@ window.printCurrentLocationLabel = () => {
     window.addToQueue({ id: locId, type: 'location', display: `Location: ${locId}` });
 };
 
+// L271 Phase 5 — explicit Parent selector helpers. The hierarchy used to be
+// implicit in the LocationID; the Edit modal now exposes parent_id directly.
+//   _LOC_PARENT_AUTO → omit parent_id on save (backend derives from the ID /
+//                      preserves the existing value)
+//   _LOC_PARENT_NONE → send parent_id:null (explicit top-level)
+//   any other value  → that LocationID (validated server-side: must exist, no
+//                      self/descendant cycle)
+const _LOC_PARENT_AUTO = '__auto__';
+const _LOC_PARENT_NONE = '__none__';
+const _locUC = (v) => String(v == null ? '' : v).toUpperCase();
+
+// Every descendant id of a row (excludes self). Cycle-guarded. Used to keep the
+// Parent <select> from offering a row's own subtree (which would make a cycle).
+const _locDescendants = (idUpper) => {
+    const childrenOf = new Map();
+    (state.allLocations || []).forEach(r => {
+        const pid = r.parent_id != null ? _locUC(r.parent_id) : null;
+        if (!pid) return;
+        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+        childrenOf.get(pid).push(_locUC(r.LocationID));
+    });
+    const out = new Set();
+    const stack = [...(childrenOf.get(idUpper) || [])];
+    while (stack.length) {
+        const c = stack.pop();
+        if (out.has(c)) continue;
+        out.add(c);
+        (childrenOf.get(c) || []).forEach(g => { if (!out.has(g)) stack.push(g); });
+    }
+    return out;
+};
+
+// Mirror locations_db.immediate_parent_for: longest existing-row prefix, else
+// the flat first segment. Drives the "Auto" breadcrumb preview.
+const _locAutoDeriveParent = (lid) => {
+    const s = String(lid || '').trim().toUpperCase();
+    if (!s.includes('-')) return null;
+    const parts = s.split('-');
+    const ids = new Set((state.allLocations || []).map(r => _locUC(r.LocationID)));
+    for (let i = parts.length - 1; i >= 1; i--) {
+        const cand = parts.slice(0, i).join('-');
+        if (ids.has(cand)) return cand;
+    }
+    return parts[0];
+};
+
+// Root→parent friendly chain for the breadcrumb readout. Cycle-guarded.
+const _locBreadcrumbChain = (parentIdUpper) => {
+    if (!parentIdUpper) return null;
+    const byId = new Map();
+    (state.allLocations || []).forEach(r => byId.set(_locUC(r.LocationID), r));
+    const rows = [];
+    const seen = new Set();
+    let cur = parentIdUpper;
+    while (cur && byId.has(cur) && !seen.has(cur)) {
+        rows.push(byId.get(cur));
+        seen.add(cur);
+        const r = byId.get(cur);
+        cur = r.parent_id != null ? _locUC(r.parent_id) : null;
+    }
+    rows.reverse();
+    if (!rows.length) return null;
+    return rows.map(r => r.Name || r.LocationID).join(' › ');
+};
+
+const _syncParentBreadcrumb = () => {
+    const el = document.getElementById('edit-parent-breadcrumb');
+    const sel = document.getElementById('edit-parent');
+    if (!el || !sel) return;
+    const v = sel.value;
+    if (v === _LOC_PARENT_NONE) { el.textContent = '↳ Top level (no parent)'; return; }
+    if (v === _LOC_PARENT_AUTO) {
+        const chain = _locBreadcrumbChain(_locAutoDeriveParent(document.getElementById('edit-id').value || ''));
+        el.textContent = chain ? `↳ Auto: ${chain}` : '↳ Auto: top level (derived from ID)';
+        return;
+    }
+    const chain = _locBreadcrumbChain(_locUC(v));
+    el.textContent = chain ? `↳ ${chain}` : `↳ ${v}`;
+};
+
+// Kinds offered as parents, in display order. Virtual/Unknown/Unassigned and
+// toolheads-as-leaves are intentionally NOT excluded here (a toolhead CAN hold
+// a child box) except the synthetic buckets, which can't be a real parent.
+const _LOC_PARENT_KINDS = ['Room', 'Wall', 'Row', 'Cart', 'Printer', 'Shelf',
+    'Storage', 'Dryer Box', 'Tool Head', 'No MMU Direct Load', 'MMU Slot'];
+
+// Populate #edit-parent. currentParentId: undefined → default "Auto";
+// null → "Top level"; a string → preselect that real parent (or fall back to
+// "Auto" when it isn't a selectable row, e.g. a PM/PJ virtual-room prefix — so
+// save omits parent_id and the backend preserves it).
+const _populateParentSelect = (selfIdUpper, currentParentId) => {
+    const sel = document.getElementById('edit-parent');
+    if (!sel) return;
+    const esc = window.escHtml || ((s) => s);
+    const exclude = new Set();
+    if (selfIdUpper) {
+        exclude.add(selfIdUpper);
+        _locDescendants(selfIdUpper).forEach(d => exclude.add(d));
+    }
+    const groups = new Map();
+    (state.allLocations || []).forEach(r => {
+        const idU = _locUC(r.LocationID);
+        if (!idU || exclude.has(idU)) return;
+        const t = String(r.Type || '');
+        if (idU === 'UNASSIGNED' || t === 'Virtual' || t === 'Virtual Room' || t === 'Unknown' || !t) return;
+        const kind = _LOC_PARENT_KINDS.includes(t) ? t : 'Other';
+        if (!groups.has(kind)) groups.set(kind, []);
+        groups.get(kind).push({ value: r.LocationID, label: r.Name ? `${r.Name} (${r.LocationID})` : r.LocationID });
+    });
+
+    let html = `<option value="${_LOC_PARENT_AUTO}">— Auto (derive from ID) —</option>`
+        + `<option value="${_LOC_PARENT_NONE}">— Top level (no parent) —</option>`;
+    _LOC_PARENT_KINDS.concat(['Other']).forEach(kind => {
+        const items = groups.get(kind);
+        if (!items || !items.length) return;
+        items.sort((a, b) => a.label.toLowerCase() < b.label.toLowerCase() ? -1 : 1);
+        html += `<optgroup label="${esc(kind)}">`;
+        items.forEach(it => { html += `<option value="${esc(it.value)}">${esc(it.label)}</option>`; });
+        html += `</optgroup>`;
+    });
+    sel.innerHTML = html;
+
+    if (currentParentId === undefined) {
+        sel.value = _LOC_PARENT_AUTO;
+    } else if (currentParentId === null) {
+        sel.value = _LOC_PARENT_NONE;
+    } else {
+        const curU = _locUC(currentParentId);
+        const match = Array.from(sel.options).find(o => o.value.toUpperCase() === curU);
+        sel.value = match ? match.value : _LOC_PARENT_AUTO;
+    }
+
+    if (!sel._fccParentBound) {
+        sel.addEventListener('change', _syncParentBreadcrumb);
+        const idInput = document.getElementById('edit-id');
+        if (idInput) idInput.addEventListener('input', () => {
+            if (document.getElementById('edit-parent').value === _LOC_PARENT_AUTO) _syncParentBreadcrumb();
+        });
+        sel._fccParentBound = true;
+    }
+    _syncParentBreadcrumb();
+};
+
 window.openEdit = (id) => {
     const i = state.allLocations.find(l => l.LocationID == id);
     if (i) {
@@ -1443,6 +1589,8 @@ window.openEdit = (id) => {
         document.getElementById('edit-name').value = i.Name;
         document.getElementById('edit-type').value = i.Type;
         document.getElementById('edit-max').value = i['Max Spools'];
+        // L271 Phase 5 — populate the explicit Parent selector + breadcrumb.
+        _populateParentSelect(_locUC(id), ('parent_id' in i) ? i.parent_id : undefined);
         modals.locModal.show();
         // 8.1 — auto-focus the Friendly Name field (the ID is rarely
         // edited; matches vendorEditModal pattern). Select-all so the
@@ -1460,20 +1608,38 @@ window.openEdit = (id) => {
 window.closeEdit = () => { modals.locModal.hide(); modals.locMgrModal.show(); };
 
 window.saveLocation = () => {
+    const new_data = {
+        LocationID: document.getElementById('edit-id').value,
+        Name: document.getElementById('edit-name').value,
+        Type: document.getElementById('edit-type').value,
+        "Max Spools": document.getElementById('edit-max').value
+    };
+    // L271 Phase 5 parent contract: Auto → omit parent_id (backend derives /
+    // preserves); Top level → explicit null; otherwise the chosen LocationID.
+    const pv = (document.getElementById('edit-parent') || {}).value;
+    if (pv === _LOC_PARENT_NONE) new_data.parent_id = null;
+    else if (pv && pv !== _LOC_PARENT_AUTO) new_data.parent_id = pv;
+
     fetch('/api/locations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            old_id: document.getElementById('edit-original-id').value,
-            new_data: {
-                LocationID: document.getElementById('edit-id').value,
-                Name: document.getElementById('edit-name').value,
-                Type: document.getElementById('edit-type').value,
-                "Max Spools": document.getElementById('edit-max').value
-            }
-        })
+        body: JSON.stringify({ old_id: document.getElementById('edit-original-id').value, new_data })
     })
-        .then(() => { modals.locModal.hide(); modals.locMgrModal.show(); fetchLocations(); });
+        .then(async r => {
+            let body = {};
+            try { body = await r.json(); } catch (_) { /* non-JSON */ }
+            if (!r.ok || body.success === false) {
+                // Keep the modal open so the user can correct the parent/id.
+                const msg = body.error || `Save failed (HTTP ${r.status})`;
+                if (typeof showToast === 'function') showToast(msg, 'error', 7000); else alert(msg);
+                return;
+            }
+            modals.locModal.hide(); modals.locMgrModal.show(); fetchLocations();
+        })
+        .catch(e => {
+            const msg = 'Save failed: ' + (e && e.message ? e.message : e);
+            if (typeof showToast === 'function') showToast(msg, 'error', 7000); else alert(msg);
+        });
 };
 
 window.openAddModal = () => {
@@ -1482,6 +1648,11 @@ window.openAddModal = () => {
     document.getElementById('edit-id').value = "";
     document.getElementById('edit-name').value = "";
     document.getElementById('edit-max').value = "1";
+    // L271 Phase 5 — reset Type to a sane default (the <select> was never reset
+    // on Add, so it used to inherit the last-edited row's Type) and default the
+    // Parent selector to Auto so a fresh id derives its parent from the prefix.
+    document.getElementById('edit-type').value = "Storage";
+    _populateParentSelect('', undefined);
     modals.locModal.show();
     // 8.1 — auto-focus the Location ID field on Add (this is the
     // first field the user fills in; Edit focuses Friendly Name

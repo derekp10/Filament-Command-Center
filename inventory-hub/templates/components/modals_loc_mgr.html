@@ -73,12 +73,27 @@
                         <option value="Storage">Storage Box</option>
                         <option value="Dryer Box">Dryer Box</option>
                         <option value="Shelf">Shelf</option>
+                        <option value="Wall">Wall (grouping)</option>
+                        <option value="Row">Row (grouping)</option>
                         <option value="Room">Room</option>
                         <option value="Cart">Cart</option>
+                        <option value="Printer">Printer</option>
                         <option value="Tool Head">Tool Head</option>
+                        <option value="No MMU Direct Load">No MMU Direct Load</option>
                         <option value="MMU Slot">MMU Slot</option>
                         <option value="Virtual Room">Virtual Room / Zone</option>
                     </select>
+                </div>
+                <!-- L271 Phase 5: explicit Parent. Makes the hierarchy editable
+                     instead of implicit-in-the-LocationID. The breadcrumb shows
+                     the resolved ancestry; the <select> is grouped by kind and
+                     excludes this row + its descendants (no cycles). "Auto" omits
+                     parent_id so the backend derives it from the ID; "Top level"
+                     sends an explicit null. Populated in openEdit/openAddModal. -->
+                <div class="mb-3">
+                    <label class="form-label">Parent <span class="text-muted fw-normal">(where it nests)</span></label>
+                    <select class="form-select" id="edit-parent"></select>
+                    <div id="edit-parent-breadcrumb" class="small text-info mt-1" style="min-height:1.2em;"></div>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Max Spools (Capacity)</label>

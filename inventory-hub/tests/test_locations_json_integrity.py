@@ -45,7 +45,9 @@ def _required_keys_for(row: dict) -> set:
         return base | {"Location", "Max Spools", "Name"}
     if t in {"Cart", "Sliding Drawer"}:
         return base | {"Name"}
-    # Rooms / Virtual / Printer (synthetic) — minimum identification only.
+    # Rooms / Virtual / Printer / Wall / Row (grouping nodes) — minimum
+    # identification only (LocationID + Type + Name). Wall/Row are L271 Phase 5
+    # structural rows; they hold no spools so they need no Max Spools/Location.
     return base | {"Name"}
 
 
