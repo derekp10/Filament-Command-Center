@@ -285,8 +285,22 @@ print("\n--- Gathering Choices ---")
 attrs = set()
 attrs.update(get_clean_choices(LISTS_CSV, "Filament Attributes"))
 attrs.update(get_clean_choices(FILAMENT_CSV, "Filament Attributes"))
-generated_attrs = ["Carbon Fiber", "Glass Fiber", "Glitter", "Marble", "Wood", "Glow", "Gradient"]
+generated_attrs = ["Carbon Fiber", "Glass Fiber", "Glitter", "Marble", "Glow", "Gradient"]
 attrs.update(generated_attrs)
+
+# L37 fix (2026-06-05): never SEED a choice that the app's startup cleanup
+# (spoolman_api.ensure_filament_attributes_cleaned) is configured to DELETE.
+# create_field() below MERGES the requested choices with the field's EXISTING
+# choices and POSTs the union, so re-seeding a delete-target makes the deploy
+# (which re-adds it) and the next boot (which strips it) fight on every single
+# deploy — the "🧹 removed ['Wood'] (180 restored)" line Derek saw on every boot,
+# plus a full DELETE+recreate+restore of all filaments each time. Stripping here
+# guards ALL seed sources at once: generated_attrs above AND the two source CSVs
+# (lines 286-287, which aren't in the repo). KEEP IN SYNC with
+# spoolman_api.FILAMENT_ATTRIBUTES_DELETE_CHOICES (the canonical remover — do not
+# delete from that set instead, it must stay to self-heal any stray re-seed).
+RETIRED_FILAMENT_ATTRS = {"Carbon-Fiber", "Tran", "Transparent; High-Speed", "Wood", "F"}
+attrs -= RETIRED_FILAMENT_ATTRS
 
 # Shore Hardness & Profiles
 shores = set()

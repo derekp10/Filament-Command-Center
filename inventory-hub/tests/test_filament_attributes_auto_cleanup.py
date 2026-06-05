@@ -399,3 +399,56 @@ def test_verification_warns_when_choice_survives_recreate(monkeypatch):
     assert "could not remove" in joined.lower(), f"expected honest failure log; got {logged}"
     assert "🧹 Filament Attributes cleaned" not in joined, \
         "must NOT print the misleading success line when the choice survived"
+
+
+# ---------------------------------------------------------------------------
+# Deploy-seed guard (2026-06-05, L37) — the prod boot log proved the
+# "removed ['Wood']" line re-fired every deploy because the deploy script
+# setup_fields.py re-seeded "Wood" into the filament_attributes choices,
+# which create_field() merge-POSTs back onto Spoolman; the next boot's cleanup
+# then strips it — an add-then-remove loop. These static-source assertions fail
+# if anyone re-introduces a delete-target into the seed or lets the deploy-time
+# strip drift out of sync with the canonical delete set. Parsed (not imported)
+# because setup_fields.py runs network calls at module load.
+# ---------------------------------------------------------------------------
+
+def _source_literal(path, name):
+    """Return the literal value of a module-level `name = <literal>` assignment
+    in `path`, without importing/executing the file."""
+    import ast
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == name for t in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"{name!r} not found as a literal assignment in {path}")
+
+
+def test_setup_fields_never_seeds_a_deleted_choice():
+    """L37 regression guard: the prod deploy seed must NOT re-introduce any
+    choice the startup cleanup deletes, and its local strip must cover the
+    whole canonical delete set (so even the external-CSV seed sources at
+    setup_fields.py:286-287 can't resurrect a deleted choice). See L37 in
+    Feature-Buglist.md."""
+    sf = os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "..", "setup-and-rebuild", "setup_fields.py"))
+    generated = set(_source_literal(sf, "generated_attrs"))
+    retired = set(_source_literal(sf, "RETIRED_FILAMENT_ATTRS"))
+    delete_set = set(spoolman_api.FILAMENT_ATTRIBUTES_DELETE_CHOICES)
+
+    leaked = generated & delete_set
+    assert not leaked, (
+        f"setup_fields.generated_attrs re-seeds delete-target(s) {leaked}; the "
+        "startup cleanup would strip them on every boot (the L37 add/remove loop).")
+
+    missing = delete_set - retired
+    assert not missing, (
+        f"setup_fields.RETIRED_FILAMENT_ATTRS is missing {missing}; keep it in sync "
+        "with spoolman_api.FILAMENT_ATTRIBUTES_DELETE_CHOICES so no seed source "
+        "(generated_attrs OR the external CSVs) can re-add a deleted choice.")
+
+    # Explicit pin on the exact value that triggered the incident.
+    assert "Wood" not in generated, "the bare 'Wood' literal must stay out of the seed"
+    assert "Wood" in retired, "'Wood' must remain in the deploy-time strip set"
