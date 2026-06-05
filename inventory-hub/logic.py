@@ -620,6 +620,16 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
                 fb_outcomes.append((ok, detail))
                 if ok:
                     state.add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
+                    # Group 20.2: a spool deployed FROM a single-slot dryer box
+                    # attaches that box to this toolhead so the box follows its
+                    # spool (Core One "missing box" aid). current_loc is where the
+                    # spool lived before this move. Best-effort — never fail the move.
+                    try:
+                        _att, _ad = locations_db.attach_single_slot_box_to_toolhead(current_loc, target)
+                        if _att and _ad != "already attached":
+                            state.add_log_entry(f"🔗 Single-slot box auto-attached → {target} ({_ad})", "INFO")
+                    except Exception as _ae:
+                        state.logger.warning(f"20.2 box auto-attach skipped: {_ae}")
                 else:
                     state.add_log_entry(f"⚠️ Filabridge map {target} <- #{sid} FAILED: {detail}", "ERROR", "ff4444")
             else:
@@ -871,6 +881,19 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
                     "ERROR", "ff4444",
                 )
 
+    # Group 20.2: ejecting off a toolhead detaches any single-slot dryer box that
+    # was following its spool onto this toolhead (the lifecycle pair of the
+    # auto-attach in perform_smart_move). Best-effort — never fail the eject.
+    if current_location in printer_map:
+        try:
+            _detached = locations_db.detach_single_slot_boxes_from_toolhead(current_location)
+            if _detached:
+                state.add_log_entry(
+                    f"🔓 Single-slot box(es) auto-detached from {current_location}: "
+                    f"{', '.join(str(d) for d in _detached)}", "INFO")
+        except Exception as _de:
+            state.logger.warning(f"20.2 box auto-detach skipped: {_de}")
+
     # Save the original slot before we wipe it for processing
     orig_container_slot = extra.get('container_slot', '')
     
@@ -982,6 +1005,131 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
             f"❌ Failed to eject Spool #{spool_id}: {err}", "ERROR", "ff4444"
         )
     return False
+
+
+def perform_toolhead_delete_cascade(target, loc_list, confirm_active_print=False):
+    """Group 20.3 — propagate a TOOLHEAD row deletion to the three drifting
+    binding stores so nothing is left pointing at the now-gone toolhead.
+
+    Spool side (Spoolman), per Derek's 20.3 decision = UNASSIGNED + breadcrumb:
+      - DIRECT spools (Spoolman ``location`` == target): → UNASSIGNED
+        (``location`` = ""), with the ghost-trail cleared so they don't resurrect
+        as a ghost in their old box.
+      - GHOST spools (physically in a box, only DEPLOYED to the toolhead via
+        ``physical_source``): keep their box ``location`` and clear ONLY the
+        deployment ghost-trail — deleting the toolhead must NOT yank a spool out
+        of the box it actually lives in. (The pre-20.3 cascade blindly set
+        ``location`` = "" for everything ``get_spools_at_location`` returned,
+        which includes these ghosts.)
+    FilaBridge: unmap the toolhead (best-effort) so the printer-side map doesn't
+    stay pinned to a spool that's no longer assigned.
+    locations.json: drop any dryer-box ``slot_targets`` feeding the toolhead, and
+    prune the toolhead from any Printer row's ``toolheads[]`` (L271 Phase-4 store).
+
+    MUTATES ``loc_list`` IN-PLACE for the locations.json cleanup; the caller owns
+    removing the toolhead row itself + the single ``save_locations_list``.
+
+    ``confirm_active_print=False`` + an ACTIVE print on this toolhead → returns
+    ``{"status": "requires_confirm", ...}`` WITHOUT touching anything (mirrors
+    ``perform_force_unassign``). Otherwise returns a summary dict
+    ``{"status": "ok", "unassigned": [...], "undeployed": [...],
+       "slot_bindings_cleared": [...], "toolhead_pruned_from": [...], "errors": [...]}``.
+    """
+    target_up = str(target).strip().strip('"').upper()
+    printer_map = locations_db.get_active_printer_map(loc_list)  # target still present → resolvable for the FB unmap
+    _sm_url, fb_url = config_loader.get_api_urls()
+
+    # Active-print safety: deleting a toolhead mid-print orphans the running spool.
+    if not confirm_active_print:
+        ap = _active_print_info_for_location(target_up, printer_map)
+        if ap:
+            return {
+                "status": "requires_confirm",
+                "confirm_type": "active_print",
+                "active_print": ap,
+                "msg": f"{ap['printer_name']} is {ap['state']} on {target_up} — "
+                       f"deleting this toolhead will orphan the running spool.",
+            }
+
+    summary = {"status": "ok", "unassigned": [], "undeployed": [],
+               "slot_bindings_cleared": [], "toolhead_pruned_from": [], "errors": []}
+
+    # --- Spoolman: re-home spools that reference the toolhead ---
+    try:
+        at_loc = spoolman_api.get_spools_at_location_detailed(target_up)
+    except Exception as e:
+        at_loc = []
+        summary["errors"].append(f"could not list spools at {target_up}: {e}")
+    for item in at_loc:
+        sid = item.get('id')
+        spool = spoolman_api.get_spool(sid)
+        if not spool:
+            summary["errors"].append(f"could not fetch spool #{sid}")
+            continue
+        extra = dict(spool.get('extra') or {})
+        # Read-merge-write: only touch the system-managed binding keys; preserve
+        # every sibling extra (Spoolman PATCH replaces the whole extra dict).
+        extra['physical_source'] = ""
+        extra['physical_source_slot'] = ""
+        if item.get('is_ghost'):
+            # Only deployed to the dead toolhead → un-deploy, keep box location.
+            if spoolman_api.update_spool(sid, {"extra": extra}):
+                summary["undeployed"].append(sid)
+            else:
+                summary["errors"].append(
+                    f"spool #{sid} un-deploy failed: {spoolman_api.LAST_SPOOLMAN_ERROR or 'unknown'}")
+        else:
+            # Physically ON the toolhead → UNASSIGNED, ghost-trail fully cleared.
+            extra['container_slot'] = ""
+            if spoolman_api.update_spool(sid, {"location": "", "extra": extra}):
+                summary["unassigned"].append(sid)
+            else:
+                summary["errors"].append(
+                    f"spool #{sid} unassign failed: {spoolman_api.LAST_SPOOLMAN_ERROR or 'unknown'}")
+
+    # --- FilaBridge: unmap the toolhead so the printer side isn't left pinned ---
+    th = _toolhead_of(target_up, printer_map)
+    if th:
+        ok, detail = _fb_write(th[0], th[1], 0, fb_url)
+        if not ok:
+            summary["errors"].append(f"filabridge unmap {th[0]}-{th[1]} failed: {detail}")
+
+    # --- locations.json: drop dryer-box slot_targets feeding the toolhead ---
+    for row in loc_list:
+        if not isinstance(row, dict) or str(row.get('Type', '')).strip() != locations_db.DRYER_BOX_TYPE:
+            continue
+        extra_l = row.get('extra') or {}
+        targets = extra_l.get('slot_targets')
+        if not isinstance(targets, dict):
+            continue
+        kept, dropped = {}, []
+        for slot, bound in targets.items():
+            # Leave PRINTER:<prefix> pool sentinels alone — they bind a printer, not this toolhead.
+            if bound and not locations_db.is_printer_sentinel(bound) and str(bound).strip().upper() == target_up:
+                dropped.append(slot)
+            else:
+                kept[slot] = bound
+        if dropped:
+            extra_l['slot_targets'] = kept
+            row['extra'] = extra_l
+            for slot in dropped:
+                summary["slot_bindings_cleared"].append(f"{row.get('LocationID')}:{slot}")
+
+    # --- locations.json: prune the toolhead from any Printer row's toolheads[] ---
+    for row in loc_list:
+        if not isinstance(row, dict) or str(row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        ths = row.get('toolheads')
+        if not isinstance(ths, list):
+            continue
+        kept = [t for t in ths
+                if not (isinstance(t, dict) and str(t.get('location_id', '')).strip().upper() == target_up)]
+        if len(kept) != len(ths):
+            row['toolheads'] = kept
+            summary["toolhead_pruned_from"].append(row.get('LocationID'))
+
+    return summary
+
 
 def perform_force_unassign(spool_id, confirm_active_print=False):
     spool_data = spoolman_api.get_spool(spool_id)

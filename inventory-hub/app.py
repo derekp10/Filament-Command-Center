@@ -1723,6 +1723,44 @@ def api_save_location():
 def api_delete_location():
     target = request.args.get('id', '').strip()
     if not target: return jsonify({"success": False})
+    confirm_active = request.args.get('confirm_active_print', '').strip().lower() in ('1', 'true', 'yes')
+
+    current = locations_db.load_locations_list()
+    target_row = next((r for r in current if str(r.get('LocationID', '')).strip() == target), None)
+    is_toolhead = bool(target_row) and str(target_row.get('Type', '')).strip() in locations_db.TOOLHEAD_TYPES
+
+    if is_toolhead:
+        # Group 20.3: a toolhead delete needs the FULL cascade — direct spools →
+        # UNASSIGNED, ghost spools un-deployed (NOT yanked from their box),
+        # filabridge unmapped, dryer-box slot_targets feeding it dropped, and the
+        # toolhead pruned from its Printer row's toolheads[]. The cascade mutates
+        # `current` for the locations.json-side cleanup; we then remove the row +
+        # save ONCE. An active print on the toolhead blocks with requires_confirm.
+        result = logic.perform_toolhead_delete_cascade(target, current, confirm_active_print=confirm_active)
+        if isinstance(result, dict) and result.get("status") == "requires_confirm":
+            return jsonify({"success": False, **result}), 409
+        new_list = [row for row in current if str(row.get('LocationID', '')).strip() != target]
+        locations_db.save_locations_list(new_list)
+        bits = []
+        if result["unassigned"]:
+            bits.append(f"{len(result['unassigned'])} spool(s) → UNASSIGNED")
+        if result["undeployed"]:
+            bits.append(f"{len(result['undeployed'])} un-deployed")
+        if result["slot_bindings_cleared"]:
+            bits.append(f"{len(result['slot_bindings_cleared'])} slot binding(s) cleared")
+        if result["toolhead_pruned_from"]:
+            bits.append(f"pruned from {', '.join(str(p) for p in result['toolhead_pruned_from'])}")
+        detail = "; ".join(bits) if bits else "nothing referenced it"
+        state.add_log_entry(f"🗑️ Deleted toolhead {target} — {detail}", "WARNING")
+        if result["errors"]:
+            state.add_log_entry(
+                f"⚠️ Toolhead-delete cascade for {target} had errors: {'; '.join(result['errors'])}",
+                "ERROR", "ff4444")
+        return jsonify({"success": True, "cascade": result})
+
+    # Non-toolhead delete (Box / Room / Cart / Shelf): keep the existing best-
+    # effort cascade-unassign of direct contents. Box/room semantics differ from
+    # toolheads and are out of 20.3 scope.
     try:
         contents = spoolman_api.get_spools_at_location(target)
         for sid in contents:
@@ -1736,9 +1774,8 @@ def api_delete_location():
                 )
     except Exception as e:
         state.logger.warning(f"location delete: cascade unassign failed: {e}")
-    
-    current = locations_db.load_locations_list()
-    new_list = [row for row in current if row['LocationID'] != target]
+
+    new_list = [row for row in current if str(row.get('LocationID', '')).strip() != target]
     locations_db.save_locations_list(new_list)
     state.add_log_entry(f"🗑️ Deleted: {target}", "WARNING")
     return jsonify({"success": True})

@@ -1021,6 +1021,80 @@ def set_dryer_box_slot_order(loc_id, order):
     return True, None
 
 
+def _is_single_slot_dryer_box(row):
+    """Group 20.2 — True if `row` is a Dryer Box with a Max Spools that parses to
+    <= 1: the only boxes 20.2 auto-manages. Multi-slot boxes' slot_targets stay
+    user config. A missing/unparseable Max Spools is treated as NOT single-slot
+    (fail safe — don't auto-manage a box whose capacity we can't determine)."""
+    if not isinstance(row, dict) or str(row.get('Type', '')).strip() != DRYER_BOX_TYPE:
+        return False
+    raw = str(row.get('Max Spools', '')).strip()
+    if not raw:
+        return False
+    try:
+        return int(raw) <= 1
+    except (TypeError, ValueError):
+        return False
+
+
+def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
+    """Group 20.2 — bind a SINGLE-SLOT (`Max Spools <= 1`) dryer box's slot '1'
+    to `toolhead_id` so the box follows its deployed spool onto the toolhead
+    (feeds the Core One "missing box" notification for non-Core-One printers).
+    Reuses the slot_targets model (no schema change). No-op unless `box_id` is a
+    single-slot Dryer Box; idempotent (no write when already bound there).
+
+    NOTE: this makes a single-slot box's slot binding LIFECYCLE-DRIVEN — it
+    mirrors where the box's one spool is deployed (paired with
+    detach_single_slot_boxes_from_toolhead on eject). Returns (attached, detail).
+    """
+    box_up = str(box_id or '').strip().upper()
+    th_up = str(toolhead_id or '').strip().upper()
+    if not box_up or not th_up:
+        return False, "missing box or toolhead"
+    loc_list = load_locations_list()
+    idx, row = _find_location(loc_list, box_up)
+    if idx is None or not _is_single_slot_dryer_box(row):
+        return False, "not a single-slot dryer box"
+    extra = dict(row.get('extra') or {})
+    targets = dict(extra.get('slot_targets') or {})
+    if str(targets.get('1', '')).strip().upper() == th_up:
+        return True, "already attached"  # idempotent — skip the write
+    targets['1'] = th_up
+    extra['slot_targets'] = targets
+    row['extra'] = extra
+    loc_list[idx] = row
+    if not save_locations_list(loc_list):
+        return False, "persist failed"
+    return True, f"{box_up} slot 1 -> {th_up}"
+
+
+def detach_single_slot_boxes_from_toolhead(toolhead_id):
+    """Group 20.2 — clear the slot '1' binding of every SINGLE-SLOT dryer box that
+    currently feeds `toolhead_id` (on eject/unload). Multi-slot boxes are left
+    untouched (their bindings are user config). Returns the list of detached box
+    LocationIDs (empty if none, or on persist failure)."""
+    th_up = str(toolhead_id or '').strip().upper()
+    if not th_up:
+        return []
+    loc_list = load_locations_list()
+    detached = []
+    for row in loc_list:
+        if not _is_single_slot_dryer_box(row):
+            continue
+        targets = (row.get('extra') or {}).get('slot_targets')
+        if not isinstance(targets, dict):
+            continue
+        if str(targets.get('1', '')).strip().upper() == th_up:
+            extra = dict(row.get('extra') or {})
+            extra['slot_targets'] = {k: v for k, v in targets.items() if str(k) != '1'}
+            row['extra'] = extra
+            detached.append(row.get('LocationID'))
+    if detached and not save_locations_list(loc_list):
+        return []
+    return detached
+
+
 def set_dryer_box_bindings(loc_id, slot_targets, printer_map):
     """Validate + persist per-slot bindings for a dryer box.
 
