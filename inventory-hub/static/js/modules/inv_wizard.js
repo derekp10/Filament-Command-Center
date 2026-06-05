@@ -1322,10 +1322,10 @@ const wizardFetchLocations = () => {
             const valid = d.filter(loc => {
                 const type = (loc.Type || '').toLowerCase();
                 if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return false;
-                // L271 Phase 5: Wall/Row are structural grouping nodes — they
-                // nest children but never hold spools, so don't offer them as
-                // spool-assignment targets (same rationale as toolheads).
-                if (type === 'wall' || type === 'row') return false;
+                // L271 Phase 5: Wall Shelf/Row are structural grouping nodes —
+                // they nest children but never hold spools, so don't offer them
+                // as spool-assignment targets (Section, the leaf, IS offered).
+                if (type === 'wall shelf' || type === 'row') return false;
                 if (loc.LocationID === 'Unassigned') return false;
                 return true;
             });

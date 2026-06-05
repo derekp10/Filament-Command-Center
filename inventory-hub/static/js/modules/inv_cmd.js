@@ -556,10 +556,10 @@ const processScan = (text, source = 'keyboard') => {
                     // so the user can scan their next destination.
                     const locData = state.allLocations.find(l => l.LocationID === res.id);
                     const locType = (locData && locData.Type) ? String(locData.Type).toLowerCase() : '';
-                    // L271 Phase 5: Wall/Row are structural grouping nodes — never
-                    // seat spools on them (keep the buffer so the user can rescan).
-                    if (locType === 'wall' || locType === 'row') {
-                        showToast("That's a structural Wall/Row node — it can't hold spools. Scan a shelf or box instead.", "warning", 7000);
+                    // L271 Phase 5: Wall Shelf/Row are structural grouping nodes —
+                    // never seat spools on them (keep the buffer so the user can rescan).
+                    if (locType === 'wall shelf' || locType === 'row') {
+                        showToast("That's a structural Wall Shelf/Row node — it can't hold spools. Scan a section or box instead.", "warning", 7000);
                         state.lastScannedLoc = null;
                         return;
                     }

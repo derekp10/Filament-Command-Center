@@ -19,14 +19,22 @@ CSV_FILE = '3D Print Supplies - Locations.csv'
 DRYER_BOX_TYPE = 'Dryer Box'
 TOOLHEAD_TYPES = {'Tool Head', 'MMU Slot', 'No MMU Direct Load'}
 
-# L271 Phase 5 — structural grouping rows. A Wall groups Rows; a Row groups
-# Shelf sections (Room → Wall → Row → Shelf). Like Rooms/Carts they hold NO
-# spools directly — they only nest children for the tree — so they're excluded
-# from the spool-assignment pickers (inv_wizard) the same way toolheads and
-# virtual rows are. Created by migrate_shelf_grouping_rows_if_needed.
-WALL_TYPE = 'Wall'
+# L271 Phase 5 — shelf hierarchy: Room → Wall Shelf → Row → Section. A Wall Shelf
+# groups Rows; a Row groups Sections. Wall Shelf + Row are STRUCTURAL grouping
+# rows — they hold NO spools, so they're excluded from the spool-assignment
+# pickers (the same way toolheads/virtual rows are). The Section LEAF holds
+# spools (it's where a spool actually sits). Created/retyped by
+# migrate_shelf_grouping_rows_if_needed.
+WALL_TYPE = 'Wall Shelf'
 ROW_TYPE = 'Row'
-GROUPING_TYPES = {WALL_TYPE, ROW_TYPE}
+SECTION_TYPE = 'Section'
+GROUPING_TYPES = {WALL_TYPE, ROW_TYPE}  # structural; never hold spools
+# Recognize a wall grouping row that may still carry the pre-rename Type 'Wall'
+# (dev rows created before the Wall Shelf rename) so the migration normalizes
+# rather than treating it as a foreign-Type collision.
+_WALL_TYPE_ALIASES = {WALL_TYPE, 'Wall'}
+# A Section leaf may still be on disk as its pre-rename Type 'Shelf'.
+_SECTION_TYPE_ALIASES = {SECTION_TYPE, 'Shelf'}
 
 
 def _ensure_data_dir():
@@ -986,34 +994,31 @@ def _name_before_token(name, token):
 
 
 def migrate_shelf_grouping_rows_if_needed(loc_list):
-    """L271 Phase 5: synthesize REAL intermediate Wall + Row grouping rows so
-    shelf sections nest **Room → Wall → Row → Shelf** instead of sitting flat
-    under the room.
+    """L271 Phase 5: build the **Room → Wall Shelf → Row → Section** hierarchy
+    from the flat shelf-section rows.
 
-    A shelf section LocationID follows ``ROOM-WALL-ROW-SECTION`` (e.g.
-    ``CR-WLN-R1-SC1``: room CR, wall WLN, row R1, section SC1). The wall
-    (``CR-WLN``) and row (``CR-WLN-R1``) levels live ONLY in the ID string — no
-    row exists for them — so ``_immediate_parent_from_rows`` lands every section
-    flat on the room. This migration CREATES the missing Wall + Row rows
-    (Type ``Wall``/``Row``, ``Max Spools`` ``"0"``, ``parent_id`` = their own
-    immediate parent) and re-points each section's ``parent_id`` at its Row row,
-    so the renderer draws the full Room → Wall → Row → Section hierarchy. No
-    renderer/occupancy change is needed — Phase 3.5 already nests arbitrary depth
-    and rolls a subtree total up to every ancestor.
+    A section LocationID follows ``ROOM-WALL-ROW-SECTION`` (e.g. ``CR-WLN-R1-SC1``:
+    room CR, wall WLN, row R1, section SC1). The Wall Shelf (``CR-WLN``) and Row
+    (``CR-WLN-R1``) levels live ONLY in the ID string — no row exists for them —
+    so every section lands flat on the room. This migration:
+      1. CREATES the missing Wall Shelf + Row grouping rows (``Max Spools`` ``"0"``,
+         structural — they hold no spools), with Names derived from each section's
+         own friendly Name (typo-robust truncation) + a decoded-segment fallback;
+      2. RETYPES each matching section leaf to ``Section`` (it's where a spool
+         actually sits) — folding the pre-rename ``Shelf`` leaves and the
+         pre-rename ``Wall`` grouping rows onto the canonical Types;
+      3. RE-POINTS each section's ``parent_id`` at its Row row,
+    so the renderer draws the full Room → Wall Shelf → Row → Section tree. No
+    renderer/occupancy change is needed — Phase 3.5 already nests arbitrary depth.
 
-    **Self-contained + order-independent:** it sets the sections' ``parent_id``
-    itself rather than relying on a later re-parent pass, so it's correct whether
-    it runs before or after ``migrate_immediate_parent_ids_if_needed`` (the
-    migrated state is a fixpoint for that pass too). **Generic:** the Wall/Row
-    ids and Names are derived from each shelf's own segments + friendly Name, so
-    it works on dev (R1 only) and prod (R1+R2) alike without hardcoding ``CR``.
-
-    Only Shelf rows matching the ``WALL=WL[NSEW]`` + ``ROW=R<n>`` scheme are
-    nested; a Shelf with any other ID shape is left flat (logged). **Idempotent
-    + respects operator overrides:** skips creating a grouping row whose
-    LocationID already exists, and only re-points a section whose ``parent_id``
-    is still its flat first-segment default (a hand re-parent is never
-    clobbered). 2nd boot → no-op (changed=False).
+    **Self-contained + order-independent** (sets section ``parent_id`` itself → a
+    fixpoint for ``migrate_immediate_parent_ids_if_needed`` too). **Generic** (ids
+    + Names from each section's own segments/Name — works on dev R1 + prod R1+R2).
+    Only leaf rows matching ``WALL=WL[NSEW]`` + ``ROW=R<n>`` are touched; any other
+    Shelf/Section id is left flat (logged). **Idempotent + respects operator
+    overrides:** skips creating an existing grouping row, only retypes when the
+    Type actually differs, and only re-points a section still on its flat default.
+    2nd boot → no-op (changed=False).
 
     Returns (mutated_list, changed_bool). Pure locations.json transform.
     """
@@ -1025,10 +1030,10 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
         for r in loc_list
         if isinstance(r, dict) and str(r.get('LocationID', '')).strip()
     }
-    # Track Type + Name per id (updated as we synthesize) so we never (a) treat a
-    # pre-existing NON-grouping row at a Wall/Row id as a usable grouping node,
-    # nor (b) re-point a section under one (review #1), and so the Row-name
-    # fallback can resolve a freshly-created Wall's friendly name (review #3).
+    # Track Type + Name per id (updated as we synthesize/retype) so we never
+    # (a) treat a pre-existing NON-grouping row at a Wall/Row id as usable, nor
+    # (b) re-point a section under one, and so the Row-name fallback can resolve
+    # a Wall's friendly name.
     type_by_id, name_by_id = {}, {}
     for r in loc_list:
         if not isinstance(r, dict):
@@ -1041,38 +1046,43 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
         rid: name_by_id[rid] for rid, t in type_by_id.items() if t.lower() == 'room'
     }
 
-    shelves = [
+    # Section LEAVES = rows whose Type is Section (or the pre-rename alias Shelf).
+    sections = [
         r for r in loc_list
-        if isinstance(r, dict) and str(r.get('Type', '')).strip().lower() == 'shelf'
+        if isinstance(r, dict) and str(r.get('Type', '')).strip() in _SECTION_TYPE_ALIASES
     ]
 
-    def _grouping_collision(gid):
-        # A real row already owns this id but it isn't a grouping Type — don't
-        # synthesize/nest under a foreign Shelf/Dryer Box/etc. row.
-        return gid in type_by_id and type_by_id[gid] not in GROUPING_TYPES
+    def _wall_collision(wid):
+        # A real row owns the wall id but it isn't a (legacy/current) Wall Shelf.
+        return wid in type_by_id and type_by_id[wid] not in _WALL_TYPE_ALIASES
 
-    # Pass 1 — collect the Wall/Row grouping rows implied by the section ids,
-    # plus a representative child name per prefix for Name derivation. Sections
-    # whose computed grouping id collides with a non-grouping row are left flat.
-    want_walls = {}   # CR-WLN  -> {'parent': 'CR',     'sample': <shelf Name>, 'wall_seg': 'WLN', 'room': 'CR'}
-    want_rows = {}    # CR-WLN-R1 -> {'parent': 'CR-WLN', 'sample': <shelf Name>, 'row_seg': 'R1'}
-    for sh in shelves:
+    def _row_collision(rid):
+        return rid in type_by_id and type_by_id[rid] != ROW_TYPE
+
+    def _matches(sh):
+        parts = str(sh.get('LocationID', '')).strip().split('-')
+        return len(parts) >= 4 and _is_wall_segment(parts[1]) and _is_row_segment(parts[2])
+
+    # Pass 1 — collect the Wall Shelf/Row grouping rows implied by the section ids.
+    want_walls = {}   # CR-WLN  -> {'parent','sample','wall_seg','room'}
+    want_rows = {}    # CR-WLN-R1 -> {'parent','sample','row_seg'}
+    for sh in sections:
         lid = str(sh.get('LocationID', '')).strip()
         parts = lid.split('-')
         if len(parts) < 4:
-            continue  # too shallow to have a Wall+Row level
+            continue
         room, wall, row = parts[0].upper(), parts[1], parts[2]
         if not _is_wall_segment(wall) or not _is_row_segment(row):
             state.logger.info(
-                f"📐 Shelf {lid} doesn't match ROOM-WALL-ROW-SECTION — left flat under {room}."
+                f"📐 {lid} doesn't match ROOM-WALL-ROW-SECTION — left flat under {room}."
             )
             continue
         wall_id = f"{room}-{wall}".upper()
         row_id = f"{room}-{wall}-{row}".upper()
-        if _grouping_collision(wall_id) or _grouping_collision(row_id):
+        if _wall_collision(wall_id) or _row_collision(row_id):
             state.logger.warning(
-                f"⚠️ Shelf {lid}: grouping id collides with an existing non-grouping row "
-                f"({wall_id if _grouping_collision(wall_id) else row_id}) — left flat."
+                f"⚠️ {lid}: grouping id collides with an existing non-grouping row "
+                f"({wall_id if _wall_collision(wall_id) else row_id}) — left flat."
             )
             continue
         want_walls.setdefault(wall_id, {
@@ -1086,9 +1096,16 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
 
     changed = False
 
-    # Pass 2a — create missing Wall rows (parent = room).
+    # Pass 2a — Wall Shelf rows: create if missing, else normalize a legacy 'Wall'.
     for wall_id, info in sorted(want_walls.items()):
         if wall_id in existing_upper:
+            existing_row = next((r for r in loc_list if isinstance(r, dict)
+                                 and str(r.get('LocationID', '')).strip().upper() == wall_id), None)
+            if existing_row is not None and str(existing_row.get('Type', '')).strip() != WALL_TYPE:
+                existing_row['Type'] = WALL_TYPE  # 'Wall' → 'Wall Shelf'
+                type_by_id[wall_id] = WALL_TYPE
+                changed = True
+                state.logger.info(f"🧱 Retyped Wall Shelf grouping row {wall_id}")
             continue
         name = _name_before_token(info['sample'], 'Row')
         if not name:
@@ -1096,17 +1113,14 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
             decoded = _decode_wall_segment(info['wall_seg']) or info['wall_seg']
             name = f"{rn} {decoded}".strip()
         loc_list.append({
-            'LocationID': wall_id,
-            'Name': name,
-            'Type': WALL_TYPE,
-            'Max Spools': '0',
-            'parent_id': info['parent'].upper(),
+            'LocationID': wall_id, 'Name': name, 'Type': WALL_TYPE,
+            'Max Spools': '0', 'parent_id': info['parent'].upper(),
         })
         existing_upper.add(wall_id)
         type_by_id[wall_id] = WALL_TYPE
         name_by_id[wall_id] = name
         changed = True
-        state.logger.info(f"🧱 Created Wall grouping row {wall_id} ('{name}')")
+        state.logger.info(f"🧱 Created Wall Shelf grouping row {wall_id} ('{name}')")
 
     # Pass 2b — create missing Row rows (parent = wall).
     for row_id, info in sorted(want_rows.items()):
@@ -1114,17 +1128,12 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
             continue
         name = _name_before_token(info['sample'], 'Section')
         if not name:
-            # Fall back to the wall's friendly name (review #3: info['parent'] is
-            # the WALL id, which lives in name_by_id, NOT the Room-only dict).
             wall_name = name_by_id.get(info['parent']) or info['parent']
             n = info['row_seg'].upper().lstrip('R')
             name = f"{wall_name} Row {n}".strip()
         loc_list.append({
-            'LocationID': row_id,
-            'Name': name,
-            'Type': ROW_TYPE,
-            'Max Spools': '0',
-            'parent_id': info['parent'].upper(),
+            'LocationID': row_id, 'Name': name, 'Type': ROW_TYPE,
+            'Max Spools': '0', 'parent_id': info['parent'].upper(),
         })
         existing_upper.add(row_id)
         type_by_id[row_id] = ROW_TYPE
@@ -1132,29 +1141,29 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
         changed = True
         state.logger.info(f"🪜 Created Row grouping row {row_id} ('{name}')")
 
-    # Pass 3 — re-point each qualifying section at its Row row (respecting any
-    # operator-set parent_id: only move a section still on its flat default).
-    # NOTE (review #2): the override guard treats "operator deliberately set
-    # parent_id back to the Room" the same as "never migrated" (both equal
-    # old_default), so such a deliberate flatten is re-nested on the next boot.
-    # Accepted as benign — resolve_room still returns the same Room either way.
-    for sh in shelves:
-        lid = str(sh.get('LocationID', '')).strip()
-        parts = lid.split('-')
-        if len(parts) < 4 or not _is_wall_segment(parts[1]) or not _is_row_segment(parts[2]):
+    # Pass 3 — retype each section leaf to 'Section' and re-point it at its Row.
+    # NOTE: the re-point override guard treats "operator set parent_id back to the
+    # Room" the same as "never migrated" (both == old_default), so a deliberate
+    # flatten is re-nested next boot — benign (resolve_room returns the same Room).
+    for sh in sections:
+        if not _matches(sh):
             continue
+        # Retype the leaf (Shelf → Section) regardless of where it's parented.
+        if str(sh.get('Type', '')).strip() != SECTION_TYPE:
+            sh['Type'] = SECTION_TYPE
+            changed = True
+        parts = str(sh.get('LocationID', '')).strip().split('-')
         row_id = f"{parts[0]}-{parts[1]}-{parts[2]}".upper()
-        # Only ever nest under a GENUINE grouping Row row (created here or a real
-        # Row), never under a colliding foreign-Type row (review #1).
-        if type_by_id.get(row_id) not in GROUPING_TYPES:
-            continue
+        if type_by_id.get(row_id) != ROW_TYPE:
+            continue  # never nest under a colliding foreign-Type row
+        lid = str(sh.get('LocationID', '')).strip()
         cur = sh.get('parent_id')
         cur_norm = None if cur in (None, '') else str(cur).strip().upper()
-        old_default = derive_parent_id_from_prefix(lid)  # the flat first-segment room
+        old_default = derive_parent_id_from_prefix(lid)
         if cur_norm in (None, old_default) and cur_norm != row_id:
             sh['parent_id'] = row_id
             changed = True
-            state.logger.info(f"🪜 Nested shelf {lid}: {cur_norm!r} → {row_id!r}")
+            state.logger.info(f"🪜 Nested section {lid}: {cur_norm!r} → {row_id!r}")
 
     return loc_list, changed
 

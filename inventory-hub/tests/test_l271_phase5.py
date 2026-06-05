@@ -70,12 +70,14 @@ def test_creates_wall_and_row_and_nests_sections():
     out, changed = L.migrate_shelf_grouping_rows_if_needed(_dev_tree())
     assert changed is True
     by = _by_id(out)
-    assert by["CR-WLN"]["Type"] == "Wall" and by["CR-WLN"]["parent_id"] == "CR"
+    assert by["CR-WLN"]["Type"] == "Wall Shelf" and by["CR-WLN"]["parent_id"] == "CR"
     assert by["CR-WLN-R1"]["Type"] == "Row" and by["CR-WLN-R1"]["parent_id"] == "CR-WLN"
     # grouping nodes hold no spools
     assert by["CR-WLN"]["Max Spools"] == "0" and by["CR-WLN-R1"]["Max Spools"] == "0"
     for n in (1, 2, 3, 4):
-        assert by[f"CR-WLN-R1-SC{n}"]["parent_id"] == "CR-WLN-R1"
+        sec = by[f"CR-WLN-R1-SC{n}"]
+        assert sec["parent_id"] == "CR-WLN-R1"
+        assert sec["Type"] == "Section"  # leaf retyped Shelf → Section
 
 
 def test_names_derived_from_child_names():
@@ -89,7 +91,7 @@ def test_prod_shape_single_wall_two_rows():
     assert changed is True
     by = _by_id(out)
     # ONE wall shared by both rows
-    assert len([r for r in out if r.get("Type") == "Wall"]) == 1
+    assert len([r for r in out if r.get("Type") == "Wall Shelf"]) == 1
     assert by["CR-WLN-R1"]["parent_id"] == "CR-WLN"
     assert by["CR-WLN-R2"]["parent_id"] == "CR-WLN"
     assert by["CR-WLN-R2"]["Name"] == "Computer Room Wall North Row 2"
@@ -128,7 +130,7 @@ def test_non_matching_shelves_left_flat():
     ]
     out, changed = L.migrate_shelf_grouping_rows_if_needed(rows)
     assert changed is False
-    assert not any(r.get("Type") in ("Wall", "Row") for r in out)
+    assert not any(r.get("Type") in ("Wall Shelf", "Row") for r in out)
     by = _by_id(out)
     assert by["CR-SHELF-A"]["parent_id"] == "CR"
     assert by["CR-XX-YY-ZZ"]["parent_id"] == "CR"
@@ -204,7 +206,7 @@ def test_collision_with_non_grouping_row_at_wall_id_leaves_sections_flat():
     out, _ = L.migrate_shelf_grouping_rows_if_needed(rows)
     by = _by_id(out)
     assert by["CR-WLN"]["Type"] == "Storage"
-    assert not any(r.get("Type") in ("Wall", "Row") for r in out)
+    assert not any(r.get("Type") in ("Wall Shelf", "Row") for r in out)
     for n in (1, 2, 3, 4):
         assert by[f"CR-WLN-R1-SC{n}"]["parent_id"] == "CR"
 
@@ -232,6 +234,32 @@ def test_is_descendant_strict_ignores_dangling_dashed_fk():
     pmap = L.build_parent_map(rows)
     assert L.is_descendant("BAR", "XL", parent_map=pmap) is True          # phantom (non-strict)
     assert L.is_descendant("BAR", "XL", parent_map=pmap, strict=True) is False  # fixed
+
+
+def test_legacy_wall_and_shelf_types_are_folded():
+    """The dev-transition state (pre-rename 'Wall' grouping + 'Shelf' section
+    leaves already nested) is normalized to 'Wall Shelf'/'Section' idempotently —
+    not treated as a foreign-Type collision."""
+    rows = [
+        {"LocationID": "CR", "Name": "Computer Room", "Type": "Room", "parent_id": None},
+        {"LocationID": "CR-WLN", "Name": "Computer Room Wall North", "Type": "Wall",
+         "Max Spools": "0", "parent_id": "CR"},
+        {"LocationID": "CR-WLN-R1", "Name": "… Row 1", "Type": "Row", "Max Spools": "0", "parent_id": "CR-WLN"},
+    ]
+    for n in (1, 2):
+        rows.append({"LocationID": f"CR-WLN-R1-SC{n}", "Name": f"… Section {n}",
+                     "Type": "Shelf", "Max Spools": "0", "parent_id": "CR-WLN-R1"})
+    out, changed = L.migrate_shelf_grouping_rows_if_needed(rows)
+    assert changed is True
+    by = _by_id(out)
+    assert by["CR-WLN"]["Type"] == "Wall Shelf"   # 'Wall' → 'Wall Shelf'
+    assert by["CR-WLN-R1"]["Type"] == "Row"
+    for n in (1, 2):
+        assert by[f"CR-WLN-R1-SC{n}"]["Type"] == "Section"  # 'Shelf' → 'Section'
+        assert by[f"CR-WLN-R1-SC{n}"]["parent_id"] == "CR-WLN-R1"
+    # idempotent
+    _, changed2 = L.migrate_shelf_grouping_rows_if_needed(copy.deepcopy(out))
+    assert changed2 is False
 
 
 # ---------------------------------------------------------------------------
@@ -387,10 +415,23 @@ def test_parent_validation_present_in_save():
     assert "is_descendant(" in app, "must reject descendant-cycle parents"
 
 
-def test_type_dropdown_has_new_options():
+def test_type_dropdown_is_data_driven_with_new_types():
+    """The Type field is now JS-populated (built-ins + custom). Built-in list
+    must carry the new/previously-missing types; the markup must expose the
+    empty <select> + the custom free-text input."""
+    js = _read("static", "js", "modules", "inv_loc_mgr.js")
+    assert "_LOC_BUILTIN_TYPES" in js and "_populateTypeSelect" in js
+    for v in ("'Printer'", "'No MMU Direct Load'", "'Wall Shelf'", "'Row'", "'Section'"):
+        assert f"v: {v}" in js, f"built-in Type list missing {v}"
     html = _read("templates", "components", "modals_loc_mgr.html")
-    for v in ('value="Printer"', 'value="No MMU Direct Load"', 'value="Wall"', 'value="Row"'):
-        assert v in html, f"edit-type dropdown missing {v}"
+    assert 'id="edit-type"></select>' in html, "Type <select> must be JS-populated (empty in markup)"
+    assert 'id="edit-type-custom"' in html, "custom-type free-text input must exist"
+
+
+def test_custom_type_support_present():
+    js = _read("static", "js", "modules", "inv_loc_mgr.js")
+    assert "_addLocCustomType" in js and "fcc.locMgr.customTypes" in js, "custom types persisted"
+    assert "_customType" in js and "_typeVal" in js, "saveLocation: custom Type wins over the dropdown"
 
 
 def test_parent_selector_markup_present():
@@ -402,21 +443,23 @@ def test_savelocation_sends_parent_contract():
     js = _read("static", "js", "modules", "inv_loc_mgr.js")
     assert "_populateParentSelect" in js and "_LOC_PARENT_NONE" in js
     assert "new_data.parent_id = null" in js, "Top level must send explicit null"
-    # openAddModal must reset the Type select (the old non-reset bug)
-    assert "document.getElementById('edit-type').value = \"Storage\"" in js
+    # openAddModal must reset the Type select to a default (the old non-reset bug)
+    assert "_populateTypeSelect('Storage')" in js
 
 
-def test_wall_row_badges_and_wizard_exclusion():
+def test_wall_shelf_row_section_badges_and_exclusion():
     core = _read("static", "js", "modules", "inv_core.js")
-    assert "t === 'Wall'" in core and "t === 'Row'" in core, "Wall/Row need distinct badges"
+    for b in ("t === 'Wall Shelf'", "t === 'Row'", "t === 'Section'"):
+        assert b in core, f"badge branch missing {b}"
     wiz = _read("static", "js", "modules", "inv_wizard.js")
-    assert "type === 'wall' || type === 'row'" in wiz, "grouping nodes excluded from wizard picker"
+    assert "type === 'wall shelf' || type === 'row'" in wiz, "grouping nodes excluded from wizard picker"
 
 
 def test_grouping_excluded_from_all_spool_pickers():
-    """review #8: Wall/Row are excluded from EVERY spool-assignment surface, not
-    just the wizard (force-location picker + scan-assign)."""
+    """review #8: Wall Shelf/Row are excluded from EVERY spool-assignment surface,
+    not just the wizard (force-location picker + scan-assign). Section is NOT
+    excluded (it holds spools)."""
     det = _read("static", "js", "modules", "inv_details.js")
     cmd = _read("static", "js", "modules", "inv_cmd.js")
-    assert "type === 'wall' || type === 'row'" in det, "force-location picker must exclude grouping nodes"
-    assert "locType === 'wall' || locType === 'row'" in cmd, "scan-assign must reject grouping nodes"
+    assert "type === 'wall shelf' || type === 'row'" in det, "force-location picker must exclude grouping nodes"
+    assert "locType === 'wall shelf' || locType === 'row'" in cmd, "scan-assign must reject grouping nodes"

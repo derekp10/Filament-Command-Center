@@ -56,10 +56,12 @@ window.updateManageTitle = (loc, itemArray = null) => {
     if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
     else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
     else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
-    else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
-    // L271 Phase 5 — structural grouping nodes (Room > Wall > Row > Shelf).
-    else if (t === 'Wall') { badgeClass = 'bg-secondary'; badgeStyle = 'border:1px solid #6dd5c9; background-color:#1f5a52 !important; color:#fff;'; }
+    // L271 Phase 5 — Room > Wall Shelf > Row > Section (exact matches before the
+    // generic 'Shelf' includes, since 'Wall Shelf' contains 'Shelf').
+    else if (t === 'Wall Shelf') { badgeClass = 'bg-secondary'; badgeStyle = 'border:1px solid #6dd5c9; background-color:#1f5a52 !important; color:#fff;'; }
     else if (t === 'Row') { badgeClass = 'bg-secondary'; badgeStyle = 'border:1px solid #9ad0ff; background-color:#34506e !important; color:#fff;'; }
+    else if (t === 'Section') { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
+    else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
     else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
     else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
     else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
@@ -1520,8 +1522,81 @@ const _syncParentBreadcrumb = () => {
 // Kinds offered as parents, in display order. Virtual/Unknown/Unassigned and
 // toolheads-as-leaves are intentionally NOT excluded here (a toolhead CAN hold
 // a child box) except the synthetic buckets, which can't be a real parent.
-const _LOC_PARENT_KINDS = ['Room', 'Wall', 'Row', 'Cart', 'Printer', 'Shelf',
+const _LOC_PARENT_KINDS = ['Room', 'Wall Shelf', 'Row', 'Cart', 'Printer', 'Section', 'Shelf',
     'Storage', 'Dryer Box', 'Tool Head', 'No MMU Direct Load', 'MMU Slot'];
+
+// L271 Phase 5 — the Type dropdown is now data-driven (built-ins + any custom
+// types you add) so it isn't capped at a hardcoded list. Built-in types + their
+// friendly labels; the shelf hierarchy is Room > Wall Shelf > Row > Section.
+const _LOC_BUILTIN_TYPES = [
+    { v: 'Storage', l: 'Storage Box' },
+    { v: 'Dryer Box', l: 'Dryer Box' },
+    { v: 'Section', l: 'Section' },
+    { v: 'Shelf', l: 'Shelf' },
+    { v: 'Wall Shelf', l: 'Wall Shelf (grouping)' },
+    { v: 'Row', l: 'Row (grouping)' },
+    { v: 'Room', l: 'Room' },
+    { v: 'Cart', l: 'Cart' },
+    { v: 'Sliding Drawer', l: 'Sliding Drawer' },
+    { v: 'Printer', l: 'Printer' },
+    { v: 'Tool Head', l: 'Tool Head' },
+    { v: 'No MMU Direct Load', l: 'No MMU Direct Load' },
+    { v: 'MMU Slot', l: 'MMU Slot' },
+    { v: 'Virtual Room', l: 'Virtual Room / Zone' },
+];
+const _LOC_CUSTOM_TYPES_KEY = 'fcc.locMgr.customTypes';
+const _readLocCustomTypes = () => {
+    try { const v = JSON.parse(localStorage.getItem(_LOC_CUSTOM_TYPES_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+    catch (_) { return []; }
+};
+const _addLocCustomType = (t) => {
+    t = String(t || '').trim();
+    if (!t) return;
+    const cur = _readLocCustomTypes();
+    if (!cur.some(x => String(x).toLowerCase() === t.toLowerCase())) {
+        cur.push(t);
+        try { localStorage.setItem(_LOC_CUSTOM_TYPES_KEY, JSON.stringify(cur)); } catch (_) { /* private mode */ }
+    }
+};
+
+// Populate #edit-type from built-ins + custom types (persisted in localStorage
+// AND derived from any Type already in use on a row, so a custom type survives a
+// fresh browser). Selects `currentType` (added as a one-off if otherwise unseen,
+// so editing a row never silently drops its Type). Clears the free-text input.
+const _populateTypeSelect = (currentType) => {
+    const sel = document.getElementById('edit-type');
+    if (!sel) return;
+    const esc = window.escHtml || ((s) => s);
+    const builtinLower = new Set(_LOC_BUILTIN_TYPES.map(t => t.v.toLowerCase()));
+    // Synthetic-only types (the Unassigned/UNKNOWN virtual rows) aren't things a
+    // user creates — don't surface them as selectable custom types.
+    const denied = new Set(['virtual', 'unknown']);
+    const customs = new Map();  // lower -> display
+    const consider = (t) => {
+        t = String(t || '').trim();
+        const lt = t.toLowerCase();
+        if (t && !builtinLower.has(lt) && !denied.has(lt)) customs.set(lt, t);
+    };
+    _readLocCustomTypes().forEach(consider);
+    (state.allLocations || []).forEach(r => consider(r.Type));
+    const cur = String(currentType || '').trim();
+    if (cur) consider(cur);  // never drop the edited row's own (possibly one-off) Type
+
+    let html = _LOC_BUILTIN_TYPES.map(t => `<option value="${esc(t.v)}">${esc(t.l)}</option>`).join('');
+    if (customs.size) {
+        html += `<optgroup label="Custom">`;
+        [...customs.values()].sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1)
+            .forEach(t => { html += `<option value="${esc(t)}">${esc(t)}</option>`; });
+        html += `</optgroup>`;
+    }
+    sel.innerHTML = html;
+    if (cur) {
+        const match = Array.from(sel.options).find(o => o.value.toLowerCase() === cur.toLowerCase());
+        if (match) sel.value = match.value;
+    }
+    const ci = document.getElementById('edit-type-custom');
+    if (ci) ci.value = '';
+};
 
 // Populate #edit-parent. currentParentId: undefined → default "Auto";
 // null → "Top level"; a string → preselect that real parent (or fall back to
@@ -1587,7 +1662,9 @@ window.openEdit = (id) => {
         document.getElementById('edit-original-id').value = id;
         document.getElementById('edit-id').value = id;
         document.getElementById('edit-name').value = i.Name;
-        document.getElementById('edit-type').value = i.Type;
+        // L271 Phase 5 — data-driven Type dropdown (built-ins + custom) so a
+        // custom-typed row keeps its Type on edit.
+        _populateTypeSelect(i.Type);
         document.getElementById('edit-max').value = i['Max Spools'];
         // L271 Phase 5 — populate the explicit Parent selector + breadcrumb.
         _populateParentSelect(_locUC(id), ('parent_id' in i) ? i.parent_id : undefined);
@@ -1608,10 +1685,15 @@ window.openEdit = (id) => {
 window.closeEdit = () => { modals.locModal.hide(); modals.locMgrModal.show(); };
 
 window.saveLocation = () => {
+    // L271 Phase 5: a non-empty free-text custom Type wins over the dropdown so
+    // you can add a brand-new type on the fly (persisted for next time).
+    const _customType = (document.getElementById('edit-type-custom') || {}).value;
+    const _typeVal = (_customType && _customType.trim()) || document.getElementById('edit-type').value;
+    if (_customType && _customType.trim()) _addLocCustomType(_customType.trim());
     const new_data = {
         LocationID: document.getElementById('edit-id').value,
         Name: document.getElementById('edit-name').value,
-        Type: document.getElementById('edit-type').value,
+        Type: _typeVal,
         "Max Spools": document.getElementById('edit-max').value
     };
     // L271 Phase 5 parent contract: Auto → omit parent_id (backend derives /
@@ -1648,10 +1730,10 @@ window.openAddModal = () => {
     document.getElementById('edit-id').value = "";
     document.getElementById('edit-name').value = "";
     document.getElementById('edit-max').value = "1";
-    // L271 Phase 5 — reset Type to a sane default (the <select> was never reset
-    // on Add, so it used to inherit the last-edited row's Type) and default the
+    // L271 Phase 5 — default Type to Storage (the <select> was never reset on
+    // Add, so it used to inherit the last-edited row's Type) and default the
     // Parent selector to Auto so a fresh id derives its parent from the prefix.
-    document.getElementById('edit-type').value = "Storage";
+    _populateTypeSelect('Storage');
     _populateParentSelect('', undefined);
     modals.locModal.show();
     // 8.1 — auto-focus the Location ID field on Add (this is the

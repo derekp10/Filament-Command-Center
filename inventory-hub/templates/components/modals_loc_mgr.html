@@ -67,22 +67,14 @@
                     <label class="form-label">Friendly Name</label>
                     <input type="text" class="form-control" id="edit-name" autocomplete="off">
                 </div>
+                <!-- L271 Phase 5: Type is data-driven (built-ins + custom types).
+                     Populated by _populateTypeSelect; the free-text input adds a
+                     brand-new custom type on the fly (it wins over the dropdown). -->
                 <div class="mb-3">
                     <label class="form-label">Type</label>
-                    <select class="form-select" id="edit-type">
-                        <option value="Storage">Storage Box</option>
-                        <option value="Dryer Box">Dryer Box</option>
-                        <option value="Shelf">Shelf</option>
-                        <option value="Wall">Wall (grouping)</option>
-                        <option value="Row">Row (grouping)</option>
-                        <option value="Room">Room</option>
-                        <option value="Cart">Cart</option>
-                        <option value="Printer">Printer</option>
-                        <option value="Tool Head">Tool Head</option>
-                        <option value="No MMU Direct Load">No MMU Direct Load</option>
-                        <option value="MMU Slot">MMU Slot</option>
-                        <option value="Virtual Room">Virtual Room / Zone</option>
-                    </select>
+                    <select class="form-select" id="edit-type"></select>
+                    <input type="text" class="form-control form-control-sm mt-1" id="edit-type-custom"
+                        placeholder="…or type a new custom type" autocomplete="off">
                 </div>
                 <!-- L271 Phase 5: explicit Parent. Makes the hierarchy editable
                      instead of implicit-in-the-LocationID. The breadcrumb shows

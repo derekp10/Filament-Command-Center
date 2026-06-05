@@ -606,10 +606,14 @@ const _renderLocationsPayload = (d) => {
                     if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
                     else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
                     else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
-                    else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
-                    // L271 Phase 5 — structural grouping nodes (Room > Wall > Row > Shelf).
-                    else if (t === 'Wall') { badgeClass = 'bg-secondary'; badgeStyle = 'border:1px solid #6dd5c9; background-color:#1f5a52 !important; color:#fff;'; }
+                    // L271 Phase 5 — Room > Wall Shelf > Row > Section. Wall Shelf
+                    // + Row are structural groupings; Section is the spool leaf.
+                    // Exact matches MUST precede the generic 'Shelf' includes
+                    // ('Wall Shelf' contains 'Shelf').
+                    else if (t === 'Wall Shelf') { badgeClass = 'bg-secondary'; badgeStyle = 'border:1px solid #6dd5c9; background-color:#1f5a52 !important; color:#fff;'; }
                     else if (t === 'Row') { badgeClass = 'bg-secondary'; badgeStyle = 'border:1px solid #9ad0ff; background-color:#34506e !important; color:#fff;'; }
+                    else if (t === 'Section') { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
+                    else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
                     else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
                     else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
                     else if (t.includes('Room')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
