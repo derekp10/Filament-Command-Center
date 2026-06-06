@@ -169,8 +169,13 @@ class PrusamentParser(BaseParser):
             # Extract attributes
             color_hex = fil.get("color_rgb", "#FFFFFF").replace("#", "")
             
-            # Prusament spools list the 'weight' property as the net weight of the filament itself
-            net_weight = data.get("weight", 1000)
+            # Prusament spools list the 'weight' property as the net weight of the
+            # filament itself. Track whether we fell back to the 1000g default so
+            # downstream consumers (the L200 spool-weight correction) don't treat a
+            # synthesized 1kg as a real manufacturer reading and propose a bogus
+            # total correction on a non-1kg spool.
+            raw_weight = data.get("weight")
+            net_weight = raw_weight if raw_weight is not None else 1000
             spool_g = data.get("spool_weight", 0)
             
             # Typical physical props (defaults if missing)
@@ -186,6 +191,7 @@ class PrusamentParser(BaseParser):
                 "material": fil.get("material", "Unknown"),
                 "vendor": {"name": "Prusament"},
                 "weight": float(net_weight),
+                "weight_is_default": raw_weight is None,
                 "spool_weight": float(spool_g),
                 "diameter": float(diameter),
                 "density": float(density),
@@ -197,7 +203,11 @@ class PrusamentParser(BaseParser):
                 "settings_bed_temp": fil.get("hb_min") if fil.get("hb_min") else None,
                 "extra": {
                     "prusament_manufacturing_date": data.get("manufacture_date", ""),
-                    "prusament_length_m": data.get("length", 0),
+                    # Spoolman registers prusament_length_m as a TEXT extra, so
+                    # emit a string — a raw int 400s the metadata backfill on the
+                    # matched-scan path ("Value is not a string"). The wizard path
+                    # already wraps it; this aligns the parser with the field type.
+                    "prusament_length_m": str(data.get("length", 0)),
                     **({"nozzle_temp_max": str(fil.get("he_max"))} if fil.get("he_max") else {}),
                     **({"bed_temp_max": str(fil.get("hb_max"))} if fil.get("hb_max") else {}),
                 }

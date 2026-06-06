@@ -176,6 +176,186 @@ def test_prusament_scan_fetch_failure_is_reported(client):
 
 
 # ---------------------------------------------------------------------------
+# L200 — spool weight-field correction from a matched Prusament scan.
+# `_compute_prusament_spool_weight_diff` is pure (used-preserving model);
+# the handler attaches its result to the prusament_matched payload — computed,
+# NEVER auto-applied (Derek chose a confirm overlay 2026-06-05).
+# ---------------------------------------------------------------------------
+
+
+def test_spool_weight_diff_fills_missing_tare_and_corrects_total():
+    matched = {"id": 42, "initial_weight": 900, "used_weight": 300, "spool_weight": None}
+    fil = {"id": 7, "weight": 900, "spool_weight": None, "vendor": {}}
+    obj = {"weight": 1000.0, "spool_weight": 201.0}
+    diff = app_module._compute_prusament_spool_weight_diff(matched, fil, obj)
+    assert diff["updates"] == {"initial_weight": 1000.0, "spool_weight": 201.0}
+    # used preserved → the consumption history is untouched, so the update
+    # payload must never carry used_weight.
+    assert "used_weight" not in diff["updates"]
+    assert diff["used"] == 300
+    assert diff["remaining"]["current"] == 600   # 900 - 300 (the OLD, wrong total)
+    assert diff["remaining"]["new"] == 700        # 1000 - 300 (recomputed correctly)
+    assert diff["blocked"] is None
+
+
+def test_spool_weight_diff_none_when_already_correct():
+    matched = {"id": 42, "initial_weight": 1000, "used_weight": 300, "spool_weight": 201}
+    fil = {"id": 7, "weight": 1000, "spool_weight": 201, "vendor": {}}
+    obj = {"weight": 1000.0, "spool_weight": 201.0}
+    assert app_module._compute_prusament_spool_weight_diff(matched, fil, obj) is None
+
+
+def test_spool_weight_diff_uses_filament_then_vendor_tare_fallback():
+    # Spool has no own tare, but the filament carries one matching the scan →
+    # no tare change proposed (effective-tare resolution mirrors the frontend).
+    matched = {"id": 42, "initial_weight": 1000, "used_weight": 0, "spool_weight": None}
+    fil = {"id": 7, "weight": 1000, "spool_weight": 201, "vendor": {}}
+    obj = {"weight": 1000.0, "spool_weight": 201.0}
+    assert app_module._compute_prusament_spool_weight_diff(matched, fil, obj) is None
+    # vendor fallback too
+    fil2 = {"id": 7, "weight": 1000, "spool_weight": None, "vendor": {"empty_spool_weight": 201}}
+    assert app_module._compute_prusament_spool_weight_diff(matched, fil2, obj) is None
+
+
+def test_spool_weight_diff_blocks_total_below_used():
+    # A scanned net at/below what's already been used would zero remaining and
+    # trip Spoolman's auto-archive. Refuse it; surface a warning.
+    matched = {"id": 42, "initial_weight": 1200, "used_weight": 1100, "spool_weight": 201}
+    fil = {"id": 7, "weight": 1200, "spool_weight": 201, "vendor": {}}
+    obj = {"weight": 1000.0, "spool_weight": 201.0}
+    diff = app_module._compute_prusament_spool_weight_diff(matched, fil, obj)
+    assert "initial_weight" not in diff["updates"]
+    assert diff["blocked"] and "already used" in diff["blocked"]
+
+
+def test_prusament_scan_matched_includes_spool_weight_diff(client):
+    matched = {"id": 42, "extra": {"product_url": _URL}, "filament": {"id": 7},
+               "initial_weight": 900, "used_weight": 300, "spool_weight": None}
+    fil = {"id": 7, "name": "Prusament PLA", "weight": 900, "spool_weight": None,
+           "vendor": {}, "settings_extruder_temp": 215, "settings_bed_temp": 60,
+           "extra": {"nozzle_temp_max": "230", "bed_temp_max": "65"}}
+    obj = _parsed_obj(weight=1000.0, spool_weight=201.0)  # temps already match fil
+    with patch("external_parsers.search_external", return_value=[obj]), \
+         patch("spoolman_api.get_all_spools", return_value=[matched]), \
+         patch("spoolman_api.get_filament", return_value=fil), \
+         patch("spoolman_api.get_spools_for_filament", return_value=[matched]), \
+         patch("spoolman_api.update_spool", return_value={"id": 42}), \
+         patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
+        res = _scan(client)
+    assert res["type"] == "prusament_matched" and res["status"] == "ok"
+    sw = res["spool_weight"]
+    assert sw is not None
+    assert sw["updates"] == {"initial_weight": 1000.0, "spool_weight": 201.0}
+    assert sw["remaining"]["current"] == 600 and sw["remaining"]["new"] == 700
+
+
+# ---------------------------------------------------------------------------
+# L200 hardening (2026-06-05 adversarial review) — safety gates on the diff and
+# live re-validation on the apply.
+# ---------------------------------------------------------------------------
+
+
+def test_spool_weight_diff_skips_archived_spool():
+    # An archived spool must NOT be silently resurrected by a weight correction.
+    matched = {"id": 42, "initial_weight": 900, "used_weight": 300,
+               "spool_weight": None, "archived": True}
+    fil = {"id": 7, "weight": 900, "spool_weight": None, "vendor": {}}
+    obj = {"weight": 1000.0, "spool_weight": 201.0}
+    assert app_module._compute_prusament_spool_weight_diff(matched, fil, obj) is None
+
+
+def test_spool_weight_diff_ignores_parser_default_weight():
+    # The parser flags a fabricated 1000g (blob omitted weight); it must not be
+    # offered as a total correction on a non-1kg spool.
+    matched = {"id": 42, "initial_weight": 2000, "used_weight": 300, "spool_weight": 250}
+    fil = {"id": 7, "weight": 2000, "spool_weight": 250, "vendor": {}}
+    obj = {"weight": 1000.0, "weight_is_default": True, "spool_weight": 250.0}
+    assert app_module._compute_prusament_spool_weight_diff(matched, fil, obj) is None
+
+
+def test_spool_weight_diff_tare_falls_through_spoolman_zero_default():
+    # Spoolman stores an un-set tare as 0.0 (not null) on most spools; treat 0 as
+    # unset and inherit the filament/vendor tare → no spurious "0g → Ng" diff.
+    matched = {"id": 42, "initial_weight": 1000, "used_weight": 0, "spool_weight": 0.0}
+    fil = {"id": 7, "weight": 1000, "spool_weight": 201, "vendor": {}}
+    obj = {"weight": 1000.0, "spool_weight": 201.0}
+    assert app_module._compute_prusament_spool_weight_diff(matched, fil, obj) is None
+    # vendor fallback also resolves through a 0.0 spool tare
+    fil2 = {"id": 7, "weight": 1000, "spool_weight": 0.0, "vendor": {"empty_spool_weight": 201}}
+    assert app_module._compute_prusament_spool_weight_diff(matched, fil2, obj) is None
+
+
+def test_spool_weight_diff_blocks_correction_that_would_empty_spool():
+    # Legacy over-entered initial (1050) on a near-fully-used spool (used 1000):
+    # correcting the total to the true net (1000) would zero remaining and trip
+    # auto-archive — so block it rather than propose it.
+    matched = {"id": 42, "initial_weight": 1050, "used_weight": 1000, "spool_weight": 278}
+    fil = {"id": 7, "weight": 1050, "spool_weight": 278, "vendor": {}}
+    obj = {"weight": 1000.0, "spool_weight": 278.0}
+    diff = app_module._compute_prusament_spool_weight_diff(matched, fil, obj)
+    assert "initial_weight" not in diff["updates"]
+    assert diff["blocked"] and "archive" in diff["blocked"]
+
+
+def test_prusament_apply_weights_success(client):
+    live = {"id": 42, "used_weight": 300, "initial_weight": 950, "archived": False}
+    with patch("spoolman_api.get_spool", return_value=live), \
+         patch("spoolman_api.update_spool_or_raise", return_value={"id": 42}) as upd:
+        res = client.post("/api/spool/prusament_apply_weights", json={
+            "spool_id": 42, "updates": {"initial_weight": 1065.0, "spool_weight": 278.0},
+        }).get_json()
+    assert res["status"] == "success"
+    sid, data = upd.call_args[0]
+    assert sid == 42
+    assert data == {"initial_weight": 1065.0, "spool_weight": 278.0}
+    assert "used_weight" not in data   # consumption preserved
+
+
+def test_prusament_apply_weights_blocks_archived(client):
+    live = {"id": 42, "used_weight": 300, "initial_weight": 900, "archived": True}
+    with patch("spoolman_api.get_spool", return_value=live), \
+         patch("spoolman_api.update_spool_or_raise") as upd:
+        res = client.post("/api/spool/prusament_apply_weights", json={
+            "spool_id": 42, "updates": {"initial_weight": 1065.0},
+        }).get_json()
+    assert res["status"] == "blocked"
+    upd.assert_not_called()
+
+
+def test_prusament_apply_weights_blocks_would_empty_against_live_used(client):
+    # TOCTOU guard: live used has risen to 1065 since the scan; applying initial
+    # 1065 would zero remaining + auto-archive — refuse against the LIVE value.
+    live = {"id": 42, "used_weight": 1065, "initial_weight": 1200, "archived": False}
+    with patch("spoolman_api.get_spool", return_value=live), \
+         patch("spoolman_api.update_spool_or_raise") as upd:
+        res = client.post("/api/spool/prusament_apply_weights", json={
+            "spool_id": 42, "updates": {"initial_weight": 1065.0},
+        }).get_json()
+    assert res["status"] == "blocked"
+    upd.assert_not_called()
+
+
+def test_prusament_parser_emits_length_as_string():
+    # Regression: prusament_length_m is a Spoolman TEXT field, so the parser must
+    # emit a string — a raw int 400s the metadata backfill ("Value is not a
+    # string") on the matched-scan path. (Found during the 2026-06-05 live demo.)
+    import external_parsers  # noqa: E402
+    blob = {
+        "filament": {"name": "Prusament PETG Blue", "material": "PETG",
+                     "color_rgb": "#1a0076", "color_name": "Blue",
+                     "he_min": 240, "he_max": 260, "hb_min": 70, "hb_max": 90},
+        "weight": 1020, "spool_weight": 278, "length": 336,
+        "manufacture_date": "2026-01-25T17:07:56+01:00", "ff_goods_id": 17637,
+    }
+    resp = type("R", (), {"ok": True, "text": "var spoolData = '" + json.dumps(blob) + "';"})()
+    with patch("external_parsers.requests.get", return_value=resp):
+        out = external_parsers.PrusamentParser.search("https://prusament.com/spool/17637/abc")
+    assert out and isinstance(out[0]["extra"]["prusament_length_m"], str)
+    assert out[0]["extra"]["prusament_length_m"] == "336"
+    assert out[0]["weight_is_default"] is False   # real reading, not the 1000g default
+
+
+# ---------------------------------------------------------------------------
 # Stage 3 (frontend) — a 'prusament_new' scan opens the Add wizard pre-filled
 # from the scanned URL. Hermetic: the scan endpoint AND the wizard's external
 # search are mocked via page.route, so no real backend / prusament.com hit.
@@ -261,3 +441,53 @@ def test_prusament_matched_scan_overlay_updates_conflicting_temps(page, base_url
     assert body["id"] == 7
     assert body["data"]["settings_extruder_temp"] == 215        # native -> number
     assert body["data"]["extra"]["nozzle_temp_max"] == "230"    # extra -> string
+
+
+@pytest.mark.usefixtures("require_server")
+def test_prusament_matched_overlay_updates_spool_weights(page, base_url, reset_dom_state_js):
+    # L200 — the matched overlay renders the spool weight diff (total / tare /
+    # recomputed remaining) and POSTs the backend's used-preserving `updates`
+    # verbatim to /api/spool/update on confirm.
+    url = "https://prusament.com/spool/17705/abc/"
+    matched_resp = {
+        "type": "prusament_matched", "status": "ok", "spool_id": 42, "filament_id": 7,
+        "filament_name": "Prusament PLA Galaxy Black", "filled": [], "conflicts": [],
+        "spool_weight": {
+            "updates": {"initial_weight": 1000.0, "spool_weight": 201.0},
+            "rows": [
+                {"key": "initial_weight", "label": "Total (net)", "current": 900, "scanned": 1000},
+                {"key": "spool_weight", "label": "Empty spool (tare)", "current": None, "scanned": 201},
+            ],
+            "used": 300,
+            "remaining": {"current": 600, "new": 700},
+            "blocked": None,
+        },
+    }
+    page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_function(
+        "typeof processScan === 'function' && typeof window.mountOverlay === 'function'",
+        timeout=10000,
+    )
+    page.route("**/api/identify_scan", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(matched_resp)))
+    captured = {}
+
+    def _capture(route):
+        captured["body"] = route.request.post_data
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "success"}))
+
+    page.route("**/api/spool/prusament_apply_weights", _capture)
+
+    page.evaluate(f"processScan({json.dumps(url)}, 'barcode')")
+    overlay = page.locator("#fcc-prusament-matched-overlay")
+    expect(overlay).to_be_visible(timeout=6000)
+    expect(overlay).to_contain_text("Total (net)")
+    expect(overlay).to_contain_text("700g")   # recomputed remaining, used kept
+    overlay.locator("#pm-update-weights").click()
+    expect(overlay).to_be_hidden(timeout=6000)
+
+    body = json.loads(captured["body"])
+    assert body["spool_id"] == 42
+    assert body["updates"] == {"initial_weight": 1000.0, "spool_weight": 201.0}

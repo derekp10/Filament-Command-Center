@@ -1152,6 +1152,76 @@ def api_spool_update():
         state.logger.error(f"Spool Update Error: {e}")
         return jsonify({"status": "error", "msg": str(e)})
 
+
+@app.route('/api/spool/prusament_apply_weights', methods=['POST'])
+def api_prusament_apply_weights():
+    """L200 confirm-apply for a Prusament-scan spool-weight correction.
+
+    Re-validates against the LIVE spool (the scan-time diff can be minutes stale
+    and FilaBridge may auto-deduct in between) so a correction can NEVER:
+      - resurrect an archived spool, or
+      - drive remaining to <= 0 and trip update_spool's auto-archive-on-empty
+        (which would silently unassign a loaded spool + clear its slot bindings).
+    Writes ONLY initial_weight / spool_weight; used_weight is preserved so the
+    consumption history is untouched. High-stakes -> update_spool_or_raise.
+    """
+    try:
+        data = request.json or {}
+        sid = data.get('spool_id') or data.get('id')
+        req = data.get('updates') or {}
+        if not sid:
+            return jsonify({"status": "error", "msg": "Missing spool_id"})
+
+        live = spoolman_api.get_spool(sid)
+        if not live:
+            return jsonify({"status": "error", "msg": f"Spool #{sid} not found"})
+        if live.get('archived'):
+            return jsonify({
+                "status": "blocked",
+                "msg": "Spool is archived — not changing its weights "
+                       "(that would return it to active inventory).",
+            })
+
+        live_used = _pm_num(live.get('used_weight')) or 0.0
+        updates = {}
+        new_initial = _pm_num(req.get('initial_weight'))
+        new_tare = _pm_num(req.get('spool_weight'))
+        if new_initial is not None and new_initial > 0:
+            # Hard floor against the live used — never let a correction zero out
+            # and auto-archive a still-loaded spool.
+            if new_initial <= live_used + _PM_WEIGHT_TOL:
+                return jsonify({
+                    "status": "blocked",
+                    "msg": f"Total {new_initial:g}g would leave ~0g against the "
+                           f"{live_used:g}g already used — not applied "
+                           f"(it would archive/unassign the spool).",
+                })
+            updates['initial_weight'] = new_initial
+        if new_tare is not None and new_tare > 0:
+            updates['spool_weight'] = new_tare
+        if not updates:
+            return jsonify({"status": "noop", "msg": "Nothing to update"})
+
+        try:
+            spoolman_api.update_spool_or_raise(sid, updates)
+        except spoolman_api.SpoolmanRejection as e:
+            state.add_log_entry(
+                f"❌ Prusament weight apply failed for spool #{sid}: {e}",
+                "ERROR", "ff4444",
+            )
+            return jsonify({"status": "error", "msg": str(e)})
+
+        summary = ", ".join(f"{k}={v:g}" for k, v in updates.items())
+        state.add_log_entry(
+            f"📦 Updated spool #{sid} weights from Prusament scan ({summary})",
+            "SUCCESS", "00ff00",
+        )
+        return jsonify({"status": "success", "updates": updates})
+    except Exception as e:
+        state.logger.error(f"Prusament weight apply error: {e}")
+        return jsonify({"status": "error", "msg": str(e)})
+
+
 import external_parsers # Added for plugin architecture
 
 
@@ -2250,6 +2320,133 @@ _PM_TEMP_LABELS = {
     'bed_temp_max': 'Bed (max)',
 }
 
+# L200 — grams of float noise to ignore when deciding a weight field "differs".
+_PM_WEIGHT_TOL = 1.0
+
+
+def _pm_num(v):
+    """Coerce a weight-ish value (number or numeric string) to float, or
+    None when blank / unparseable. Mirrors _pm_norm's tolerance for the
+    JSON-wrapped/native ambiguity but yields a number for arithmetic."""
+    if v is None or v == '':
+        return None
+    try:
+        return float(str(v).strip().strip('"').strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _pm_first_pos(*vals):
+    """First strictly-positive numeric among vals, else None. Mirrors the
+    frontend resolveEmptySpoolWeight chain, which treats null/''/0/<=0 as UNSET
+    — important because Spoolman stores an un-set tare/initial as 0.0 (not null)
+    on most spools, so a None-only guard would treat 0 as a real value."""
+    for v in vals:
+        n = _pm_num(v)
+        if n is not None and n > 0:
+            return n
+    return None
+
+
+def _compute_prusament_spool_weight_diff(matched, fil, obj):
+    """Build the proposed SPOOL weight-field updates from a Prusament scan (L200).
+
+    Model (confirmed with Derek 2026-06-05):
+      - `used_weight` is the source of truth for consumption (FilaBridge
+        auto-deduct writes it directly; it is tare-independent) → PRESERVED.
+      - `initial_weight` ← scanned net (manufacturer truth) when it differs
+        from the spool's *effective* initial (own value, else filament.weight).
+      - `spool_weight` (tare) ← scanned tare when it differs from the
+        *effective* tare (own value, else filament.spool_weight, else the
+        vendor's empty_spool_weight — the same resolveEmptySpoolWeight chain
+        the frontend uses, with 0 treated as unset).
+      - Spoolman derives remaining = initial - used, so correcting the total
+        recomputes remaining "as if the correct weight had been used from the
+        start" without touching the real consumption history.
+
+    Safety gates (added after the 2026-06-05 adversarial review):
+      - Returns None for an ARCHIVED matched spool — a weight correction must
+        not silently un-archive + relocate a retired spool.
+      - Ignores the parser's hardcoded 1000g default (weight_is_default) so a
+        page-format drift can't propose a bogus total on a non-1kg spool.
+      - Refuses any total that would drive remaining to <= ~0 (would trip
+        update_spool's auto-archive-on-empty and unassign a loaded spool).
+
+    Returns a dict the matched-overlay renders + sends back on confirm (the
+    APPLY re-validates against the live spool — see api_prusament_apply_weights),
+    or None when nothing meaningful changes. NEVER applies the write itself.
+    """
+    matched = matched or {}
+    fil = fil or {}
+    fil_vendor = fil.get('vendor') or {}
+
+    # Never silently resurrect an archived spool via a weight correction —
+    # mirrors the temp-conflict path's archived gate.
+    if matched.get('archived'):
+        return None
+
+    scanned_net = _pm_num(obj.get('weight'))
+    # The Prusament parser falls back to a hardcoded 1000g when the page blob
+    # omits the net weight; that default is indistinguishable from a real 1kg
+    # reading, so refuse to offer it as a total correction.
+    if obj.get('weight_is_default'):
+        scanned_net = None
+    scanned_tare = _pm_num(obj.get('spool_weight'))
+
+    cur_used = _pm_num(matched.get('used_weight')) or 0.0
+    # Effective current values: treat 0/blank as UNSET and fall through
+    # spool -> filament -> vendor, exactly like resolveEmptySpoolWeight.
+    eff_initial = _pm_first_pos(matched.get('initial_weight'), fil.get('weight'))
+    eff_tare = _pm_first_pos(
+        matched.get('spool_weight'),
+        fil.get('spool_weight'),
+        fil_vendor.get('empty_spool_weight'),
+    )
+
+    updates = {}
+    rows = []
+    blocked = None
+
+    # initial_weight (net / total). Refuse any correction that would leave
+    # remaining <= ~0 — Spoolman's auto-archive-on-empty would then silently
+    # archive the spool, clear its location, and wipe its slot bindings.
+    if scanned_net and scanned_net > 0:
+        if eff_initial is None or abs(scanned_net - eff_initial) > _PM_WEIGHT_TOL:
+            if scanned_net <= cur_used + _PM_WEIGHT_TOL:
+                blocked = (f"Scanned total {scanned_net:g}g would leave ~0g against the "
+                           f"{cur_used:g}g already used — leaving the total unchanged "
+                           f"(applying it would archive/unassign the spool).")
+            else:
+                updates['initial_weight'] = scanned_net
+                rows.append({"key": "initial_weight", "label": "Total (net)",
+                             "current": eff_initial, "scanned": scanned_net})
+
+    # spool_weight (empty / tare)
+    if scanned_tare and scanned_tare > 0:
+        if eff_tare is None or abs(scanned_tare - eff_tare) > _PM_WEIGHT_TOL:
+            updates['spool_weight'] = scanned_tare
+            rows.append({"key": "spool_weight", "label": "Empty spool (tare)",
+                         "current": eff_tare, "scanned": scanned_tare})
+
+    if not updates and not blocked:
+        return None
+
+    new_initial = updates.get('initial_weight', eff_initial)
+    remaining = None
+    if new_initial is not None:
+        remaining = {
+            "current": (eff_initial - cur_used) if eff_initial is not None else None,
+            "new": new_initial - cur_used,
+        }
+
+    return {
+        "updates": updates,   # used-preserving: never includes used_weight
+        "rows": rows,
+        "used": cur_used,
+        "remaining": remaining,
+        "blocked": blocked,
+    }
+
 
 def _handle_prusament_url_scan(res):
     """Prusament spool-QR scan (feature/scan-match-pipeline).
@@ -2381,6 +2578,12 @@ def _handle_prusament_url_scan(res):
         else:
             suggest = conflicts
 
+    # --- L200: propose SPOOL weight-field corrections (confirm-gated) ---
+    # Computed only; never auto-applied. The matched overlay shows the
+    # before→after (total / tare / recomputed remaining) and the user clicks
+    # to commit. used_weight is preserved so the print history is untouched.
+    spool_weight = _compute_prusament_spool_weight_diff(matched, fil, obj)
+
     return jsonify({
         "type": "prusament_matched",
         "status": "ok",
@@ -2389,6 +2592,7 @@ def _handle_prusament_url_scan(res):
         "filament_name": fil.get('name', 'Unknown'),
         "filled": filled,
         "conflicts": suggest,  # frontend (2c) shows the suggest-overlay when non-empty
+        "spool_weight": spool_weight,  # L200: weight diff or None
     })
 
 

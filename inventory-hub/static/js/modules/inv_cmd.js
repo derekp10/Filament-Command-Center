@@ -355,7 +355,7 @@ window.promptPrusamentMatched = (res) => {
         : `<div class="text-muted small mb-2">Temps already current — nothing to backfill.</div>`;
 
     const conflictHtml = conflicts.length ? `
-        <div class="border border-warning rounded p-2 mb-2" style="background:#2a2a2a;">
+        <div id="pm-temp-section" class="border border-warning rounded p-2 mb-2" style="background:#2a2a2a;">
             <div class="text-warning small mb-1">⚠️ Prusament's current spec differs from your saved temps:</div>
             ${conflicts.map(c => `
                 <div class="d-flex justify-content-between small text-light">
@@ -365,12 +365,45 @@ window.promptPrusamentMatched = (res) => {
             <button id="pm-update-temps" class="btn btn-sm btn-warning w-100 mt-2">Update to Prusament's spec</button>
         </div>` : '';
 
+    // L200 — spool weight-field corrections (total / tare), confirm-gated.
+    // used_weight is preserved server-side; remaining is recomputed from the
+    // corrected total. The `remaining` preview line makes the recompute
+    // explicit so the user sees exactly what the print history maps to.
+    const sw = res.spool_weight || null;
+    const g = (v) => (v === null || v === undefined) ? '—' : `${Math.round(Number(v))}g`;
+    let weightHtml = '';
+    if (sw && (sw.rows && sw.rows.length || sw.blocked)) {
+        const rowLines = (sw.rows || []).map(r => `
+            <div class="d-flex justify-content-between small text-light">
+                <span>${esc(r.label)}</span>
+                <span><span style="color:#adb5bd;">${g(r.current)}</span> &rarr; <span class="text-info fw-bold">${g(r.scanned)}</span></span>
+            </div>`).join('');
+        const remLine = sw.remaining ? `
+            <div class="d-flex justify-content-between small text-light border-top border-secondary mt-1 pt-1">
+                <span>Remaining <span class="text-muted">(used ${g(sw.used)} kept)</span></span>
+                <span><span style="color:#adb5bd;">${g(sw.remaining.current)}</span> &rarr; <span class="text-success fw-bold">${g(sw.remaining.new)}</span></span>
+            </div>` : '';
+        const blockedLine = sw.blocked
+            ? `<div class="text-warning small mt-1">⚠️ ${esc(sw.blocked)}</div>` : '';
+        const applyBtn = (sw.rows && sw.rows.length)
+            ? `<button id="pm-update-weights" class="btn btn-sm btn-success w-100 mt-2">📦 Update spool weights</button>` : '';
+        weightHtml = `
+            <div id="pm-weight-section" class="border border-success rounded p-2 mb-2" style="background:#2a2a2a;">
+                <div class="text-success small mb-1">📦 Prusament's spec differs from this spool's weights:</div>
+                ${rowLines}
+                ${remLine}
+                ${blockedLine}
+                ${applyBtn}
+            </div>`;
+    }
+
     const content = `
         <div class="p-3" style="max-width:420px; background:#1e1e1e; color:#fff; border:1px solid #444; border-radius:8px;">
             <h6 class="text-info mb-1">🎯 Matched Prusament spool</h6>
             <div class="mb-2"><strong>${esc(name)}</strong> <span class="text-muted">— Spool #${esc(sid)}</span></div>
             ${filledHtml}
             ${conflictHtml}
+            ${weightHtml}
             <div class="d-flex gap-2 mt-2">
                 <button id="pm-queue-label" class="btn btn-sm btn-outline-info flex-fill">🏷️ Queue label</button>
                 <button id="pm-done" class="btn btn-sm btn-secondary flex-fill">Done</button>
@@ -415,7 +448,12 @@ window.promptPrusamentMatched = (res) => {
         }).then(r => r.json()).then(d => {
             if (d && d.success) {
                 showToast(`🌡️ Updated ${conflicts.length} temp(s) on ${name} to Prusament's spec`, 'success', 4000);
-                close();
+                const section = ov.querySelector('#pm-temp-section');
+                if (section && ov.querySelector('#pm-update-weights')) {
+                    section.remove();   // leave the weight-correction section actionable
+                } else {
+                    close();
+                }
             } else {
                 showToast((d && d.msg) || 'Temp update rejected', 'error', 7000);
                 updateBtn.disabled = false;
@@ -427,6 +465,51 @@ window.promptPrusamentMatched = (res) => {
             updateBtn.textContent = "Update to Prusament's spec";
         });
     };
+
+    // L200 — apply the spool weight corrections. Sends the backend's computed
+    // `updates` (used-preserving — never includes used_weight) to the dedicated
+    // /api/spool/prusament_apply_weights, which RE-VALIDATES against the live
+    // spool (refuses if it would archive/unassign or resurrect the spool) and
+    // surfaces LAST_SPOOLMAN_ERROR on reject. Closes only the weight section if
+    // a temp-conflict section is still pending, so a spool needing both fixes
+    // isn't forced into a second scan.
+    const weightBtn = ov.querySelector('#pm-update-weights');
+    if (weightBtn && sw && sw.updates && Object.keys(sw.updates).length) {
+        weightBtn.onclick = () => {
+            weightBtn.disabled = true;
+            weightBtn.textContent = 'Updating…';
+            fetch('/api/spool/prusament_apply_weights', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ spool_id: sid, updates: sw.updates }),
+            }).then(r => r.json()).then(d => {
+                if (d && d.status === 'success') {
+                    showToast(`📦 Updated weights on Spool #${sid} from Prusament scan`, 'success', 4000);
+                    // Nudge the live surfaces (buffer / details) to repaint with
+                    // the corrected remaining without waiting for the next pulse.
+                    try { document.dispatchEvent(new CustomEvent('inventory:sync-pulse')); } catch (_) { /* noop */ }
+                    const section = ov.querySelector('#pm-weight-section');
+                    if (section && ov.querySelector('#pm-update-temps')) {
+                        section.remove();   // leave the temp-conflict section actionable
+                    } else {
+                        close();
+                    }
+                } else if (d && d.status === 'blocked') {
+                    // Live re-validation refused (archived / would-archive). Not an
+                    // error — surface the reason and disable the button.
+                    showToast(d.msg || 'Weight update not applied', 'warning', 8000);
+                    weightBtn.textContent = 'Not applied';
+                } else {
+                    showToast((d && (d.msg || d.error)) || 'Weight update rejected', 'error', 7000);
+                    weightBtn.disabled = false;
+                    weightBtn.textContent = '📦 Update spool weights';
+                }
+            }).catch(() => {
+                showToast('Weight update failed (network)', 'error', 7000);
+                weightBtn.disabled = false;
+                weightBtn.textContent = '📦 Update spool weights';
+            });
+        };
+    }
 };
 
 // --- SCAN ROUTER ---
