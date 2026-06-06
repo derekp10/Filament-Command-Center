@@ -69,6 +69,8 @@ Inventory of current production write surfaces (keep this list updated when addi
 | `app.py:521` | `api_edit_spool_wizard` filament save | Surfaces `LAST_SPOOLMAN_ERROR` in response JSON. |
 | `app.py:555` | `/api/manage_contents` set_meta | Returns `error` field with Spoolman body. |
 | `app.py:1079` | `/api/locations` cascade unassign | Best-effort fire-and-forget; logs each failure. |
+| `app.py:1101` | `/api/spool/update` generic partial update | `update_spool` (read-merge-write extras + `used_weight ≤ initial_weight` cap + auto-archive/unarchive on remaining); surfaces `LAST_SPOOLMAN_ERROR` in the `error`/`msg` response fields. ⚠️ Sending `initial_weight` here runs `_auto_archive_on_empty`/`_auto_unarchive_on_refill` — a too-low total can silently archive+unassign a loaded spool. The L200 path deliberately does NOT use this; see the dedicated endpoint below. |
+| `app.py:~1156` | `/api/spool/prusament_apply_weights` (L200) | Confirm-apply for the Prusament-scan spool-weight correction. RE-VALIDATES against the live spool (refuses if archived, or if the new total would leave remaining ≤ ~0 and trip auto-archive), writes only `initial_weight`/`spool_weight` via `update_spool_or_raise` (used_weight preserved). Returns `status: success`/`blocked`/`error`. Hardened per the 2026-06-05 adversarial review. |
 | `app.py:1183` | `/api/update_filament` quick-edit | Reference impl — surfaces error in response JSON. |
 | `app.py:1331` | spool label-confirm scan | Logs ERROR with Spoolman body; emits "already verified" info path. |
 | `app.py:1388` | filament label-confirm scan | Same pattern as spool side. |
