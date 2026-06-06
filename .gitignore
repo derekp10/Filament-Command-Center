@@ -27,6 +27,9 @@ inventory-hub/data/*
 inventory-hub/locations.json
 inventory-hub/locations.json.*.bak
 inventory-hub/data/locations.json.*.bak
+# A stray repo-ROOT data/ (e.g. a tool run from the repo root instead of
+# inventory-hub/) is runtime state too — never track it.
+/data/
 
 # Dashboard version badge — regenerated at server startup (and on every
 # git commit via .git/hooks/post-commit, see setup-and-rebuild/

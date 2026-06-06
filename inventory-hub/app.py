@@ -2465,17 +2465,42 @@ def _handle_prusament_url_scan(res):
     update_filament merges against the live record, so siblings survive.
     """
     spool_id = res.get('spool_id')
+    spool_hash = res.get('spool_hash')
     url = res.get('url', '')
 
-    # Match FIRST — deciding a match needs only the scanned id vs. stored
+    # Match FIRST — deciding a match needs only the scanned id/hash vs. stored
     # product_urls, NOT the (slow) prusament.com page fetch. So a no-match
     # "onboard" responds fast (just a Spoolman spool list); the page fetch is
     # deferred to the matched/backfill path and the Add wizard (Stage 3).
-    needle = f"/spool/{spool_id}/"
+    #
+    # Match on the spool-UNIQUE hash so a scan resolves to the EXACT physical
+    # spool, not the first owned duplicate of the same product (two spools can
+    # share a product <id> — e.g. dev #196/#197, both 17705 — and the old
+    # product-id-only needle corrected whichever came first). When the scanned
+    # URL carried a hash but NO owned spool (incl. archived) matches it we do
+    # NOT fall back to a product-id match — that would silently operate on a
+    # different physical spool. Instead we onboard (Derek 2026-06-05): an
+    # unowned exact spool is a brand-new spool. Only a hash-less scan (rare /
+    # degenerate) falls back to product-id granularity. Compared lower-cased
+    # because _pm_norm doesn't fold case and stored hashes are lowercase hex.
+    if spool_hash:
+        # The unique spool hash appears either in the PATH form
+        # (/spool/<id>/<hash>) the physical QR encodes, or in the QUERY form
+        # (?spoolId=<hash>) some imports store. Match EITHER — the hash is
+        # unique per physical spool, so this resolves the exact spool whatever
+        # the stored URL shape, and never matches a sibling (a sibling carries
+        # a different hash). Lower-cased: _pm_norm doesn't fold case and stored
+        # hashes are lowercase hex.
+        h = spool_hash.lower()
+        needles = (f"/spool/{spool_id}/{h}", f"spoolid={h}")
+    else:
+        # Hash-less scan (rare / degenerate) — best we can do is product-id
+        # granularity (the legacy behavior; may resolve the wrong duplicate).
+        needles = (f"/spool/{spool_id}/".lower(),)
     matched = None
     for s in spoolman_api.get_all_spools(allow_archived=True):
         pu = _pm_norm((s.get('extra') or {}).get('product_url'))
-        if pu and needle in pu:
+        if pu and any(n in pu.lower() for n in needles):
             matched = s
             break
 
@@ -2484,7 +2509,13 @@ def _handle_prusament_url_scan(res):
             "🆕 Scanned a Prusament spool that isn't in inventory yet — ready to onboard",
             "INFO", "00ccff",
         )
-        return jsonify({"type": "prusament_new", "spool_id": spool_id, "url": url})
+        return jsonify({
+            "type": "prusament_new",
+            "spool_id": spool_id,
+            # Carry the unique hash so onboarding can record the EXACT spool.
+            "spool_hash": spool_hash,
+            "url": url,
+        })
 
     # Matched — NOW fetch the spool page for its temps.
     parsed = external_parsers.search_external('prusament', url) or []

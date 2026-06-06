@@ -305,10 +305,27 @@ def resolve_scan(text):
     # https://prusament.com/spool/<id>/<hash>/ URL. Recognize it BEFORE the
     # generic URL branch below (which would otherwise dead-end on "Unknown/
     # Invalid Link") so the scan pipeline can backfill temps onto the matching
-    # existing filament or onboard a brand-new spool. Match key is numeric <id>.
-    pm = re.search(r'prusament\.com/spool/(\d+)', text, re.IGNORECASE)
+    # existing filament or onboard a brand-new spool.
+    #
+    # The numeric <id> identifies the *product* (shared by every spool of that
+    # product); the trailing <hash> identifies the *unique physical spool*.
+    # Recognition stays keyed on the product <id> so a malformed or absent hash
+    # never breaks the scan. The hash is captured best-effort as an optional,
+    # contiguous alphanumeric run — real Prusament hashes are 10 lowercase hex
+    # chars (see setup-and-rebuild/seeds), but we stay permissive and
+    # case-insensitive so we neither truncate nor mis-recognize. The greedy
+    # product-id group stops at the '/', so an all-digit hash isn't swallowed.
+    # spool_hash is None when the URL carries no hash segment. Consumers needing
+    # spool-level granularity (vs. product-level temp backfill) match on the
+    # hash — see _handle_prusament_url_scan in app.py.
+    pm = re.search(r'prusament\.com/spool/(\d+)(?:/([0-9a-z]+))?', text, re.IGNORECASE)
     if pm:
-        return {'type': 'prusament_url', 'url': text, 'spool_id': pm.group(1)}
+        return {
+            'type': 'prusament_url',
+            'url': text,
+            'spool_id': pm.group(1),
+            'spool_hash': pm.group(2),
+        }
 
     # 6. LEGACY / URL PARSING
     if any(x in text.lower() for x in ['http', 'www.', '.com', 'google', '/', '\\', '{', '}', '[', ']']):
