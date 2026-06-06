@@ -1618,15 +1618,23 @@ const wizardGenerateFieldHTML = (field, entityType) => {
     const inputId = `wiz_${entityType}_ef_${field.key}`;
 
     if (field.field_type === 'choice' && field.multi_choice) {
-        // Custom Searchable Tag/Chip System (Replaces Native Datalist)
-        html += `<div class="position-relative wizard-chip-multiselect" id="wizard-ms-${entityType}-${field.key}">
+        // Custom Searchable Tag/Chip System (Replaces Native Datalist).
+        // Wrapped in a flex row so the ➕ "add new option" button sits to the
+        // RIGHT of the chip box — parity with the single-choice path below,
+        // which always had a ➕ while the multi-choice path was missing it (the
+        // widget's own suggestion toast already told users to "use the ➕
+        // button"). The ➕ opens wizardPromptNewChoice, which is multi-choice
+        // aware: it drops a chip in place on success instead of refetching the
+        // schema (a refetch would wipe the in-progress wizard DOM).
+        html += `<div class="d-flex align-items-stretch gap-1">
+                    <div class="position-relative wizard-chip-multiselect flex-grow-1" id="wizard-ms-${entityType}-${field.key}">
                     <div class="form-control bg-dark text-white border-secondary d-flex flex-wrap align-items-center gap-1 p-1" style="min-height: 38px; cursor: text;" onclick="document.getElementById('${inputId}').focus()">
                         <div class="chip-container d-flex flex-wrap gap-1" id="chip-container-${entityType}-${field.key}"></div>
-                        <input type="text" 
-                               class="border-0 bg-transparent text-white flex-grow-1 chip-input sync-source-${entityType}" 
-                               id="${inputId}" 
-                               data-key="${field.key}" 
-                               placeholder="Search or type new..." 
+                        <input type="text"
+                               class="border-0 bg-transparent text-white flex-grow-1 chip-input sync-source-${entityType}"
+                               id="${inputId}"
+                               data-key="${field.key}"
+                               placeholder="Search or type new..."
                                autocomplete="off"
                                style="outline: none; min-width: 120px;"
                                onfocus="wizardMultiselectFocus('${entityType}', '${field.key}')"
@@ -1634,17 +1642,24 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                                oninput="wizardMultiselectFilter('${entityType}', '${field.key}')"
                                onkeydown="wizardMultiselectKeydown(event, '${entityType}', '${field.key}')">
                     </div>
-                    <div class="autocomplete-dropdown position-absolute w-100 bg-dark border border-secondary rounded shadow-lg" 
-                         id="dropdown-${entityType}-${field.key}" 
+                    <div class="autocomplete-dropdown position-absolute w-100 bg-dark border border-secondary rounded shadow-lg"
+                         id="dropdown-${entityType}-${field.key}"
                          style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">`;
 
         // Populate the dropdown with initial options
         field.choices.forEach(c => {
-            html += `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option" 
+            html += `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option"
                           onmousedown="wizardMultiselectSelect(event, '${entityType}', '${field.key}', this.innerText)">${c}</div>`;
         });
 
         html += `   </div>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary wizard-multichoice-add"
+                            onmousedown="event.preventDefault()"
+                            onclick="wizardPromptNewChoice('${entityType}', '${field.key}')"
+                            title="Add a new option to the Spoolman database"
+                            aria-label="Add new option"
+                            style="flex:0 0 auto;">➕</button>
                  </div>`;
 
     } else if (field.field_type === 'choice' && !field.multi_choice) {
@@ -1930,6 +1945,20 @@ window.wizardPromptNewChoice = (entityType, key) => {
     // Determine the absolute entity mapping Spoolman uses ('filament' or 'spool')
     const apiEntity = entityType === 'fil' ? 'filament' : 'spool';
 
+    // Multi-choice fields (e.g. filament_attributes) now expose a ➕ button too.
+    // They render the chip widget, so the success path must drop a chip IN PLACE
+    // rather than refetch the schema (wizardFetchExtraFields wipes the
+    // in-progress wizard DOM). Pre-seed the overlay with whatever the user
+    // already typed into the chip input, and clear that input so the pending
+    // blur-commit (wizardMultiselectBlur) doesn't double-add the same value.
+    const fieldDef = (wizardState.extraFields?.[apiEntity] || []).find((f) => f.key === key);
+    const isMultiChoice = !!(fieldDef && fieldDef.multi_choice);
+    let seedValue = '';
+    if (isMultiChoice) {
+        const chipInput = document.getElementById(`wiz_${entityType}_ef_${key}`);
+        if (chipInput) { seedValue = (chipInput.value || '').trim(); chipInput.value = ''; }
+    }
+
     // Group 10.8 — was nested Swal.fire; now mountOverlay.
     // Group 10.9 hooks `validateNewChoice` into the submit path for length /
     // punctuation / fuzzy-duplicate guards. Group 10.5 hooks the post-success
@@ -1995,6 +2024,8 @@ window.wizardPromptNewChoice = (entityType, key) => {
         msg.textContent = '';
     };
     input?.addEventListener('input', renderPreview);
+    // Pre-fill from the chip input when the ➕ was clicked after typing.
+    if (seedValue && input) { input.value = seedValue; renderPreview(); }
 
     const commit = async () => {
         if (!input || (confirmBtn && confirmBtn.disabled)) return;
@@ -2048,10 +2079,33 @@ window.wizardPromptNewChoice = (entityType, key) => {
                 if (typeof showToast === 'function') {
                     showToast(`"${canonical}" added to the database.`, 'success', 3000);
                 }
-                // Refresh the field schema THEN fire the auto-assign hook —
-                // the select gets re-rendered by wizardFetchExtraFields, so
-                // we have to wait for the new <option> to exist before we
-                // can select it (Group 10.5).
+                if (isMultiChoice) {
+                    // Multi-choice chip widget: do NOT refetch the schema —
+                    // wizardFetchExtraFields wipes the in-progress wizard DOM.
+                    // Register the new value in the live in-memory schema + the
+                    // dropdown, then drop the chip in place.
+                    if (fieldDef && Array.isArray(fieldDef.choices) && !fieldDef.choices.includes(canonical)) {
+                        fieldDef.choices.push(canonical);
+                    }
+                    const dropdown = document.getElementById(`dropdown-${entityType}-${key}`);
+                    if (dropdown && !Array.from(dropdown.children).some((o) => o.innerText === canonical)) {
+                        const opt = document.createElement('div');
+                        opt.className = 'dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option';
+                        opt.setAttribute('onmousedown', `wizardMultiselectSelect(event, '${entityType}', '${key}', this.innerText)`);
+                        opt.innerText = canonical;
+                        dropdown.appendChild(opt);
+                    }
+                    // canonical is now a "known" choice, so the directVal path
+                    // appends the chip and skips a duplicate add_choice POST.
+                    if (typeof window.wizardAddMultiChoiceChip === 'function') {
+                        window.wizardAddMultiChoiceChip(entityType, key, canonical);
+                    }
+                    return undefined;
+                }
+                // Single-choice (existing behavior): refresh the schema THEN
+                // fire the auto-assign hook — the select gets re-rendered by
+                // wizardFetchExtraFields, so we wait for the new <option> to
+                // exist before selecting it (Group 10.5).
                 return Promise.resolve(wizardFetchExtraFields()).then(() => {
                     if (typeof window.wizardOnNewChoiceAdded === 'function') {
                         window.wizardOnNewChoiceAdded(apiEntity, key, canonical, { wasNew: true });
