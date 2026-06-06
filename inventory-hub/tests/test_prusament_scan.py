@@ -28,6 +28,7 @@ def test_resolve_scan_recognizes_prusament_url():
         "type": "prusament_url",
         "url": "https://prusament.com/spool/17705/5b1a183b26/",
         "spool_id": "17705",
+        "spool_hash": "5b1a183b26",
     }
 
 
@@ -42,6 +43,31 @@ def test_resolve_scan_prusament_url_is_case_insensitive():
     res = resolve_scan("HTTPS://PRUSAMENT.COM/SPOOL/999/DEADBEEF/")
     assert res["type"] == "prusament_url"
     assert res["spool_id"] == "999"
+
+
+def test_resolve_scan_captures_spool_hash():
+    # The trailing URL segment is the unique *physical spool* hash. Capturing it
+    # lets spool-level ops (e.g. L200 weight correction) target the exact spool
+    # rather than the first owned duplicate of the same product <id>.
+    res = resolve_scan("https://prusament.com/spool/17705/5b1a183b26/")
+    assert res["spool_hash"] == "5b1a183b26"
+
+
+def test_resolve_scan_captures_all_digit_spool_hash():
+    # Some real Prusament hashes are all digits (e.g. seed-data 2117943310). The
+    # greedy product-id group must stop at the '/' and NOT swallow the hash.
+    res = resolve_scan("https://prusament.com/spool/17705/2117943310/")
+    assert res["spool_id"] == "17705"
+    assert res["spool_hash"] == "2117943310"
+
+
+def test_resolve_scan_spool_hash_is_none_when_absent():
+    # A bare product URL with no hash segment still recognizes (keyed on <id>),
+    # and spool_hash is None so the matcher can fall back to product granularity.
+    res = resolve_scan("https://prusament.com/spool/17705")
+    assert res["type"] == "prusament_url"
+    assert res["spool_id"] == "17705"
+    assert res["spool_hash"] is None
 
 
 def test_resolve_scan_generic_url_is_not_mistaken_for_prusament():
@@ -97,6 +123,82 @@ def test_prusament_scan_no_match_returns_new_for_onboarding(client):
     assert res["type"] == "prusament_new"
     assert res["spool_id"] == "17705"
     assert res["url"] == _URL
+    assert res["spool_hash"] == "5b1a183b26"   # surface #3: the hash rides along to onboarding
+
+
+def test_prusament_scan_duplicate_product_matches_exact_hash_spool(client):
+    # Two physical spools share product 17705 but have distinct hashes. Scanning
+    # the SECOND one's hash must resolve to THAT spool (id 43), not the first
+    # owned duplicate (id 42) the way the old product-id-only needle did.
+    url_a = "https://prusament.com/spool/17705/5b1a183b26/"
+    url_b = "https://prusament.com/spool/17705/6100497ffc/"
+    spool_a = {"id": 42, "extra": {"product_url": url_a}, "filament": {"id": 7}}
+    spool_b = {"id": 43, "extra": {"product_url": url_b}, "filament": {"id": 7}}
+    blank_fil = {"id": 7, "name": "Prusament PLA", "settings_extruder_temp": None,
+                 "settings_bed_temp": None, "extra": {}}
+    with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
+         patch("spoolman_api.get_all_spools", return_value=[spool_a, spool_b]), \
+         patch("spoolman_api.get_filament", return_value=blank_fil), \
+         patch("spoolman_api.get_spools_for_filament", return_value=[spool_a, spool_b]), \
+         patch("spoolman_api.update_spool", return_value={"id": 43}), \
+         patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
+        res = _scan(client, url=url_b)
+    assert res["type"] == "prusament_matched"
+    assert res["spool_id"] == 43   # the EXACT-hash spool, not the first duplicate (42)
+
+
+def test_prusament_scan_unowned_hash_onboards_even_when_product_owned(client):
+    # You own a sibling spool of the SAME product (hash A) but NOT the exact
+    # physical spool being scanned (hash B). Per the design call, an unowned
+    # exact spool is treated as brand-new (onboard) rather than silently
+    # operating on the owned sibling. The unique hash rides along so the Add
+    # wizard can record the exact spool. Match-first means NO page fetch here.
+    url_a = "https://prusament.com/spool/17705/5b1a183b26/"
+    url_b = "https://prusament.com/spool/17705/6100497ffc/"
+    owned_sibling = {"id": 42, "extra": {"product_url": url_a}, "filament": {"id": 7}}
+    with patch("spoolman_api.get_all_spools", return_value=[owned_sibling]):
+        res = _scan(client, url=url_b)
+    assert res["type"] == "prusament_new"
+    assert res["spool_id"] == "17705"
+    assert res["spool_hash"] == "6100497ffc"
+    assert res["url"] == url_b
+
+
+def test_prusament_scan_matches_query_form_stored_url_by_hash(client):
+    # Some spools store product_url in the QUERY form (?spoolId=<hash>) rather
+    # than the path form. The physical QR still scans as the path form
+    # (/spool/<id>/<hash>); matching on the UNIQUE hash resolves the exact spool
+    # regardless of stored URL shape. (Query-form spools were previously
+    # unmatchable and would re-onboard.)
+    scanned = "https://prusament.com/spool/17705/730b53b325/"
+    stored = {"id": 71,
+              "extra": {"product_url": "https://prusament.com/spool/?spoolId=730b53b325"},
+              "filament": {"id": 7}}
+    blank_fil = {"id": 7, "name": "Prusament PLA", "settings_extruder_temp": None,
+                 "settings_bed_temp": None, "extra": {}}
+    with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
+         patch("spoolman_api.get_all_spools", return_value=[stored]), \
+         patch("spoolman_api.get_filament", return_value=blank_fil), \
+         patch("spoolman_api.get_spools_for_filament", return_value=[stored]), \
+         patch("spoolman_api.update_spool", return_value={"id": 71}), \
+         patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
+        res = _scan(client, url=scanned)
+    assert res["type"] == "prusament_matched"
+    assert res["spool_id"] == 71   # matched the query-form spool via its hash
+
+
+def test_prusament_scan_query_form_hash_is_precise_not_sibling(client):
+    # A query-form spool with a DIFFERENT hash must NOT match — matching is on
+    # the unique hash, so an unowned scan still routes to onboard (never a
+    # wrong-sibling correction).
+    scanned = "https://prusament.com/spool/17705/730b53b325/"
+    other = {"id": 71,
+             "extra": {"product_url": "https://prusament.com/spool/?spoolId=d9e6fdadda"},
+             "filament": {"id": 7}}
+    with patch("spoolman_api.get_all_spools", return_value=[other]):
+        res = _scan(client, url=scanned)
+    assert res["type"] == "prusament_new"
+    assert res["spool_hash"] == "730b53b325"
 
 
 def test_prusament_scan_match_backfills_blank_temps(client):
