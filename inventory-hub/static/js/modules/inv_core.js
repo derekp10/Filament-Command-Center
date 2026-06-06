@@ -124,6 +124,47 @@ const showToast = (msg, type = 'info', duration = 2000) => {
     c.appendChild(el);
     setTimeout(dismiss, duration);
 };
+// `showToast` is a top-level `const` in this classic (non-module) script, so it
+// lives in the global LEXICAL environment — bare `showToast(...)` resolves, but
+// `window.showToast` did NOT, silently no-op'ing every guarded
+// `if (window.showToast) window.showToast(...)` caller (inv_config.js,
+// inv_settings.js, duplicate_picker.js). Publish it so those toasts actually fire.
+window.showToast = showToast;
+
+// --- Escape-to-dismiss for toasts (buglist 2026-05-30 wizard/attribute bullet:
+// "hitting escape on a toast should cancel the toast"). Escape priority ladder:
+//   1. an open mountOverlay owns Escape (it closes itself via its OWN
+//      capture-phase handler — we yield to it),
+//   2. otherwise a visible toast intercepts Escape and dismisses the newest one,
+//   3. otherwise Escape falls through untouched to whatever else handles it
+//      (a Bootstrap modal's Escape-to-close, the Location Manager handler, etc).
+//
+// We register a single capture-phase listener on `document` so it runs BEFORE
+// Bootstrap's bubble-phase modal keydown — that's what lets a toast win over a
+// modal-close when both are on screen (Derek's case: an info/error toast raised
+// from inside the open wizard). The event is only consumed when we actually
+// dismiss a toast, so overlays and modals keep their normal Escape behavior
+// whenever no toast is up. inv_core loads before any overlay mounts, so this
+// capture handler is ordered ahead of overlay ones — the overlay-present
+// early-return below correctly yields the still-propagating event to the
+// overlay's own (later-registered) capture handler.
+if (!window.__fccToastEscapeBound) {
+    window.__fccToastEscapeBound = true;
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        // A mountOverlay is the foreground dialog — let its handler close it.
+        if (document.querySelector('[data-overlay-mount="1"]')) return;
+        const c = document.getElementById('toast-container');
+        if (!c) return;
+        // Ignore toasts already fading out (opacity driven to 0 by a prior dismiss).
+        const live = Array.from(c.querySelectorAll('.toast-msg'))
+            .filter((t) => t.style.opacity !== '0');
+        if (!live.length) return;  // nothing to dismiss → don't swallow Escape
+        e.preventDefault();
+        e.stopImmediatePropagation();  // keep the underlying modal open
+        live[live.length - 1].click();  // dismiss the most-recent toast
+    }, true);
+}
 
 const setProcessing = (s) => {
     let ov = document.getElementById('processing-overlay');
