@@ -88,6 +88,40 @@ def test_toast_beats_modal_close(page: Page):
     expect(page.locator("#wizardModal")).not_to_be_visible(timeout=5_000)
 
 
+def test_escape_consumed_during_toast_fadeout_keeps_modal_open(page: Page):
+    """Race guard (Derek 2026-06-07): an Escape pressed while a toast is mid
+    fade-out (opacity 0 but still attached for ~300ms) must be consumed by the
+    toast layer, NOT leak through and close a background modal."""
+    _goto(page)
+    page.evaluate("window.openWizardModal && window.openWizardModal()")
+    expect(page.locator("#wizardModal")).to_be_visible()
+
+    page.evaluate("window.showToast('FADING_TOAST', 'info', 30000)")
+    # Drive the toast into the fade window deterministically: opacity 0 but still
+    # in the DOM (exactly the state showToast's dismiss() leaves it in for 300ms).
+    page.evaluate(
+        """() => {
+            const t = document.querySelector('#toast-container .toast-msg');
+            if (t) t.style.opacity = '0';
+        }"""
+    )
+
+    # Escape during the fade → consumed; wizard stays open.
+    page.keyboard.press("Escape")
+    expect(page.locator("#wizardModal")).to_be_visible()
+    assert page.evaluate(
+        "document.querySelectorAll('#toast-container .toast-msg').length"
+    ) >= 1
+
+    # Once the toast node is gone, Escape closes the wizard as normal.
+    page.evaluate(
+        "document.querySelectorAll('#toast-container .toast-msg').forEach(t => t.remove())"
+    )
+    page.evaluate("try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}")
+    page.keyboard.press("Escape")
+    expect(page.locator("#wizardModal")).not_to_be_visible(timeout=5_000)
+
+
 def test_overlay_beats_toast(page: Page):
     """An open mountOverlay owns Escape — pressing Escape closes the overlay
     and leaves the toast untouched."""

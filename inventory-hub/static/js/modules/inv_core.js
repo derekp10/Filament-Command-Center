@@ -156,13 +156,21 @@ if (!window.__fccToastEscapeBound) {
         if (document.querySelector('[data-overlay-mount="1"]')) return;
         const c = document.getElementById('toast-container');
         if (!c) return;
-        // Ignore toasts already fading out (opacity driven to 0 by a prior dismiss).
-        const live = Array.from(c.querySelectorAll('.toast-msg'))
-            .filter((t) => t.style.opacity !== '0');
-        if (!live.length) return;  // nothing to dismiss → don't swallow Escape
+        // If ANY toast element is still on screen — INCLUDING one mid fade-out
+        // (opacity 0 but not yet removed) — Escape belongs to the toasts, not the
+        // background modal. This closes the race Derek flagged: an Escape pressed
+        // "just as a toast cleared" must NOT leak through and dismiss a background
+        // modal. We consume the keypress for the whole ~300ms fade window; once
+        // the DOM node is gone, Escape falls through to the modal as normal.
+        const toasts = Array.from(c.querySelectorAll('.toast-msg'));
+        if (!toasts.length) return;  // none present → don't swallow Escape
         e.preventDefault();
         e.stopImmediatePropagation();  // keep the underlying modal open
-        live[live.length - 1].click();  // dismiss the most-recent toast
+        // Dismiss the newest toast that isn't already fading. If every toast is
+        // mid-fade there's nothing left to dismiss — but we've still safely
+        // consumed the keypress so it can't reach the modal.
+        const live = toasts.filter((t) => t.style.opacity !== '0');
+        if (live.length) live[live.length - 1].click();
     }, true);
 }
 
