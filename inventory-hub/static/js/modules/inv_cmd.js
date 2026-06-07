@@ -137,25 +137,90 @@ const updateDeckVisuals = () => {
     }
 };
 
+// --- Reusable "shapeshift" deck QR (generalizes the Audit slot) -------------
+// A single .deck-qr slot whose ENCODED command, label text, and active CSS
+// classes change IN PLACE between named states, driven by a mode flag. The
+// Audit slot is the reference (idle: CMD:AUDIT/"AUDIT"  <->  active:
+// CMD:DONE/"FINISH"). This factory lets a future multi-state deck command
+// (e.g. the backlog's Bulk Moves: arm -> set-dest -> commit) reuse the exact
+// same recipe instead of hand-rolling another updateAuditVisuals.
+//
+// Config: { slot, size, default, states: { <name>: { cmd, label, btnClass,
+// labelClass, onEnter } } }. The handle's set(name): (1) clears + re-renders
+// the QR via generateSafeQR with the state's cmd; (2) rewrites the label
+// innerText; (3) swaps the active classes on the deck button + label — it
+// first removes the UNION of every state's classes, then adds the current
+// state's, so N states stay clean AND the 2-state audit matches its old
+// add/remove behavior exactly; (4) fires the state's onEnter side-effect.
+// set() is idempotent — safe to call repeatedly from the backend poll, just
+// like the original updateAuditVisuals. Ids follow the deck convention:
+// qr-<slot> / lbl-<slot> / btn-deck-<slot>.
+window.registerShapeshiftQR = (config) => {
+    const cfg = config || {};
+    const slot = cfg.slot;
+    const size = cfg.size || 85;
+    const states = cfg.states || {};
+    const qrId = `qr-${slot}`;
+    const labelId = `lbl-${slot}`;
+    const btnId = `btn-deck-${slot}`;
+    const _split = (s) => String(s || '').split(/\s+/).filter(Boolean);
+    // Union of every state's active classes, so set() can clear them all first.
+    const allBtnClasses = new Set();
+    const allLabelClasses = new Set();
+    Object.keys(states).forEach((k) => {
+        const s = states[k] || {};
+        _split(s.btnClass).forEach((c) => allBtnClasses.add(c));
+        _split(s.labelClass).forEach((c) => allLabelClasses.add(c));
+    });
+    let currentName = null;
+    const set = (name) => {
+        const st = states[name];
+        if (!st) return;
+        currentName = name;
+        const btn = document.getElementById(btnId);
+        const lbl = document.getElementById(labelId);
+        const qrDiv = document.getElementById(qrId);
+        if (btn) {
+            allBtnClasses.forEach((c) => btn.classList.remove(c));
+            _split(st.btnClass).forEach((c) => btn.classList.add(c));
+        }
+        if (lbl) {
+            allLabelClasses.forEach((c) => lbl.classList.remove(c));
+            if (typeof st.label === 'string') lbl.innerText = st.label;
+            _split(st.labelClass).forEach((c) => lbl.classList.add(c));
+        }
+        if (qrDiv && st.cmd) {
+            qrDiv.innerHTML = "";
+            generateSafeQR(qrId, st.cmd, size);
+        }
+        if (typeof st.onEnter === 'function') st.onEnter();
+    };
+    return { set, reset: () => set(cfg.default), current: () => currentName };
+};
+
+// Audit slot migrated onto the shapeshift helper — behavior is identical to the
+// former hand-rolled updateAuditVisuals (CMD:AUDIT/"AUDIT" <-> CMD:DONE/"FINISH"
+// + the btn-audit-active / label-active-audit classes). The onEnter hooks
+// preserve 18.2 Part B's visual audit panel: open it when the session is
+// active, close it when it ends — additive to the Activity Log, not a
+// replacement (Derek 2026-05-15: "I still like the idea of having the activity
+// log reference"). NOTE: audit is deliberately NOT wired into
+// resetCommandModes — an audit session must survive opening other modals,
+// unlike the drop/eject danger modes. The static idle QR is still seeded once
+// in scripts.html; the first updateAuditVisuals() call (from the backend poll
+// or toggleAudit) paints the correct state.
+const auditShapeshift = window.registerShapeshiftQR({
+    slot: 'audit',
+    size: 85,
+    default: 'idle',
+    states: {
+        idle:   { cmd: "CMD:AUDIT", label: "AUDIT",  btnClass: '',                 labelClass: '',                   onEnter: () => { if (typeof window.closeAuditPanel === 'function') window.closeAuditPanel(); } },
+        active: { cmd: "CMD:DONE",  label: "FINISH", btnClass: 'btn-audit-active', labelClass: 'label-active-audit', onEnter: () => { if (typeof window.openAuditPanel  === 'function') window.openAuditPanel();  } },
+    },
+});
+
 window.updateAuditVisuals = () => {
-    const deckBtn = document.getElementById('btn-deck-audit');
-    const lbl = document.getElementById('lbl-audit');
-    const qrDiv = document.getElementById('qr-audit');
-    if (state.auditActive) {
-        if (deckBtn) deckBtn.classList.add('btn-audit-active');
-        if (lbl) { lbl.innerText = "FINISH"; lbl.classList.add('label-active-audit'); }
-        if (qrDiv) { qrDiv.innerHTML = ""; generateSafeQR('qr-audit', "CMD:DONE", 85); }
-        // 18.2 Part B — auto-open the visual audit panel when an audit
-        // session is detected. Activity Log entries continue to fire too;
-        // the panel is additive, not a replacement (Derek 2026-05-15:
-        // "I still like the idea of having the activity log reference").
-        if (typeof window.openAuditPanel === 'function') window.openAuditPanel();
-    } else {
-        if (deckBtn) deckBtn.classList.remove('btn-audit-active');
-        if (lbl) { lbl.innerText = "AUDIT"; lbl.classList.remove('label-active-audit'); }
-        if (qrDiv) { qrDiv.innerHTML = ""; generateSafeQR('qr-audit', "CMD:AUDIT", 85); }
-        if (typeof window.closeAuditPanel === 'function') window.closeAuditPanel();
-    }
+    auditShapeshift.set(state.auditActive ? 'active' : 'idle');
 };
 
 // --- 18.2 Part B — VISUAL AUDIT PANEL --------------------------------------
