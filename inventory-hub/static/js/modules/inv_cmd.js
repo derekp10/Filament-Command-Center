@@ -737,6 +737,22 @@ const processScan = (text, source = 'keyboard') => {
                     state.lastScannedLoc = res.id;
                     return;
                 }
+                // Empty-location scan (buglist: "if a legacy barcode has no spools
+                // attached, warn + offer to add"). A location/legacy label that
+                // resolves to ZERO spools used to open the manager SILENTLY, leaving
+                // the user wondering why nothing happened. Warn + log + open the
+                // manager (which carries the Add-Spool affordance) — mirrors the
+                // empty-SLOT path above. Scoped to the truly-empty case so it never
+                // fires for quick-pick or buffer-assign flows.
+                if (!res.contents || res.contents.length === 0) {
+                    showToast(`📭 ${res.id} is empty — no spools here. Use the manager to add one.`, 'info', 6000);
+                    if (window.logClientEvent) window.logClientEvent(
+                        `📭 Location scan ${res.id} — no spools attached (opened manager)`,
+                        'WARNING'
+                    );
+                    openManage(res.id); state.lastScannedLoc = res.id;
+                    return;
+                }
                 openManage(res.id); state.lastScannedLoc = res.id;
             } else if (res.type === 'spool') {
                 if (state.dropMode) { removeBufferItem(res.id); return; }
