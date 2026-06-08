@@ -13,6 +13,17 @@ import pytest
 from playwright.sync_api import Page, expect
 
 
+# Toast-visibility tolerance. The scan POSTs to /api/identify_scan and the error
+# toast only appears AFTER the (correct) error response. When the shared dev
+# server is loaded by prior network-heavy tests in the same sweep (e.g.
+# test_confirm_qr.py's printer-state probes), that response is slow and a tight
+# 3 s wait flaked even though the toast was correct — see the
+# order-dependent-pollution note in Feature-Buglist.md (Testing). 8 s tolerates
+# a loaded server without weakening what's asserted (the error toast lasts 5 s,
+# so it's still on screen well after it appears).
+_TOAST_WAIT_MS = 8000
+
+
 def _goto_and_wait(page: Page, base_url: str) -> None:
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
@@ -29,7 +40,7 @@ def test_ui_slot_scan_bad_target_shows_error_toast(page: Page, base_url: str):
     _goto_and_wait(page, base_url)
     _fire_scan(page, "LOC:NOT-A-REAL-PLACE:SLOT:1")
     toast = page.locator(".toast-msg.toast-error")
-    expect(toast).to_be_visible(timeout=3000)
+    expect(toast).to_be_visible(timeout=_TOAST_WAIT_MS)
     expect(toast).to_contain_text("NOT-A-REAL-PLACE")
     expect(toast).to_contain_text("valid load target")
 
@@ -45,7 +56,7 @@ def test_ui_slot_scan_bad_slot_shows_error_toast(page: Page, base_url: str):
     page.wait_for_timeout(400)
     _fire_scan(page, "LOC:LR-MDB-1:SLOT:99")
     toast = page.locator(".toast-msg.toast-error")
-    expect(toast).to_be_visible(timeout=3000)
+    expect(toast).to_be_visible(timeout=_TOAST_WAIT_MS)
     expect(toast).to_contain_text("99")
     expect(toast).to_contain_text("invalid")
 
@@ -78,7 +89,7 @@ def test_ui_slot_scan_toast_error_is_long_enough_to_read(page: Page, base_url: s
     _goto_and_wait(page, base_url)
     _fire_scan(page, "LOC:NOT-A-REAL-PLACE:SLOT:1")
     toast = page.locator(".toast-msg.toast-error").first
-    expect(toast).to_be_visible(timeout=3000)
+    expect(toast).to_be_visible(timeout=_TOAST_WAIT_MS)
     # Still visible 3 s in (comfortable read time). Error duration is 5 s.
     page.wait_for_timeout(3000)
     expect(toast).to_be_visible()
@@ -91,7 +102,7 @@ def test_ui_toast_click_dismisses_immediately(page: Page, base_url: str):
     _goto_and_wait(page, base_url)
     _fire_scan(page, "LOC:NOT-A-REAL-PLACE:SLOT:1")
     toast = page.locator(".toast-msg.toast-error").first
-    expect(toast).to_be_visible(timeout=3000)
+    expect(toast).to_be_visible(timeout=_TOAST_WAIT_MS)
     # Use JS click to bypass pointer-event hit testing (Bootstrap layout
     # sometimes has non-toast ancestors intercept positioned-overlay
     # clicks in headless mode). The user-visible click handler is the
