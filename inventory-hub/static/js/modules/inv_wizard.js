@@ -635,6 +635,45 @@ const wizardApplyPurchaseLinkFallback = (spoolUrl, filamentUrl) => {
     }
 };
 
+// L351: same smart-fallback pattern as purchase_url, for the per-spool
+// product_url input. Prefill the spool's OWN product_url; if it has none but
+// the filament does, advertise the filament URL as ghost placeholder so saving
+// without typing leaves the spool override blank (the details modal then falls
+// back to the filament's value — inv_details.js:218).
+const wizardApplyProductLinkFallback = (spoolUrl, filamentUrl) => {
+    const el = document.getElementById('wiz-spool-product_url');
+    if (!el) return;
+    const stripQuotes = (s) => typeof s === 'string' ? s.replace(/^"|"$/g, '') : '';
+    const sUrl = stripQuotes(spoolUrl).trim();
+    const fUrl = stripQuotes(filamentUrl).trim();
+    if (sUrl) {
+        el.value = sUrl;
+        el.placeholder = 'https://...';
+    } else {
+        el.value = '';
+        if (fUrl) {
+            const truncated = fUrl.length > 40 ? fUrl.slice(0, 37) + '…' : fUrl;
+            el.placeholder = `${truncated} (inherited from filament)`;
+        } else {
+            el.placeholder = 'https://...';
+        }
+    }
+};
+
+// L349: cascade the filament's native price down to a new / cloned / edited
+// spool that has none of its own (mirrors the empty-weight cascade). BLANK-GATED
+// — only fills when the spool price field is empty AND the spool has no own
+// price, so it NEVER overwrites an explicit spool price. `ownPrice` is the
+// spool's own price (null for a brand-new spool); `filamentPrice` is the
+// filament-level fallback.
+window.wizardPrefillSpoolPrice = (ownPrice, filamentPrice) => {
+    const el = document.getElementById('wiz-spool-price');
+    if (!el) return;
+    if (el.value !== '' && el.value != null) return;  // never clobber a typed/own value
+    const v = (ownPrice != null) ? ownPrice : filamentPrice;
+    if (v != null) el.value = v;
+};
+
 const wizardReset = () => {
     wizardState.mode = 'manual';
     wizardState.selectedFilamentId = null;
@@ -657,6 +696,8 @@ const wizardReset = () => {
     // we don't want that to bleed into the next session either.
     const purchUrlReset = document.getElementById('wiz-spool-purchase_url');
     if (purchUrlReset) purchUrlReset.placeholder = 'https://...';
+    const productUrlReset = document.getElementById('wiz-spool-product_url');
+    if (productUrlReset) productUrlReset.placeholder = 'https://...';
     document.querySelectorAll('#wizardModal select').forEach(i => i.selectedIndex = 0);
     if (window.wizardClearSpoolEmptyWeightBadge) window.wizardClearSpoolEmptyWeightBadge();
 
@@ -2424,6 +2465,11 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
     if (temp.external_link) {
         const filUrlNode = document.getElementById('wiz_fil_ef_product_url');
         if (filUrlNode) filUrlNode.value = temp.external_link;
+        // L351: also preload the spool's OWN product_url input so the scraped
+        // product link is visible + editable per-spool (parity with the
+        // purchase_url preload below).
+        const spProductNode = document.getElementById('wiz-spool-product_url');
+        if (spProductNode) { spProductNode.value = temp.external_link; spProductNode.placeholder = 'https://...'; }
     }
     if (temp.purchase_link) {
         // Group 10.4 — purchase_url is no longer rendered on the filament
@@ -2580,6 +2626,12 @@ window.wizardSubmit = async () => {
         // Purchase Link (Spool Extra)
         const purchaseUrl = document.getElementById('wiz-spool-purchase_url')?.value?.trim();
         if (purchaseUrl) sp_payload.extra.purchase_url = purchaseUrl;
+
+        // Product Link (Spool Extra). L351 — gated on a truthy typed value, so an
+        // empty input never clobbers a product_url supplied by a Prusament-scan
+        // override or inherited via the filament fallback (ghost placeholder).
+        const productUrl = document.getElementById('wiz-spool-product_url')?.value?.trim();
+        if (productUrl) sp_payload.extra.product_url = productUrl;
 
         // Extract Dynamic Spool Fields
         document.querySelectorAll('.dynamic-extra-spool-field').forEach(el => {
@@ -2918,15 +2970,14 @@ window.openCloneWizard = async (spoolId) => {
             document.getElementById('wiz-spool-used').value = 0; // Fresh spool is usually 0
             document.getElementById('wiz-spool-comment').value = d.comment || "";
             // Price & Purchase Link
-            if (d.price !== null && d.price !== undefined) {
-                document.getElementById('wiz-spool-price').value = d.price;
-            }
+            window.wizardPrefillSpoolPrice(d.price, d.filament && d.filament.price);
             // Group 10.4 smart fallback: only prefill with the spool's OWN
             // purchase_url. If the spool has none but the filament does,
             // surface the filament URL as ghost placeholder text — saving
             // without typing leaves the spool override blank so the details
             // modal continues to fall back to the filament's value.
             wizardApplyPurchaseLinkFallback(d.extra?.purchase_url, d.filament?.extra?.purchase_url);
+            wizardApplyProductLinkFallback(d.extra?.product_url, d.filament?.extra?.product_url);
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = false;
             }
@@ -2990,6 +3041,11 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
                 });
                 window.wizardSetSpoolEmptyWeightInherited(value, source);
             }
+            // L349: a brand-new spool has no price of its own — inherit the
+            // filament's (d is the filament here, so d.price is the fallback).
+            window.wizardPrefillSpoolPrice(null, d.price);
+            // L351: show the filament's product link as inherited ghost text.
+            wizardApplyProductLinkFallback(null, d.extra?.product_url);
 
             window.wizardCalcRemainingFromUsed();
 
@@ -3189,11 +3245,10 @@ window.openEditWizard = async (spoolId) => {
 
             document.getElementById('wiz-spool-comment').value = d.comment || "";
             // Price & Purchase Link
-            if (d.price !== null && d.price !== undefined) {
-                document.getElementById('wiz-spool-price').value = d.price;
-            }
+            window.wizardPrefillSpoolPrice(d.price, d.filament && d.filament.price);
             // Group 10.4 smart fallback (same as clone path above).
             wizardApplyPurchaseLinkFallback(d.extra?.purchase_url, d.filament?.extra?.purchase_url);
+            wizardApplyProductLinkFallback(d.extra?.product_url, d.filament?.extra?.product_url);
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = d.archived || false;
             }
