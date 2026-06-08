@@ -124,6 +124,55 @@ const showToast = (msg, type = 'info', duration = 2000) => {
     c.appendChild(el);
     setTimeout(dismiss, duration);
 };
+// `showToast` is a top-level `const` in this classic (non-module) script, so it
+// lives in the global LEXICAL environment — bare `showToast(...)` resolves, but
+// `window.showToast` did NOT, silently no-op'ing every guarded
+// `if (window.showToast) window.showToast(...)` caller (inv_config.js,
+// inv_settings.js, duplicate_picker.js). Publish it so those toasts actually fire.
+window.showToast = showToast;
+
+// --- Escape-to-dismiss for toasts (buglist 2026-05-30 wizard/attribute bullet:
+// "hitting escape on a toast should cancel the toast"). Escape priority ladder:
+//   1. an open mountOverlay owns Escape (it closes itself via its OWN
+//      capture-phase handler — we yield to it),
+//   2. otherwise a visible toast intercepts Escape and dismisses the newest one,
+//   3. otherwise Escape falls through untouched to whatever else handles it
+//      (a Bootstrap modal's Escape-to-close, the Location Manager handler, etc).
+//
+// We register a single capture-phase listener on `document` so it runs BEFORE
+// Bootstrap's bubble-phase modal keydown — that's what lets a toast win over a
+// modal-close when both are on screen (Derek's case: an info/error toast raised
+// from inside the open wizard). The event is only consumed when we actually
+// dismiss a toast, so overlays and modals keep their normal Escape behavior
+// whenever no toast is up. inv_core loads before any overlay mounts, so this
+// capture handler is ordered ahead of overlay ones — the overlay-present
+// early-return below correctly yields the still-propagating event to the
+// overlay's own (later-registered) capture handler.
+if (!window.__fccToastEscapeBound) {
+    window.__fccToastEscapeBound = true;
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        // A mountOverlay is the foreground dialog — let its handler close it.
+        if (document.querySelector('[data-overlay-mount="1"]')) return;
+        const c = document.getElementById('toast-container');
+        if (!c) return;
+        // If ANY toast element is still on screen — INCLUDING one mid fade-out
+        // (opacity 0 but not yet removed) — Escape belongs to the toasts, not the
+        // background modal. This closes the race Derek flagged: an Escape pressed
+        // "just as a toast cleared" must NOT leak through and dismiss a background
+        // modal. We consume the keypress for the whole ~300ms fade window; once
+        // the DOM node is gone, Escape falls through to the modal as normal.
+        const toasts = Array.from(c.querySelectorAll('.toast-msg'));
+        if (!toasts.length) return;  // none present → don't swallow Escape
+        e.preventDefault();
+        e.stopImmediatePropagation();  // keep the underlying modal open
+        // Dismiss the newest toast that isn't already fading. If every toast is
+        // mid-fade there's nothing left to dismiss — but we've still safely
+        // consumed the keypress so it can't reach the modal.
+        const live = toasts.filter((t) => t.style.opacity !== '0');
+        if (live.length) live[live.length - 1].click();
+    }, true);
+}
 
 const setProcessing = (s) => {
     let ov = document.getElementById('processing-overlay');

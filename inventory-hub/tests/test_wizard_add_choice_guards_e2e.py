@@ -38,9 +38,11 @@ def _force_close_wizard(page: Page) -> None:
 
 def _open_add_new_choice_for_filament_attributes(page: Page) -> None:
     """Open the +Add Choice overlay seeded as the filament_attributes target.
-    We invoke the function directly because the actual ➕ button only renders
-    for single-choice fields (filament_attributes is multi-choice and uses
-    the chip path). The overlay UI is identical regardless of source field."""
+    We invoke the function directly here for stability (no dependence on the
+    extras section being expanded). The multi-choice path now ALSO renders a
+    real ➕ button wired to this same wizardPromptNewChoice — that button is
+    exercised directly in test_wizard_multichoice_add_button_e2e.py. The
+    overlay UI is identical regardless of which field opened it."""
     page.evaluate("""
         // Ensure schema is loaded so the overlay's existingChoices lookup works.
         wizardFetchExtraFields();
