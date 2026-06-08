@@ -64,8 +64,13 @@
     // Track the currently-viewed location so bindings edit / return-to-slot
     // know what to act on.
     let currentLoc = null;
+    // Last grid HTML committed, so the heartbeat-driven silent refresh (L352)
+    // can skip the DOM swap — and the flicker / focus loss — when nothing
+    // actually changed since the previous tick.
+    let _lastQsHtml = null;
 
-    const renderQuickSwapSection = (loc) => {
+    const renderQuickSwapSection = (loc, opts = {}) => {
+        const silent = !!(opts && opts.silent);
         const section = document.getElementById('manage-quickswap-section');
         if (!section) return;
 
@@ -94,7 +99,10 @@
                 : resolvePrinterNameForToolhead(loc.LocationID, printerMap);
             const grid = document.getElementById('quickswap-grid');
             const empty = document.getElementById('quickswap-empty');
-            grid.innerHTML = '';
+            // Silent (heartbeat) refreshes must NOT blank the grid up-front —
+            // that's the flicker + focus-loss. They commit only the final HTML,
+            // and only if it changed (see the content-hash guard below).
+            if (!silent) grid.innerHTML = '';
             if (!printerName) {
                 empty.style.display = 'block';
                 empty.innerHTML = '⚠️ This location is not registered in ' +
@@ -129,6 +137,9 @@
 
                     if (!entries.length && !printerPool.length) {
                         empty.style.display = 'block';
+                        // Silent path skipped the up-front clear; if the view
+                        // just transitioned to empty, clear the stale grid once.
+                        if (silent && grid.innerHTML !== '') { grid.innerHTML = ''; _lastQsHtml = ''; }
                         return;
                     }
                     empty.style.display = 'none';
@@ -302,7 +313,11 @@
                                 });
                         }
 
-                        grid.innerHTML = html;
+                        // Non-silent always commits (preserves the open path).
+                        // Silent commits only when the content actually changed,
+                        // so an unchanged heartbeat tick is a no-op (no flicker).
+                        if (!silent || html !== _lastQsHtml) grid.innerHTML = html;
+                        _lastQsHtml = html;
                     });
                 });
         });
@@ -1197,5 +1212,26 @@
         if (currentLoc && window.renderQuickSwapSection) {
             window.renderQuickSwapSection(currentLoc);
         }
+    });
+
+    // L352 — heartbeat-driven SILENT refresh so the Quick-Swap cards' live
+    // remaining-weight ticks while the view stays open. Without this, a spool
+    // sitting in one of a toolhead's source slots that is weighed out /
+    // filabridge-deducted / Prusament-corrected elsewhere shows a stale weight
+    // for as long as the manage modal stays open with no buffer change.
+    // Guards: only when a toolhead/printer manage view is actually open AND
+    // visible, and NEVER while the user is mid keyboard-navigation inside the
+    // grid (a re-render would yank focus). The silent mode + content-hash in
+    // renderQuickSwapSection itself prevents flicker and skips the DOM swap
+    // when nothing changed.
+    document.addEventListener('inventory:sync-pulse', () => {
+        if (!currentLoc || !window.renderQuickSwapSection) return;
+        const mm = document.getElementById('manageModal');
+        if (!mm || !mm.classList.contains('show')) return;
+        const grid = document.getElementById('quickswap-grid');
+        if (!grid) return;
+        // Focus lives in the grid → user is navigating; don't disturb it.
+        if (grid.contains(document.activeElement)) return;
+        window.renderQuickSwapSection(currentLoc, { silent: true });
     });
 })();
