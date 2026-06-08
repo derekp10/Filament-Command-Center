@@ -1,5 +1,7 @@
 # **New and Unsorted Features/Bugs**
 
+* Assigning a filament to a slot takes increadibly long for it to fully resolve. (Processing... to go away) I don't know if there is something we can fix to make this faster, but it's noticibly long, and i'm not sure why that is.
+
 *(L37 — `[RECURRING] data/locations.json corruption` — PARTIAL 2026-05-12. Hardening (1) per-call temp filename + (2) verify-after-write tripwire shipped on `feature/locations-json-write-hardening`. Monitor prod hub.log for `verify-after-write FAILED` critical lines; (3) explicit truncate and (4) Docker named volume deferred pending recurrence signal. See `completed-archive.md`.)*
 
 * Sometimes the inprogress printing update modal will have its QR codes on the right side of it. This seemed to happen when there was a toast up in the background, but could be unrelated.
