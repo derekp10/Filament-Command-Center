@@ -142,6 +142,30 @@ def test_validate_rejects_toolhead_not_in_printer_map(sample_locs, printer_map):
     assert "printer_map" in errors[0][2]
 
 
+def test_validate_accepts_dual_role_printer_row(sample_locs, printer_map):
+    # L271 Phase 3: Core One is a first-class dual-role Printer row — it IS its
+    # own toolhead and is registered in printer_map under its own LocationID.
+    # Binding a dryer slot directly to it must be ACCEPTED (regression for the
+    # "type 'Printer' is not a toolhead" feeds-save rejection, 2026-06).
+    locs = sample_locs + [{"LocationID": "CORE1", "Type": "Printer", "Max Spools": "1"}]
+    pm = dict(printer_map)
+    pm["CORE1"] = {"printer_name": "🦝 Core One Upgraded", "position": 0}
+    errors = locations_db.validate_slot_targets({"1": "CORE1"}, locs, pm)
+    assert errors == []
+
+
+def test_validate_rejects_printer_row_not_in_printer_map(sample_locs, printer_map):
+    # A non-dual-role Printer PARENT row (e.g. XL, whose real load targets are
+    # XL-1..XL-5) is absent from printer_map, so it must STILL be rejected — but
+    # for the correct reason ("not registered in printer_map"), not the blanket
+    # "not a toolhead" type rejection that used to fire for every Printer row.
+    locs = sample_locs + [{"LocationID": "XL", "Type": "Printer", "Max Spools": "0"}]
+    errors = locations_db.validate_slot_targets({"1": "XL"}, locs, printer_map)
+    assert len(errors) == 1
+    assert "printer_map" in errors[0][2]
+    assert "not a toolhead" not in errors[0][2]
+
+
 def test_validate_allows_mix_of_null_and_real_targets(sample_locs, printer_map):
     errors = locations_db.validate_slot_targets(
         {"1": "XL-1", "2": "XL-2", "3": "XL-3", "4": None},
