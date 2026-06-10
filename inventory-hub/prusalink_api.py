@@ -1,14 +1,38 @@
 import requests
 import re
+import threading
 import traceback
 from typing import Dict, Optional
+import perf_trace  # L3 latency probe — zero-cost when no trace is active
+
+# Per-operation memo for get_printer_state (L3 fix A). A single
+# perform_smart_move probes the SAME printer in BOTH its phase-1 and phase-2
+# (auto-deploy) passes; without this the recursion hits the network twice and,
+# on an offline printer, pays the full timeout twice — the dominant cost in the
+# slot-assign latency. The logic.perform_smart_move wrapper begins/clears it per
+# top-level move, so it is strictly scoped and never serves stale state to
+# unrelated requests. When no cache is active (the common case for every other
+# caller) get_printer_state behaves exactly as before — no memoization.
+_probe_cache = threading.local()
+
+
+def begin_probe_cache():
+    """Start a fresh per-operation get_printer_state memo on this thread."""
+    _probe_cache.data = {}
+
+
+def clear_probe_cache():
+    """Tear down the per-operation memo. Idempotent."""
+    _probe_cache.data = None
+
 
 def fetch_printer_credentials(filabridge_url: str, printer_name: str):
     """
     Fetches the IP address and API key for a given printer name from FilaBridge.
     """
     try:
-        response = requests.get(f"{filabridge_url}/printers", timeout=5)
+        with perf_trace.span("prusalink.fetch_creds"):
+            response = requests.get(f"{filabridge_url}/printers", timeout=5)
         if response.ok:
             data = response.json()
             printers = data.get('printers', {})
@@ -110,6 +134,25 @@ def download_gcode_and_parse_usage(ip_address: str, api_key: str, filename: str)
     return None
 
 def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
+    """Cached front door for the PrusaLink state probe (L3 fix A).
+
+    Memoizes per-operation when a probe cache is active (see begin_probe_cache),
+    so a single perform_smart_move probes a given printer ONCE across its
+    phase-1/phase-2 auto-deploy recursion instead of twice. With no active cache
+    it just calls through, so every other caller (/api/printer_state, usage
+    deduction) is unchanged.
+    """
+    key = (filabridge_url, printer_name)
+    cache = getattr(_probe_cache, "data", None)
+    if cache is not None and key in cache:
+        return cache[key]
+    result = _probe_printer_state(filabridge_url, printer_name)
+    if cache is not None:
+        cache[key] = result
+    return result
+
+
+def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
     """Best-effort PrusaLink state probe for a named printer. Returns a dict
     {state: str, is_active: bool} or None on any failure (fail-open — the
     caller treats None as "unknown" and does not block user actions).
@@ -137,19 +180,29 @@ def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
 
     # v1 status — returns {"printer": {"state": "PRINTING", ...}, ...}
     try:
-        r = requests.get(f"http://{ip}/api/v1/status", headers=headers, timeout=2)
+        with perf_trace.span("prusalink.status"):
+            r = requests.get(f"http://{ip}/api/v1/status", headers=headers, timeout=2)
         if r.ok:
             body = r.json() or {}
             printer = body.get("printer") or {}
             state_str = str(printer.get("state", "")).upper()
             if state_str:
                 return {"state": state_str, "is_active": state_str in _ACTIVE_PRINT_STATES}
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        # L3 fix B: a connection-level failure (timeout / refused / no route)
+        # means the printer is unreachable. The legacy endpoint lives on the
+        # SAME ip:port and will time out too — skip it instead of burning a
+        # second 2s timeout. Halves the probe cost for an offline printer.
+        return None
     except Exception:
+        # v1 answered but the body was unusable (bad JSON / odd shape) — fall
+        # through and try the legacy endpoint, which may parse on old firmware.
         pass
 
     # Legacy /api/printer — returns {"state": {"text": "Printing", "flags": {...}}, ...}
     try:
-        r = requests.get(f"http://{ip}/api/printer", headers=headers, timeout=2)
+        with perf_trace.span("prusalink.status"):
+            r = requests.get(f"http://{ip}/api/printer", headers=headers, timeout=2)
         if r.ok:
             body = r.json() or {}
             flags = (body.get("state") or {}).get("flags") or {}

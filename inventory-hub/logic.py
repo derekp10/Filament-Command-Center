@@ -6,6 +6,7 @@ import state
 import config_loader
 import spoolman_api
 import locations_db
+import perf_trace  # L3 latency probe — zero-cost when no trace is active
 
 
 def _active_print_info_for_location(location_str, printer_map=None):
@@ -35,7 +36,8 @@ def _active_print_info_for_location(location_str, printer_map=None):
         # have prusalink_api's `requests` import graph fully satisfied.
         import prusalink_api
         _, fb_url = config_loader.get_api_urls()
-        state_dict = prusalink_api.get_printer_state(fb_url, printer_name)
+        with perf_trace.span("preflight", rollup=True):
+            state_dict = prusalink_api.get_printer_state(fb_url, printer_name)
     except Exception:
         return None
     if not state_dict or not state_dict.get('is_active'):
@@ -107,7 +109,8 @@ def _fb_spool_location(spool_id, fb_url=None):
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
     try:
-        resp = requests.get(f"{fb_url}/status", timeout=3)
+        with perf_trace.span("filabridge.status"):
+            resp = requests.get(f"{fb_url}/status", timeout=3)
         if not getattr(resp, 'ok', False):
             return None
         data = resp.json() or {}
@@ -139,7 +142,8 @@ def _fb_write(printer_name, toolhead_id, spool_id, fb_url=None):
         _, fb_url = config_loader.get_api_urls()
     payload = {"printer_name": printer_name, "toolhead_id": toolhead_id, "spool_id": int(spool_id)}
     try:
-        resp = requests.post(f"{fb_url}/map_toolhead", json=payload, timeout=3)
+        with perf_trace.span("filabridge.map"):
+            resp = requests.post(f"{fb_url}/map_toolhead", json=payload, timeout=3)
         # Prefer the standard requests.Response `.ok` accessor (True when
         # status_code is 2xx). Falls through to explicit status_code +
         # body inspection for richer detail on failures.
@@ -388,6 +392,54 @@ def resolve_scan(text):
     return {'type': 'error', 'msg': 'Unknown Code'}
 
 def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, origin_toolhead=None, confirm_active_print=False):
+    """Trace-wrapping entry point for the slot-move pipeline (L3 latency probe).
+
+    Owns the per-assign timing trace lifecycle: starts the trace on the
+    OUTERMOST call, lets the auto-deploy recursion accumulate its spans into
+    the same trace (so a bound-slot assign reports preflight×2, spoolman.patch×2,
+    …), then emits a one-line breakdown to hub.log + the Activity Log on
+    completion. Also owns the per-move printer-state probe cache (L3 fix A) so
+    the recursion probes a given printer ONCE, not twice. All real work lives in
+    _perform_smart_move_impl — this is a behaviour-neutral wrapper.
+    """
+    owns_trace = perf_trace.start_if_idle(
+        f"slot-assign → {str(target).strip().upper()}"
+        + (f":SLOT:{target_slot}" if target_slot else "")
+        + (f" ({origin})" if origin else "")
+    )
+    _pa = None
+    if owns_trace:
+        # Deferred import keeps logic.py importable in unit tests that don't
+        # satisfy prusalink_api's import graph (mirrors _active_print_info_*).
+        try:
+            import prusalink_api as _pa
+            _pa.begin_probe_cache()
+        except Exception:
+            _pa = None
+    try:
+        return _perform_smart_move_impl(
+            target, raw_spools, target_slot=target_slot, origin=origin,
+            auto_deploy=auto_deploy, origin_toolhead=origin_toolhead,
+            confirm_active_print=confirm_active_print,
+        )
+    finally:
+        if owns_trace:
+            if _pa is not None:
+                try:
+                    _pa.clear_probe_cache()
+                except Exception:
+                    pass
+            summary = perf_trace.finish()
+            if summary:
+                # add_log_entry writes the Activity Log (prod-visible) AND hub.log
+                # in one shot; fall back to hub.log only if the log ring isn't up.
+                try:
+                    state.add_log_entry(summary, "INFO", "888888")
+                except Exception:
+                    state.logger.info(summary)
+
+
+def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, origin_toolhead=None, confirm_active_print=False):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
