@@ -19,6 +19,14 @@ CSV_FILE = '3D Print Supplies - Locations.csv'
 DRYER_BOX_TYPE = 'Dryer Box'
 TOOLHEAD_TYPES = {'Tool Head', 'MMU Slot', 'No MMU Direct Load'}
 
+# A dual-role Printer row (e.g. Core One) IS its own toolhead and is registered
+# in printer_map as its own load position (L271 Phase 3). It is therefore a valid
+# slot-bind target even though its Type is 'Printer', not a toolhead type — the
+# move path already treats 'Printer' targets as toolheads (see logic.py
+# is_toolhead). validate_slot_targets accepts it and lets the printer_map
+# membership check be the real gate.
+PRINTER_ROW_TYPE = 'Printer'
+
 # L271 Phase 5 — shelf hierarchy: Room → Wall Shelf → Row → Section. A Wall Shelf
 # groups Rows; a Row groups Sections. Wall Shelf + Row are STRUCTURAL grouping
 # rows — they hold NO spools, so they're excluded from the spool-assignment
@@ -1210,7 +1218,14 @@ def validate_slot_targets(slot_targets, loc_list, printer_map):
         if not row:
             errors.append((str(slot), target, "unknown location"))
             continue
-        if row.get('Type') not in TOOLHEAD_TYPES:
+        # Accept toolhead-typed rows AND dual-role Printer rows (Core One). The
+        # printer_map membership check below is the real gate: a non-dual-role
+        # Printer PARENT row (e.g. XL, whose load targets are XL-1..XL-5) is
+        # absent from printer_map and still gets rejected there with a clearer
+        # reason, while CORE1 (registered in printer_map as its own position)
+        # passes. Mirrors perform_smart_move's is_toolhead, which already
+        # treats 'Printer' as a valid deploy target.
+        if row.get('Type') not in TOOLHEAD_TYPES and row.get('Type') != PRINTER_ROW_TYPE:
             errors.append((str(slot), target, f"type '{row.get('Type')}' is not a toolhead"))
             continue
         if tgt_norm not in {k.upper() for k in printer_map.keys()}:
