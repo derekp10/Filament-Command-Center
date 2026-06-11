@@ -143,8 +143,19 @@ def download_gcode_content(ip_address: str, api_key: str, filename: str) -> Opti
     reached position — a Range tail (as `download_gcode_and_parse_usage` uses to
     grab only the footer) won't do. After a print STOPS the file un-404s, so this
     works at cancel time. Returns the text, or None on failure.
+
+    Binary gcode (`.bgcode`) is rejected up front: its body is compressed
+    (heatshrink/MeatPack), so `resp.text` would decode to garbage and the
+    line-by-line prefix-parse can't read the `G1 ... E` moves. We return None so
+    the caller surfaces a clear "couldn't compute partial" signal instead of
+    silently logging a fabricated 0g (the footer-only path in
+    `download_gcode_and_parse_usage` tolerates bgcode, but a PREFIX parse can't).
     """
     filename = filename.lstrip('/')
+    if filename.lower().endswith('.bgcode'):
+        print(f"download_gcode_content: binary gcode not parseable for a "
+              f"prefix-parse: {filename}")
+        return None
     url = f"http://{ip_address}/{filename}"
     headers = {'X-Api-Key': api_key} if api_key else {}
     try:
@@ -355,6 +366,108 @@ def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dic
     except Exception:
         pass
 
+    return None
+
+
+def _parse_v1_job(body: Dict) -> Optional[Dict]:
+    """Normalize a PrusaLink ``/api/v1/job`` body to the tracker's shape."""
+    f = body.get("file") or {}
+    refs = f.get("refs") or {}
+    # refs.download is the storage-relative URL PrusaLink serves the gcode at
+    # (e.g. "/usb/Print.bgcode"); path/name are fallbacks for odd firmware.
+    filename = refs.get("download") or f.get("path") or f.get("name")
+    if not filename:
+        return None
+    prog = body.get("progress")
+    if prog is None:
+        prog = (body.get("job") or {}).get("progress")
+    try:
+        progress = max(0.0, min(1.0, float(prog) / 100.0)) if prog is not None else 0.0
+    except (TypeError, ValueError):
+        progress = 0.0
+    return {
+        "job_id": body.get("id"),
+        "filename": filename,
+        "progress": progress,
+        "file_meta": f.get("meta") or {},
+    }
+
+
+def _parse_legacy_job(body: Dict) -> Optional[Dict]:
+    """Normalize a legacy PrusaLink ``/api/job`` body (older firmware)."""
+    job = body.get("job") or {}
+    f = job.get("file") or {}
+    filename = f.get("path") or f.get("name") or f.get("display")
+    if not filename:
+        return None
+    completion = (body.get("progress") or {}).get("completion")
+    try:
+        # Legacy `completion` is a 0..1 fraction on most firmware but a
+        # 0..100 percent on some builds — normalize defensively.
+        c = float(completion) if completion is not None else 0.0
+        progress = c / 100.0 if c > 1.0 else c
+        progress = max(0.0, min(1.0, progress))
+    except (TypeError, ValueError):
+        progress = 0.0
+    return {
+        "job_id": body.get("id") or job.get("id"),
+        "filename": filename,
+        "progress": progress,
+        "file_meta": {},
+    }
+
+
+def get_printer_job(filabridge_url: str, printer_name: str) -> Optional[Dict]:
+    """Best-effort fetch of the CURRENTLY-LOADED print job for a named printer.
+
+    ``get_printer_state`` returns only the state enum; the cancelled-print
+    detector (FilaBridge absorption design §9.3 / build slice 2a) also needs the
+    running job's filename, id, and byte-progress to compute the PARTIAL deduct.
+    PrusaLink tears the job block down the instant a print STOPS, so the tracker
+    calls this on every IN-PROGRESS poll and latches the values for use on the
+    later terminal edge — reading it post-cancel returns nothing.
+
+    Returns ``{"job_id", "filename", "progress", "file_meta"}`` or None when
+    there's no active job or the printer is unreachable. ``progress`` is the
+    gcode FILE-BYTE fraction 0.0..1.0 (PrusaLink ``progress`` percent / 100 —
+    the same proxy ``parse_partial_filament_usage`` slices on). ``filename`` is
+    the storage-relative path PrusaLink serves the gcode at
+    (``file.refs.download``, else ``file.path`` / ``file.name``), ready to hand
+    to ``download_gcode_content``. Fails open (None) on any error.
+    """
+    creds = fetch_printer_credentials(filabridge_url, printer_name)
+    if not creds or not creds.get("ip_address"):
+        return None
+    ip = creds["ip_address"]
+    api_key = creds.get("api_key")
+    headers = {"X-Api-Key": api_key} if api_key else {}
+
+    # v1 job — {"id", "progress"(0-100), "file": {"refs": {"download"}, "path",
+    # "name", "meta": {...}}, ...}. 204/empty body when the printer is idle.
+    try:
+        with perf_trace.span("prusalink.job"):
+            r = requests.get(f"http://{ip}/api/v1/job", headers=headers, timeout=2)
+        if r.status_code == 204:
+            return None  # no active job
+        if r.ok and r.content:
+            parsed = _parse_v1_job(r.json() or {})
+            if parsed:
+                return parsed
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        # Unreachable — the legacy endpoint lives on the same host and will
+        # time out too; skip it (same L3 fix-B reasoning as the state probe).
+        return None
+    except Exception:
+        pass  # odd/empty body — fall through to the legacy shape
+
+    # Legacy /api/job — {"job": {"file": {"name","path"}}, "progress": {"completion"}}
+    try:
+        with perf_trace.span("prusalink.job"):
+            r = requests.get(f"http://{ip}/api/job", headers=headers, timeout=2)
+        if r.ok and r.content:
+            return _parse_legacy_job(r.json() or {})
+    except Exception:
+        pass
     return None
 
 

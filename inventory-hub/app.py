@@ -12,6 +12,7 @@ import os
 import json
 import logging
 import time
+import threading
 
 def _compute_build_mtime():
     """L42 fix: derive a freshness-stamp from the newest source-file mtime.
@@ -4099,18 +4100,38 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
             return {"status": "error", "reason": "no credentials", "job_id": job_id}
         ip_address, api_key = creds.get('ip_address'), creds.get('api_key')
 
+    pct = max(0.0, min(1.0, float(reached_fraction))) * 100
     content = prusalink_api.download_gcode_content(ip_address, api_key, filename)
     if not content:
+        # Download failed OR the file is binary gcode (.bgcode) we can't
+        # prefix-parse. Surface it VISIBLY so a cancel never silently goes
+        # un-deducted — Derek should weigh the spool. NOT recorded in the ledger
+        # so a later retry (if the file becomes parseable) can still deduct.
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+            f"couldn't fetch/parse the gcode (binary .bgcode or printer "
+            f"unreachable); no partial deduct. Weigh the spool to true it up.",
+            "WARNING", "ffaa00")
         return {"status": "error", "reason": "gcode download failed", "job_id": job_id}
 
     usage_map = prusalink_api.parse_partial_filament_usage(content, reached_fraction)
-    pct = max(0.0, min(1.0, float(reached_fraction))) * 100
 
     if not usage_map:
-        state.add_log_entry(
-            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — no "
-            f"partial usage to deduct (cancelled before extrusion or no metadata).",
-            "INFO")
+        # Distinguish a genuine zero-extrusion cancel (INFO, expected) from a
+        # gcode whose per-tool 'filament used' footer we couldn't read (WARNING —
+        # the tool DID extrude but we can't measure it, so Derek should weigh).
+        has_footer = ('filament used [g]' in content and 'filament used [mm]' in content)
+        if has_footer:
+            state.add_log_entry(
+                f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+                f"no partial usage to deduct (cancelled before any extrusion).",
+                "INFO")
+        else:
+            state.add_log_entry(
+                f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+                f"gcode has no recognized per-tool 'filament used' footer "
+                f"(non-Prusa slicer?); can't compute the partial. Weigh the spool.",
+                "WARNING", "ffaa00")
         print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                           scale=reached_fraction, grams=0)
         return {"status": "no_usage", "job_id": job_id}
@@ -5310,6 +5331,158 @@ def _pulse_section_manage(loc_id):
     }
 
 
+# ---------------------------------------------------------------------------
+# Cancelled-print detection — rides the dashboard-pulse printer-state probe
+# (FilaBridge absorption design §9.3 / build slice 2a).
+#
+# _pulse_section_printer_status already probes every printer's PrusaLink state
+# on each heartbeat. We piggyback on that probe: while a print is IN PROGRESS we
+# latch its filename / job_id / monotonic byte-progress (PrusaLink tears the job
+# block down the instant the print STOPS, so we MUST capture it beforehand),
+# and on the →STOPPED/ERROR edge we fire deduct_cancelled_print with the latched
+# values on a background thread. The persistent print_deduct_ledger keeps the
+# deduct exactly-once across ticks and restarts.
+#
+# First ship is cancel-only (STOPPED/ERROR). FINISHED stays with FilaBridge
+# until the Phase-2 atomic cutover — firing on FINISHED here would
+# double-deduct prints FilaBridge already deducts.
+# ---------------------------------------------------------------------------
+
+# {printer_name: {"state": str, "job_id", "filename", "progress", "file_meta"}}
+_PRINT_TRACKER = {}
+_PRINT_TRACKER_LOCK = threading.Lock()
+
+# A print is "running" (so we latch the job) in any of these states — a pause is
+# still running. Mirrors the frontend Phase-0 _PRINT_INPROGRESS_STATES.
+_INPROGRESS_PRINT_STATES = frozenset({"PRINTING", "PAUSING", "RESUMING", "PAUSED"})
+# Terminal states that, reached FROM an in-progress state, mean a CANCEL/abort.
+# Cancel-only first ship (see header) — FINISHED/IDLE completion is excluded so
+# FilaBridge still owns completed-print deducts until the Phase-2 cutover.
+_CANCEL_TERMINAL_STATES = frozenset({"STOPPED", "ERROR"})
+
+# Tests flip this to False so the deduct runs synchronously + deterministically
+# instead of on a daemon thread.
+_CANCEL_DEDUCT_RUN_ASYNC = True
+
+
+def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
+    """Action taken when a cancel edge is detected. SLICE 2a: auto-apply the
+    partial deduct. (Slice 5 swaps this body for a preview-and-confirm gate; the
+    detector reaches it only through _dispatch_cancel_edge, so its threading
+    contract stays stable regardless of what this body does.)"""
+    try:
+        deduct_cancelled_print(printer_name, filename, job_id, progress, fb_url=fb_url)
+    except Exception as e:
+        try:
+            state.add_log_entry(
+                f"❌ Cancelled-print deduct failed for {printer_name} "
+                f"('{filename}'): {e}", "ERROR", "ff4444")
+        except Exception:
+            pass
+
+
+def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url):
+    """Run the cancel-edge action OFF the heartbeat thread, so a slow gcode
+    download never stalls the pulse. Synchronous when _CANCEL_DEDUCT_RUN_ASYNC
+    is False (tests)."""
+    if _CANCEL_DEDUCT_RUN_ASYNC:
+        threading.Thread(
+            target=_on_cancel_edge,
+            args=(printer_name, filename, job_id, progress, fb_url),
+            daemon=True).start()
+    else:
+        _on_cancel_edge(printer_name, filename, job_id, progress, fb_url)
+
+
+def _track_print_edge(printer_name, state_info, fb_url):
+    """Latch the active job while printing; fire the cancelled-print partial
+    deduct on the →STOPPED/ERROR edge. Called once per printer per heartbeat
+    from fetch_for_printer (best-effort — the caller wraps it so a failure never
+    breaks the Printer Status widget). See the section header for the full
+    rationale.
+
+    `state_info is None` (offline/unreachable) is NOT treated as an edge — we
+    leave any existing latch intact so a real STOPPED reached across a transient
+    offline blip still deducts with the pre-blip latch.
+    """
+    if state_info is None:
+        return
+    cur = str(state_info.get('state', '')).upper()
+    if not cur:
+        # An empty state string can't happen from _probe_printer_state (it
+        # returns None or a non-empty state), so this only guards a malformed
+        # dict. Treat it like offline: don't update the latch, so a real
+        # terminal state on the next poll still detects the edge.
+        return
+
+    if cur in _INPROGRESS_PRINT_STATES:
+        # Latch the live job — the network call stays OUTSIDE the lock so a slow
+        # printer doesn't serialize the other printers' tracker updates.
+        job = None
+        try:
+            job = prusalink_api.get_printer_job(fb_url, printer_name)
+        except Exception:
+            job = None
+        with _PRINT_TRACKER_LOCK:
+            entry = _PRINT_TRACKER.setdefault(printer_name, {})
+            entry['state'] = cur
+            if job:
+                if job.get('filename'):
+                    entry['filename'] = job['filename']
+                # Reject blank/zero ids (None/''/'0'/0) — same "blank job" set
+                # print_deduct_ledger keys on, so the tracker and the ledger
+                # agree on what can't be deduped restart-safely.
+                if job.get('job_id') not in (None, '', '0', 0):
+                    entry['job_id'] = job['job_id']
+                # file_meta (the slicer's per-tool 'filament used' estimate) is
+                # latched for slice 5's preview UX, which shows the estimate
+                # alongside the computed partial without re-fetching the job.
+                if job.get('file_meta'):
+                    entry['file_meta'] = job['file_meta']
+                prog = job.get('progress')
+                if isinstance(prog, (int, float)):
+                    entry['progress'] = max(float(entry.get('progress', 0.0)), float(prog))
+        return
+
+    # Non-in-progress state: detect a cancel edge against the latched prev state.
+    fire = None
+    cancel_without_latch = False
+    with _PRINT_TRACKER_LOCK:
+        entry = _PRINT_TRACKER.get(printer_name)
+        prev = entry.get('state') if entry else None
+        # First ship is CANCEL-ONLY: _CANCEL_TERMINAL_STATES is {STOPPED, ERROR}
+        # and deliberately EXCLUDES FINISHED/IDLE — FilaBridge still owns
+        # completed-print deducts until the Phase-2 atomic cutover, so firing
+        # here on a completion would double-deduct. Don't widen this set without
+        # cutting FilaBridge's monitor over (scoping doc §9.5).
+        is_cancel_edge = (prev in _INPROGRESS_PRINT_STATES
+                          and cur in _CANCEL_TERMINAL_STATES)
+        if is_cancel_edge and entry and entry.get('filename'):
+            fire = {
+                'filename': entry.get('filename'),
+                'job_id': entry.get('job_id', ''),
+                'progress': float(entry.get('progress', 0.0)),
+            }
+            # Reset the latch to the terminal state so the edge can't re-fire.
+            _PRINT_TRACKER[printer_name] = {'state': cur}
+        else:
+            if is_cancel_edge:
+                cancel_without_latch = True
+            if entry is not None:
+                entry['state'] = cur
+            else:
+                _PRINT_TRACKER[printer_name] = {'state': cur}
+
+    if cancel_without_latch:
+        state.add_log_entry(
+            f"🛑 Cancel detected on {printer_name}, but no active job was latched "
+            f"(print too short to sample between heartbeats) — no partial deduct.",
+            "INFO")
+    if fire:
+        _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
+                              fire['progress'], fb_url)
+
+
 def _pulse_section_printer_status():
     """Server-side aggregator for the Printer Status widget. Replaces
     the client-side fan-out of printer_map + N x toolhead_slots +
@@ -5387,6 +5560,13 @@ def _pulse_section_printer_status():
             state_info = prusalink_api.get_printer_state(fb_url, name)
         except Exception:
             state_info = None
+        # Cancelled-print detection rides this same probe (FilaBridge §9 / 2a):
+        # latch the live job while printing, fire the partial deduct on a
+        # →STOPPED/ERROR edge. Wrapped so it never breaks the widget.
+        try:
+            _track_print_edge(name, state_info, fb_url)
+        except Exception:
+            pass
         return name, {'toolheads': toolheads, 'state': state_info}
 
     out = {}

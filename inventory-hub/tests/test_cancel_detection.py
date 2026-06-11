@@ -1,0 +1,482 @@
+"""Simulation tests for the live-pulse cancelled-print DETECTION wiring
+(FilaBridge absorption §9.3 / build slice 2a).
+
+The detection layer rides the dashboard-pulse printer-state probe: it latches
+the running job (filename / job_id / monotonic byte-progress) while a print is
+in progress, and fires the partial deduct on the →STOPPED/ERROR edge. These
+tests drive the edge logic + `get_printer_job` parsing + the full
+pulse→detect→deduct path with a MOCKED PrusaLink + Spoolman, so no physical
+cancelled print is needed to validate it (Derek's "active test pattern": catch
+issues in CI, burn filament only for a final sign-off).
+"""
+from __future__ import annotations
+
+import os
+import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import app as app_module  # noqa: E402
+import prusalink_api  # noqa: E402
+import print_deduct_ledger  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_tracker():
+    """Each test starts with an empty PRINT_TRACKER and synchronous dispatch
+    (so the cancel-edge action runs inline, not on a daemon thread)."""
+    app_module._PRINT_TRACKER.clear()
+    prev_async = app_module._CANCEL_DEDUCT_RUN_ASYNC
+    app_module._CANCEL_DEDUCT_RUN_ASYNC = False
+    try:
+        yield
+    finally:
+        app_module._CANCEL_DEDUCT_RUN_ASYNC = prev_async
+        app_module._PRINT_TRACKER.clear()
+
+
+@pytest.fixture
+def capture_edge():
+    """Replace the cancel-edge ACTION with a capturing mock, so the detection
+    tests assert WHAT fires (and with which latched values) independently of the
+    deduct itself. This seam (`_on_cancel_edge`) is stable across slice 2a/5."""
+    m = MagicMock()
+    with patch.object(app_module, "_on_cancel_edge", m):
+        yield m
+
+
+def _state(s):
+    return {"state": s, "is_active": s in ("PRINTING", "PAUSING", "RESUMING")}
+
+
+def _job(filename="/usb/print.gcode", job_id=7, progress=0.5, meta=None):
+    return {"filename": filename, "job_id": job_id, "progress": progress,
+            "file_meta": meta or {}}
+
+
+class _Resp:
+    """Faithful-enough stand-in for requests.Response: exposes status_code, ok,
+    content, .text (real Response decodes the body to a string), and .json()."""
+    def __init__(self, status_code=200, body=None, content=b"x"):
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 300
+        self.content = content if status_code != 204 else b""
+        self._body = body or {}
+
+    @property
+    def text(self):
+        import json as _json
+        if isinstance(self._body, str):
+            return self._body
+        return _json.dumps(self._body)
+
+    def json(self):
+        return self._body
+
+
+# ---------------------------------------------------------------------------
+# get_printer_job — /api/v1/job parsing
+# ---------------------------------------------------------------------------
+
+def _creds(*a, **k):
+    return {"ip_address": "1.2.3.4", "api_key": "k"}
+
+
+def test_get_printer_job_parses_v1():
+    body = {
+        "id": 42, "state": "PRINTING", "progress": 37.5,
+        "file": {
+            "refs": {"download": "/usb/MyPrint.bgcode"},
+            "name": "MyPrint.bgcode", "path": "/usb/MyPrint.bgcode",
+            "meta": {"filament used [g]": "40, 32", "filament used [mm]": "20, 16"},
+        },
+    }
+    with patch.object(prusalink_api, "fetch_printer_credentials", _creds), \
+         patch.object(prusalink_api.requests, "get", return_value=_Resp(200, body)):
+        out = prusalink_api.get_printer_job("http://fb", "XL")
+    assert out["job_id"] == 42
+    assert out["filename"] == "/usb/MyPrint.bgcode"   # refs.download preferred
+    assert abs(out["progress"] - 0.375) < 1e-9        # percent / 100
+    assert out["file_meta"]["filament used [g]"] == "40, 32"
+
+
+def test_get_printer_job_prefers_refs_download_over_name():
+    body = {"id": 1, "progress": 10,
+            "file": {"refs": {"download": "/usb/A.gcode"}, "name": "A.gcode"}}
+    with patch.object(prusalink_api, "fetch_printer_credentials", _creds), \
+         patch.object(prusalink_api.requests, "get", return_value=_Resp(200, body)):
+        out = prusalink_api.get_printer_job("http://fb", "XL")
+    assert out["filename"] == "/usb/A.gcode"
+
+
+def test_get_printer_job_idle_204_returns_none():
+    with patch.object(prusalink_api, "fetch_printer_credentials", _creds), \
+         patch.object(prusalink_api.requests, "get", return_value=_Resp(204)):
+        assert prusalink_api.get_printer_job("http://fb", "XL") is None
+
+
+def test_get_printer_job_legacy_fallback():
+    """v1 404 (firmware lacks it) → legacy /api/job parsed."""
+    legacy = {"job": {"file": {"name": "old.gcode", "path": "/usb/old.gcode"}},
+              "progress": {"completion": 0.42}}
+
+    def _get(url, **k):
+        if "/api/v1/job" in url:
+            return _Resp(404, {})
+        return _Resp(200, legacy)
+
+    with patch.object(prusalink_api, "fetch_printer_credentials", _creds), \
+         patch.object(prusalink_api.requests, "get", side_effect=_get):
+        out = prusalink_api.get_printer_job("http://fb", "XL")
+    assert out["filename"] == "/usb/old.gcode"
+    assert abs(out["progress"] - 0.42) < 1e-9
+    assert out["job_id"] is None   # legacy has no numeric id → blank job
+
+
+def test_get_printer_job_no_creds_returns_none():
+    with patch.object(prusalink_api, "fetch_printer_credentials", return_value=None):
+        assert prusalink_api.get_printer_job("http://fb", "XL") is None
+
+
+# ---------------------------------------------------------------------------
+# _track_print_edge — latch + edge detection (action seam mocked)
+# ---------------------------------------------------------------------------
+
+def _drive(states, jobs=None):
+    """Feed a sequence of (state, job) through _track_print_edge for one
+    printer. `jobs` maps a state-index to the get_printer_job return."""
+    jobs = jobs or {}
+    for i, st in enumerate(states):
+        job_ret = jobs.get(i, _job())
+        with patch.object(app_module.prusalink_api, "get_printer_job",
+                          return_value=job_ret):
+            app_module._track_print_edge("XL", _state(st) if st else None, "http://fb")
+
+
+def test_printing_then_stopped_fires_once(capture_edge):
+    _drive(["PRINTING", "STOPPED"],
+           jobs={0: _job(filename="/usb/p.gcode", job_id=9, progress=0.4)})
+    assert capture_edge.call_count == 1
+    args = capture_edge.call_args.args
+    # _on_cancel_edge(printer, filename, job_id, progress, fb_url)
+    assert args[0] == "XL"
+    assert args[1] == "/usb/p.gcode"
+    assert args[2] == 9
+    assert abs(args[3] - 0.4) < 1e-9
+
+
+def test_error_state_fires(capture_edge):
+    _drive(["PRINTING", "ERROR"], jobs={0: _job(progress=0.6)})
+    assert capture_edge.call_count == 1
+    assert abs(capture_edge.call_args.args[3] - 0.6) < 1e-9
+
+
+def test_monotonic_progress_latched(capture_edge):
+    # 0.2 then 0.6 then a regressed 0.4 — the edge must use the MAX (0.6).
+    _drive(["PRINTING", "PRINTING", "PRINTING", "STOPPED"],
+           jobs={0: _job(progress=0.2), 1: _job(progress=0.6), 2: _job(progress=0.4)})
+    assert capture_edge.call_count == 1
+    assert abs(capture_edge.call_args.args[3] - 0.6) < 1e-9
+
+
+def test_finished_does_not_fire(capture_edge):
+    """First ship is cancel-only — a completed print (FINISHED) stays with
+    FilaBridge, so the detector must NOT fire on it."""
+    _drive(["PRINTING", "FINISHED"])
+    assert capture_edge.call_count == 0
+
+
+def test_idle_after_printing_does_not_fire(capture_edge):
+    """A bare IDLE (no STOPPED) is excluded from the cancel-only first ship."""
+    _drive(["PRINTING", "IDLE"])
+    assert capture_edge.call_count == 0
+
+
+def test_pause_resume_then_stopped_fires(capture_edge):
+    """A pause is still in-progress, so a print paused then cancelled still
+    deducts (with the latest latch)."""
+    _drive(["PRINTING", "PAUSED", "PRINTING", "STOPPED"],
+           jobs={0: _job(progress=0.3), 2: _job(progress=0.55, job_id=12)})
+    assert capture_edge.call_count == 1
+    assert capture_edge.call_args.args[2] == 12
+    assert abs(capture_edge.call_args.args[3] - 0.55) < 1e-9
+
+
+def test_offline_blip_is_bridged(capture_edge):
+    """PRINTING → offline(None) → STOPPED: the offline blip is not an edge, and
+    the pre-blip latch still drives the deduct on the real STOPPED."""
+    with patch.object(app_module.prusalink_api, "get_printer_job",
+                      return_value=_job(filename="/usb/b.gcode", job_id=3, progress=0.7)):
+        app_module._track_print_edge("XL", _state("PRINTING"), "http://fb")
+    app_module._track_print_edge("XL", None, "http://fb")        # offline
+    app_module._track_print_edge("XL", _state("STOPPED"), "http://fb")
+    assert capture_edge.call_count == 1
+    assert capture_edge.call_args.args[1] == "/usb/b.gcode"
+    assert abs(capture_edge.call_args.args[3] - 0.7) < 1e-9
+
+
+def test_no_double_fire_when_stopped_persists(capture_edge):
+    _drive(["PRINTING", "STOPPED", "STOPPED"])
+    assert capture_edge.call_count == 1   # second STOPPED tick: prev not in-progress
+
+
+def test_stopped_without_prior_print_does_not_fire(capture_edge):
+    """A STOPPED seen with no preceding in-progress state is not a cancel edge
+    (printer was already idle/stopped when the dashboard loaded)."""
+    _drive(["STOPPED"])
+    assert capture_edge.call_count == 0
+
+
+def test_cancel_without_latched_job_logs_and_skips(capture_edge):
+    """PRINTING with no job latch-able (get_printer_job returns None) then
+    STOPPED — too-short-to-sample: no deduct, but an INFO log so it's visible."""
+    with patch.object(app_module.prusalink_api, "get_printer_job", return_value=None):
+        app_module._track_print_edge("XL", _state("PRINTING"), "http://fb")
+    with patch.object(app_module.state, "add_log_entry") as log:
+        app_module._track_print_edge("XL", _state("STOPPED"), "http://fb")
+    assert capture_edge.call_count == 0
+    assert log.call_count == 1
+    assert "no active job was latched" in log.call_args.args[0]
+
+
+def test_second_print_after_cancel_fires_again(capture_edge):
+    """After a cancel resets the latch, a NEW print that is itself cancelled
+    must fire again (the reset doesn't wedge the tracker)."""
+    _drive(["PRINTING", "STOPPED"], jobs={0: _job(job_id=1)})
+    _drive(["PRINTING", "STOPPED"], jobs={0: _job(job_id=2)})
+    assert capture_edge.call_count == 2
+    assert capture_edge.call_args_list[1].args[2] == 2
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: pulse → detect → real deduct_cancelled_print → Spoolman
+# ---------------------------------------------------------------------------
+
+_DEAD = "; " + ("pad " * 40) + "\n"
+
+
+def _cancelled_gcode():
+    """T0 extrudes 10mm before the cancel, 10mm after; T1 only after. footer
+    mm=[20,16] g=[40,32] → 2.0 g/mm. Returns (gcode, reached_fraction)."""
+    prefix = "M83\nT0\nG1 X10 E5\nG1 X20 E5\n"
+    suffix = ("G1 X30 E5\nG1 X40 E5\nT1\nG1 E16\n"
+              "; filament used [mm] = 20, 16\n; filament used [g] = 40, 32\n")
+    gcode = prefix + _DEAD + suffix
+    cut = len(prefix.encode("utf-8")) + len(_DEAD.encode("utf-8")) // 2
+    return gcode, cut / len(gcode.encode("utf-8"))
+
+
+@pytest.fixture
+def ledger_tmp(tmp_path, monkeypatch):
+    monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
+
+
+def test_pulse_printing_then_stopped_deducts_end_to_end(ledger_tmp):
+    """Drive the WHOLE path: a PRINTING pulse latches the job via the live
+    probe, a STOPPED pulse fires the real deduct_cancelled_print, and Spoolman
+    sees a per-tool partial deduct (untouched head skipped)."""
+    gcode, frac = _cancelled_gcode()
+    printer_map = {
+        "XL-1": {"printer_name": "XL", "position": 0},
+        "XL-2": {"printer_name": "XL", "position": 1},
+    }
+    spools = {
+        100: {"id": 100, "used_weight": 100.0, "initial_weight": 1000.0},
+        200: {"id": 200, "used_weight": 50.0, "initial_weight": 1000.0},
+    }
+    spools_at = {"XL-1": [100], "XL-2": [200]}
+    captured = {"updates": []}
+
+    def _update(sid, data):
+        captured["updates"].append((sid, dict(data)))
+        return {"id": sid, **data}
+
+    # get_printer_state: PRINTING on pulse 1, STOPPED on pulse 2.
+    state_seq = iter([_state("PRINTING"), _state("STOPPED")])
+    job_ret = _job(filename="job.gcode", job_id="J-1", progress=frac)
+
+    ctx = [
+        patch.object(app_module.config_loader, "load_config", return_value={}),
+        patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map),
+        patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
+        patch.object(app_module.locations_db, "get_bindings_for_machine",
+                     return_value={"printer_name": "XL", "toolheads": {}, "printer_pool": []}),
+        patch.object(app_module.spoolman_api, "bucket_spools_by_location", return_value={}),
+        patch.object(app_module.prusalink_api, "get_printer_state",
+                     side_effect=lambda *a, **k: next(state_seq)),
+        patch.object(app_module.prusalink_api, "get_printer_job", return_value=job_ret),
+        patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds),
+        patch.object(app_module.prusalink_api, "download_gcode_content", return_value=gcode),
+        patch.object(app_module.spoolman_api, "get_spools_at_location",
+                     side_effect=lambda loc: spools_at.get(str(loc).upper(), [])),
+        patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))),
+        patch.object(app_module.spoolman_api, "update_spool", side_effect=_update),
+        patch.object(app_module.spoolman_api, "format_spool_display",
+                     return_value={"text": "#s", "color": "ff0000"}),
+    ]
+    for m in ctx:
+        m.start()
+    try:
+        app_module._pulse_section_printer_status()   # PRINTING → latch
+        app_module._pulse_section_printer_status()   # STOPPED → fire deduct
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+
+    updates = {sid: data for sid, data in captured["updates"]}
+    assert 100 in updates, captured["updates"]
+    assert abs(updates[100]["used_weight"] - 120.0) < 1e-6   # 100 + 10mm*2.0
+    assert 200 not in updates, "untouched toolhead's spool must not be deducted"
+    assert set(updates[100].keys()) == {"used_weight"}       # archive-on-empty discipline
+    assert print_deduct_ledger.was_deducted("XL", "J-1") is True
+
+
+# ---------------------------------------------------------------------------
+# Hardening coverage (from the slice-2a adversarial review)
+# ---------------------------------------------------------------------------
+
+def test_continuous_get_printer_job_failure_skips_cancel(capture_edge):
+    """If get_printer_job RAISES on every printing poll (timeout/500), nothing
+    latches; the cancel can't be computed and is skipped with a visible log —
+    not a crash, not a silent fire with stale data."""
+    import requests
+    with patch.object(app_module.prusalink_api, "get_printer_job",
+                      side_effect=requests.exceptions.Timeout("boom")):
+        app_module._track_print_edge("XL", _state("PRINTING"), "http://fb")
+        app_module._track_print_edge("XL", _state("PRINTING"), "http://fb")
+    with patch.object(app_module.state, "add_log_entry") as log:
+        app_module._track_print_edge("XL", _state("STOPPED"), "http://fb")
+    assert capture_edge.call_count == 0
+    assert log.call_count == 1
+    assert "no active job was latched" in log.call_args.args[0]
+
+
+def test_legacy_blank_job_id_cancel_still_fires(capture_edge):
+    """A legacy-firmware job (no numeric id → job_id None) must still fire the
+    cancel; the latch keeps the filename even though the id is blank (the
+    ledger then deducts once from the edge, accepting the §9.4 restart window)."""
+    _drive(["PRINTING", "STOPPED"],
+           jobs={0: _job(filename="/usb/legacy.gcode", job_id=None, progress=0.5)})
+    assert capture_edge.call_count == 1
+    args = capture_edge.call_args.args
+    assert args[1] == "/usb/legacy.gcode"
+    assert args[2] == ""          # blank id defaulted at fire time
+    assert abs(args[3] - 0.5) < 1e-9
+
+
+def test_zero_job_id_not_latched(capture_edge):
+    """A spurious job_id of 0 / '0' is treated as blank (matches the ledger's
+    _is_blank_job set) — it must not be latched as a real id."""
+    _drive(["PRINTING", "STOPPED"],
+           jobs={0: _job(filename="/usb/z.gcode", job_id=0, progress=0.3)})
+    assert capture_edge.call_count == 1
+    assert capture_edge.call_args.args[2] == ""   # 0 rejected → blank default
+
+
+# ---------------------------------------------------------------------------
+# download_gcode_content — binary-gcode guard + deduct messaging
+# ---------------------------------------------------------------------------
+
+def test_download_gcode_content_rejects_bgcode():
+    """Binary gcode can't be prefix-parsed (compressed body) → return None up
+    front so the caller surfaces a clear signal instead of garbage."""
+    called = {"n": 0}
+
+    def _get(*a, **k):
+        called["n"] += 1
+        return _Resp(200, content=b"BGCD\x00\x01")
+
+    with patch.object(prusalink_api.requests, "get", side_effect=_get):
+        assert prusalink_api.download_gcode_content("1.2.3.4", "k", "/usb/Print.bgcode") is None
+    assert called["n"] == 0, "must short-circuit before any HTTP fetch"
+
+
+def test_deduct_bgcode_cancel_logs_visible_warning_not_silent(ledger_tmp):
+    """A .bgcode cancel can't be computed — it must surface a VISIBLE warning so
+    the cancel isn't silently un-deducted, and must NOT be ledger-recorded
+    (download could succeed on a later parseable file)."""
+    with patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
+         patch.object(app_module.prusalink_api, "download_gcode_content", return_value=None), \
+         patch.object(app_module.state, "add_log_entry") as log:
+        out = app_module.deduct_cancelled_print(
+            "XL", "/usb/Print.bgcode", "J-9", 0.4, fb_url="http://fb",
+            ip_address="1.2.3.4", api_key="k")
+    assert out["status"] == "error"
+    assert log.call_count == 1
+    msg, level = log.call_args.args[0], log.call_args.args[1]
+    assert level == "WARNING"
+    assert "Weigh the spool" in msg
+    assert print_deduct_ledger.was_deducted("XL", "J-9") is False
+
+
+def test_deduct_unrecognized_footer_warns_distinctly(ledger_tmp):
+    """Gcode present but with no Prusa 'filament used' footer → WARNING (the
+    tool extruded but we can't measure it), distinct from a true no-extrusion
+    cancel (INFO)."""
+    no_footer = "M83\nT0\nG1 X10 E5\n; some non-prusa slicer\n"
+    with patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
+         patch.object(app_module.prusalink_api, "download_gcode_content", return_value=no_footer), \
+         patch.object(app_module.state, "add_log_entry") as log:
+        out = app_module.deduct_cancelled_print(
+            "XL", "x.gcode", "J-10", 0.9, fb_url="http://fb",
+            ip_address="1.2.3.4", api_key="k")
+    assert out["status"] == "no_usage"
+    assert log.call_args.args[1] == "WARNING"
+    assert "no recognized per-tool 'filament used' footer" in log.call_args.args[0]
+
+
+# ---------------------------------------------------------------------------
+# Real daemon-thread dispatch (production path, not the sync test shortcut)
+# ---------------------------------------------------------------------------
+
+def test_cancel_fires_exactly_once_on_real_daemon_thread(ledger_tmp):
+    """Exercise the ACTUAL async dispatch (_CANCEL_DEDUCT_RUN_ASYNC=True): a
+    PRINTING→STOPPED edge spawns the daemon thread, which deducts exactly once.
+    Proves the thread path (not just the sync shortcut the other tests use)."""
+    import time
+    gcode, frac = _cancelled_gcode()
+    printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
+    spools = {100: {"id": 100, "used_weight": 100.0, "initial_weight": 1000.0}}
+    captured = {"updates": []}
+
+    def _update(sid, data):
+        captured["updates"].append((sid, dict(data)))
+        return {"id": sid, **data}
+
+    app_module._CANCEL_DEDUCT_RUN_ASYNC = True   # fixture restores it
+    ctx = [
+        patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map),
+        patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds),
+        patch.object(app_module.prusalink_api, "download_gcode_content", return_value=gcode),
+        patch.object(app_module.spoolman_api, "get_spools_at_location",
+                     side_effect=lambda loc: [100] if str(loc).upper() == "XL-1" else []),
+        patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))),
+        patch.object(app_module.spoolman_api, "update_spool", side_effect=_update),
+        patch.object(app_module.spoolman_api, "format_spool_display",
+                     return_value={"text": "#s", "color": "ff0000"}),
+    ]
+    for m in ctx:
+        m.start()
+    try:
+        with patch.object(app_module.prusalink_api, "get_printer_job",
+                          return_value=_job(filename="job.gcode", job_id="T-1", progress=frac)):
+            app_module._track_print_edge("XL", _state("PRINTING"), "http://fb")
+        app_module._track_print_edge("XL", _state("STOPPED"), "http://fb")  # dispatches a thread
+        # Wait for the daemon thread to commit the ledger (deduct done).
+        deadline = time.time() + 3.0
+        while time.time() < deadline and not print_deduct_ledger.was_deducted("XL", "T-1"):
+            time.sleep(0.02)
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+
+    assert print_deduct_ledger.was_deducted("XL", "T-1") is True, "daemon deduct never committed"
+    assert len(captured["updates"]) == 1, captured["updates"]
+    assert abs(captured["updates"][0][1]["used_weight"] - 120.0) < 1e-6
