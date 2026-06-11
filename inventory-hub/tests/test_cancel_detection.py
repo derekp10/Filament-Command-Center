@@ -503,6 +503,23 @@ def test_single_head_printer_folds_usage_to_sole_position():
     assert abs(usage_map[0] - 25.0) < 1e-6
 
 
+def test_single_position_multi_material_not_folded():
+    """MMU SAFETY: a real multi-material print (several spools swapped through one
+    head → multi-tool footer) on a single-position printer must NOT be summed
+    onto one spool (that would over-deduct). It keeps its per-tool map and falls
+    through to the orphan-warning path instead."""
+    gcode = ("M83\nT0\nG1 E10\nT1\nG1 E4\n"
+             "; filament used [mm] = 10, 4\n; filament used [g] = 20, 8\n")
+    pm = {"CORE1-M0": {"printer_name": "Core One", "position": 0}}
+    with patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
+                      side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value=pm):
+        usage_map, terminal = app_module._compute_cancel_usage(
+            "Core One", "f.gcode", "J-3", 1.0, "1.2.3.4", "k")
+    assert terminal is None
+    assert set(usage_map.keys()) == {0, 1}, usage_map   # NOT folded (multi-tool)
+
+
 def test_multi_head_printer_keeps_per_tool_map():
     """A multi-toolhead printer (XL/INDX) keeps the per-tool map — tool index IS
     the toolhead position there, no fold."""

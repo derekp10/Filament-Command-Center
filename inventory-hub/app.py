@@ -4162,20 +4162,25 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
         _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
         return None, {"status": "no_usage", "job_id": job_id}
 
-    # Single-toolhead printers (Derek's Core One: one head, one spool) route ALL
-    # filament through one physical position, so fold every footer tool onto it.
-    # The slicer's tool INDEX can differ from the printer's toolhead POSITION
-    # (e.g. an MMU-profile file marks slot 1 even when only one head exists), and
-    # without this fold that usage would orphan to a non-existent position and go
-    # un-deducted. Multi-head printers (XL / future INDX toolchanger) keep their
-    # per-tool map — there the tool index IS the toolhead position.
+    # Single-toolhead printer + single-material print (Derek's Core One: one
+    # head, one spool): the slicer's tool INDEX can differ from the printer's
+    # toolhead POSITION (an MMU-profile file marks slot 1 even when one head
+    # exists), so re-key that lone tool onto the sole position — otherwise it
+    # orphans to a non-existent position and goes un-deducted. Guarded to a
+    # SINGLE footer tool so a real multi-material MMU print (several spools
+    # swapped through one head) is NOT summed onto one spool (over-deduct); that
+    # genuinely-ambiguous case falls through to the orphan warning instead.
+    # Multi-head printers (XL / future INDX toolchanger) keep their per-tool map
+    # untouched — there the tool index IS the toolhead position (1:1).
     try:
-        pm = locations_db.get_active_printer_map()
-        positions = {info.get('position', 0) for info in pm.values()
-                     if info.get('printer_name') == printer_name}
-        if len(positions) == 1:
-            sole = next(iter(positions))
-            usage_map = {sole: round(sum(usage_map.values()), 4)}
+        if len(usage_map) == 1:
+            pm = locations_db.get_active_printer_map()
+            positions = {info.get('position', 0) for info in pm.values()
+                         if info.get('printer_name') == printer_name}
+            if len(positions) == 1:
+                sole = next(iter(positions))
+                grams = next(iter(usage_map.values()))
+                usage_map = {sole: grams}
     except Exception:
         pass
 
