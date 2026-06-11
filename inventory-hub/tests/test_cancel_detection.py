@@ -316,7 +316,8 @@ def test_pulse_printing_then_stopped_creates_pending_review(ledger_tmp):
                      side_effect=lambda *a, **k: next(state_seq)),
         patch.object(app_module.prusalink_api, "get_printer_job", return_value=job_ret),
         patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds),
-        patch.object(app_module.prusalink_api, "download_gcode_content", return_value=gcode),
+        patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
+                     side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}),
         patch.object(app_module.spoolman_api, "get_spools_at_location",
                      side_effect=lambda loc: spools_at.get(str(loc).upper(), [])),
         patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))),
@@ -327,8 +328,8 @@ def test_pulse_printing_then_stopped_creates_pending_review(ledger_tmp):
     for m in ctx:
         m.start()
     try:
-        app_module._pulse_section_printer_status()   # PRINTING → latch
-        app_module._pulse_section_printer_status()   # STOPPED → stash pending
+        app_module._cancel_monitor_tick()   # PRINTING → latch
+        app_module._cancel_monitor_tick()   # STOPPED → stash pending
     finally:
         for m in reversed(ctx):
             m.stop()
@@ -388,29 +389,15 @@ def test_zero_job_id_not_latched(capture_edge):
 
 
 # ---------------------------------------------------------------------------
-# download_gcode_content — binary-gcode guard + deduct messaging
+# fetch_cancel_gcode failure + deduct messaging
 # ---------------------------------------------------------------------------
 
-def test_download_gcode_content_rejects_bgcode():
-    """Binary gcode can't be prefix-parsed (compressed body) → return None up
-    front so the caller surfaces a clear signal instead of garbage."""
-    called = {"n": 0}
-
-    def _get(*a, **k):
-        called["n"] += 1
-        return _Resp(200, content=b"BGCD\x00\x01")
-
-    with patch.object(prusalink_api.requests, "get", side_effect=_get):
-        assert prusalink_api.download_gcode_content("1.2.3.4", "k", "/usb/Print.bgcode") is None
-    assert called["n"] == 0, "must short-circuit before any HTTP fetch"
-
-
-def test_deduct_bgcode_cancel_logs_visible_warning_not_silent(ledger_tmp):
-    """A .bgcode cancel can't be computed — it must surface a VISIBLE warning so
-    the cancel isn't silently un-deducted, and must NOT be ledger-recorded
-    (download could succeed on a later parseable file)."""
+def test_deduct_gcode_fetch_fail_logs_visible_warning_not_silent(ledger_tmp):
+    """A cancel whose gcode can't be fetched/decoded must surface a VISIBLE
+    warning so it isn't silently un-deducted, and must NOT be ledger-recorded
+    (a later fetch could succeed)."""
     with patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
-         patch.object(app_module.prusalink_api, "download_gcode_content", return_value=None), \
+         patch.object(app_module.prusalink_api, "fetch_cancel_gcode", return_value=None), \
          patch.object(app_module.state, "add_log_entry") as log:
         out = app_module.deduct_cancelled_print(
             "XL", "/usb/Print.bgcode", "J-9", 0.4, fb_url="http://fb",
@@ -429,7 +416,8 @@ def test_deduct_unrecognized_footer_warns_distinctly(ledger_tmp):
     cancel (INFO)."""
     no_footer = "M83\nT0\nG1 X10 E5\n; some non-prusa slicer\n"
     with patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
-         patch.object(app_module.prusalink_api, "download_gcode_content", return_value=no_footer), \
+         patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
+                      side_effect=lambda ip, key, fn, frac: {"gcode": no_footer, "fraction": frac}), \
          patch.object(app_module.state, "add_log_entry") as log:
         out = app_module.deduct_cancelled_print(
             "XL", "x.gcode", "J-10", 0.9, fb_url="http://fb",
@@ -462,7 +450,8 @@ def test_cancel_creates_pending_once_on_real_daemon_thread(ledger_tmp):
         patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
         patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map),
         patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds),
-        patch.object(app_module.prusalink_api, "download_gcode_content", return_value=gcode),
+        patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
+                     side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}),
         patch.object(app_module.spoolman_api, "get_spools_at_location",
                      side_effect=lambda loc: [100] if str(loc).upper() == "XL-1" else []),
         patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))),
@@ -490,3 +479,62 @@ def test_cancel_creates_pending_once_on_real_daemon_thread(ledger_tmp):
     rec = cancel_review_store.get_pending("XL", "T-1")
     assert len(rec["spools"]) == 1 and rec["spools"][0]["sid"] == 100
     assert abs(rec["spools"][0]["grams"] - 20.0) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Cancel-monitor daemon — dashboard-independent detection (Derek's correction)
+# ---------------------------------------------------------------------------
+
+def test_cancel_monitor_tick_drives_edge(capture_edge):
+    """The 30s daemon tick probes each printer and runs the latch/edge detector
+    independent of the dashboard: PRINTING then STOPPED across two ticks fires
+    the cancel edge."""
+    printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
+    state_seq = iter([_state("PRINTING"), _state("STOPPED")])
+    with patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map), \
+         patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module.prusalink_api, "get_printer_state",
+                      side_effect=lambda *a, **k: next(state_seq)), \
+         patch.object(app_module.prusalink_api, "get_printer_job",
+                      return_value=_job(filename="j.gcode", job_id="M-1", progress=0.5)):
+        app_module._cancel_monitor_tick()   # PRINTING → latch
+        app_module._cancel_monitor_tick()   # STOPPED → edge
+    assert capture_edge.call_count == 1
+    assert capture_edge.call_args.args[2] == "M-1"
+
+
+def test_cancel_monitor_tick_no_printers_noop(capture_edge):
+    with patch.object(app_module.locations_db, "get_active_printer_map", return_value={}), \
+         patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")):
+        app_module._cancel_monitor_tick()
+    assert capture_edge.call_count == 0
+
+
+def test_cancel_monitor_start_idempotent():
+    """The daemon starts at most once per process (no real thread spawned in the
+    test — threading.Thread is mocked)."""
+    app_module._cancel_monitor_started = False
+    try:
+        with patch.object(app_module.threading, "Thread") as T:
+            app_module._start_cancel_monitor()
+            app_module._start_cancel_monitor()
+        assert T.call_count == 1
+    finally:
+        app_module._cancel_monitor_started = False
+
+
+def test_pulse_no_longer_drives_detection():
+    """Regression guard for the decoupling: the dashboard pulse must NOT run
+    cancel detection (that's the daemon's job now), so an unfocused/closed
+    dashboard can't cause missed cancels."""
+    printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
+    with patch.object(app_module, "_track_print_edge") as tpe, \
+         patch.object(app_module.config_loader, "load_config", return_value={}), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map), \
+         patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module.locations_db, "get_bindings_for_machine",
+                      return_value={"printer_name": "XL", "toolheads": {}, "printer_pool": []}), \
+         patch.object(app_module.spoolman_api, "bucket_spools_by_location", return_value={}), \
+         patch.object(app_module.prusalink_api, "get_printer_state", return_value=_state("PRINTING")):
+        app_module._pulse_section_printer_status()
+    assert tpe.call_count == 0, "dashboard pulse must not drive cancel detection (daemon-only)"

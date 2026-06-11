@@ -66,8 +66,8 @@ def deduct_mocks():
         return {"id": sid, **data}
 
     ctx = [
-        patch.object(app_module.prusalink_api, "download_gcode_content",
-                     return_value=gcode),
+        patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
+                     side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}),
         patch.object(app_module.locations_db, "get_active_printer_map",
                      return_value=printer_map),
         patch.object(app_module.spoolman_api, "get_spools_at_location",

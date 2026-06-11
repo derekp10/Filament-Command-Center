@@ -4092,6 +4092,20 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
                     err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
                     state.add_log_entry(
                         f"❌ Failed to auto-deduct from Spool #{sid}: {err}", "ERROR", "ff4444")
+    # Surface gcode tool indices that don't correspond to ANY of this printer's
+    # toolhead positions (a cross-machine gcode, or a tool↔position mismatch) —
+    # those grams can't be deducted, so make the loss visible instead of
+    # silently dropping it. (A position that exists but has no spool loaded is
+    # benign and not flagged here.)
+    known_positions = {p_info.get('position', 0) for _, p_info in active_locs}
+    orphaned = {t: g for t, g in usage_map.items()
+                if t not in known_positions and g > 0}
+    if orphaned:
+        lost = round(sum(orphaned.values()), 1)
+        state.add_log_entry(
+            f"⚠️ {printer_name}: {lost:.1f}g on tool index(es) {sorted(orphaned)} "
+            f"map to no toolhead position on this printer — not deducted "
+            f"(weigh the spool if this looks wrong).", "WARNING", "ffaa00")
     return spools_updated, details
 
 
@@ -4132,12 +4146,18 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
     On success: (usage_map, None). On a can't-compute outcome: (None, status
     dict) already logged via _log_cancel_uncomputable. Shared by both the
     auto-apply path (deduct_cancelled_print) and the preview path
-    (_create_pending_cancel_review)."""
-    content = prusalink_api.download_gcode_content(ip_address, api_key, filename)
-    if not content:
+    (_create_pending_cancel_review).
+
+    fetch_cancel_gcode transparently decodes binary G-code (.bgcode — Derek's
+    whole fleet) and remaps the progress fraction from compressed-file space to
+    the decoded text, so the prefix-parse runs correctly on real prints."""
+    prepared = prusalink_api.fetch_cancel_gcode(
+        ip_address, api_key, filename, reached_fraction)
+    if not prepared or not prepared.get("gcode"):
         _log_cancel_uncomputable(printer_name, filename, reached_fraction, None)
         return None, {"status": "error", "reason": "gcode download failed", "job_id": job_id}
-    usage_map = prusalink_api.parse_partial_filament_usage(content, reached_fraction)
+    content = prepared["gcode"]
+    usage_map = prusalink_api.parse_partial_filament_usage(content, prepared["fraction"])
     if not usage_map:
         _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
         return None, {"status": "no_usage", "job_id": job_id}
@@ -5783,6 +5803,92 @@ def _track_print_edge(printer_name, state_info, fb_url):
                               fire['progress'], fb_url)
 
 
+# ---------------------------------------------------------------------------
+# Cancelled-print monitor — a dedicated server-side poller, INDEPENDENT of the
+# dashboard pulse (Derek 2026-06-11). Detection must NOT depend on a browser
+# having the dashboard open or focused: an unattended print is the common case,
+# and FCC usually isn't in focus. So _track_print_edge no longer rides
+# _pulse_section_printer_status; this daemon probes every printer on a fixed
+# ~30s tick regardless of UI state. The frontend pulse still probes state for
+# the widget, and its Phase-0 fast-poll burst still snaps the displayed weight
+# after a deduct — but it's no longer load-bearing for catching cancels.
+# ---------------------------------------------------------------------------
+
+_CANCEL_MONITOR_INTERVAL_S = 30
+_cancel_monitor_started = False
+_cancel_monitor_lock = threading.Lock()
+
+
+def _cancel_monitor_tick():
+    """One detection sweep: probe every printer's state + run the latch/edge
+    detector. Per-printer probes fan out so a slow/offline printer doesn't block
+    the rest. Best-effort throughout."""
+    from concurrent.futures import ThreadPoolExecutor
+    try:
+        printer_map = locations_db.get_active_printer_map()
+        _, fb_url = config_loader.get_api_urls()
+    except Exception:
+        return
+    names = sorted({info.get('printer_name') for info in printer_map.values()
+                    if info.get('printer_name')})
+    if not names:
+        return
+
+    def _probe(name):
+        try:
+            state_info = prusalink_api.get_printer_state(fb_url, name)
+        except Exception:
+            state_info = None
+        try:
+            _track_print_edge(name, state_info, fb_url)
+        except Exception as e:
+            try:
+                state.logger.debug(f"cancel-monitor probe failed for {name}: {e}")
+            except Exception:
+                pass
+
+    workers = max(1, min(8, len(names)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(_probe, names))
+
+    # Prune tracker entries for printers no longer in the map so a removed /
+    # renamed printer's stale latch can't linger or mis-fire on re-add.
+    with _PRINT_TRACKER_LOCK:
+        for stale in [p for p in _PRINT_TRACKER if p not in names]:
+            _PRINT_TRACKER.pop(stale, None)
+
+
+def _cancel_monitor_loop():
+    while True:
+        try:
+            _cancel_monitor_tick()
+        except Exception as e:
+            try:
+                state.logger.warning(f"cancel-monitor tick error: {e}")
+            except Exception:
+                pass
+        time.sleep(_CANCEL_MONITOR_INTERVAL_S)
+
+
+def _start_cancel_monitor():
+    """Start the cancel-monitor daemon thread once per process. Called from the
+    __main__ launch path only (never on a bare import, so tests don't spawn it).
+    Idempotent."""
+    global _cancel_monitor_started
+    with _cancel_monitor_lock:
+        if _cancel_monitor_started:
+            return
+        _cancel_monitor_started = True
+    threading.Thread(target=_cancel_monitor_loop, name="cancel-monitor",
+                     daemon=True).start()
+    try:
+        state.logger.info(
+            f"🛑 Cancelled-print monitor started ({_CANCEL_MONITOR_INTERVAL_S}s poll, "
+            f"dashboard-independent).")
+    except Exception:
+        pass
+
+
 def _pulse_section_printer_status():
     """Server-side aggregator for the Printer Status widget. Replaces
     the client-side fan-out of printer_map + N x toolhead_slots +
@@ -5855,18 +5961,14 @@ def _pulse_section_printer_status():
             })
         toolheads.sort(key=lambda t: (t['position'], t['id']))
         # Direct PrusaLink probe — runs regardless of dryer-box bindings,
-        # so the widget ticks for dryer-box-less printers (L56).
+        # so the widget ticks for dryer-box-less printers (L56). NOTE: cancel
+        # DETECTION no longer rides this probe — it runs in the dashboard-
+        # independent _cancel_monitor daemon (so an unattended print with FCC
+        # unfocused/closed is still caught). This probe is widget-display only.
         try:
             state_info = prusalink_api.get_printer_state(fb_url, name)
         except Exception:
             state_info = None
-        # Cancelled-print detection rides this same probe (FilaBridge §9 / 2a):
-        # latch the live job while printing, fire the partial deduct on a
-        # →STOPPED/ERROR edge. Wrapped so it never breaks the widget.
-        try:
-            _track_print_edge(name, state_info, fb_url)
-        except Exception:
-            pass
         return name, {'toolheads': toolheads, 'state': state_info}
 
     out = {}
@@ -5993,4 +6095,10 @@ if __name__ == '__main__':
     # template through a 3-day uptime; this prevents that footgun.
     if _dev:
         app.config['TEMPLATES_AUTO_RELOAD'] = True
+    # Start the dashboard-independent cancelled-print monitor in the SERVING
+    # process only: with the dev reloader that's the child (WERKZEUG_RUN_MAIN);
+    # without it (prod) this single process. The reloader PARENT skips it so dev
+    # doesn't run two pollers.
+    if (not _dev) or os.environ.get('WERKZEUG_RUN_MAIN', '').lower() == 'true':
+        _start_cancel_monitor()
     app.run(host='0.0.0.0', port=8000, use_reloader=_dev, debug=False)

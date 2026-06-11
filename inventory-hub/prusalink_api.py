@@ -4,6 +4,7 @@ import threading
 import traceback
 from typing import Dict, Optional
 import perf_trace  # L3 latency probe — zero-cost when no trace is active
+import bgcode_decode  # binary-gcode (.bgcode) decoder for the cancel prefix-parse
 
 # Per-operation memo for get_printer_state (L3 fix A). A single
 # perform_smart_move probes the SAME printer in BOTH its phase-1 and phase-2
@@ -136,36 +137,68 @@ def download_gcode_and_parse_usage(ip_address: str, api_key: str, filename: str)
 
 # --- Cancelled-print partial usage (FilaBridge absorption §9.2, slice 3) ------
 
-def download_gcode_content(ip_address: str, api_key: str, filename: str) -> Optional[str]:
-    """Download the FULL gcode file TEXT from PrusaLink.
-
-    The cancelled-print prefix-parse needs the file BODY from byte 0 up to the
-    reached position — a Range tail (as `download_gcode_and_parse_usage` uses to
-    grab only the footer) won't do. After a print STOPS the file un-404s, so this
-    works at cancel time. Returns the text, or None on failure.
-
-    Binary gcode (`.bgcode`) is rejected up front: its body is compressed
-    (heatshrink/MeatPack), so `resp.text` would decode to garbage and the
-    line-by-line prefix-parse can't read the `G1 ... E` moves. We return None so
-    the caller surfaces a clear "couldn't compute partial" signal instead of
-    silently logging a fabricated 0g (the footer-only path in
-    `download_gcode_and_parse_usage` tolerates bgcode, but a PREFIX parse can't).
-    """
+def _download_file_bytes(ip_address: str, api_key: str, filename: str) -> Optional[bytes]:
+    """Download a print file's raw bytes from PrusaLink. After a print STOPS the
+    file un-404s (it's locked + 404 while printing), so this works at cancel
+    time. Returns the bytes, or None on failure."""
     filename = filename.lstrip('/')
-    if filename.lower().endswith('.bgcode'):
-        print(f"download_gcode_content: binary gcode not parseable for a "
-              f"prefix-parse: {filename}")
-        return None
     url = f"http://{ip_address}/{filename}"
     headers = {'X-Api-Key': api_key} if api_key else {}
     try:
         resp = requests.get(url, headers=headers, timeout=60)
         if resp.ok:
-            return resp.text
+            return resp.content
         print(f"download_gcode_content: HTTP {resp.status_code} for {filename}")
     except Exception as e:
         print(f"download_gcode_content failed for {filename}: {e}")
     return None
+
+
+def download_gcode_content(ip_address: str, api_key: str, filename: str) -> Optional[str]:
+    """Download the full print file as ASCII G-code text, transparently decoding
+    binary G-code (`.bgcode`) — its body is heatshrink+MeatPack compressed, so a
+    naive text decode is garbage; `bgcode_decode` reconstructs the moves so the
+    prefix-parse can run on Derek's real (binary) prints. Returns None on
+    failure. (For binary gcode, prefer `fetch_cancel_gcode`, which also remaps
+    the progress fraction from compressed-file to decoded-text space.)"""
+    raw = _download_file_bytes(ip_address, api_key, filename)
+    if raw is None:
+        return None
+    try:
+        if bgcode_decode.is_bgcode(raw):
+            return bgcode_decode.decode_bgcode(raw).get("gcode") or None
+        return raw.decode("utf-8", "replace")
+    except Exception as e:
+        print(f"download_gcode_content: decode failed for {filename}: {e}")
+        return None
+
+
+def fetch_cancel_gcode(ip_address: str, api_key: str, filename: str,
+                       reached_fraction: float) -> Optional[Dict]:
+    """Download + decode a print file for the cancelled-print parser.
+
+    Returns ``{"gcode": ascii_text, "fraction": effective_fraction}`` or None on
+    failure. For binary G-code the printer's ``progress`` (a byte position in
+    the COMPRESSED .bgcode file) is remapped to the matching position in the
+    DECODED text, so the prefix-parse slices at the right point even though the
+    header/thumbnail/metadata blocks (which carry no extrusion) sit before the
+    G-code in the file. For plain ASCII gcode the fraction passes through.
+    """
+    raw = _download_file_bytes(ip_address, api_key, filename)
+    if raw is None:
+        return None
+    try:
+        if bgcode_decode.is_bgcode(raw):
+            dec = bgcode_decode.decode_bgcode(raw)
+            if not dec.get("gcode"):
+                return None
+            return {"gcode": dec["gcode"],
+                    "fraction": bgcode_decode.progress_to_decoded_fraction(dec, reached_fraction)}
+        text = raw.decode("utf-8", "replace")
+        return {"gcode": text, "fraction": max(0.0, min(1.0, float(reached_fraction)))}
+    except Exception as e:
+        print(f"fetch_cancel_gcode: failed for {filename}: {e}")
+        return None
 
 
 _GCODE_MM_RE = re.compile(r';?\s*filament used \[mm\]\s*=\s*([0-9.,\s]+)')
@@ -229,10 +262,16 @@ def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) ->
     if reached_byte <= 0:
         return {}
 
-    active_tool = 0
+    # When the gcode carries no explicit `Tn` (a single-material print whose
+    # one tool is selected outside the body, common on MMU), attribute all
+    # extrusion to the sole tool the footer marks as used. Multi-tool prints
+    # have `Tn` changes and start at tool 0.
+    default_tool = next(iter(g_per_mm)) if len(g_per_mm) == 1 else 0
+    active_tool = default_tool
     relative_e = False           # M82 absolute (default) vs M83 relative
-    last_e: Dict[int, float] = {}   # per-tool absolute-E position
+    e_high: Dict[int, float] = {}   # per-tool high-water E since last G92 reset
     extruded_mm: Dict[int, float] = {}
+    saw_tool = False
     consumed = 0
 
     for line in gcode_content.splitlines(keepends=True):
@@ -244,9 +283,10 @@ def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) ->
             continue
         upper = code.upper()
 
-        tmatch = re.match(r'^T(\d+)(?:\s|$)', upper)
+        tmatch = re.match(r'^T(\d+)(?![0-9])', upper)
         if tmatch:
             active_tool = int(tmatch.group(1))
+            saw_tool = True
             continue
         if upper.startswith('M82'):
             relative_e = False
@@ -257,22 +297,40 @@ def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) ->
         if upper.startswith('G92'):
             em = re.search(r'E(-?\d*\.?\d+)', upper)
             if em:
-                last_e[active_tool] = float(em.group(1))
+                # G92 E<v> redefines the E origin: reset the high-water mark so
+                # extrusion past <v> counts (filament already used stays counted).
+                e_high[active_tool] = float(em.group(1))
+            else:
+                # Bare G92 (no params) resets all axes incl. E to 0 (RepRap) —
+                # reset the high-water mark too. (PrusaSlicer emits `G92 E0`
+                # explicitly, so this only guards hand/odd gcode.)
+                e_high[active_tool] = 0.0
             continue
-        if upper.startswith('G1 ') or upper.startswith('G0 ') \
-                or upper == 'G1' or upper == 'G0':
+        # Match G0/G1 with or WITHOUT a trailing space (Prusa no-spaces gcode
+        # emits `G1X92.3Y9.4E.001`); exclude G10/G11 etc.
+        if re.match(r'^G[01](?![0-9])', upper):
             em = re.search(r'E(-?\d*\.?\d+)', upper)
             if not em:
                 continue
             e = float(em.group(1))
             if relative_e:
-                if e > 0:
-                    extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + e
+                # Net extrusion: a retract (negative) and its later re-prime
+                # cancel, so signed accumulation matches the slicer's count.
+                extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + e
             else:
-                delta = e - last_e.get(active_tool, 0.0)
-                if delta > 0:
-                    extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + delta
-                last_e[active_tool] = e
+                # High-water mark: only E that EXCEEDS the running max is new
+                # filament (a retract + re-prime below the max adds nothing).
+                hi = e_high.get(active_tool, 0.0)
+                if e > hi:
+                    extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + (e - hi)
+                    e_high[active_tool] = e
+
+    # If we never saw a Tn but accumulated onto a default that has no g/mm,
+    # fold it onto the sole footer tool (single-material, no explicit select).
+    if not saw_tool and len(g_per_mm) == 1 and extruded_mm:
+        sole = next(iter(g_per_mm))
+        merged = sum(extruded_mm.values())
+        extruded_mm = {sole: merged}
 
     # --- convert extruded mm -> grams via the slicer's own ratio -----------
     result = {}

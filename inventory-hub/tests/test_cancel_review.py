@@ -95,7 +95,8 @@ def _preview_ctx(gcode, printer_map, spools, spools_at, captured):
         patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
         patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map),
         patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds),
-        patch.object(app_module.prusalink_api, "download_gcode_content", return_value=gcode),
+        patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
+                     side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}),
         patch.object(app_module.spoolman_api, "get_spools_at_location",
                      side_effect=lambda loc: spools_at.get(str(loc).upper(), [])),
         patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))),
@@ -156,7 +157,7 @@ def test_create_pending_idempotent_and_ledger_guarded():
 def test_create_pending_download_fail_no_pending_no_ledger():
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
-         patch.object(app_module.prusalink_api, "download_gcode_content", return_value=None), \
+         patch.object(app_module.prusalink_api, "fetch_cancel_gcode", return_value=None), \
          patch.object(app_module.state, "add_log_entry") as log:
         out = app_module._create_pending_cancel_review("XL", "p.bgcode", "J-4", 0.5, fb_url="http://fb")
     assert out["status"] == "error"
