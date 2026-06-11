@@ -1,5 +1,11 @@
 # **New and Unsorted Features/Bugs**
 
+* Ejecting a spool from an attached dryerbox slot from the manage location on a toolhead (XL) Causes the attached filament to refresh, but sometimes not reload the QR codes. This was done using the spool cards eject button.
+
+* Assigning a filament manually through the interface to a toolhead directly should auto eject the currently loaded filament from the toolhead, not leave 2 filaments attached to the same toolhead. (This probably causes some sort of colission down stream in other code that might expect only a single filament in a toolhead. Which should always be the case, 1 spool per head.)
+
+* Queueing a label for a spool from the spool details modal shouldn't cancel out the modal, it should stay open.
+
 * Assigning a filament to a slot takes increadibly long for it to fully resolve. (Processing... to go away) I don't know if there is something we can fix to make this faster, but it's noticibly long, and i'm not sure why that is.
   _[✅ **A+B SHIPPED to `main` 2026-06-10** (`e3b9481`) — **14.6s → 6.5s (−55%)** on a worst-case bound-Core-One assign. Instrumented the whole move pipeline with a per-assign `⏱️` trace (`inventory-hub/perf_trace.py`, Activity-Log + hub.log, zero-cost when idle); the trace proved ~96% of the time was **synchronous timeouts probing the OFFLINE Core One**, not Spoolman. **Fix A** = per-move printer-state probe cache (the auto-deploy recursion was probing the same printer twice); **Fix B** = skip the legacy PrusaLink `/api/printer` fallback on a connection-level timeout (`prusalink_api.py`). Shipped alongside a **feeds-bind-to-Printer fix** (`9fdca65` — Core One is a dual-role `Type:"Printer"` row, the slot-bind validator was rejecting it). **Prod fleet == dev fleet (same physical printers), so the dev numbers represent prod — no separate prod trace needed.** Remaining **~4s is FilaBridge's own `/status`** synchronously probing the offline printer (FilaBridge-side root cause) → tracked under the FilaBridge absorption epic immediately below.]_
 
