@@ -133,6 +133,122 @@ def download_gcode_and_parse_usage(ip_address: str, api_key: str, filename: str)
 
     return None
 
+
+# --- Cancelled-print partial usage (FilaBridge absorption §9.2, slice 3) ------
+
+_GCODE_MM_RE = re.compile(r';?\s*filament used \[mm\]\s*=\s*([0-9.,\s]+)')
+
+
+def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) -> Dict[int, float]:
+    """Per-toolhead ACTUAL grams extruded up to a cancel point — the cancelled-
+    print partial-deduction core (FilaBridge absorption design §9.2, rung 1).
+
+    A cancelled print's ``filament used [g]`` footer is the FULL-job estimate,
+    so deducting it would massively over-charge. Instead we parse the gcode from
+    the start up to the byte position actually reached (PrusaLink ``progress`` is
+    ``sd_percent_done`` = the gcode FILE-BYTE fraction), summing each tool's real
+    extrusion, then convert mm->g using the slicer's OWN per-tool grams-per-mm
+    ratio (from the ``filament used [g]`` and ``[mm]`` footers — no material
+    density table needed, and it's exact for that filament).
+
+    Critically this is PER-TOOLHEAD by construction: a tool never selected
+    before the cancel sums to zero extrusion and is simply absent from the
+    result (the XL "untouched head deducts 0" invariant, satisfied natively).
+
+    Args:
+        gcode_content: the FULL gcode file text (footer + body). ``reached_byte``
+            is computed against this content's length, so it must be the whole
+            file, not a Range subset.
+        reached_fraction: progress 0.0..1.0 (``progress`` percent / 100) — the
+            fraction of the file reached when the print was cancelled.
+
+    Returns:
+        ``{toolhead_index: grams}`` for tools that extruded before the cancel.
+        Untouched tools are omitted (caller treats absent as 0). Empty dict when
+        nothing extruded (cancel before first extrusion) or the footer lacks the
+        per-tool g/mm metadata needed to convert.
+
+    Handles absolute (M82, default) and relative (M83) extrusion, ``G92 E<n>``
+    extruder-origin resets, per-tool absolute-E context across ``T<n>`` changes
+    (each tool changer head has its own E coordinate), and inline ``;`` comments.
+    """
+    if not gcode_content:
+        return {}
+
+    # --- per-tool grams-per-mm from the slicer footers ---------------------
+    g_match = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', gcode_content)
+    mm_match = _GCODE_MM_RE.search(gcode_content)
+    if not g_match or not mm_match:
+        return {}
+    grams = _parse_weights_from_match(g_match)
+    mms = _parse_weights_from_match(mm_match)
+    g_per_mm = {
+        tool: grams[tool] / mm
+        for tool, mm in mms.items()
+        if mm > 0 and tool in grams
+    }
+    if not g_per_mm:
+        return {}
+
+    # --- prefix-parse the body up to the reached byte position -------------
+    reached_fraction = max(0.0, min(1.0, float(reached_fraction)))
+    total_bytes = len(gcode_content.encode('utf-8'))
+    reached_byte = int(reached_fraction * total_bytes)
+    if reached_byte <= 0:
+        return {}
+
+    active_tool = 0
+    relative_e = False           # M82 absolute (default) vs M83 relative
+    last_e: Dict[int, float] = {}   # per-tool absolute-E position
+    extruded_mm: Dict[int, float] = {}
+    consumed = 0
+
+    for line in gcode_content.splitlines(keepends=True):
+        consumed += len(line.encode('utf-8'))
+        if consumed > reached_byte:
+            break
+        code = line.split(';', 1)[0].strip()
+        if not code:
+            continue
+        upper = code.upper()
+
+        tmatch = re.match(r'^T(\d+)(?:\s|$)', upper)
+        if tmatch:
+            active_tool = int(tmatch.group(1))
+            continue
+        if upper.startswith('M82'):
+            relative_e = False
+            continue
+        if upper.startswith('M83'):
+            relative_e = True
+            continue
+        if upper.startswith('G92'):
+            em = re.search(r'E(-?\d*\.?\d+)', upper)
+            if em:
+                last_e[active_tool] = float(em.group(1))
+            continue
+        if upper.startswith('G1 ') or upper.startswith('G0 ') \
+                or upper == 'G1' or upper == 'G0':
+            em = re.search(r'E(-?\d*\.?\d+)', upper)
+            if not em:
+                continue
+            e = float(em.group(1))
+            if relative_e:
+                if e > 0:
+                    extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + e
+            else:
+                delta = e - last_e.get(active_tool, 0.0)
+                if delta > 0:
+                    extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + delta
+                last_e[active_tool] = e
+
+    # --- convert extruded mm -> grams via the slicer's own ratio -----------
+    result = {}
+    for tool, mm in extruded_mm.items():
+        if mm > 0 and tool in g_per_mm:
+            result[tool] = round(mm * g_per_mm[tool], 4)
+    return result
+
 def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
     """Cached front door for the PrusaLink state probe (L3 fix A).
 
