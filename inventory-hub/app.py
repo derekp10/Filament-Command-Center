@@ -6,6 +6,7 @@ import config_schema # type: ignore
 import locations_db # type: ignore
 import spoolman_api # type: ignore
 import print_deduct_ledger # type: ignore
+import cancel_review_store # type: ignore
 import logic # type: ignore
 import csv
 import os
@@ -364,6 +365,25 @@ try:
         state.logger.info(f"🧹 Pruned {len(_pruned)} old locations.json backup(s)")
 except Exception as _prune_err:
     state.logger.warning(f"locations.json backup prune skipped: {_prune_err}")
+
+# Re-surface any cancelled-print reviews that outlived a restart. The pending
+# store persists, but the activity log (the "🛑 Review" button's home) is
+# in-memory, so without this a pending review would be invisible after a reboot
+# even though it's still on disk (§9.7 "never silently lost"). Emit one log line
+# per pending so the button reappears.
+try:
+    _pending_reviews = cancel_review_store.list_pending()
+    for _pr in _pending_reviews:
+        state.add_log_entry(
+            f"🛑 Pending cancel review from a previous session: {_pr.get('printer_name')} "
+            f"— {_pr.get('total_grams')}g across {len(_pr.get('spools', []))} spool(s). Review to confirm/dismiss.",
+            "WARNING", "ffaa00",
+            meta={"type": "cancel_deduct_pending",
+                  "printer_name": _pr.get('printer_name'), "job_id": _pr.get('job_id')})
+    if _pending_reviews:
+        state.logger.info(f"🛑 Re-surfaced {len(_pending_reviews)} pending cancel review(s) from disk.")
+except Exception as _cr_err:
+    state.logger.warning(f"pending cancel-review re-surface skipped: {_cr_err}")
 
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
 log = logging.getLogger('werkzeug')
@@ -4075,9 +4095,58 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
     return spools_updated, details
 
 
+def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content):
+    """Operator-facing log for a cancel whose partial we couldn't compute,
+    distinguishing the three reasons so a cancel never goes SILENTLY
+    un-deducted. Returns the status string the caller should surface.
+      content is None      → download failed / binary .bgcode  → 'error' (WARNING)
+      footer present        → genuine zero-extrusion cancel      → 'no_usage' (INFO)
+      footer absent         → unrecognized gcode (non-Prusa?)    → 'no_usage' (WARNING)
+    """
+    pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    if not content:
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+            f"couldn't fetch/parse the gcode (binary .bgcode or printer "
+            f"unreachable); no partial deduct. Weigh the spool to true it up.",
+            "WARNING", "ffaa00")
+        return "error"
+    has_footer = ('filament used [g]' in content and 'filament used [mm]' in content)
+    if has_footer:
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+            f"no partial usage to deduct (cancelled before any extrusion).",
+            "INFO")
+    else:
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+            f"gcode has no recognized per-tool 'filament used' footer "
+            f"(non-Prusa slicer?); can't compute the partial. Weigh the spool.",
+            "WARNING", "ffaa00")
+    return "no_usage"
+
+
+def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
+                          ip_address, api_key):
+    """Download + prefix-parse a cancelled print → (usage_map, terminal).
+    On success: (usage_map, None). On a can't-compute outcome: (None, status
+    dict) already logged via _log_cancel_uncomputable. Shared by both the
+    auto-apply path (deduct_cancelled_print) and the preview path
+    (_create_pending_cancel_review)."""
+    content = prusalink_api.download_gcode_content(ip_address, api_key, filename)
+    if not content:
+        _log_cancel_uncomputable(printer_name, filename, reached_fraction, None)
+        return None, {"status": "error", "reason": "gcode download failed", "job_id": job_id}
+    usage_map = prusalink_api.parse_partial_filament_usage(content, reached_fraction)
+    if not usage_map:
+        _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
+        return None, {"status": "no_usage", "job_id": job_id}
+    return usage_map, None
+
+
 def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
                            fb_url=None, ip_address=None, api_key=None):
-    """Compute + apply the PARTIAL filament deduct for a CANCELLED print
+    """Compute + AUTO-APPLY the PARTIAL filament deduct for a CANCELLED print
     (FilaBridge absorption design §9). Exactly-once via the (printer, job_id)
     ledger; NEVER deducts the full estimate (that's the ~10x over-charge a
     cancel must avoid). Returns a status dict:
@@ -4087,6 +4156,12 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
       status='deducted'  partial grams applied; carries spools_updated + details
       status='error'     credentials / gcode download failed (NOT recorded, so a
                          later retry can still deduct)
+
+    NOTE: the live cancel-EDGE no longer calls this — slice 5 routes cancels
+    through _create_pending_cancel_review (preview-and-confirm, §9.7). This
+    remains the canonical "compute-and-apply-in-one-shot" primitive (a future
+    opt-in auto-mode / recompute action can call it) and shares its compute half
+    with the preview path via _compute_cancel_usage.
     """
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
@@ -4100,42 +4175,15 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
             return {"status": "error", "reason": "no credentials", "job_id": job_id}
         ip_address, api_key = creds.get('ip_address'), creds.get('api_key')
 
+    usage_map, terminal = _compute_cancel_usage(
+        printer_name, filename, job_id, reached_fraction, ip_address, api_key)
+    if terminal is not None:
+        if terminal["status"] == "no_usage":
+            print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                              scale=reached_fraction, grams=0)
+        return terminal
+
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
-    content = prusalink_api.download_gcode_content(ip_address, api_key, filename)
-    if not content:
-        # Download failed OR the file is binary gcode (.bgcode) we can't
-        # prefix-parse. Surface it VISIBLY so a cancel never silently goes
-        # un-deducted — Derek should weigh the spool. NOT recorded in the ledger
-        # so a later retry (if the file becomes parseable) can still deduct.
-        state.add_log_entry(
-            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
-            f"couldn't fetch/parse the gcode (binary .bgcode or printer "
-            f"unreachable); no partial deduct. Weigh the spool to true it up.",
-            "WARNING", "ffaa00")
-        return {"status": "error", "reason": "gcode download failed", "job_id": job_id}
-
-    usage_map = prusalink_api.parse_partial_filament_usage(content, reached_fraction)
-
-    if not usage_map:
-        # Distinguish a genuine zero-extrusion cancel (INFO, expected) from a
-        # gcode whose per-tool 'filament used' footer we couldn't read (WARNING —
-        # the tool DID extrude but we can't measure it, so Derek should weigh).
-        has_footer = ('filament used [g]' in content and 'filament used [mm]' in content)
-        if has_footer:
-            state.add_log_entry(
-                f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
-                f"no partial usage to deduct (cancelled before any extrusion).",
-                "INFO")
-        else:
-            state.add_log_entry(
-                f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
-                f"gcode has no recognized per-tool 'filament used' footer "
-                f"(non-Prusa slicer?); can't compute the partial. Weigh the spool.",
-                "WARNING", "ffaa00")
-        print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
-                                          scale=reached_fraction, grams=0)
-        return {"status": "no_usage", "job_id": job_id}
-
     spools_updated, details = _apply_usage_to_printer(
         printer_name, usage_map, fb_url, strategy_label="Cancel")
     print_deduct_ledger.record_deduct(
@@ -4148,6 +4196,257 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
         "WARNING")
     return {"status": "deducted", "spools_updated": spools_updated,
             "details": details, "usage_map": usage_map, "job_id": job_id}
+
+
+def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
+    """Read-only resolution of {toolhead_position: grams} → the per-spool rows a
+    deduct WOULD touch — the cancel-review PREVIEW (no write). Mirrors
+    _apply_usage_to_printer's MMU-alias/dedup resolution exactly, minus the
+    write, so the preview is faithful to what a confirm will deduct. Each row
+    carries a snapshot of the spool's current used/remaining for display; the
+    actual write (confirm) re-reads current used and applies additively, so a
+    weigh-out between preview and confirm can't be clobbered.
+    """
+    printer_map = locations_db.get_active_printer_map()
+    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+    rows = []
+    processed_positions = set()
+    for loc_id, p_info in active_locs:
+        pos = p_info.get('position', 0)
+        if pos in processed_positions:
+            continue
+        if pos not in usage_map:
+            continue
+        grams = usage_map[pos]
+        if grams <= 0:
+            continue
+        loc_spools = spoolman_api.get_spools_at_location(loc_id)
+        if not loc_spools:
+            continue  # try the next alias for this position
+        processed_positions.add(pos)
+        for sid in loc_spools:
+            spool = spoolman_api.get_spool(sid)
+            if not spool:
+                continue
+            used = float(spool.get('used_weight', 0) or 0)
+            initial = float(spool.get('initial_weight', 0) or 0)
+            remaining_before = max(0.0, initial - used)
+            remaining_after = max(0.0, remaining_before - grams)
+            disp = spoolman_api.format_spool_display(spool)
+            rows.append({
+                'sid': sid,
+                'toolhead': str(loc_id).upper(),
+                'position': pos,
+                'grams': round(float(grams), 2),
+                'current_used': round(used, 2),
+                'initial_weight': round(initial, 2),
+                'remaining_before': round(remaining_before, 1),
+                'remaining_after': round(remaining_after, 1),
+                'display': disp.get('text', f"#{sid}"),
+                'color': disp.get('color', '888888'),
+            })
+    return rows
+
+
+def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,
+                                  fb_url=None):
+    """Compute the cancelled-print partial and STASH it for review instead of
+    auto-writing (FilaBridge absorption design §9.7). Idempotent against the
+    ledger (already confirmed/dismissed) and the pending store (already queued).
+    On success raises a 'cancel_deduct_pending' activity-log line (with meta) so
+    the dashboard shows a "🛑 Review" button. Returns a status dict."""
+    if fb_url is None:
+        _, fb_url = config_loader.get_api_urls()
+
+    if print_deduct_ledger.was_deducted(printer_name, job_id):
+        # Already confirmed/dismissed. Clear any stale pending so the invariant
+        # "ledger ⟹ no pending" holds even after an odd crash sequence.
+        cancel_review_store.pop_pending(printer_name, job_id)
+        return {"status": "skipped", "reason": "already processed", "job_id": job_id}
+    if cancel_review_store.has_pending(printer_name, job_id):
+        return {"status": "skipped", "reason": "already pending", "job_id": job_id}
+
+    creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
+    if not creds:
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{filename}') — no printer "
+            f"credentials; can't compute the partial. Weigh the spool.",
+            "WARNING", "ffaa00")
+        return {"status": "error", "reason": "no credentials", "job_id": job_id}
+
+    usage_map, terminal = _compute_cancel_usage(
+        printer_name, filename, job_id, reached_fraction,
+        creds.get('ip_address'), creds.get('api_key'))
+    if terminal is not None:
+        if terminal["status"] == "no_usage":
+            print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                              scale=reached_fraction, grams=0)
+        return terminal
+
+    rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url)
+    pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    if not rows:
+        # The print extruded filament but no spool is mapped to the active
+        # toolhead(s) — nothing to deduct from. Record so it doesn't re-queue;
+        # surface so Derek can fix the binding.
+        used_g = round(sum(usage_map.values()), 1)
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%) — {used_g:.1f}g used "
+            f"but no mapped spool to deduct from (check toolhead bindings).",
+            "WARNING", "ffaa00")
+        print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                          scale=reached_fraction, grams=0)
+        return {"status": "no_spools", "job_id": job_id}
+
+    # Re-check after the (slow) gcode download+parse — if the job was processed
+    # in the meantime, don't stash a stale pending.
+    if print_deduct_ledger.was_deducted(printer_name, job_id):
+        return {"status": "skipped", "reason": "already processed", "job_id": job_id}
+
+    total = round(sum(r['grams'] for r in rows), 1)
+    record = {
+        "printer_name": printer_name,
+        "job_id": str(job_id),
+        "filename": filename,
+        "progress": float(reached_fraction),
+        "total_grams": total,
+        "spools": rows,
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    cancel_review_store.add_pending(record)
+    state.add_log_entry(
+        f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%) — review partial "
+        f"deduct: {total:.1f}g across {len(rows)} spool(s) ('{filename}').",
+        "WARNING", rows[0]['color'],
+        meta={"type": "cancel_deduct_pending",
+              "printer_name": printer_name, "job_id": str(job_id)})
+    return {"status": "pending", "spools": len(rows), "total_grams": total,
+            "job_id": str(job_id)}
+
+
+@app.route('/api/cancel_deduct/pending', methods=['GET'])
+def api_cancel_deduct_pending():
+    """All pending cancelled-print partial-deduct reviews awaiting confirm/
+    dismiss. Drives the preview overlay (§9.7) and survives log scroll-off /
+    restart."""
+    return jsonify({"pending": cancel_review_store.list_pending()})
+
+
+@app.route('/api/cancel_deduct/confirm', methods=['POST'])
+def api_cancel_deduct_confirm():
+    """Apply a reviewed (optionally nudged) cancel partial-deduct. Body:
+    {printer_name, job_id, updates: {sid: grams}}. Pops the pending record
+    atomically (the CLAIM — a double-submit gets 'already_handled'), then
+    deducts each spool ADDITIVELY against its CURRENT used_weight (re-read now,
+    so a weigh-out between preview and confirm isn't clobbered) sending ONLY
+    {used_weight} (archive-on-empty discipline)."""
+    data = request.json or {}
+    printer = data.get('printer_name')
+    job_id = data.get('job_id')
+    updates = data.get('updates') or {}
+    if not printer or job_id is None:
+        return jsonify({"status": "error", "msg": "missing printer_name/job_id"}), 400
+
+    rec = cancel_review_store.pop_pending(printer, job_id)
+    if rec is None:
+        return jsonify({"status": "already_handled"})
+
+    # Only spools that were in the reviewed preview may be deducted — a stray /
+    # crafted update for an out-of-scope sid must never touch a different spool.
+    rec_rows = {r["sid"]: r for r in rec.get("spools", [])}
+
+    applied, errors = [], []
+    failed_sids = set()
+    for sid_raw, grams_raw in updates.items():
+        try:
+            sid = int(sid_raw)
+            grams = float(grams_raw)
+        except (TypeError, ValueError):
+            continue
+        if grams <= 0:
+            continue
+        if sid not in rec_rows:
+            errors.append({"sid": sid, "error": "not in this review"})
+            failed_sids.add(sid)
+            continue
+        spool = spoolman_api.get_spool(sid)
+        if not spool:
+            errors.append({"sid": sid, "error": "spool not found"})
+            failed_sids.add(sid)
+            continue
+        # Re-read CURRENT used (a weigh-out between preview and confirm isn't
+        # clobbered) and clamp grams to the spool's real remaining so the deduct
+        # never exceeds capacity and the reported figures match what Spoolman
+        # actually stores (update_spool silently caps used_weight ≤ initial).
+        used = float(spool.get('used_weight', 0) or 0)
+        initial = float(spool.get('initial_weight', 0) or 0)
+        grams = min(grams, max(0.0, initial - used))
+        if grams <= 0:
+            # Spool already empty — nothing to deduct, but it's not a failure.
+            applied.append({"sid": sid, "grams": 0.0, "remaining": 0.0})
+            continue
+        new_used = used + grams
+        if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+            remaining = max(0.0, initial - new_used)
+            info = spoolman_api.format_spool_display(spool)
+            state.add_log_entry(
+                f"✔️ Cancel-deduct {grams:.1f}g from Spool #{sid} (confirmed): "
+                f"[➔ {remaining:.1f}g remaining]", "SUCCESS", info.get('color', '888888'))
+            applied.append({"sid": sid, "grams": round(grams, 1), "remaining": round(remaining, 1)})
+        else:
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            errors.append({"sid": sid, "error": err})
+            failed_sids.add(sid)
+            state.add_log_entry(
+                f"❌ Cancel-deduct failed for Spool #{sid}: {err}", "ERROR", "ff4444")
+
+    if errors:
+        # Re-queue ONLY the spools that DIDN'T apply, so a retry can't double-
+        # deduct the ones that did. Don't burn the ledger — the job isn't fully
+        # done — so the edge stays blocked (has_pending) but a retry is possible.
+        leftover = {r["sid"]: r for r in rec.get("spools", []) if r["sid"] in failed_sids}
+        if leftover:
+            retry_rec = dict(rec)
+            retry_rec["spools"] = list(leftover.values())
+            cancel_review_store.add_pending(retry_rec)
+            # Re-emit the Review affordance so the retry is discoverable even if
+            # the original cancel log line has scrolled off.
+            state.add_log_entry(
+                f"🛑 {len(leftover)} spool(s) still need a cancel-deduct review on "
+                f"{printer} (a deduct failed) — Review to retry.",
+                "WARNING", "ffaa00",
+                meta={"type": "cancel_deduct_pending",
+                      "printer_name": printer, "job_id": str(job_id)})
+        status = "confirmed" if applied else "error"
+        return jsonify({"status": status, "applied": applied, "errors": errors})
+
+    # Full success — commit the ledger (exactly-once across restart/retry).
+    print_deduct_ledger.record_deduct(
+        printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
+        grams=round(sum(a['grams'] for a in applied), 2), confirmed=True)
+    return jsonify({"status": "confirmed", "applied": applied, "errors": errors})
+
+
+@app.route('/api/cancel_deduct/dismiss', methods=['POST'])
+def api_cancel_deduct_dismiss():
+    """Dismiss a pending cancel review without deducting. Body:
+    {printer_name, job_id}. Records the ledger (so it can't re-surface) and pops
+    the pending record."""
+    data = request.json or {}
+    printer = data.get('printer_name')
+    job_id = data.get('job_id')
+    if not printer or job_id is None:
+        return jsonify({"status": "error", "msg": "missing printer_name/job_id"}), 400
+    rec = cancel_review_store.pop_pending(printer, job_id)
+    if rec is None:
+        return jsonify({"status": "already_handled"})
+    print_deduct_ledger.record_deduct(
+        printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
+        grams=0, dismissed=True)
+    state.add_log_entry(
+        f"🚫 Dismissed cancel-deduct review for {printer} (job {job_id}) — "
+        f"no weight deducted.", "INFO")
+    return jsonify({"status": "dismissed"})
 
 
 @app.route('/api/fb_aggressive_parse', methods=['POST'])
@@ -5366,16 +5665,17 @@ _CANCEL_DEDUCT_RUN_ASYNC = True
 
 
 def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
-    """Action taken when a cancel edge is detected. SLICE 2a: auto-apply the
-    partial deduct. (Slice 5 swaps this body for a preview-and-confirm gate; the
-    detector reaches it only through _dispatch_cancel_edge, so its threading
-    contract stays stable regardless of what this body does.)"""
+    """Action taken when a cancel edge is detected. SLICE 5: compute the partial
+    and stash it for preview-and-confirm (§9.7) — Derek reviews/nudges before it
+    writes (automating the manual Connect-reading he does today). The detector
+    reaches this only through _dispatch_cancel_edge, so the threading contract
+    (off the heartbeat thread) is unchanged from slice 2a."""
     try:
-        deduct_cancelled_print(printer_name, filename, job_id, progress, fb_url=fb_url)
+        _create_pending_cancel_review(printer_name, filename, job_id, progress, fb_url=fb_url)
     except Exception as e:
         try:
             state.add_log_entry(
-                f"❌ Cancelled-print deduct failed for {printer_name} "
+                f"❌ Cancelled-print review failed for {printer_name} "
                 f"('{filename}'): {e}", "ERROR", "ff4444")
         except Exception:
             pass

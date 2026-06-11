@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import app as app_module  # noqa: E402
 import prusalink_api  # noqa: E402
 import print_deduct_ledger  # noqa: E402
+import cancel_review_store  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -276,12 +277,14 @@ def _cancelled_gcode():
 @pytest.fixture
 def ledger_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
+    monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "pending.json"))
 
 
-def test_pulse_printing_then_stopped_deducts_end_to_end(ledger_tmp):
+def test_pulse_printing_then_stopped_creates_pending_review(ledger_tmp):
     """Drive the WHOLE path: a PRINTING pulse latches the job via the live
-    probe, a STOPPED pulse fires the real deduct_cancelled_print, and Spoolman
-    sees a per-tool partial deduct (untouched head skipped)."""
+    probe, a STOPPED pulse computes the per-tool partial and STASHES a pending
+    review (slice 5 = preview-and-confirm, NOT auto-write). Spoolman is NOT
+    touched; the untouched head is skipped in the resolved rows."""
     gcode, frac = _cancelled_gcode()
     printer_map = {
         "XL-1": {"printer_name": "XL", "position": 0},
@@ -325,17 +328,21 @@ def test_pulse_printing_then_stopped_deducts_end_to_end(ledger_tmp):
         m.start()
     try:
         app_module._pulse_section_printer_status()   # PRINTING → latch
-        app_module._pulse_section_printer_status()   # STOPPED → fire deduct
+        app_module._pulse_section_printer_status()   # STOPPED → stash pending
     finally:
         for m in reversed(ctx):
             m.stop()
 
-    updates = {sid: data for sid, data in captured["updates"]}
-    assert 100 in updates, captured["updates"]
-    assert abs(updates[100]["used_weight"] - 120.0) < 1e-6   # 100 + 10mm*2.0
-    assert 200 not in updates, "untouched toolhead's spool must not be deducted"
-    assert set(updates[100].keys()) == {"used_weight"}       # archive-on-empty discipline
-    assert print_deduct_ledger.was_deducted("XL", "J-1") is True
+    assert captured["updates"] == [], "preview path must NOT write to Spoolman"
+    pending = cancel_review_store.list_pending()
+    assert len(pending) == 1, pending
+    rec = pending[0]
+    assert rec["printer_name"] == "XL" and rec["job_id"] == "J-1"
+    sids = {r["sid"]: r for r in rec["spools"]}
+    assert 100 in sids and abs(sids[100]["grams"] - 20.0) < 1e-6   # T0: 10mm*2.0
+    assert 200 not in sids, "untouched toolhead's spool must not be in the preview"
+    # Not yet committed to the ledger — that happens on confirm/dismiss.
+    assert print_deduct_ledger.was_deducted("XL", "J-1") is False
 
 
 # ---------------------------------------------------------------------------
@@ -436,10 +443,10 @@ def test_deduct_unrecognized_footer_warns_distinctly(ledger_tmp):
 # Real daemon-thread dispatch (production path, not the sync test shortcut)
 # ---------------------------------------------------------------------------
 
-def test_cancel_fires_exactly_once_on_real_daemon_thread(ledger_tmp):
+def test_cancel_creates_pending_once_on_real_daemon_thread(ledger_tmp):
     """Exercise the ACTUAL async dispatch (_CANCEL_DEDUCT_RUN_ASYNC=True): a
-    PRINTING→STOPPED edge spawns the daemon thread, which deducts exactly once.
-    Proves the thread path (not just the sync shortcut the other tests use)."""
+    PRINTING→STOPPED edge spawns the daemon thread, which stashes a pending
+    review exactly once. Proves the thread path (not just the sync shortcut)."""
     import time
     gcode, frac = _cancelled_gcode()
     printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
@@ -452,6 +459,7 @@ def test_cancel_fires_exactly_once_on_real_daemon_thread(ledger_tmp):
 
     app_module._CANCEL_DEDUCT_RUN_ASYNC = True   # fixture restores it
     ctx = [
+        patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
         patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map),
         patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds),
         patch.object(app_module.prusalink_api, "download_gcode_content", return_value=gcode),
@@ -469,14 +477,16 @@ def test_cancel_fires_exactly_once_on_real_daemon_thread(ledger_tmp):
                           return_value=_job(filename="job.gcode", job_id="T-1", progress=frac)):
             app_module._track_print_edge("XL", _state("PRINTING"), "http://fb")
         app_module._track_print_edge("XL", _state("STOPPED"), "http://fb")  # dispatches a thread
-        # Wait for the daemon thread to commit the ledger (deduct done).
+        # Wait for the daemon thread to stash the pending review.
         deadline = time.time() + 3.0
-        while time.time() < deadline and not print_deduct_ledger.was_deducted("XL", "T-1"):
+        while time.time() < deadline and not cancel_review_store.has_pending("XL", "T-1"):
             time.sleep(0.02)
     finally:
         for m in reversed(ctx):
             m.stop()
 
-    assert print_deduct_ledger.was_deducted("XL", "T-1") is True, "daemon deduct never committed"
-    assert len(captured["updates"]) == 1, captured["updates"]
-    assert abs(captured["updates"][0][1]["used_weight"] - 120.0) < 1e-6
+    assert cancel_review_store.has_pending("XL", "T-1") is True, "daemon review never stashed"
+    assert captured["updates"] == [], "preview path must NOT write to Spoolman"
+    rec = cancel_review_store.get_pending("XL", "T-1")
+    assert len(rec["spools"]) == 1 and rec["spools"][0]["sid"] == 100
+    assert abs(rec["spools"][0]["grams"] - 20.0) < 1e-6
