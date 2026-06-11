@@ -202,12 +202,15 @@ Send ONLY `{used_weight}` to `update_spool` (never bundle `initial_weight`/`loca
 ### 9.7 UX
 For cancels, PREVIEW the computed per-tool partial and let Derek confirm/nudge before it writes (the WeightEntry "preview the used_weight before submit" pattern) — automating the manual Connect-reading he does today.
 
-### 9.8 Build slices (dependency order)
-| # | Slice | Size |
-|---|-------|------|
-| 0 | Phase 0 fast-poll (printer-state transition → short-cadence tick; also fixes L25) | S |
-| 1 | Phase 1 / Scope 1 (`_fb_spool_location` → Spoolman) | S |
-| 2 | Cancel detection + latching (rides the pulse probe) | M |
-| 3 | gcode prefix-parse (per-tool E-axis state machine) | M |
-| 4 | Exactly-once ledger | S |
-| 5 | Preview-and-confirm UX | M |
+### 9.8 Build slices (dependency order) — STATUS 2026-06-10
+Branch `feature/filabridge-absorb-phase-0-1`. The whole backend is done + simulation-tested; only the live-pulse detection wiring and the UI remain.
+
+| # | Slice | Size | Status |
+|---|-------|------|--------|
+| 0 | Phase 0 fast-poll (printer-state transition → short-cadence tick; also fixes L25) | S | ✅ `881f3d7` (8 tests) |
+| 1 | Phase 1 / Scope 1 (`_fb_spool_location` → Spoolman) | S | ✅ `20f8802` (89 FB-seam tests) |
+| 3 | gcode prefix-parse (`prusalink_api.parse_partial_filament_usage`, per-tool E-axis) | M | ✅ `0a9ea6c` (9 tests) |
+| 4 | Exactly-once ledger (`print_deduct_ledger.py`) | S | ✅ `10abe33` |
+| 2b | Cancel-deduct backend (`_apply_usage_to_printer` extract + `deduct_cancelled_print` orchestrator + `download_gcode_content`) | M | ✅ `10abe33` (4 sim tests) |
+| 2a | **Cancel DETECTION + latching** — `PRINT_TRACKER` in `_pulse_section_printer_status`/`fetch_for_printer` (~app.py:5287-5310): latch `filename`/`job_id`/monotonic `progress` while PRINTING via a **`/api/v1/job` fetch** (`get_printer_state` lacks them); on the →STOPPED/ERROR edge fire `deduct_cancelled_print(...)` **async** (don't block the heartbeat). **STOPPED/ERROR-only first ship** (FINISHED stays with FilaBridge until Phase-2 cutover). Extend the sim harness to drive the edge through the pulse. | M | ⏳ TODO |
+| 5 | Preview-and-confirm UX on a cancel (WeightEntry preview pattern) | M | ⏳ TODO |
