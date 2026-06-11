@@ -5,6 +5,7 @@ import config_loader # type: ignore
 import config_schema # type: ignore
 import locations_db # type: ignore
 import spoolman_api # type: ignore
+import print_deduct_ledger # type: ignore
 import logic # type: ignore
 import csv
 import os
@@ -4014,6 +4015,120 @@ def api_fb_parse_status():
     import prusalink_api
     return jsonify({"msg": prusalink_api.FB_PARSE_STATUS})
 
+
+def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
+    """Deduct per-toolhead grams from the spools currently mapped to
+    `printer_name`'s toolheads. `usage_map` is {toolhead_position: grams}.
+
+    The single canonical deduct loop, shared by the FilaBridge error-recovery
+    aggressive parse (full-print estimate) and the cancelled-print PARTIAL
+    deduct (prefix-parsed grams). MMU-alias positions (e.g. CORE1-M0 vs
+    CORE1-M1 — same position in printer_map) are deduped via
+    `processed_positions` so one usage slice isn't applied twice. Writes ONLY
+    `{used_weight}` per the CLAUDE.md write-surface contract — never bundles
+    initial_weight/location/extra, so a partial deduct can't wipe siblings or
+    silently archive a loaded spool. Surfaces LAST_SPOOLMAN_ERROR on rejection.
+
+    Returns (spools_updated, details) where details is a list of
+    {sid, grams, remaining} for each successful deduct.
+    """
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2
+    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+    spools_updated = 0
+    details = []
+    processed_positions = set()
+    for loc_id, p_info in active_locs:
+        toolhead_idx = p_info.get('position', 0)
+        if toolhead_idx in processed_positions:
+            continue
+        if toolhead_idx not in usage_map:
+            continue
+        weight_used = usage_map[toolhead_idx]
+        loc_spools = spoolman_api.get_spools_at_location(loc_id)
+        if not loc_spools:
+            continue  # try the next alias for this position
+        processed_positions.add(toolhead_idx)
+        for sid in loc_spools:
+            spool_data = spoolman_api.get_spool(sid)
+            if spool_data and weight_used > 0:
+                used = float(spool_data.get('used_weight', 0))
+                initial = float(spool_data.get('initial_weight', 0) or 0)
+                remaining = max(0, initial - used)
+                new_remaining = max(0, remaining - weight_used)
+                new_used = used + weight_used
+                if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+                    spools_updated += 1
+                    info = spoolman_api.format_spool_display(spool_data)
+                    label = strategy_label or (
+                        "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
+                    )
+                    state.add_log_entry(
+                        f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({label}): "
+                        f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]",
+                        "SUCCESS", info['color'])
+                    details.append({"sid": sid, "grams": weight_used, "remaining": new_remaining})
+                else:
+                    err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                    state.add_log_entry(
+                        f"❌ Failed to auto-deduct from Spool #{sid}: {err}", "ERROR", "ff4444")
+    return spools_updated, details
+
+
+def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
+                           fb_url=None, ip_address=None, api_key=None):
+    """Compute + apply the PARTIAL filament deduct for a CANCELLED print
+    (FilaBridge absorption design §9). Exactly-once via the (printer, job_id)
+    ledger; NEVER deducts the full estimate (that's the ~10x over-charge a
+    cancel must avoid). Returns a status dict:
+
+      status='skipped'   already deducted (ledger hit) — no-op
+      status='no_usage'  cancelled before extrusion / no metadata — recorded, 0g
+      status='deducted'  partial grams applied; carries spools_updated + details
+      status='error'     credentials / gcode download failed (NOT recorded, so a
+                         later retry can still deduct)
+    """
+    if fb_url is None:
+        _, fb_url = config_loader.get_api_urls()
+
+    if print_deduct_ledger.was_deducted(printer_name, job_id):
+        return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
+
+    if not (ip_address and api_key):
+        creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
+        if not creds:
+            return {"status": "error", "reason": "no credentials", "job_id": job_id}
+        ip_address, api_key = creds.get('ip_address'), creds.get('api_key')
+
+    content = prusalink_api.download_gcode_content(ip_address, api_key, filename)
+    if not content:
+        return {"status": "error", "reason": "gcode download failed", "job_id": job_id}
+
+    usage_map = prusalink_api.parse_partial_filament_usage(content, reached_fraction)
+    pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+
+    if not usage_map:
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — no "
+            f"partial usage to deduct (cancelled before extrusion or no metadata).",
+            "INFO")
+        print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                          scale=reached_fraction, grams=0)
+        return {"status": "no_usage", "job_id": job_id}
+
+    spools_updated, details = _apply_usage_to_printer(
+        printer_name, usage_map, fb_url, strategy_label="Cancel")
+    print_deduct_ledger.record_deduct(
+        printer_name, job_id, filename=filename, scale=reached_fraction,
+        grams=round(sum(usage_map.values()), 2))
+    total = round(sum(d["grams"] for d in details), 1)
+    state.add_log_entry(
+        f"🛑 Cancelled-print partial deduct on {printer_name}: {total:.1f}g across "
+        f"{spools_updated} spool(s) at ~{pct:.0f}% progress ('{filename}').",
+        "WARNING")
+    return {"status": "deducted", "spools_updated": spools_updated,
+            "details": details, "usage_map": usage_map, "job_id": job_id}
+
+
 @app.route('/api/fb_aggressive_parse', methods=['POST'])
 def api_fb_aggressive_parse():
     data = request.json
@@ -4042,45 +4157,10 @@ def api_fb_aggressive_parse():
     if not usage_map:
         return jsonify({"success": False, "msg": "Failed to parse filament usage from GCode"})
         
-    # 3. Apply weights to mapped spools
-    cfg = config_loader.load_config()
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
-
-    _, _fb_url_for_mmu = config_loader.get_api_urls()
-    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, _fb_url_for_mmu)
-    spools_updated = 0
-    # Track positions we've already processed so MMU-alias entries (CORE1-M0
-    # vs CORE1-M1 — same position in printer_map) don't double-deduct the
-    # same gcode usage slice.
-    processed_positions = set()
-    for loc_id, p_info in active_locs:
-        toolhead_idx = p_info.get('position', 0)
-        if toolhead_idx in processed_positions:
-            continue
-        if toolhead_idx in usage_map:
-            weight_used = usage_map[toolhead_idx]
-            loc_spools = spoolman_api.get_spools_at_location(loc_id)
-            if not loc_spools:
-                continue  # try the next alias for this position
-            processed_positions.add(toolhead_idx)
-            for sid in loc_spools:
-                spool_data = spoolman_api.get_spool(sid)
-                if spool_data and weight_used > 0:
-                    used = float(spool_data.get('used_weight', 0))
-                    initial = float(spool_data.get('initial_weight', 0) or 0)
-                    remaining = max(0, initial - used)
-                    new_remaining = max(0, remaining - weight_used)
-                    new_used = used + weight_used
-                    if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-                        spools_updated += 1
-                        info = spoolman_api.format_spool_display(spool_data)
-                        strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
-                        state.add_log_entry(f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
-                    else:
-                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-                        state.add_log_entry(
-                            f"❌ Failed to auto-deduct from Spool #{sid}: {err}", "ERROR", "ff4444"
-                        )
+    # 3. Apply weights to mapped spools via the shared deduct loop (the same
+    #    loop the cancelled-print partial deduct reuses — see
+    #    _apply_usage_to_printer).
+    spools_updated, _ = _apply_usage_to_printer(printer_name, usage_map, fb_url)
 
     # 4. Acknowledge Error
     if spools_updated > 0:

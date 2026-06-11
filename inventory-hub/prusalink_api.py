@@ -136,6 +136,27 @@ def download_gcode_and_parse_usage(ip_address: str, api_key: str, filename: str)
 
 # --- Cancelled-print partial usage (FilaBridge absorption §9.2, slice 3) ------
 
+def download_gcode_content(ip_address: str, api_key: str, filename: str) -> Optional[str]:
+    """Download the FULL gcode file TEXT from PrusaLink.
+
+    The cancelled-print prefix-parse needs the file BODY from byte 0 up to the
+    reached position — a Range tail (as `download_gcode_and_parse_usage` uses to
+    grab only the footer) won't do. After a print STOPS the file un-404s, so this
+    works at cancel time. Returns the text, or None on failure.
+    """
+    filename = filename.lstrip('/')
+    url = f"http://{ip_address}/{filename}"
+    headers = {'X-Api-Key': api_key} if api_key else {}
+    try:
+        resp = requests.get(url, headers=headers, timeout=60)
+        if resp.ok:
+            return resp.text
+        print(f"download_gcode_content: HTTP {resp.status_code} for {filename}")
+    except Exception as e:
+        print(f"download_gcode_content failed for {filename}: {e}")
+    return None
+
+
 _GCODE_MM_RE = re.compile(r';?\s*filament used \[mm\]\s*=\s*([0-9.,\s]+)')
 
 
