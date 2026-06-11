@@ -30,7 +30,7 @@ Three forces converge:
 
 | Capability | FilaBridge (Go) | FCC today | Verdict |
 |---|---|---|---|
-| **Print-finish detection** (poll PrusaLink, edge-detect PRINTING→idle) | ✅ per-printer goroutines on a ticker | ❌ **none** — FCC has no proactive monitor; it only reacts to FilaBridge's `/print-errors` feed ([app.py:5059](../../../inventory-hub/app.py)) | **The only genuinely missing piece** |
+| **Print-finish detection** (poll PrusaLink, edge-detect PRINTING→idle) | ✅ per-printer goroutines on a ticker | ❌ **none today** — FCC has no proactive monitor; it only reacts to FilaBridge's `/print-errors` feed ([app.py:5059](../../../inventory-hub/app.py)). **Cancelled-print detection now DESIGNED (see §9)** — rides the existing pulse probe; ships before the full Phase-2 monitor | **The only genuinely missing piece — cancel-edge slice designed** |
 | **GCode download + `filament used [g]=` parse** | ✅ full download + 3× exp-backoff retry | ✅ **FCC's own implementation** — `download_gcode_and_parse_usage` ([prusalink_api.py:64-134](../../../inventory-hub/prusalink_api.py)). Shares the *parse regex* with FilaBridge; the Range fast-path (`bytes=-2097152`) is **FCC-original** (FilaBridge has none); FCC lacks FilaBridge's retry/backoff | FCC owns the capability |
 | **Per-toolhead deduct** (read-modify-write `used_weight`) | ✅ PATCH `/spool/{id}` | ✅ three FCC paths: aggressive-parse ([app.py:4074](../../../inventory-hub/app.py)), manual-recovery ([app.py:4116](../../../inventory-hub/app.py)), auto-recover ([app.py:5138](../../../inventory-hub/app.py)) — same RMW PATCH mechanism | FCC owns it |
 | **MMU-alias dedup** (M0/M1 same position) | ❌ deserializes the `mmu` flag but never uses it | ✅ `_resolve_active_locs_for_printer` + `processed_positions` ([app.py:461-504](../../../inventory-hub/app.py), [app.py:4055-4065](../../../inventory-hub/app.py)) | **FCC is ahead** |
@@ -139,7 +139,7 @@ Three forces converge:
 
 ## 7. Open questions for Derek
 
-1. **Cancelled prints:** does FCC's auto-deduct account for *cancelled/aborted* prints, or only completed ones? FilaBridge deducts only on completion; only the `sargonas` fork adds cancellation. If FCC only handles completions, Scope 2's monitor needs the cancelled-print logic.
+1. **Cancelled prints — ✅ ANSWERED + DESIGNED (2026-06-10, see §9).** FCC does NOT handle cancellations today (neither does Derek's FilaBridge build — both bill the full estimate on the printing→idle edge). Now a designed feature: gcode prefix-parse per-tool partial deduction, shippable before Phase 2 by riding the existing pulse probe. Derek wants it.
 2. **Filename at finish-edge:** does PrusaLink reliably expose the *just-completed* job's gcode filename the moment state flips to FINISHED, or only *during* the print (forcing the capture-on-PRINTING-edge stash)?
 3. **Credential store:** when FilaBridge `/printers` goes away, where do `ip_address`/`api_key` live — folded into the L271 `locations.json` Printer rows, or a dedicated secrets store?
 4. **Scope 1 backing store:** OK to use Spoolman `location` (already written on every move) as the map source, accepting its lag characteristics — or stand up a dedicated FCC-side mirror?
@@ -159,3 +159,55 @@ Three forces converge:
 - **Uncertain — L25 mechanism (C13):** the buglist's "cadence drops when the printer goes idle" is wrong; cadence is driven by *user* inactivity + tab visibility, not printer state. The fix direction was rewritten accordingly (§5/§6).
 - **Uncertain — nfc.go framing (C21):** it's a scan-session *assignment coordinator* (overlapping `perform_smart_move`), not just a tag driver. Doesn't change "don't replicate the tag layer," but it's why C23 matters.
 - **Uncertain — OpenPrintTag barrier (C22):** firmware/library, not necessarily a hardware swap (PN532 supports ISO 15693 natively).
+
+---
+
+## 9. Cancelled-Print Partial Deduction — Locked Design (2026-06-10)
+
+*Promoted from Open Question #1. Designed via two research workflows (cancelled-print mechanism — 20 agents; metrics + Connect legality — 8 agents) + a deep-read of `needo37/filabridge` and the `sargonas` fork. **Method locked; ready to build.** Derek wants this feature: partial usage on cancels currently goes unrecorded, so spool weight drifts and he has to re-weigh after several cancels.*
+
+**Problem.** Neither FCC nor Derek's FilaBridge build deducts filament on a CANCELLED/aborted print — only on completion. The gcode `filament used [g]` footer is the FULL-job estimate, so a cancel must NOT deduct that total (massive over-deduct); we have to compute the ACTUAL partial grams **per toolhead**.
+
+### 9.1 Data-availability findings (what's reachable, what isn't)
+- **Local PrusaLink API exposes NO measured consumed-filament figure.** Confirmed 3 ways (Prusa OpenAPI `StatusJob`; firmware `basic_gets.cpp`; pyprusalink). `/api/v1/job` `file.meta['filament used [g]']` (+ per-tool arrays) is the SLICER ESTIMATE and doesn't shrink with progress. `progress` = `sd_percent_done` = gcode FILE-BYTE position (0–100).
+- **Firmware-measured total is cloud-only AND a lifetime length odometer (meters).** `render.cpp` `"filament"=params.filament_used` = `Odometer_s::get_extruded_all()` (EEPROM, not per-print, not grams), emitted only to Prusa Connect. Connect derives per-print by differencing it server-side; the LAN endpoints never expose it.
+- **Buddy metrics channel (buglist L150 / `prusa_exporter`) — NO-GO as a measured source.** `app_metrics.cpp` catalog has X/Y/Z position only (no `pos_e`/E-axis), `sdpos` (byte progress = same proxy we already have), `active_extruder` (index), and `filament` = TYPE-name STRING. No `filament_used`/`extruded_mm` anywhere. Transport is plain UDP syslog (port 8514 — ingestible without Prometheus/Grafana) but there is no useful payload, and enabling it needs an on-printer touchscreen confirm (M334/M340, off-by-default, dev-flagged). Cost moderate, benefit zero.
+- **Prusa Connect cloud API — RISKY, and XL-blind.** No sanctioned own-data API; only the undocumented/unversioned web-app `/app/.../material_quantity` endpoint authed by a browser session cookie (`_sleek_session`, no token refresh). Explicit ToS anti-scraping clauses (Connect/Link T&C §5.3; Website ToS Art 9.1/9.3), no personal-use automation carve-out. HA deliberately uses local PrusaLink, not Connect. Community precedent works but warns it's unversioned + "probably won't work for toolchanger/INDX printers" (clusters by material → breaks the untouched-head invariant on the XL too). **Decision: stay local-only;** at most a far-future opt-in, off-by-default, fail-soft, never-redistribute side-channel — and even then it can't serve the XL.
+
+### 9.2 Method — LOCKED: gcode prefix-parse (2-rung ladder)
+**Hard multi-tool invariant (Derek):** never one global progress-scale across heads; an un-engaged toolhead deducts exactly **0**. Flat `estimate[t] × global_progress` deducts filament a never-engaged head never extruded (e.g. a top-band color tool on a cancel at 40%) — the `sargonas` fork does exactly this; fine for single-tool MK, WRONG for the XL.
+
+- **Rung 1 (primary) — gcode prefix-parse.** Because `progress` IS byte-position, parse the gcode from byte 0 to `progress × filesize`, track the active tool via `Tn`, accumulate per-tool extrusion `E` (honor M82/M83 absolute/relative + G92 E0 resets), convert mm→g per filament diameter (1.75) + density. Yields per-tool actual grams at the cancel point; an un-reached tool sums to 0 NATIVELY. Subsumes global-scaling and removes the byte≠filament-density bias on ALL printers. **The only local method that satisfies the invariant on the XL.** FCC already downloads + parses the gcode for the completed path, so half the machinery exists.
+- **Rung 2 (fallback) — estimate × progress.** When the gcode isn't parseable/available. NO per-tool breakdown → on the XL it CANNOT keep an untouched head at 0, so on multi-tool jobs it must surface **LOW-CONFIDENCE** (activity log + toast), never silently emit a fabricated per-tool figure.
+
+mm→g: `g = (mm/1000) × π × (d/2)² × ρ`, d = 1.75 mm, ρ from filament density (PLA ≈ 1.24 g/cm³).
+
+### 9.3 Detection
+Probe `GET /api/v1/status` → `printer.state` (already in `_probe_printer_state`). Enum: IDLE/BUSY/PRINTING/PAUSED/FINISHED/STOPPED/ERROR/ATTENTION/READY. Cancel = STOPPED (no separate ABORTED); ERROR = failed; FINISHED = completion; PAUSED = not terminal.
+- Use the RAW `state` string, **not** `is_active` (eject/swap-during-pause depends on `is_active` semantics — don't change them).
+- **LATCH on every active poll** — the job block + progress are torn down at the STOPPED edge while the gcode only un-404s *post*-STOPPED (Prusa-Link-Web #431, Buddy #4744). Per printer stash: `last_job_filename`, `last_job_id`, `last_progress` (monotonic max), `last_file_meta['filament used [g]']`.
+- On the terminal edge (`→ STOPPED/ERROR`, or bare IDLE with last_progress < 0.95 = cancel; FINISHED or IDLE ≥ 0.95 = completion) fire the deduct using the **latched** values.
+
+### 9.4 Exactly-once
+Persistent `data/print_deduct_ledger.json` keyed on `(printer_name, job_id)` — Spoolman's `/use` is NON-idempotent (issue #608, 2.6× on retry) and the in-memory latch is lost on restart. On a terminal edge: resolve job_id → if in ledger, skip; else deduct, write ledger, clear latch. `job_id == 0` → deduct once from the in-memory edge, don't write ledger. Bound the ledger (last N per printer) like `_evict_old_fb_snapshots`.
+
+### 9.5 Integration — rides the existing pulse probe (no Phase-2 daemon needed yet)
+`_pulse_section_printer_status` already iterates the printer_map and calls `get_printer_state` per printer on every heartbeat via a `ThreadPoolExecutor`. Hook a new `_track_print_edge(name, state_info, fb_url)` inside `fetch_for_printer`; on the terminal edge call a NEW reusable `parse_and_deduct(printer, filename, usage_scale, file_meta)` extracted from `_auto_recover_task` / `api_fb_aggressive_parse` (the extraction §4 Scope 2 step 3 already calls for). Reuse the deduct loop + MMU-alias dedup (`_resolve_active_locs_for_printer` + `processed_positions`) unchanged except for the per-tool prefix-parse amount.
+- **Needs the Phase 0 fast-poll** (printer-state transition forces a short-cadence tick) so a short cancel isn't missed between 15 s/30 s idle-bucket ticks — same hook as L25, now with two consumers.
+- **First ship = STOPPED/ERROR only** (additive; leave FINISHED to FilaBridge until the Phase-2 atomic cutover, else completed prints double-deduct). Covers exactly the gap FilaBridge never had.
+
+### 9.6 Archive-on-empty hazard
+Send ONLY `{used_weight}` to `update_spool` (never bundle `initial_weight`/`location`/`extra`); do NOT route through `/api/spool/update` (it runs `_auto_archive_on_empty`/`_auto_unarchive_on_refill` on `initial_weight`). The existing deduct sites already do this — preserve it in `parse_and_deduct`. Deduction is uni-directional (no `_auto_unarchive_on_refill`). Note: today's error-recovery path already over-deducts the FULL estimate on a cancel (~10× on a 10 % cancel) — scaling is a strict improvement.
+
+### 9.7 UX
+For cancels, PREVIEW the computed per-tool partial and let Derek confirm/nudge before it writes (the WeightEntry "preview the used_weight before submit" pattern) — automating the manual Connect-reading he does today.
+
+### 9.8 Build slices (dependency order)
+| # | Slice | Size |
+|---|-------|------|
+| 0 | Phase 0 fast-poll (printer-state transition → short-cadence tick; also fixes L25) | S |
+| 1 | Phase 1 / Scope 1 (`_fb_spool_location` → Spoolman) | S |
+| 2 | Cancel detection + latching (rides the pulse probe) | M |
+| 3 | gcode prefix-parse (per-tool E-axis state machine) | M |
+| 4 | Exactly-once ledger | S |
+| 5 | Preview-and-confirm UX | M |
