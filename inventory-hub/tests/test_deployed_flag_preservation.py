@@ -31,6 +31,14 @@ def _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured):
     mocks = [
         patch.object(logic.config_loader, "load_config",
                      return_value={"printer_map": printer_map}),
+        # L271 Phase 4: perform_smart_move reads the printer_map via
+        # locations_db.get_active_printer_map() (Printer-row toolheads[]), not
+        # config:printer_map. The test loc_lists carry bare "Tool Head" rows
+        # (no "Printer" rows), so the accessor would build an EMPTY map and
+        # misroute toolhead moves into the GENERIC branch — inject through the
+        # accessor too (mirrors test_filabridge_move_ordering.py).
+        patch.object(logic.locations_db, "get_active_printer_map",
+                     return_value=printer_map),
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
