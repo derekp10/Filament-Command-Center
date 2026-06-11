@@ -485,6 +485,41 @@ def test_cancel_creates_pending_once_on_real_daemon_thread(ledger_tmp):
 # Cancel-monitor daemon — dashboard-independent detection (Derek's correction)
 # ---------------------------------------------------------------------------
 
+def test_single_head_printer_folds_usage_to_sole_position():
+    """A one-toolhead printer (Derek's Core One — one head, one spool) folds all
+    footer tools onto its sole position, so an MMU-profile file (footer marks
+    slot 1) still deducts from the one physical spool instead of orphaning to a
+    non-existent position 1."""
+    gcode = ("M83\nT1\nG1 E10\n"
+             "; filament used [mm] = 0, 10\n; filament used [g] = 0, 25\n")
+    pm = {"CORE1-M0": {"printer_name": "Core One", "position": 0}}
+    with patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
+                      side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value=pm):
+        usage_map, terminal = app_module._compute_cancel_usage(
+            "Core One", "f.gcode", "J-1", 1.0, "1.2.3.4", "k")
+    assert terminal is None
+    assert set(usage_map.keys()) == {0}, usage_map      # slot-1 folded → position 0
+    assert abs(usage_map[0] - 25.0) < 1e-6
+
+
+def test_multi_head_printer_keeps_per_tool_map():
+    """A multi-toolhead printer (XL/INDX) keeps the per-tool map — tool index IS
+    the toolhead position there, no fold."""
+    gcode = ("M83\nT0\nG1 E10\nT1\nG1 E4\n"
+             "; filament used [mm] = 10, 4\n; filament used [g] = 20, 8\n")
+    pm = {"XL-1": {"printer_name": "XL", "position": 0},
+          "XL-2": {"printer_name": "XL", "position": 1}}
+    with patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
+                      side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value=pm):
+        usage_map, terminal = app_module._compute_cancel_usage(
+            "XL", "f.gcode", "J-2", 1.0, "1.2.3.4", "k")
+    assert terminal is None
+    assert set(usage_map.keys()) == {0, 1}, usage_map   # per-tool preserved
+    assert abs(usage_map[0] - 20.0) < 1e-6 and abs(usage_map[1] - 8.0) < 1e-6
+
+
 def test_cancel_monitor_tick_drives_edge(capture_edge):
     """The 30s daemon tick probes each printer and runs the latch/edge detector
     independent of the dashboard: PRINTING then STOPPED across two ticks fires

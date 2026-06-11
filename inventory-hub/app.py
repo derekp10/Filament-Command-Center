@@ -4161,6 +4161,24 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
     if not usage_map:
         _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
         return None, {"status": "no_usage", "job_id": job_id}
+
+    # Single-toolhead printers (Derek's Core One: one head, one spool) route ALL
+    # filament through one physical position, so fold every footer tool onto it.
+    # The slicer's tool INDEX can differ from the printer's toolhead POSITION
+    # (e.g. an MMU-profile file marks slot 1 even when only one head exists), and
+    # without this fold that usage would orphan to a non-existent position and go
+    # un-deducted. Multi-head printers (XL / future INDX toolchanger) keep their
+    # per-tool map — there the tool index IS the toolhead position.
+    try:
+        pm = locations_db.get_active_printer_map()
+        positions = {info.get('position', 0) for info in pm.values()
+                     if info.get('printer_name') == printer_name}
+        if len(positions) == 1:
+            sole = next(iter(positions))
+            usage_map = {sole: round(sum(usage_map.values()), 4)}
+    except Exception:
+        pass
+
     return usage_map, None
 
 
