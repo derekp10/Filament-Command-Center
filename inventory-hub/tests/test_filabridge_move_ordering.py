@@ -235,44 +235,43 @@ def test_filabridge_reject_on_unmap_aborts_destination_map():
     assert "409" in result["filabridge_detail"], f"detail should include HTTP code: {result!r}"
 
 
-def test_filabridge_authoritative_origin_wins_over_spoolman_lag():
-    """If Spoolman thinks the spool is at CORE1-M0 but filabridge still
-    has it mapped to XL-3 (a latent desync), the pre-map query to
-    /api/status must identify XL-3 as the real origin and unmap it
-    before attempting the CORE1-M0 map. Otherwise filabridge rejects
-    the map on its one-spool-one-toolhead invariant.
+def test_scope1_spoolman_is_authoritative_origin():
+    """[Scope 1 / FilaBridge absorption] FCC is now the single source of truth
+    for the toolhead<->spool map — _fb_spool_location reads the spool's Spoolman
+    `location`, NOT FilaBridge `/status`. So the pre-map origin unmap targets
+    wherever SPOOLMAN says the spool is, even if a (now-ignored) FilaBridge view
+    would disagree.
 
-    This scenario actually happened 2026-04-22 after the first fix
-    landed: spool #213 was stuck on XL-3 in filabridge while Spoolman
-    had already been rewritten to CORE1-M0, so the Spoolman-only
-    origin check short-circuited as origin == destination."""
+    Pre-Scope-1 this asserted the INVERSE — FilaBridge winning over a Spoolman
+    lag — which was the dual-writer desync this change eliminates: with FCC the
+    only map writer and Spoolman written first, the two can no longer diverge.
+
+    Setup: Spoolman says #213 is on XL-2; we move it to CORE1-M0. The origin
+    unmap must clear XL-2 before mapping CORE1-M0. A contradictory FilaBridge
+    /status (which would claim CORE1-M0 == destination → skip the unmap) is
+    provided to prove it's never consulted."""
     printer_map = {
         "CORE1-M0": {"printer_name": "Core1", "position": 0},
-        "XL-3": {"printer_name": "XL", "position": 2},
+        "XL-2": {"printer_name": "XL", "position": 2},
     }
     loc_list = [
         {"LocationID": "CORE1-M0", "Type": "Tool Head", "Max Spools": "1"},
-        {"LocationID": "XL-3", "Type": "Tool Head", "Max Spools": "1"},
+        {"LocationID": "XL-2", "Type": "Tool Head", "Max Spools": "1"},
     ]
-    # Spoolman (wrongly) thinks #213 is already at CORE1-M0
-    spool_213 = {"id": 213, "location": "CORE1-M0", "extra": {}}
+    # Spoolman — the authoritative origin under Scope 1 — says #213 is on XL-2.
+    spool_213 = {"id": 213, "location": "XL-2", "extra": {}}
 
     def fake_update(sid, data):
         return {"id": sid, **data}
 
-    # Filabridge /api/status response: #213 is on XL toolhead 2.
-    fb_status_resp = MagicMock(
-        ok=True, status_code=200,
-        text='',
-    )
+    # A contradictory FilaBridge /status that (pre-Scope-1) would have claimed
+    # #213 on CORE1-M0 — origin == destination → skip unmap. Scope 1 never reads
+    # /status, so this is ignored and Spoolman's XL-2 origin wins.
+    fb_status_resp = MagicMock(ok=True, status_code=200, text='')
     fb_status_resp.json.return_value = {
         "toolhead_mappings": {
-            "printer_xl": {
-                "2": {"printer_name": "XL", "toolhead_id": 2, "spool_id": 213},
-                "0": {"printer_name": "XL", "toolhead_id": 0, "spool_id": 0},
-            },
             "printer_core1": {
-                "0": {"printer_name": "Core1", "toolhead_id": 0, "spool_id": 0},
+                "0": {"printer_name": "Core1", "toolhead_id": 0, "spool_id": 213},
             },
         },
     }
@@ -308,18 +307,45 @@ def test_filabridge_authoritative_origin_wins_over_spoolman_lag():
         for m in reversed(ctx):
             m.stop()
 
-    # Two POSTs: unmap XL toolhead 2 (filabridge's real origin), then
-    # map CORE1-M0 <- 213. Spoolman's stale "CORE1-M0" origin would have
-    # said origin == destination → skip unmap → filabridge 409. We must
-    # instead trust filabridge and unmap XL-3.
+    # Two POSTs: unmap XL-2 (Spoolman's authoritative origin), then map
+    # CORE1-M0 <- 213. The contradictory FilaBridge /status (origin ==
+    # destination) is never consulted, so the unmap fires off Spoolman.
     assert len(post_calls) == 2, f"expected unmap+map, got {post_calls!r}"
     unmap_call, map_call = post_calls
     assert _call_toolhead(unmap_call) == ("XL", 2), \
-        f"unmap should target filabridge's actual origin (XL toolhead 2), got {_call_toolhead(unmap_call)!r}"
+        f"unmap should target Spoolman's origin (XL-2), got {_call_toolhead(unmap_call)!r}"
     assert _call_spool_id(unmap_call) == 0
     assert _call_toolhead(map_call) == ("Core1", 0)
     assert _call_spool_id(map_call) == 213
     assert result["filabridge_ok"] is True
+
+
+def test_scope1_fb_spool_location_reads_spoolman_not_filabridge():
+    """[Scope 1] _fb_spool_location resolves the spool's toolhead from its
+    Spoolman `location` (through the printer_map), and does NOT probe FilaBridge
+    `/status` — proving the READ side moved off FilaBridge (this is what kills
+    the residual L3 latency tail and the dual-writer desync class)."""
+    printer_map = {"XL-2": {"printer_name": "XL", "position": 2}}
+
+    # On a toolhead -> (printer_name, position); FilaBridge /status untouched.
+    with patch.object(logic.locations_db, "get_active_printer_map",
+                      return_value=printer_map), \
+         patch.object(logic.spoolman_api, "get_spool",
+                      return_value={"id": 213, "location": "XL-2"}) as get_spool, \
+         patch.object(logic.requests, "get") as fb_get:
+        assert logic._fb_spool_location(213) == ("XL", 2)
+        assert fb_get.call_count == 0, \
+            "Scope 1: _fb_spool_location must not read FilaBridge /status"
+        get_spool.assert_called_with(213)
+
+    # Not on a toolhead (Spoolman says a dryer box) -> None; still no /status.
+    with patch.object(logic.locations_db, "get_active_printer_map",
+                      return_value=printer_map), \
+         patch.object(logic.spoolman_api, "get_spool",
+                      return_value={"id": 213, "location": "PM-DB-1"}), \
+         patch.object(logic.requests, "get") as fb_get2:
+        assert logic._fb_spool_location(213) is None
+        assert fb_get2.call_count == 0
 
 
 def test_move_to_same_toolhead_does_not_double_unmap():
@@ -459,13 +485,15 @@ def test_l204_dryer_move_unmaps_filabridge_when_spool_was_on_toolhead():
     )
 
 
-def test_l204_eject_falls_back_to_filabridge_lookup_when_spoolman_lags():
-    """L204 — perform_smart_eject must unmap filabridge even when the
-    spool's Spoolman location isn't in printer_map (e.g. the location
-    field still reads as the dryerbox because the DRYER MOVE branch
-    didn't unmap previously, or the user manually edited Spoolman).
-    Without the fix the user ejects the visible spool, Spoolman clears
-    cleanly, but filabridge stays pinned and the toolhead reads occupied."""
+def test_scope1_eject_trusts_spoolman_no_toolhead_rescue():
+    """[Scope 1 / FilaBridge absorption] When Spoolman says the spool is NOT on
+    a toolhead (here: in dryer box PM-DB-1), ejecting it issues no toolhead
+    unmap — FCC trusts Spoolman as the single source of truth. Pre-Scope-1 the
+    eject probed FilaBridge `/status` and rescue-unmapped a toolhead the spool
+    was still pinned to (a Spoolman-lag desync); that whole class is gone now
+    (FCC is the only map writer + writes Spoolman first; out-of-band drift is
+    healed by the L324 reconcile, not opportunistically here). A contradictory
+    FilaBridge /status claiming XL-3 is provided to prove it's ignored."""
     printer_map = {
         "XL-3": {"printer_name": "XL", "position": 3},
     }
@@ -505,11 +533,13 @@ def test_l204_eject_falls_back_to_filabridge_lookup_when_spoolman_lags():
         for m in reversed(ctx):
             m.stop()
 
-    # The eject must POST an unmap to filabridge for XL-3, picked up
-    # via the _fb_spool_location fallback even though Spoolman says PM-DB-1.
+    # No toolhead unmap: Spoolman says PM-DB-1 (a dryer box), so the spool
+    # isn't on a toolhead and there's nothing to clear. The old rescue-unmap
+    # of XL-3 (driven by FilaBridge's view) is gone by design under Scope 1.
     unmaps = [c for c in post_calls
               if _call_spool_id(c) == 0 and _call_toolhead(c) == ("XL", 3)]
-    assert len(unmaps) >= 1, (
-        f"expected at least one unmap(XL-3), got fb POSTs: "
+    assert not unmaps, (
+        f"Scope 1: a spool Spoolman places in a dryer box must NOT trigger a "
+        f"FilaBridge toolhead rescue-unmap; got fb POSTs: "
         f"{[(_call_toolhead(c), _call_spool_id(c)) for c in post_calls]!r}"
     )

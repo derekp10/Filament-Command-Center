@@ -97,35 +97,42 @@ def _find_box_slot_feeding_toolhead(toolhead_id, loc_list=None):
 
 
 def _fb_spool_location(spool_id, fb_url=None):
-    """Return (printer_name, toolhead_id) where filabridge currently has
-    `spool_id` mapped, or None.
+    """Return (printer_name, toolhead_id) for the toolhead `spool_id` is
+    currently mapped to — per FCC's own authoritative state — or None.
 
-    This is the AUTHORITATIVE origin for any upcoming map call — Spoolman's
-    `location` field can lag behind filabridge (stale desyncs, manual DB
-    edits, prior failed moves), and filabridge will reject the map if its
-    own view shows the spool on a different toolhead. Querying the status
-    endpoint lets us clear the correct toolhead first.
+    [Scope 1 / 2026-06-10 — FilaBridge absorption] Repointed from FilaBridge
+    `GET /status` to Spoolman. A spool's Spoolman `location`, resolved through
+    the first-class Printer rows' toolheads[] (`printer_map`, via `_toolhead_of`),
+    IS where it's mapped: FCC is now the single source of truth for the
+    toolhead<->spool map. The old `/status` read serially probed every printer's
+    live PrusaLink state with no caching, so one offline printer cost the full
+    timeout (~4-6s on a prod-sized fleet — the same reason the dashboard
+    heartbeat already moved OFF `/status`); routing the read through Spoolman
+    removes that residual L3 latency tail AND collapses the dual-writer desync
+    class (two map sources — FilaBridge SQLite vs Spoolman `location` — can no
+    longer drift apart, the root of the 2026-04-22 outage). FCC keeps PUSHING
+    the map to FilaBridge via `_fb_write` so its auto-deduct still targets the
+    right spool — only the READ side moved.
+
+    Precondition (verified 2026-06-10): FCC is the SOLE writer of the map via
+    `_fb_write`. FilaBridge's own `/api/nfc/assign` back-door writer is unused
+    here (FCC never calls it), so Spoolman can't be written behind FCC's back,
+    and every move path (smart-move / eject / force / undo) writes Spoolman
+    `location` before any FB call returns — so the Spoolman view is current and
+    authoritative. (This is the very resolution `perform_smart_move` already
+    used for its Spoolman-derived origin fallback at `origin_toolheads_by_spool`.)
+
+    `fb_url` is retained for call-site/back-compat and is now unused. Returns
+    (printer_name, position) — the contract callers feed to `_fb_write(..., 0)`
+    to clear the origin toolhead — or None when the spool isn't on a registered
+    toolhead.
     """
-    if fb_url is None:
-        _, fb_url = config_loader.get_api_urls()
     try:
-        with perf_trace.span("filabridge.status"):
-            resp = requests.get(f"{fb_url}/status", timeout=3)
-        if not getattr(resp, 'ok', False):
-            return None
-        data = resp.json() or {}
-        mappings = data.get('toolhead_mappings', {}) or {}
-        target = int(spool_id)
-        for _printer_key, toolheads in mappings.items():
-            for th_id, entry in (toolheads or {}).items():
-                try:
-                    if int(entry.get('spool_id') or 0) == target:
-                        return (entry.get('printer_name'), int(th_id))
-                except (TypeError, ValueError):
-                    continue
+        with perf_trace.span("fb_origin.spoolman"):
+            snap = spoolman_api.get_spool(int(spool_id)) or {}
+        return _toolhead_of(str(snap.get('location', '') or ''))
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _fb_write(printer_name, toolhead_id, spool_id, fb_url=None):
@@ -930,25 +937,17 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         ok, detail = _fb_write(p['printer_name'], p['position'], 0, fb_url)
         if not ok:
             state.add_log_entry(f"⚠️ Filabridge unmap {p['printer_name']}-{p['position']} FAILED: {detail}", "ERROR", "ff4444")
-    else:
-        # L204 — Spoolman location can lag behind filabridge: a spool
-        # whose Spoolman row says "in dryerbox slot 2" can still be
-        # mapped on a toolhead from an earlier auto-deploy that wasn't
-        # subsequently cleared (e.g. when the spool was moved out via
-        # the DRYER/GENERIC MOVE branches that don't unmap filabridge,
-        # or after a manual Spoolman edit). Probe filabridge directly
-        # and unmap there too — without this, ejecting such a spool
-        # clears Spoolman cleanly but leaves filabridge pinned to the
-        # now-gone spool, and the toolhead reads as occupied until
-        # somebody runs the reconcile tool.
-        fb_origin = _fb_spool_location(spool_id, fb_url)
-        if fb_origin:
-            ok, detail = _fb_write(fb_origin[0], fb_origin[1], 0, fb_url)
-            if not ok:
-                state.add_log_entry(
-                    f"⚠️ Filabridge unmap {fb_origin[0]}-{fb_origin[1]} FAILED: {detail}",
-                    "ERROR", "ff4444",
-                )
+    # [Scope 1 / 2026-06-10 — FilaBridge absorption] The old `else` here probed
+    # FilaBridge `/status` (via _fb_spool_location) to rescue-unmap a toolhead
+    # the spool was still mapped to even when Spoolman's `location` lagged. With
+    # FCC now the single source of truth — _fb_spool_location reads Spoolman,
+    # FCC is the only map writer, and every move writes Spoolman first — a spool
+    # whose Spoolman location isn't a toolhead is by definition not on one, so
+    # there's nothing to rescue (post-repoint the probe would resolve that same
+    # non-toolhead location to None anyway). The L204 causes it guarded against
+    # are gone: the DRYER/GENERIC move branches now unmap FilaBridge themselves,
+    # and out-of-band drift from a manual Spoolman edit is healed by the L324
+    # reconcile, not here.
 
     # Group 20.2: ejecting off a toolhead detaches any single-slot dryer box that
     # was following its spool onto this toolhead (the lifecycle pair of the
