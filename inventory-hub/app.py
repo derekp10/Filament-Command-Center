@@ -8,6 +8,7 @@ import spoolman_api # type: ignore
 import print_deduct_ledger # type: ignore
 import cancel_review_store # type: ignore
 import cancel_fetch_store # type: ignore
+import print_tracker_store # type: ignore
 import logic # type: ignore
 import csv
 import os
@@ -5982,6 +5983,12 @@ def _cancel_monitor_tick():
     with _PRINT_TRACKER_LOCK:
         for stale in [p for p in _PRINT_TRACKER if p not in names]:
             _PRINT_TRACKER.pop(stale, None)
+        snapshot = {k: dict(v) for k, v in _PRINT_TRACKER.items()}
+
+    # Slice 7: persist the latch snapshot so an in-flight print survives an FCC /
+    # host restart (reconciled on monitor start via _recover_print_tracker_on_
+    # start). Best-effort — print_tracker_store.save swallows its own errors.
+    print_tracker_store.save(snapshot)
 
     # Retry any cancels whose gcode was download-locked at the edge (§9.10).
     try:
@@ -6066,7 +6073,138 @@ def _process_pending_cancel_fetches(states, fb_url):
                 pass
 
 
+def _recover_print_tracker_on_start():
+    """Slice 7 — power-loss latch persistence. On monitor start, reconcile the
+    persisted in-flight latch against each printer's CURRENT state so a cancel
+    that happened (or a print that was running) during an FCC / host restart
+    isn't silently lost. Resolution table (persisted = was in-progress + a
+    latched job):
+
+        now PRINTING, SAME job_id  → it resumed: restore the latch
+        now PRINTING, DIFFERENT job → old outcome unknown: warn (manual), latch new
+        now STOPPED / ERROR        → cancel/failure: fire the deduct at persisted %
+        now FINISHED               → completed: leave to FilaBridge (no deduct)
+        now IDLE / READY           → cleared during outage, ambiguous: warn (manual)
+        offline (unreachable)      → restore the latch, defer to normal detection
+        (no latched job)           → seed the baseline state only
+
+    Idempotent: _dispatch_cancel_edge dedups via the (printer, job_id) ledger +
+    review store, so a double restart can't double-deduct."""
+    persisted = print_tracker_store.load()
+    if not persisted:
+        return
+    try:
+        _, fb_url = config_loader.get_api_urls()
+    except Exception:
+        fb_url = None
+    recovered = 0
+    for name, entry in list(persisted.items()):
+        try:
+            if _recover_one_print_latch(name, entry, fb_url):
+                recovered += 1
+        except Exception as e:
+            try:
+                state.logger.debug(f"print-latch recovery failed for {name}: {e}")
+            except Exception:
+                pass
+    if recovered:
+        try:
+            state.logger.info(
+                f"🛑 Reconciled {recovered} persisted print latch(es) after restart.")
+        except Exception:
+            pass
+
+
+def _recover_one_print_latch(name, entry, fb_url):
+    """Reconcile one persisted latch (see _recover_print_tracker_on_start for the
+    table). Returns True if it acted, False for a no-op (bare entry / completion)."""
+    job_id = entry.get('job_id')
+    filename = entry.get('filename')
+    progress = float(entry.get('progress', 0.0) or 0.0)
+    if not (job_id and filename):
+        # No latched job (a bare terminal/idle snapshot) — nothing to recover;
+        # seed the baseline state so the first edge-detect has a `prev`.
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = {'state': str(entry.get('state', '')).upper()}
+        return False
+
+    cur_info = prusalink_api.get_printer_state(fb_url, name) if fb_url else None
+    cur = str((cur_info or {}).get('state', '')).upper() if cur_info else None
+    pct = max(0.0, min(1.0, progress)) * 100
+
+    # Offline on restart → can't resolve; restore the latch and let normal
+    # edge-detection handle it when the printer is reachable again (mirrors the
+    # in-tick "offline preserves the latch" rule).
+    if cur is None:
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = dict(entry)
+        return True
+
+    if cur in _INPROGRESS_PRINT_STATES:
+        job = prusalink_api.get_printer_job(fb_url, name) or {}
+        cur_jid = job.get('job_id')
+        cur_jid = cur_jid if cur_jid not in (None, '', '0', 0) else None
+        if cur_jid is not None and str(cur_jid) == str(job_id):
+            # Same job still running → it RESUMED. Restore the latch (incl. the
+            # progress high-water) so normal detection continues from here.
+            with _PRINT_TRACKER_LOCK:
+                _PRINT_TRACKER[name] = dict(entry)
+            return True
+        # A DIFFERENT job is printing → the old one ended during the outage and
+        # we can't tell cancel from completion → manual review; latch the new job.
+        state.add_log_entry(
+            f"⚠️ {name}: a print ('{filename}', ~{pct:.0f}%) was in progress when FCC "
+            f"restarted and a different job is printing now — its outcome is unknown, "
+            f"not auto-deducted. Weigh the spool if that print was cancelled.",
+            "WARNING", "ffaa00")
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = {
+                'state': cur, 'job_id': cur_jid, 'filename': job.get('filename'),
+                'progress': float(job.get('progress') or 0.0),
+                'file_meta': job.get('file_meta') or {}}
+        return True
+
+    if cur in _CANCEL_TERMINAL_STATES:
+        # Did NOT resume — still STOPPED/ERROR → a real cancel/failure. Fire the
+        # deduct from the persisted progress (Derek's "resolve from last pull
+        # status if it doesn't resume").
+        state.add_log_entry(
+            f"🛑 Recovering a cancel missed during an FCC restart on {name} "
+            f"('{filename}', ~{pct:.0f}%) — printer still {cur}.", "WARNING", "ffaa00")
+        _dispatch_cancel_edge(name, filename, job_id, progress, fb_url)
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = {'state': cur}
+        return True
+
+    if cur == "FINISHED":
+        # Completed during the outage → FilaBridge owns completions (cancel-only
+        # first ship) → no deduct.
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = {'state': cur}
+        return False
+
+    # IDLE / READY / other: in-progress → cleared during the outage. Can't tell a
+    # cancelled-then-cleared print from a completed-then-cleared one → manual
+    # review, never a phantom deduct.
+    state.add_log_entry(
+        f"⚠️ A print ('{filename}', ~{pct:.0f}%) was in progress on {name} when FCC "
+        f"restarted; it's now {cur or 'idle'} so I can't tell if it was cancelled or "
+        f"finished — weigh the spool if it was cancelled.", "WARNING", "ffaa00")
+    with _PRINT_TRACKER_LOCK:
+        _PRINT_TRACKER[name] = {'state': cur}
+    return True
+
+
 def _cancel_monitor_loop():
+    # Slice 7: reconcile the persisted in-flight latch BEFORE the first tick so a
+    # cancel missed during an FCC/host restart is recovered (or surfaced) up front.
+    try:
+        _recover_print_tracker_on_start()
+    except Exception as e:
+        try:
+            state.logger.warning(f"print-latch recovery pass failed: {e}")
+        except Exception:
+            pass
     while True:
         try:
             _cancel_monitor_tick()
