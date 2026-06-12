@@ -144,7 +144,7 @@
             <div class="col-logs">
                 <div
                     class="p-2 border-bottom border-secondary text-info fw-bold d-flex justify-content-between align-items-center">
-                    <span>Live Activity 📡</span><span id="log-status" class="small fw-bold" style="color:#0f0; cursor:pointer; user-select:none;" onclick="window.toggleLogsStickyPause && window.toggleLogsStickyPause()" title="Click to toggle sticky pause">Auto-Refresh ON (click to pause)</span>
+                    <span>Live Activity 📡<span id="cancel-review-badge" onclick="window.openCancelReview && window.openCancelReview()" title="Cancelled-print partial deducts waiting for review — click to review" style="display:none;cursor:pointer;margin-left:8px;color:#ffae42;font-size:0.8rem;font-weight:bold;"></span></span><span id="log-status" class="small fw-bold" style="color:#0f0; cursor:pointer; user-select:none;" onclick="window.toggleLogsStickyPause && window.toggleLogsStickyPause()" title="Click to toggle sticky pause">Auto-Refresh ON (click to pause)</span>
                 </div>
                 <!-- L286 follow-up: hover-pause removed (was the
                      bug, not the workaround). The indicator above is

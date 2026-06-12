@@ -137,6 +137,66 @@ def test_pulse_interval_returns_idle_after_60s_threshold(
     )
 
 
+def test_pulse_interval_fast_polls_after_print_finish_edge(
+    page, require_server, base_url
+):
+    """L25 / FilaBridge Phase 0 — when a printer transitions from an
+    in-progress state (PRINTING) to an ended state (FINISHED), the cadence is
+    forced to the ACTIVE 5s bucket for ~30s, overriding the idle + hidden
+    buckets, so the post-deduct weight lands within one fast tick instead of
+    lagging a full bucket behind the deduct's separate clock."""
+    page.goto(base_url, wait_until='domcontentloaded')
+    # Clean fast-poll state, and force the tab hidden so the baseline bucket
+    # would be 30s — the finish edge must override it.
+    page.evaluate("""() => {
+        window._resetFastPollForTest();
+        Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
+    }""")
+    assert page.evaluate("() => window._pulseInterval()") == 30000, (
+        "Baseline (hidden, no recent finish edge) should be the 30s bucket"
+    )
+    # Feed two pulses for a synthetic printer: PRINTING then FINISHED — the
+    # in-progress -> ended edge. (A distinct name so a real dev pulse can't
+    # clobber the synthetic transition.)
+    page.evaluate("""() => {
+        window._notePrinterStatesForFastPoll({ FccTestPrinter: { state: { state: 'PRINTING', is_active: true } } });
+        window._notePrinterStatesForFastPoll({ FccTestPrinter: { state: { state: 'FINISHED', is_active: false } } });
+    }""")
+    assert page.evaluate("() => window._fastPollActive()") is True, (
+        "A print-finish edge should arm the fast-poll burst"
+    )
+    assert page.evaluate("() => window._pulseInterval()") == 5000, (
+        "The finish edge must force the ACTIVE 5s cadence even while hidden"
+    )
+    # Past the ~30s window the burst expires and the hidden bucket reasserts.
+    expired = page.evaluate("""() => {
+        const real = Date.now;
+        try { Date.now = () => real() + 40_000; return window._pulseInterval(); }
+        finally { Date.now = real; }
+    }""")
+    assert expired == 30000, (
+        f"After the fast-poll window elapses the hidden bucket should "
+        f"reassert; got {expired}"
+    )
+
+
+def test_pulse_interval_no_fast_poll_on_pause(
+    page, require_server, base_url
+):
+    """A PRINTING -> PAUSED transition is not a finish — no deduct happens on
+    a pause, so it must not arm the fast-poll burst (PAUSED is an in-progress
+    state, not an ended one)."""
+    page.goto(base_url, wait_until='domcontentloaded')
+    page.evaluate("() => window._resetFastPollForTest()")
+    page.evaluate("""() => {
+        window._notePrinterStatesForFastPoll({ FccTestPrinter: { state: { state: 'PRINTING', is_active: true } } });
+        window._notePrinterStatesForFastPoll({ FccTestPrinter: { state: { state: 'PAUSED', is_active: false } } });
+    }""")
+    assert page.evaluate("() => window._fastPollActive()") is False, (
+        "A pause is not a finish; the fast-poll burst must not arm"
+    )
+
+
 def test_dashboard_pulse_dispatcher_repaints_status_dots(
     page, require_server, base_url
 ):

@@ -180,6 +180,15 @@ const setProcessing = (s) => {
     state.processing = s; ov.style.display = s ? 'block' : 'none';
 };
 
+// UI-lockout guard (2026-06-12): fetch with a hard wall-clock timeout so a hung
+// request — the only way an overlay-clearing .catch can be skipped — can't
+// strand the z-index:9999 #processing-overlay (which gates ALL input). On
+// timeout AbortSignal.timeout rejects the promise, so the caller's existing
+// .catch / .finally clears state. ~15s is well above a healthy Spoolman /
+// PrusaLink write. Use for any fetch whose handler toggles setProcessing.
+window.fetchT = (url, opts = {}, ms = 15000) =>
+    fetch(url, { ...opts, signal: opts.signal || AbortSignal.timeout(ms) });
+
 // L286 final: the click-to-toggle indicator is the only pause path. The
 // old onmouseenter/onmouseleave hover-pause was removed in the dashboard
 // template — it caused accidental pauses Derek didn't realize were active.
@@ -938,9 +947,18 @@ const _renderLogsPayload = (d, force = false) => {
             let extraHtml = '';
             let extraClass = '';
             if (l.meta && l.meta.type === 'filabridge_error') {
-                const dataStr = encodeURIComponent(JSON.stringify(l.meta));
+                // encodeURIComponent does NOT escape the apostrophe, so also
+                // %27-encode it before embedding in the single-quoted onclick —
+                // otherwise a printer name with a ' breaks out of the JS string.
+                const dataStr = encodeURIComponent(JSON.stringify(l.meta)).replace(/'/g, '%27');
                 extraClass = ' filabridge-error-log';
                 extraHtml = `<button class="btn btn-sm btn-outline-warning ms-2 py-0 px-1" onclick="window.openFilaBridgeRecovery('${dataStr}')">💊 Fix</button>`;
+            } else if (l.meta && l.meta.type === 'cancel_deduct_pending') {
+                // Cancelled-print partial deduct awaiting preview/confirm (§9.7).
+                // openCancelReview() takes no args (it lists ALL pending), so no
+                // meta is interpolated — nothing to inject.
+                extraClass = ' cancel-review-log';
+                extraHtml = `<button class="btn btn-sm btn-outline-warning ms-2 py-0 px-1" onclick="window.openCancelReview()">🛑 Review</button>`;
             }
             return `<div class="log-${l.type}${extraClass}">[${l.time}] ${l.msg}${extraHtml}</div>`;
         }).join('');
@@ -1005,6 +1023,24 @@ const PULSE_INTERVAL_IDLE = 15000;
 const PULSE_INTERVAL_HIDDEN = 30000;
 const PULSE_IDLE_THRESHOLD_MS = 60000;
 
+// L25 / FilaBridge Phase 0 — fast-poll on a print-finish/cancel edge.
+//
+// The filament deduct (FilaBridge today; FCC's own cancel detector soon)
+// fires on a clock independent of the dashboard pulse. During an UNATTENDED
+// print the user is idle and the tab may be hidden, so the pulse sits in the
+// 15s/30s bucket and the post-finish weight can lag a full bucket behind the
+// deduct. (NOTE: this is NOT the old "cadence drops when the printer goes
+// idle" theory — that was wrong; cadence keys on USER inactivity + tab
+// visibility, never printer state.) Fix: watch the printer_status section of
+// each pulse for a "print just ended" transition (in-progress -> ended) and
+// force a short ACTIVE-cadence burst so the fresh weight shows up within ~5s.
+// This burst is also the event hook the cancelled-print detector rides.
+const PULSE_FAST_POLL_WINDOW_MS = 30000;
+const _PRINT_INPROGRESS_STATES = new Set(['PRINTING', 'PAUSED', 'PAUSING', 'RESUMING']);
+const _PRINT_ENDED_STATES = new Set(['FINISHED', 'STOPPED', 'IDLE', 'ERROR', 'READY', 'OPERATIONAL']);
+let _fastPollUntil = 0;
+let _lastPrinterState = {};   // {printerName: 'PRINTING'|... |null} last-seen raw state
+
 let _lastUserActivity = Date.now();
 const _bumpUserActivity = () => { _lastUserActivity = Date.now(); };
 // Activity bumpers. Notes on coverage:
@@ -1029,9 +1065,34 @@ const _bumpUserActivity = () => { _lastUserActivity = Date.now(); };
 );
 
 const _pulseInterval = () => {
+    // A recent print-finish/cancel edge forces a short-cadence burst that
+    // overrides the idle + hidden buckets, so the deduct's weight update
+    // isn't stuck behind the 15s/30s gap (L25).
+    if (Date.now() < _fastPollUntil) return PULSE_INTERVAL_ACTIVE;
     if (document.hidden) return PULSE_INTERVAL_HIDDEN;
     if (Date.now() - _lastUserActivity > PULSE_IDLE_THRESHOLD_MS) return PULSE_INTERVAL_IDLE;
     return PULSE_INTERVAL_ACTIVE;
+};
+
+// Inspect a dashboard_pulse `printer_status` payload and arm the fast-poll
+// burst when any printer transitions from an in-progress state (PRINTING /
+// PAUSED / PAUSING / RESUMING) to an ended state (FINISHED / STOPPED / IDLE /
+// ERROR / READY / OPERATIONAL) — i.e. a print just completed or was
+// cancelled. `state === null` means the printer is offline/unreachable; we
+// skip it so an offline blip isn't mistaken for a finish edge.
+const _notePrinterStatesForFastPoll = (printerStatus) => {
+    if (!printerStatus || typeof printerStatus !== 'object') return;
+    for (const name of Object.keys(printerStatus)) {
+        const info = printerStatus[name];
+        const st = info && info.state;
+        if (!st) { _lastPrinterState[name] = null; continue; }
+        const now = String(st.state || '').toUpperCase();
+        const prev = _lastPrinterState[name];
+        if (prev && _PRINT_INPROGRESS_STATES.has(prev) && _PRINT_ENDED_STATES.has(now)) {
+            _fastPollUntil = Date.now() + PULSE_FAST_POLL_WINDOW_MS;
+        }
+        _lastPrinterState[name] = now;
+    }
 };
 
 // Build the include= list based on what the user can actually see this
@@ -1129,8 +1190,13 @@ const _dashboardPulseTick = () => {
             if (payload.manage && payload.manage.contents && window._renderManagePayload) {
                 window._renderManagePayload(payload.manage.id, payload.manage.contents);
             }
-            if (payload.printer_status && window.refreshPrinterStatusWidgetFromAggregate) {
-                window.refreshPrinterStatusWidgetFromAggregate(payload.printer_status);
+            if (payload.printer_status) {
+                // L25 — note finish/cancel edges to arm the fast-poll burst
+                // (runs even if the widget renderer isn't mounted this tick).
+                _notePrinterStatesForFastPoll(payload.printer_status);
+                if (window.refreshPrinterStatusWidgetFromAggregate) {
+                    window.refreshPrinterStatusWidgetFromAggregate(payload.printer_status);
+                }
             }
             if (payload.spools_refresh && window._renderSpoolsRefreshPayload) {
                 window._renderSpoolsRefreshPayload(payload.spools_refresh);
@@ -1177,6 +1243,11 @@ window._dashboardPulseTickOnce = () => {
 };
 // Expose the current-cadence reader for the cadence test.
 window._pulseInterval = _pulseInterval;
+// L25 fast-poll test hooks — feed synthetic printer_status transitions,
+// read whether the burst is armed, and reset state between tests.
+window._notePrinterStatesForFastPoll = _notePrinterStatesForFastPoll;
+window._fastPollActive = () => Date.now() < _fastPollUntil;
+window._resetFastPollForTest = () => { _fastPollUntil = 0; _lastPrinterState = {}; };
 
 // --- GLOBAL MODAL / WINDOW MANAGER ---
 document.addEventListener('DOMContentLoaded', () => {

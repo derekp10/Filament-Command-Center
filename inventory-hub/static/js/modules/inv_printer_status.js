@@ -396,6 +396,9 @@
         // and click, especially during active PRINTING when state/weight
         // ticks invalidated the fingerprint frequently (L361).
         _wireDelegation(widget);
+        // Re-paint the cancelled-print "🛑 N" review chip onto each printer's
+        // name (the widget just overwrote body.innerHTML, dropping any chips).
+        if (window.cancelReviewDecorate) window.cancelReviewDecorate();
     };
 
     const _wireDelegation = (widget) => {

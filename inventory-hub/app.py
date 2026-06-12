@@ -5,12 +5,17 @@ import config_loader # type: ignore
 import config_schema # type: ignore
 import locations_db # type: ignore
 import spoolman_api # type: ignore
+import print_deduct_ledger # type: ignore
+import cancel_review_store # type: ignore
+import cancel_fetch_store # type: ignore
+import print_tracker_store # type: ignore
 import logic # type: ignore
 import csv
 import os
 import json
 import logging
 import time
+import threading
 
 def _compute_build_mtime():
     """L42 fix: derive a freshness-stamp from the newest source-file mtime.
@@ -362,6 +367,25 @@ try:
         state.logger.info(f"🧹 Pruned {len(_pruned)} old locations.json backup(s)")
 except Exception as _prune_err:
     state.logger.warning(f"locations.json backup prune skipped: {_prune_err}")
+
+# Re-surface any cancelled-print reviews that outlived a restart. The pending
+# store persists, but the activity log (the "🛑 Review" button's home) is
+# in-memory, so without this a pending review would be invisible after a reboot
+# even though it's still on disk (§9.7 "never silently lost"). Emit one log line
+# per pending so the button reappears.
+try:
+    _pending_reviews = cancel_review_store.list_pending()
+    for _pr in _pending_reviews:
+        state.add_log_entry(
+            f"🛑 Pending cancel review from a previous session: {_pr.get('printer_name')} "
+            f"— {_pr.get('total_grams')}g across {len(_pr.get('spools', []))} spool(s). Review to confirm/dismiss.",
+            "WARNING", "ffaa00",
+            meta={"type": "cancel_deduct_pending",
+                  "printer_name": _pr.get('printer_name'), "job_id": _pr.get('job_id')})
+    if _pending_reviews:
+        state.logger.info(f"🛑 Re-surfaced {len(_pending_reviews)} pending cancel review(s) from disk.")
+except Exception as _cr_err:
+    state.logger.warning(f"pending cancel-review re-surface skipped: {_cr_err}")
 
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
 log = logging.getLogger('werkzeug')
@@ -4014,6 +4038,529 @@ def api_fb_parse_status():
     import prusalink_api
     return jsonify({"msg": prusalink_api.FB_PARSE_STATUS})
 
+
+def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
+    """Deduct per-toolhead grams from the spools currently mapped to
+    `printer_name`'s toolheads. `usage_map` is {toolhead_position: grams}.
+
+    The single canonical deduct loop, shared by the FilaBridge error-recovery
+    aggressive parse (full-print estimate) and the cancelled-print PARTIAL
+    deduct (prefix-parsed grams). MMU-alias positions (e.g. CORE1-M0 vs
+    CORE1-M1 — same position in printer_map) are deduped via
+    `processed_positions` so one usage slice isn't applied twice. Writes ONLY
+    `{used_weight}` per the CLAUDE.md write-surface contract — never bundles
+    initial_weight/location/extra, so a partial deduct can't wipe siblings or
+    silently archive a loaded spool. Surfaces LAST_SPOOLMAN_ERROR on rejection.
+
+    Returns (spools_updated, details) where details is a list of
+    {sid, grams, remaining} for each successful deduct.
+    """
+    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2
+    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+    spools_updated = 0
+    details = []
+    processed_positions = set()
+    for loc_id, p_info in active_locs:
+        toolhead_idx = p_info.get('position', 0)
+        if toolhead_idx in processed_positions:
+            continue
+        if toolhead_idx not in usage_map:
+            continue
+        weight_used = usage_map[toolhead_idx]
+        loc_spools = spoolman_api.get_spools_at_location(loc_id)
+        if not loc_spools:
+            continue  # try the next alias for this position
+        processed_positions.add(toolhead_idx)
+        for sid in loc_spools:
+            spool_data = spoolman_api.get_spool(sid)
+            if spool_data and weight_used > 0:
+                used = float(spool_data.get('used_weight', 0))
+                initial = float(spool_data.get('initial_weight', 0) or 0)
+                remaining = max(0, initial - used)
+                new_remaining = max(0, remaining - weight_used)
+                new_used = used + weight_used
+                if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+                    spools_updated += 1
+                    info = spoolman_api.format_spool_display(spool_data)
+                    label = strategy_label or (
+                        "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
+                    )
+                    state.add_log_entry(
+                        f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({label}): "
+                        f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]",
+                        "SUCCESS", info['color'])
+                    details.append({"sid": sid, "grams": weight_used, "remaining": new_remaining})
+                else:
+                    err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                    state.add_log_entry(
+                        f"❌ Failed to auto-deduct from Spool #{sid}: {err}", "ERROR", "ff4444")
+    # Surface gcode tool indices that don't correspond to ANY of this printer's
+    # toolhead positions (a cross-machine gcode, or a tool↔position mismatch) —
+    # those grams can't be deducted, so make the loss visible instead of
+    # silently dropping it. (A position that exists but has no spool loaded is
+    # benign and not flagged here.)
+    known_positions = {p_info.get('position', 0) for _, p_info in active_locs}
+    orphaned = {t: g for t, g in usage_map.items()
+                if t not in known_positions and g > 0}
+    if orphaned:
+        lost = round(sum(orphaned.values()), 1)
+        state.add_log_entry(
+            f"⚠️ {printer_name}: {lost:.1f}g on tool index(es) {sorted(orphaned)} "
+            f"map to no toolhead position on this printer — not deducted "
+            f"(weigh the spool if this looks wrong).", "WARNING", "ffaa00")
+    return spools_updated, details
+
+
+def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content):
+    """Operator-facing log for a cancel whose partial we couldn't compute,
+    distinguishing the three reasons so a cancel never goes SILENTLY
+    un-deducted. Returns the status string the caller should surface.
+      content is None      → download failed / binary .bgcode  → 'error' (WARNING)
+      footer present        → genuine zero-extrusion cancel      → 'no_usage' (INFO)
+      footer absent         → unrecognized gcode (non-Prusa?)    → 'no_usage' (WARNING)
+    """
+    pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    if not content:
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+            f"couldn't fetch/parse the gcode (binary .bgcode or printer "
+            f"unreachable); no partial deduct. Weigh the spool to true it up.",
+            "WARNING", "ffaa00")
+        return "error"
+    has_footer = ('filament used [g]' in content and 'filament used [mm]' in content)
+    if has_footer:
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+            f"no partial usage to deduct (cancelled before any extrusion).",
+            "INFO")
+    else:
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+            f"gcode has no recognized per-tool 'filament used' footer "
+            f"(non-Prusa slicer?); can't compute the partial. Weigh the spool.",
+            "WARNING", "ffaa00")
+    return "no_usage"
+
+
+def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
+                          ip_address, api_key):
+    """Download + prefix-parse a cancelled print → (usage_map, terminal).
+    On success: (usage_map, None). On a can't-compute outcome: (None, status
+    dict) already logged via _log_cancel_uncomputable. Shared by both the
+    auto-apply path (deduct_cancelled_print) and the preview path
+    (_create_pending_cancel_review).
+
+    fetch_cancel_gcode transparently decodes binary G-code (.bgcode — Derek's
+    whole fleet) and remaps the progress fraction from compressed-file space to
+    the decoded text, so the prefix-parse runs correctly on real prints."""
+    prepared = prusalink_api.fetch_cancel_gcode(
+        ip_address, api_key, filename, reached_fraction)
+    if not prepared or not prepared.get("gcode"):
+        # Download failed. The dominant cause is NOT a permanent error: PrusaLink
+        # 404s the raw-file download while the file is the SELECTED/active print
+        # — i.e. while the printer sits in STOPPED with the cancel-summary screen
+        # up, which is EXACTLY when we fire (confirmed live 2026-06-11; §9.10).
+        # The file un-locks once the print is cleared (→ IDLE). So this is
+        # RETRYABLE: return without a terminal "weigh the spool" log and let the
+        # caller stash a deferred-fetch retry (the monitor re-attempts each tick
+        # once the printer leaves STOPPED). (Was an immediate terminal error.)
+        return None, {"status": "error", "reason": "download_failed", "job_id": job_id}
+    content = prepared["gcode"]
+    usage_map = prusalink_api.parse_partial_filament_usage(content, prepared["fraction"])
+    if not usage_map:
+        _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
+        return None, {"status": "no_usage", "job_id": job_id}
+
+    # Single-toolhead printer + single-material print (Derek's Core One: one
+    # head, one spool): the slicer's tool INDEX can differ from the printer's
+    # toolhead POSITION (an MMU-profile file marks slot 1 even when one head
+    # exists), so re-key that lone tool onto the sole position — otherwise it
+    # orphans to a non-existent position and goes un-deducted. Guarded to a
+    # SINGLE footer tool so a real multi-material MMU print (several spools
+    # swapped through one head) is NOT summed onto one spool (over-deduct); that
+    # genuinely-ambiguous case falls through to the orphan warning instead.
+    # Multi-head printers (XL / future INDX toolchanger) keep their per-tool map
+    # untouched — there the tool index IS the toolhead position (1:1).
+    try:
+        if len(usage_map) == 1:
+            pm = locations_db.get_active_printer_map()
+            positions = {info.get('position', 0) for info in pm.values()
+                         if info.get('printer_name') == printer_name}
+            if len(positions) == 1:
+                sole = next(iter(positions))
+                grams = next(iter(usage_map.values()))
+                usage_map = {sole: grams}
+    except Exception:
+        pass
+
+    return usage_map, None
+
+
+def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
+                           fb_url=None, ip_address=None, api_key=None):
+    """Compute + AUTO-APPLY the PARTIAL filament deduct for a CANCELLED print
+    (FilaBridge absorption design §9). Exactly-once via the (printer, job_id)
+    ledger; NEVER deducts the full estimate (that's the ~10x over-charge a
+    cancel must avoid). Returns a status dict:
+
+      status='skipped'   already deducted (ledger hit) — no-op
+      status='no_usage'  cancelled before extrusion / no metadata — recorded, 0g
+      status='deducted'  partial grams applied; carries spools_updated + details
+      status='error'     credentials / gcode download failed (NOT recorded, so a
+                         later retry can still deduct)
+
+    NOTE: the live cancel-EDGE no longer calls this — slice 5 routes cancels
+    through _create_pending_cancel_review (preview-and-confirm, §9.7). This
+    remains the canonical "compute-and-apply-in-one-shot" primitive (a future
+    opt-in auto-mode / recompute action can call it) and shares its compute half
+    with the preview path via _compute_cancel_usage.
+    """
+    if fb_url is None:
+        _, fb_url = config_loader.get_api_urls()
+
+    if print_deduct_ledger.was_deducted(printer_name, job_id):
+        return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
+
+    if not (ip_address and api_key):
+        creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
+        if not creds:
+            return {"status": "error", "reason": "no credentials", "job_id": job_id}
+        ip_address, api_key = creds.get('ip_address'), creds.get('api_key')
+
+    usage_map, terminal = _compute_cancel_usage(
+        printer_name, filename, job_id, reached_fraction, ip_address, api_key)
+    if terminal is not None:
+        if terminal["status"] == "no_usage":
+            print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                              scale=reached_fraction, grams=0)
+        elif terminal["status"] == "error":
+            # This one-shot auto-apply primitive has no retry loop, so surface the
+            # download failure (the live preview path defers/retries instead).
+            _log_cancel_uncomputable(printer_name, filename, reached_fraction, None)
+        return terminal
+
+    pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    spools_updated, details = _apply_usage_to_printer(
+        printer_name, usage_map, fb_url, strategy_label="Cancel")
+    print_deduct_ledger.record_deduct(
+        printer_name, job_id, filename=filename, scale=reached_fraction,
+        grams=round(sum(usage_map.values()), 2))
+    total = round(sum(d["grams"] for d in details), 1)
+    state.add_log_entry(
+        f"🛑 Cancelled-print partial deduct on {printer_name}: {total:.1f}g across "
+        f"{spools_updated} spool(s) at ~{pct:.0f}% progress ('{filename}').",
+        "WARNING")
+    return {"status": "deducted", "spools_updated": spools_updated,
+            "details": details, "usage_map": usage_map, "job_id": job_id}
+
+
+def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
+    """Read-only resolution of {toolhead_position: grams} → the per-spool rows a
+    deduct WOULD touch — the cancel-review PREVIEW (no write). Mirrors
+    _apply_usage_to_printer's MMU-alias/dedup resolution exactly, minus the
+    write, so the preview is faithful to what a confirm will deduct. Each row
+    carries a snapshot of the spool's current used/remaining for display; the
+    actual write (confirm) re-reads current used and applies additively, so a
+    weigh-out between preview and confirm can't be clobbered.
+    """
+    printer_map = locations_db.get_active_printer_map()
+    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+    rows = []
+    processed_positions = set()
+    for loc_id, p_info in active_locs:
+        pos = p_info.get('position', 0)
+        if pos in processed_positions:
+            continue
+        if pos not in usage_map:
+            continue
+        grams = usage_map[pos]
+        if grams <= 0:
+            continue
+        loc_spools = spoolman_api.get_spools_at_location(loc_id)
+        if not loc_spools:
+            continue  # try the next alias for this position
+        processed_positions.add(pos)
+        for sid in loc_spools:
+            spool = spoolman_api.get_spool(sid)
+            if not spool:
+                continue
+            used = float(spool.get('used_weight', 0) or 0)
+            initial = float(spool.get('initial_weight', 0) or 0)
+            remaining_before = max(0.0, initial - used)
+            remaining_after = max(0.0, remaining_before - grams)
+            disp = spoolman_api.format_spool_display(spool)
+            rows.append({
+                'sid': sid,
+                'toolhead': str(loc_id).upper(),
+                'position': pos,
+                'grams': round(float(grams), 2),
+                'current_used': round(used, 2),
+                'initial_weight': round(initial, 2),
+                'remaining_before': round(remaining_before, 1),
+                'remaining_after': round(remaining_after, 1),
+                'display': disp.get('text', f"#{sid}"),
+                'color': disp.get('color', '888888'),
+            })
+
+    # Merge rows that resolve to the SAME spool. One physical spool can feed more
+    # than one toolhead position (a shared-spool config, or the dev XL-4/XL-5=
+    # #230 case), producing two rows for one sid. The confirm path keys updates
+    # by sid (frontend `updates[sid]` + backend `rec_rows={sid:row}`), so two
+    # same-sid rows would COLLAPSE to a single deduct — a silent under-deduct
+    # (found 2026-06-12: job 690 previewed 1.65g but only ~0.8g applied). Sum the
+    # grams here so there's exactly one row per spool: the spool loses filament
+    # once, totalled across every position it fed.
+    merged = {}
+    for r in rows:
+        m = merged.get(r['sid'])
+        if m is None:
+            merged[r['sid']] = r
+        else:
+            m['grams'] = round(m['grams'] + r['grams'], 2)
+            m['remaining_after'] = round(max(0.0, m['remaining_before'] - m['grams']), 1)
+            if str(r['toolhead']) not in str(m['toolhead']).split(', '):
+                m['toolhead'] = f"{m['toolhead']}, {r['toolhead']}"
+    return list(merged.values())
+
+
+def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction):
+    """Queue a cancelled print whose gcode couldn't be fetched yet (the
+    selected-file download LOCK, §9.10) for the monitor to retry. Idempotent:
+    re-queuing the same job bumps `attempts`, PRESERVES `first_seen` (so the
+    max-age give-up window is measured from the FIRST sighting), and does NOT
+    re-nudge. The 'clear the screen' nudge logs exactly ONCE, on first queue.
+    Returns True if newly queued (nudged), False if it was already queued."""
+    if cancel_fetch_store.has_pending(printer_name, job_id):
+        rec = cancel_fetch_store.get_pending(printer_name, job_id) or {}
+        rec.update({"printer_name": printer_name, "job_id": str(job_id),
+                    "filename": filename, "progress": float(reached_fraction),
+                    "attempts": int(rec.get("attempts", 0)) + 1})
+        cancel_fetch_store.add_pending(rec)
+        return False
+    cancel_fetch_store.add_pending({
+        "printer_name": printer_name, "job_id": str(job_id), "filename": filename,
+        "progress": float(reached_fraction), "first_seen": time.time(),
+        "attempts": 1, "last_status": "awaiting_fetch",
+    })
+    pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    state.add_log_entry(
+        f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%, '{filename}') detected — "
+        f"the printer is still showing the cancel screen, so the gcode is locked. "
+        f"Clear it on the printer and I'll record the partial deduct automatically.",
+        "WARNING", "ffaa00",
+        meta={"type": "cancel_deduct_awaiting",
+              "printer_name": printer_name, "job_id": str(job_id)})
+    return True
+
+
+def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,
+                                  fb_url=None):
+    """Compute the cancelled-print partial and STASH it for review instead of
+    auto-writing (FilaBridge absorption design §9.7). Idempotent against the
+    ledger (already confirmed/dismissed) and the pending store (already queued).
+    On success raises a 'cancel_deduct_pending' activity-log line (with meta) so
+    the dashboard shows a "🛑 Review" button. Returns a status dict."""
+    if fb_url is None:
+        _, fb_url = config_loader.get_api_urls()
+
+    if print_deduct_ledger.was_deducted(printer_name, job_id):
+        # Already confirmed/dismissed. Clear any stale pending so the invariant
+        # "ledger ⟹ no pending" holds even after an odd crash sequence.
+        cancel_review_store.pop_pending(printer_name, job_id)
+        return {"status": "skipped", "reason": "already processed", "job_id": job_id}
+    if cancel_review_store.has_pending(printer_name, job_id):
+        return {"status": "skipped", "reason": "already pending", "job_id": job_id}
+
+    creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
+    if not creds:
+        # No creds right now (FilaBridge blip / printer briefly unreachable) —
+        # retryable, so queue a deferred fetch rather than telling Derek to weigh.
+        _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction)
+        return {"status": "awaiting_fetch", "reason": "no credentials", "job_id": job_id}
+
+    usage_map, terminal = _compute_cancel_usage(
+        printer_name, filename, job_id, reached_fraction,
+        creds.get('ip_address'), creds.get('api_key'))
+    if terminal is not None:
+        if terminal["status"] == "no_usage":
+            print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                              scale=reached_fraction, grams=0)
+        elif terminal["status"] == "error":
+            # Download failed — almost always the selected-file LOCK (§9.10): the
+            # file un-locks once Derek clears the cancel screen (→ IDLE). Queue a
+            # deferred fetch; the monitor retries each tick once the printer
+            # leaves STOPPED, then computes + pops the 🛑 Review automatically.
+            _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction)
+            return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
+                    "job_id": job_id}
+        return terminal
+
+    rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url)
+    pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    if not rows:
+        # The print extruded filament but no spool is mapped to the active
+        # toolhead(s) — nothing to deduct from. Record so it doesn't re-queue;
+        # surface so Derek can fix the binding.
+        used_g = round(sum(usage_map.values()), 1)
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%) — {used_g:.1f}g used "
+            f"but no mapped spool to deduct from (check toolhead bindings).",
+            "WARNING", "ffaa00")
+        print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                          scale=reached_fraction, grams=0)
+        return {"status": "no_spools", "job_id": job_id}
+
+    # Re-check after the (slow) gcode download+parse — if the job was processed
+    # in the meantime, don't stash a stale pending.
+    if print_deduct_ledger.was_deducted(printer_name, job_id):
+        return {"status": "skipped", "reason": "already processed", "job_id": job_id}
+
+    total = round(sum(r['grams'] for r in rows), 2)
+    record = {
+        "printer_name": printer_name,
+        "job_id": str(job_id),
+        "filename": filename,
+        "progress": float(reached_fraction),
+        "total_grams": total,
+        "spools": rows,
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    cancel_review_store.add_pending(record)
+    state.add_log_entry(
+        f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%) — review partial "
+        f"deduct: {total:.2f}g across {len(rows)} spool(s) ('{filename}').",
+        "WARNING", rows[0]['color'],
+        meta={"type": "cancel_deduct_pending",
+              "printer_name": printer_name, "job_id": str(job_id)})
+    return {"status": "pending", "spools": len(rows), "total_grams": total,
+            "job_id": str(job_id)}
+
+
+@app.route('/api/cancel_deduct/pending', methods=['GET'])
+def api_cancel_deduct_pending():
+    """All pending cancelled-print partial-deduct reviews awaiting confirm/
+    dismiss. Drives the preview overlay (§9.7) and survives log scroll-off /
+    restart."""
+    return jsonify({"pending": cancel_review_store.list_pending()})
+
+
+@app.route('/api/cancel_deduct/confirm', methods=['POST'])
+def api_cancel_deduct_confirm():
+    """Apply a reviewed (optionally nudged) cancel partial-deduct. Body:
+    {printer_name, job_id, updates: {sid: grams}}. Pops the pending record
+    atomically (the CLAIM — a double-submit gets 'already_handled'), then
+    deducts each spool ADDITIVELY against its CURRENT used_weight (re-read now,
+    so a weigh-out between preview and confirm isn't clobbered) sending ONLY
+    {used_weight} (archive-on-empty discipline)."""
+    data = request.json or {}
+    printer = data.get('printer_name')
+    job_id = data.get('job_id')
+    updates = data.get('updates') or {}
+    if not printer or job_id is None:
+        return jsonify({"status": "error", "msg": "missing printer_name/job_id"}), 400
+
+    rec = cancel_review_store.pop_pending(printer, job_id)
+    if rec is None:
+        return jsonify({"status": "already_handled"})
+
+    # Only spools that were in the reviewed preview may be deducted — a stray /
+    # crafted update for an out-of-scope sid must never touch a different spool.
+    rec_rows = {r["sid"]: r for r in rec.get("spools", [])}
+
+    applied, errors = [], []
+    failed_sids = set()
+    for sid_raw, grams_raw in updates.items():
+        try:
+            sid = int(sid_raw)
+            grams = float(grams_raw)
+        except (TypeError, ValueError):
+            continue
+        if grams <= 0:
+            continue
+        if sid not in rec_rows:
+            errors.append({"sid": sid, "error": "not in this review"})
+            failed_sids.add(sid)
+            continue
+        spool = spoolman_api.get_spool(sid)
+        if not spool:
+            errors.append({"sid": sid, "error": "spool not found"})
+            failed_sids.add(sid)
+            continue
+        # Re-read CURRENT used (a weigh-out between preview and confirm isn't
+        # clobbered) and clamp grams to the spool's real remaining so the deduct
+        # never exceeds capacity and the reported figures match what Spoolman
+        # actually stores (update_spool silently caps used_weight ≤ initial).
+        used = float(spool.get('used_weight', 0) or 0)
+        initial = float(spool.get('initial_weight', 0) or 0)
+        grams = min(grams, max(0.0, initial - used))
+        if grams <= 0:
+            # Spool already empty — nothing to deduct, but it's not a failure.
+            applied.append({"sid": sid, "grams": 0.0, "remaining": 0.0})
+            continue
+        new_used = used + grams
+        if spoolman_api.update_spool(sid, {"used_weight": new_used}):
+            remaining = max(0.0, initial - new_used)
+            info = spoolman_api.format_spool_display(spool)
+            state.add_log_entry(
+                f"✔️ Cancel-deduct {grams:.2f}g from Spool #{sid} (confirmed): "
+                f"[➔ {remaining:.1f}g remaining]", "SUCCESS", info.get('color', '888888'))
+            applied.append({"sid": sid, "grams": round(grams, 2), "remaining": round(remaining, 1)})
+        else:
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            errors.append({"sid": sid, "error": err})
+            failed_sids.add(sid)
+            state.add_log_entry(
+                f"❌ Cancel-deduct failed for Spool #{sid}: {err}", "ERROR", "ff4444")
+
+    if errors:
+        # Re-queue ONLY the spools that DIDN'T apply, so a retry can't double-
+        # deduct the ones that did. Don't burn the ledger — the job isn't fully
+        # done — so the edge stays blocked (has_pending) but a retry is possible.
+        leftover = {r["sid"]: r for r in rec.get("spools", []) if r["sid"] in failed_sids}
+        if leftover:
+            retry_rec = dict(rec)
+            retry_rec["spools"] = list(leftover.values())
+            cancel_review_store.add_pending(retry_rec)
+            # Re-emit the Review affordance so the retry is discoverable even if
+            # the original cancel log line has scrolled off.
+            state.add_log_entry(
+                f"🛑 {len(leftover)} spool(s) still need a cancel-deduct review on "
+                f"{printer} (a deduct failed) — Review to retry.",
+                "WARNING", "ffaa00",
+                meta={"type": "cancel_deduct_pending",
+                      "printer_name": printer, "job_id": str(job_id)})
+        status = "confirmed" if applied else "error"
+        return jsonify({"status": status, "applied": applied, "errors": errors})
+
+    # Full success — commit the ledger (exactly-once across restart/retry).
+    print_deduct_ledger.record_deduct(
+        printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
+        grams=round(sum(a['grams'] for a in applied), 2), confirmed=True)
+    return jsonify({"status": "confirmed", "applied": applied, "errors": errors})
+
+
+@app.route('/api/cancel_deduct/dismiss', methods=['POST'])
+def api_cancel_deduct_dismiss():
+    """Dismiss a pending cancel review without deducting. Body:
+    {printer_name, job_id}. Records the ledger (so it can't re-surface) and pops
+    the pending record."""
+    data = request.json or {}
+    printer = data.get('printer_name')
+    job_id = data.get('job_id')
+    if not printer or job_id is None:
+        return jsonify({"status": "error", "msg": "missing printer_name/job_id"}), 400
+    rec = cancel_review_store.pop_pending(printer, job_id)
+    if rec is None:
+        return jsonify({"status": "already_handled"})
+    print_deduct_ledger.record_deduct(
+        printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
+        grams=0, dismissed=True)
+    state.add_log_entry(
+        f"🚫 Dismissed cancel-deduct review for {printer} (job {job_id}) — "
+        f"no weight deducted.", "INFO")
+    return jsonify({"status": "dismissed"})
+
+
 @app.route('/api/fb_aggressive_parse', methods=['POST'])
 def api_fb_aggressive_parse():
     data = request.json
@@ -4042,45 +4589,10 @@ def api_fb_aggressive_parse():
     if not usage_map:
         return jsonify({"success": False, "msg": "Failed to parse filament usage from GCode"})
         
-    # 3. Apply weights to mapped spools
-    cfg = config_loader.load_config()
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
-
-    _, _fb_url_for_mmu = config_loader.get_api_urls()
-    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, _fb_url_for_mmu)
-    spools_updated = 0
-    # Track positions we've already processed so MMU-alias entries (CORE1-M0
-    # vs CORE1-M1 — same position in printer_map) don't double-deduct the
-    # same gcode usage slice.
-    processed_positions = set()
-    for loc_id, p_info in active_locs:
-        toolhead_idx = p_info.get('position', 0)
-        if toolhead_idx in processed_positions:
-            continue
-        if toolhead_idx in usage_map:
-            weight_used = usage_map[toolhead_idx]
-            loc_spools = spoolman_api.get_spools_at_location(loc_id)
-            if not loc_spools:
-                continue  # try the next alias for this position
-            processed_positions.add(toolhead_idx)
-            for sid in loc_spools:
-                spool_data = spoolman_api.get_spool(sid)
-                if spool_data and weight_used > 0:
-                    used = float(spool_data.get('used_weight', 0))
-                    initial = float(spool_data.get('initial_weight', 0) or 0)
-                    remaining = max(0, initial - used)
-                    new_remaining = max(0, remaining - weight_used)
-                    new_used = used + weight_used
-                    if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-                        spools_updated += 1
-                        info = spoolman_api.format_spool_display(spool_data)
-                        strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
-                        state.add_log_entry(f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
-                    else:
-                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-                        state.add_log_entry(
-                            f"❌ Failed to auto-deduct from Spool #{sid}: {err}", "ERROR", "ff4444"
-                        )
+    # 3. Apply weights to mapped spools via the shared deduct loop (the same
+    #    loop the cancelled-print partial deduct reuses — see
+    #    _apply_usage_to_printer).
+    spools_updated, _ = _apply_usage_to_printer(printer_name, usage_map, fb_url)
 
     # 4. Acknowledge Error
     if spools_updated > 0:
@@ -5230,6 +5742,499 @@ def _pulse_section_manage(loc_id):
     }
 
 
+# ---------------------------------------------------------------------------
+# Cancelled-print detection — rides the dashboard-pulse printer-state probe
+# (FilaBridge absorption design §9.3 / build slice 2a).
+#
+# _pulse_section_printer_status already probes every printer's PrusaLink state
+# on each heartbeat. We piggyback on that probe: while a print is IN PROGRESS we
+# latch its filename / job_id / monotonic byte-progress (PrusaLink tears the job
+# block down the instant the print STOPS, so we MUST capture it beforehand),
+# and on the →STOPPED/ERROR edge we fire deduct_cancelled_print with the latched
+# values on a background thread. The persistent print_deduct_ledger keeps the
+# deduct exactly-once across ticks and restarts.
+#
+# First ship is cancel-only (STOPPED/ERROR). FINISHED stays with FilaBridge
+# until the Phase-2 atomic cutover — firing on FINISHED here would
+# double-deduct prints FilaBridge already deducts.
+# ---------------------------------------------------------------------------
+
+# {printer_name: {"state": str, "job_id", "filename", "progress", "file_meta"}}
+_PRINT_TRACKER = {}
+_PRINT_TRACKER_LOCK = threading.Lock()
+
+# A print is "running" (so we latch the job) in any of these states — a pause is
+# still running. Mirrors the frontend Phase-0 _PRINT_INPROGRESS_STATES.
+_INPROGRESS_PRINT_STATES = frozenset({"PRINTING", "PAUSING", "RESUMING", "PAUSED"})
+# Terminal states that, reached FROM an in-progress state, mean a CANCEL/abort.
+# Cancel-only first ship (see header) — FINISHED/IDLE completion is excluded so
+# FilaBridge still owns completed-print deducts until the Phase-2 cutover.
+_CANCEL_TERMINAL_STATES = frozenset({"STOPPED", "ERROR"})
+
+# Tests flip this to False so the deduct runs synchronously + deterministically
+# instead of on a daemon thread.
+_CANCEL_DEDUCT_RUN_ASYNC = True
+
+
+def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
+    """Action taken when a cancel edge is detected. SLICE 5: compute the partial
+    and stash it for preview-and-confirm (§9.7) — Derek reviews/nudges before it
+    writes (automating the manual Connect-reading he does today). The detector
+    reaches this only through _dispatch_cancel_edge, so the threading contract
+    (off the heartbeat thread) is unchanged from slice 2a."""
+    try:
+        _create_pending_cancel_review(printer_name, filename, job_id, progress, fb_url=fb_url)
+    except Exception as e:
+        try:
+            state.add_log_entry(
+                f"❌ Cancelled-print review failed for {printer_name} "
+                f"('{filename}'): {e}", "ERROR", "ff4444")
+        except Exception:
+            pass
+
+
+def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url):
+    """Run the cancel-edge action OFF the heartbeat thread, so a slow gcode
+    download never stalls the pulse. Synchronous when _CANCEL_DEDUCT_RUN_ASYNC
+    is False (tests)."""
+    if _CANCEL_DEDUCT_RUN_ASYNC:
+        threading.Thread(
+            target=_on_cancel_edge,
+            args=(printer_name, filename, job_id, progress, fb_url),
+            daemon=True).start()
+    else:
+        _on_cancel_edge(printer_name, filename, job_id, progress, fb_url)
+
+
+def _track_print_edge(printer_name, state_info, fb_url):
+    """Latch the active job while printing; fire the cancelled-print partial
+    deduct on the →STOPPED/ERROR edge. Called once per printer per heartbeat
+    from fetch_for_printer (best-effort — the caller wraps it so a failure never
+    breaks the Printer Status widget). See the section header for the full
+    rationale.
+
+    `state_info is None` (offline/unreachable) is NOT treated as an edge — we
+    leave any existing latch intact so a real STOPPED reached across a transient
+    offline blip still deducts with the pre-blip latch.
+    """
+    if state_info is None:
+        return
+    cur = str(state_info.get('state', '')).upper()
+    if not cur:
+        # An empty state string can't happen from _probe_printer_state (it
+        # returns None or a non-empty state), so this only guards a malformed
+        # dict. Treat it like offline: don't update the latch, so a real
+        # terminal state on the next poll still detects the edge.
+        return
+
+    if cur in _INPROGRESS_PRINT_STATES:
+        # Latch the live job — the network call stays OUTSIDE the lock so a slow
+        # printer doesn't serialize the other printers' tracker updates.
+        job = None
+        try:
+            job = prusalink_api.get_printer_job(fb_url, printer_name)
+        except Exception:
+            job = None
+        job_changed = None
+        with _PRINT_TRACKER_LOCK:
+            entry = _PRINT_TRACKER.setdefault(printer_name, {})
+            entry['state'] = cur
+            if job:
+                # Reject blank/zero ids (None/''/'0'/0) — same "blank job" set
+                # print_deduct_ledger keys on, so the tracker and the ledger
+                # agree on what can't be deduped restart-safely.
+                new_jid = job.get('job_id')
+                new_jid = new_jid if new_jid not in (None, '', '0', 0) else None
+                old_jid = entry.get('job_id')
+                # A different (valid) job_id while still in-progress means a NEW
+                # print started without us sampling the previous one's terminal
+                # state (cancel→reslice→restart faster than the poll, or a missed
+                # STOPPED). Reset the stale latch so the new job does NOT inherit
+                # the old progress high-water (which would over-state its %, then
+                # over-deduct on its own cancel). We can't tell from here whether
+                # the previous job was cancelled or completed, so it is NOT
+                # auto-deducted — logged for visibility (usage in this window is
+                # ~0 anyway since reprep takes longer than a poll).
+                if new_jid is not None and old_jid not in (None, '') and str(new_jid) != str(old_jid):
+                    job_changed = (old_jid, new_jid)
+                    entry.pop('progress', None)
+                    entry.pop('filename', None)
+                    entry.pop('file_meta', None)
+                if job.get('filename'):
+                    entry['filename'] = job['filename']
+                if new_jid is not None:
+                    entry['job_id'] = new_jid
+                # file_meta (the slicer's per-tool 'filament used' estimate) is
+                # latched for slice 5's preview UX, which shows the estimate
+                # alongside the computed partial without re-fetching the job.
+                if job.get('file_meta'):
+                    entry['file_meta'] = job['file_meta']
+                prog = job.get('progress')
+                if isinstance(prog, (int, float)):
+                    entry['progress'] = max(float(entry.get('progress', 0.0)), float(prog))
+        if job_changed:
+            try:
+                state.add_log_entry(
+                    f"ℹ️ {printer_name}: print job changed ({job_changed[0]}→{job_changed[1]}) "
+                    f"without a sampled end state; previous job not auto-deducted.", "INFO")
+            except Exception:
+                pass
+        return
+
+    # Non-in-progress state: detect a cancel edge against the latched prev state.
+    fire = None
+    cancel_without_latch = False
+    with _PRINT_TRACKER_LOCK:
+        entry = _PRINT_TRACKER.get(printer_name)
+        prev = entry.get('state') if entry else None
+        # First ship is CANCEL-ONLY: _CANCEL_TERMINAL_STATES is {STOPPED, ERROR}
+        # and deliberately EXCLUDES FINISHED/IDLE — FilaBridge still owns
+        # completed-print deducts until the Phase-2 atomic cutover, so firing
+        # here on a completion would double-deduct. Don't widen this set without
+        # cutting FilaBridge's monitor over (scoping doc §9.5).
+        is_cancel_edge = (prev in _INPROGRESS_PRINT_STATES
+                          and cur in _CANCEL_TERMINAL_STATES)
+        if is_cancel_edge and entry and entry.get('filename'):
+            fire = {
+                'filename': entry.get('filename'),
+                'job_id': entry.get('job_id', ''),
+                'progress': float(entry.get('progress', 0.0)),
+            }
+            # Reset the latch to the terminal state so the edge can't re-fire.
+            _PRINT_TRACKER[printer_name] = {'state': cur}
+        else:
+            if is_cancel_edge:
+                cancel_without_latch = True
+            if entry is not None:
+                entry['state'] = cur
+            else:
+                _PRINT_TRACKER[printer_name] = {'state': cur}
+
+    if cancel_without_latch:
+        state.add_log_entry(
+            f"🛑 Cancel detected on {printer_name}, but no active job was latched "
+            f"(print too short to sample between heartbeats) — no partial deduct.",
+            "INFO")
+    if fire:
+        _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
+                              fire['progress'], fb_url)
+
+
+# ---------------------------------------------------------------------------
+# Cancelled-print monitor — a dedicated server-side poller, INDEPENDENT of the
+# dashboard pulse (Derek 2026-06-11). Detection must NOT depend on a browser
+# having the dashboard open or focused: an unattended print is the common case,
+# and FCC usually isn't in focus. So _track_print_edge no longer rides
+# _pulse_section_printer_status; this daemon probes every printer on a fixed
+# ~30s tick regardless of UI state. The frontend pulse still probes state for
+# the widget, and its Phase-0 fast-poll burst still snaps the displayed weight
+# after a deduct — but it's no longer load-bearing for catching cancels.
+# ---------------------------------------------------------------------------
+
+_CANCEL_MONITOR_INTERVAL_S = 30
+# How long to keep retrying a deferred fetch before giving up (§9.10). The
+# cancelled file stays download-LOCKED until Derek clears the cancel screen on
+# the printer; he's usually at the printer, but this buffers a cancel-and-walk-
+# away (e.g. over a weekend). Retrying is nearly free — it only hits the network
+# once the printer leaves STOPPED — so the window is generous.
+_CANCEL_FETCH_MAX_AGE_S = 72 * 3600
+_cancel_monitor_started = False
+_cancel_monitor_lock = threading.Lock()
+
+
+def _cancel_monitor_tick():
+    """One detection sweep: probe every printer's state + run the latch/edge
+    detector, then service the deferred-fetch retry queue (§9.10) using the
+    states just probed. Per-printer probes fan out so a slow/offline printer
+    doesn't block the rest. Best-effort throughout."""
+    from concurrent.futures import ThreadPoolExecutor
+    try:
+        printer_map = locations_db.get_active_printer_map()
+        _, fb_url = config_loader.get_api_urls()
+    except Exception:
+        return
+    names = sorted({info.get('printer_name') for info in printer_map.values()
+                    if info.get('printer_name')})
+    if not names:
+        return
+
+    probed = {}
+
+    def _probe(name):
+        try:
+            state_info = prusalink_api.get_printer_state(fb_url, name)
+        except Exception:
+            state_info = None
+        probed[name] = state_info  # distinct keys per thread → GIL-safe
+        try:
+            _track_print_edge(name, state_info, fb_url)
+        except Exception as e:
+            try:
+                state.logger.debug(f"cancel-monitor probe failed for {name}: {e}")
+            except Exception:
+                pass
+
+    workers = max(1, min(8, len(names)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(_probe, names))
+
+    # Prune tracker entries for printers no longer in the map so a removed /
+    # renamed printer's stale latch can't linger or mis-fire on re-add.
+    with _PRINT_TRACKER_LOCK:
+        for stale in [p for p in _PRINT_TRACKER if p not in names]:
+            _PRINT_TRACKER.pop(stale, None)
+        snapshot = {k: dict(v) for k, v in _PRINT_TRACKER.items()}
+
+    # Slice 7: persist the latch snapshot so an in-flight print survives an FCC /
+    # host restart (reconciled on monitor start via _recover_print_tracker_on_
+    # start). Best-effort — print_tracker_store.save swallows its own errors.
+    print_tracker_store.save(snapshot)
+
+    # Retry any cancels whose gcode was download-locked at the edge (§9.10).
+    try:
+        _process_pending_cancel_fetches(probed, fb_url)
+    except Exception as e:
+        try:
+            state.logger.debug(f"cancel-fetch retry pass failed: {e}")
+        except Exception:
+            pass
+
+
+def _process_pending_cancel_fetches(states, fb_url):
+    """Service the deferred-fetch queue (§9.10): for each cancelled print whose
+    gcode couldn't be downloaded at the edge (selected-file LOCK), re-attempt the
+    compute ONCE the printer has left STOPPED (the file un-locks → IDLE), then
+    stash the 🛑 Review and drop the queue entry. Gives up after
+    _CANCEL_FETCH_MAX_AGE_S with a "weigh the spool" warning.
+
+    `states` maps printer_name -> the state dict get_printer_state returned this
+    tick (or None when offline). Best-effort per entry; one bad record never
+    blocks the rest.
+    """
+    pendings = cancel_fetch_store.list_pending()
+    if not pendings:
+        return
+    now = time.time()
+    for rec in pendings:
+        try:
+            printer = rec.get("printer_name")
+            job_id = rec.get("job_id")
+            filename = rec.get("filename")
+            progress = float(rec.get("progress", 0.0) or 0.0)
+            if not printer or job_id in (None, ""):
+                cancel_fetch_store.pop_pending(printer, job_id)
+                continue
+
+            # Resolved elsewhere (confirmed/dismissed, or a review already
+            # stashed) → drop the queue entry. Keeps "ledger/review ⟹ no fetch".
+            if (print_deduct_ledger.was_deducted(printer, job_id)
+                    or cancel_review_store.has_pending(printer, job_id)):
+                cancel_fetch_store.pop_pending(printer, job_id)
+                continue
+
+            # Give up after the max-age window so a deleted/abandoned file's
+            # entry can't linger forever. Record grams=0 so it can't re-queue.
+            first_seen = float(rec.get("first_seen", now) or now)
+            if now - first_seen > _CANCEL_FETCH_MAX_AGE_S:
+                pct = max(0.0, min(1.0, progress)) * 100
+                hrs = _CANCEL_FETCH_MAX_AGE_S // 3600
+                state.add_log_entry(
+                    f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
+                    f"('{filename}', ~{pct:.0f}%) after {hrs}h — no partial deduct. "
+                    f"Weigh the spool to true it up.", "WARNING", "ffaa00")
+                print_deduct_ledger.record_deduct(printer, job_id, filename=filename,
+                                                  scale=progress, grams=0)
+                cancel_fetch_store.pop_pending(printer, job_id)
+                continue
+
+            # Gate on state: the file stays download-LOCKED while the printer is
+            # in STOPPED/ERROR (cancel screen up) or PRINTING (a new job). Only
+            # attempt once it's in a ready/idle state. Offline (None) → wait.
+            st = states.get(printer)
+            cur = str((st or {}).get("state", "")).upper() if st else ""
+            if not cur or cur in _INPROGRESS_PRINT_STATES or cur in _CANCEL_TERMINAL_STATES:
+                continue
+
+            result = _create_pending_cancel_review(
+                printer, filename, job_id, progress, fb_url=fb_url)
+            status = (result or {}).get("status")
+            if status == "awaiting_fetch":
+                # Still couldn't fetch (the file 404'd despite a ready state — a
+                # transient, or the file was deleted). Leave queued; the re-queue
+                # already bumped attempts. The max-age window bounds the retries.
+                continue
+            # Any terminal outcome (pending review / no_usage / no_spools /
+            # skipped) resolves this entry.
+            cancel_fetch_store.pop_pending(printer, job_id)
+        except Exception as e:
+            try:
+                state.logger.debug(f"cancel-fetch retry failed for {rec}: {e}")
+            except Exception:
+                pass
+
+
+def _recover_print_tracker_on_start():
+    """Slice 7 — power-loss latch persistence. On monitor start, reconcile the
+    persisted in-flight latch against each printer's CURRENT state so a cancel
+    that happened (or a print that was running) during an FCC / host restart
+    isn't silently lost. Resolution table (persisted = was in-progress + a
+    latched job):
+
+        now PRINTING, SAME job_id  → it resumed: restore the latch
+        now PRINTING, DIFFERENT job → old outcome unknown: warn (manual), latch new
+        now STOPPED / ERROR        → cancel/failure: fire the deduct at persisted %
+        now FINISHED               → completed: leave to FilaBridge (no deduct)
+        now IDLE / READY           → cleared during outage, ambiguous: warn (manual)
+        offline (unreachable)      → restore the latch, defer to normal detection
+        (no latched job)           → seed the baseline state only
+
+    Idempotent: _dispatch_cancel_edge dedups via the (printer, job_id) ledger +
+    review store, so a double restart can't double-deduct."""
+    persisted = print_tracker_store.load()
+    if not persisted:
+        return
+    try:
+        _, fb_url = config_loader.get_api_urls()
+    except Exception:
+        fb_url = None
+    recovered = 0
+    for name, entry in list(persisted.items()):
+        try:
+            if _recover_one_print_latch(name, entry, fb_url):
+                recovered += 1
+        except Exception as e:
+            try:
+                state.logger.debug(f"print-latch recovery failed for {name}: {e}")
+            except Exception:
+                pass
+    if recovered:
+        try:
+            state.logger.info(
+                f"🛑 Reconciled {recovered} persisted print latch(es) after restart.")
+        except Exception:
+            pass
+
+
+def _recover_one_print_latch(name, entry, fb_url):
+    """Reconcile one persisted latch (see _recover_print_tracker_on_start for the
+    table). Returns True if it acted, False for a no-op (bare entry / completion)."""
+    job_id = entry.get('job_id')
+    filename = entry.get('filename')
+    progress = float(entry.get('progress', 0.0) or 0.0)
+    if not (job_id and filename):
+        # No latched job (a bare terminal/idle snapshot) — nothing to recover;
+        # seed the baseline state so the first edge-detect has a `prev`.
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = {'state': str(entry.get('state', '')).upper()}
+        return False
+
+    cur_info = prusalink_api.get_printer_state(fb_url, name) if fb_url else None
+    cur = str((cur_info or {}).get('state', '')).upper() if cur_info else None
+    pct = max(0.0, min(1.0, progress)) * 100
+
+    # Offline on restart → can't resolve; restore the latch and let normal
+    # edge-detection handle it when the printer is reachable again (mirrors the
+    # in-tick "offline preserves the latch" rule).
+    if cur is None:
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = dict(entry)
+        return True
+
+    if cur in _INPROGRESS_PRINT_STATES:
+        job = prusalink_api.get_printer_job(fb_url, name) or {}
+        cur_jid = job.get('job_id')
+        cur_jid = cur_jid if cur_jid not in (None, '', '0', 0) else None
+        if cur_jid is not None and str(cur_jid) == str(job_id):
+            # Same job still running → it RESUMED. Restore the latch (incl. the
+            # progress high-water) so normal detection continues from here.
+            with _PRINT_TRACKER_LOCK:
+                _PRINT_TRACKER[name] = dict(entry)
+            return True
+        # A DIFFERENT job is printing → the old one ended during the outage and
+        # we can't tell cancel from completion → manual review; latch the new job.
+        state.add_log_entry(
+            f"⚠️ {name}: a print ('{filename}', ~{pct:.0f}%) was in progress when FCC "
+            f"restarted and a different job is printing now — its outcome is unknown, "
+            f"not auto-deducted. Weigh the spool if that print was cancelled.",
+            "WARNING", "ffaa00")
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = {
+                'state': cur, 'job_id': cur_jid, 'filename': job.get('filename'),
+                'progress': float(job.get('progress') or 0.0),
+                'file_meta': job.get('file_meta') or {}}
+        return True
+
+    if cur in _CANCEL_TERMINAL_STATES:
+        # Did NOT resume — still STOPPED/ERROR → a real cancel/failure. Fire the
+        # deduct from the persisted progress (Derek's "resolve from last pull
+        # status if it doesn't resume").
+        state.add_log_entry(
+            f"🛑 Recovering a cancel missed during an FCC restart on {name} "
+            f"('{filename}', ~{pct:.0f}%) — printer still {cur}.", "WARNING", "ffaa00")
+        _dispatch_cancel_edge(name, filename, job_id, progress, fb_url)
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = {'state': cur}
+        return True
+
+    if cur == "FINISHED":
+        # Completed during the outage → FilaBridge owns completions (cancel-only
+        # first ship) → no deduct.
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = {'state': cur}
+        return False
+
+    # IDLE / READY / other: in-progress → cleared during the outage. Can't tell a
+    # cancelled-then-cleared print from a completed-then-cleared one → manual
+    # review, never a phantom deduct.
+    state.add_log_entry(
+        f"⚠️ A print ('{filename}', ~{pct:.0f}%) was in progress on {name} when FCC "
+        f"restarted; it's now {cur or 'idle'} so I can't tell if it was cancelled or "
+        f"finished — weigh the spool if it was cancelled.", "WARNING", "ffaa00")
+    with _PRINT_TRACKER_LOCK:
+        _PRINT_TRACKER[name] = {'state': cur}
+    return True
+
+
+def _cancel_monitor_loop():
+    # Slice 7: reconcile the persisted in-flight latch BEFORE the first tick so a
+    # cancel missed during an FCC/host restart is recovered (or surfaced) up front.
+    try:
+        _recover_print_tracker_on_start()
+    except Exception as e:
+        try:
+            state.logger.warning(f"print-latch recovery pass failed: {e}")
+        except Exception:
+            pass
+    while True:
+        try:
+            _cancel_monitor_tick()
+        except Exception as e:
+            try:
+                state.logger.warning(f"cancel-monitor tick error: {e}")
+            except Exception:
+                pass
+        time.sleep(_CANCEL_MONITOR_INTERVAL_S)
+
+
+def _start_cancel_monitor():
+    """Start the cancel-monitor daemon thread once per process. Called from the
+    __main__ launch path only (never on a bare import, so tests don't spawn it).
+    Idempotent."""
+    global _cancel_monitor_started
+    with _cancel_monitor_lock:
+        if _cancel_monitor_started:
+            return
+        _cancel_monitor_started = True
+    threading.Thread(target=_cancel_monitor_loop, name="cancel-monitor",
+                     daemon=True).start()
+    try:
+        state.logger.info(
+            f"🛑 Cancelled-print monitor started ({_CANCEL_MONITOR_INTERVAL_S}s poll, "
+            f"dashboard-independent).")
+    except Exception:
+        pass
+
+
 def _pulse_section_printer_status():
     """Server-side aggregator for the Printer Status widget. Replaces
     the client-side fan-out of printer_map + N x toolhead_slots +
@@ -5302,7 +6307,10 @@ def _pulse_section_printer_status():
             })
         toolheads.sort(key=lambda t: (t['position'], t['id']))
         # Direct PrusaLink probe — runs regardless of dryer-box bindings,
-        # so the widget ticks for dryer-box-less printers (L56).
+        # so the widget ticks for dryer-box-less printers (L56). NOTE: cancel
+        # DETECTION no longer rides this probe — it runs in the dashboard-
+        # independent _cancel_monitor daemon (so an unattended print with FCC
+        # unfocused/closed is still caught). This probe is widget-display only.
         try:
             state_info = prusalink_api.get_printer_state(fb_url, name)
         except Exception:
@@ -5433,4 +6441,10 @@ if __name__ == '__main__':
     # template through a 3-day uptime; this prevents that footgun.
     if _dev:
         app.config['TEMPLATES_AUTO_RELOAD'] = True
+    # Start the dashboard-independent cancelled-print monitor in the SERVING
+    # process only: with the dev reloader that's the child (WERKZEUG_RUN_MAIN);
+    # without it (prod) this single process. The reloader PARENT skips it so dev
+    # doesn't run two pollers.
+    if (not _dev) or os.environ.get('WERKZEUG_RUN_MAIN', '').lower() == 'true':
+        _start_cancel_monitor()
     app.run(host='0.0.0.0', port=8000, use_reloader=_dev, debug=False)
