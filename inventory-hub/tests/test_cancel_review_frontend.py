@@ -43,6 +43,12 @@ def test_cancel_review_overlay_renders_nudges_and_confirms(page, require_server,
     assert grams is not None, "grams input for spool 100 should render"
     assert grams.input_value() in ("20", "20.0"), grams.input_value()
 
+    # The M486 over-estimate reminder is always shown (Derek 2026-06-12): per-
+    # object cancels can't be auto-detected, so the review nudges the user to
+    # trim the grams down when objects were cancelled mid-print.
+    card = page.query_selector("#fcc-cancel-review-overlay .fcc-cr-card")
+    assert "M486" in card.inner_text(), "M486 over-estimate reminder must show in the review"
+
     # Nudge 20 → 25 and confirm.
     grams.fill("25")
     page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
@@ -78,7 +84,10 @@ def test_cancel_review_dismiss_drops_card(page, require_server, base_url):
 
     page.evaluate("() => window.openCancelReview()")
     page.wait_for_selector("#fcc-cancel-review-overlay .fcc-cr-card", timeout=5000)
-    page.click("#fcc-cancel-review-overlay .fcc-cr-dismiss")
+    # Discard is a two-click confirm (arm → "⚠️ Confirm discard") so an
+    # accidental click can't drop a review (slice 5.1).
+    page.click("#fcc-cancel-review-overlay .fcc-cr-discard")   # arm
+    page.click("#fcc-cancel-review-overlay .fcc-cr-discard")   # confirm → fires dismiss
     page.wait_for_function("() => !document.getElementById('fcc-cancel-review-overlay')", timeout=5000)
     assert dismissed["hit"] is True
 
@@ -117,7 +126,8 @@ def test_cancel_review_dismiss_already_handled_closes_cleanly(page, require_serv
                                            body=json.dumps({"status": "already_handled"})))
     page.evaluate("() => window.openCancelReview()")
     page.wait_for_selector("#fcc-cancel-review-overlay .fcc-cr-card", timeout=5000)
-    page.click("#fcc-cancel-review-overlay .fcc-cr-dismiss")
+    page.click("#fcc-cancel-review-overlay .fcc-cr-discard")   # arm
+    page.click("#fcc-cancel-review-overlay .fcc-cr-discard")   # confirm → fires dismiss
     page.wait_for_function("() => !document.getElementById('fcc-cancel-review-overlay')", timeout=5000)
 
 
