@@ -4300,7 +4300,26 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
                 'display': disp.get('text', f"#{sid}"),
                 'color': disp.get('color', '888888'),
             })
-    return rows
+
+    # Merge rows that resolve to the SAME spool. One physical spool can feed more
+    # than one toolhead position (a shared-spool config, or the dev XL-4/XL-5=
+    # #230 case), producing two rows for one sid. The confirm path keys updates
+    # by sid (frontend `updates[sid]` + backend `rec_rows={sid:row}`), so two
+    # same-sid rows would COLLAPSE to a single deduct — a silent under-deduct
+    # (found 2026-06-12: job 690 previewed 1.65g but only ~0.8g applied). Sum the
+    # grams here so there's exactly one row per spool: the spool loses filament
+    # once, totalled across every position it fed.
+    merged = {}
+    for r in rows:
+        m = merged.get(r['sid'])
+        if m is None:
+            merged[r['sid']] = r
+        else:
+            m['grams'] = round(m['grams'] + r['grams'], 2)
+            m['remaining_after'] = round(max(0.0, m['remaining_before'] - m['grams']), 1)
+            if str(r['toolhead']) not in str(m['toolhead']).split(', '):
+                m['toolhead'] = f"{m['toolhead']}, {r['toolhead']}"
+    return list(merged.values())
 
 
 def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction):

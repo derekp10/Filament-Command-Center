@@ -203,6 +203,59 @@ def test_create_pending_no_mapped_spool_records_and_warns():
 
 
 # ---------------------------------------------------------------------------
+# _resolve_usage_to_spools — same-spool-across-positions merge (job 690 fix)
+# ---------------------------------------------------------------------------
+
+def test_resolve_usage_merges_same_spool_across_positions():
+    """One physical spool feeding TWO toolhead positions (the dev XL-4/XL-5=#230
+    case, or any many-positions-one-spool config) must produce ONE row with the
+    grams SUMMED. Two rows for one sid would collapse to a single deduct on
+    confirm (frontend `updates[sid]` + backend `rec_rows={sid:row}`), the silent
+    under-deduct found 2026-06-12 (job 690: 1.65g preview → ~0.8g applied)."""
+    printer_map = {"XL-4": {"printer_name": "XL", "position": 3},
+                   "XL-5": {"printer_name": "XL", "position": 4}}
+    usage_map = {3: 0.84, 4: 0.81}   # both positions feed the SAME spool #230
+    spools = {230: {"id": 230, "used_weight": 700.0, "initial_weight": 1258.0}}
+    with patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map), \
+         patch.object(app_module, "_resolve_active_locs_for_printer",
+                      return_value=[("XL-4", {"position": 3}), ("XL-5", {"position": 4})]), \
+         patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=lambda loc: [230]), \
+         patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))), \
+         patch.object(app_module.spoolman_api, "format_spool_display",
+                      return_value={"text": "#230", "color": "ff0000"}):
+        rows = app_module._resolve_usage_to_spools("XL", usage_map, "http://fb")
+    assert len(rows) == 1, "same spool across two positions must merge to one row"
+    r = rows[0]
+    assert r["sid"] == 230
+    assert abs(r["grams"] - 1.65) < 1e-6, "grams summed across both positions (0.84 + 0.81)"
+    assert abs(r["remaining_before"] - 558.0) < 1e-6      # 1258 - 700
+    assert abs(r["remaining_after"] - 556.35) < 0.06      # 558.0 - 1.65 (rounded to .1)
+    assert "XL-4" in r["toolhead"] and "XL-5" in r["toolhead"]
+
+
+def test_resolve_usage_distinct_spools_stay_separate():
+    """Two positions feeding DIFFERENT spools stay as two rows (the normal XL
+    toolchanger case — the merge must not over-collapse)."""
+    printer_map = {"XL-1": {"printer_name": "XL", "position": 0},
+                   "XL-2": {"printer_name": "XL", "position": 1}}
+    usage_map = {0: 1.0, 1: 2.0}
+    spools = {100: {"id": 100, "used_weight": 50.0, "initial_weight": 1000.0},
+              200: {"id": 200, "used_weight": 50.0, "initial_weight": 1000.0}}
+    at = {"XL-1": [100], "XL-2": [200]}
+    with patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map), \
+         patch.object(app_module, "_resolve_active_locs_for_printer",
+                      return_value=[("XL-1", {"position": 0}), ("XL-2", {"position": 1})]), \
+         patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=lambda loc: at.get(str(loc).upper(), [])), \
+         patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))), \
+         patch.object(app_module.spoolman_api, "format_spool_display",
+                      return_value={"text": "#s", "color": "ff0000"}):
+        rows = app_module._resolve_usage_to_spools("XL", usage_map, "http://fb")
+    assert {r["sid"] for r in rows} == {100, 200}
+    assert abs(next(r["grams"] for r in rows if r["sid"] == 100) - 1.0) < 1e-6
+    assert abs(next(r["grams"] for r in rows if r["sid"] == 200) - 2.0) < 1e-6
+
+
+# ---------------------------------------------------------------------------
 # Deferred-fetch retry queue (§9.10 — the selected-file download LOCK)
 # ---------------------------------------------------------------------------
 
