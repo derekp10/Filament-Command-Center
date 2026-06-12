@@ -118,6 +118,42 @@ def test_progress_mapping_bounds():
     assert 0.0 <= mid <= 1.0
 
 
+def test_progress_spans_gcode_not_whole_file():
+    """Regression (2026-06-12): when a big (incompressible PNG) thumbnail sits
+    BEFORE the G-code, a mid-print cancel must NOT map to decoded 0. `progress`
+    is progress through the G-code, not a whole-compressed-file byte offset.
+
+    Here the single G-code block spans compressed bytes [8000, 10000] of a
+    10000-byte file — the thumbnail occupies the first 80%. The OLD code scaled
+    `progress * filesize`, so progress 0.5 → byte 5000 ≤ gmap[0][0]=8000 → 0.0
+    (a silent 0 g under-deduction — exactly the real Core One ~51% cancel). The
+    fix spans `progress` across the G-code's compressed range, so 0.5 → ~0.5."""
+    dec = {"gcode": "x" * 1000, "filesize": 10000, "gmap": [(8000, 10000, 0, 1000)]}
+    assert bgcode_decode.progress_to_decoded_fraction(dec, 0.0) == 0.0
+    assert bgcode_decode.progress_to_decoded_fraction(dec, 1.0) == 1.0
+    # progress 0.5 → ~0.5 of the decoded G-code (the old code returned 0.0 here).
+    # (No M73 markers in this hand-built dict → exercises the gmap FALLBACK.)
+    assert abs(bgcode_decode.progress_to_decoded_fraction(dec, 0.5) - 0.5) < 0.02
+    assert abs(bgcode_decode.progress_to_decoded_fraction(dec, 0.25) - 0.25) < 0.02
+
+
+def test_progress_uses_m73_markers_when_present():
+    """The printer's `progress` is the slicer's M73 TIME-based value, so it
+    inverts through the file's `M73 P{percent}` markers (exact to the slicer's
+    time model) — NOT the byte/gmap mapping. Validated 2026-06-12 against scale
+    weights (51%→1.08g, 76%→1.49g = weighed part + a constant skirt/prime)."""
+    # Markers 0%@b0, 50%@b200, 100%@b400 over a 500-byte decoded G-code. A gmap is
+    # ALSO present (to a different answer) to prove M73 takes precedence.
+    dec = {"gcode": "x" * 500, "m73": [(0, 0), (50, 200), (100, 400)],
+           "gmap": [(0, 999, 0, 500)]}
+    assert bgcode_decode.progress_to_decoded_fraction(dec, 0.0) == 0.0
+    assert bgcode_decode.progress_to_decoded_fraction(dec, 1.0) == 1.0
+    # 50% → M73 P50 → byte 200 → 0.40 (NOT the gmap's 0.50).
+    assert abs(bgcode_decode.progress_to_decoded_fraction(dec, 0.5) - 0.40) < 1e-6
+    # 25% interpolates P0@0..P50@200 → byte 100 → 0.20.
+    assert abs(bgcode_decode.progress_to_decoded_fraction(dec, 0.25) - 0.20) < 1e-6
+
+
 # --------------------------------------------------------------------------
 # real-data round-trip (the gold test)
 # --------------------------------------------------------------------------

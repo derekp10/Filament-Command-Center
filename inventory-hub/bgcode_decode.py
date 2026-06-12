@@ -58,6 +58,11 @@ _ENC_MEATPACK_COMMENTS = 2
 # exhausting memory in the unattended daemon.
 _MAX_BLOCK_OUTPUT = 64 * 1024 * 1024
 
+# PrusaSlicer time-progress markers: `M73 P{percent} R{minutes}`. The printer's
+# reported `progress` is this time-based value, so inverting it through these
+# markers (percent -> reached byte) is exact; a raw byte mapping over-counts.
+_M73_RE = re.compile(r'\bM73\b[^\n]*?\bP(\d+)')
+
 
 def is_bgcode(data) -> bool:
     """True if `data` (bytes or str) begins with the bgcode magic `GCDE`."""
@@ -309,32 +314,95 @@ def decode_bgcode(raw: bytes) -> Dict:
     # all the moves keeps the byte-position map intact (footers carry no E).
     if footer_g and footer_mm:
         gcode += f"\n; filament used [mm] = {footer_mm}\n; filament used [g] = {footer_g}\n"
-    return {"gcode": gcode, "gmap": gmap, "filesize": n,
+    # M73 progress markers: PrusaSlicer emits `M73 P{percent} R{minutes}` lines
+    # throughout, and the printer's reported `progress` IS this time-based value
+    # (NOT a byte position). Capture each marker's (percent, decoded-byte-pos) so
+    # progress_to_decoded_fraction can invert progress -> the exact byte reached;
+    # a gcode-byte mapping over-counts because progress is time-based, not linear
+    # in bytes (validated 2026-06-12 against scale ground truth).
+    m73 = []
+    bpos = 0
+    for line in gcode.splitlines(keepends=True):
+        mk = _M73_RE.search(line)
+        if mk:
+            m73.append((int(mk.group(1)), bpos))
+        bpos += len(line.encode("utf-8"))
+    return {"gcode": gcode, "gmap": gmap, "filesize": n, "m73": m73,
             "filament_g": footer_g, "filament_mm": footer_mm}
 
 
+def _m73_byte_for_percent(m73: List[Tuple[int, int]], pct: float) -> int:
+    """Interpolate the decoded-byte position for a progress percent from the
+    M73 markers ``[(percent, byte_pos)]`` (in file order, percent non-decreasing).
+    Linear between bracketing markers; clamps to the ends."""
+    if pct <= m73[0][0]:
+        return m73[0][1]
+    if pct >= m73[-1][0]:
+        return m73[-1][1]
+    prev = m73[0]
+    for cur in m73[1:]:
+        if cur[0] >= pct:
+            (p0, b0), (p1, b1) = prev, cur
+            if p1 == p0:
+                return b1
+            return int(b0 + (pct - p0) / (p1 - p0) * (b1 - b0))
+        prev = cur
+    return m73[-1][1]
+
+
 def progress_to_decoded_fraction(decoded: Dict, progress01: float) -> float:
-    """Map a `.bgcode` print-progress fraction (0..1, a byte position in the
-    COMPRESSED file) to the equivalent fraction of the DECODED G-code, so
-    `parse_partial_filament_usage` slices at the right point. Header/thumbnail
-    bytes before the first G-code block map to 0 (no extrusion reached yet)."""
+    """Map a `.bgcode` print-progress fraction (0..1) to the equivalent fraction
+    of the DECODED G-code, so `parse_partial_filament_usage` slices at the right
+    point.
+
+    PRIMARY (PrusaSlicer files): the printer's reported ``progress`` is the M73
+    TIME-based value the slicer embeds (`M73 P{percent}`), NOT a byte position —
+    so invert it through the file's own M73 markers (percent -> reached decoded
+    byte). This is exact to the slicer's time model: validated 2026-06-12 against
+    physical scale weights (51% -> 1.08 g, 76% -> 1.49 g, each matching the
+    weighed part + a constant ~0.23 g of startup skirt/prime the spool really
+    loses). A raw byte mapping over-counts because progress is time-, not
+    byte-, linear.
+
+    FALLBACK (no M73 markers — non-PrusaSlicer gcode): span ``progress`` across
+    the G-code blocks' COMPRESSED byte range ``[gmap[0][0], gmap[-1][1]]`` and map
+    through the block table. (NOT ``progress * filesize`` — the incompressible PNG
+    thumbnail occupies the front of the file, so a whole-file offset collapsed
+    every sub-~52% cancel to decoded 0.0, a silent 0 g under-deduction; fixed
+    2026-06-12.)"""
     gcode = decoded.get("gcode") or ""
-    gmap = decoded.get("gmap") or []
-    filesize = decoded.get("filesize") or 0
-    if not gcode or not gmap or filesize <= 0:
-        return 0.0
-    target = max(0.0, min(1.0, float(progress01))) * filesize
     declen = len(gcode.encode("utf-8"))
+    if not gcode or declen <= 0:
+        return 0.0
+    m73 = decoded.get("m73") or []
+    gmap = decoded.get("gmap") or []
+    if len(m73) < 2 and not gmap:
+        return 0.0  # no G-code body / no position info — nothing was reached
+    p = max(0.0, min(1.0, float(progress01)))
+    if p <= 0.0:
+        return 0.0
+    if p >= 1.0:
+        return 1.0
+
+    if len(m73) >= 2:
+        return min(1.0, _m73_byte_for_percent(m73, p * 100.0) / declen)
+
+    if not gmap:
+        return 0.0
+    gcode_start, gcode_end = gmap[0][0], gmap[-1][1]
+    span = gcode_end - gcode_start
+    if span <= 0:
+        return p
+    target = gcode_start + p * span
     if target <= gmap[0][0]:
         return 0.0
     if target >= gmap[-1][1]:
         return 1.0
     for bg_start, bg_end, dec_start, dec_end in gmap:
         if target < bg_start:
-            return dec_start / declen if declen else 0.0  # in a gap between blocks
+            return dec_start / declen  # in a gap (a metadata block between G-code blocks)
         if bg_start <= target <= bg_end:
-            span = bg_end - bg_start
-            frac_in = (target - bg_start) / span if span else 0.0
-            dec_byte = dec_start + frac_in * (dec_end - dec_start)
-            return dec_byte / declen if declen else 0.0
+            blkspan = bg_end - bg_start
+            frac_in = (target - bg_start) / blkspan if blkspan else 0.0
+            return (dec_start + frac_in * (dec_end - dec_start)) / declen
     return 1.0
