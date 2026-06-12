@@ -68,7 +68,7 @@
                 <div style="min-width:0;flex:1;">
                     ${swatch}
                     <span style="color:#eee;">${esc(s.display)}</span>
-                    <span style="color:#9aa;font-size:0.8rem;">
+                    <span style="color:#9aa;font-size:0.92rem;">
                         (${esc(s.toolhead)} · ${fmt(s.remaining_before)}g left)
                     </span>
                 </div>
@@ -76,11 +76,11 @@
                     <input type="number" class="fcc-cr-grams form-control bg-dark text-white border-secondary"
                            data-sid="${s.sid}" data-remaining="${s.remaining_before}"
                            value="${fmtG(s.grams)}" step="0.01" min="0" max="${fmt(s.remaining_before)}"
-                           autocomplete="off" style="font-size:0.95rem;" />
+                           autocomplete="off" style="font-size:1.05rem;" />
                     <span class="input-group-text bg-dark text-light border-secondary">g</span>
                 </div>
                 <div class="fcc-cr-preview" data-sid="${s.sid}"
-                     style="width:96px;flex:none;text-align:right;color:#9fe0b0;font-size:0.82rem;">
+                     style="width:104px;flex:none;text-align:right;color:#9fe0b0;font-size:0.95rem;">
                     → ${fmt(s.remaining_after)}g
                 </div>
             </div>`;
@@ -95,15 +95,15 @@
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div style="font-weight:bold;color:#ffd27a;">🛑 ${esc(rec.printer_name)} — cancelled at ~${pct}%</div>
-                    <div style="color:#9aa;font-size:0.8rem;">${fmtG(total)}g total</div>
+                    <div style="color:#9aa;font-size:0.92rem;">${fmtG(total)}g total</div>
                 </div>
-                <div style="color:#9aa;font-size:0.78rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
-                <div style="color:#caa15a;font-size:0.74rem;margin-bottom:8px;line-height:1.35;
-                            background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:5px 7px;">
-                    ⚠️ If you cancelled individual objects mid-print (per-object / M486 cancel, e.g.
-                    from Connect), these grams can read <b>high</b> — the gcode still counts the
-                    skipped object's filament, which never left the spool. Nudge each spool down to
-                    the real amount before confirming.
+                <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
+                <div style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
+                            background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
+                    ⚠️ If you cancelled individual objects mid-print — a per-object / M486 cancel,
+                    from the printer or Connect — these grams can read <b>high</b>: the gcode still
+                    counts the skipped object's filament, which never left the spool. Nudge each
+                    spool down to the real amount before confirming.
                 </div>
                 ${rows}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
@@ -120,19 +120,19 @@
         return `
             <div role="dialog" aria-modal="true" aria-labelledby="fcc-cr-title"
                  style="background:#1f2024;color:#eee;border:1px solid #555;border-radius:8px;
-                        min-width:420px;max-width:640px;width:94vw;
+                        min-width:440px;max-width:680px;width:94vw;font-size:1rem;
                         box-shadow:0 8px 32px rgba(0,0,0,0.6);">
                 <div style="display:flex;justify-content:space-between;align-items:center;
                             padding:14px 18px;border-bottom:1px solid #444;">
-                    <div id="fcc-cr-title" style="font-weight:bold;font-size:1.05rem;">
-                        🛑 Cancelled-Print Reviews <span id="fcc-cr-count" style="color:#9aa;font-weight:normal;font-size:0.85rem;"></span>
+                    <div id="fcc-cr-title" style="font-weight:bold;font-size:1.18rem;">
+                        🛑 Cancelled-Print Reviews <span id="fcc-cr-count" style="color:#9aa;font-weight:normal;font-size:0.95rem;"></span>
                     </div>
                     <button type="button" id="fcc-cr-close"
                         style="background:none;border:none;color:#aaa;font-size:1.4rem;line-height:1;cursor:pointer;"
                         aria-label="Close — reviews stay pending"
                         title="Close — every review stays pending for later">×</button>
                 </div>
-                <div style="padding:8px 18px 4px;color:#bbb;font-size:0.82rem;">
+                <div style="padding:8px 18px 4px;color:#bbb;font-size:0.95rem;">
                     Nudge each spool's grams if needed, then <b>Confirm</b>. <b>Closing keeps everything for later</b> — only <b>Discard</b> drops a review.
                 </div>
                 <div id="fcc-cr-body" style="padding:8px 18px 14px;max-height:60vh;overflow:auto;">
