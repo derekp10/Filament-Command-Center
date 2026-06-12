@@ -180,6 +180,15 @@ const setProcessing = (s) => {
     state.processing = s; ov.style.display = s ? 'block' : 'none';
 };
 
+// UI-lockout guard (2026-06-12): fetch with a hard wall-clock timeout so a hung
+// request — the only way an overlay-clearing .catch can be skipped — can't
+// strand the z-index:9999 #processing-overlay (which gates ALL input). On
+// timeout AbortSignal.timeout rejects the promise, so the caller's existing
+// .catch / .finally clears state. ~15s is well above a healthy Spoolman /
+// PrusaLink write. Use for any fetch whose handler toggles setProcessing.
+window.fetchT = (url, opts = {}, ms = 15000) =>
+    fetch(url, { ...opts, signal: opts.signal || AbortSignal.timeout(ms) });
+
 // L286 final: the click-to-toggle indicator is the only pause path. The
 // old onmouseenter/onmouseleave hover-pause was removed in the dashboard
 // template — it caused accidental pauses Derek didn't realize were active.
