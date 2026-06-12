@@ -98,6 +98,13 @@
                     <div style="color:#9aa;font-size:0.8rem;">${fmtG(total)}g total</div>
                 </div>
                 <div style="color:#9aa;font-size:0.78rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
+                <div style="color:#caa15a;font-size:0.74rem;margin-bottom:8px;line-height:1.35;
+                            background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:5px 7px;">
+                    ⚠️ If you cancelled individual objects mid-print (per-object / M486 cancel, e.g.
+                    from Connect), these grams can read <b>high</b> — the gcode still counts the
+                    skipped object's filament, which never left the spool. Nudge each spool down to
+                    the real amount before confirming.
+                </div>
                 ${rows}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
