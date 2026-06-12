@@ -187,6 +187,20 @@ def test_monotonic_progress_latched(capture_edge):
     assert abs(capture_edge.call_args.args[3] - 0.6) < 1e-9
 
 
+def test_job_id_change_resets_progress_high_water(capture_edge):
+    """PRINTING job A @0.7, then a DIFFERENT job B @0.1 starts while still
+    in-progress (cancel→reslice→restart faster than a sampled STOPPED). The new
+    job must NOT inherit A's 0.7 high-water — B's own cancel deducts B's progress
+    (0.1), else a quick restart over-deducts the new spool."""
+    _drive(["PRINTING", "PRINTING", "STOPPED"],
+           jobs={0: _job(filename="/usb/a.gcode", job_id=100, progress=0.7),
+                 1: _job(filename="/usb/b.gcode", job_id=200, progress=0.1)})
+    assert capture_edge.call_count == 1
+    args = capture_edge.call_args.args
+    assert args[1] == "/usb/b.gcode" and args[2] == 200
+    assert abs(args[3] - 0.1) < 1e-9   # 0.1, NOT max(0.7, 0.1)
+
+
 def test_finished_does_not_fire(capture_edge):
     """First ship is cancel-only — a completed print (FINISHED) stays with
     FilaBridge, so the detector must NOT fire on it."""

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from unittest.mock import patch
 
 import pytest
@@ -17,12 +18,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module  # noqa: E402
 import cancel_review_store  # noqa: E402
+import cancel_fetch_store  # noqa: E402
 import print_deduct_ledger  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _tmp_stores(tmp_path, monkeypatch):
     monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetches.json"))
     monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
 
 
@@ -154,16 +157,30 @@ def test_create_pending_idempotent_and_ledger_guarded():
             m.stop()
 
 
-def test_create_pending_download_fail_no_pending_no_ledger():
+def test_create_pending_download_fail_queues_deferred_fetch():
+    # A locked selected-file download (§9.10) is RETRYABLE: don't give up — queue
+    # a deferred fetch + nudge to clear the screen, NO review/ledger yet.
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode", return_value=None), \
          patch.object(app_module.state, "add_log_entry") as log:
         out = app_module._create_pending_cancel_review("XL", "p.bgcode", "J-4", 0.5, fb_url="http://fb")
-    assert out["status"] == "error"
-    assert cancel_review_store.has_pending("XL", "J-4") is False
-    assert print_deduct_ledger.was_deducted("XL", "J-4") is False   # retryable
+    assert out["status"] == "awaiting_fetch"
+    assert cancel_fetch_store.has_pending("XL", "J-4") is True       # queued for retry
+    assert cancel_review_store.has_pending("XL", "J-4") is False     # not computed yet
+    assert print_deduct_ledger.was_deducted("XL", "J-4") is False    # retryable, not recorded
+    # The one nudge logged is the clear-the-screen WARNING with the awaiting meta.
     assert log.call_args.args[1] == "WARNING"
+    assert log.call_args.kwargs["meta"]["type"] == "cancel_deduct_awaiting"
+
+
+def test_create_pending_no_creds_queues_deferred_fetch():
+    with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module.prusalink_api, "fetch_printer_credentials", return_value=None), \
+         patch.object(app_module.state, "add_log_entry"):
+        out = app_module._create_pending_cancel_review("XL", "f.gcode", "J-4b", 0.5, fb_url="http://fb")
+    assert out["status"] == "awaiting_fetch"
+    assert cancel_fetch_store.has_pending("XL", "J-4b") is True
 
 
 def test_create_pending_no_mapped_spool_records_and_warns():
@@ -182,6 +199,114 @@ def test_create_pending_no_mapped_spool_records_and_warns():
     assert out["status"] == "no_spools"
     assert cancel_review_store.has_pending("XL", "J-6") is False
     assert print_deduct_ledger.was_deducted("XL", "J-6") is True   # recorded, won't re-queue
+    assert log.call_args.args[1] == "WARNING"
+
+
+# ---------------------------------------------------------------------------
+# Deferred-fetch retry queue (§9.10 — the selected-file download LOCK)
+# ---------------------------------------------------------------------------
+
+def _queue(job_id, first_seen=None, progress=0.5):
+    cancel_fetch_store.add_pending({
+        "printer_name": "XL", "job_id": job_id, "filename": "f.gcode",
+        "progress": progress, "first_seen": first_seen if first_seen is not None else time.time(),
+        "attempts": 1, "last_status": "awaiting_fetch"})
+
+
+def test_enqueue_is_idempotent_and_nudges_once():
+    with patch.object(app_module.state, "add_log_entry") as log:
+        assert app_module._enqueue_cancel_fetch("XL", "f.gcode", "Q-1", 0.5) is True
+        first_seen = cancel_fetch_store.get_pending("XL", "Q-1")["first_seen"]
+        # Re-queue: bumps attempts, preserves first_seen, does NOT re-nudge.
+        assert app_module._enqueue_cancel_fetch("XL", "f.gcode", "Q-1", 0.7) is False
+    rec = cancel_fetch_store.get_pending("XL", "Q-1")
+    assert rec["attempts"] == 2 and rec["first_seen"] == first_seen
+    assert log.call_count == 1   # nudged exactly once
+
+
+def test_process_fetch_gated_off_while_locked():
+    # STOPPED (cancel screen up) and PRINTING (new job) both keep the file
+    # locked → no fetch attempt, entry stays queued. Offline (None) too.
+    for st in ({"state": "STOPPED"}, {"state": "PRINTING"}, None):
+        cancel_fetch_store.add_pending({"printer_name": "XL", "job_id": "G-1",
+            "filename": "f.gcode", "progress": 0.5, "first_seen": time.time(), "attempts": 1})
+        with patch.object(app_module, "_create_pending_cancel_review") as cpr:
+            app_module._process_pending_cancel_fetches({"XL": st}, "http://fb")
+            cpr.assert_not_called()
+        assert cancel_fetch_store.has_pending("XL", "G-1") is True
+        cancel_fetch_store.pop_pending("XL", "G-1")
+
+
+def test_process_fetch_succeeds_when_idle_creates_review_and_dequeues():
+    gcode, frac = _cancelled_gcode()
+    printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
+    spools = {100: {"id": 100, "used_weight": 100.0, "initial_weight": 1000.0}}
+    _queue("U-1", progress=frac)
+    ctx = _preview_ctx(gcode, printer_map, spools, {"XL-1": [100]}, {"updates": []})
+    for m in ctx:
+        m.start()
+    try:
+        app_module._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+    assert cancel_review_store.has_pending("XL", "U-1") is True   # computed + stashed
+    assert cancel_fetch_store.has_pending("XL", "U-1") is False   # dequeued
+
+
+def test_process_fetch_locked_then_unlocks_across_ticks():
+    gcode, frac = _cancelled_gcode()
+    printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
+    spools = {100: {"id": 100, "used_weight": 100.0, "initial_weight": 1000.0}}
+    _queue("T-1", progress=frac)
+    # tick 1 — still STOPPED (locked): no attempt, stays queued
+    with patch.object(app_module, "_create_pending_cancel_review") as cpr:
+        app_module._process_pending_cancel_fetches({"XL": {"state": "STOPPED"}}, "http://fb")
+        cpr.assert_not_called()
+    assert cancel_fetch_store.has_pending("XL", "T-1") is True
+    # tick 2 — IDLE (unlocked): computes + dequeues
+    ctx = _preview_ctx(gcode, printer_map, spools, {"XL-1": [100]}, {"updates": []})
+    for m in ctx:
+        m.start()
+    try:
+        app_module._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+    assert cancel_review_store.has_pending("XL", "T-1") is True
+    assert cancel_fetch_store.has_pending("XL", "T-1") is False
+
+
+def test_process_fetch_still_locked_when_idle_stays_queued():
+    # IDLE but the download still fails (transient / file deleted) → re-queued,
+    # not given up (until the max-age window).
+    _queue("S-1")
+    with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
+         patch.object(app_module.prusalink_api, "fetch_cancel_gcode", return_value=None), \
+         patch.object(app_module.state, "add_log_entry"):
+        app_module._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+    assert cancel_fetch_store.has_pending("XL", "S-1") is True
+    assert cancel_review_store.has_pending("XL", "S-1") is False
+
+
+def test_process_fetch_resolved_in_ledger_drops_entry():
+    _queue("R-1")
+    print_deduct_ledger.record_deduct("XL", "R-1", filename="f.gcode")
+    with patch.object(app_module, "_create_pending_cancel_review") as cpr:
+        app_module._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+        cpr.assert_not_called()   # already processed → no re-compute
+    assert cancel_fetch_store.has_pending("XL", "R-1") is False
+
+
+def test_process_fetch_max_age_gives_up_and_records():
+    _queue("M-1", first_seen=time.time() - app_module._CANCEL_FETCH_MAX_AGE_S - 10)
+    with patch.object(app_module, "_create_pending_cancel_review") as cpr, \
+         patch.object(app_module.state, "add_log_entry") as log:
+        app_module._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+        cpr.assert_not_called()
+    assert cancel_fetch_store.has_pending("XL", "M-1") is False
+    assert print_deduct_ledger.was_deducted("XL", "M-1") is True   # grams=0 so it can't re-queue
     assert log.call_args.args[1] == "WARNING"
 
 

@@ -7,6 +7,7 @@ import locations_db # type: ignore
 import spoolman_api # type: ignore
 import print_deduct_ledger # type: ignore
 import cancel_review_store # type: ignore
+import cancel_fetch_store # type: ignore
 import logic # type: ignore
 import csv
 import os
@@ -4154,8 +4155,15 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
     prepared = prusalink_api.fetch_cancel_gcode(
         ip_address, api_key, filename, reached_fraction)
     if not prepared or not prepared.get("gcode"):
-        _log_cancel_uncomputable(printer_name, filename, reached_fraction, None)
-        return None, {"status": "error", "reason": "gcode download failed", "job_id": job_id}
+        # Download failed. The dominant cause is NOT a permanent error: PrusaLink
+        # 404s the raw-file download while the file is the SELECTED/active print
+        # — i.e. while the printer sits in STOPPED with the cancel-summary screen
+        # up, which is EXACTLY when we fire (confirmed live 2026-06-11; §9.10).
+        # The file un-locks once the print is cleared (→ IDLE). So this is
+        # RETRYABLE: return without a terminal "weigh the spool" log and let the
+        # caller stash a deferred-fetch retry (the monitor re-attempts each tick
+        # once the printer leaves STOPPED). (Was an immediate terminal error.)
+        return None, {"status": "error", "reason": "download_failed", "job_id": job_id}
     content = prepared["gcode"]
     usage_map = prusalink_api.parse_partial_filament_usage(content, prepared["fraction"])
     if not usage_map:
@@ -4224,6 +4232,10 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
         if terminal["status"] == "no_usage":
             print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                               scale=reached_fraction, grams=0)
+        elif terminal["status"] == "error":
+            # This one-shot auto-apply primitive has no retry loop, so surface the
+            # download failure (the live preview path defers/retries instead).
+            _log_cancel_uncomputable(printer_name, filename, reached_fraction, None)
         return terminal
 
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
@@ -4291,6 +4303,36 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
     return rows
 
 
+def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction):
+    """Queue a cancelled print whose gcode couldn't be fetched yet (the
+    selected-file download LOCK, §9.10) for the monitor to retry. Idempotent:
+    re-queuing the same job bumps `attempts`, PRESERVES `first_seen` (so the
+    max-age give-up window is measured from the FIRST sighting), and does NOT
+    re-nudge. The 'clear the screen' nudge logs exactly ONCE, on first queue.
+    Returns True if newly queued (nudged), False if it was already queued."""
+    if cancel_fetch_store.has_pending(printer_name, job_id):
+        rec = cancel_fetch_store.get_pending(printer_name, job_id) or {}
+        rec.update({"printer_name": printer_name, "job_id": str(job_id),
+                    "filename": filename, "progress": float(reached_fraction),
+                    "attempts": int(rec.get("attempts", 0)) + 1})
+        cancel_fetch_store.add_pending(rec)
+        return False
+    cancel_fetch_store.add_pending({
+        "printer_name": printer_name, "job_id": str(job_id), "filename": filename,
+        "progress": float(reached_fraction), "first_seen": time.time(),
+        "attempts": 1, "last_status": "awaiting_fetch",
+    })
+    pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    state.add_log_entry(
+        f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%, '{filename}') detected — "
+        f"the printer is still showing the cancel screen, so the gcode is locked. "
+        f"Clear it on the printer and I'll record the partial deduct automatically.",
+        "WARNING", "ffaa00",
+        meta={"type": "cancel_deduct_awaiting",
+              "printer_name": printer_name, "job_id": str(job_id)})
+    return True
+
+
 def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,
                                   fb_url=None):
     """Compute the cancelled-print partial and STASH it for review instead of
@@ -4311,11 +4353,10 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
 
     creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
     if not creds:
-        state.add_log_entry(
-            f"🛑 Cancelled print on {printer_name} ('{filename}') — no printer "
-            f"credentials; can't compute the partial. Weigh the spool.",
-            "WARNING", "ffaa00")
-        return {"status": "error", "reason": "no credentials", "job_id": job_id}
+        # No creds right now (FilaBridge blip / printer briefly unreachable) —
+        # retryable, so queue a deferred fetch rather than telling Derek to weigh.
+        _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction)
+        return {"status": "awaiting_fetch", "reason": "no credentials", "job_id": job_id}
 
     usage_map, terminal = _compute_cancel_usage(
         printer_name, filename, job_id, reached_fraction,
@@ -4324,6 +4365,14 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         if terminal["status"] == "no_usage":
             print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                               scale=reached_fraction, grams=0)
+        elif terminal["status"] == "error":
+            # Download failed — almost always the selected-file LOCK (§9.10): the
+            # file un-locks once Derek clears the cancel screen (→ IDLE). Queue a
+            # deferred fetch; the monitor retries each tick once the printer
+            # leaves STOPPED, then computes + pops the 🛑 Review automatically.
+            _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction)
+            return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
+                    "job_id": job_id}
         return terminal
 
     rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url)
@@ -4346,7 +4395,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     if print_deduct_ledger.was_deducted(printer_name, job_id):
         return {"status": "skipped", "reason": "already processed", "job_id": job_id}
 
-    total = round(sum(r['grams'] for r in rows), 1)
+    total = round(sum(r['grams'] for r in rows), 2)
     record = {
         "printer_name": printer_name,
         "job_id": str(job_id),
@@ -4359,7 +4408,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     cancel_review_store.add_pending(record)
     state.add_log_entry(
         f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%) — review partial "
-        f"deduct: {total:.1f}g across {len(rows)} spool(s) ('{filename}').",
+        f"deduct: {total:.2f}g across {len(rows)} spool(s) ('{filename}').",
         "WARNING", rows[0]['color'],
         meta={"type": "cancel_deduct_pending",
               "printer_name": printer_name, "job_id": str(job_id)})
@@ -4433,9 +4482,9 @@ def api_cancel_deduct_confirm():
             remaining = max(0.0, initial - new_used)
             info = spoolman_api.format_spool_display(spool)
             state.add_log_entry(
-                f"✔️ Cancel-deduct {grams:.1f}g from Spool #{sid} (confirmed): "
+                f"✔️ Cancel-deduct {grams:.2f}g from Spool #{sid} (confirmed): "
                 f"[➔ {remaining:.1f}g remaining]", "SUCCESS", info.get('color', '888888'))
-            applied.append({"sid": sid, "grams": round(grams, 1), "remaining": round(remaining, 1)})
+            applied.append({"sid": sid, "grams": round(grams, 2), "remaining": round(remaining, 1)})
         else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
             errors.append({"sid": sid, "error": err})
@@ -5766,17 +5815,35 @@ def _track_print_edge(printer_name, state_info, fb_url):
             job = prusalink_api.get_printer_job(fb_url, printer_name)
         except Exception:
             job = None
+        job_changed = None
         with _PRINT_TRACKER_LOCK:
             entry = _PRINT_TRACKER.setdefault(printer_name, {})
             entry['state'] = cur
             if job:
-                if job.get('filename'):
-                    entry['filename'] = job['filename']
                 # Reject blank/zero ids (None/''/'0'/0) — same "blank job" set
                 # print_deduct_ledger keys on, so the tracker and the ledger
                 # agree on what can't be deduped restart-safely.
-                if job.get('job_id') not in (None, '', '0', 0):
-                    entry['job_id'] = job['job_id']
+                new_jid = job.get('job_id')
+                new_jid = new_jid if new_jid not in (None, '', '0', 0) else None
+                old_jid = entry.get('job_id')
+                # A different (valid) job_id while still in-progress means a NEW
+                # print started without us sampling the previous one's terminal
+                # state (cancel→reslice→restart faster than the poll, or a missed
+                # STOPPED). Reset the stale latch so the new job does NOT inherit
+                # the old progress high-water (which would over-state its %, then
+                # over-deduct on its own cancel). We can't tell from here whether
+                # the previous job was cancelled or completed, so it is NOT
+                # auto-deducted — logged for visibility (usage in this window is
+                # ~0 anyway since reprep takes longer than a poll).
+                if new_jid is not None and old_jid not in (None, '') and str(new_jid) != str(old_jid):
+                    job_changed = (old_jid, new_jid)
+                    entry.pop('progress', None)
+                    entry.pop('filename', None)
+                    entry.pop('file_meta', None)
+                if job.get('filename'):
+                    entry['filename'] = job['filename']
+                if new_jid is not None:
+                    entry['job_id'] = new_jid
                 # file_meta (the slicer's per-tool 'filament used' estimate) is
                 # latched for slice 5's preview UX, which shows the estimate
                 # alongside the computed partial without re-fetching the job.
@@ -5785,6 +5852,13 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 prog = job.get('progress')
                 if isinstance(prog, (int, float)):
                     entry['progress'] = max(float(entry.get('progress', 0.0)), float(prog))
+        if job_changed:
+            try:
+                state.add_log_entry(
+                    f"ℹ️ {printer_name}: print job changed ({job_changed[0]}→{job_changed[1]}) "
+                    f"without a sampled end state; previous job not auto-deducted.", "INFO")
+            except Exception:
+                pass
         return
 
     # Non-in-progress state: detect a cancel edge against the latched prev state.
@@ -5838,14 +5912,21 @@ def _track_print_edge(printer_name, state_info, fb_url):
 # ---------------------------------------------------------------------------
 
 _CANCEL_MONITOR_INTERVAL_S = 30
+# How long to keep retrying a deferred fetch before giving up (§9.10). The
+# cancelled file stays download-LOCKED until Derek clears the cancel screen on
+# the printer; he's usually at the printer, but this buffers a cancel-and-walk-
+# away (e.g. over a weekend). Retrying is nearly free — it only hits the network
+# once the printer leaves STOPPED — so the window is generous.
+_CANCEL_FETCH_MAX_AGE_S = 72 * 3600
 _cancel_monitor_started = False
 _cancel_monitor_lock = threading.Lock()
 
 
 def _cancel_monitor_tick():
     """One detection sweep: probe every printer's state + run the latch/edge
-    detector. Per-printer probes fan out so a slow/offline printer doesn't block
-    the rest. Best-effort throughout."""
+    detector, then service the deferred-fetch retry queue (§9.10) using the
+    states just probed. Per-printer probes fan out so a slow/offline printer
+    doesn't block the rest. Best-effort throughout."""
     from concurrent.futures import ThreadPoolExecutor
     try:
         printer_map = locations_db.get_active_printer_map()
@@ -5857,11 +5938,14 @@ def _cancel_monitor_tick():
     if not names:
         return
 
+    probed = {}
+
     def _probe(name):
         try:
             state_info = prusalink_api.get_printer_state(fb_url, name)
         except Exception:
             state_info = None
+        probed[name] = state_info  # distinct keys per thread → GIL-safe
         try:
             _track_print_edge(name, state_info, fb_url)
         except Exception as e:
@@ -5879,6 +5963,88 @@ def _cancel_monitor_tick():
     with _PRINT_TRACKER_LOCK:
         for stale in [p for p in _PRINT_TRACKER if p not in names]:
             _PRINT_TRACKER.pop(stale, None)
+
+    # Retry any cancels whose gcode was download-locked at the edge (§9.10).
+    try:
+        _process_pending_cancel_fetches(probed, fb_url)
+    except Exception as e:
+        try:
+            state.logger.debug(f"cancel-fetch retry pass failed: {e}")
+        except Exception:
+            pass
+
+
+def _process_pending_cancel_fetches(states, fb_url):
+    """Service the deferred-fetch queue (§9.10): for each cancelled print whose
+    gcode couldn't be downloaded at the edge (selected-file LOCK), re-attempt the
+    compute ONCE the printer has left STOPPED (the file un-locks → IDLE), then
+    stash the 🛑 Review and drop the queue entry. Gives up after
+    _CANCEL_FETCH_MAX_AGE_S with a "weigh the spool" warning.
+
+    `states` maps printer_name -> the state dict get_printer_state returned this
+    tick (or None when offline). Best-effort per entry; one bad record never
+    blocks the rest.
+    """
+    pendings = cancel_fetch_store.list_pending()
+    if not pendings:
+        return
+    now = time.time()
+    for rec in pendings:
+        try:
+            printer = rec.get("printer_name")
+            job_id = rec.get("job_id")
+            filename = rec.get("filename")
+            progress = float(rec.get("progress", 0.0) or 0.0)
+            if not printer or job_id in (None, ""):
+                cancel_fetch_store.pop_pending(printer, job_id)
+                continue
+
+            # Resolved elsewhere (confirmed/dismissed, or a review already
+            # stashed) → drop the queue entry. Keeps "ledger/review ⟹ no fetch".
+            if (print_deduct_ledger.was_deducted(printer, job_id)
+                    or cancel_review_store.has_pending(printer, job_id)):
+                cancel_fetch_store.pop_pending(printer, job_id)
+                continue
+
+            # Give up after the max-age window so a deleted/abandoned file's
+            # entry can't linger forever. Record grams=0 so it can't re-queue.
+            first_seen = float(rec.get("first_seen", now) or now)
+            if now - first_seen > _CANCEL_FETCH_MAX_AGE_S:
+                pct = max(0.0, min(1.0, progress)) * 100
+                hrs = _CANCEL_FETCH_MAX_AGE_S // 3600
+                state.add_log_entry(
+                    f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
+                    f"('{filename}', ~{pct:.0f}%) after {hrs}h — no partial deduct. "
+                    f"Weigh the spool to true it up.", "WARNING", "ffaa00")
+                print_deduct_ledger.record_deduct(printer, job_id, filename=filename,
+                                                  scale=progress, grams=0)
+                cancel_fetch_store.pop_pending(printer, job_id)
+                continue
+
+            # Gate on state: the file stays download-LOCKED while the printer is
+            # in STOPPED/ERROR (cancel screen up) or PRINTING (a new job). Only
+            # attempt once it's in a ready/idle state. Offline (None) → wait.
+            st = states.get(printer)
+            cur = str((st or {}).get("state", "")).upper() if st else ""
+            if not cur or cur in _INPROGRESS_PRINT_STATES or cur in _CANCEL_TERMINAL_STATES:
+                continue
+
+            result = _create_pending_cancel_review(
+                printer, filename, job_id, progress, fb_url=fb_url)
+            status = (result or {}).get("status")
+            if status == "awaiting_fetch":
+                # Still couldn't fetch (the file 404'd despite a ready state — a
+                # transient, or the file was deleted). Leave queued; the re-queue
+                # already bumped attempts. The max-age window bounds the retries.
+                continue
+            # Any terminal outcome (pending review / no_usage / no_spools /
+            # skipped) resolves this entry.
+            cancel_fetch_store.pop_pending(printer, job_id)
+        except Exception as e:
+            try:
+                state.logger.debug(f"cancel-fetch retry failed for {rec}: {e}")
+            except Exception:
+                pass
 
 
 def _cancel_monitor_loop():
