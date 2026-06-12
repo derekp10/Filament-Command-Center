@@ -2,11 +2,21 @@
 //
 // FilaBridge absorption design §9.7. When the live-pulse detector catches a
 // cancelled print it computes the per-tool partial deduct but does NOT auto-
-// write it; it stashes a pending record and raises a "🛑 Review" button on the
-// activity-log line. This overlay lists every pending review, shows each spool's
-// computed grams (nudgeable) with a live "→ remaining" preview, and lets Derek
-// Confirm (apply) or Dismiss (drop) — automating the manual Connect-reading he
-// does today.
+// write it; it stashes a pending record and raises a "🛑 Review" affordance.
+// This overlay lists EVERY pending review (several cancels stack up — same or
+// different printers — and persist server-side across restarts), shows each
+// spool's computed grams (nudgeable, 2-decimal) with a live "→ remaining"
+// preview, and lets Derek Confirm (apply) or Discard (drop) — automating the
+// manual Connect-reading he does today.
+//
+// UX contract (slice 5.1, after Derek's 2026-06-12 feedback):
+//   • Closing the overlay (× or "Close — keep for later" or Escape) is
+//     NON-destructive: every un-actioned review stays pending.
+//   • Discard is the ONLY destructive path and needs a two-click confirm, so an
+//     accidental click can't silently drop a real deduct.
+//   • A persistent badge (activity-log header + Print-Status widget) surfaces
+//     the pending count so a review is reachable long after its log line
+//     scrolled off.
 //
 // Inline overlay routes through window.mountOverlay (CLAUDE.md "Inline overlays
 // MUST route through mountOverlay" — NOT a nested Swal). The backend owns the
@@ -20,9 +30,16 @@
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
+    // remaining/large weights — 1 decimal is plenty.
     function fmt(v) {
         const n = Number(v);
         return Number.isFinite(n) ? Math.round(n * 10) / 10 : 0;
+    }
+    // partial-deduct grams — small (<1 g common), so keep 2 decimals: a 0.97 g
+    // cancel must NOT read as "1 g" (Derek 2026-06-12).
+    function fmtG(v) {
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
     }
     function toast(msg, type, dur) {
         if (window.showToast) window.showToast(msg, type, dur);
@@ -55,10 +72,10 @@
                         (${esc(s.toolhead)} · ${fmt(s.remaining_before)}g left)
                     </span>
                 </div>
-                <div class="input-group input-group-sm" style="width:128px;flex:none;">
+                <div class="input-group input-group-sm" style="width:132px;flex:none;">
                     <input type="number" class="fcc-cr-grams form-control bg-dark text-white border-secondary"
                            data-sid="${s.sid}" data-remaining="${s.remaining_before}"
-                           value="${fmt(s.grams)}" step="0.1" min="0" max="${fmt(s.remaining_before)}"
+                           value="${fmtG(s.grams)}" step="0.01" min="0" max="${fmt(s.remaining_before)}"
                            autocomplete="off" style="font-size:0.95rem;" />
                     <span class="input-group-text bg-dark text-light border-secondary">g</span>
                 </div>
@@ -72,17 +89,20 @@
     function cardHtml(rec) {
         const pct = Math.round((Number(rec.progress) || 0) * 100);
         const rows = (rec.spools || []).map(spoolRowHtml).join('');
+        const total = (rec.spools || []).reduce((a, s) => a + (Number(s.grams) || 0), 0);
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div style="font-weight:bold;color:#ffd27a;">🛑 ${esc(rec.printer_name)} — cancelled at ~${pct}%</div>
-                    <div style="color:#9aa;font-size:0.8rem;">${esc(rec.total_grams)}g total</div>
+                    <div style="color:#9aa;font-size:0.8rem;">${fmtG(total)}g total</div>
                 </div>
                 <div style="color:#9aa;font-size:0.78rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
                 ${rows}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
-                    <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-dismiss">Dismiss (no deduct)</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
+                            data-armed="0"
+                            title="Permanently drop this review — the spool is NOT deducted">🗑️ Discard</button>
                     <button type="button" class="btn btn-sm btn-success fw-bold fcc-cr-confirm">Confirm deduct</button>
                 </div>
             </div>`;
@@ -98,32 +118,99 @@
                 <div style="display:flex;justify-content:space-between;align-items:center;
                             padding:14px 18px;border-bottom:1px solid #444;">
                     <div id="fcc-cr-title" style="font-weight:bold;font-size:1.05rem;">
-                        🛑 Cancelled-Print Review
+                        🛑 Cancelled-Print Reviews <span id="fcc-cr-count" style="color:#9aa;font-weight:normal;font-size:0.85rem;"></span>
                     </div>
                     <button type="button" id="fcc-cr-close"
                         style="background:none;border:none;color:#aaa;font-size:1.4rem;line-height:1;cursor:pointer;"
-                        aria-label="Close">×</button>
+                        aria-label="Close — reviews stay pending"
+                        title="Close — every review stays pending for later">×</button>
                 </div>
                 <div style="padding:8px 18px 4px;color:#bbb;font-size:0.82rem;">
-                    Review each spool's computed partial deduct. Nudge the grams if needed, then Confirm — or Dismiss to skip.
+                    Nudge each spool's grams if needed, then <b>Confirm</b>. <b>Closing keeps everything for later</b> — only <b>Discard</b> drops a review.
                 </div>
-                <div id="fcc-cr-body" style="padding:8px 18px 14px;max-height:64vh;overflow:auto;">
+                <div id="fcc-cr-body" style="padding:8px 18px 14px;max-height:60vh;overflow:auto;">
                     ${cards}
                 </div>
+                <div style="display:flex;justify-content:flex-end;padding:10px 18px 14px;border-top:1px solid #444;">
+                    <button type="button" id="fcc-cr-close-keep" class="btn btn-sm btn-outline-info">Close — keep for later</button>
+                </div>
             </div>`;
+    }
+
+    // ----- persistent indicators: activity-log header pill + Print-Status badge
+    let _lastPending = [];
+    function applyBadges(pending) {
+        _lastPending = pending;
+        const n = pending.length;
+        // (a) activity-log header pill
+        const badge = document.getElementById('cancel-review-badge');
+        if (badge) {
+            if (n > 0) {
+                badge.textContent = `🛑 ${n} review${n === 1 ? '' : 's'}`;
+                badge.style.display = '';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+        // (b) per-printer chips inside the Print-Status widget. The widget
+        // re-renders on each pulse, so we (re)inject after render keyed on the
+        // printer name carried on each card. Hook is window.cancelReviewDecorate
+        // — inv_printer_status.js calls it after it paints (and we also run it
+        // here for the badge-poll cadence).
+        decoratePrinterStatus();
+    }
+    function decoratePrinterStatus() {
+        const counts = {};
+        _lastPending.forEach((r) => { counts[r.printer_name] = (counts[r.printer_name] || 0) + 1; });
+        // Add/update/remove one "🛑 N" chip inside `host` for printer `name`.
+        // Used on BOTH Print-Status surfaces so a review shows whether the widget
+        // is expanded OR minimized.
+        const apply = (host, name) => {
+            let chip = host.querySelector('.fcc-cr-chip');
+            const n = counts[name] || 0;
+            if (n > 0) {
+                if (!chip) {
+                    chip = document.createElement('span');
+                    chip.className = 'fcc-cr-chip';
+                    chip.style.cssText = 'cursor:pointer;margin-left:6px;font-size:0.78rem;font-weight:bold;color:#ffae42;';
+                    chip.title = 'Cancelled-print partial deduct waiting for review — click to review';
+                    chip.addEventListener('click', (ev) => { ev.stopPropagation(); openCancelReview(); });
+                    host.appendChild(chip);
+                }
+                chip.textContent = `🛑 ${n}`;
+            } else if (chip) {
+                chip.remove();
+            }
+        };
+        // Expanded view: next to the printer name. (`data-printer` entity-decodes
+        // to the real name in the DOM, matching the record's printer_name.)
+        document.querySelectorAll('.fcc-ps-row[data-printer]').forEach((row) => {
+            const nameEl = row.querySelector('.fcc-ps-name');
+            if (nameEl) apply(nameEl, row.getAttribute('data-printer'));
+        });
+        // Minimized/collapsed view: onto each printer's group in the header chip
+        // strip — the only thing visible when the widget is minimized (Derek
+        // 2026-06-12, "in case the activity log isn't always visible").
+        document.querySelectorAll('.fcc-ps-header-chips .fcc-ps-printer-group[data-printer]')
+            .forEach((grp) => apply(grp, grp.getAttribute('data-printer')));
+    }
+    async function refreshBadge() {
+        applyBadges(await fetchPending());
     }
 
     async function openCancelReview() {
         const pending = await fetchPending();
         if (!pending.length) {
             toast('No pending cancel reviews.', 'info');
+            applyBadges(pending);
             return;
         }
 
         // Pre-define cleanup so onEscape doesn't close over an unassigned handle
-        // (matches the inv_quickswap.js reference pattern).
+        // (matches the inv_quickswap.js reference pattern). Closing is always
+        // non-destructive — refreshBadge keeps the indicators in sync.
         let handle = null;
-        const cleanup = () => { if (handle) handle.cleanup(); };
+        const cleanup = () => { if (handle) handle.cleanup(); refreshBadge(); };
         handle = window.mountOverlay({
             id: OVERLAY_ID,
             content: panelHtml(pending),
@@ -133,6 +220,13 @@
         });
         const overlay = handle.element;
         const body = overlay.querySelector('#fcc-cr-body');
+        const countEl = overlay.querySelector('#fcc-cr-count');
+
+        function updateCount() {
+            const n = body.querySelectorAll('.fcc-cr-card').length;
+            if (countEl) countEl.textContent = n > 1 ? `(${n})` : '';
+        }
+        updateCount();
 
         function updatePreview(input) {
             const sid = input.dataset.sid;
@@ -148,13 +242,22 @@
             prev.style.color = over ? '#ffc107' : '#9fe0b0';
         }
         function closeIfEmpty() {
-            if (!body.querySelector('.fcc-cr-card')) handle.cleanup();
+            if (!body.querySelector('.fcc-cr-card')) cleanup();
         }
 
         overlay.addEventListener('input', (e) => {
             if (e.target.classList && e.target.classList.contains('fcc-cr-grams')) updatePreview(e.target);
         });
-        overlay.querySelector('#fcc-cr-close').addEventListener('click', () => handle.cleanup());
+        // Both close affordances are non-destructive (reviews stay pending).
+        overlay.querySelector('#fcc-cr-close').addEventListener('click', cleanup);
+        overlay.querySelector('#fcc-cr-close-keep').addEventListener('click', cleanup);
+
+        function disarmDiscard(btn) {
+            btn.dataset.armed = '0';
+            btn.textContent = '🗑️ Discard';
+            btn.classList.remove('btn-outline-danger');
+            btn.classList.add('btn-outline-secondary');
+        }
 
         body.addEventListener('click', async (e) => {
             const card = e.target.closest('.fcc-cr-card');
@@ -178,11 +281,11 @@
                     if (d.status === 'confirmed') {
                         toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
                         if ((d.errors || []).length) toast(`${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
-                        card.remove(); closeIfEmpty();
+                        card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.status === 'already_handled') {
                         toast('Already handled elsewhere.', 'info');
-                        card.remove(); closeIfEmpty();
+                        card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
                     } else {
                         e.target.disabled = false;
                         toast(d.msg || 'Confirm failed — check the log.', 'error', 7000);
@@ -191,27 +294,36 @@
                     e.target.disabled = false;
                     toast('Confirm failed.', 'error', 7000);
                 }
-            } else if (e.target.classList.contains('fcc-cr-dismiss')) {
-                e.target.disabled = true;
+            } else if (e.target.classList.contains('fcc-cr-discard')) {
+                const btn = e.target;
+                // First click ARMS (no backend call); second click within 4s
+                // discards. Guards an accidental click from a permanent drop.
+                if (btn.dataset.armed !== '1') {
+                    body.querySelectorAll('.fcc-cr-discard[data-armed="1"]').forEach(disarmDiscard);
+                    btn.dataset.armed = '1';
+                    btn.textContent = '⚠️ Confirm discard';
+                    btn.classList.remove('btn-outline-secondary');
+                    btn.classList.add('btn-outline-danger');
+                    setTimeout(() => { if (btn.dataset.armed === '1') disarmDiscard(btn); }, 4000);
+                    return;
+                }
+                btn.disabled = true;
                 try {
                     const r = await fetch('/api/cancel_deduct/dismiss', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ printer_name: printer, job_id: job }),
                     });
                     const d = await r.json();
-                    if (d.status === 'dismissed') {
-                        toast('Review dismissed (no deduct).', 'info');
-                        card.remove(); closeIfEmpty();
-                    } else if (d.status === 'already_handled') {
-                        toast('Already handled elsewhere.', 'info');
-                        card.remove(); closeIfEmpty();
+                    if (d.status === 'dismissed' || d.status === 'already_handled') {
+                        toast(d.status === 'dismissed' ? 'Review discarded (no deduct).' : 'Already handled elsewhere.', 'info');
+                        card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
                     } else {
-                        e.target.disabled = false;
-                        toast(d.msg || 'Dismiss failed — check the log.', 'error', 7000);
+                        btn.disabled = false; disarmDiscard(btn);
+                        toast(d.msg || 'Discard failed — check the log.', 'error', 7000);
                     }
                 } catch (err) {
-                    e.target.disabled = false;
-                    toast('Dismiss failed.', 'error', 7000);
+                    btn.disabled = false; disarmDiscard(btn);
+                    toast('Discard failed.', 'error', 7000);
                 }
             }
         });
@@ -220,4 +332,21 @@
     // Accepts an optional meta string (from the activity-log button) but always
     // shows ALL pending reviews — robust even if the clicked line scrolled off.
     window.openCancelReview = openCancelReview;
+    window.refreshCancelReviewBadge = refreshBadge;
+    // inv_printer_status.js calls this after it re-renders, so per-printer chips
+    // survive the widget repaint without a fresh fetch.
+    window.cancelReviewDecorate = decoratePrinterStatus;
+
+    // Keep the indicators live: on load, on a slow poll, and after every sync
+    // pulse (a confirm/deduct fires one). Cheap — one tiny GET.
+    function startBadge() {
+        refreshBadge();
+        setInterval(refreshBadge, 20000);
+        document.addEventListener('inventory:sync-pulse', refreshBadge);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', startBadge);
+    } else {
+        startBadge();
+    }
 })();
