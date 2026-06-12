@@ -1322,7 +1322,9 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
 
 window.ejectSpool = (sid, loc, pickup) => {
     if (pickup) {
-        fetch('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: "ID:" + sid, source: 'keyboard' }) })
+        if (window._pickInFlight) return;   // no stacked identify_scan on a double-click (UI-lockout family)
+        window._pickInFlight = true;
+        window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: "ID:" + sid, source: 'keyboard' }) })
             .then(r => r.json())
             .then(res => {
                 if (res.type === 'spool') {
@@ -1333,7 +1335,9 @@ window.ejectSpool = (sid, loc, pickup) => {
                         renderManagerNav();
                     }
                 }
-            });
+            })
+            .catch((e) => { console.error(e); showToast("Pickup failed", "error", 7000); })
+            .finally(() => { window._pickInFlight = false; });
     } else {
         if (loc !== "Scan") requestConfirmation(`Eject spool #${sid}?`, () => doEject(sid, loc));
         else doEject(sid, loc);
@@ -1342,7 +1346,7 @@ window.ejectSpool = (sid, loc, pickup) => {
 
 window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => {
     setProcessing(true);
-    fetch('/api/manage_contents', {
+    window.fetchT('/api/manage_contents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1406,7 +1410,7 @@ window.manualAddSpool = () => {
     const val = document.getElementById('manual-spool-id').value.trim();
     if (!val) return;
     setProcessing(true);
-    fetch('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: val, source: 'keyboard' }) })
+    window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: val, source: 'keyboard' }) })
         .then(r => r.json())
         .then(res => {
             setProcessing(false);
@@ -1428,9 +1432,10 @@ window.manualAddSpool = () => {
 
 window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, () => {
     setProcessing(true);
-    fetch('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: loc }) })
+    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: loc }) })
         .then(r => r.json())
-        .then(() => { setProcessing(false); if(window.fetchLocations) window.fetchLocations(); refreshManageView(loc); showToast("Cleared!"); });
+        .then(() => { setProcessing(false); if(window.fetchLocations) window.fetchLocations(); refreshManageView(loc); showToast("Cleared!"); })
+        .catch(() => { setProcessing(false); showToast("Eject-all failed", "error", 7000); });
 });
 
 window.printCurrentLocationLabel = () => {
