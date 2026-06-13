@@ -270,12 +270,25 @@
             if (n && pcNames.indexOf(n) === -1) pcNames.push(n);
         });
         Object.keys(creds).forEach((n) => { if (n && pcNames.indexOf(n) === -1) pcNames.push(n); });
-        html += `<hr class="my-3" style="border-color:rgba(255,255,255,0.15);">`;
-        html += `<div class="small mb-2" style="color:rgba(255,255,255,0.55);">
-            🔌 <b>Printer Connections</b> — the PrusaLink IP + API key FCC uses to read each printer's
-            state and parse finished / cancelled prints (relocated off FilaBridge). Leave the key blank to keep the saved one; clear the IP to remove a connection.
-        </div>`;
-        html += `<div id="pc-rows">` + pcNames.map((n) => pcRowHtml(n, creds[n] || {})).join('') + `</div>`;
+        if (pcNames.length) {
+            html += `<hr class="my-3" style="border-color:rgba(255,255,255,0.15);">`;
+            html += `<div class="small mb-2" style="color:rgba(255,255,255,0.55);">
+                🔌 <b>Printer Connections</b> — the PrusaLink IP + API key FCC uses to read each printer's
+                state and parse finished / cancelled prints (relocated off FilaBridge). Leave the key blank to keep the saved one; clear the IP to remove a connection.
+            </div>`;
+            // CSS grid so every row shares the SAME columns regardless of name
+            // length (the long "Core One Upgraded" no longer shoves the inputs
+            // out of alignment). Each .pc-row is display:contents so its cells
+            // become items of this grid. Header row labels the columns.
+            const pcGrid = 'display:grid;grid-template-columns:minmax(110px,160px) minmax(0,1fr) minmax(0,1fr) auto;column-gap:8px;row-gap:6px;align-items:center;';
+            html += `<div id="pc-rows" style="${pcGrid}">`
+                + `<span class="small text-secondary">Printer</span>`
+                + `<span class="small text-secondary">PrusaLink IP</span>`
+                + `<span class="small text-secondary">API key</span>`
+                + `<span></span>`
+                + pcNames.map((n) => pcRowHtml(n, creds[n] || {})).join('')
+                + `</div>`;
+        }
 
         host.innerHTML = html;
         host.querySelectorAll('.pm-row').forEach(pmWireRow);

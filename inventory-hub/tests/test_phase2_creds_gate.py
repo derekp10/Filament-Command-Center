@@ -366,3 +366,40 @@ def test_put_printer_creds_unknown_printer_404(client):
 def test_put_printer_creds_requires_name(client):
     res = client.put("/api/printer_creds", json={"ip_address": "1.2.3.4", "api_key": "k"})
     assert res.status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# Rename flows down: renaming the printer in the toolhead editor keeps creds    #
+# (they live ON the row, looked up by Name — so the new name resolves them).    #
+# --------------------------------------------------------------------------- #
+
+def _rows_with_toolheads():
+    return [
+        {"LocationID": "XL", "Type": "Printer", "Name": "🦝 XL", "parent_id": "LR",
+         "toolheads": [{"location_id": "XL-1", "position": 0}],
+         "printer_creds": dict(XL_CREDS)},
+        {"LocationID": "XL-1", "Type": "Tool Head", "Name": "XL T1", "parent_id": "XL"},
+    ]
+
+
+def test_rename_printer_via_printer_map_put_preserves_creds(client):
+    import app
+    saved = {}
+
+    def _cap(lst):
+        saved["list"] = copy.deepcopy(lst)
+        return True
+
+    with patch.object(app.locations_db, "load_locations_list",
+                      return_value=copy.deepcopy(_rows_with_toolheads())), \
+         patch.object(app.locations_db, "save_locations_list", side_effect=_cap):
+        # The toolhead editor renames a printer by changing printer_name on the PUT.
+        res = client.put("/api/printer_map", json={
+            "printer_map": {"XL-1": {"printer_name": "🦝 XL Workshop", "position": 0}}})
+    assert res.status_code == 200 and res.get_json()["ok"], res.get_json()
+    xl = next(r for r in saved["list"] if r["LocationID"] == "XL")
+    assert xl["Name"] == "🦝 XL Workshop", "rename must propagate to the Printer row Name"
+    assert xl.get("printer_creds") == XL_CREDS, "creds must survive the rename (sibling field)"
+    # And the NEW name now resolves the same creds (the lookup is by Name).
+    assert locations_db.get_printer_credentials("🦝 XL Workshop", saved["list"]) == XL_CREDS
+    assert locations_db.get_printer_credentials("🦝 XL", saved["list"]) is None
