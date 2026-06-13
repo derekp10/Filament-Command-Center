@@ -20,9 +20,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import logic  # noqa: E402
 
 
-def _patch(monkeypatch, *, spools_at, spool_extras, active=None, fb_ok=True):
-    """Stub the external stores the cascade touches. Returns (updates, fb_calls)
-    capture lists. printer_map maps XL-3 -> ('🦝 XL', 2) so _toolhead_of resolves."""
+def _patch(monkeypatch, *, spools_at, spool_extras, active=None):
+    """Stub the external stores the cascade touches. Returns the update-capture
+    list. printer_map maps XL-3 -> ('🦝 XL', 2) so _toolhead_of resolves."""
     monkeypatch.setattr(logic.config_loader, "get_api_urls", lambda: ("http://sm", "http://fb"))
     monkeypatch.setattr(logic.locations_db, "get_active_printer_map",
                         lambda loc_list=None: {"XL-3": {"printer_name": "🦝 XL", "position": 2}})
@@ -37,17 +37,11 @@ def _patch(monkeypatch, *, spools_at, spool_extras, active=None, fb_ok=True):
         return True
     monkeypatch.setattr(logic.spoolman_api, "update_spool", _upd)
     monkeypatch.setattr(logic.spoolman_api, "LAST_SPOOLMAN_ERROR", None, raising=False)
-    fb = []
-
-    def _fbw(name, pos, sid, fb_url=None):
-        fb.append((name, pos, sid))
-        return (fb_ok, "ok" if fb_ok else "boom")
-    monkeypatch.setattr(logic, "_fb_write", _fbw)
-    return updates, fb
+    return updates
 
 
 def test_direct_spool_unassigned_and_ghost_trail_cleared(monkeypatch):
-    updates, fb = _patch(
+    updates = _patch(
         monkeypatch,
         spools_at=[{"id": 5, "is_ghost": False}],
         spool_extras={5: {"physical_source": "PM-DB-1", "physical_source_slot": "2",
@@ -65,11 +59,10 @@ def test_direct_spool_unassigned_and_ghost_trail_cleared(monkeypatch):
     assert data["extra"]["container_slot"] == ""
     assert data["extra"]["nozzle_temp_max"] == "260"        # sibling extra preserved (read-merge-write)
     assert res["toolhead_pruned_from"] == ["XL"] and loc[0]["toolheads"] == []
-    assert ("🦝 XL", 2, 0) in fb                            # filabridge unmapped
 
 
 def test_ghost_spool_undeployed_not_yanked_from_box(monkeypatch):
-    updates, _fb = _patch(
+    updates = _patch(
         monkeypatch,
         spools_at=[{"id": 7, "is_ghost": True}],
         spool_extras={7: {"physical_source": "XL-3", "physical_source_slot": "1", "container_slot": "1"}})
@@ -105,18 +98,17 @@ def test_toolhead_pruned_from_printer_row_only(monkeypatch):
 
 
 def test_no_references_is_clean_noop_summary(monkeypatch):
-    updates, fb = _patch(monkeypatch, spools_at=[], spool_extras={})
+    updates = _patch(monkeypatch, spools_at=[], spool_extras={})
     res = logic.perform_toolhead_delete_cascade("XL-3", [])
 
     assert res["status"] == "ok"
     assert res["unassigned"] == [] and res["undeployed"] == []
     assert res["slot_bindings_cleared"] == [] and res["toolhead_pruned_from"] == []
     assert updates == []
-    assert fb == [("🦝 XL", 2, 0)]                           # still issues a defensive unmap
 
 
 def test_active_print_blocks_without_confirm_touches_nothing(monkeypatch):
-    updates, fb = _patch(
+    updates = _patch(
         monkeypatch,
         spools_at=[{"id": 1, "is_ghost": False}], spool_extras={1: {}},
         active={"printer_name": "🦝 XL", "state": "PRINTING", "toolhead": "XL-3"})
@@ -125,12 +117,12 @@ def test_active_print_blocks_without_confirm_touches_nothing(monkeypatch):
     res = logic.perform_toolhead_delete_cascade("XL-3", loc)
 
     assert res["status"] == "requires_confirm" and res["confirm_type"] == "active_print"
-    assert updates == [] and fb == []                        # nothing mutated
+    assert updates == []                                     # nothing mutated
     assert loc[0]["toolheads"] == [{"location_id": "XL-3", "position": 2}]   # not pruned
 
 
 def test_confirm_active_print_proceeds(monkeypatch):
-    updates, _fb = _patch(
+    updates = _patch(
         monkeypatch,
         spools_at=[{"id": 1, "is_ghost": False}], spool_extras={1: {}},
         active={"printer_name": "🦝 XL", "state": "PRINTING"})
@@ -140,11 +132,3 @@ def test_confirm_active_print_proceeds(monkeypatch):
         confirm_active_print=True)
 
     assert res["status"] == "ok" and res["unassigned"] == [1]
-
-
-def test_filabridge_unmap_failure_recorded_not_fatal(monkeypatch):
-    _patch(monkeypatch, spools_at=[], spool_extras={}, fb_ok=False)
-    res = logic.perform_toolhead_delete_cascade("XL-3", [])
-
-    assert res["status"] == "ok"
-    assert any("filabridge unmap" in e for e in res["errors"])

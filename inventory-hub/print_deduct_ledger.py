@@ -17,7 +17,7 @@ Contract (mirrors the design):
     than skipping the cancel entirely.
 
 The file is bounded to the most-recent N entries (dict preserves insertion
-order on 3.7+), the same eviction shape as app.py's `_evict_old_fb_snapshots`.
+order on 3.7+), dropping the oldest head entries once it exceeds the cap.
 """
 from __future__ import annotations
 

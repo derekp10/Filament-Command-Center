@@ -130,17 +130,53 @@ def test_recover_different_job_warns_and_latches_new_no_fire():
     assert app_module._PRINT_TRACKER["XL"]["job_id"] == "J10"
 
 
-def test_recover_idle_after_inprogress_warns_no_fire():
-    """now IDLE → cleared during outage, can't tell cancel vs complete → manual
-    review, no phantom deduct."""
-    dispatch, log = _recover_with({"XL": _entry()}, "IDLE")
-    dispatch.assert_not_called()
+def test_recover_idle_after_inprogress_surfaces_ambiguous_review():
+    """now IDLE → cleared during the outage, can't tell cancel vs completion →
+    route to the AMBIGUOUS REVIEW (2026-06-13): download the now-unlocked file →
+    compute → review flagged 'couldn't confirm'. NOT a silent 'weigh the spool'
+    and NOT the auto-deduct cancel edge, but NEVER a phantom deduct either."""
+    with patch.object(print_tracker_store, "load", return_value={"XL": _entry()}), \
+         patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module.prusalink_api, "get_printer_state", return_value={"state": "IDLE"}), \
+         patch.object(app_module, "_dispatch_cancel_edge") as cancel_disp, \
+         patch.object(app_module, "_dispatch_ambiguous_edge") as amb_disp, \
+         patch.object(app_module.state, "add_log_entry") as log:
+        app_module._recover_print_tracker_on_start()
+    cancel_disp.assert_not_called()
+    amb_disp.assert_called_once()
+    args = amb_disp.call_args.args
+    # _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url)
+    assert args[0] == "XL" and args[1] == "/usb/F.BGC" and args[2] == "J9"
+    assert abs(args[3] - 0.4) < 1e-6
     assert log.call_args.args[1] == "WARNING"
 
 
+def test_recover_attention_restores_latch_no_fire():
+    """now ATTENTION (filament-prompt still up) on restart → the print is still
+    mid-something, NOT ended → restore the latch and defer to LIVE edge-detection;
+    neither a cancel nor an ambiguous review fires (no premature surface). The
+    live monitor fires the real edge when it later reaches IDLE/STOPPED."""
+    persisted = {"XL": _entry(state="ATTENTION", job_id="J9",
+                              filename="/usb/F.BGC", progress=0.91)}
+    with patch.object(print_tracker_store, "load", return_value=persisted), \
+         patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module.prusalink_api, "get_printer_state", return_value={"state": "ATTENTION"}), \
+         patch.object(app_module, "_dispatch_cancel_edge") as cancel_disp, \
+         patch.object(app_module, "_dispatch_ambiguous_edge") as amb_disp:
+        app_module._recover_print_tracker_on_start()
+    cancel_disp.assert_not_called()
+    amb_disp.assert_not_called()
+    assert app_module._PRINT_TRACKER["XL"]["job_id"] == "J9"
+    assert app_module._PRINT_TRACKER["XL"]["filename"] == "/usb/F.BGC"
+
+
 def test_recover_finished_no_fire_no_warn():
-    """now FINISHED → completed → leave to FilaBridge (no deduct, no warning)."""
-    dispatch, log = _recover_with({"XL": _entry()}, "FINISHED")
+    """now FINISHED → completed → leave to FilaBridge (no deduct, no warning) when
+    the cutover flag is OFF (the pre-Phase-C behavior). The flag is mocked off so
+    this stays deterministic regardless of the live config value (dev currently
+    runs with fcc_owns_completion_deduct ON for the Phase-D rehearsal)."""
+    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=False):
+        dispatch, log = _recover_with({"XL": _entry()}, "FINISHED")
     dispatch.assert_not_called()
     log.assert_not_called()
 

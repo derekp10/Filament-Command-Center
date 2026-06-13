@@ -1,7 +1,6 @@
 import requests
 import re
 import threading
-import traceback
 from typing import Dict, Optional
 import perf_trace  # L3 latency probe — zero-cost when no trace is active
 import bgcode_decode  # binary-gcode (.bgcode) decoder for the cancel prefix-parse
@@ -28,26 +27,54 @@ def clear_probe_cache():
 
 
 def fetch_printer_credentials(filabridge_url: str, printer_name: str):
-    """
-    Fetches the IP address and API key for a given printer name from FilaBridge.
+    """Return ``{'ip_address','api_key'}`` for a printer, or ``None``.
+
+    FilaBridge Phase-2 cutover: credentials now live on the first-class
+    Type:"Printer" row in locations.json (``printer_creds``), read here via
+    ``locations_db.get_printer_credentials``. ``filabridge_url`` is retained for
+    the call-site/back-compat contract (every consumer + test stub passes it) but
+    is now UNUSED — the same pattern Scope 1 used to retire ``_fb_spool_location``'s
+    FilaBridge read. The one-time boot seed (``fetch_all_filabridge_printers`` →
+    ``locations_db.seed_printer_credentials``) is what primes the rows from
+    FilaBridge before it is decommissioned.
+
+    Lazy local import of ``locations_db`` to avoid a circular import at module
+    load (``locations_db`` / ``app`` import ``prusalink_api``).
     """
     try:
-        with perf_trace.span("prusalink.fetch_creds"):
+        import locations_db
+        return locations_db.get_printer_credentials(printer_name)
+    except Exception as e:
+        print(f"Error reading printer credentials for {printer_name!r}: {e}")
+        return None
+
+
+def fetch_all_filabridge_printers(filabridge_url: str) -> Dict[str, Dict]:
+    """Pull the full ``{printer_name: {ip_address, api_key}}`` map from FilaBridge
+    ``GET /printers``. Used ONLY by the one-time boot credential SEED
+    (``locations_db.seed_printer_credentials``) while FilaBridge is still up —
+    NOT on any live path. Returns ``{}`` on any failure (fail-soft: a missing
+    FilaBridge just means the seed retries next boot)."""
+    out: Dict[str, Dict] = {}
+    try:
+        with perf_trace.span("prusalink.fetch_all_printers"):
             response = requests.get(f"{filabridge_url}/printers", timeout=5)
         if response.ok:
-            data = response.json()
-            printers = data.get('printers', {})
-            for pid, pdata in printers.items():
-                if pdata.get('name') == printer_name:
-                    return {
-                        "ip_address": pdata.get("ip_address"),
-                        "api_key": pdata.get("api_key")
-                    }
+            printers = (response.json() or {}).get('printers', {}) or {}
+            for _pid, pdata in printers.items():
+                if not isinstance(pdata, dict):
+                    continue
+                name = pdata.get('name')
+                if not name:
+                    continue
+                out[str(name)] = {
+                    "ip_address": pdata.get("ip_address"),
+                    "api_key": pdata.get("api_key"),
+                }
     except Exception as e:
-        print(f"Error fetching printer credentials from FilaBridge: {e}")
-    return None
+        print(f"Error fetching all printers from FilaBridge: {e}")
+    return out
 
-FB_PARSE_STATUS = ""
 
 def _parse_weights_from_match(match) -> Dict[int, float]:
     weights_str = match.group(1)
@@ -62,77 +89,18 @@ def _parse_weights_from_match(match) -> Dict[int, float]:
             pass
     return usage
 
-def download_gcode_and_parse_usage(ip_address: str, api_key: str, filename: str) -> Optional[Dict[int, float]]:
-    """
-    Downloads the gcode file from PrusaLink and parses the 'filament used [g]=' metadata.
-    Returns a dictionary mapping toolhead index to grams used.
-    """
-    global FB_PARSE_STATUS
-    filename = filename.lstrip('/')
-    url = f"http://{ip_address}/{filename}"
-    headers = {}
-    if api_key:
-        headers['X-Api-Key'] = api_key
 
-    # Try Range request first (last 2MB)
-    FB_PARSE_STATUS = f"Requesting Fast Meta-block for {filename}..."
-    try:
-        range_headers = headers.copy()
-        range_headers['Range'] = 'bytes=-2097152'
-        response = requests.get(url, headers=range_headers, timeout=10)
-        
-        if response.ok:
-            if response.status_code == 206:
-                content = response.text
-                match = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', content)
-                if match:
-                    FB_PARSE_STATUS = "Fast"
-                    return _parse_weights_from_match(match)
-                else:
-                    FB_PARSE_STATUS = "Metadata not found in 2MB tail, falling back to full download..."
-            elif response.status_code == 200:
-                # PrusaLink completely ignored the Range header and fed us the entire file
-                content = response.text
-                match = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', content)
-                if match:
-                    FB_PARSE_STATUS = "RAM"
-                    return _parse_weights_from_match(match)
-                else:
-                    FB_PARSE_STATUS = "Full file provided automatically but metadata not found."
-            else:
-                FB_PARSE_STATUS = f"Range request rejected (HTTP {response.status_code}), falling back to full download..."
-        else:
-            FB_PARSE_STATUS = f"Range request failed (HTTP {response.status_code}), falling back to full download..."
-    except requests.exceptions.ReadTimeout:
-        FB_PARSE_STATUS = f"Range request timed out over PrusaLink network, falling back to full download..."
-    except Exception as e:
-        FB_PARSE_STATUS = f"Range request failed ({str(e)}), falling back to full download..."
-
-    # Fallback to full download
-    try:
-        FB_PARSE_STATUS = f"Downloading full file into RAM for {filename} (this may take a minute)..."
-        response = requests.get(url, headers=headers, timeout=60)
-        
-        if response.ok:
-            FB_PARSE_STATUS = "File downloaded, parsing metadata..."
-            content = response.text
-            match = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', content)
-            if match:
-                FB_PARSE_STATUS = "RAM"
-                return _parse_weights_from_match(match)
-            else:
-                FB_PARSE_STATUS = f"No filament usage metadata found in {filename}."
-                print(f"No filament usage metadata found in {filename}")
-        else:
-            msg = f"Failed to download {filename} from PrusaLink. Status: {response.status_code}"
-            FB_PARSE_STATUS = msg
-            print(msg)
-    except Exception as e:
-        FB_PARSE_STATUS = f"Full download failed: {str(e)}"
-        print(f"Error aggressively downloading/parsing gcode: {e}")
-        traceback.print_exc()
-
-    return None
+def parse_footer_usage(gcode_content: str) -> Dict[int, float]:
+    """Parse the slicer's full per-tool ``filament used [g]`` footer →
+    ``{tool_index: grams}`` — the COMPLETE-print estimate (exactly what FilaBridge
+    bills). Used by FCC's Phase-2 FINISHED-completion deduct (the footer is exact;
+    the cancel prefix-parse is only for PARTIAL/cancelled prints). Same indexing
+    space as ``parse_partial_filament_usage`` (the comma-separated array is tool
+    0,1,2,…). Empty dict when the footer is absent."""
+    if not gcode_content:
+        return {}
+    m = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', gcode_content)
+    return _parse_weights_from_match(m) if m else {}
 
 
 # --- Cancelled-print partial usage (FilaBridge absorption §9.2, slice 3) ------
@@ -557,17 +525,3 @@ def get_printer_mmu_flag(filabridge_url: str, printer_name: str) -> Optional[boo
     except Exception:
         pass
     return None
-
-
-def acknowledge_filabridge_error(filabridge_url: str, error_id: str) -> bool:
-    """
-    Acknowledges the FilaBridge error to dismiss it from the server.
-    """
-    try:
-        # Ensure we construct the URL properly, POST /api/print-errors/:id/acknowledge
-        url = f"{filabridge_url}/print-errors/{error_id}/acknowledge"
-        response = requests.post(url, timeout=5)
-        return response.ok
-    except Exception as e:
-        print(f"Failed to acknowledge FilaBridge error {error_id}: {e}")
-    return False

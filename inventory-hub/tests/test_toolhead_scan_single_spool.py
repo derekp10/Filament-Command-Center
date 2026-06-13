@@ -69,7 +69,7 @@ def test_toolhead_scan_with_multi_spool_buffer_sends_only_topmost(page: Page, ba
             route.fulfill(
                 status=200,
                 content_type='application/json',
-                body=json.dumps({"status": "success", "filabridge_ok": True}),
+                body=json.dumps({"status": "success"}),
             )
         else:
             route.continue_()
@@ -135,7 +135,7 @@ def test_multispool_dryer_box_scan_still_sends_full_buffer(page: Page, base_url:
             route.fulfill(
                 status=200,
                 content_type='application/json',
-                body=json.dumps({"status": "success", "filabridge_ok": True}),
+                body=json.dumps({"status": "success"}),
             )
         else:
             route.continue_()

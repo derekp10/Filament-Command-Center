@@ -11,8 +11,8 @@
  *    read by their owning module unchanged (e.g. weight_entry.js reads
  *    'fcc.weighEntry.defaultMode').
  *
- * The action-tool cards (reconcile / attributes / restore field order / build
- * info) are untouched — this card simply slots in alongside them.
+ * The action-tool cards (attributes / restore field order / build info) are
+ * untouched — this card simply slots in alongside them.
  */
 (function () {
     const HOST_ID = 'config-generated-settings';
@@ -246,7 +246,8 @@
         if (rm) rm.addEventListener('click', () => row.remove());
     }
 
-    function pmRender(entries) {
+    function pmRender(entries, creds) {
+        creds = creds || {};
         const host = document.getElementById(PM_HOST_ID);
         if (!host) return;
         let html = `<div class="small mb-2" style="color:rgba(255,255,255,0.55);">
@@ -259,8 +260,39 @@
             <button type="button" class="btn btn-sm btn-info fw-bold" id="pm-save">Save toolheads</button>
             <span class="small" id="pm-status" style="color:rgba(255,255,255,0.6);"></span>
         </div>`;
+
+        // FilaBridge Phase-2: per-printer PrusaLink connection (ip + api_key),
+        // relocated off FilaBridge onto the Printer rows. One row per distinct
+        // printer name. The api_key is masked — blank keeps the saved one.
+        const pcNames = [];
+        (entries || []).forEach((e) => {
+            const n = e.printer_name || '';
+            if (n && pcNames.indexOf(n) === -1) pcNames.push(n);
+        });
+        Object.keys(creds).forEach((n) => { if (n && pcNames.indexOf(n) === -1) pcNames.push(n); });
+        if (pcNames.length) {
+            html += `<hr class="my-3" style="border-color:rgba(255,255,255,0.15);">`;
+            html += `<div class="small mb-2" style="color:rgba(255,255,255,0.55);">
+                🔌 <b>Printer Connections</b> — the PrusaLink IP + API key FCC uses to read each printer's
+                state and parse finished / cancelled prints (relocated off FilaBridge). Leave the key blank to keep the saved one; clear the IP to remove a connection.
+            </div>`;
+            // CSS grid so every row shares the SAME columns regardless of name
+            // length (the long "Core One Upgraded" no longer shoves the inputs
+            // out of alignment). Each .pc-row is display:contents so its cells
+            // become items of this grid. Header row labels the columns.
+            const pcGrid = 'display:grid;grid-template-columns:minmax(110px,160px) minmax(0,1fr) minmax(0,1fr) auto;column-gap:8px;row-gap:6px;align-items:center;';
+            html += `<div id="pc-rows" style="${pcGrid}">`
+                + `<span class="small text-secondary">Printer</span>`
+                + `<span class="small text-secondary">PrusaLink IP</span>`
+                + `<span class="small text-secondary">API key</span>`
+                + `<span></span>`
+                + pcNames.map((n) => pcRowHtml(n, creds[n] || {})).join('')
+                + `</div>`;
+        }
+
         host.innerHTML = html;
         host.querySelectorAll('.pm-row').forEach(pmWireRow);
+        host.querySelectorAll('.pc-row').forEach(pcWireRow);
         const addBtn = host.querySelector('#pm-add');
         if (addBtn) addBtn.addEventListener('click', () => {
             const rows = host.querySelector('#pm-rows');
@@ -269,6 +301,68 @@
         });
         const saveBtn = host.querySelector('#pm-save');
         if (saveBtn) saveBtn.addEventListener('click', pmSave);
+    }
+
+    // ---- FilaBridge Phase-2: per-printer PrusaLink connection editor ----
+    function pcRowHtml(name, c) {
+        const nm = _esc(name);
+        const ip = _esc(c.ip_address || '');
+        const isSet = String(c.api_key || '') === SECRET_SENTINEL;
+        // display:contents → the 4 cells below become direct items of the
+        // #pc-rows grid, so every row's columns line up with the header. (Exactly
+        // 4 cells to match grid-template-columns; the action cell holds the
+        // badge + Save + status so the count stays 4.)
+        return `<div class="pc-row" data-printer="${nm}" style="display:contents;">
+            <span class="small text-white" title="${nm}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${nm}</span>
+            <input class="form-control form-control-sm pc-ip bg-dark text-white border-secondary" type="text" value="${ip}" placeholder="192.168.1.50" autocomplete="off" style="min-width:0;">
+            <input class="form-control form-control-sm pc-key bg-dark text-white border-secondary" type="password" value="" placeholder="${isSet ? '•••••• blank keeps it' : 'API key'}" autocomplete="new-password" style="min-width:0;">
+            <span class="d-flex align-items-center gap-2">
+                ${isSet ? '<span class="badge bg-success" title="An API key is saved">✓ key</span>' : ''}
+                <button type="button" class="btn btn-sm btn-info pc-save" title="Save this printer's connection">Save</button>
+                <span class="small pc-status" style="color:rgba(255,255,255,0.6);"></span>
+            </span>
+        </div>`;
+    }
+
+    function pcWireRow(row) {
+        const btn = row.querySelector('.pc-save');
+        if (btn) btn.addEventListener('click', () => pcSave(row));
+    }
+
+    async function pcSave(row) {
+        const name = row.getAttribute('data-printer') || '';
+        const ip = (row.querySelector('.pc-ip').value || '').trim();
+        const keyRaw = row.querySelector('.pc-key').value;
+        // Mirror the Config secret contract: an empty key field means "keep the
+        // saved key" (send the sentinel); a typed value replaces it.
+        const api_key = (keyRaw === '' ? SECRET_SENTINEL : keyRaw);
+        const statusEl = row.querySelector('.pc-status');
+        const btn = row.querySelector('.pc-save');
+        if (btn) btn.disabled = true;
+        if (statusEl) { statusEl.style.color = 'rgba(255,255,255,0.6)'; statusEl.textContent = 'Saving…'; }
+        try {
+            const r = await fetch('/api/printer_creds', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ printer_name: name, ip_address: ip, api_key }),
+            });
+            const d = await r.json();
+            if (r.ok && d.ok) {
+                if (statusEl) { statusEl.style.color = '#7CFC00'; statusEl.textContent = '✓ Saved'; }
+                if (window.showToast) window.showToast(`Connection saved for ${name}`, 'success', 4000);
+                window.renderPrinterMap();  // reload canonical (re-masks the key)
+            } else {
+                const msg = (d && d.error) ? d.error : 'Save failed';
+                if (statusEl) { statusEl.style.color = '#ff6b6b'; statusEl.textContent = msg; }
+                if (window.showToast) window.showToast(msg, 'error', 8000);
+            }
+        } catch (e) {
+            const msg = 'Save error: ' + (e && e.message ? e.message : e);
+            if (statusEl) { statusEl.style.color = '#ff6b6b'; statusEl.textContent = msg; }
+            if (window.showToast) window.showToast(msg, 'error', 7000);
+        } finally {
+            if (btn) btn.disabled = false;
+        }
     }
 
     async function pmSave() {
@@ -338,7 +432,7 @@
         try {
             const r = await fetch('/api/printer_map');
             const d = await r.json();
-            pmRender(d.entries || []);
+            pmRender(d.entries || [], d.printer_creds || {});
         } catch (e) {
             host.innerHTML = `<div class="alert alert-danger py-2 mb-0">Failed to load toolheads: ${_esc(e && e.message ? e.message : e)}</div>`;
         }

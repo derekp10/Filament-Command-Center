@@ -1,9 +1,7 @@
-{# L324 / Config UI scaffold.
-
-   First inhabitant: FilaBridge ↔ Spoolman Reconcile tool.
-   Future sections (user preferences, choice-cleanup launcher,
-   build-info viewer, etc.) drop into this same modal as additional
-   collapsible panels in `#config-sections`. #}
+{# Config UI scaffold. Sections drop into this modal as collapsible panels in
+   `#config-sections` (Filament Attributes, build-info viewer, settings, etc.).
+   The original FilaBridge ↔ Spoolman Reconcile tool was retired in the
+   FilaBridge Phase-2 cutover (Phase E — FCC is the single source of truth). #}
 <div class="modal fade" id="configModal" tabindex="-1" data-bs-keyboard="true">
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content bg-dark text-white border-info">
@@ -14,32 +12,6 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body" id="config-sections">
-
-                <!-- SECTION: FilaBridge ↔ Spoolman Reconcile -->
-                <div class="card bg-black border-secondary mb-3">
-                    <div class="card-header d-flex justify-content-between align-items-center"
-                         style="background: #1a1a1a;">
-                        <span class="fw-bold text-info">🔧 FilaBridge ↔ Spoolman Reconcile</span>
-                        <button class="btn btn-sm btn-info fw-bold"
-                                id="btn-config-reconcile-scan"
-                                onclick="window.configReconcileScan && window.configReconcileScan()">
-                            🔎 Scan for mismatches
-                        </button>
-                    </div>
-                    <div class="card-body">
-                        <p class="small mb-2" style="color: rgba(255,255,255,0.78);">
-                            Cross-checks every non-zero FilaBridge toolhead mapping against
-                            Spoolman's <code>location</code> field. Use this to heal stale
-                            ghost mappings that pre-date the <code>_fb_spool_location</code>
-                            pre-flight (manual DB edits, old bugs, retired code paths).
-                        </p>
-                        <div id="config-reconcile-results">
-                            <div class="small" style="color: rgba(255,255,255,0.6);">
-                                Click <b>Scan for mismatches</b> to start.
-                            </div>
-                        </div>
-                    </div>
-                </div>
 
                 <!-- SECTION: Filament Attributes Manager (L58) -->
                 <div class="card bg-black border-secondary mb-3">
