@@ -24,6 +24,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+import config_schema
 import locations_db
 import prusalink_api
 
@@ -283,3 +284,85 @@ def test_save_location_explicit_creds_not_overridden_by_carry(client):
     assert res.status_code == 200
     xl = next(r for r in saved["list"] if r.get("LocationID") == "XL")
     assert xl.get("printer_creds") == new_creds
+
+
+# --------------------------------------------------------------------------- #
+# Settings editor — GET masks creds, PUT /api/printer_creds writes them        #
+# --------------------------------------------------------------------------- #
+
+def test_printer_map_get_masks_creds(client):
+    import app
+    with patch.object(app.locations_db, "load_locations_list", return_value=copy.deepcopy(_rows())):
+        res = client.get("/api/printer_map")
+    assert res.status_code == 200
+    pc = res.get_json()["printer_creds"]
+    # api_key is NEVER plaintext — set → sentinel, unset → "". ip is plaintext.
+    assert pc["🦝 XL"] == {"ip_address": "192.168.1.50", "api_key": config_schema.SECRET_SENTINEL}
+    assert pc["🦦 Core One Upgraded"] == {"ip_address": "", "api_key": ""}
+    assert "XLKEY" not in res.get_data(as_text=True)
+
+
+def test_put_printer_creds_sets_new(client):
+    import app
+    saved = {}
+
+    def _cap(lst):
+        saved["list"] = copy.deepcopy(lst)
+        return True
+
+    with patch.object(app.locations_db, "load_locations_list", return_value=copy.deepcopy(_rows())), \
+         patch.object(app.locations_db, "save_locations_list", side_effect=_cap):
+        res = client.put("/api/printer_creds", json={
+            "printer_name": "🦦 Core One Upgraded", "ip_address": "10.0.0.9", "api_key": "NEWKEY"})
+    assert res.status_code == 200 and res.get_json()["ok"]
+    core = next(r for r in saved["list"] if r["LocationID"] == "CORE1")
+    assert core["printer_creds"] == {"ip_address": "10.0.0.9", "api_key": "NEWKEY"}
+
+
+def test_put_printer_creds_sentinel_keeps_key_updates_ip(client):
+    import app
+    saved = {}
+
+    def _cap(lst):
+        saved["list"] = copy.deepcopy(lst)
+        return True
+
+    with patch.object(app.locations_db, "load_locations_list", return_value=copy.deepcopy(_rows())), \
+         patch.object(app.locations_db, "save_locations_list", side_effect=_cap):
+        res = client.put("/api/printer_creds", json={
+            "printer_name": "🦝 XL", "ip_address": "192.168.1.99",
+            "api_key": config_schema.SECRET_SENTINEL})
+    assert res.status_code == 200
+    xl = next(r for r in saved["list"] if r["LocationID"] == "XL")
+    # ip updated, the saved key preserved (sentinel = unchanged).
+    assert xl["printer_creds"] == {"ip_address": "192.168.1.99", "api_key": "XLKEY"}
+
+
+def test_put_printer_creds_blank_ip_clears(client):
+    import app
+    saved = {}
+
+    def _cap(lst):
+        saved["list"] = copy.deepcopy(lst)
+        return True
+
+    with patch.object(app.locations_db, "load_locations_list", return_value=copy.deepcopy(_rows())), \
+         patch.object(app.locations_db, "save_locations_list", side_effect=_cap):
+        res = client.put("/api/printer_creds", json={
+            "printer_name": "🦝 XL", "ip_address": "", "api_key": config_schema.SECRET_SENTINEL})
+    assert res.status_code == 200
+    xl = next(r for r in saved["list"] if r["LocationID"] == "XL")
+    assert "printer_creds" not in xl
+
+
+def test_put_printer_creds_unknown_printer_404(client):
+    import app
+    with patch.object(app.locations_db, "load_locations_list", return_value=copy.deepcopy(_rows())):
+        res = client.put("/api/printer_creds", json={
+            "printer_name": "Nope", "ip_address": "1.2.3.4", "api_key": "k"})
+    assert res.status_code == 404
+
+
+def test_put_printer_creds_requires_name(client):
+    res = client.put("/api/printer_creds", json={"ip_address": "1.2.3.4", "api_key": "k"})
+    assert res.status_code == 400

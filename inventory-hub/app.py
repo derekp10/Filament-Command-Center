@@ -3105,7 +3105,8 @@ def api_printer_map():
     {entries, printers} shape, so the 4 JS modules that fetch /api/printer_map
     are unchanged (compat shim). Dual-read: falls back to config until folded.
     """
-    printer_map = locations_db.get_active_printer_map()
+    loc_rows = locations_db.load_locations_list()
+    printer_map = locations_db.get_active_printer_map(loc_rows)
     grouped = {}
     for loc_id, info in printer_map.items():
         name = info.get('printer_name', 'Unknown')
@@ -3131,7 +3132,68 @@ def api_printer_map():
         for loc_id, info in printer_map.items()
     ]
     flat.sort(key=lambda e: (e['printer_name'], e['position'], e['location_id']))
-    return jsonify({"printers": grouped, "entries": flat})
+    # FilaBridge Phase-2: per-printer PrusaLink connection (ip + api_key) for the
+    # "Printer Connections" block folded into this editor. ip_address is a LAN
+    # address (not secret); api_key is MASKED to SECRET_SENTINEL when present
+    # (never the plaintext) — the PUT keeps the stored key when it gets the
+    # sentinel back. Keyed by printer Name (the same key the rest of this view
+    # uses), so a printer with no creds yet still shows an empty editable row.
+    creds_view = {}
+    for _row in (loc_rows or []):
+        if not isinstance(_row, dict) or str(_row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        _nm = str(_row.get('Name', ''))
+        if not _nm:
+            continue
+        _c = _row.get(locations_db.PRINTER_CREDS_KEY)
+        _c = _c if isinstance(_c, dict) else {}
+        creds_view[_nm] = {
+            "ip_address": (_c.get("ip_address") or ""),
+            "api_key": config_schema.SECRET_SENTINEL if _c.get("api_key") else "",
+        }
+    return jsonify({"printers": grouped, "entries": flat, "printer_creds": creds_view})
+
+
+@app.route('/api/printer_creds', methods=['PUT'])
+def api_put_printer_creds():
+    """FilaBridge Phase-2: set a printer's PrusaLink connection (ip_address +
+    api_key) on its Type:"Printer" row in locations.json. Powers the "Printer
+    Connections" block in the printer-map editor.
+
+    SECRET_SENTINEL contract for api_key (mirrors the Config editor): receiving
+    the sentinel means "unchanged" → keep the stored key; any other value
+    replaces it (empty string → no key). A blank ip_address CLEARS the whole
+    creds object. Body: {printer_name, ip_address, api_key}. 404 if no Printer
+    row carries that Name."""
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get('printer_name', '')).strip()
+    ip = str(payload.get('ip_address', '') or '').strip()
+    api_key_in = payload.get('api_key', '')
+    if not name:
+        return jsonify({"ok": False, "error": "printer_name is required"}), 400
+    try:
+        rows = locations_db.load_locations_list()
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"could not read locations: {e}"}), 500
+    # Confirm the Printer row exists before any write (changed=False is ambiguous —
+    # it also means "value unchanged" — so we can't use it to detect a bad name).
+    if not any(isinstance(r, dict)
+               and str(r.get('Type', '')).strip().lower() == 'printer'
+               and str(r.get('Name', '')) == name
+               for r in (rows or [])):
+        return jsonify({"ok": False, "error": f"No Printer named {name!r}"}), 404
+    # Sentinel = keep the stored key; otherwise take the sent value (blank → None).
+    if api_key_in == config_schema.SECRET_SENTINEL:
+        existing = locations_db.get_printer_credentials(name, rows) or {}
+        api_key = existing.get('api_key')
+    else:
+        api_key = api_key_in if api_key_in else None
+    rows, changed = locations_db.set_printer_credentials(rows, name, ip, api_key)
+    if changed and not locations_db.save_locations_list(rows):
+        state.add_log_entry(f"🔐 Printer connection save FAILED for {name}", "ERROR", "ff4444")
+        return jsonify({"ok": False, "error": "could not persist printer connection"}), 500
+    state.add_log_entry(f"🔐 Printer connection updated for {name}", "INFO")
+    return jsonify({"ok": True, "error": None})
 
 
 def _pm_prefix(k):
