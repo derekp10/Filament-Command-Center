@@ -10,7 +10,7 @@ import json
 import os
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 @pytest.fixture(autouse=True)
@@ -130,38 +130,10 @@ def test_prusalink_parser_download_failure_returns_none():
     assert usage is None
     assert "Failed to download" in pa.FB_PARSE_STATUS
 
-def test_fb_error_snapshotting(mock_app):
-    with patch("app.config_loader.get_api_urls", return_value=("http://spool", "http://fb/api")), \
-         patch("app.requests.get") as mock_get, \
-         patch("app.config_loader.load_config") as mock_load, \
-         patch("app.spoolman_api.get_spools_at_location_detailed", return_value=[{"id": 999, "extra": {}}]):
-
-         # Mock Spoolman and FilaBridge Health Checks
-         health_resp = MagicMock()
-         health_resp.ok = True
-
-         # Mock FilaBridge Print Errors
-         err_resp = MagicMock()
-         err_resp.ok = True
-         err_resp.json.return_value = {
-             "errors": [{"id": "err_snap_1", "printer_name": "TestSnapPrinter", "acknowledged": False}]
-         }
-         mock_get.side_effect = [health_resp, health_resp, err_resp]
-
-         mock_load.return_value = {
-             "printer_map": {"l-1": {"printer_name": "TestSnapPrinter"}},
-             "auto_recover_filabridge_errors": False
-         }
-
-         # Call the log poller which triggers the snapshot hook
-         mock_app.get("/api/logs")
-
-         snap_path = os.path.join(os.path.dirname(__file__), "..", "data", "filabridge_error_snapshots.json")
-         assert os.path.exists(snap_path)
-         with open(snap_path, "r") as f:
-             data = json.load(f)
-             assert "err_snap_1" in data
-             assert data["err_snap_1"][0]["id"] == 999
+# NOTE: the FilaBridge error-snapshot hook in /api/logs (the error-poll +
+# _auto_recover_task) was retired in the FilaBridge Phase-2 cutover, Phase E
+# Slice 2 — its test (`test_fb_error_snapshotting`) was removed with it. The
+# /api/fb_* recovery endpoints + the snapshot store itself go in Slice 3.
 
 
 # L347 — bounded snapshot store. The dict-cap helper is the seam: tests

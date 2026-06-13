@@ -5637,121 +5637,12 @@ def api_get_logs_route():
         # FilaBridge was up and serving (Derek 2026-06-02 "constantly red, even
         # though it's active"). It also added ~6s of latency to every dashboard
         # pulse since this runs in the /api/logs heartbeat path. /print-errors
-        # returns ~instantly, so one fast call is both the liveness check AND
-        # the error poll.
+        # returns ~instantly. (The error-poll + auto-recover that used to ride
+        # this response was retired in the FilaBridge Phase-2 cutover, Phase E
+        # Slice 2; this is now liveness-only — the probe + dot go together in
+        # Slice 4.)
         fb_resp = requests.get(f"{fb_url}/print-errors", timeout=4)
         fb_ok = fb_resp.ok
-
-        # [NEW] Check for FilaBridge Print Errors
-        if fb_ok:
-            try:
-                err_resp = fb_resp  # reuse the liveness response — no second fetch
-                if err_resp.ok:
-                    # `errors` can be null when there are none; coerce to [].
-                    fb_errors = err_resp.json().get('errors') or []
-
-                    cfg = config_loader.load_config()
-                    auto_recover = cfg.get("auto_recover_filabridge_errors", True)
-                    
-                    for err in fb_errors:
-                        err_id = err.get('id')
-                        # Only alert if we haven't seen it and the user hasn't naturally acknowledged it in FilaBridge
-                        if err_id and not err.get('acknowledged', False):
-                            if err_id not in state.ACKNOWLEDGED_FILABRIDGE_ERRORS:
-                                state.ACKNOWLEDGED_FILABRIDGE_ERRORS.add(err_id)
-                                p_name = err.get('printer_name', 'Unknown Printer')
-                                f_name = err.get('filename', 'Unknown File')
-                                err_msg = err.get('error', 'Unknown Error')
-                                
-                                # Snapshot active spools at time of error
-                                try:
-                                    import os
-                                    target_locations = []
-                                    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: dual-read
-                                    for loc_id, p_info in printer_map.items():
-                                        if p_info.get('printer_name') == p_name:
-                                            target_locations.append(loc_id)
-                                    spools = []
-                                    for loc in target_locations:
-                                        spools.extend(spoolman_api.get_spools_at_location_detailed(loc))
-                                    snap_path = os.path.join(os.path.dirname(__file__), "data", "filabridge_error_snapshots.json")
-                                    snapshots = {}
-                                    if os.path.exists(snap_path):
-                                        with open(snap_path, 'r', encoding='utf-8') as f:
-                                            snapshots = json.load(f)
-                                    snapshots[err_id] = spools
-                                    # L347 — bound the snapshot store; see
-                                    # _evict_old_fb_snapshots above for rationale.
-                                    snapshots = _evict_old_fb_snapshots(snapshots)
-                                    os.makedirs(os.path.dirname(snap_path), exist_ok=True)
-                                    with open(snap_path, 'w', encoding='utf-8') as f:
-                                        json.dump(snapshots, f)
-                                except Exception as snap_e:
-                                    state.logger.error(f"Failed to snapshot spools for error {err_id}: {snap_e}")
-
-                                def _auto_recover_task(e_id, printer_name, filename, error_msg):
-                                    state.add_log_entry(f"🔄 Auto-Recovering FilaBridge Error for {printer_name}...", "INFO")
-                                    creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
-                                    if creds:
-                                        usage_map = prusalink_api.download_gcode_and_parse_usage(creds['ip_address'], creds['api_key'], filename)
-                                        if usage_map:
-                                            printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2 (dual-read)
-                                            spools_updated = 0
-                                            # Same MMU-alias dedup as the primary auto-deduct path.
-                                            ar_active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
-                                            ar_processed_positions = set()
-                                            for loc_id, p_info in ar_active_locs:
-                                                toolhead_idx = p_info.get('position', 0)
-                                                if toolhead_idx in ar_processed_positions:
-                                                    continue
-                                                if toolhead_idx in usage_map:
-                                                    w_used = usage_map[toolhead_idx]
-                                                    loc_spools = spoolman_api.get_spools_at_location(loc_id)
-                                                    if not loc_spools:
-                                                        continue
-                                                    ar_processed_positions.add(toolhead_idx)
-                                                    for sid in loc_spools:
-                                                        spool = spoolman_api.get_spool(sid)
-                                                        if spool and w_used > 0:
-                                                            used = float(spool.get('used_weight', 0))
-                                                            initial = float(spool.get('initial_weight', 0) or 0)
-                                                            remaining = max(0, initial - used)
-                                                            new_rem = max(0, remaining - w_used)
-                                                            new_used = used + w_used
-                                                            if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-                                                                spools_updated += 1
-                                                                inf = spoolman_api.format_spool_display(spool)
-                                                                strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
-                                                                state.add_log_entry(f"✔️ Auto-deducted {w_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_rem:.1f}g remaining]", "SUCCESS", inf['color'])
-                                                            else:
-                                                                err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-                                                                state.add_log_entry(
-                                                                    f"❌ Auto-recover failed for Spool #{sid}: {err}",
-                                                                    "ERROR", "ff4444"
-                                                                )
-                                            if spools_updated > 0:
-                                                prusalink_api.acknowledge_filabridge_error(fb_url, e_id)
-                                                return # Success
-                                                
-                                    # Fallback if auto-recover fails or wasn't applicable
-                                    state.add_log_entry(
-                                        f"🔴 FilaBridge: [{printer_name}] failed to parse weight for '{filename}': {error_msg}",
-                                        "WARNING",
-                                        meta={"type": "filabridge_error", "error_id": e_id, "printer_name": printer_name, "filename": filename}
-                                    )
-
-                                if auto_recover:
-                                    import threading
-                                    threading.Thread(target=_auto_recover_task, args=(err_id, p_name, f_name, err_msg), daemon=True).start()
-                                else:
-                                    state.add_log_entry(
-                                        f"🔴 FilaBridge: [{p_name}] failed to parse weight for '{f_name}': {err_msg}",
-                                        "WARNING",
-                                        meta={"type": "filabridge_error", "error_id": err_id, "printer_name": p_name, "filename": f_name}
-                                    )
-            except Exception as e:
-                pass # Don't crash the log poller if FilaBridge errors endpoint times out
-                
     except: pass
     
     return jsonify({
