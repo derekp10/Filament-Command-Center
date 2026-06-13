@@ -1,16 +1,16 @@
 # Group 21: New-Bug Sweep (2026-06-12) — card/modal + toolhead load/unload
 
 **Branch name (when started):** `feature/new-bug-sweep-2026-06-12`
-**Estimated effort:** ~3–5 hours (21.3 is the meaty one — backend smart-load; the other three are frontend/CSS)
-**Risk:** **MEDIUM.** 21.3 touches the one-spool-one-toolhead invariant (`perform_smart_move` auto-eject-resident) — the same load-bearing subsystem as Group 20, so reproduce against the LIVE Docker container before patching (see `[[feedback_adversarial_review_runtime_lens]]`). 21.1/21.2/21.4 are isolated card/modal rendering and are low-risk.
+**Estimated effort:** ~4–6 hours (21.3 is the meaty one — backend smart-load; the rest are frontend/CSS/UX)
+**Risk:** **MEDIUM.** 21.3 touches the one-spool-one-toolhead invariant (`perform_smart_move` auto-eject-resident) — the same load-bearing subsystem as Group 20, so reproduce against the LIVE Docker container before patching (see `[[feedback_adversarial_review_runtime_lens]]`). 21.1/21.2/21.4/21.5/21.6 are isolated card/modal/force-location UX and are low-risk.
 
-> **Status: TODO** — filed 2026-06-12 by `/refresh-groups` from the four brand-new bugs Derek added to the top of `Feature-Buglist.md` ("New and Unsorted" section, lines 3/5/7/9).
+> **Status: TODO** — filed 2026-06-12 by `/refresh-groups` (21.1–21.4). **21.5 + 21.6 added 2026-06-13** (two more small UX/state bugs). **⚠️ buglist line numbers below are stale:** 8 items were inserted at the top of `Feature-Buglist.md` on 2026-06-13, shifting everything +16 — 21.1–21.4 are now ~lines 19/21/23/25; 21.5 is line 9, 21.6 is line 13. Anchor by the quoted text, not the number.
 
-## Why these four are one group
+## Why these are one group
 
-A fresh batch of small bugs that cluster on two shared surfaces, knockable out in one session:
-- **Card / details-modal rendering** — 21.1 (buffer-card badge overlap), 21.2 (post-eject card QR re-render), 21.4 (details-modal stays open on queue). Touch `ui_builder.js` / `inv_details.js` + CSS.
-- **Toolhead load/unload** — 21.2 (eject from a dryerbox-slot-on-toolhead) and 21.3 (manual assign should auto-eject the resident). Echo the now-DONE Group 20 cluster; 21.3 is the only one that reaches the backend move pipeline.
+A fresh batch of small bugs that cluster on shared surfaces, knockable out in one session:
+- **Card / details-modal rendering + UX** — 21.1 (buffer-card badge overlap), 21.4 (details-modal stays open on queue), 21.5 (force-location double-click to assign). Touch `ui_builder.js` / `inv_details.js` + CSS.
+- **Toolhead / buffer load-unload** — 21.2 (eject-from-dryerbox-slot-on-toolhead QR re-render), 21.3 (manual assign should auto-eject the resident), 21.6 (buffer spools return after scan-into-slot). Echo the now-DONE Group 20 cluster; 21.3 is the only one that reaches the backend move pipeline.
 
 ## Items
 
@@ -34,12 +34,25 @@ A fresh batch of small bugs that cluster on two shared surfaces, knockable out i
 **Surface:** `inv_details.js` spool-details queue-label handler.
 **Direction:** the queue action currently dismisses the details modal (probably a refresh/close side-effect or an unintended `.hide()`); keep the modal open and just toast the outcome. **Precedent:** Group 17.2 (L146) made "Queue all active spools" stop auto-OPENING the Print Queue modal and toast instead — this is the sibling fix (stop auto-CLOSING the details modal). Mirror that pattern. Add a small E2E asserting the details modal is still `.show` after queueing.
 
+### 21.5 — Double-click a force-location override entry should assign it without clicking Force (buglist line 9, added 2026-06-13)
+**Buglist:** "Double clicking on a force location override entry should just assign that entry without having to click force."
+**Surface:** the Force-Location dialog `window.promptEditLocation` ([inv_details.js:937](../../../inventory-hub/static/js/modules/inv_details.js#L937)).
+**Direction:** add a `dblclick` handler on each location list entry that selects it AND triggers the same commit path the Force button runs (one gesture instead of click-then-Force). Keep the single-click + Force button working (don't break the deliberate two-step for keyboard users); double-click is a shortcut on top. Mind the keyboard-nav idiom (arrow + Enter already confirms — `dblclick` is the mouse equivalent).
+
+### 21.6 — Buffer spools sometimes return to the buffer after being scanned into a slot (buglist line 13, added 2026-06-13)
+**Buglist:** "Sometimes filaments that have been in the buffer for a bit (usually after a weigh update) after being scanned into a slot, return back into the buffer. (Could also be some weird issue with having FCC open on two PCs at the same time?)"
+**Surface:** buffer ↔ scan-assign ↔ heartbeat-refresh state (`state.heldSpools` / `loadBuffer` / `liveRefreshBuffer` / the dashboard_pulse buffer renderer). **NEEDS LIVE REPRO.**
+**Direction:** suspect a **stale-buffer race** — a spool is assigned out of the buffer, but a pulse/refresh that was in flight (carrying the pre-assign buffer) re-renders and re-adds it; the "after a weigh update" + "two PCs" hints point at a heartbeat carrying stale `heldSpools` (a second client's buffer, or a pre-assign snapshot) clobbering the post-assign state. Reproduce with DevTools: watch whether a `dashboard_pulse`/`loadBuffer` tick repopulates the buffer right after the successful slot-assign, and whether two open clients share/overwrite buffer state. Possibly related to the L28 in-flight-guard work (a pulse landing after a mutation) — check the buffer renderer honors the latest assign.
+
 ## Recommended order
 1. **21.4** (most self-contained — one handler, clear precedent in 17.2).
-2. **21.1** (CSS/layout + a visual-baseline recapture).
-3. **21.2** (needs live repro; may share a root with L19 — investigate together).
-4. **21.3** (live repro + backend; the meaty one — leave for last, or split to its own session if the manual-assign path turns out to need a real smart-move rework).
+2. **21.5** (small `dblclick` handler on the force-location list).
+3. **21.1** (CSS/layout + a visual-baseline recapture).
+4. **21.2** (needs live repro; may share a root with L19 — investigate together).
+5. **21.6** (needs live repro; possible multi-client/stale-pulse race — pair the investigation with 21.2 since both are post-action refresh races).
+6. **21.3** (live repro + backend; the meaty one — leave for last, or split to its own session if the manual-assign path turns out to need a real smart-move rework).
 
 ## Out of scope / do NOT do without live repro
 - Any change to `_fb_write` / the FilaBridge unmap ordering (21.2/21.3) — load-bearing, patched multiple times (Group 20).
 - Folding 21.3 into a broader "every assign path goes through one smart-move entry" refactor — flag it if the repro points that way, but don't start it under this sweep.
+- A real multi-client sync transport for 21.6 — if the repro proves it's a genuine two-PC concurrency issue (not a single-client stale-pulse race), that's L302 (cross-browser sync, ON HOLD), not this sweep.
