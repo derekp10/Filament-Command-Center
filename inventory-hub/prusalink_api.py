@@ -91,6 +91,20 @@ def _parse_weights_from_match(match) -> Dict[int, float]:
             pass
     return usage
 
+
+def parse_footer_usage(gcode_content: str) -> Dict[int, float]:
+    """Parse the slicer's full per-tool ``filament used [g]`` footer →
+    ``{tool_index: grams}`` — the COMPLETE-print estimate (exactly what FilaBridge
+    bills). Used by FCC's Phase-2 FINISHED-completion deduct (the footer is exact;
+    the cancel prefix-parse is only for PARTIAL/cancelled prints). Same indexing
+    space as ``parse_partial_filament_usage`` (the comma-separated array is tool
+    0,1,2,…). Empty dict when the footer is absent."""
+    if not gcode_content:
+        return {}
+    m = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', gcode_content)
+    return _parse_weights_from_match(m) if m else {}
+
+
 def download_gcode_and_parse_usage(ip_address: str, api_key: str, filename: str) -> Optional[Dict[int, float]]:
     """Download a finished/errored print's gcode and parse the per-toolhead
     ``filament used [g]`` footer (the slicer's FULL-job estimate) → ``{tool: grams}``.

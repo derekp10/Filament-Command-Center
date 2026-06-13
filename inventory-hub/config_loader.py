@@ -86,7 +86,12 @@ def load_config():
         "sync_delay": 0.5,
         "printer_map": {},
         "dryer_slots": [],
-        "auto_recover_filabridge_errors": True
+        "auto_recover_filabridge_errors": True,
+        # FilaBridge Phase-2 cutover: when True, FCC deducts filament on FINISHED
+        # prints (the slicer footer) instead of FilaBridge. Default False so the
+        # code ships DARK — flip it the same moment the FilaBridge container is
+        # stopped, or completed prints double-deduct.
+        "fcc_owns_completion_deduct": False
     }
     # Note: the legacy `feeder_map` key is no longer read here. Its values
     # were imported into per-Dryer-Box `extra.slot_targets` entries in

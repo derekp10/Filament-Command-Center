@@ -4225,16 +4225,25 @@ def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content):
 
 
 def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
-                          ip_address, api_key):
-    """Download + prefix-parse a cancelled print → (usage_map, terminal).
+                          ip_address, api_key, use_footer=False):
+    """Download + parse a print → (usage_map, terminal).
     On success: (usage_map, None). On a can't-compute outcome: (None, status
-    dict) already logged via _log_cancel_uncomputable. Shared by both the
-    auto-apply path (deduct_cancelled_print) and the preview path
-    (_create_pending_cancel_review).
+    dict). Shared by the cancel paths (auto-apply deduct_cancelled_print + preview
+    _create_pending_cancel_review) AND the Phase-2 completion path
+    (deduct_completed_print).
+
+    use_footer=False (cancel/partial): prefix-parse the body up to the cancel
+    point. use_footer=True (COMPLETED print): parse the full per-tool footer (the
+    exact slicer estimate = what FilaBridge billed — the cancel prefix-parse's
+    high-water-mark E omits the final wipe/ram tail, which a completion should
+    keep). Both yield {tool_index: grams} in the same space, so the single-tool
+    fold + downstream resolution are identical.
 
     fetch_cancel_gcode transparently decodes binary G-code (.bgcode — Derek's
     whole fleet) and remaps the progress fraction from compressed-file space to
-    the decoded text, so the prefix-parse runs correctly on real prints."""
+    the decoded text, so the prefix-parse runs correctly on real prints. The
+    decoded text also carries the footer, so use_footer reads it from the same
+    download."""
     prepared = prusalink_api.fetch_cancel_gcode(
         ip_address, api_key, filename, reached_fraction)
     if not prepared or not prepared.get("gcode"):
@@ -4248,9 +4257,16 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
         # once the printer leaves STOPPED). (Was an immediate terminal error.)
         return None, {"status": "error", "reason": "download_failed", "job_id": job_id}
     content = prepared["gcode"]
-    usage_map = prusalink_api.parse_partial_filament_usage(content, prepared["fraction"])
+    if use_footer:
+        # Completion: the full per-tool slicer footer (exact, = FilaBridge).
+        usage_map = prusalink_api.parse_footer_usage(content)
+    else:
+        usage_map = prusalink_api.parse_partial_filament_usage(content, prepared["fraction"])
     if not usage_map:
-        _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
+        if not use_footer:
+            # Cancel-specific "weigh the spool" log. A completion with an empty
+            # footer is a degenerate no-op — its caller logs its own line.
+            _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
         return None, {"status": "no_usage", "job_id": job_id}
 
     # Single-toolhead printer + single-material print (Derek's Core One: one
@@ -4336,6 +4352,81 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
 
+def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
+                           ip_address=None, api_key=None):
+    """Compute + AUTO-APPLY the full per-tool deduct for a COMPLETED (FINISHED)
+    print — FCC's Phase-2 takeover of FilaBridge's completion deduct. Uses the
+    slicer FOOTER (the full per-tool estimate, exact = what FilaBridge billed;
+    neither side handles M486), NOT the cancel prefix-parse. Exactly-once via the
+    (printer, job_id) ledger. Auto-applies SILENTLY with a ✅ log line — NO
+    preview/confirm, because a completion's grams are exact (the cancel review
+    exists to nudge the M486/partial over-estimate, which doesn't apply here).
+
+    On a download lock/blip returns 'awaiting_fetch' and queues a deferred fetch
+    (kind='complete'): a Connect-STARTED finished print locks the file behind the
+    finish screen, exactly like a cancel's cancel-screen lock — the monitor
+    retries once the printer leaves FINISHED. Same status-dict shape as
+    deduct_cancelled_print. Gated by the fcc_owns_completion_deduct flag at the
+    EDGE (this primitive itself is unconditional, so the deferred-fetch retry can
+    still finish a completion enqueued while the flag was on)."""
+    if fb_url is None:
+        _, fb_url = config_loader.get_api_urls()
+    if print_deduct_ledger.was_deducted(printer_name, job_id):
+        return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
+    if not (ip_address and api_key):
+        creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
+        if not creds:
+            _enqueue_cancel_fetch(printer_name, filename, job_id, 1.0, kind="complete")
+            return {"status": "awaiting_fetch", "reason": "no credentials", "job_id": job_id}
+        ip_address, api_key = creds.get('ip_address'), creds.get('api_key')
+
+    usage_map, terminal = _compute_cancel_usage(
+        printer_name, filename, job_id, 1.0, ip_address, api_key, use_footer=True)
+    if terminal is not None:
+        if terminal["status"] == "no_usage":
+            print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                              scale=1.0, grams=0)
+            state.add_log_entry(
+                f"✅ Completed print on {printer_name} ('{filename}') — no filament "
+                f"usage in the footer; nothing to deduct.", "INFO")
+        elif terminal["status"] == "error":
+            # Download failed — the Connect finish-screen LOCK (the completion
+            # analogue of the cancel-screen lock §9.10). Defer; the monitor
+            # retries once the printer leaves FINISHED (→ IDLE, file unlocked).
+            _enqueue_cancel_fetch(printer_name, filename, job_id, 1.0, kind="complete")
+            return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
+                    "job_id": job_id}
+        return terminal
+
+    spools_updated, details = _apply_usage_to_printer(
+        printer_name, usage_map, fb_url, strategy_label="Complete")
+    if spools_updated == 0:
+        # Footer had usage but no spool is loaded at the active toolhead(s) — the
+        # completion analogue of the cancel 'no_spools' path. Surface a WARNING
+        # (never a misleading green "0.0g" SUCCESS) and record grams=0 so an
+        # honest ledger entry stops it re-firing without claiming a phantom
+        # deduct. (A tool index that maps to NO position already got an orphan
+        # warning inside _apply_usage_to_printer; this catches the position-exists-
+        # but-empty case, which that orphan check treats as benign.)
+        used_g = round(sum(usage_map.values()), 1)
+        state.add_log_entry(
+            f"✅ Completed print on {printer_name} ('{filename}') — {used_g:.1f}g in "
+            f"the footer but no mapped spool to deduct from (check the toolhead "
+            f"binding; weigh the spool to true it up).", "WARNING", "ffaa00")
+        print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                          scale=1.0, grams=0)
+        return {"status": "no_spools", "job_id": job_id}
+    print_deduct_ledger.record_deduct(
+        printer_name, job_id, filename=filename, scale=1.0,
+        grams=round(sum(usage_map.values()), 2))
+    total = round(sum(d["grams"] for d in details), 1)
+    state.add_log_entry(
+        f"✅ Completed-print deduct on {printer_name}: {total:.1f}g across "
+        f"{spools_updated} spool(s) ('{filename}').", "SUCCESS")
+    return {"status": "deducted", "spools_updated": spools_updated,
+            "details": details, "usage_map": usage_map, "job_id": job_id}
+
+
 def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
     """Read-only resolution of {toolhead_position: grams} → the per-spool rows a
     deduct WOULD touch — the cancel-review PREVIEW (no write). Mirrors
@@ -4405,33 +4496,47 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
     return list(merged.values())
 
 
-def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction):
-    """Queue a cancelled print whose gcode couldn't be fetched yet (the
-    selected-file download LOCK, §9.10) for the monitor to retry. Idempotent:
-    re-queuing the same job bumps `attempts`, PRESERVES `first_seen` (so the
-    max-age give-up window is measured from the FIRST sighting), and does NOT
-    re-nudge. The 'clear the screen' nudge logs exactly ONCE, on first queue.
-    Returns True if newly queued (nudged), False if it was already queued."""
+def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel"):
+    """Queue a print whose gcode couldn't be fetched yet (the selected-file
+    download LOCK, §9.10) for the monitor to retry. `kind` is 'cancel' (default)
+    or 'complete' — a COMPLETED Connect-started print locks behind the FINISH
+    screen the same way a cancel locks behind the cancel screen; the kind is
+    stashed on the record so _process_pending_cancel_fetches routes the retry to
+    the right handler (cancel→review, complete→auto-apply). Idempotent: re-queuing
+    the same job bumps `attempts`, PRESERVES `first_seen` (so the max-age give-up
+    window is measured from the FIRST sighting), and does NOT re-nudge. The 'clear
+    the screen' nudge logs exactly ONCE, on first queue. Returns True if newly
+    queued (nudged), False if it was already queued."""
     if cancel_fetch_store.has_pending(printer_name, job_id):
         rec = cancel_fetch_store.get_pending(printer_name, job_id) or {}
         rec.update({"printer_name": printer_name, "job_id": str(job_id),
                     "filename": filename, "progress": float(reached_fraction),
+                    "kind": kind,
                     "attempts": int(rec.get("attempts", 0)) + 1})
         cancel_fetch_store.add_pending(rec)
         return False
     cancel_fetch_store.add_pending({
         "printer_name": printer_name, "job_id": str(job_id), "filename": filename,
         "progress": float(reached_fraction), "first_seen": time.time(),
-        "attempts": 1, "last_status": "awaiting_fetch",
+        "kind": kind, "attempts": 1, "last_status": "awaiting_fetch",
     })
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
-    state.add_log_entry(
-        f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%, '{filename}') detected — "
-        f"the printer is still showing the cancel screen, so the gcode is locked. "
-        f"Clear it on the printer and I'll record the partial deduct automatically.",
-        "WARNING", "ffaa00",
-        meta={"type": "cancel_deduct_awaiting",
-              "printer_name": printer_name, "job_id": str(job_id)})
+    if kind == "complete":
+        state.add_log_entry(
+            f"✅ Completed print on {printer_name} ('{filename}') detected — the "
+            f"printer is still showing the finish screen, so the gcode is locked. "
+            f"Clear it on the printer and I'll record the deduct automatically.",
+            "INFO",
+            meta={"type": "complete_deduct_awaiting",
+                  "printer_name": printer_name, "job_id": str(job_id)})
+    else:
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%, '{filename}') detected — "
+            f"the printer is still showing the cancel screen, so the gcode is locked. "
+            f"Clear it on the printer and I'll record the partial deduct automatically.",
+            "WARNING", "ffaa00",
+            meta={"type": "cancel_deduct_awaiting",
+                  "printer_name": printer_name, "job_id": str(job_id)})
     return True
 
 
@@ -5849,13 +5954,32 @@ _PRINT_TRACKER_LOCK = threading.Lock()
 # still running. Mirrors the frontend Phase-0 _PRINT_INPROGRESS_STATES.
 _INPROGRESS_PRINT_STATES = frozenset({"PRINTING", "PAUSING", "RESUMING", "PAUSED"})
 # Terminal states that, reached FROM an in-progress state, mean a CANCEL/abort.
-# Cancel-only first ship (see header) — FINISHED/IDLE completion is excluded so
-# FilaBridge still owns completed-print deducts until the Phase-2 cutover.
+# Cancel terminal states (reached FROM in-progress = a CANCEL/abort). This set
+# ALSO doubles as the "file still download-locked, don't fetch yet" gate in
+# _process_pending_cancel_fetches — do NOT add FINISHED here (it would break the
+# retry queue); completions use the separate set below.
 _CANCEL_TERMINAL_STATES = frozenset({"STOPPED", "ERROR"})
+
+# Phase-2 cutover: COMPLETION terminal state. Kept SEPARATE from the cancel set
+# (above) precisely because that one is reused as a lock gate. A FINISHED edge
+# fires FCC's own completion deduct ONLY when the fcc_owns_completion_deduct flag
+# is on — otherwise FilaBridge still owns completions and firing here would
+# double-deduct. (Default off → this code ships DARK; flip it the same moment the
+# FilaBridge container is stopped.)
+_COMPLETE_TERMINAL_STATES = frozenset({"FINISHED"})
 
 # Tests flip this to False so the deduct runs synchronously + deterministically
 # instead of on a daemon thread.
 _CANCEL_DEDUCT_RUN_ASYNC = True
+
+
+def _fcc_owns_completion_deduct():
+    """The Phase-2 cutover flag (default False → FilaBridge owns completions, this
+    code stays dark). Only consulted on an actual in-progress→FINISHED edge."""
+    try:
+        return bool(config_loader.load_config().get("fcc_owns_completion_deduct", False))
+    except Exception:
+        return False
 
 
 def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
@@ -5886,6 +6010,35 @@ def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url):
             daemon=True).start()
     else:
         _on_cancel_edge(printer_name, filename, job_id, progress, fb_url)
+
+
+def _on_completion_edge(printer_name, filename, job_id, fb_url):
+    """Action on a →FINISHED edge (Phase-2, flag-gated): compute + AUTO-APPLY the
+    completion deduct from the slicer footer. No preview/confirm — the grams are
+    exact for a completion. Reaches here only through _dispatch_completion_edge so
+    the off-heartbeat threading contract matches the cancel path."""
+    try:
+        deduct_completed_print(printer_name, filename, job_id, fb_url=fb_url)
+    except Exception as e:
+        try:
+            state.add_log_entry(
+                f"❌ Completed-print deduct failed for {printer_name} "
+                f"('{filename}'): {e}", "ERROR", "ff4444")
+        except Exception:
+            pass
+
+
+def _dispatch_completion_edge(printer_name, filename, job_id, fb_url):
+    """Run the completion-edge action OFF the heartbeat thread (mirrors
+    _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
+    (tests)."""
+    if _CANCEL_DEDUCT_RUN_ASYNC:
+        threading.Thread(
+            target=_on_completion_edge,
+            args=(printer_name, filename, job_id, fb_url),
+            daemon=True).start()
+    else:
+        _on_completion_edge(printer_name, filename, job_id, fb_url)
 
 
 def _track_print_edge(printer_name, state_info, fb_url):
@@ -5963,21 +6116,29 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 pass
         return
 
-    # Non-in-progress state: detect a cancel edge against the latched prev state.
+    # Non-in-progress state: detect a CANCEL or (Phase-2) COMPLETION edge against
+    # the latched prev state.
     fire = None
     cancel_without_latch = False
     with _PRINT_TRACKER_LOCK:
         entry = _PRINT_TRACKER.get(printer_name)
         prev = entry.get('state') if entry else None
-        # First ship is CANCEL-ONLY: _CANCEL_TERMINAL_STATES is {STOPPED, ERROR}
-        # and deliberately EXCLUDES FINISHED/IDLE — FilaBridge still owns
-        # completed-print deducts until the Phase-2 atomic cutover, so firing
-        # here on a completion would double-deduct. Don't widen this set without
-        # cutting FilaBridge's monitor over (scoping doc §9.5).
+        # Cancel = in-progress → STOPPED/ERROR (always owned by FCC).
         is_cancel_edge = (prev in _INPROGRESS_PRINT_STATES
                           and cur in _CANCEL_TERMINAL_STATES)
-        if is_cancel_edge and entry and entry.get('filename'):
+        # Completion = in-progress → FINISHED, but ONLY when the cutover flag is
+        # on (else FilaBridge still owns completions → firing here double-deducts).
+        # `_COMPLETE_TERMINAL_STATES` is deliberately SEPARATE from the cancel set
+        # (which doubles as the fetch lock-gate). Short-circuit AND so the config
+        # read happens only on an actual in-progress→FINISHED transition.
+        is_complete_edge = (prev in _INPROGRESS_PRINT_STATES
+                            and cur in _COMPLETE_TERMINAL_STATES
+                            and _fcc_owns_completion_deduct())
+        edge_kind = ('cancel' if is_cancel_edge
+                     else 'complete' if is_complete_edge else None)
+        if edge_kind and entry and entry.get('filename'):
             fire = {
+                'kind': edge_kind,
                 'filename': entry.get('filename'),
                 'job_id': entry.get('job_id', ''),
                 'progress': float(entry.get('progress', 0.0)),
@@ -5998,8 +6159,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
             f"(print too short to sample between heartbeats) — no partial deduct.",
             "INFO")
     if fire:
-        _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
-                              fire['progress'], fb_url)
+        if fire['kind'] == 'complete':
+            _dispatch_completion_edge(printer_name, fire['filename'],
+                                      fire['job_id'], fb_url)
+        else:
+            _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
+                                  fire['progress'], fb_url)
 
 
 # ---------------------------------------------------------------------------
@@ -6103,6 +6268,7 @@ def _process_pending_cancel_fetches(states, fb_url):
             job_id = rec.get("job_id")
             filename = rec.get("filename")
             progress = float(rec.get("progress", 0.0) or 0.0)
+            kind = rec.get("kind", "cancel")  # 'cancel' (review) | 'complete' (auto-apply)
             if not printer or job_id in (None, ""):
                 cancel_fetch_store.pop_pending(printer, job_id)
                 continue
@@ -6120,25 +6286,45 @@ def _process_pending_cancel_fetches(states, fb_url):
             if now - first_seen > _CANCEL_FETCH_MAX_AGE_S:
                 pct = max(0.0, min(1.0, progress)) * 100
                 hrs = _CANCEL_FETCH_MAX_AGE_S // 3600
-                state.add_log_entry(
-                    f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
-                    f"('{filename}', ~{pct:.0f}%) after {hrs}h — no partial deduct. "
-                    f"Weigh the spool to true it up.", "WARNING", "ffaa00")
+                if kind == "complete":
+                    state.add_log_entry(
+                        f"✅ Gave up fetching the completed print's gcode on {printer} "
+                        f"('{filename}') after {hrs}h — no deduct recorded. "
+                        f"Weigh the spool to true it up.", "WARNING", "ffaa00")
+                else:
+                    state.add_log_entry(
+                        f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
+                        f"('{filename}', ~{pct:.0f}%) after {hrs}h — no partial deduct. "
+                        f"Weigh the spool to true it up.", "WARNING", "ffaa00")
                 print_deduct_ledger.record_deduct(printer, job_id, filename=filename,
                                                   scale=progress, grams=0)
                 cancel_fetch_store.pop_pending(printer, job_id)
                 continue
 
             # Gate on state: the file stays download-LOCKED while the printer is
-            # in STOPPED/ERROR (cancel screen up) or PRINTING (a new job). Only
-            # attempt once it's in a ready/idle state. Offline (None) → wait.
+            # in PRINTING (a new job), on the cancel screen (STOPPED/ERROR), or the
+            # finish screen (FINISHED) — only attempt once it's a ready/idle state.
+            # Offline (None) → wait.
             st = states.get(printer)
             cur = str((st or {}).get("state", "")).upper() if st else ""
-            if not cur or cur in _INPROGRESS_PRINT_STATES or cur in _CANCEL_TERMINAL_STATES:
+            if (not cur or cur in _INPROGRESS_PRINT_STATES
+                    or cur in _CANCEL_TERMINAL_STATES or cur in _COMPLETE_TERMINAL_STATES):
                 continue
 
-            result = _create_pending_cancel_review(
-                printer, filename, job_id, progress, fb_url=fb_url)
+            if kind == "complete":
+                # Re-check the flag HERE, not just at the edge: a completion can
+                # sit queued behind the finish-screen lock for up to 72h without a
+                # ledger record. If the cutover is rolled back in that window (flag
+                # OFF + FilaBridge restarted), FilaBridge owns completions again —
+                # firing FCC's deduct now would double-bill (the ledger can't span
+                # processes). Abandon the queued completion instead.
+                if not _fcc_owns_completion_deduct():
+                    cancel_fetch_store.pop_pending(printer, job_id)
+                    continue
+                result = deduct_completed_print(printer, filename, job_id, fb_url=fb_url)
+            else:
+                result = _create_pending_cancel_review(
+                    printer, filename, job_id, progress, fb_url=fb_url)
             status = (result or {}).get("status")
             if status == "awaiting_fetch":
                 # Still couldn't fetch (the file 404'd despite a ready state — a
@@ -6259,8 +6445,19 @@ def _recover_one_print_latch(name, entry, fb_url):
         return True
 
     if cur == "FINISHED":
-        # Completed during the outage → FilaBridge owns completions (cancel-only
-        # first ship) → no deduct.
+        if _fcc_owns_completion_deduct():
+            # Phase-2: FCC owns completions → recover the completion deduct missed
+            # during the restart. Still FINISHED = unambiguous (a completion, not a
+            # cleared-then-reprinted job). Idempotent via the (printer, job_id)
+            # ledger, so a double restart can't double-deduct.
+            state.add_log_entry(
+                f"✅ Recovering a completion missed during an FCC restart on {name} "
+                f"('{filename}') — printer still FINISHED.", "INFO")
+            _dispatch_completion_edge(name, filename, job_id, fb_url)
+            with _PRINT_TRACKER_LOCK:
+                _PRINT_TRACKER[name] = {'state': cur}
+            return True
+        # Flag off → FilaBridge still owns completions → no deduct.
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {'state': cur}
         return False
