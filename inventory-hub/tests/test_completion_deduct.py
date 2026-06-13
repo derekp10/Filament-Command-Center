@@ -260,6 +260,41 @@ def test_fetch_retry_routes_complete_to_completion_deduct(stores_tmp):
     assert cancel_fetch_store.get_pending("XL", "J-9") is None  # resolved → popped
 
 
+def test_fetch_retry_ambiguous_routes_to_review_flagged(stores_tmp):
+    """A deferred-fetch entry flagged ambiguous (kind='cancel', ambiguous=True —
+    an in-progress→IDLE that hit a transient blip) must route the retry to
+    _create_pending_cancel_review WITH ambiguous=True, so a review queued behind a
+    blip stays flagged 'couldn't confirm' — never the completion auto-apply."""
+    cancel_fetch_store.add_pending({
+        "printer_name": "XL", "job_id": "J-7", "filename": "amb.gcode",
+        "progress": 0.26, "first_seen": time.time(), "kind": "cancel",
+        "ambiguous": True, "attempts": 1, "last_status": "awaiting_fetch"})
+    states = {"XL": _state("IDLE")}  # unlocked
+    with patch.object(app_module, "deduct_completed_print") as comp, \
+         patch.object(app_module, "_create_pending_cancel_review",
+                      return_value={"status": "pending", "job_id": "J-7"}) as review:
+        app_module._process_pending_cancel_fetches(states, "http://fb")
+    comp.assert_not_called()
+    review.assert_called_once()
+    assert review.call_args.kwargs.get("ambiguous") is True
+    assert cancel_fetch_store.get_pending("XL", "J-7") is None  # resolved → popped
+
+
+def test_fetch_retry_plain_cancel_routes_with_ambiguous_false(stores_tmp):
+    """A normal cancel fetch (no ambiguous flag) routes the retry with
+    ambiguous=False (the default), so the wording stays the plain cancel review."""
+    cancel_fetch_store.add_pending({
+        "printer_name": "XL", "job_id": "J-8", "filename": "x.gcode",
+        "progress": 0.5, "first_seen": time.time(), "kind": "cancel",
+        "attempts": 1, "last_status": "awaiting_fetch"})
+    states = {"XL": _state("IDLE")}
+    with patch.object(app_module, "_create_pending_cancel_review",
+                      return_value={"status": "pending", "job_id": "J-8"}) as review:
+        app_module._process_pending_cancel_fetches(states, "http://fb")
+    review.assert_called_once()
+    assert review.call_args.kwargs.get("ambiguous") is False
+
+
 def test_fetch_retry_waits_while_finished_locked(stores_tmp):
     cancel_fetch_store.add_pending({
         "printer_name": "XL", "job_id": "J-9", "filename": "done.gcode",

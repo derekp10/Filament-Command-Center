@@ -90,20 +90,37 @@
         const pct = Math.round((Number(rec.progress) || 0) * 100);
         const rows = (rec.spools || []).map(spoolRowHtml).join('');
         const total = (rec.spools || []).reduce((a, s) => a + (Number(s.grams) || 0), 0);
+        // Ambiguous (2026-06-13): the print reached idle without an observed
+        // terminal state, so FCC couldn't confirm cancel vs completion. Reword
+        // the header + banner; the grams are computed at the last seen progress
+        // (the confidence hint), nudgeable either way.
+        const ambiguous = !!rec.ambiguous;
+        const header = ambiguous
+            ? `❓ ${esc(rec.printer_name)} — ended at ~${pct}% (couldn't confirm: completed or cancelled?)`
+            : `🛑 ${esc(rec.printer_name)} — cancelled at ~${pct}%`;
+        const banner = ambiguous
+            ? `❓ FCC couldn't tell whether this print <b>finished</b> or was <b>cancelled</b> — it
+               reached idle without a clear cancel/finish signal (a fast restart, or the printer
+               power-cycled). The grams below are computed at the last seen progress (~${pct}%).
+               If it actually <b>finished</b>, nudge each spool up to the full amount; if it was
+               <b>cancelled earlier</b>, nudge down. Confirm to deduct, or <b>Discard</b> if it
+               was already handled.`
+            : `⚠️ If you cancelled individual objects mid-print — a per-object / M486 cancel,
+               from the printer or Connect — these grams can read <b>high</b>: the gcode still
+               counts the skipped object's filament, which never left the spool. Nudge each
+               spool down to the real amount before confirming.`;
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
+                 data-ambiguous="${ambiguous ? '1' : '0'}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
-                    <div style="font-weight:bold;color:#ffd27a;">🛑 ${esc(rec.printer_name)} — cancelled at ~${pct}%</div>
+                    <div style="font-weight:bold;color:${ambiguous ? '#7ec8ff' : '#ffd27a'};">${header}</div>
                     <div style="color:#9aa;font-size:0.92rem;">${fmtG(total)}g total</div>
                 </div>
                 <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
                 <div style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
                             background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
-                    ⚠️ If you cancelled individual objects mid-print — a per-object / M486 cancel,
-                    from the printer or Connect — these grams can read <b>high</b>: the gcode still
-                    counts the skipped object's filament, which never left the spool. Nudge each
-                    spool down to the real amount before confirming.
+                    ${banner}
                 </div>
                 ${rows}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">

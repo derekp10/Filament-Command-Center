@@ -4496,32 +4496,46 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
     return list(merged.values())
 
 
-def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel"):
+def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel",
+                          ambiguous=False):
     """Queue a print whose gcode couldn't be fetched yet (the selected-file
     download LOCK, §9.10) for the monitor to retry. `kind` is 'cancel' (default)
     or 'complete' — a COMPLETED Connect-started print locks behind the FINISH
     screen the same way a cancel locks behind the cancel screen; the kind is
     stashed on the record so _process_pending_cancel_fetches routes the retry to
-    the right handler (cancel→review, complete→auto-apply). Idempotent: re-queuing
-    the same job bumps `attempts`, PRESERVES `first_seen` (so the max-age give-up
-    window is measured from the FIRST sighting), and does NOT re-nudge. The 'clear
-    the screen' nudge logs exactly ONCE, on first queue. Returns True if newly
+    the right handler (cancel→review, complete→auto-apply). `ambiguous` (carried
+    on the record, only meaningful for kind='cancel') means the edge couldn't
+    confirm cancel vs completion, so the retried review stays flagged. Idempotent:
+    re-queuing the same job bumps `attempts`, PRESERVES `first_seen` (so the
+    max-age give-up window is measured from the FIRST sighting), and does NOT
+    re-nudge. The nudge logs exactly ONCE, on first queue. Returns True if newly
     queued (nudged), False if it was already queued."""
     if cancel_fetch_store.has_pending(printer_name, job_id):
         rec = cancel_fetch_store.get_pending(printer_name, job_id) or {}
         rec.update({"printer_name": printer_name, "job_id": str(job_id),
                     "filename": filename, "progress": float(reached_fraction),
-                    "kind": kind,
+                    "kind": kind, "ambiguous": bool(ambiguous),
                     "attempts": int(rec.get("attempts", 0)) + 1})
         cancel_fetch_store.add_pending(rec)
         return False
     cancel_fetch_store.add_pending({
         "printer_name": printer_name, "job_id": str(job_id), "filename": filename,
         "progress": float(reached_fraction), "first_seen": time.time(),
-        "kind": kind, "attempts": 1, "last_status": "awaiting_fetch",
+        "kind": kind, "ambiguous": bool(ambiguous),
+        "attempts": 1, "last_status": "awaiting_fetch",
     })
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
-    if kind == "complete":
+    if ambiguous:
+        # The ambiguous edge fires at IDLE (file already unlocked), so this path
+        # is only a transient blip — use neutral wording (NOT "clear the screen").
+        state.add_log_entry(
+            f"❓ Print on {printer_name} (~{pct:.0f}%, '{filename}') ended without a "
+            f"clear cancel/finish signal and its gcode isn't readable yet — I'll "
+            f"retry and surface a review when it's readable.",
+            "WARNING", "ffaa00",
+            meta={"type": "cancel_deduct_awaiting",
+                  "printer_name": printer_name, "job_id": str(job_id)})
+    elif kind == "complete":
         state.add_log_entry(
             f"✅ Completed print on {printer_name} ('{filename}') detected — the "
             f"printer is still showing the finish screen, so the gcode is locked. "
@@ -4541,12 +4555,18 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
 
 
 def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,
-                                  fb_url=None):
+                                  fb_url=None, ambiguous=False):
     """Compute the cancelled-print partial and STASH it for review instead of
     auto-writing (FilaBridge absorption design §9.7). Idempotent against the
     ledger (already confirmed/dismissed) and the pending store (already queued).
     On success raises a 'cancel_deduct_pending' activity-log line (with meta) so
-    the dashboard shows a "🛑 Review" button. Returns a status dict."""
+    the dashboard shows a "🛑 Review" button. Returns a status dict.
+
+    ambiguous=True (2026-06-13): the print reached idle WITHOUT an observed
+    terminal state, so we couldn't confirm cancel vs completion. The compute is
+    identical (the partial at `reached_fraction`, the retained progress = the
+    confidence hint), but the record is flagged and the log/overlay reword to
+    "couldn't confirm". Still NEVER auto-deducts — it's a review either way."""
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
 
@@ -4562,7 +4582,8 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     if not creds:
         # No creds right now (FilaBridge blip / printer briefly unreachable) —
         # retryable, so queue a deferred fetch rather than telling Derek to weigh.
-        _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction)
+        _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction,
+                              ambiguous=ambiguous)
         return {"status": "awaiting_fetch", "reason": "no credentials", "job_id": job_id}
 
     usage_map, terminal = _compute_cancel_usage(
@@ -4577,21 +4598,28 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
             # file un-locks once Derek clears the cancel screen (→ IDLE). Queue a
             # deferred fetch; the monitor retries each tick once the printer
             # leaves STOPPED, then computes + pops the 🛑 Review automatically.
-            _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction)
+            # (For the ambiguous edge the file is already unlocked at IDLE, so
+            # this is just a transient-blip safety net — but carry the flag so a
+            # retried review stays flagged "couldn't confirm".)
+            _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction,
+                                  ambiguous=ambiguous)
             return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
                     "job_id": job_id}
         return terminal
 
     rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url)
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    lead = ("❓ Print on {p} reached idle (~{pct:.0f}%, couldn't confirm cancel vs "
+            "complete)").format(p=printer_name, pct=pct) if ambiguous else \
+           "🛑 Cancelled print on {p} (~{pct:.0f}%)".format(p=printer_name, pct=pct)
     if not rows:
         # The print extruded filament but no spool is mapped to the active
         # toolhead(s) — nothing to deduct from. Record so it doesn't re-queue;
         # surface so Derek can fix the binding.
         used_g = round(sum(usage_map.values()), 1)
         state.add_log_entry(
-            f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%) — {used_g:.1f}g used "
-            f"but no mapped spool to deduct from (check toolhead bindings).",
+            f"{lead} — {used_g:.1f}g used but no mapped spool to deduct from "
+            f"(check toolhead bindings).",
             "WARNING", "ffaa00")
         print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                           scale=reached_fraction, grams=0)
@@ -4610,11 +4638,12 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         "progress": float(reached_fraction),
         "total_grams": total,
         "spools": rows,
+        "ambiguous": bool(ambiguous),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     cancel_review_store.add_pending(record)
     state.add_log_entry(
-        f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%) — review partial "
+        f"{lead} — review {'computed' if ambiguous else 'partial'} "
         f"deduct: {total:.2f}g across {len(rows)} spool(s) ('{filename}').",
         "WARNING", rows[0]['color'],
         meta={"type": "cancel_deduct_pending",
@@ -5968,6 +5997,18 @@ _CANCEL_TERMINAL_STATES = frozenset({"STOPPED", "ERROR"})
 # FilaBridge container is stopped.)
 _COMPLETE_TERMINAL_STATES = frozenset({"FINISHED"})
 
+# Idle / ready states reached FROM an in-progress state WITHOUT our ever sampling
+# the terminal STOPPED or FINISHED. This is the AMBIGUOUS edge (2026-06-13): a
+# fast cancel→restart that slipped the poll, or a PRINTING→offline→IDLE printer
+# power-cycle. We can't tell a cancel from a completion, so we NEVER auto-deduct
+# — but we must NOT silently drop it either; it routes to the cancel-REVIEW
+# pipeline flagged "couldn't confirm" with the retained progress as the hint.
+# Deliberately an ALLOW-LIST (not "everything non-terminal") so a mid-print
+# ATTENTION/BUSY (filament runout / heating) can NEVER masquerade as an
+# end-of-print idle and fire a spurious review. The real fleet reports v1 "IDLE"
+# / "READY"; "OPERATIONAL" covers legacy /api/printer firmware idle text.
+_IDLE_READY_STATES = frozenset({"IDLE", "READY", "OPERATIONAL"})
+
 # Tests flip this to False so the deduct runs synchronously + deterministically
 # instead of on a daemon thread.
 _CANCEL_DEDUCT_RUN_ASYNC = True
@@ -5988,6 +6029,18 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
     writes (automating the manual Connect-reading he does today). The detector
     reaches this only through _dispatch_cancel_edge, so the threading contract
     (off the heartbeat thread) is unchanged from slice 2a."""
+    # INSTANT ACK (2026-06-13): log the moment the STOPPED edge fires, BEFORE the
+    # slow async gcode download+decode. On a slow XL .bgcode download the review
+    # line is 30-60s out; without this the user faces silence and thinks nothing
+    # happened. INFO (no toast spam) — the actual review line below raises the
+    # "🛑 Review" affordance.
+    try:
+        pct = max(0.0, min(1.0, float(progress or 0.0))) * 100
+        state.add_log_entry(
+            f"🛑 Cancel detected on {printer_name} (~{pct:.0f}%) — computing the partial…",
+            "INFO")
+    except Exception:
+        pass
     try:
         _create_pending_cancel_review(printer_name, filename, job_id, progress, fb_url=fb_url)
     except Exception as e:
@@ -6039,6 +6092,50 @@ def _dispatch_completion_edge(printer_name, filename, job_id, fb_url):
             daemon=True).start()
     else:
         _on_completion_edge(printer_name, filename, job_id, fb_url)
+
+
+def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url):
+    """Action when a latched in-progress job reaches IDLE/READY WITHOUT our ever
+    sampling the terminal STOPPED or FINISHED (2026-06-13): a fast cancel→restart
+    that slipped the poll, or a PRINTING→offline→IDLE printer power-cycle. We
+    can't tell a cancel from a completion, so route it to the cancel-REVIEW
+    pipeline flagged ambiguous (compute the partial at the RETAINED progress as
+    the confidence hint) — NEVER auto-deduct (that's FilaBridge's cancel
+    over-deduct bug). Reaches here only through _dispatch_ambiguous_edge so the
+    off-heartbeat threading contract matches the cancel/completion paths."""
+    # Instant ack (the ambiguous analogue of the cancel instant-ack), so the user
+    # isn't met with silence during the async download.
+    try:
+        pct = max(0.0, min(1.0, float(progress or 0.0))) * 100
+        state.add_log_entry(
+            f"❓ Print on {printer_name} reached idle without a clear cancel/finish "
+            f"signal (~{pct:.0f}% reached) — computing a review (couldn't confirm "
+            f"completed vs cancelled)…", "INFO")
+    except Exception:
+        pass
+    try:
+        _create_pending_cancel_review(printer_name, filename, job_id, progress,
+                                      fb_url=fb_url, ambiguous=True)
+    except Exception as e:
+        try:
+            state.add_log_entry(
+                f"❌ Ambiguous-print review failed for {printer_name} "
+                f"('{filename}'): {e}", "ERROR", "ff4444")
+        except Exception:
+            pass
+
+
+def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url):
+    """Run the ambiguous-edge action OFF the heartbeat thread (mirrors
+    _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
+    (tests)."""
+    if _CANCEL_DEDUCT_RUN_ASYNC:
+        threading.Thread(
+            target=_on_ambiguous_edge,
+            args=(printer_name, filename, job_id, progress, fb_url),
+            daemon=True).start()
+    else:
+        _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url)
 
 
 def _track_print_edge(printer_name, state_info, fb_url):
@@ -6116,26 +6213,61 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 pass
         return
 
-    # Non-in-progress state: detect a CANCEL or (Phase-2) COMPLETION edge against
-    # the latched prev state.
+    # Non-in-progress state: detect a CANCEL, a (Phase-2) COMPLETION, or an
+    # AMBIGUOUS-idle edge against the latched prev state.
     fire = None
     cancel_without_latch = False
     with _PRINT_TRACKER_LOCK:
         entry = _PRINT_TRACKER.get(printer_name)
         prev = entry.get('state') if entry else None
-        # Cancel = in-progress → STOPPED/ERROR (always owned by FCC).
-        is_cancel_edge = (prev in _INPROGRESS_PRINT_STATES
-                          and cur in _CANCEL_TERMINAL_STATES)
-        # Completion = in-progress → FINISHED, but ONLY when the cutover flag is
-        # on (else FilaBridge still owns completions → firing here double-deducts).
+        # `prev_active` = the printer was mid-something (a job in flight), NOT
+        # already idle/ready and NOT a clean terminal we already handled. This is
+        # BROADER than _INPROGRESS_PRINT_STATES (the LATCH set) on purpose: a
+        # filament runout / M600 parks the printer at ATTENTION, and a hard reset
+        # / power-cycle can surface BUSY on the way back up — neither is
+        # "in-progress" for latching, but a print that ENDS from them (ATTENTION→
+        # IDLE on a hard reset, ATTENTION→STOPPED on a cancel-from-the-prompt) is
+        # still a real edge that today would be silently dropped (2026-06-13,
+        # Derek's live Core One at ATTENTION 91%). A resolved cancel/complete
+        # resets the latch (clearing `filename`), and prev is guarded against
+        # idle/terminal here, so neither a bare idle→idle nor a second terminal
+        # tick can re-fire — and the latch branch only ever sets `filename` during
+        # a real printing state, so pre-print heating (IDLE→BUSY→IDLE) never has a
+        # filename to fire on.
+        prev_active = (prev is not None
+                       and prev not in _IDLE_READY_STATES
+                       and prev not in _CANCEL_TERMINAL_STATES
+                       and prev not in _COMPLETE_TERMINAL_STATES)
+        # Cancel = active → STOPPED/ERROR (always owned by FCC).
+        is_cancel_edge = prev_active and cur in _CANCEL_TERMINAL_STATES
+        # Completion = active → FINISHED, but ONLY when the cutover flag is on
+        # (else FilaBridge still owns completions → firing here double-deducts).
         # `_COMPLETE_TERMINAL_STATES` is deliberately SEPARATE from the cancel set
         # (which doubles as the fetch lock-gate). Short-circuit AND so the config
-        # read happens only on an actual in-progress→FINISHED transition.
-        is_complete_edge = (prev in _INPROGRESS_PRINT_STATES
-                            and cur in _COMPLETE_TERMINAL_STATES
+        # read happens only on an actual active→FINISHED transition.
+        is_complete_edge = (prev_active and cur in _COMPLETE_TERMINAL_STATES
                             and _fcc_owns_completion_deduct())
-        edge_kind = ('cancel' if is_cancel_edge
-                     else 'complete' if is_complete_edge else None)
+        # Ambiguous = active → IDLE/READY WITHOUT our ever sampling the terminal
+        # STOPPED or FINISHED (2026-06-13): a fast cancel→restart that slipped the
+        # poll, a PRINTING→offline→IDLE power-cycle, or a hard reset out of the
+        # ATTENTION filament-prompt (prev=ATTENTION/BUSY → IDLE). We can't tell
+        # cancel from completion, so route it to the REVIEW pipeline flagged
+        # "couldn't confirm" — NEVER auto-deduct. Fires regardless of the cutover
+        # flag (it's a safe review, not a write; the proven prod signature
+        # `{state:IDLE, job_id:693, progress:0.26}` was captured pre-cutover, and
+        # visibility beats a silent drop). A clean completion FCC actually
+        # observed (PRINTING→FINISHED→…) is NOT ambiguous (prev=FINISHED is a
+        # handled terminal → prev_active False), so this can't spam reviews for
+        # normal prints; only a genuinely-missed terminal triggers it.
+        is_ambiguous_edge = prev_active and cur in _IDLE_READY_STATES
+        if is_cancel_edge:
+            edge_kind = 'cancel'
+        elif is_complete_edge:
+            edge_kind = 'complete'
+        elif is_ambiguous_edge:
+            edge_kind = 'ambiguous'
+        else:
+            edge_kind = None
         if edge_kind and entry and entry.get('filename'):
             fire = {
                 'kind': edge_kind,
@@ -6162,6 +6294,9 @@ def _track_print_edge(printer_name, state_info, fb_url):
         if fire['kind'] == 'complete':
             _dispatch_completion_edge(printer_name, fire['filename'],
                                       fire['job_id'], fb_url)
+        elif fire['kind'] == 'ambiguous':
+            _dispatch_ambiguous_edge(printer_name, fire['filename'],
+                                     fire['job_id'], fire['progress'], fb_url)
         else:
             _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
                                   fire['progress'], fb_url)
@@ -6178,7 +6313,19 @@ def _track_print_edge(printer_name, state_info, fb_url):
 # after a deduct — but it's no longer load-bearing for catching cancels.
 # ---------------------------------------------------------------------------
 
-_CANCEL_MONITOR_INTERVAL_S = 30
+# ADAPTIVE poll cadence (2026-06-13, Derek wants the monitor more responsive).
+# Poll FAST while anything is happening on the fleet, back off to the slow rate
+# when every printer is idle. The cancel/poll-miss gap (a fast cancel→restart
+# that slips a slow tick) closes the most by sampling often WHILE a print runs,
+# so we can catch the STOPPED edge before the screen is cleared. Perf is fine:
+# each state probe is ~30ms, runs in parallel with a bounded timeout, and the
+# costly bgcode download fires only on an EDGE, never per tick — so a 10s tick
+# doesn't hammer Buddy's tiny HTTP pool. "Busy" = any printer in-progress OR
+# sitting on a terminal screen (STOPPED/ERROR/FINISHED), so the whole
+# print→clear lifecycle (incl. waiting out the deferred-fetch lock) stays
+# responsive; the fleet idles down to the slow rate only when truly nothing's up.
+_CANCEL_MONITOR_FAST_S = 10
+_CANCEL_MONITOR_IDLE_S = 30
 # How long to keep retrying a deferred fetch before giving up (§9.10). The
 # cancelled file stays download-LOCKED until Derek clears the cancel screen on
 # the printer; he's usually at the printer, but this buffers a cancel-and-walk-
@@ -6193,17 +6340,22 @@ def _cancel_monitor_tick():
     """One detection sweep: probe every printer's state + run the latch/edge
     detector, then service the deferred-fetch retry queue (§9.10) using the
     states just probed. Per-printer probes fan out so a slow/offline printer
-    doesn't block the rest. Best-effort throughout."""
+    doesn't block the rest. Best-effort throughout.
+
+    Returns True when the fleet is BUSY (any printer in-progress or on a terminal
+    screen) so the loop can poll on the FAST cadence; False when everything is
+    idle/offline (back off to the slow cadence). The return is the only signal
+    the adaptive loop needs — it never raises."""
     from concurrent.futures import ThreadPoolExecutor
     try:
         printer_map = locations_db.get_active_printer_map()
         _, fb_url = config_loader.get_api_urls()
     except Exception:
-        return
+        return False
     names = sorted({info.get('printer_name') for info in printer_map.values()
                     if info.get('printer_name')})
     if not names:
-        return
+        return False
 
     probed = {}
 
@@ -6246,6 +6398,20 @@ def _cancel_monitor_tick():
         except Exception:
             pass
 
+    # Tell the loop whether to stay FAST: any reachable printer that is NOT
+    # idle/ready is "busy" — printing, paused, ATTENTION (filament prompt), BUSY,
+    # or sitting on a terminal STOPPED/ERROR/FINISHED screen. Poll fast across
+    # that whole window so a cancel→restart is sampled in time and the deferred-
+    # fetch lock drains soon after the screen clears. Offline (None/'') and
+    # idle/ready → back off to the slow cadence.
+    busy = False
+    for st in probed.values():
+        s = str((st or {}).get('state', '')).upper()
+        if s and s not in _IDLE_READY_STATES:
+            busy = True
+            break
+    return busy
+
 
 def _process_pending_cancel_fetches(states, fb_url):
     """Service the deferred-fetch queue (§9.10): for each cancelled print whose
@@ -6269,6 +6435,7 @@ def _process_pending_cancel_fetches(states, fb_url):
             filename = rec.get("filename")
             progress = float(rec.get("progress", 0.0) or 0.0)
             kind = rec.get("kind", "cancel")  # 'cancel' (review) | 'complete' (auto-apply)
+            ambiguous = bool(rec.get("ambiguous", False))  # cancel-review "couldn't confirm" flag
             if not printer or job_id in (None, ""):
                 cancel_fetch_store.pop_pending(printer, job_id)
                 continue
@@ -6301,14 +6468,17 @@ def _process_pending_cancel_fetches(states, fb_url):
                 cancel_fetch_store.pop_pending(printer, job_id)
                 continue
 
-            # Gate on state: the file stays download-LOCKED while the printer is
-            # in PRINTING (a new job), on the cancel screen (STOPPED/ERROR), or the
-            # finish screen (FINISHED) — only attempt once it's a ready/idle state.
-            # Offline (None) → wait.
+            # Gate on state: the selected file is reliably download-UNLOCKED only
+            # once the printer is genuinely IDLE/READY (the print cleared off the
+            # screen). Any other reachable state means it's still busy/locked —
+            # PRINTING (new job), the cancel screen (STOPPED/ERROR), the finish
+            # screen (FINISHED), an ATTENTION filament-prompt, or a transient BUSY
+            # — so wait. Offline (None/'') → wait. (Allow-list, not deny-list, so
+            # we never hammer Buddy's tiny HTTP pool retrying a locked file mid-
+            # ATTENTION — the live Core One @91% bug, 2026-06-13.)
             st = states.get(printer)
             cur = str((st or {}).get("state", "")).upper() if st else ""
-            if (not cur or cur in _INPROGRESS_PRINT_STATES
-                    or cur in _CANCEL_TERMINAL_STATES or cur in _COMPLETE_TERMINAL_STATES):
+            if cur not in _IDLE_READY_STATES:
                 continue
 
             if kind == "complete":
@@ -6324,7 +6494,7 @@ def _process_pending_cancel_fetches(states, fb_url):
                 result = deduct_completed_print(printer, filename, job_id, fb_url=fb_url)
             else:
                 result = _create_pending_cancel_review(
-                    printer, filename, job_id, progress, fb_url=fb_url)
+                    printer, filename, job_id, progress, fb_url=fb_url, ambiguous=ambiguous)
             status = (result or {}).get("status")
             if status == "awaiting_fetch":
                 # Still couldn't fetch (the file 404'd despite a ready state — a
@@ -6462,15 +6632,29 @@ def _recover_one_print_latch(name, entry, fb_url):
             _PRINT_TRACKER[name] = {'state': cur}
         return False
 
-    # IDLE / READY / other: in-progress → cleared during the outage. Can't tell a
-    # cancelled-then-cleared print from a completed-then-cleared one → manual
-    # review, never a phantom deduct.
-    state.add_log_entry(
-        f"⚠️ A print ('{filename}', ~{pct:.0f}%) was in progress on {name} when FCC "
-        f"restarted; it's now {cur or 'idle'} so I can't tell if it was cancelled or "
-        f"finished — weigh the spool if it was cancelled.", "WARNING", "ffaa00")
+    if cur in _IDLE_READY_STATES:
+        # in-progress → cleared during the outage. Can't tell a cancelled-then-
+        # cleared print from a completed-then-cleared one → route it to the
+        # AMBIGUOUS REVIEW (download the now-unlocked file, compute the partial at
+        # the persisted progress, surface "couldn't confirm") instead of only
+        # telling Derek to weigh. Same machinery + wording as the live ambiguous
+        # edge; idempotent via the (printer, job_id) ledger + review store, so a
+        # double restart can't double-surface. NEVER auto-deducts.
+        state.add_log_entry(
+            f"❓ A print ('{filename}', ~{pct:.0f}%) was in progress on {name} when FCC "
+            f"restarted and it's now {cur or 'idle'} — surfacing a review (couldn't "
+            f"confirm completed vs cancelled).", "WARNING", "ffaa00")
+        _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url)
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = {'state': cur}
+        return True
+
+    # Any OTHER state (ATTENTION filament-prompt, BUSY, or an unknown transient) =
+    # the print is still mid-something, NOT ended. Restore the latch and defer to
+    # live edge-detection (mirrors the offline case) — the live monitor fires the
+    # cancel/ambiguous/completion edge when it actually reaches a terminal/idle.
     with _PRINT_TRACKER_LOCK:
-        _PRINT_TRACKER[name] = {'state': cur}
+        _PRINT_TRACKER[name] = dict(entry)
     return True
 
 
@@ -6485,14 +6669,16 @@ def _cancel_monitor_loop():
         except Exception:
             pass
     while True:
+        busy = False
         try:
-            _cancel_monitor_tick()
+            busy = _cancel_monitor_tick()
         except Exception as e:
             try:
                 state.logger.warning(f"cancel-monitor tick error: {e}")
             except Exception:
                 pass
-        time.sleep(_CANCEL_MONITOR_INTERVAL_S)
+        # Adaptive cadence: fast while the fleet is busy, slow when idle.
+        time.sleep(_CANCEL_MONITOR_FAST_S if busy else _CANCEL_MONITOR_IDLE_S)
 
 
 def _seed_printer_credentials_from_filabridge():
@@ -6568,7 +6754,8 @@ def _start_cancel_monitor():
                      daemon=True).start()
     try:
         state.logger.info(
-            f"🛑 Cancelled-print monitor started ({_CANCEL_MONITOR_INTERVAL_S}s poll, "
+            f"🛑 Cancelled-print monitor started (adaptive poll: "
+            f"{_CANCEL_MONITOR_FAST_S}s busy / {_CANCEL_MONITOR_IDLE_S}s idle, "
             f"dashboard-independent).")
     except Exception:
         pass
