@@ -11,8 +11,8 @@
  *    read by their owning module unchanged (e.g. weight_entry.js reads
  *    'fcc.weighEntry.defaultMode').
  *
- * The action-tool cards (reconcile / attributes / restore field order / build
- * info) are untouched — this card simply slots in alongside them.
+ * The action-tool cards (attributes / restore field order / build info) are
+ * untouched — this card simply slots in alongside them.
  */
 (function () {
     const HOST_ID = 'config-generated-settings';
