@@ -1,5 +1,7 @@
 # FilaBridge: Absorb vs Adopt — Scoping
 
+> ✅ **EXECUTED — this plan is DONE (2026-06-13).** The FilaBridge absorption epic shipped end-to-end and is verified on prod (main `92e4d74`, prod `92e4d749`; FilaBridge stopped/decommissioned). FCC now owns the toolhead↔spool map + both cancel & completion deducts. This doc is retained as the historical design/research record; for the as-built outcome see `completed-archive.md` (top block) + the `project_filabridge_absorption_active` memory. Only open follow-ups: Group 22.3 (mid-print spool-swap apportionment) + a low-pri cosmetic FB-artifact cleanup, both standalone in `Feature-Buglist.md`.
+
 *Prepared for Derek (sole dev, Filament Command Center). 2026-06-10. File:line citations verified against the live `dev` tree; load-bearing claims went through an adversarial verification pass (see §8 — two were corrected, three refined).*
 
 ---
