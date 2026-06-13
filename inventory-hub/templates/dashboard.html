@@ -29,9 +29,6 @@
                 <div class="status-label cursor-pointer" onclick="window.open(SPOOLMAN_URL, '_blank')">
                     <span id="st-spoolman" class="status-dot status-off"></span> Spoolman
                 </div>
-                <div class="status-label cursor-pointer" onclick="window.open(FILABRIDGE_URL, '_blank')">
-                    <span id="st-filabridge" class="status-dot status-off"></span> FilaBridge
-                </div>
 
                 <button class="btn btn-secondary ms-4 fw-bold shadow-sm border border-light"
                     onclick="SearchEngine.open()">
@@ -207,7 +204,6 @@
     {% include 'components/modals_weigh_out.html' %}
     {% include 'components/label_spool.html' %}
     {% include 'components/offcanvas_search.html' %}
-    {% include 'components/modals_filabridge_recovery.html' %}
     {% include 'components/modals_config.html' %}
     <!-- Global Floating Action Button for Search -->
     <button class="btn btn-primary shadow-lg border border-info fcc-fab-search"
@@ -220,7 +216,6 @@
     <script>
         // Inject the Spoolman URL from Python
         const SPOOLMAN_URL = "{{ spoolman_url }}";
-        const FILABRIDGE_URL = "{{ filabridge_url }}";
         const BUY_MORE_URL_TEMPLATE = "{{ buy_more_template }}";
 
         // [Code Guardian] Request Screen Wake Lock on Load

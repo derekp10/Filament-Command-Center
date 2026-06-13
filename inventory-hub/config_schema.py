@@ -82,6 +82,12 @@ CONFIG_SCHEMA = [
     Field("auto_recover_filabridge_errors", "Auto-recover FilaBridge errors", "bool", True,
           section="behavior", scope="server",
           help="Automatically retry FilaBridge writes that failed."),
+    Field("fcc_owns_completion_deduct", "FCC owns completed-print deduct", "bool", False,
+          section="behavior", scope="server",
+          help="Phase-2 cutover: when ON, FCC deducts filament on FINISHED prints "
+               "(the slicer footer, same as FilaBridge billed). Turn this ON the "
+               "SAME moment you stop the FilaBridge container — otherwise completed "
+               "prints double-deduct (FilaBridge + FCC)."),
     Field("fcc.weighEntry.defaultMode", "Default weigh-in mode", "select", "additive",
           section="client", scope="client",
           choices=["gross", "net", "additive", "set_used"],

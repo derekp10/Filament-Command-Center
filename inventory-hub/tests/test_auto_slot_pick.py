@@ -76,7 +76,6 @@ def _run_move(target, spools=None, target_slot=None, existing_at_target=None):
         ))
         stack.enter_context(patch.object(logic.spoolman_api, "update_spool", side_effect=fake_update))
         stack.enter_context(patch.object(logic.state, "add_log_entry"))
-        stack.enter_context(patch.object(logic, "_fb_spool_location", return_value=None))
 
         result = logic.perform_smart_move(
             target, spools, target_slot=target_slot, origin="test", auto_deploy=False

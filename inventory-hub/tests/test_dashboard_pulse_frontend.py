@@ -201,20 +201,21 @@ def test_dashboard_pulse_dispatcher_repaints_status_dots(
     page, require_server, base_url
 ):
     """Status dot DOM is what the user actually sees. After a heartbeat
-    tick, st-spoolman and st-filabridge should carry a status-on/off class
-    based on the bulk endpoint's response."""
+    tick, st-spoolman should carry a status-on/off class based on the bulk
+    endpoint's response. (The FilaBridge dot was retired in the FilaBridge
+    Phase-2 cutover, Phase E Slice 4.)"""
     page.goto(base_url, wait_until='domcontentloaded')
     # Wait for the initial pulse to land.
     page.wait_for_timeout(2_000)
     sm_class = page.evaluate("() => document.getElementById('st-spoolman')?.className || ''")
-    fb_class = page.evaluate("() => document.getElementById('st-filabridge')?.className || ''")
-    # The dots may be on or off depending on dev environment health, but
+    # The dot may be on or off depending on dev environment health, but
     # the class must be one of the two — never empty / never missing.
     assert 'status-on' in sm_class or 'status-off' in sm_class, (
         f"st-spoolman should carry a status-on/off class after a pulse; got '{sm_class}'"
     )
-    assert 'status-on' in fb_class or 'status-off' in fb_class, (
-        f"st-filabridge should carry a status-on/off class after a pulse; got '{fb_class}'"
+    # The FilaBridge dot element is gone — assert it no longer exists.
+    assert page.evaluate("() => document.getElementById('st-filabridge') === null"), (
+        "st-filabridge should have been removed in Phase E Slice 4"
     )
 
 

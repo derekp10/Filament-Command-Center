@@ -9,6 +9,7 @@ import print_deduct_ledger # type: ignore
 import cancel_review_store # type: ignore
 import cancel_fetch_store # type: ignore
 import print_tracker_store # type: ignore
+import prusalink_api # type: ignore
 import logic # type: ignore
 import csv
 import os
@@ -404,9 +405,6 @@ def dashboard():
     if ip == '0.0.0.0': ip = '127.0.0.1'
     port = cfg.get('spoolman_port', 7912)
     sm_url = f"http://{ip}:{port}"
-    # [Code Guardian] Fetch FilaBridge URL for Dashboard Button
-    _, fb_api_url = config_loader.get_api_urls()
-    fb_ui_url = fb_api_url.replace('/api', '')
     buy_more_url_template = cfg.get('buy_more_url_template', '')
     
     # Re-read .build_info on every dashboard render so a post-commit hook
@@ -424,7 +422,6 @@ def dashboard():
         build_commit_sha=live_sha or '',
         build_commit_ts=live_ts or 0,
         spoolman_url=sm_url,
-        filabridge_url=fb_ui_url,
         buy_more_template=buy_more_url_template,
     )
 
@@ -1249,25 +1246,6 @@ def api_prusament_apply_weights():
 import external_parsers # Added for plugin architecture
 
 
-# L347 — bound the filabridge_error_snapshots.json size at the most-recent
-# MAX_FB_ERROR_SNAPSHOTS entries. Each filabridge error appends an entry
-# that's never deleted; on a long-running prod install this grows forever
-# (~1KB per entry — the cost is unbounded disk + the JSON parse on every
-# recovery lookup, not catastrophic but real). Python 3.7+ dict preserves
-# insertion order, so dropping the head N entries evicts the oldest.
-MAX_FB_ERROR_SNAPSHOTS = 100
-
-
-def _evict_old_fb_snapshots(snapshots, cap=MAX_FB_ERROR_SNAPSHOTS):
-    """Return a dict containing at most `cap` of the most-recently-inserted
-    entries from `snapshots`. Insertion order is preserved by Python dicts
-    (3.7+), so slicing the tail of items() gives the newest survivors."""
-    if not isinstance(snapshots, dict) or len(snapshots) <= cap:
-        return snapshots
-    items = list(snapshots.items())
-    return dict(items[-cap:])
-
-
 @app.route('/api/external/search', methods=['GET'])
 def api_external_search():
     """
@@ -1803,6 +1781,14 @@ def api_get_locations():
         "Max Spools": 0,
         "parent_id": None,  # L271 Phase 2.5 — virtual top-level row
     })
+    # FilaBridge Phase-2: per-printer credentials (ip + api_key) live on the
+    # Printer rows but must NEVER reach the browser — locations.json has no
+    # secret-sentinel machinery the way config.json does. Strip them from this
+    # GET. The printer-map Settings editor reads creds through its own masked
+    # endpoint instead.
+    for _row in final_list:
+        if isinstance(_row, dict):
+            _row.pop(locations_db.PRINTER_CREDS_KEY, None)
     return jsonify(final_list)
 
 @app.route('/api/locations', methods=['POST'])
@@ -1878,6 +1864,18 @@ def api_save_location():
         else:
             new_entry['parent_id'] = locations_db.immediate_parent_for(
                 new_entry.get('LocationID'), current_list)
+    # FilaBridge Phase-2: printer_creds (ip/api_key) live on the Printer row but
+    # are REDACTED out of GET /api/locations, so the Location-Manager edit modal
+    # never receives them and would silently DROP them on a Name/Type edit (this
+    # POST replaces the whole row). Carry them forward from the old row (same
+    # printer, possibly renamed) unless the caller explicitly sent a creds object.
+    # Mirrors the parent_id-preserve above; the printer-map editor is the only
+    # surface that writes creds intentionally.
+    if (isinstance(new_entry, dict) and old_row is not None
+            and locations_db.PRINTER_CREDS_KEY not in new_entry):
+        _carry_creds = old_row.get(locations_db.PRINTER_CREDS_KEY)
+        if _carry_creds:
+            new_entry[locations_db.PRINTER_CREDS_KEY] = _carry_creds
     current_list.append(new_entry)
     current_list.sort(key=lambda x: str(x.get('LocationID', '')))
     locations_db.save_locations_list(current_list)
@@ -3085,7 +3083,8 @@ def api_printer_map():
     {entries, printers} shape, so the 4 JS modules that fetch /api/printer_map
     are unchanged (compat shim). Dual-read: falls back to config until folded.
     """
-    printer_map = locations_db.get_active_printer_map()
+    loc_rows = locations_db.load_locations_list()
+    printer_map = locations_db.get_active_printer_map(loc_rows)
     grouped = {}
     for loc_id, info in printer_map.items():
         name = info.get('printer_name', 'Unknown')
@@ -3111,7 +3110,68 @@ def api_printer_map():
         for loc_id, info in printer_map.items()
     ]
     flat.sort(key=lambda e: (e['printer_name'], e['position'], e['location_id']))
-    return jsonify({"printers": grouped, "entries": flat})
+    # FilaBridge Phase-2: per-printer PrusaLink connection (ip + api_key) for the
+    # "Printer Connections" block folded into this editor. ip_address is a LAN
+    # address (not secret); api_key is MASKED to SECRET_SENTINEL when present
+    # (never the plaintext) — the PUT keeps the stored key when it gets the
+    # sentinel back. Keyed by printer Name (the same key the rest of this view
+    # uses), so a printer with no creds yet still shows an empty editable row.
+    creds_view = {}
+    for _row in (loc_rows or []):
+        if not isinstance(_row, dict) or str(_row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        _nm = str(_row.get('Name', ''))
+        if not _nm:
+            continue
+        _c = _row.get(locations_db.PRINTER_CREDS_KEY)
+        _c = _c if isinstance(_c, dict) else {}
+        creds_view[_nm] = {
+            "ip_address": (_c.get("ip_address") or ""),
+            "api_key": config_schema.SECRET_SENTINEL if _c.get("api_key") else "",
+        }
+    return jsonify({"printers": grouped, "entries": flat, "printer_creds": creds_view})
+
+
+@app.route('/api/printer_creds', methods=['PUT'])
+def api_put_printer_creds():
+    """FilaBridge Phase-2: set a printer's PrusaLink connection (ip_address +
+    api_key) on its Type:"Printer" row in locations.json. Powers the "Printer
+    Connections" block in the printer-map editor.
+
+    SECRET_SENTINEL contract for api_key (mirrors the Config editor): receiving
+    the sentinel means "unchanged" → keep the stored key; any other value
+    replaces it (empty string → no key). A blank ip_address CLEARS the whole
+    creds object. Body: {printer_name, ip_address, api_key}. 404 if no Printer
+    row carries that Name."""
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get('printer_name', '')).strip()
+    ip = str(payload.get('ip_address', '') or '').strip()
+    api_key_in = payload.get('api_key', '')
+    if not name:
+        return jsonify({"ok": False, "error": "printer_name is required"}), 400
+    try:
+        rows = locations_db.load_locations_list()
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"could not read locations: {e}"}), 500
+    # Confirm the Printer row exists before any write (changed=False is ambiguous —
+    # it also means "value unchanged" — so we can't use it to detect a bad name).
+    if not any(isinstance(r, dict)
+               and str(r.get('Type', '')).strip().lower() == 'printer'
+               and str(r.get('Name', '')) == name
+               for r in (rows or [])):
+        return jsonify({"ok": False, "error": f"No Printer named {name!r}"}), 404
+    # Sentinel = keep the stored key; otherwise take the sent value (blank → None).
+    if api_key_in == config_schema.SECRET_SENTINEL:
+        existing = locations_db.get_printer_credentials(name, rows) or {}
+        api_key = existing.get('api_key')
+    else:
+        api_key = api_key_in if api_key_in else None
+    rows, changed = locations_db.set_printer_credentials(rows, name, ip, api_key)
+    if changed and not locations_db.save_locations_list(rows):
+        state.add_log_entry(f"🔐 Printer connection save FAILED for {name}", "ERROR", "ff4444")
+        return jsonify({"ok": False, "error": "could not persist printer connection"}), 500
+    state.add_log_entry(f"🔐 Printer connection updated for {name}", "INFO")
+    return jsonify({"ok": True, "error": None})
 
 
 def _pm_prefix(k):
@@ -3983,61 +4043,6 @@ def api_smart_move():
         confirm_active_print=bool(payload.get('confirm_active_print', False)),
     ))
 
-# --- FILABRIDGE ERROR RECOVERY ROUTES ---
-
-import prusalink_api
-
-@app.route('/api/fb_recovery_spools', methods=['GET'])
-def api_fb_recovery_spools():
-    import os
-    printer_name = request.args.get('printer_name')
-    error_id = request.args.get('error_id')
-    if not printer_name:
-        return jsonify({"success": False, "msg": "Missing printer_name"})
-        
-    if error_id:
-        try:
-            snap_path = os.path.join(os.path.dirname(__file__), "data", "filabridge_error_snapshots.json")
-            if os.path.exists(snap_path):
-                with open(snap_path, 'r', encoding='utf-8') as f:
-                    snapshots = json.load(f)
-                if error_id in snapshots:
-                    return jsonify({"success": True, "spools": snapshots[error_id]})
-        except Exception:
-            pass
-        # L347 — snapshot store is bounded at MAX_FB_ERROR_SNAPSHOTS via
-        # _evict_old_fb_snapshots(); an older error_id may have been
-        # evicted. Falling through here returns the LIVE spool state at
-        # the requested printer instead of the at-error snapshot. For
-        # most recovery flows the live state is what the user actually
-        # wants anyway; the snapshot was just a "what was on the
-        # toolhead at the moment FilaBridge errored" reference. Missing
-        # snapshot is NOT an error — only a missing printer_name is.
-    
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
-
-    # Find which FilaBridge toolheads map to which spoolman location keys
-    # Typically, the location ID is the key in printer_map, and it has 'printer_name'
-    target_locations = []
-    for loc_id, p_info in printer_map.items():
-        if p_info.get('printer_name') == printer_name:
-            target_locations.append(loc_id)
-            
-    if not target_locations:
-        return jsonify({"success": False, "msg": "Printer name not found in printer_map"})
-        
-    spools = []
-    for loc in target_locations:
-        loc_spools = spoolman_api.get_spools_at_location_detailed(loc)
-        spools.extend(loc_spools)
-        
-    return jsonify({"success": True, "spools": spools})
-
-@app.route('/api/fb_parse_status', methods=['GET'])
-def api_fb_parse_status():
-    import prusalink_api
-    return jsonify({"msg": prusalink_api.FB_PARSE_STATUS})
-
 
 def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
     """Deduct per-toolhead grams from the spools currently mapped to
@@ -4082,9 +4087,7 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
                 if spoolman_api.update_spool(sid, {"used_weight": new_used}):
                     spools_updated += 1
                     info = spoolman_api.format_spool_display(spool_data)
-                    label = strategy_label or (
-                        "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
-                    )
+                    label = strategy_label or "Auto-deduct"
                     state.add_log_entry(
                         f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({label}): "
                         f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]",
@@ -4143,16 +4146,25 @@ def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content):
 
 
 def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
-                          ip_address, api_key):
-    """Download + prefix-parse a cancelled print → (usage_map, terminal).
+                          ip_address, api_key, use_footer=False):
+    """Download + parse a print → (usage_map, terminal).
     On success: (usage_map, None). On a can't-compute outcome: (None, status
-    dict) already logged via _log_cancel_uncomputable. Shared by both the
-    auto-apply path (deduct_cancelled_print) and the preview path
-    (_create_pending_cancel_review).
+    dict). Shared by the cancel paths (auto-apply deduct_cancelled_print + preview
+    _create_pending_cancel_review) AND the Phase-2 completion path
+    (deduct_completed_print).
+
+    use_footer=False (cancel/partial): prefix-parse the body up to the cancel
+    point. use_footer=True (COMPLETED print): parse the full per-tool footer (the
+    exact slicer estimate = what FilaBridge billed — the cancel prefix-parse's
+    high-water-mark E omits the final wipe/ram tail, which a completion should
+    keep). Both yield {tool_index: grams} in the same space, so the single-tool
+    fold + downstream resolution are identical.
 
     fetch_cancel_gcode transparently decodes binary G-code (.bgcode — Derek's
     whole fleet) and remaps the progress fraction from compressed-file space to
-    the decoded text, so the prefix-parse runs correctly on real prints."""
+    the decoded text, so the prefix-parse runs correctly on real prints. The
+    decoded text also carries the footer, so use_footer reads it from the same
+    download."""
     prepared = prusalink_api.fetch_cancel_gcode(
         ip_address, api_key, filename, reached_fraction)
     if not prepared or not prepared.get("gcode"):
@@ -4166,9 +4178,16 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
         # once the printer leaves STOPPED). (Was an immediate terminal error.)
         return None, {"status": "error", "reason": "download_failed", "job_id": job_id}
     content = prepared["gcode"]
-    usage_map = prusalink_api.parse_partial_filament_usage(content, prepared["fraction"])
+    if use_footer:
+        # Completion: the full per-tool slicer footer (exact, = FilaBridge).
+        usage_map = prusalink_api.parse_footer_usage(content)
+    else:
+        usage_map = prusalink_api.parse_partial_filament_usage(content, prepared["fraction"])
     if not usage_map:
-        _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
+        if not use_footer:
+            # Cancel-specific "weigh the spool" log. A completion with an empty
+            # footer is a degenerate no-op — its caller logs its own line.
+            _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
         return None, {"status": "no_usage", "job_id": job_id}
 
     # Single-toolhead printer + single-material print (Derek's Core One: one
@@ -4254,6 +4273,81 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
 
+def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
+                           ip_address=None, api_key=None):
+    """Compute + AUTO-APPLY the full per-tool deduct for a COMPLETED (FINISHED)
+    print — FCC's Phase-2 takeover of FilaBridge's completion deduct. Uses the
+    slicer FOOTER (the full per-tool estimate, exact = what FilaBridge billed;
+    neither side handles M486), NOT the cancel prefix-parse. Exactly-once via the
+    (printer, job_id) ledger. Auto-applies SILENTLY with a ✅ log line — NO
+    preview/confirm, because a completion's grams are exact (the cancel review
+    exists to nudge the M486/partial over-estimate, which doesn't apply here).
+
+    On a download lock/blip returns 'awaiting_fetch' and queues a deferred fetch
+    (kind='complete'): a Connect-STARTED finished print locks the file behind the
+    finish screen, exactly like a cancel's cancel-screen lock — the monitor
+    retries once the printer leaves FINISHED. Same status-dict shape as
+    deduct_cancelled_print. Gated by the fcc_owns_completion_deduct flag at the
+    EDGE (this primitive itself is unconditional, so the deferred-fetch retry can
+    still finish a completion enqueued while the flag was on)."""
+    if fb_url is None:
+        _, fb_url = config_loader.get_api_urls()
+    if print_deduct_ledger.was_deducted(printer_name, job_id):
+        return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
+    if not (ip_address and api_key):
+        creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
+        if not creds:
+            _enqueue_cancel_fetch(printer_name, filename, job_id, 1.0, kind="complete")
+            return {"status": "awaiting_fetch", "reason": "no credentials", "job_id": job_id}
+        ip_address, api_key = creds.get('ip_address'), creds.get('api_key')
+
+    usage_map, terminal = _compute_cancel_usage(
+        printer_name, filename, job_id, 1.0, ip_address, api_key, use_footer=True)
+    if terminal is not None:
+        if terminal["status"] == "no_usage":
+            print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                              scale=1.0, grams=0)
+            state.add_log_entry(
+                f"✅ Completed print on {printer_name} ('{filename}') — no filament "
+                f"usage in the footer; nothing to deduct.", "INFO")
+        elif terminal["status"] == "error":
+            # Download failed — the Connect finish-screen LOCK (the completion
+            # analogue of the cancel-screen lock §9.10). Defer; the monitor
+            # retries once the printer leaves FINISHED (→ IDLE, file unlocked).
+            _enqueue_cancel_fetch(printer_name, filename, job_id, 1.0, kind="complete")
+            return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
+                    "job_id": job_id}
+        return terminal
+
+    spools_updated, details = _apply_usage_to_printer(
+        printer_name, usage_map, fb_url, strategy_label="Complete")
+    if spools_updated == 0:
+        # Footer had usage but no spool is loaded at the active toolhead(s) — the
+        # completion analogue of the cancel 'no_spools' path. Surface a WARNING
+        # (never a misleading green "0.0g" SUCCESS) and record grams=0 so an
+        # honest ledger entry stops it re-firing without claiming a phantom
+        # deduct. (A tool index that maps to NO position already got an orphan
+        # warning inside _apply_usage_to_printer; this catches the position-exists-
+        # but-empty case, which that orphan check treats as benign.)
+        used_g = round(sum(usage_map.values()), 1)
+        state.add_log_entry(
+            f"✅ Completed print on {printer_name} ('{filename}') — {used_g:.1f}g in "
+            f"the footer but no mapped spool to deduct from (check the toolhead "
+            f"binding; weigh the spool to true it up).", "WARNING", "ffaa00")
+        print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                          scale=1.0, grams=0)
+        return {"status": "no_spools", "job_id": job_id}
+    print_deduct_ledger.record_deduct(
+        printer_name, job_id, filename=filename, scale=1.0,
+        grams=round(sum(usage_map.values()), 2))
+    total = round(sum(d["grams"] for d in details), 1)
+    state.add_log_entry(
+        f"✅ Completed-print deduct on {printer_name}: {total:.1f}g across "
+        f"{spools_updated} spool(s) ('{filename}').", "SUCCESS")
+    return {"status": "deducted", "spools_updated": spools_updated,
+            "details": details, "usage_map": usage_map, "job_id": job_id}
+
+
 def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
     """Read-only resolution of {toolhead_position: grams} → the per-spool rows a
     deduct WOULD touch — the cancel-review PREVIEW (no write). Mirrors
@@ -4323,43 +4417,77 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
     return list(merged.values())
 
 
-def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction):
-    """Queue a cancelled print whose gcode couldn't be fetched yet (the
-    selected-file download LOCK, §9.10) for the monitor to retry. Idempotent:
+def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel",
+                          ambiguous=False):
+    """Queue a print whose gcode couldn't be fetched yet (the selected-file
+    download LOCK, §9.10) for the monitor to retry. `kind` is 'cancel' (default)
+    or 'complete' — a COMPLETED Connect-started print locks behind the FINISH
+    screen the same way a cancel locks behind the cancel screen; the kind is
+    stashed on the record so _process_pending_cancel_fetches routes the retry to
+    the right handler (cancel→review, complete→auto-apply). `ambiguous` (carried
+    on the record, only meaningful for kind='cancel') means the edge couldn't
+    confirm cancel vs completion, so the retried review stays flagged. Idempotent:
     re-queuing the same job bumps `attempts`, PRESERVES `first_seen` (so the
     max-age give-up window is measured from the FIRST sighting), and does NOT
-    re-nudge. The 'clear the screen' nudge logs exactly ONCE, on first queue.
-    Returns True if newly queued (nudged), False if it was already queued."""
+    re-nudge. The nudge logs exactly ONCE, on first queue. Returns True if newly
+    queued (nudged), False if it was already queued."""
     if cancel_fetch_store.has_pending(printer_name, job_id):
         rec = cancel_fetch_store.get_pending(printer_name, job_id) or {}
         rec.update({"printer_name": printer_name, "job_id": str(job_id),
                     "filename": filename, "progress": float(reached_fraction),
+                    "kind": kind, "ambiguous": bool(ambiguous),
                     "attempts": int(rec.get("attempts", 0)) + 1})
         cancel_fetch_store.add_pending(rec)
         return False
     cancel_fetch_store.add_pending({
         "printer_name": printer_name, "job_id": str(job_id), "filename": filename,
         "progress": float(reached_fraction), "first_seen": time.time(),
+        "kind": kind, "ambiguous": bool(ambiguous),
         "attempts": 1, "last_status": "awaiting_fetch",
     })
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
-    state.add_log_entry(
-        f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%, '{filename}') detected — "
-        f"the printer is still showing the cancel screen, so the gcode is locked. "
-        f"Clear it on the printer and I'll record the partial deduct automatically.",
-        "WARNING", "ffaa00",
-        meta={"type": "cancel_deduct_awaiting",
-              "printer_name": printer_name, "job_id": str(job_id)})
+    if ambiguous:
+        # The ambiguous edge fires at IDLE (file already unlocked), so this path
+        # is only a transient blip — use neutral wording (NOT "clear the screen").
+        state.add_log_entry(
+            f"❓ Print on {printer_name} (~{pct:.0f}%, '{filename}') ended without a "
+            f"clear cancel/finish signal and its gcode isn't readable yet — I'll "
+            f"retry and surface a review when it's readable.",
+            "WARNING", "ffaa00",
+            meta={"type": "cancel_deduct_awaiting",
+                  "printer_name": printer_name, "job_id": str(job_id)})
+    elif kind == "complete":
+        state.add_log_entry(
+            f"✅ Completed print on {printer_name} ('{filename}') detected — the "
+            f"printer is still showing the finish screen, so the gcode is locked. "
+            f"Clear it on the printer and I'll record the deduct automatically.",
+            "INFO",
+            meta={"type": "complete_deduct_awaiting",
+                  "printer_name": printer_name, "job_id": str(job_id)})
+    else:
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%, '{filename}') detected — "
+            f"the printer is still showing the cancel screen, so the gcode is locked. "
+            f"Clear it on the printer and I'll record the partial deduct automatically.",
+            "WARNING", "ffaa00",
+            meta={"type": "cancel_deduct_awaiting",
+                  "printer_name": printer_name, "job_id": str(job_id)})
     return True
 
 
 def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,
-                                  fb_url=None):
+                                  fb_url=None, ambiguous=False):
     """Compute the cancelled-print partial and STASH it for review instead of
     auto-writing (FilaBridge absorption design §9.7). Idempotent against the
     ledger (already confirmed/dismissed) and the pending store (already queued).
     On success raises a 'cancel_deduct_pending' activity-log line (with meta) so
-    the dashboard shows a "🛑 Review" button. Returns a status dict."""
+    the dashboard shows a "🛑 Review" button. Returns a status dict.
+
+    ambiguous=True (2026-06-13): the print reached idle WITHOUT an observed
+    terminal state, so we couldn't confirm cancel vs completion. The compute is
+    identical (the partial at `reached_fraction`, the retained progress = the
+    confidence hint), but the record is flagged and the log/overlay reword to
+    "couldn't confirm". Still NEVER auto-deducts — it's a review either way."""
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
 
@@ -4375,7 +4503,8 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     if not creds:
         # No creds right now (FilaBridge blip / printer briefly unreachable) —
         # retryable, so queue a deferred fetch rather than telling Derek to weigh.
-        _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction)
+        _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction,
+                              ambiguous=ambiguous)
         return {"status": "awaiting_fetch", "reason": "no credentials", "job_id": job_id}
 
     usage_map, terminal = _compute_cancel_usage(
@@ -4390,21 +4519,28 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
             # file un-locks once Derek clears the cancel screen (→ IDLE). Queue a
             # deferred fetch; the monitor retries each tick once the printer
             # leaves STOPPED, then computes + pops the 🛑 Review automatically.
-            _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction)
+            # (For the ambiguous edge the file is already unlocked at IDLE, so
+            # this is just a transient-blip safety net — but carry the flag so a
+            # retried review stays flagged "couldn't confirm".)
+            _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction,
+                                  ambiguous=ambiguous)
             return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
                     "job_id": job_id}
         return terminal
 
     rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url)
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    lead = ("❓ Print on {p} reached idle (~{pct:.0f}%, couldn't confirm cancel vs "
+            "complete)").format(p=printer_name, pct=pct) if ambiguous else \
+           "🛑 Cancelled print on {p} (~{pct:.0f}%)".format(p=printer_name, pct=pct)
     if not rows:
         # The print extruded filament but no spool is mapped to the active
         # toolhead(s) — nothing to deduct from. Record so it doesn't re-queue;
         # surface so Derek can fix the binding.
         used_g = round(sum(usage_map.values()), 1)
         state.add_log_entry(
-            f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%) — {used_g:.1f}g used "
-            f"but no mapped spool to deduct from (check toolhead bindings).",
+            f"{lead} — {used_g:.1f}g used but no mapped spool to deduct from "
+            f"(check toolhead bindings).",
             "WARNING", "ffaa00")
         print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                           scale=reached_fraction, grams=0)
@@ -4423,11 +4559,12 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         "progress": float(reached_fraction),
         "total_grams": total,
         "spools": rows,
+        "ambiguous": bool(ambiguous),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     cancel_review_store.add_pending(record)
     state.add_log_entry(
-        f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%) — review partial "
+        f"{lead} — review {'computed' if ambiguous else 'partial'} "
         f"deduct: {total:.2f}g across {len(rows)} spool(s) ('{filename}').",
         "WARNING", rows[0]['color'],
         meta={"type": "cancel_deduct_pending",
@@ -4561,98 +4698,6 @@ def api_cancel_deduct_dismiss():
     return jsonify({"status": "dismissed"})
 
 
-@app.route('/api/fb_aggressive_parse', methods=['POST'])
-def api_fb_aggressive_parse():
-    data = request.json
-    printer_name = data.get('printer_name')
-    filename = data.get('filename')
-    error_id = data.get('error_id')
-    
-    if not all([printer_name, filename, error_id]):
-        return jsonify({"success": False, "msg": "Missing parameters"})
-        
-    _, fb_url = config_loader.get_api_urls()
-    fb_base = fb_url.replace('/api', '')
-    
-    # 1. Fetch credentials
-    creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
-    if not creds:
-        return jsonify({"success": False, "msg": "Could not fetch printer credentials from FilaBridge"})
-        
-    ip_addr = creds['ip_address']
-    api_key = creds['api_key']
-    
-    # 2. Parse GCode
-    state.add_log_entry(f"🔍 Starting aggressive parse for '{filename}' on {printer_name}...", "INFO")
-    usage_map = prusalink_api.download_gcode_and_parse_usage(ip_addr, api_key, filename)
-    
-    if not usage_map:
-        return jsonify({"success": False, "msg": "Failed to parse filament usage from GCode"})
-        
-    # 3. Apply weights to mapped spools via the shared deduct loop (the same
-    #    loop the cancelled-print partial deduct reuses — see
-    #    _apply_usage_to_printer).
-    spools_updated, _ = _apply_usage_to_printer(printer_name, usage_map, fb_url)
-
-    # 4. Acknowledge Error
-    if spools_updated > 0:
-        ack = prusalink_api.acknowledge_filabridge_error(fb_url, error_id)
-        if ack:
-            return jsonify({"success": True, "msg": f"Successfully parsed and updated {spools_updated} spools."})
-        else:
-            return jsonify({"success": True, "msg": "Updated spools but failed to acknowledge error."})
-            
-    return jsonify({"success": False, "msg": "Parsed usage but no matching active spools found."})
-
-@app.route('/api/fb_manual_recovery', methods=['POST'])
-def api_fb_manual_recovery():
-    data = request.json
-    error_id = data.get('error_id')
-    updates = data.get('updates', {}) # dict of sid -> weight_used (diff)
-    
-    if not error_id:
-        return jsonify({"success": False, "msg": "Missing error_id"})
-        
-    spools_updated = 0
-    for sid, weight_used in updates.items():
-        try:
-            w = float(weight_used)
-            if w > 0:
-                spool_data = spoolman_api.get_spool(sid)
-                if spool_data:
-                    used = float(spool_data.get('used_weight', 0))
-                    initial = float(spool_data.get('initial_weight', 0) or 0)
-                    remaining = max(0, initial - used)
-                    new_remaining = max(0, remaining - w)
-                    new_used = used + w
-                    if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-                        spools_updated += 1
-                        info = spoolman_api.format_spool_display(spool_data)
-                        state.add_log_entry(f"✔️ Manually deducted {w:.1f}g from Spool #{sid}: [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
-                    else:
-                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-                        state.add_log_entry(
-                            f"❌ Failed to manually deduct from Spool #{sid}: {err}", "ERROR", "ff4444"
-                        )
-        except ValueError:
-            pass
-            
-    _, fb_url = config_loader.get_api_urls()
-    prusalink_api.acknowledge_filabridge_error(fb_url, error_id)
-
-    return jsonify({"success": True, "msg": f"Updated {spools_updated} spools."})
-
-
-# --- FILABRIDGE ↔ SPOOLMAN RECONCILE (L324) -----------------------------------
-# Cross-checks every non-zero FilaBridge toolhead_mapping against the
-# spool's Spoolman `location` field. Surfaces mismatches that the
-# `_fb_spool_location()` pre-flight in logic.py prevents from being
-# created NEW but doesn't heal once they exist (manual DB edits, prior
-# bugs, the retired suppress_fb_unmap path, etc.).
-#
-# /api/filabridge/reconcile           GET  → list of mismatches
-# /api/filabridge/reconcile/apply     POST → resolve one mismatch
-#
 @app.route('/api/audit_session', methods=['GET'])
 def api_audit_session():
     """L154 / 18.2 Part B — current audit session snapshot for the visual
@@ -4841,141 +4886,6 @@ def api_config_import():
     state.add_log_entry(
         f"⚙️ Config imported ({len(result.get('saved') or [])} settings, {len(ignored)} ignored)", "INFO")
     return jsonify({"ok": True, "saved": result.get('saved'), "ignored": ignored, "diff": diff})
-
-
-@app.route('/api/filabridge/reconcile', methods=['GET'])
-def api_filabridge_reconcile():
-    """Walk FilaBridge /status, cross-check against Spoolman per-spool
-    location. Return a JSON payload listing each mismatch with both views
-    so the UI can offer 'Trust Spoolman' / 'Trust FilaBridge' actions."""
-    _, fb_url = config_loader.get_api_urls()
-    try:
-        resp = requests.get(f"{fb_url}/status", timeout=5)
-        if not resp.ok:
-            return jsonify({"success": False, "msg": f"FilaBridge /status returned {resp.status_code}"})
-        fb_data = resp.json() or {}
-    except requests.RequestException as e:
-        return jsonify({"success": False, "msg": f"FilaBridge unreachable: {e}"})
-
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
-    # Build a reverse: (printer_name, position) → location_id, for the
-    # mapping side that FB exposes as raw position numbers.
-    pos_to_loc = {}
-    for loc_id, info in printer_map.items():
-        key = (info.get('printer_name'), int(info.get('position', 0)))
-        pos_to_loc[key] = loc_id.upper()
-
-    mismatches = []
-    matched = 0
-    fb_mappings = fb_data.get('toolhead_mappings', {}) or {}
-    for _printer_key, toolheads in fb_mappings.items():
-        for th_id, entry in (toolheads or {}).items():
-            try:
-                spool_id = int((entry or {}).get('spool_id') or 0)
-            except (TypeError, ValueError):
-                continue
-            if spool_id <= 0:
-                continue
-            try:
-                th_pos = int(th_id)
-            except (TypeError, ValueError):
-                continue
-            fb_printer = (entry or {}).get('printer_name') or _printer_key
-            fb_loc = pos_to_loc.get((fb_printer, th_pos))
-            if not fb_loc:
-                mismatches.append({
-                    "spool_id": spool_id,
-                    "fb_printer": fb_printer,
-                    "fb_toolhead": th_pos,
-                    "fb_location": None,
-                    "sm_location": None,
-                    "reason": "FilaBridge reports a toolhead position with no matching entry in printer_map; unmap recommended.",
-                })
-                continue
-            sp = spoolman_api.get_spool(spool_id) or {}
-            sm_loc = str(sp.get('location') or '').strip().upper()
-            if sm_loc == fb_loc:
-                matched += 1
-                continue
-            mismatches.append({
-                "spool_id": spool_id,
-                "fb_printer": fb_printer,
-                "fb_toolhead": th_pos,
-                "fb_location": fb_loc,
-                "sm_location": sm_loc or None,
-                "spool_display": spoolman_api.format_spool_display(sp).get('text', f"#{spool_id}") if sp else f"#{spool_id}",
-                "reason": (
-                    "FilaBridge says this spool is on the listed toolhead; "
-                    "Spoolman records a different location. They diverged at some "
-                    "point — likely a stale ghost from before _fb_spool_location pre-flight landed."
-                ),
-            })
-    return jsonify({"success": True, "matched": matched, "mismatches": mismatches})
-
-
-@app.route('/api/filabridge/reconcile/apply', methods=['POST'])
-def api_filabridge_reconcile_apply():
-    """Resolve one mismatch.
-
-    Payload:
-      {
-        "spool_id": int,
-        "action": "trust_spoolman" | "trust_filabridge",
-        "fb_printer": str,
-        "fb_toolhead": int,
-        "fb_location": str | null,     # required for trust_filabridge
-        "sm_location": str | null,
-      }
-    """
-    data = request.json or {}
-    action = data.get('action')
-    spool_id = data.get('spool_id')
-    fb_printer = data.get('fb_printer')
-    try:
-        fb_toolhead = int(data.get('fb_toolhead'))
-    except (TypeError, ValueError):
-        return jsonify({"success": False, "msg": "fb_toolhead must be an int"})
-    if not spool_id or action not in ('trust_spoolman', 'trust_filabridge'):
-        return jsonify({"success": False, "msg": "Bad payload"})
-
-    _, fb_url = config_loader.get_api_urls()
-    if action == 'trust_spoolman':
-        # Clear FilaBridge's stale toolhead entry; Spoolman's location wins.
-        ok, detail = logic._fb_write(fb_printer, fb_toolhead, 0, fb_url)
-        if ok:
-            state.add_log_entry(
-                f"🔧 Reconcile: cleared FilaBridge {fb_printer}-{fb_toolhead} (trusted Spoolman for Spool #{spool_id})",
-                "SUCCESS", "00ff00",
-            )
-            return jsonify({"success": True})
-        state.add_log_entry(
-            f"❌ Reconcile: failed to clear FilaBridge {fb_printer}-{fb_toolhead}: {detail}",
-            "ERROR", "ff4444",
-        )
-        return jsonify({"success": False, "msg": detail})
-
-    # action == 'trust_filabridge'
-    fb_location = (data.get('fb_location') or '').strip().upper()
-    if not fb_location:
-        return jsonify({"success": False, "msg": "fb_location required for trust_filabridge"})
-    sp = spoolman_api.get_spool(spool_id) or {}
-    extra = dict((sp.get('extra') or {}))
-    # Don't disturb container_slot / physical_source — perform_smart_move
-    # would, but this is a "rewrite Spoolman to match the truth FilaBridge
-    # already accepted" operation, so we leave the system-managed extras
-    # alone and only set the location field.
-    if spoolman_api.update_spool(spool_id, {"location": fb_location, "extra": extra}):
-        state.add_log_entry(
-            f"🔧 Reconcile: set Spoolman #{spool_id} location → {fb_location} (trusted FilaBridge)",
-            "SUCCESS", "00ff00",
-        )
-        return jsonify({"success": True})
-    err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-    state.add_log_entry(
-        f"❌ Reconcile: Spoolman rejected #{spool_id} → {fb_location}: {err}",
-        "ERROR", "ff4444",
-    )
-    return jsonify({"success": False, "msg": err})
 
 
 # --- FILAMENT ATTRIBUTES MANAGER (L58) ----------------------------------------
@@ -5552,142 +5462,16 @@ def api_get_logs_route():
     # Cheap pre-flight: clear any abandoned audit session before the
     # frontend sees audit_active=True and auto-opens the panel.
     _check_audit_idle_timeout()
-    sm_url, fb_url = config_loader.get_api_urls()
-    sm_ok, fb_ok = False, False
+    sm_url, _ = config_loader.get_api_urls()
+    sm_ok = False
     try: sm_ok = requests.get(f"{sm_url}/api/v1/health", timeout=3).ok
     except: pass
-    
-    try:
-        # FilaBridge liveness probe (drives the status dot). Use /print-errors
-        # — the lightweight endpoint we need anyway — NOT /status. The dedicated
-        # /status endpoint polls every printer's live PrusaLink state and takes
-        # ~5-6s to return on a prod-sized fleet, well past the old timeout=3, so
-        # it timed out on EVERY heartbeat and pinned the dot RED even though
-        # FilaBridge was up and serving (Derek 2026-06-02 "constantly red, even
-        # though it's active"). It also added ~6s of latency to every dashboard
-        # pulse since this runs in the /api/logs heartbeat path. /print-errors
-        # returns ~instantly, so one fast call is both the liveness check AND
-        # the error poll.
-        fb_resp = requests.get(f"{fb_url}/print-errors", timeout=4)
-        fb_ok = fb_resp.ok
 
-        # [NEW] Check for FilaBridge Print Errors
-        if fb_ok:
-            try:
-                err_resp = fb_resp  # reuse the liveness response — no second fetch
-                if err_resp.ok:
-                    # `errors` can be null when there are none; coerce to [].
-                    fb_errors = err_resp.json().get('errors') or []
-
-                    cfg = config_loader.load_config()
-                    auto_recover = cfg.get("auto_recover_filabridge_errors", True)
-                    
-                    for err in fb_errors:
-                        err_id = err.get('id')
-                        # Only alert if we haven't seen it and the user hasn't naturally acknowledged it in FilaBridge
-                        if err_id and not err.get('acknowledged', False):
-                            if err_id not in state.ACKNOWLEDGED_FILABRIDGE_ERRORS:
-                                state.ACKNOWLEDGED_FILABRIDGE_ERRORS.add(err_id)
-                                p_name = err.get('printer_name', 'Unknown Printer')
-                                f_name = err.get('filename', 'Unknown File')
-                                err_msg = err.get('error', 'Unknown Error')
-                                
-                                # Snapshot active spools at time of error
-                                try:
-                                    import os
-                                    target_locations = []
-                                    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: dual-read
-                                    for loc_id, p_info in printer_map.items():
-                                        if p_info.get('printer_name') == p_name:
-                                            target_locations.append(loc_id)
-                                    spools = []
-                                    for loc in target_locations:
-                                        spools.extend(spoolman_api.get_spools_at_location_detailed(loc))
-                                    snap_path = os.path.join(os.path.dirname(__file__), "data", "filabridge_error_snapshots.json")
-                                    snapshots = {}
-                                    if os.path.exists(snap_path):
-                                        with open(snap_path, 'r', encoding='utf-8') as f:
-                                            snapshots = json.load(f)
-                                    snapshots[err_id] = spools
-                                    # L347 — bound the snapshot store; see
-                                    # _evict_old_fb_snapshots above for rationale.
-                                    snapshots = _evict_old_fb_snapshots(snapshots)
-                                    os.makedirs(os.path.dirname(snap_path), exist_ok=True)
-                                    with open(snap_path, 'w', encoding='utf-8') as f:
-                                        json.dump(snapshots, f)
-                                except Exception as snap_e:
-                                    state.logger.error(f"Failed to snapshot spools for error {err_id}: {snap_e}")
-
-                                def _auto_recover_task(e_id, printer_name, filename, error_msg):
-                                    state.add_log_entry(f"🔄 Auto-Recovering FilaBridge Error for {printer_name}...", "INFO")
-                                    creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
-                                    if creds:
-                                        usage_map = prusalink_api.download_gcode_and_parse_usage(creds['ip_address'], creds['api_key'], filename)
-                                        if usage_map:
-                                            printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2 (dual-read)
-                                            spools_updated = 0
-                                            # Same MMU-alias dedup as the primary auto-deduct path.
-                                            ar_active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
-                                            ar_processed_positions = set()
-                                            for loc_id, p_info in ar_active_locs:
-                                                toolhead_idx = p_info.get('position', 0)
-                                                if toolhead_idx in ar_processed_positions:
-                                                    continue
-                                                if toolhead_idx in usage_map:
-                                                    w_used = usage_map[toolhead_idx]
-                                                    loc_spools = spoolman_api.get_spools_at_location(loc_id)
-                                                    if not loc_spools:
-                                                        continue
-                                                    ar_processed_positions.add(toolhead_idx)
-                                                    for sid in loc_spools:
-                                                        spool = spoolman_api.get_spool(sid)
-                                                        if spool and w_used > 0:
-                                                            used = float(spool.get('used_weight', 0))
-                                                            initial = float(spool.get('initial_weight', 0) or 0)
-                                                            remaining = max(0, initial - used)
-                                                            new_rem = max(0, remaining - w_used)
-                                                            new_used = used + w_used
-                                                            if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-                                                                spools_updated += 1
-                                                                inf = spoolman_api.format_spool_display(spool)
-                                                                strat = "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
-                                                                state.add_log_entry(f"✔️ Auto-deducted {w_used:.1f}g from Spool #{sid} ({strat}): [{remaining:.1f}g at start ➔ {new_rem:.1f}g remaining]", "SUCCESS", inf['color'])
-                                                            else:
-                                                                err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-                                                                state.add_log_entry(
-                                                                    f"❌ Auto-recover failed for Spool #{sid}: {err}",
-                                                                    "ERROR", "ff4444"
-                                                                )
-                                            if spools_updated > 0:
-                                                prusalink_api.acknowledge_filabridge_error(fb_url, e_id)
-                                                return # Success
-                                                
-                                    # Fallback if auto-recover fails or wasn't applicable
-                                    state.add_log_entry(
-                                        f"🔴 FilaBridge: [{printer_name}] failed to parse weight for '{filename}': {error_msg}",
-                                        "WARNING",
-                                        meta={"type": "filabridge_error", "error_id": e_id, "printer_name": printer_name, "filename": filename}
-                                    )
-
-                                if auto_recover:
-                                    import threading
-                                    threading.Thread(target=_auto_recover_task, args=(err_id, p_name, f_name, err_msg), daemon=True).start()
-                                else:
-                                    state.add_log_entry(
-                                        f"🔴 FilaBridge: [{p_name}] failed to parse weight for '{f_name}': {err_msg}",
-                                        "WARNING",
-                                        meta={"type": "filabridge_error", "error_id": err_id, "printer_name": p_name, "filename": f_name}
-                                    )
-            except Exception as e:
-                pass # Don't crash the log poller if FilaBridge errors endpoint times out
-                
-    except: pass
-    
     return jsonify({
         "logs": state.RECENT_LOGS,
         "undo_available": len(state.UNDO_STACK) > 0,
         "audit_active": state.AUDIT_SESSION.get('active', False),
-        "status": {"spoolman": sm_ok, "filabridge": fb_ok}
+        "status": {"spoolman": sm_ok}
     })
 
 
@@ -5714,10 +5498,9 @@ _VALID_PULSE_SECTIONS = frozenset({
 
 def _pulse_section_logs():
     """Invoke the /api/logs handler and unwrap its JSON. Preserves the
-    audit-idle-watchdog and FilaBridge error auto-recover side effects
-    because the bulk endpoint REPLACES the legacy heartbeat that used
-    to drive them - losing them would silently break audit cancellation
-    and recovery."""
+    audit-idle-watchdog side effect because the bulk endpoint REPLACES the
+    legacy heartbeat that used to drive it - losing it would silently break
+    audit cancellation."""
     resp = api_get_logs_route()
     return resp.get_json()
 
@@ -5767,13 +5550,44 @@ _PRINT_TRACKER_LOCK = threading.Lock()
 # still running. Mirrors the frontend Phase-0 _PRINT_INPROGRESS_STATES.
 _INPROGRESS_PRINT_STATES = frozenset({"PRINTING", "PAUSING", "RESUMING", "PAUSED"})
 # Terminal states that, reached FROM an in-progress state, mean a CANCEL/abort.
-# Cancel-only first ship (see header) — FINISHED/IDLE completion is excluded so
-# FilaBridge still owns completed-print deducts until the Phase-2 cutover.
+# Cancel terminal states (reached FROM in-progress = a CANCEL/abort). This set
+# ALSO doubles as the "file still download-locked, don't fetch yet" gate in
+# _process_pending_cancel_fetches — do NOT add FINISHED here (it would break the
+# retry queue); completions use the separate set below.
 _CANCEL_TERMINAL_STATES = frozenset({"STOPPED", "ERROR"})
+
+# Phase-2 cutover: COMPLETION terminal state. Kept SEPARATE from the cancel set
+# (above) precisely because that one is reused as a lock gate. A FINISHED edge
+# fires FCC's own completion deduct ONLY when the fcc_owns_completion_deduct flag
+# is on — otherwise FilaBridge still owns completions and firing here would
+# double-deduct. (Default off → this code ships DARK; flip it the same moment the
+# FilaBridge container is stopped.)
+_COMPLETE_TERMINAL_STATES = frozenset({"FINISHED"})
+
+# Idle / ready states reached FROM an in-progress state WITHOUT our ever sampling
+# the terminal STOPPED or FINISHED. This is the AMBIGUOUS edge (2026-06-13): a
+# fast cancel→restart that slipped the poll, or a PRINTING→offline→IDLE printer
+# power-cycle. We can't tell a cancel from a completion, so we NEVER auto-deduct
+# — but we must NOT silently drop it either; it routes to the cancel-REVIEW
+# pipeline flagged "couldn't confirm" with the retained progress as the hint.
+# Deliberately an ALLOW-LIST (not "everything non-terminal") so a mid-print
+# ATTENTION/BUSY (filament runout / heating) can NEVER masquerade as an
+# end-of-print idle and fire a spurious review. The real fleet reports v1 "IDLE"
+# / "READY"; "OPERATIONAL" covers legacy /api/printer firmware idle text.
+_IDLE_READY_STATES = frozenset({"IDLE", "READY", "OPERATIONAL"})
 
 # Tests flip this to False so the deduct runs synchronously + deterministically
 # instead of on a daemon thread.
 _CANCEL_DEDUCT_RUN_ASYNC = True
+
+
+def _fcc_owns_completion_deduct():
+    """The Phase-2 cutover flag (default False → FilaBridge owns completions, this
+    code stays dark). Only consulted on an actual in-progress→FINISHED edge."""
+    try:
+        return bool(config_loader.load_config().get("fcc_owns_completion_deduct", False))
+    except Exception:
+        return False
 
 
 def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
@@ -5782,6 +5596,18 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
     writes (automating the manual Connect-reading he does today). The detector
     reaches this only through _dispatch_cancel_edge, so the threading contract
     (off the heartbeat thread) is unchanged from slice 2a."""
+    # INSTANT ACK (2026-06-13): log the moment the STOPPED edge fires, BEFORE the
+    # slow async gcode download+decode. On a slow XL .bgcode download the review
+    # line is 30-60s out; without this the user faces silence and thinks nothing
+    # happened. INFO (no toast spam) — the actual review line below raises the
+    # "🛑 Review" affordance.
+    try:
+        pct = max(0.0, min(1.0, float(progress or 0.0))) * 100
+        state.add_log_entry(
+            f"🛑 Cancel detected on {printer_name} (~{pct:.0f}%) — computing the partial…",
+            "INFO")
+    except Exception:
+        pass
     try:
         _create_pending_cancel_review(printer_name, filename, job_id, progress, fb_url=fb_url)
     except Exception as e:
@@ -5804,6 +5630,79 @@ def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url):
             daemon=True).start()
     else:
         _on_cancel_edge(printer_name, filename, job_id, progress, fb_url)
+
+
+def _on_completion_edge(printer_name, filename, job_id, fb_url):
+    """Action on a →FINISHED edge (Phase-2, flag-gated): compute + AUTO-APPLY the
+    completion deduct from the slicer footer. No preview/confirm — the grams are
+    exact for a completion. Reaches here only through _dispatch_completion_edge so
+    the off-heartbeat threading contract matches the cancel path."""
+    try:
+        deduct_completed_print(printer_name, filename, job_id, fb_url=fb_url)
+    except Exception as e:
+        try:
+            state.add_log_entry(
+                f"❌ Completed-print deduct failed for {printer_name} "
+                f"('{filename}'): {e}", "ERROR", "ff4444")
+        except Exception:
+            pass
+
+
+def _dispatch_completion_edge(printer_name, filename, job_id, fb_url):
+    """Run the completion-edge action OFF the heartbeat thread (mirrors
+    _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
+    (tests)."""
+    if _CANCEL_DEDUCT_RUN_ASYNC:
+        threading.Thread(
+            target=_on_completion_edge,
+            args=(printer_name, filename, job_id, fb_url),
+            daemon=True).start()
+    else:
+        _on_completion_edge(printer_name, filename, job_id, fb_url)
+
+
+def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url):
+    """Action when a latched in-progress job reaches IDLE/READY WITHOUT our ever
+    sampling the terminal STOPPED or FINISHED (2026-06-13): a fast cancel→restart
+    that slipped the poll, or a PRINTING→offline→IDLE printer power-cycle. We
+    can't tell a cancel from a completion, so route it to the cancel-REVIEW
+    pipeline flagged ambiguous (compute the partial at the RETAINED progress as
+    the confidence hint) — NEVER auto-deduct (that's FilaBridge's cancel
+    over-deduct bug). Reaches here only through _dispatch_ambiguous_edge so the
+    off-heartbeat threading contract matches the cancel/completion paths."""
+    # Instant ack (the ambiguous analogue of the cancel instant-ack), so the user
+    # isn't met with silence during the async download.
+    try:
+        pct = max(0.0, min(1.0, float(progress or 0.0))) * 100
+        state.add_log_entry(
+            f"❓ Print on {printer_name} reached idle without a clear cancel/finish "
+            f"signal (~{pct:.0f}% reached) — computing a review (couldn't confirm "
+            f"completed vs cancelled)…", "INFO")
+    except Exception:
+        pass
+    try:
+        _create_pending_cancel_review(printer_name, filename, job_id, progress,
+                                      fb_url=fb_url, ambiguous=True)
+    except Exception as e:
+        try:
+            state.add_log_entry(
+                f"❌ Ambiguous-print review failed for {printer_name} "
+                f"('{filename}'): {e}", "ERROR", "ff4444")
+        except Exception:
+            pass
+
+
+def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url):
+    """Run the ambiguous-edge action OFF the heartbeat thread (mirrors
+    _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
+    (tests)."""
+    if _CANCEL_DEDUCT_RUN_ASYNC:
+        threading.Thread(
+            target=_on_ambiguous_edge,
+            args=(printer_name, filename, job_id, progress, fb_url),
+            daemon=True).start()
+    else:
+        _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url)
 
 
 def _track_print_edge(printer_name, state_info, fb_url):
@@ -5881,21 +5780,64 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 pass
         return
 
-    # Non-in-progress state: detect a cancel edge against the latched prev state.
+    # Non-in-progress state: detect a CANCEL, a (Phase-2) COMPLETION, or an
+    # AMBIGUOUS-idle edge against the latched prev state.
     fire = None
     cancel_without_latch = False
     with _PRINT_TRACKER_LOCK:
         entry = _PRINT_TRACKER.get(printer_name)
         prev = entry.get('state') if entry else None
-        # First ship is CANCEL-ONLY: _CANCEL_TERMINAL_STATES is {STOPPED, ERROR}
-        # and deliberately EXCLUDES FINISHED/IDLE — FilaBridge still owns
-        # completed-print deducts until the Phase-2 atomic cutover, so firing
-        # here on a completion would double-deduct. Don't widen this set without
-        # cutting FilaBridge's monitor over (scoping doc §9.5).
-        is_cancel_edge = (prev in _INPROGRESS_PRINT_STATES
-                          and cur in _CANCEL_TERMINAL_STATES)
-        if is_cancel_edge and entry and entry.get('filename'):
+        # `prev_active` = the printer was mid-something (a job in flight), NOT
+        # already idle/ready and NOT a clean terminal we already handled. This is
+        # BROADER than _INPROGRESS_PRINT_STATES (the LATCH set) on purpose: a
+        # filament runout / M600 parks the printer at ATTENTION, and a hard reset
+        # / power-cycle can surface BUSY on the way back up — neither is
+        # "in-progress" for latching, but a print that ENDS from them (ATTENTION→
+        # IDLE on a hard reset, ATTENTION→STOPPED on a cancel-from-the-prompt) is
+        # still a real edge that today would be silently dropped (2026-06-13,
+        # Derek's live Core One at ATTENTION 91%). A resolved cancel/complete
+        # resets the latch (clearing `filename`), and prev is guarded against
+        # idle/terminal here, so neither a bare idle→idle nor a second terminal
+        # tick can re-fire — and the latch branch only ever sets `filename` during
+        # a real printing state, so pre-print heating (IDLE→BUSY→IDLE) never has a
+        # filename to fire on.
+        prev_active = (prev is not None
+                       and prev not in _IDLE_READY_STATES
+                       and prev not in _CANCEL_TERMINAL_STATES
+                       and prev not in _COMPLETE_TERMINAL_STATES)
+        # Cancel = active → STOPPED/ERROR (always owned by FCC).
+        is_cancel_edge = prev_active and cur in _CANCEL_TERMINAL_STATES
+        # Completion = active → FINISHED, but ONLY when the cutover flag is on
+        # (else FilaBridge still owns completions → firing here double-deducts).
+        # `_COMPLETE_TERMINAL_STATES` is deliberately SEPARATE from the cancel set
+        # (which doubles as the fetch lock-gate). Short-circuit AND so the config
+        # read happens only on an actual active→FINISHED transition.
+        is_complete_edge = (prev_active and cur in _COMPLETE_TERMINAL_STATES
+                            and _fcc_owns_completion_deduct())
+        # Ambiguous = active → IDLE/READY WITHOUT our ever sampling the terminal
+        # STOPPED or FINISHED (2026-06-13): a fast cancel→restart that slipped the
+        # poll, a PRINTING→offline→IDLE power-cycle, or a hard reset out of the
+        # ATTENTION filament-prompt (prev=ATTENTION/BUSY → IDLE). We can't tell
+        # cancel from completion, so route it to the REVIEW pipeline flagged
+        # "couldn't confirm" — NEVER auto-deduct. Fires regardless of the cutover
+        # flag (it's a safe review, not a write; the proven prod signature
+        # `{state:IDLE, job_id:693, progress:0.26}` was captured pre-cutover, and
+        # visibility beats a silent drop). A clean completion FCC actually
+        # observed (PRINTING→FINISHED→…) is NOT ambiguous (prev=FINISHED is a
+        # handled terminal → prev_active False), so this can't spam reviews for
+        # normal prints; only a genuinely-missed terminal triggers it.
+        is_ambiguous_edge = prev_active and cur in _IDLE_READY_STATES
+        if is_cancel_edge:
+            edge_kind = 'cancel'
+        elif is_complete_edge:
+            edge_kind = 'complete'
+        elif is_ambiguous_edge:
+            edge_kind = 'ambiguous'
+        else:
+            edge_kind = None
+        if edge_kind and entry and entry.get('filename'):
             fire = {
+                'kind': edge_kind,
                 'filename': entry.get('filename'),
                 'job_id': entry.get('job_id', ''),
                 'progress': float(entry.get('progress', 0.0)),
@@ -5916,8 +5858,15 @@ def _track_print_edge(printer_name, state_info, fb_url):
             f"(print too short to sample between heartbeats) — no partial deduct.",
             "INFO")
     if fire:
-        _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
-                              fire['progress'], fb_url)
+        if fire['kind'] == 'complete':
+            _dispatch_completion_edge(printer_name, fire['filename'],
+                                      fire['job_id'], fb_url)
+        elif fire['kind'] == 'ambiguous':
+            _dispatch_ambiguous_edge(printer_name, fire['filename'],
+                                     fire['job_id'], fire['progress'], fb_url)
+        else:
+            _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
+                                  fire['progress'], fb_url)
 
 
 # ---------------------------------------------------------------------------
@@ -5931,7 +5880,19 @@ def _track_print_edge(printer_name, state_info, fb_url):
 # after a deduct — but it's no longer load-bearing for catching cancels.
 # ---------------------------------------------------------------------------
 
-_CANCEL_MONITOR_INTERVAL_S = 30
+# ADAPTIVE poll cadence (2026-06-13, Derek wants the monitor more responsive).
+# Poll FAST while anything is happening on the fleet, back off to the slow rate
+# when every printer is idle. The cancel/poll-miss gap (a fast cancel→restart
+# that slips a slow tick) closes the most by sampling often WHILE a print runs,
+# so we can catch the STOPPED edge before the screen is cleared. Perf is fine:
+# each state probe is ~30ms, runs in parallel with a bounded timeout, and the
+# costly bgcode download fires only on an EDGE, never per tick — so a 10s tick
+# doesn't hammer Buddy's tiny HTTP pool. "Busy" = any printer in-progress OR
+# sitting on a terminal screen (STOPPED/ERROR/FINISHED), so the whole
+# print→clear lifecycle (incl. waiting out the deferred-fetch lock) stays
+# responsive; the fleet idles down to the slow rate only when truly nothing's up.
+_CANCEL_MONITOR_FAST_S = 10
+_CANCEL_MONITOR_IDLE_S = 30
 # How long to keep retrying a deferred fetch before giving up (§9.10). The
 # cancelled file stays download-LOCKED until Derek clears the cancel screen on
 # the printer; he's usually at the printer, but this buffers a cancel-and-walk-
@@ -5946,17 +5907,22 @@ def _cancel_monitor_tick():
     """One detection sweep: probe every printer's state + run the latch/edge
     detector, then service the deferred-fetch retry queue (§9.10) using the
     states just probed. Per-printer probes fan out so a slow/offline printer
-    doesn't block the rest. Best-effort throughout."""
+    doesn't block the rest. Best-effort throughout.
+
+    Returns True when the fleet is BUSY (any printer in-progress or on a terminal
+    screen) so the loop can poll on the FAST cadence; False when everything is
+    idle/offline (back off to the slow cadence). The return is the only signal
+    the adaptive loop needs — it never raises."""
     from concurrent.futures import ThreadPoolExecutor
     try:
         printer_map = locations_db.get_active_printer_map()
         _, fb_url = config_loader.get_api_urls()
     except Exception:
-        return
+        return False
     names = sorted({info.get('printer_name') for info in printer_map.values()
                     if info.get('printer_name')})
     if not names:
-        return
+        return False
 
     probed = {}
 
@@ -5999,6 +5965,20 @@ def _cancel_monitor_tick():
         except Exception:
             pass
 
+    # Tell the loop whether to stay FAST: any reachable printer that is NOT
+    # idle/ready is "busy" — printing, paused, ATTENTION (filament prompt), BUSY,
+    # or sitting on a terminal STOPPED/ERROR/FINISHED screen. Poll fast across
+    # that whole window so a cancel→restart is sampled in time and the deferred-
+    # fetch lock drains soon after the screen clears. Offline (None/'') and
+    # idle/ready → back off to the slow cadence.
+    busy = False
+    for st in probed.values():
+        s = str((st or {}).get('state', '')).upper()
+        if s and s not in _IDLE_READY_STATES:
+            busy = True
+            break
+    return busy
+
 
 def _process_pending_cancel_fetches(states, fb_url):
     """Service the deferred-fetch queue (§9.10): for each cancelled print whose
@@ -6021,6 +6001,8 @@ def _process_pending_cancel_fetches(states, fb_url):
             job_id = rec.get("job_id")
             filename = rec.get("filename")
             progress = float(rec.get("progress", 0.0) or 0.0)
+            kind = rec.get("kind", "cancel")  # 'cancel' (review) | 'complete' (auto-apply)
+            ambiguous = bool(rec.get("ambiguous", False))  # cancel-review "couldn't confirm" flag
             if not printer or job_id in (None, ""):
                 cancel_fetch_store.pop_pending(printer, job_id)
                 continue
@@ -6038,25 +6020,48 @@ def _process_pending_cancel_fetches(states, fb_url):
             if now - first_seen > _CANCEL_FETCH_MAX_AGE_S:
                 pct = max(0.0, min(1.0, progress)) * 100
                 hrs = _CANCEL_FETCH_MAX_AGE_S // 3600
-                state.add_log_entry(
-                    f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
-                    f"('{filename}', ~{pct:.0f}%) after {hrs}h — no partial deduct. "
-                    f"Weigh the spool to true it up.", "WARNING", "ffaa00")
+                if kind == "complete":
+                    state.add_log_entry(
+                        f"✅ Gave up fetching the completed print's gcode on {printer} "
+                        f"('{filename}') after {hrs}h — no deduct recorded. "
+                        f"Weigh the spool to true it up.", "WARNING", "ffaa00")
+                else:
+                    state.add_log_entry(
+                        f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
+                        f"('{filename}', ~{pct:.0f}%) after {hrs}h — no partial deduct. "
+                        f"Weigh the spool to true it up.", "WARNING", "ffaa00")
                 print_deduct_ledger.record_deduct(printer, job_id, filename=filename,
                                                   scale=progress, grams=0)
                 cancel_fetch_store.pop_pending(printer, job_id)
                 continue
 
-            # Gate on state: the file stays download-LOCKED while the printer is
-            # in STOPPED/ERROR (cancel screen up) or PRINTING (a new job). Only
-            # attempt once it's in a ready/idle state. Offline (None) → wait.
+            # Gate on state: the selected file is reliably download-UNLOCKED only
+            # once the printer is genuinely IDLE/READY (the print cleared off the
+            # screen). Any other reachable state means it's still busy/locked —
+            # PRINTING (new job), the cancel screen (STOPPED/ERROR), the finish
+            # screen (FINISHED), an ATTENTION filament-prompt, or a transient BUSY
+            # — so wait. Offline (None/'') → wait. (Allow-list, not deny-list, so
+            # we never hammer Buddy's tiny HTTP pool retrying a locked file mid-
+            # ATTENTION — the live Core One @91% bug, 2026-06-13.)
             st = states.get(printer)
             cur = str((st or {}).get("state", "")).upper() if st else ""
-            if not cur or cur in _INPROGRESS_PRINT_STATES or cur in _CANCEL_TERMINAL_STATES:
+            if cur not in _IDLE_READY_STATES:
                 continue
 
-            result = _create_pending_cancel_review(
-                printer, filename, job_id, progress, fb_url=fb_url)
+            if kind == "complete":
+                # Re-check the flag HERE, not just at the edge: a completion can
+                # sit queued behind the finish-screen lock for up to 72h without a
+                # ledger record. If the cutover is rolled back in that window (flag
+                # OFF + FilaBridge restarted), FilaBridge owns completions again —
+                # firing FCC's deduct now would double-bill (the ledger can't span
+                # processes). Abandon the queued completion instead.
+                if not _fcc_owns_completion_deduct():
+                    cancel_fetch_store.pop_pending(printer, job_id)
+                    continue
+                result = deduct_completed_print(printer, filename, job_id, fb_url=fb_url)
+            else:
+                result = _create_pending_cancel_review(
+                    printer, filename, job_id, progress, fb_url=fb_url, ambiguous=ambiguous)
             status = (result or {}).get("status")
             if status == "awaiting_fetch":
                 # Still couldn't fetch (the file 404'd despite a ready state — a
@@ -6177,21 +6182,46 @@ def _recover_one_print_latch(name, entry, fb_url):
         return True
 
     if cur == "FINISHED":
-        # Completed during the outage → FilaBridge owns completions (cancel-only
-        # first ship) → no deduct.
+        if _fcc_owns_completion_deduct():
+            # Phase-2: FCC owns completions → recover the completion deduct missed
+            # during the restart. Still FINISHED = unambiguous (a completion, not a
+            # cleared-then-reprinted job). Idempotent via the (printer, job_id)
+            # ledger, so a double restart can't double-deduct.
+            state.add_log_entry(
+                f"✅ Recovering a completion missed during an FCC restart on {name} "
+                f"('{filename}') — printer still FINISHED.", "INFO")
+            _dispatch_completion_edge(name, filename, job_id, fb_url)
+            with _PRINT_TRACKER_LOCK:
+                _PRINT_TRACKER[name] = {'state': cur}
+            return True
+        # Flag off → FilaBridge still owns completions → no deduct.
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {'state': cur}
         return False
 
-    # IDLE / READY / other: in-progress → cleared during the outage. Can't tell a
-    # cancelled-then-cleared print from a completed-then-cleared one → manual
-    # review, never a phantom deduct.
-    state.add_log_entry(
-        f"⚠️ A print ('{filename}', ~{pct:.0f}%) was in progress on {name} when FCC "
-        f"restarted; it's now {cur or 'idle'} so I can't tell if it was cancelled or "
-        f"finished — weigh the spool if it was cancelled.", "WARNING", "ffaa00")
+    if cur in _IDLE_READY_STATES:
+        # in-progress → cleared during the outage. Can't tell a cancelled-then-
+        # cleared print from a completed-then-cleared one → route it to the
+        # AMBIGUOUS REVIEW (download the now-unlocked file, compute the partial at
+        # the persisted progress, surface "couldn't confirm") instead of only
+        # telling Derek to weigh. Same machinery + wording as the live ambiguous
+        # edge; idempotent via the (printer, job_id) ledger + review store, so a
+        # double restart can't double-surface. NEVER auto-deducts.
+        state.add_log_entry(
+            f"❓ A print ('{filename}', ~{pct:.0f}%) was in progress on {name} when FCC "
+            f"restarted and it's now {cur or 'idle'} — surfacing a review (couldn't "
+            f"confirm completed vs cancelled).", "WARNING", "ffaa00")
+        _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url)
+        with _PRINT_TRACKER_LOCK:
+            _PRINT_TRACKER[name] = {'state': cur}
+        return True
+
+    # Any OTHER state (ATTENTION filament-prompt, BUSY, or an unknown transient) =
+    # the print is still mid-something, NOT ended. Restore the latch and defer to
+    # live edge-detection (mirrors the offline case) — the live monitor fires the
+    # cancel/ambiguous/completion edge when it actually reaches a terminal/idle.
     with _PRINT_TRACKER_LOCK:
-        _PRINT_TRACKER[name] = {'state': cur}
+        _PRINT_TRACKER[name] = dict(entry)
     return True
 
 
@@ -6206,14 +6236,76 @@ def _cancel_monitor_loop():
         except Exception:
             pass
     while True:
+        busy = False
         try:
-            _cancel_monitor_tick()
+            busy = _cancel_monitor_tick()
         except Exception as e:
             try:
                 state.logger.warning(f"cancel-monitor tick error: {e}")
             except Exception:
                 pass
-        time.sleep(_CANCEL_MONITOR_INTERVAL_S)
+        # Adaptive cadence: fast while the fleet is busy, slow when idle.
+        time.sleep(_CANCEL_MONITOR_FAST_S if busy else _CANCEL_MONITOR_IDLE_S)
+
+
+def _seed_printer_credentials_from_filabridge():
+    """FilaBridge Phase-2 cutover — credential gate. ONE-TIME, prime-only seed:
+    relocate each printer's ip_address + api_key OFF FilaBridge `GET /printers`
+    and ONTO its first-class Type:"Printer" row (printer_creds field), so the
+    whole PrusaLink read path (state/job/MMU probe, cancel-deduct download) stops
+    depending on FilaBridge being up. Pulls /printers ONLY when a Printer row is
+    still missing creds, and never overwrites a row that already has them (a
+    Settings edit wins). Idempotent — once every row has creds (or FilaBridge is
+    gone) it does nothing. Lives in the SERVING-process launch path (not module
+    import) because it makes a network call; mirrors the Phase-3/4 migrations'
+    load→migrate→backup→save shape. Best-effort: never blocks startup."""
+    try:
+        _cred_locs = locations_db.load_locations_list()
+    except Exception as _e:
+        state.logger.warning(f"printer-creds seed: could not load locations: {_e}")
+        return
+    _needs_seed = any(
+        isinstance(r, dict)
+        and str(r.get('Type', '')).strip().lower() == 'printer'
+        and not (isinstance(r.get(locations_db.PRINTER_CREDS_KEY), dict)
+                 and str((r.get(locations_db.PRINTER_CREDS_KEY) or {}).get('ip_address', '') or '').strip())
+        for r in (_cred_locs or [])
+    )
+    if not _needs_seed:
+        return
+    try:
+        _, _cred_fb_url = config_loader.get_api_urls()
+        _fb_printers = prusalink_api.fetch_all_filabridge_printers(_cred_fb_url)
+    except Exception as _e:
+        state.logger.warning(f"printer-creds seed: FilaBridge pull failed: {_e}")
+        return
+    if not _fb_printers:
+        state.logger.info(
+            "🔐 Printer-creds seed: FilaBridge /printers unreachable or empty; "
+            "will retry next boot (rows still missing creds).")
+        return
+    _cred_migrated, _cred_changed = locations_db.seed_printer_credentials(
+        _cred_locs, _fb_printers, prime_only=True)
+    if not _cred_changed:
+        return
+    try:
+        import shutil, time as _t
+        _stamp = _t.strftime('%Y%m%d-%H%M%S')
+        _backup = f"{locations_db.JSON_FILE}.pre-printer-creds-seed-{_stamp}.bak"
+        shutil.copy2(locations_db.JSON_FILE, _backup)
+        state.logger.info(f"📦 Backed up locations.json → {_backup}")
+        _prune_locations_backups()
+    except Exception as _bk_err:
+        state.logger.warning(f"Could not write pre-printer-creds-seed backup: {_bk_err}")
+    if locations_db.save_locations_list(_cred_migrated):
+        state.logger.info(
+            "🔐 Seeded printer credentials from FilaBridge onto Printer rows — "
+            "FilaBridge Phase-2 credential gate primed (FCC now reaches PrusaLink "
+            "without FilaBridge).")
+    else:
+        state.logger.error(
+            "❌ Printer-creds seed save FAILED — locations.json left unchanged; "
+            "will retry next boot.")
 
 
 def _start_cancel_monitor():
@@ -6229,7 +6321,8 @@ def _start_cancel_monitor():
                      daemon=True).start()
     try:
         state.logger.info(
-            f"🛑 Cancelled-print monitor started ({_CANCEL_MONITOR_INTERVAL_S}s poll, "
+            f"🛑 Cancelled-print monitor started (adaptive poll: "
+            f"{_CANCEL_MONITOR_FAST_S}s busy / {_CANCEL_MONITOR_IDLE_S}s idle, "
             f"dashboard-independent).")
     except Exception:
         pass
@@ -6371,7 +6464,6 @@ def api_dashboard_pulse():
         if 'status' in include and isinstance(logs_payload, dict) and 'status' in logs_payload:
             out['status'] = {
                 'spoolman': logs_payload['status'].get('spoolman', False),
-                'filabridge': logs_payload['status'].get('filabridge', False),
                 'audit_active': logs_payload.get('audit_active', False),
                 'undo_available': logs_payload.get('undo_available', False),
             }
@@ -6446,5 +6538,9 @@ if __name__ == '__main__':
     # without it (prod) this single process. The reloader PARENT skips it so dev
     # doesn't run two pollers.
     if (not _dev) or os.environ.get('WERKZEUG_RUN_MAIN', '').lower() == 'true':
+        # FilaBridge Phase-2 gate: relocate printer creds onto the Printer rows
+        # (one-time, prime-only) BEFORE the cancel monitor starts, so its first
+        # PrusaLink probe reads creds locally rather than from FilaBridge.
+        _seed_printer_credentials_from_filabridge()
         _start_cancel_monitor()
     app.run(host='0.0.0.0', port=8000, use_reloader=_dev, debug=False)
