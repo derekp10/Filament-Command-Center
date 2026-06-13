@@ -1803,6 +1803,14 @@ def api_get_locations():
         "Max Spools": 0,
         "parent_id": None,  # L271 Phase 2.5 — virtual top-level row
     })
+    # FilaBridge Phase-2: per-printer credentials (ip + api_key) live on the
+    # Printer rows but must NEVER reach the browser — locations.json has no
+    # secret-sentinel machinery the way config.json does. Strip them from this
+    # GET. The printer-map Settings editor reads creds through its own masked
+    # endpoint instead.
+    for _row in final_list:
+        if isinstance(_row, dict):
+            _row.pop(locations_db.PRINTER_CREDS_KEY, None)
     return jsonify(final_list)
 
 @app.route('/api/locations', methods=['POST'])
@@ -1878,6 +1886,18 @@ def api_save_location():
         else:
             new_entry['parent_id'] = locations_db.immediate_parent_for(
                 new_entry.get('LocationID'), current_list)
+    # FilaBridge Phase-2: printer_creds (ip/api_key) live on the Printer row but
+    # are REDACTED out of GET /api/locations, so the Location-Manager edit modal
+    # never receives them and would silently DROP them on a Name/Type edit (this
+    # POST replaces the whole row). Carry them forward from the old row (same
+    # printer, possibly renamed) unless the caller explicitly sent a creds object.
+    # Mirrors the parent_id-preserve above; the printer-map editor is the only
+    # surface that writes creds intentionally.
+    if (isinstance(new_entry, dict) and old_row is not None
+            and locations_db.PRINTER_CREDS_KEY not in new_entry):
+        _carry_creds = old_row.get(locations_db.PRINTER_CREDS_KEY)
+        if _carry_creds:
+            new_entry[locations_db.PRINTER_CREDS_KEY] = _carry_creds
     current_list.append(new_entry)
     current_list.sort(key=lambda x: str(x.get('LocationID', '')))
     locations_db.save_locations_list(current_list)
@@ -6216,6 +6236,66 @@ def _cancel_monitor_loop():
         time.sleep(_CANCEL_MONITOR_INTERVAL_S)
 
 
+def _seed_printer_credentials_from_filabridge():
+    """FilaBridge Phase-2 cutover — credential gate. ONE-TIME, prime-only seed:
+    relocate each printer's ip_address + api_key OFF FilaBridge `GET /printers`
+    and ONTO its first-class Type:"Printer" row (printer_creds field), so the
+    whole PrusaLink read path (state/job/MMU probe, cancel-deduct download) stops
+    depending on FilaBridge being up. Pulls /printers ONLY when a Printer row is
+    still missing creds, and never overwrites a row that already has them (a
+    Settings edit wins). Idempotent — once every row has creds (or FilaBridge is
+    gone) it does nothing. Lives in the SERVING-process launch path (not module
+    import) because it makes a network call; mirrors the Phase-3/4 migrations'
+    load→migrate→backup→save shape. Best-effort: never blocks startup."""
+    try:
+        _cred_locs = locations_db.load_locations_list()
+    except Exception as _e:
+        state.logger.warning(f"printer-creds seed: could not load locations: {_e}")
+        return
+    _needs_seed = any(
+        isinstance(r, dict)
+        and str(r.get('Type', '')).strip().lower() == 'printer'
+        and not (isinstance(r.get(locations_db.PRINTER_CREDS_KEY), dict)
+                 and str((r.get(locations_db.PRINTER_CREDS_KEY) or {}).get('ip_address', '') or '').strip())
+        for r in (_cred_locs or [])
+    )
+    if not _needs_seed:
+        return
+    try:
+        _, _cred_fb_url = config_loader.get_api_urls()
+        _fb_printers = prusalink_api.fetch_all_filabridge_printers(_cred_fb_url)
+    except Exception as _e:
+        state.logger.warning(f"printer-creds seed: FilaBridge pull failed: {_e}")
+        return
+    if not _fb_printers:
+        state.logger.info(
+            "🔐 Printer-creds seed: FilaBridge /printers unreachable or empty; "
+            "will retry next boot (rows still missing creds).")
+        return
+    _cred_migrated, _cred_changed = locations_db.seed_printer_credentials(
+        _cred_locs, _fb_printers, prime_only=True)
+    if not _cred_changed:
+        return
+    try:
+        import shutil, time as _t
+        _stamp = _t.strftime('%Y%m%d-%H%M%S')
+        _backup = f"{locations_db.JSON_FILE}.pre-printer-creds-seed-{_stamp}.bak"
+        shutil.copy2(locations_db.JSON_FILE, _backup)
+        state.logger.info(f"📦 Backed up locations.json → {_backup}")
+        _prune_locations_backups()
+    except Exception as _bk_err:
+        state.logger.warning(f"Could not write pre-printer-creds-seed backup: {_bk_err}")
+    if locations_db.save_locations_list(_cred_migrated):
+        state.logger.info(
+            "🔐 Seeded printer credentials from FilaBridge onto Printer rows — "
+            "FilaBridge Phase-2 credential gate primed (FCC now reaches PrusaLink "
+            "without FilaBridge).")
+    else:
+        state.logger.error(
+            "❌ Printer-creds seed save FAILED — locations.json left unchanged; "
+            "will retry next boot.")
+
+
 def _start_cancel_monitor():
     """Start the cancel-monitor daemon thread once per process. Called from the
     __main__ launch path only (never on a bare import, so tests don't spawn it).
@@ -6446,5 +6526,9 @@ if __name__ == '__main__':
     # without it (prod) this single process. The reloader PARENT skips it so dev
     # doesn't run two pollers.
     if (not _dev) or os.environ.get('WERKZEUG_RUN_MAIN', '').lower() == 'true':
+        # FilaBridge Phase-2 gate: relocate printer creds onto the Printer rows
+        # (one-time, prime-only) BEFORE the cancel monitor starts, so its first
+        # PrusaLink probe reads creds locally rather than from FilaBridge.
+        _seed_printer_credentials_from_filabridge()
         _start_cancel_monitor()
     app.run(host='0.0.0.0', port=8000, use_reloader=_dev, debug=False)

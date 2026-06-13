@@ -28,24 +28,53 @@ def clear_probe_cache():
 
 
 def fetch_printer_credentials(filabridge_url: str, printer_name: str):
-    """
-    Fetches the IP address and API key for a given printer name from FilaBridge.
+    """Return ``{'ip_address','api_key'}`` for a printer, or ``None``.
+
+    FilaBridge Phase-2 cutover: credentials now live on the first-class
+    Type:"Printer" row in locations.json (``printer_creds``), read here via
+    ``locations_db.get_printer_credentials``. ``filabridge_url`` is retained for
+    the call-site/back-compat contract (every consumer + test stub passes it) but
+    is now UNUSED — the same pattern Scope 1 used to retire ``_fb_spool_location``'s
+    FilaBridge read. The one-time boot seed (``fetch_all_filabridge_printers`` →
+    ``locations_db.seed_printer_credentials``) is what primes the rows from
+    FilaBridge before it is decommissioned.
+
+    Lazy local import of ``locations_db`` to avoid a circular import at module
+    load (``locations_db`` / ``app`` import ``prusalink_api``).
     """
     try:
-        with perf_trace.span("prusalink.fetch_creds"):
+        import locations_db
+        return locations_db.get_printer_credentials(printer_name)
+    except Exception as e:
+        print(f"Error reading printer credentials for {printer_name!r}: {e}")
+        return None
+
+
+def fetch_all_filabridge_printers(filabridge_url: str) -> Dict[str, Dict]:
+    """Pull the full ``{printer_name: {ip_address, api_key}}`` map from FilaBridge
+    ``GET /printers``. Used ONLY by the one-time boot credential SEED
+    (``locations_db.seed_printer_credentials``) while FilaBridge is still up —
+    NOT on any live path. Returns ``{}`` on any failure (fail-soft: a missing
+    FilaBridge just means the seed retries next boot)."""
+    out: Dict[str, Dict] = {}
+    try:
+        with perf_trace.span("prusalink.fetch_all_printers"):
             response = requests.get(f"{filabridge_url}/printers", timeout=5)
         if response.ok:
-            data = response.json()
-            printers = data.get('printers', {})
-            for pid, pdata in printers.items():
-                if pdata.get('name') == printer_name:
-                    return {
-                        "ip_address": pdata.get("ip_address"),
-                        "api_key": pdata.get("api_key")
-                    }
+            printers = (response.json() or {}).get('printers', {}) or {}
+            for _pid, pdata in printers.items():
+                if not isinstance(pdata, dict):
+                    continue
+                name = pdata.get('name')
+                if not name:
+                    continue
+                out[str(name)] = {
+                    "ip_address": pdata.get("ip_address"),
+                    "api_key": pdata.get("api_key"),
+                }
     except Exception as e:
-        print(f"Error fetching printer credentials from FilaBridge: {e}")
-    return None
+        print(f"Error fetching all printers from FilaBridge: {e}")
+    return out
 
 FB_PARSE_STATUS = ""
 

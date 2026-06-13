@@ -806,6 +806,120 @@ def get_active_printer_map(loc_list=None):
     return build_printer_map_from_rows(loc_list)
 
 
+# --- FilaBridge Phase-2 cutover: printer credentials on the Printer row -------
+# The whole PrusaLink read path (state/job/MMU probe, cancel-deduct download)
+# needs each printer's ip_address + api_key. They used to come from FilaBridge
+# `GET /printers` (prusalink_api.fetch_printer_credentials) — the ONE hard
+# FilaBridge dependency. They now live on the first-class Type:"Printer" row as
+# `printer_creds:{ip_address, api_key}`, so FCC reaches PrusaLink without
+# FilaBridge. Stored ON the row (identified by its stable LocationID) but looked
+# up by the row's `Name` — the exact contract every consumer + test stub passes
+# — so an editor rename (which syncs Name on the SAME row) keeps creds attached
+# (no Name-keyed orphan). The Phase-4 toolheads rebuild only sets row['toolheads']
+# and the printer_map PUT's Name-sync only sets row['Name'], so this sibling
+# field survives both. ⚠️ api_key is a secret: redact `printer_creds` from any
+# API that ships rows to the browser (see app.py /api/locations).
+PRINTER_CREDS_KEY = 'printer_creds'
+
+
+def get_printer_credentials(printer_name, loc_list=None):
+    """Return ``{'ip_address','api_key'}`` for the Printer row whose ``Name``
+    matches ``printer_name``, or ``None`` when there's no usable ip to probe with.
+
+    Mirrors FilaBridge's old ``/printers`` name-match contract so
+    ``prusalink_api.fetch_printer_credentials`` can swap its source with zero
+    caller change. ``api_key`` may be ``None`` (some PrusaLink installs have no
+    key — callers already treat it as optional); only a missing ``ip_address``
+    yields ``None``.
+    """
+    name = str(printer_name or '')
+    if not name:
+        return None
+    if loc_list is None:
+        loc_list = load_locations_list()
+    for row in (loc_list or []):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        if str(row.get('Name', '')) != name:
+            continue
+        creds = row.get(PRINTER_CREDS_KEY)
+        if not isinstance(creds, dict):
+            return None
+        ip = str(creds.get('ip_address', '') or '').strip()
+        if not ip:
+            return None
+        return {'ip_address': ip, 'api_key': creds.get('api_key')}
+    return None
+
+
+def seed_printer_credentials(loc_list, creds_by_name, prime_only=True):
+    """Pure migration: write ``printer_creds`` onto each Printer row from a
+    ``{printer_name: {ip_address, api_key}}`` dict (pulled once from FilaBridge
+    ``/printers`` while it's still up — see app.py's boot seed).
+
+    ``prime_only=True`` (the boot default) NEVER overwrites a row that already
+    has a usable ip, so a manual Settings edit is never reverted by the auto-pull.
+    Returns ``(loc_list, changed)``. Idempotent — once every Printer row carries
+    creds (or FilaBridge is gone) it changes nothing.
+    """
+    if not isinstance(loc_list, list) or not isinstance(creds_by_name, dict):
+        return loc_list, False
+    changed = False
+    for row in loc_list:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        existing = row.get(PRINTER_CREDS_KEY)
+        has_ip = (isinstance(existing, dict)
+                  and bool(str(existing.get('ip_address', '') or '').strip()))
+        if prime_only and has_ip:
+            continue
+        src = creds_by_name.get(str(row.get('Name', '')))
+        if not isinstance(src, dict):
+            continue
+        ip = str(src.get('ip_address', '') or '').strip()
+        if not ip:
+            continue
+        new_creds = {'ip_address': ip, 'api_key': src.get('api_key')}
+        if existing != new_creds:
+            row[PRINTER_CREDS_KEY] = new_creds
+            changed = True
+    return loc_list, changed
+
+
+def set_printer_credentials(loc_list, printer_name, ip_address, api_key):
+    """Set/clear ``printer_creds`` on the Printer row matching ``Name`` (the
+    Settings-editor write path). A blank ip_address REMOVES the creds. Returns
+    ``(loc_list, changed)``. Does not persist — the caller saves.
+    """
+    if not isinstance(loc_list, list):
+        return loc_list, False
+    name = str(printer_name or '')
+    changed = False
+    for row in loc_list:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        if str(row.get('Name', '')) != name:
+            continue
+        ip = str(ip_address or '').strip()
+        if not ip:
+            if PRINTER_CREDS_KEY in row:
+                row.pop(PRINTER_CREDS_KEY, None)
+                changed = True
+            return loc_list, changed
+        new_creds = {'ip_address': ip, 'api_key': (api_key if api_key else None)}
+        if row.get(PRINTER_CREDS_KEY) != new_creds:
+            row[PRINTER_CREDS_KEY] = new_creds
+            changed = True
+        return loc_list, changed
+    return loc_list, changed
+
+
 # Recorded printer→room mapping (L271 plan, Derek 2026-06-03). Used ONLY as a
 # fallback when a printer's room can't be auto-derived from a toolhead child's
 # Location field — e.g. CORE1 is a dual-role printer with no toolhead children
