@@ -114,7 +114,6 @@ def _patch_eject_io(monkeypatch, *, location, physical_source, physical_source_s
     )
     monkeypatch.setattr(config_loader, "load_config", lambda: {"printer_map": {}})
     monkeypatch.setattr(config_loader, "get_api_urls", lambda: ("http://sm", "http://fb"))
-    monkeypatch.setattr(logic, "_fb_spool_location", lambda sid, url: None)
     monkeypatch.setattr(smapi, "get_spools_at_location_detailed", lambda loc: [])
 
     def fake_update(sid, payload):
