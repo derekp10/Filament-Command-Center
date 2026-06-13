@@ -959,10 +959,8 @@ const _renderLogsPayload = (d, force = false) => {
     _updateLogPill(d.logs || []);
 
     const sSpool = document.getElementById('st-spoolman');
-    const sFila = document.getElementById('st-filabridge');
     if (d.status) {
         if (sSpool) sSpool.className = `status-dot ${d.status.spoolman ? 'status-on' : 'status-off'}`;
-        if (sFila) sFila.className = `status-dot ${d.status.filabridge ? 'status-on' : 'status-off'}`;
     }
 
     if (d.audit_active !== undefined && d.audit_active !== state.lastAuditState) {
@@ -1168,11 +1166,9 @@ const _dashboardPulseTick = () => {
             if (payload.logs) {
                 _renderLogsPayload(payload.logs);
             } else if (payload.status) {
-                // No log entries but still got status — repaint the dots only.
+                // No log entries but still got status — repaint the dot only.
                 const sSpool = document.getElementById('st-spoolman');
-                const sFila = document.getElementById('st-filabridge');
                 if (sSpool) sSpool.className = `status-dot ${payload.status.spoolman ? 'status-on' : 'status-off'}`;
-                if (sFila) sFila.className = `status-dot ${payload.status.filabridge ? 'status-on' : 'status-off'}`;
                 if (payload.status.audit_active !== undefined && payload.status.audit_active !== state.lastAuditState) {
                     state.lastAuditState = payload.status.audit_active;
                     state.auditActive = payload.status.audit_active;

@@ -405,9 +405,6 @@ def dashboard():
     if ip == '0.0.0.0': ip = '127.0.0.1'
     port = cfg.get('spoolman_port', 7912)
     sm_url = f"http://{ip}:{port}"
-    # [Code Guardian] Fetch FilaBridge URL for Dashboard Button
-    _, fb_api_url = config_loader.get_api_urls()
-    fb_ui_url = fb_api_url.replace('/api', '')
     buy_more_url_template = cfg.get('buy_more_url_template', '')
     
     # Re-read .build_info on every dashboard render so a post-commit hook
@@ -425,7 +422,6 @@ def dashboard():
         build_commit_sha=live_sha or '',
         build_commit_ts=live_ts or 0,
         spoolman_url=sm_url,
-        filabridge_url=fb_ui_url,
         buy_more_template=buy_more_url_template,
     )
 
@@ -5466,33 +5462,16 @@ def api_get_logs_route():
     # Cheap pre-flight: clear any abandoned audit session before the
     # frontend sees audit_active=True and auto-opens the panel.
     _check_audit_idle_timeout()
-    sm_url, fb_url = config_loader.get_api_urls()
-    sm_ok, fb_ok = False, False
+    sm_url, _ = config_loader.get_api_urls()
+    sm_ok = False
     try: sm_ok = requests.get(f"{sm_url}/api/v1/health", timeout=3).ok
     except: pass
-    
-    try:
-        # FilaBridge liveness probe (drives the status dot). Use /print-errors
-        # — the lightweight endpoint we need anyway — NOT /status. The dedicated
-        # /status endpoint polls every printer's live PrusaLink state and takes
-        # ~5-6s to return on a prod-sized fleet, well past the old timeout=3, so
-        # it timed out on EVERY heartbeat and pinned the dot RED even though
-        # FilaBridge was up and serving (Derek 2026-06-02 "constantly red, even
-        # though it's active"). It also added ~6s of latency to every dashboard
-        # pulse since this runs in the /api/logs heartbeat path. /print-errors
-        # returns ~instantly. (The error-poll + auto-recover that used to ride
-        # this response was retired in the FilaBridge Phase-2 cutover, Phase E
-        # Slice 2; this is now liveness-only — the probe + dot go together in
-        # Slice 4.)
-        fb_resp = requests.get(f"{fb_url}/print-errors", timeout=4)
-        fb_ok = fb_resp.ok
-    except: pass
-    
+
     return jsonify({
         "logs": state.RECENT_LOGS,
         "undo_available": len(state.UNDO_STACK) > 0,
         "audit_active": state.AUDIT_SESSION.get('active', False),
-        "status": {"spoolman": sm_ok, "filabridge": fb_ok}
+        "status": {"spoolman": sm_ok}
     })
 
 
@@ -5519,10 +5498,9 @@ _VALID_PULSE_SECTIONS = frozenset({
 
 def _pulse_section_logs():
     """Invoke the /api/logs handler and unwrap its JSON. Preserves the
-    audit-idle-watchdog and FilaBridge error auto-recover side effects
-    because the bulk endpoint REPLACES the legacy heartbeat that used
-    to drive them - losing them would silently break audit cancellation
-    and recovery."""
+    audit-idle-watchdog side effect because the bulk endpoint REPLACES the
+    legacy heartbeat that used to drive it - losing it would silently break
+    audit cancellation."""
     resp = api_get_logs_route()
     return resp.get_json()
 
@@ -6486,7 +6464,6 @@ def api_dashboard_pulse():
         if 'status' in include and isinstance(logs_payload, dict) and 'status' in logs_payload:
             out['status'] = {
                 'spoolman': logs_payload['status'].get('spoolman', False),
-                'filabridge': logs_payload['status'].get('filabridge', False),
                 'audit_active': logs_payload.get('audit_active', False),
                 'undo_available': logs_payload.get('undo_available', False),
             }

@@ -45,9 +45,10 @@ def test_pulse_buffer_matches_legacy_endpoint(api_base_url, require_server):
 
 
 def test_pulse_status_section_has_expected_keys(api_base_url, require_server):
-    """status section must always include spoolman + filabridge booleans
-    plus audit_active + undo_available so the frontend can repaint the
-    nav-bar dots from one payload."""
+    """status section must always include the spoolman boolean plus
+    audit_active + undo_available so the frontend can repaint the nav-bar
+    dot from one payload. (The FilaBridge liveness dot was retired in the
+    FilaBridge Phase-2 cutover, Phase E Slice 4.)"""
     r = requests.get(
         f"{api_base_url}/api/dashboard_pulse?include=status", timeout=10
     )
@@ -55,7 +56,8 @@ def test_pulse_status_section_has_expected_keys(api_base_url, require_server):
     payload = r.json()
     assert "status" in payload
     status = payload["status"]
-    for key in ("spoolman", "filabridge", "audit_active", "undo_available"):
+    assert "filabridge" not in status  # retired in Phase E Slice 4
+    for key in ("spoolman", "audit_active", "undo_available"):
         assert key in status, f"status section missing '{key}': {status}"
         assert isinstance(status[key], bool), (
             f"status.{key} should be bool, got {type(status[key]).__name__}"
@@ -87,9 +89,9 @@ def test_pulse_logs_and_status_share_one_health_check(
     api_base_url, require_server
 ):
     """When both logs and status are requested, the response must
-    contain BOTH sections and the spoolman/filabridge bits must agree
-    between them — we run the underlying health check at most once
-    per request so they can't disagree."""
+    contain BOTH sections and the spoolman bit must agree between them —
+    we run the underlying health check at most once per request so they
+    can't disagree."""
     r = requests.get(
         f"{api_base_url}/api/dashboard_pulse?include=logs,status", timeout=10
     )
@@ -98,10 +100,6 @@ def test_pulse_logs_and_status_share_one_health_check(
     assert (
         payload["logs"]["status"]["spoolman"]
         == payload["status"]["spoolman"]
-    )
-    assert (
-        payload["logs"]["status"]["filabridge"]
-        == payload["status"]["filabridge"]
     )
 
 
