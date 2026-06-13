@@ -308,13 +308,19 @@
         const nm = _esc(name);
         const ip = _esc(c.ip_address || '');
         const isSet = String(c.api_key || '') === SECRET_SENTINEL;
-        return `<div class="d-flex align-items-center gap-2 py-1 pc-row" data-printer="${nm}">
-            <span class="small text-white text-truncate" style="min-width:140px;max-width:160px;" title="${nm}">${nm}</span>
-            <input class="form-control form-control-sm pc-ip bg-dark text-white border-secondary" type="text" value="${ip}" placeholder="PrusaLink IP (e.g. 192.168.1.50)" autocomplete="off" style="max-width:190px;">
-            <input class="form-control form-control-sm pc-key bg-dark text-white border-secondary" type="password" value="" placeholder="${isSet ? '•••••• saved — blank keeps it' : 'API key'}" autocomplete="new-password" style="max-width:180px;">
-            ${isSet ? '<span class="badge bg-success" title="An API key is saved">✓ key</span>' : ''}
-            <button type="button" class="btn btn-sm btn-info pc-save" title="Save this printer's connection">Save</button>
-            <span class="small pc-status" style="color:rgba(255,255,255,0.6);"></span>
+        // display:contents → the 4 cells below become direct items of the
+        // #pc-rows grid, so every row's columns line up with the header. (Exactly
+        // 4 cells to match grid-template-columns; the action cell holds the
+        // badge + Save + status so the count stays 4.)
+        return `<div class="pc-row" data-printer="${nm}" style="display:contents;">
+            <span class="small text-white" title="${nm}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${nm}</span>
+            <input class="form-control form-control-sm pc-ip bg-dark text-white border-secondary" type="text" value="${ip}" placeholder="192.168.1.50" autocomplete="off" style="min-width:0;">
+            <input class="form-control form-control-sm pc-key bg-dark text-white border-secondary" type="password" value="" placeholder="${isSet ? '•••••• blank keeps it' : 'API key'}" autocomplete="new-password" style="min-width:0;">
+            <span class="d-flex align-items-center gap-2">
+                ${isSet ? '<span class="badge bg-success" title="An API key is saved">✓ key</span>' : ''}
+                <button type="button" class="btn btn-sm btn-info pc-save" title="Save this printer's connection">Save</button>
+                <span class="small pc-status" style="color:rgba(255,255,255,0.6);"></span>
+            </span>
         </div>`;
     }
 
