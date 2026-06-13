@@ -946,14 +946,7 @@ const _renderLogsPayload = (d, force = false) => {
         logsEl.innerHTML = d.logs.map(l => {
             let extraHtml = '';
             let extraClass = '';
-            if (l.meta && l.meta.type === 'filabridge_error') {
-                // encodeURIComponent does NOT escape the apostrophe, so also
-                // %27-encode it before embedding in the single-quoted onclick —
-                // otherwise a printer name with a ' breaks out of the JS string.
-                const dataStr = encodeURIComponent(JSON.stringify(l.meta)).replace(/'/g, '%27');
-                extraClass = ' filabridge-error-log';
-                extraHtml = `<button class="btn btn-sm btn-outline-warning ms-2 py-0 px-1" onclick="window.openFilaBridgeRecovery('${dataStr}')">💊 Fix</button>`;
-            } else if (l.meta && l.meta.type === 'cancel_deduct_pending') {
+            if (l.meta && l.meta.type === 'cancel_deduct_pending') {
                 // Cancelled-print partial deduct awaiting preview/confirm (§9.7).
                 // openCancelReview() takes no args (it lists ALL pending), so no
                 // meta is interpolated — nothing to inject.

@@ -1,7 +1,6 @@
 import requests
 import re
 import threading
-import traceback
 from typing import Dict, Optional
 import perf_trace  # L3 latency probe — zero-cost when no trace is active
 import bgcode_decode  # binary-gcode (.bgcode) decoder for the cancel prefix-parse
@@ -76,7 +75,6 @@ def fetch_all_filabridge_printers(filabridge_url: str) -> Dict[str, Dict]:
         print(f"Error fetching all printers from FilaBridge: {e}")
     return out
 
-FB_PARSE_STATUS = ""
 
 def _parse_weights_from_match(match) -> Dict[int, float]:
     weights_str = match.group(1)
@@ -103,46 +101,6 @@ def parse_footer_usage(gcode_content: str) -> Dict[int, float]:
         return {}
     m = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', gcode_content)
     return _parse_weights_from_match(m) if m else {}
-
-
-def download_gcode_and_parse_usage(ip_address: str, api_key: str, filename: str) -> Optional[Dict[int, float]]:
-    """Download a finished/errored print's gcode and parse the per-toolhead
-    ``filament used [g]`` footer (the slicer's FULL-job estimate) → ``{tool: grams}``.
-    Used by the FilaBridge error-recovery path (``api_fb_aggressive_parse`` /
-    ``_auto_recover_task``) and, after the Phase-2 cutover, as the source for FCC's
-    own FINISHED-completion deduct — the footer IS the complete-print deduct,
-    exactly what FilaBridge billed (and FilaBridge's parser does no better: same
-    footer, no M486 handling).
-
-    Reuses ``download_gcode_content``, which transparently decodes binary G-code
-    (``.bgcode`` — Derek's entire fleet). The old Range fast-path was REMOVED: a
-    2 MB tail slice of a ``.bgcode`` file is heatshrink+MeatPack-compressed bytes
-    the footer regex can never match (and the footer lives near the FRONT of the
-    container, not the tail), so it only ever worked on the now-extinct plain-ASCII
-    gcode and silently read ZERO on the real binary fleet. ``FB_PARSE_STATUS`` is
-    still maintained for the recovery modal's progress poll. Returns None on
-    failure.
-    """
-    global FB_PARSE_STATUS
-    FB_PARSE_STATUS = f"Downloading + decoding {filename}..."
-    try:
-        content = download_gcode_content(ip_address, api_key, filename)
-    except Exception as e:
-        FB_PARSE_STATUS = f"Download/decode failed: {e}"
-        print(f"Error downloading/decoding gcode for {filename}: {e}")
-        traceback.print_exc()
-        return None
-    if content is None:
-        FB_PARSE_STATUS = f"Failed to download {filename} from PrusaLink."
-        print(f"Failed to download {filename} from PrusaLink.")
-        return None
-    match = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', content)
-    if match:
-        FB_PARSE_STATUS = "Decoded"
-        return _parse_weights_from_match(match)
-    FB_PARSE_STATUS = f"No filament usage metadata found in {filename}."
-    print(f"No filament usage metadata found in {filename}")
-    return None
 
 
 # --- Cancelled-print partial usage (FilaBridge absorption §9.2, slice 3) ------
@@ -567,17 +525,3 @@ def get_printer_mmu_flag(filabridge_url: str, printer_name: str) -> Optional[boo
     except Exception:
         pass
     return None
-
-
-def acknowledge_filabridge_error(filabridge_url: str, error_id: str) -> bool:
-    """
-    Acknowledges the FilaBridge error to dismiss it from the server.
-    """
-    try:
-        # Ensure we construct the URL properly, POST /api/print-errors/:id/acknowledge
-        url = f"{filabridge_url}/print-errors/{error_id}/acknowledge"
-        response = requests.post(url, timeout=5)
-        return response.ok
-    except Exception as e:
-        print(f"Failed to acknowledge FilaBridge error {error_id}: {e}")
-    return False

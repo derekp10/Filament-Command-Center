@@ -9,6 +9,7 @@ import print_deduct_ledger # type: ignore
 import cancel_review_store # type: ignore
 import cancel_fetch_store # type: ignore
 import print_tracker_store # type: ignore
+import prusalink_api # type: ignore
 import logic # type: ignore
 import csv
 import os
@@ -1247,25 +1248,6 @@ def api_prusament_apply_weights():
 
 
 import external_parsers # Added for plugin architecture
-
-
-# L347 — bound the filabridge_error_snapshots.json size at the most-recent
-# MAX_FB_ERROR_SNAPSHOTS entries. Each filabridge error appends an entry
-# that's never deleted; on a long-running prod install this grows forever
-# (~1KB per entry — the cost is unbounded disk + the JSON parse on every
-# recovery lookup, not catastrophic but real). Python 3.7+ dict preserves
-# insertion order, so dropping the head N entries evicts the oldest.
-MAX_FB_ERROR_SNAPSHOTS = 100
-
-
-def _evict_old_fb_snapshots(snapshots, cap=MAX_FB_ERROR_SNAPSHOTS):
-    """Return a dict containing at most `cap` of the most-recently-inserted
-    entries from `snapshots`. Insertion order is preserved by Python dicts
-    (3.7+), so slicing the tail of items() gives the newest survivors."""
-    if not isinstance(snapshots, dict) or len(snapshots) <= cap:
-        return snapshots
-    items = list(snapshots.items())
-    return dict(items[-cap:])
 
 
 @app.route('/api/external/search', methods=['GET'])
@@ -4065,61 +4047,6 @@ def api_smart_move():
         confirm_active_print=bool(payload.get('confirm_active_print', False)),
     ))
 
-# --- FILABRIDGE ERROR RECOVERY ROUTES ---
-
-import prusalink_api
-
-@app.route('/api/fb_recovery_spools', methods=['GET'])
-def api_fb_recovery_spools():
-    import os
-    printer_name = request.args.get('printer_name')
-    error_id = request.args.get('error_id')
-    if not printer_name:
-        return jsonify({"success": False, "msg": "Missing printer_name"})
-        
-    if error_id:
-        try:
-            snap_path = os.path.join(os.path.dirname(__file__), "data", "filabridge_error_snapshots.json")
-            if os.path.exists(snap_path):
-                with open(snap_path, 'r', encoding='utf-8') as f:
-                    snapshots = json.load(f)
-                if error_id in snapshots:
-                    return jsonify({"success": True, "spools": snapshots[error_id]})
-        except Exception:
-            pass
-        # L347 — snapshot store is bounded at MAX_FB_ERROR_SNAPSHOTS via
-        # _evict_old_fb_snapshots(); an older error_id may have been
-        # evicted. Falling through here returns the LIVE spool state at
-        # the requested printer instead of the at-error snapshot. For
-        # most recovery flows the live state is what the user actually
-        # wants anyway; the snapshot was just a "what was on the
-        # toolhead at the moment FilaBridge errored" reference. Missing
-        # snapshot is NOT an error — only a missing printer_name is.
-    
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
-
-    # Find which FilaBridge toolheads map to which spoolman location keys
-    # Typically, the location ID is the key in printer_map, and it has 'printer_name'
-    target_locations = []
-    for loc_id, p_info in printer_map.items():
-        if p_info.get('printer_name') == printer_name:
-            target_locations.append(loc_id)
-            
-    if not target_locations:
-        return jsonify({"success": False, "msg": "Printer name not found in printer_map"})
-        
-    spools = []
-    for loc in target_locations:
-        loc_spools = spoolman_api.get_spools_at_location_detailed(loc)
-        spools.extend(loc_spools)
-        
-    return jsonify({"success": True, "spools": spools})
-
-@app.route('/api/fb_parse_status', methods=['GET'])
-def api_fb_parse_status():
-    import prusalink_api
-    return jsonify({"msg": prusalink_api.FB_PARSE_STATUS})
-
 
 def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
     """Deduct per-toolhead grams from the spools currently mapped to
@@ -4164,9 +4091,7 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
                 if spoolman_api.update_spool(sid, {"used_weight": new_used}):
                     spools_updated += 1
                     info = spoolman_api.format_spool_display(spool_data)
-                    label = strategy_label or (
-                        "Fast-Fetch" if "Fast" in prusalink_api.FB_PARSE_STATUS else "RAM-Fetch"
-                    )
+                    label = strategy_label or "Auto-deduct"
                     state.add_log_entry(
                         f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({label}): "
                         f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]",
@@ -4775,88 +4700,6 @@ def api_cancel_deduct_dismiss():
         f"🚫 Dismissed cancel-deduct review for {printer} (job {job_id}) — "
         f"no weight deducted.", "INFO")
     return jsonify({"status": "dismissed"})
-
-
-@app.route('/api/fb_aggressive_parse', methods=['POST'])
-def api_fb_aggressive_parse():
-    data = request.json
-    printer_name = data.get('printer_name')
-    filename = data.get('filename')
-    error_id = data.get('error_id')
-    
-    if not all([printer_name, filename, error_id]):
-        return jsonify({"success": False, "msg": "Missing parameters"})
-        
-    _, fb_url = config_loader.get_api_urls()
-    fb_base = fb_url.replace('/api', '')
-    
-    # 1. Fetch credentials
-    creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
-    if not creds:
-        return jsonify({"success": False, "msg": "Could not fetch printer credentials from FilaBridge"})
-        
-    ip_addr = creds['ip_address']
-    api_key = creds['api_key']
-    
-    # 2. Parse GCode
-    state.add_log_entry(f"🔍 Starting aggressive parse for '{filename}' on {printer_name}...", "INFO")
-    usage_map = prusalink_api.download_gcode_and_parse_usage(ip_addr, api_key, filename)
-    
-    if not usage_map:
-        return jsonify({"success": False, "msg": "Failed to parse filament usage from GCode"})
-        
-    # 3. Apply weights to mapped spools via the shared deduct loop (the same
-    #    loop the cancelled-print partial deduct reuses — see
-    #    _apply_usage_to_printer).
-    spools_updated, _ = _apply_usage_to_printer(printer_name, usage_map, fb_url)
-
-    # 4. Acknowledge Error
-    if spools_updated > 0:
-        ack = prusalink_api.acknowledge_filabridge_error(fb_url, error_id)
-        if ack:
-            return jsonify({"success": True, "msg": f"Successfully parsed and updated {spools_updated} spools."})
-        else:
-            return jsonify({"success": True, "msg": "Updated spools but failed to acknowledge error."})
-            
-    return jsonify({"success": False, "msg": "Parsed usage but no matching active spools found."})
-
-@app.route('/api/fb_manual_recovery', methods=['POST'])
-def api_fb_manual_recovery():
-    data = request.json
-    error_id = data.get('error_id')
-    updates = data.get('updates', {}) # dict of sid -> weight_used (diff)
-    
-    if not error_id:
-        return jsonify({"success": False, "msg": "Missing error_id"})
-        
-    spools_updated = 0
-    for sid, weight_used in updates.items():
-        try:
-            w = float(weight_used)
-            if w > 0:
-                spool_data = spoolman_api.get_spool(sid)
-                if spool_data:
-                    used = float(spool_data.get('used_weight', 0))
-                    initial = float(spool_data.get('initial_weight', 0) or 0)
-                    remaining = max(0, initial - used)
-                    new_remaining = max(0, remaining - w)
-                    new_used = used + w
-                    if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-                        spools_updated += 1
-                        info = spoolman_api.format_spool_display(spool_data)
-                        state.add_log_entry(f"✔️ Manually deducted {w:.1f}g from Spool #{sid}: [{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]", "SUCCESS", info['color'])
-                    else:
-                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-                        state.add_log_entry(
-                            f"❌ Failed to manually deduct from Spool #{sid}: {err}", "ERROR", "ff4444"
-                        )
-        except ValueError:
-            pass
-            
-    _, fb_url = config_loader.get_api_urls()
-    prusalink_api.acknowledge_filabridge_error(fb_url, error_id)
-
-    return jsonify({"success": True, "msg": f"Updated {spools_updated} spools."})
 
 
 @app.route('/api/audit_session', methods=['GET'])
