@@ -92,75 +92,42 @@ def _parse_weights_from_match(match) -> Dict[int, float]:
     return usage
 
 def download_gcode_and_parse_usage(ip_address: str, api_key: str, filename: str) -> Optional[Dict[int, float]]:
-    """
-    Downloads the gcode file from PrusaLink and parses the 'filament used [g]=' metadata.
-    Returns a dictionary mapping toolhead index to grams used.
+    """Download a finished/errored print's gcode and parse the per-toolhead
+    ``filament used [g]`` footer (the slicer's FULL-job estimate) → ``{tool: grams}``.
+    Used by the FilaBridge error-recovery path (``api_fb_aggressive_parse`` /
+    ``_auto_recover_task``) and, after the Phase-2 cutover, as the source for FCC's
+    own FINISHED-completion deduct — the footer IS the complete-print deduct,
+    exactly what FilaBridge billed (and FilaBridge's parser does no better: same
+    footer, no M486 handling).
+
+    Reuses ``download_gcode_content``, which transparently decodes binary G-code
+    (``.bgcode`` — Derek's entire fleet). The old Range fast-path was REMOVED: a
+    2 MB tail slice of a ``.bgcode`` file is heatshrink+MeatPack-compressed bytes
+    the footer regex can never match (and the footer lives near the FRONT of the
+    container, not the tail), so it only ever worked on the now-extinct plain-ASCII
+    gcode and silently read ZERO on the real binary fleet. ``FB_PARSE_STATUS`` is
+    still maintained for the recovery modal's progress poll. Returns None on
+    failure.
     """
     global FB_PARSE_STATUS
-    filename = filename.lstrip('/')
-    url = f"http://{ip_address}/{filename}"
-    headers = {}
-    if api_key:
-        headers['X-Api-Key'] = api_key
-
-    # Try Range request first (last 2MB)
-    FB_PARSE_STATUS = f"Requesting Fast Meta-block for {filename}..."
+    FB_PARSE_STATUS = f"Downloading + decoding {filename}..."
     try:
-        range_headers = headers.copy()
-        range_headers['Range'] = 'bytes=-2097152'
-        response = requests.get(url, headers=range_headers, timeout=10)
-        
-        if response.ok:
-            if response.status_code == 206:
-                content = response.text
-                match = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', content)
-                if match:
-                    FB_PARSE_STATUS = "Fast"
-                    return _parse_weights_from_match(match)
-                else:
-                    FB_PARSE_STATUS = "Metadata not found in 2MB tail, falling back to full download..."
-            elif response.status_code == 200:
-                # PrusaLink completely ignored the Range header and fed us the entire file
-                content = response.text
-                match = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', content)
-                if match:
-                    FB_PARSE_STATUS = "RAM"
-                    return _parse_weights_from_match(match)
-                else:
-                    FB_PARSE_STATUS = "Full file provided automatically but metadata not found."
-            else:
-                FB_PARSE_STATUS = f"Range request rejected (HTTP {response.status_code}), falling back to full download..."
-        else:
-            FB_PARSE_STATUS = f"Range request failed (HTTP {response.status_code}), falling back to full download..."
-    except requests.exceptions.ReadTimeout:
-        FB_PARSE_STATUS = f"Range request timed out over PrusaLink network, falling back to full download..."
+        content = download_gcode_content(ip_address, api_key, filename)
     except Exception as e:
-        FB_PARSE_STATUS = f"Range request failed ({str(e)}), falling back to full download..."
-
-    # Fallback to full download
-    try:
-        FB_PARSE_STATUS = f"Downloading full file into RAM for {filename} (this may take a minute)..."
-        response = requests.get(url, headers=headers, timeout=60)
-        
-        if response.ok:
-            FB_PARSE_STATUS = "File downloaded, parsing metadata..."
-            content = response.text
-            match = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', content)
-            if match:
-                FB_PARSE_STATUS = "RAM"
-                return _parse_weights_from_match(match)
-            else:
-                FB_PARSE_STATUS = f"No filament usage metadata found in {filename}."
-                print(f"No filament usage metadata found in {filename}")
-        else:
-            msg = f"Failed to download {filename} from PrusaLink. Status: {response.status_code}"
-            FB_PARSE_STATUS = msg
-            print(msg)
-    except Exception as e:
-        FB_PARSE_STATUS = f"Full download failed: {str(e)}"
-        print(f"Error aggressively downloading/parsing gcode: {e}")
+        FB_PARSE_STATUS = f"Download/decode failed: {e}"
+        print(f"Error downloading/decoding gcode for {filename}: {e}")
         traceback.print_exc()
-
+        return None
+    if content is None:
+        FB_PARSE_STATUS = f"Failed to download {filename} from PrusaLink."
+        print(f"Failed to download {filename} from PrusaLink.")
+        return None
+    match = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', content)
+    if match:
+        FB_PARSE_STATUS = "Decoded"
+        return _parse_weights_from_match(match)
+    FB_PARSE_STATUS = f"No filament usage metadata found in {filename}."
+    print(f"No filament usage metadata found in {filename}")
     return None
 
 

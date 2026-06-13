@@ -89,43 +89,46 @@ def test_fb_aggressive_parse(mock_app):
         mock_update.assert_called_once_with(123, {"used_weight": 20.5})
         mock_ack.assert_called_once_with("http://fb/api", "err_1")
 
-def test_prusalink_parser_fast_fetch():
+def test_prusalink_parser_ascii():
+    """Plain-ASCII gcode: the footer parses straight through the decode chain.
+    (Phase-2: the parser now routes through download_gcode_content, which decodes
+    .bgcode and passes ASCII through — so we mock the byte download, not requests.)"""
     import prusalink_api as pa
 
-    with patch("prusalink_api.requests.get") as mock_get:
-        # Mock Range Request Success
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.status_code = 206
-        mock_resp.text = "; metadata block\n; filament used [g] = 3.14, 5.22\n; end"
-        mock_get.return_value = mock_resp
+    ascii_bytes = b"; metadata block\n; filament used [g] = 3.14, 5.22\n; end"
+    with patch("prusalink_api._download_file_bytes", return_value=ascii_bytes):
+        usage = pa.download_gcode_and_parse_usage("1.2.3.4", "key", "test.gcode")
+    assert usage == {0: 3.14, 1: 5.22}
+    assert pa.FB_PARSE_STATUS == "Decoded"
 
-        usage = pa.download_gcode_and_parse_usage("1.2.3.4", "key", "test.bgcode")
-        assert usage == {0: 3.14, 1: 5.22}
-        assert mock_get.call_count == 1
-        assert pa.FB_PARSE_STATUS == "Fast"
 
-def test_prusalink_parser_ram_fallback():
+def test_prusalink_parser_bgcode_roundtrip():
+    """The real fleet slices to binary .bgcode — the footer lives in the PrintMeta
+    block, so the OLD text parser read ZERO. The decoder must lift it. This is the
+    regression the old ASCII-only tests structurally couldn't catch."""
+    import struct
     import prusalink_api as pa
 
-    with patch("prusalink_api.requests.get") as mock_get:
-        # 1. Mock Range Request Fail (e.g. 416 or just 200 without meta)
-        fail_resp = MagicMock()
-        fail_resp.ok = False
-        fail_resp.status_code = 416
+    def _block(btype, payload, enc=0):  # uncompressed block (comp=0, checksum=0)
+        return struct.pack("<HHI", btype, 0, len(payload)) + struct.pack("<H", enc) + payload
 
-        # 2. Mock Fallback RAM Success
-        success_resp = MagicMock()
-        success_resp.ok = True
-        success_resp.status_code = 200
-        success_resp.text = "; full file\n; filament used [g] = 10.0, 20.0"
+    body = b"M83\nT0\nG1 X10 E5\nG1 X20 E5\n"
+    meta = b"filament used [mm] = 10\nfilament used [g] = 25\n"
+    raw = (b"GCDE" + struct.pack("<I", 1) + struct.pack("<H", 0)
+           + _block(4, meta) + _block(1, body))  # PrintMeta, GCode
 
-        mock_get.side_effect = [fail_resp, success_resp]
+    with patch("prusalink_api._download_file_bytes", return_value=raw):
+        usage = pa.download_gcode_and_parse_usage("1.2.3.4", "key", "real.bgcode")
+    assert usage == {0: 25.0}  # footer lifted out of the binary container
+    assert pa.FB_PARSE_STATUS == "Decoded"
 
-        usage = pa.download_gcode_and_parse_usage("1.2.3.4", "key", "test.bgcode")
-        assert usage == {0: 10.0, 1: 20.0}
-        assert mock_get.call_count == 2
-        assert "RAM" in pa.FB_PARSE_STATUS
+
+def test_prusalink_parser_download_failure_returns_none():
+    import prusalink_api as pa
+    with patch("prusalink_api._download_file_bytes", return_value=None):
+        usage = pa.download_gcode_and_parse_usage("1.2.3.4", "key", "x.bgcode")
+    assert usage is None
+    assert "Failed to download" in pa.FB_PARSE_STATUS
 
 def test_fb_error_snapshotting(mock_app):
     with patch("app.config_loader.get_api_urls", return_value=("http://spool", "http://fb/api")), \
