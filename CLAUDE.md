@@ -2,7 +2,7 @@ Architecture & Environment:
 Dev: Runs in a local Docker instance. Always provide terminal and execution commands in a Docker context (e.g., docker exec, docker-compose).
 Front end for dev can be found here: http://localhost:8000/
 Spoolman for dev can be found here: http://192.168.1.29:7913/
-Filabridge for dev can be found here: http://192.168.1.29:5001/
+Filabridge: **DECOMMISSIONED 2026-06-13** (FilaBridge Phase-2 cutover — FCC absorbed all of its responsibilities and the container was stopped). FCC is now standalone; there is no FilaBridge process/URL. The `needo37` image is kept pinned as a do-nothing fallback only. Residual `fb_url`/`filabridge_url` params still threaded through the code are vestigial back-compat signatures — see the `Feature-Buglist.md` "vestigial FilaBridge artifacts" cleanup item.
 Prod: Hosted on a TrueNAS server. Keep deployment, storage, and networking suggestions strictly compatible with TrueNAS architecture.
 
 ## Testing
@@ -79,9 +79,8 @@ Inventory of current production write surfaces (keep this list updated when addi
 | `app.py:2103` | `/api/print_queue/set_flag` (spool) | Returns Spoolman error in response. |
 | `app.py:2113` | `/api/print_queue/set_flag` (filament) | Returns Spoolman error in response. |
 | `app.py:2359` | `/api/backfill_spool_weights` | Per-spool `errors` list in response. |
-| `app.py:2496` | filabridge auto-deduct | Activity log on failure with Spoolman body. |
-| `app.py:2533` | filabridge manual recovery | Same pattern as auto-deduct. |
-| `app.py:2659` | filabridge auto-recover task (threaded) | Activity log on failure. |
+| `app.py:4087` | print deduct — `_apply_usage_to_printer` | **FCC-native print-usage deduct** (replaced the FilaBridge auto-deduct in the 2026-06-13 Phase-2 cutover). Writes `used_weight` via `update_spool` per toolhead; the shared primitive for BOTH the cancelled-print partial deduct (`deduct_cancelled_print`, app.py:4218 — decode `.bgcode` + per-tool prefix-parse to the cancel/M73 point) AND the FINISHED completion deduct. Exactly-once via `print_deduct_ledger`; activity-log on failure. |
+| `app.py:4638` | cancel/ambiguous-review confirm-apply | User-confirmed deduct: re-reads CURRENT `used_weight` (so a weigh-out between preview and confirm isn't clobbered), clamps grams to real remaining, writes `used_weight` via `update_spool`; activity-log on success/failure. |
 | `app.py:314` | `PATCH /api/vendors/<id>` Vendor Edit modal save | Uses `update_vendor_or_raise`; merges `extra` against existing record so partial PATCH preserves siblings; activity log on both success and rejection; surfaces Spoolman error body in response JSON for the modal to toast at 7s. |
 | `logic.py:432` | `perform_smart_move` unseat existing | Read-merge-write reference impl; logs failure. |
 | `logic.py:484` | `perform_smart_move` toolhead branch | Activity log on failure with Spoolman body. |
@@ -94,7 +93,7 @@ Inventory of current production write surfaces (keep this list updated when addi
 
 ### Weight-entry surfaces (known fragmentation hot-spot)
 
-Within the table above, the weight-touching entries are themselves a fragmented sub-system: `app.py:2068` (mark_printed), `app.py:2359` (backfill), `app.py:2496/2533/2659` (filabridge auto/manual/thread), plus the frontend modals (`inv_weigh_out.js` weigh-out, `inv_wizard.js` empty-weight fields, `inv_details.js` post-archive prompt + filament edit). Each accepts a slightly different input form (gross / net / additive / delta / field-only) with inconsistent terminology and inconsistent empty-spool-weight resolution.
+Within the table above, the weight-touching entries are themselves a fragmented sub-system: `app.py:2068` (mark_printed), `app.py:2359` (backfill), `app.py:4087`/`4638` (FCC-native print deduct `_apply_usage_to_printer` + cancel-review confirm — replaced the retired FilaBridge deduct paths), plus the frontend modals (`inv_weigh_out.js` weigh-out, `inv_wizard.js` empty-weight fields, `inv_details.js` post-archive prompt + filament edit). Each accepts a slightly different input form (gross / net / additive / delta / field-only) with inconsistent terminology and inconsistent empty-spool-weight resolution.
 
 Phase 1 (current branch) extracted `resolveEmptySpoolWeight` into `static/js/modules/weight_utils.js` so the cascade has one canonical home. Phase 2 (separate branch — see `Feature-Buglist.md` "Unified weight-entry component") will build a single `<WeightEntry>`-style component reused by every weight surface, with mode-aware input (gross / net / additive / delta), shared missing-empty-weight prompt, and a preview of the computed `used_weight` before submit. **Don't add new weight-entry UI before Phase 2** — feed any new requirements into that design instead.
 
