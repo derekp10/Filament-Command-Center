@@ -265,6 +265,45 @@ def test_confirm_no_spool_reresolves_and_applies():
     assert cancel_review_store.has_pending("XL", "NS-1") is False
 
 
+def test_confirm_no_spool_partial_apply_warns_shortfall():
+    """no_spool review with multi-position usage_map; on Apply only ONE position
+    resolves to a bound spool, so part of the computed usage can't be applied. The
+    applied grams are recorded, and the shortfall is surfaced (WARNING + shortfall_g
+    in the response) rather than silently lost (review findings F5/F6, 2026-06-13)."""
+    cancel_review_store.add_pending({
+        "printer_name": "XL", "job_id": "NS-P", "filename": "f.gcode", "progress": 1.0,
+        "total_grams": 30.0, "spools": [], "kind": "no_spool",
+        "usage_map": {"0": 20.0, "1": 10.0}, "created": "2026-06-13 00:00:00"})
+    with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module, "_resolve_usage_to_spools",
+                      return_value=[{"sid": 100, "grams": 20.0, "position": 0, "toolhead": "XL-1"}]), \
+         patch.object(app_module, "_apply_usage_to_printer",
+                      return_value=(1, [{"sid": 100, "grams": 20.0, "remaining": 880.0}])), \
+         patch.object(app_module.state, "add_log_entry") as log:
+        r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
+                                               json={"printer_name": "XL", "job_id": "NS-P", "updates": {}})
+    d = r.get_json()
+    assert d["status"] == "confirmed"
+    assert d["shortfall_g"] == 10.0                                  # 30 requested - 20 applied
+    entry = print_deduct_ledger._load()[print_deduct_ledger._key("XL", "NS-P")]
+    assert entry["grams"] == 20.0                                    # only the applied 20g
+    assert any(len(c.args) > 1 and c.args[1] == "WARNING" and "couldn't be applied" in str(c.args[0])
+               for c in log.call_args_list), log.call_args_list
+
+
+def test_stash_unresolved_neither_flag_defaults_progress_unknown():
+    """Defensive (review finding F8): a caller-error call with NEITHER no_spool nor
+    progress_unknown must NOT produce a kind='partial' record (empty spools + no
+    usage_map) — that would route into the confirm partial loop and 0g-burn the
+    ledger. Default to the non-destructive progress_unknown kind."""
+    with patch.object(app_module.state, "add_log_entry"):
+        out = app_module._stash_unresolved_review("XL", "f.gcode", "NF-1", 0.5)
+    assert out["status"] == "pending_unresolved"
+    rec = cancel_review_store.get_pending("XL", "NF-1")
+    assert rec["kind"] == "progress_unknown"                         # NOT 'partial'
+    assert rec["spools"] == [] and rec["usage_map"] is None
+
+
 def test_confirm_no_spool_still_unbound_restashes_no_ledger():
     """If still no spool is bound at Apply time, the review is RE-STASHED (kept
     recoverable) and reports still_no_spool — never a terminal 0g, never popped."""

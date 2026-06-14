@@ -4330,13 +4330,26 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
         # undo.
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
                                         usage_map=usage_map, no_spool=True)
+    # Record what was ACTUALLY deducted, not the full footer estimate: on a
+    # multi-tool print where one toolhead has a spool and another doesn't,
+    # _apply_usage_to_printer deducts only the bound one(s), so sum(usage_map) would
+    # over-state the ledger and (single (printer,job_id) key) the unbound position's
+    # grams can't be held pending alongside this recorded deduct.
+    applied = round(sum(d["grams"] for d in details), 2)
+    requested = round(sum(usage_map.values()), 2)
     print_deduct_ledger.record_deduct(
-        printer_name, job_id, filename=filename, scale=1.0,
-        grams=round(sum(usage_map.values()), 2))
-    total = round(sum(d["grams"] for d in details), 1)
+        printer_name, job_id, filename=filename, scale=1.0, grams=applied)
     state.add_log_entry(
-        f"✅ Completed-print deduct on {printer_name}: {total:.1f}g across "
+        f"✅ Completed-print deduct on {printer_name}: {applied:.1f}g across "
         f"{spools_updated} spool(s) ('{filename}').", "SUCCESS")
+    if requested - applied > 0.05:
+        # Some toolhead position(s) had footer usage but no bound spool — surface the
+        # shortfall so it's NOT silently lost (the partial-bind analogue of the
+        # no_spool review; weigh the spool to true up).
+        state.add_log_entry(
+            f"⚠️ {printer_name}: {requested - applied:.1f}g of '{filename}' was on a "
+            f"toolhead with no bound spool — not deducted; weigh that spool to true up.",
+            "WARNING", "ffaa00")
     return {"status": "deducted", "spools_updated": spools_updated,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
@@ -4436,11 +4449,16 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
 
     usage_map = usage_map or {}
     total = round(sum(usage_map.values()), 2) if usage_map else 0.0
-    kind = "no_spool" if no_spool else ("progress_unknown" if progress_unknown else "partial")
+    # Binary on purpose: this helper ONLY stashes UNRESOLVED reviews. A neither-flag
+    # call must NOT produce kind='partial' — that record (empty spools, no usage_map)
+    # would route into the confirm partial loop and 0g-burn the ledger. Default the
+    # (caller-error) neither case to the non-destructive progress_unknown kind.
+    kind = "no_spool" if no_spool else "progress_unknown"
 
     if no_spool:
-        msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{filename}') but no spool "
-               f"is bound to the toolhead — Review to apply once you bind it, or Discard.")
+        msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{filename}') but it "
+               f"couldn't be deducted (no spool bound to the toolhead, or the write was "
+               f"rejected) — Review to apply once it's bound, or Discard.")
     else:  # progress_unknown
         msg = (f"❓ {printer_name}: couldn't measure how much '{filename}' used (replaced "
                f"before a progress reading) — Review to weigh the spool, or Discard.")
@@ -4674,12 +4692,23 @@ def _confirm_no_spool_review(printer, job_id, rec):
         return jsonify({"status": "still_no_spool",
                         "msg": "No spool is bound to this printer's toolhead yet."})
     total = round(sum(d["grams"] for d in details), 2)
+    requested = round(sum(umap.values()), 2)
     print_deduct_ledger.record_deduct(printer, job_id, filename=rec.get('filename'),
                                       scale=rec.get('progress'), grams=total, confirmed=True)
     state.add_log_entry(
         f"✔️ Cancel-review deduct {total:.2f}g across {spools_updated} spool(s) on "
         f"{printer} (toolhead now bound).", "SUCCESS")
-    return jsonify({"status": "confirmed", "applied": details})
+    shortfall = round(max(0.0, requested - total), 2)
+    if shortfall > 0.05:
+        # Some of the computed usage couldn't be applied — a position still without a
+        # bound spool, or a Spoolman write that failed. The (printer,job_id) ledger
+        # is now recorded so this can't double-apply or re-fire, so surface the
+        # remainder rather than silently dropping it (weigh that spool to true up).
+        state.add_log_entry(
+            f"⚠️ {printer}: {shortfall:.1f}g couldn't be applied (a toolhead still "
+            f"without a bound spool, or a write failed) — weigh that spool to true up.",
+            "WARNING", "ffaa00")
+    return jsonify({"status": "confirmed", "applied": details, "shortfall_g": shortfall})
 
 
 @app.route('/api/cancel_deduct/confirm', methods=['POST'])

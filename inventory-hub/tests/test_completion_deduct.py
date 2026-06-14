@@ -188,6 +188,35 @@ def test_completed_print_no_spool_stashes_recoverable_review(stores_tmp):
     assert rec["usage_map"] == {"0": 25.0}                          # footer grams, recoverable
 
 
+def test_completed_print_partial_bind_records_applied_not_full_and_warns(stores_tmp):
+    """Multi-tool completion where one toolhead has a spool and another doesn't:
+    _apply_usage_to_printer deducts only the bound one. The ledger must record the
+    ACTUALLY-applied grams (not the full footer sum, which over-states it AND, via
+    the single (printer,job_id) key, would block the unbound position's recovery),
+    and the shortfall must surface as a WARNING — not silent loss (review finding
+    F1, 2026-06-13)."""
+    def _apply(printer, usage_map, fb_url, strategy_label=""):
+        return 1, [{"sid": 200, "grams": 40.0, "remaining": 800.0}]  # pos 1 bound; pos 0 unbound
+    pm = {"XL-1": {"printer_name": "XL", "position": 0},
+          "XL-2": {"printer_name": "XL", "position": 1}}
+    gcode = "; filament used [g] = 25, 40\n"
+    logs = []
+    with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value=pm), \
+         patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
+         patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
+                      side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
+         patch.object(app_module, "_apply_usage_to_printer", side_effect=_apply), \
+         patch.object(app_module.state, "add_log_entry", side_effect=lambda *a, **k: logs.append(a)):
+        res = app_module.deduct_completed_print("XL", "done.gcode", "J-P")
+    assert res["status"] == "deducted"
+    entry = print_deduct_ledger._load()[print_deduct_ledger._key("XL", "J-P")]
+    assert entry["grams"] == 40.0          # APPLIED 40g, NOT the full 65g
+    # shortfall (65 - 40 = 25g) surfaced as a WARNING, not silently dropped
+    assert any(len(a) > 1 and a[1] == "WARNING" and "25" in a[0] and "weigh" in a[0].lower()
+               for a in logs), logs
+
+
 def test_fetch_retry_complete_abandoned_when_flag_off(stores_tmp):
     """A completion queued behind the finish-screen lock must NOT fire if the
     cutover was rolled back (flag off) — FilaBridge owns completions again, so
