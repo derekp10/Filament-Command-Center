@@ -64,36 +64,34 @@ Inventory of current production write surfaces (keep this list updated when addi
 
 | File:Line | Endpoint / Function | Notes |
 |-----------|--------------------|-------|
-| `app.py:408` | `api_create_inventory_wizard` auto-unarchive | Logs `LAST_SPOOLMAN_ERROR` on failure; warning level (best-effort). |
-| `app.py:507` | `api_edit_spool_wizard` spool save | Uses `compute_dirty_extras` with SYSTEM_MANAGED_EXTRAS guard. |
-| `app.py:521` | `api_edit_spool_wizard` filament save | Surfaces `LAST_SPOOLMAN_ERROR` in response JSON. |
-| `app.py:555` | `/api/manage_contents` set_meta | Returns `error` field with Spoolman body. |
-| `app.py:1079` | `/api/locations` cascade unassign | Best-effort fire-and-forget; logs each failure. |
-| `app.py:1101` | `/api/spool/update` generic partial update | `update_spool` (read-merge-write extras + `used_weight ≤ initial_weight` cap + auto-archive/unarchive on remaining); surfaces `LAST_SPOOLMAN_ERROR` in the `error`/`msg` response fields. ⚠️ Sending `initial_weight` here runs `_auto_archive_on_empty`/`_auto_unarchive_on_refill` — a too-low total can silently archive+unassign a loaded spool. The L200 path deliberately does NOT use this; see the dedicated endpoint below. |
-| `app.py:~1156` | `/api/spool/prusament_apply_weights` (L200) | Confirm-apply for the Prusament-scan spool-weight correction. RE-VALIDATES against the live spool (refuses if archived, or if the new total would leave remaining ≤ ~0 and trip auto-archive), writes only `initial_weight`/`spool_weight` via `update_spool_or_raise` (used_weight preserved). Returns `status: success`/`blocked`/`error`. Hardened per the 2026-06-05 adversarial review. |
-| `app.py:1183` | `/api/update_filament` quick-edit | Reference impl — surfaces error in response JSON. |
-| `app.py:1331` | spool label-confirm scan | Logs ERROR with Spoolman body; emits "already verified" info path. |
-| `app.py:1388` | filament label-confirm scan | Same pattern as spool side. |
-| `app.py:2068` | `/api/print_queue/mark_printed` (spool) | Returns Spoolman error in response. |
-| `app.py:2079` | `/api/print_queue/mark_printed` (filament) | Returns Spoolman error in response. |
-| `app.py:2103` | `/api/print_queue/set_flag` (spool) | Returns Spoolman error in response. |
-| `app.py:2113` | `/api/print_queue/set_flag` (filament) | Returns Spoolman error in response. |
-| `app.py:2359` | `/api/backfill_spool_weights` | Per-spool `errors` list in response. |
+| `app.py:1095` | `api_edit_spool_wizard` spool save | Uses `compute_dirty_extras` with SYSTEM_MANAGED_EXTRAS guard. |
+| `app.py:1106` | `api_edit_spool_wizard` filament save | Surfaces `LAST_SPOOLMAN_ERROR` in response JSON. |
+| `app.py:1932` | `/api/locations` cascade unassign | Best-effort fire-and-forget; logs each failure. |
+| `app.py:1145` | `/api/spool/update` generic partial update | `update_spool` (read-merge-write extras + `used_weight ≤ initial_weight` cap + auto-archive/unarchive on remaining); surfaces `LAST_SPOOLMAN_ERROR` in the `error`/`msg` response fields. ⚠️ Sending `initial_weight` here runs `_auto_archive_on_empty`/`_auto_unarchive_on_refill` — a too-low total can silently archive+unassign a loaded spool. The L200 path deliberately does NOT use this; see the dedicated endpoint below. |
+| `app.py:1227` | `/api/spool/prusament_apply_weights` (L200) | Confirm-apply for the Prusament-scan spool-weight correction. RE-VALIDATES against the live spool (refuses if archived, or if the new total would leave remaining ≤ ~0 and trip auto-archive), writes only `initial_weight`/`spool_weight` via `update_spool_or_raise` (used_weight preserved). Returns `status: success`/`blocked`/`error`. Hardened per the 2026-06-05 adversarial review. |
+| `app.py:2221` | `/api/update_filament` quick-edit | Reference impl — surfaces error in response JSON. |
+| `app.py:2718` | spool label-confirm scan | Logs ERROR with Spoolman body; emits "already verified" info path. |
+| `app.py:2791` | filament label-confirm scan | Same pattern as spool side. |
+| `app.py:3723` | `/api/print_queue/mark_printed` (spool) | Returns Spoolman error in response. |
+| `app.py:3734` | `/api/print_queue/mark_printed` (filament) | Returns Spoolman error in response. |
+| `app.py:3758` | `/api/print_queue/set_flag` (spool) | Returns Spoolman error in response. |
+| `app.py:3768` | `/api/print_queue/set_flag` (filament) | Returns Spoolman error in response. |
+| `app.py:4014` | `/api/backfill_spool_weights` | Per-spool `errors` list in response. |
 | `app.py:4087` | print deduct — `_apply_usage_to_printer` | **FCC-native print-usage deduct** (replaced the FilaBridge auto-deduct in the 2026-06-13 Phase-2 cutover). Writes `used_weight` via `update_spool` per toolhead; the shared primitive for BOTH the cancelled-print partial deduct (`deduct_cancelled_print`, app.py:4218 — decode `.bgcode` + per-tool prefix-parse to the cancel/M73 point) AND the FINISHED completion deduct. Exactly-once via `print_deduct_ledger`; activity-log on failure. |
 | `app.py:4638` | cancel/ambiguous-review confirm-apply | User-confirmed deduct: re-reads CURRENT `used_weight` (so a weigh-out between preview and confirm isn't clobbered), clamps grams to real remaining, writes `used_weight` via `update_spool`; activity-log on success/failure. |
-| `app.py:314` | `PATCH /api/vendors/<id>` Vendor Edit modal save | Uses `update_vendor_or_raise`; merges `extra` against existing record so partial PATCH preserves siblings; activity log on both success and rejection; surfaces Spoolman error body in response JSON for the modal to toast at 7s. |
-| `logic.py:432` | `perform_smart_move` unseat existing | Read-merge-write reference impl; logs failure. |
-| `logic.py:484` | `perform_smart_move` toolhead branch | Activity log on failure with Spoolman body. |
-| `logic.py:498` | `perform_smart_move` dryer branch | Activity log on failure. |
-| `logic.py:509` | `perform_smart_move` generic branch | Activity log on failure. |
-| `logic.py:692` | `perform_smart_eject` return-home | Activity log on failure. |
-| `logic.py:714` | `perform_smart_eject` relocate | Activity log on failure. |
-| `logic.py:754` | `perform_force_unassign` | Activity log on failure. |
+| `app.py:679` | `PATCH /api/vendors/<id>` Vendor Edit modal save | Uses `update_vendor_or_raise`; merges `extra` against existing record so partial PATCH preserves siblings; activity log on both success and rejection; surfaces Spoolman error body in response JSON for the modal to toast at 7s. |
+| `logic.py:524` | `perform_smart_move` unseat existing | Read-merge-write reference impl; logs failure. |
+| `logic.py:575` | `perform_smart_move` toolhead branch | Activity log on failure with Spoolman body. |
+| `logic.py:603` | `perform_smart_move` dryer branch | Activity log on failure. |
+| `logic.py:628` | `perform_smart_move` generic branch | Activity log on failure. |
+| `logic.py:827` | `perform_smart_eject` return-home | Activity log on failure. |
+| `logic.py:853` | `perform_smart_eject` relocate | Activity log on failure. |
+| `logic.py:1007` | `perform_force_unassign` | Activity log on failure. |
 | `inv_details.js:promptEditSlicerProfile` | Pencil overlay on filament details modal | Client-side merges current `extra` from `/api/filaments/<id>` before POST to `/api/update_filament` so siblings (`nozzle_temp_max`, `sheet_link`, `filament_attributes`, etc.) are preserved. Surfaces error in Swal. Fires `add_choice` POST after successful save when user typed a brand-new profile name. |
 
 ### Weight-entry surfaces (known fragmentation hot-spot)
 
-Within the table above, the weight-touching entries are themselves a fragmented sub-system: `app.py:2068` (mark_printed), `app.py:2359` (backfill), `app.py:4087`/`4638` (FCC-native print deduct `_apply_usage_to_printer` + cancel-review confirm — replaced the retired FilaBridge deduct paths), plus the frontend modals (`inv_weigh_out.js` weigh-out, `inv_wizard.js` empty-weight fields, `inv_details.js` post-archive prompt + filament edit). Each accepts a slightly different input form (gross / net / additive / delta / field-only) with inconsistent terminology and inconsistent empty-spool-weight resolution.
+Within the table above, the weight-touching entries are themselves a fragmented sub-system: `app.py:3723` (mark_printed), `app.py:4014` (backfill), `app.py:4087`/`4638` (FCC-native print deduct `_apply_usage_to_printer` + cancel-review confirm — replaced the retired FilaBridge deduct paths), plus the frontend modals (`inv_weigh_out.js` weigh-out, `inv_wizard.js` empty-weight fields, `inv_details.js` post-archive prompt + filament edit). Each accepts a slightly different input form (gross / net / additive / delta / field-only) with inconsistent terminology and inconsistent empty-spool-weight resolution.
 
 Phase 1 (current branch) extracted `resolveEmptySpoolWeight` into `static/js/modules/weight_utils.js` so the cascade has one canonical home. Phase 2 (separate branch — see `Feature-Buglist.md` "Unified weight-entry component") will build a single `<WeightEntry>`-style component reused by every weight surface, with mode-aware input (gross / net / additive / delta), shared missing-empty-weight prompt, and a preview of the computed `used_weight` before submit. **Don't add new weight-entry UI before Phase 2** — feed any new requirements into that design instead.
 
