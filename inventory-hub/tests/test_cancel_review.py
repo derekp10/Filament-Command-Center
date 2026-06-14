@@ -291,6 +291,46 @@ def test_confirm_no_spool_partial_apply_warns_shortfall():
                for c in log.call_args_list), log.call_args_list
 
 
+def test_apply_usage_records_clamped_grams_not_requested():
+    """_apply_usage_to_printer records the ACTUALLY-absorbed grams, not the requested
+    amount: Spoolman caps used_weight ≤ initial, so a near-empty spool (5g left) given
+    a 20g deduct absorbs only 5g. details must report 5g so the ledger + the callers'
+    shortfall math reflect reality, instead of reading the over-capacity deduct as
+    fully applied (review finding F-clamp, 2026-06-13)."""
+    printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
+    spools = {100: {"id": 100, "used_weight": 995.0, "initial_weight": 1000.0}}  # 5g remaining
+    with patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map), \
+         patch.object(app_module, "_resolve_active_locs_for_printer",
+                      return_value=[("XL-1", {"position": 0})]), \
+         patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=lambda loc: [100]), \
+         patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))), \
+         patch.object(app_module.spoolman_api, "update_spool", return_value={"id": 100}), \
+         patch.object(app_module.spoolman_api, "format_spool_display",
+                      return_value={"text": "#100", "color": "ff0000"}), \
+         patch.object(app_module.state, "add_log_entry"):
+        spools_updated, details = app_module._apply_usage_to_printer("XL", {0: 20.0}, "http://fb")
+    assert spools_updated == 1
+    assert len(details) == 1
+    assert details[0]["grams"] == 5.0          # absorbed 5g (clamped), NOT the requested 20g
+
+
+def test_confirm_no_spool_unexpected_raise_restashes_review():
+    """If _confirm_no_spool_review raises unexpectedly after the record was popped
+    (the claim), the review must be RE-STASHED (kept recoverable) not lost — the
+    pop-without-guard silent-loss the review flagged (2026-06-13)."""
+    cancel_review_store.add_pending({
+        "printer_name": "XL", "job_id": "NS-R", "filename": "f.gcode", "progress": 1.0,
+        "total_grams": 20.0, "spools": [], "kind": "no_spool",
+        "usage_map": {"0": 20.0}, "created": "2026-06-13 00:00:00"})
+    with patch.object(app_module, "_confirm_no_spool_review", side_effect=RuntimeError("boom")), \
+         patch.object(app_module.state, "add_log_entry"):
+        r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
+                                               json={"printer_name": "XL", "job_id": "NS-R", "updates": {}})
+    assert r.status_code == 500 and r.get_json()["status"] == "error"
+    assert cancel_review_store.has_pending("XL", "NS-R") is True     # re-stashed, recoverable
+    assert print_deduct_ledger.was_deducted("XL", "NS-R") is False
+
+
 def test_stash_unresolved_neither_flag_defaults_progress_unknown():
     """Defensive (review finding F8): a caller-error call with NEITHER no_spool nor
     progress_unknown must NOT produce a kind='partial' record (empty spools + no

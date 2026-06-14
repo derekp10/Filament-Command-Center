@@ -351,6 +351,10 @@
                     const d = await r.json();
                     if (d.status === 'confirmed') {
                         toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
+                        // Partial-bind / clamp shortfall (no_spool re-resolve path): part of the
+                        // computed usage couldn't be applied — surface it AT THE OVERLAY, not only
+                        // in the Activity Log, so the user knows to weigh the still-short spool.
+                        if (Number(d.shortfall_g) > 0.05) toast(`${fmtG(d.shortfall_g)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
                         if ((d.errors || []).length) toast(`${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
                         card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));

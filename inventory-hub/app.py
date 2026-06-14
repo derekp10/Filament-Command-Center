@@ -4086,13 +4086,20 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
                 new_used = used + weight_used
                 if spoolman_api.update_spool(sid, {"used_weight": new_used}):
                     spools_updated += 1
+                    # Spoolman caps used_weight ≤ initial, so a near-empty spool
+                    # absorbs only `remaining`, not the full `weight_used`. Record the
+                    # ACTUALLY-absorbed grams (= remaining - new_remaining) so the
+                    # ledger and the callers' shortfall math reflect reality — else an
+                    # over-capacity deduct reads as fully applied and the gap is
+                    # silently lost (the clamp the partial-confirm loop also guards).
+                    actual_g = min(float(weight_used), remaining)
                     info = spoolman_api.format_spool_display(spool_data)
                     label = strategy_label or "Auto-deduct"
                     state.add_log_entry(
-                        f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({label}): "
+                        f"✔️ Auto-deducted {actual_g:.1f}g from Spool #{sid} ({label}): "
                         f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]",
                         "SUCCESS", info['color'])
-                    details.append({"sid": sid, "grams": weight_used, "remaining": new_remaining})
+                    details.append({"sid": sid, "grams": actual_g, "remaining": new_remaining})
                 else:
                     err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
                     state.add_log_entry(
@@ -4342,14 +4349,17 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     state.add_log_entry(
         f"✅ Completed-print deduct on {printer_name}: {applied:.1f}g across "
         f"{spools_updated} spool(s) ('{filename}').", "SUCCESS")
-    if requested - applied > 0.05:
-        # Some toolhead position(s) had footer usage but no bound spool — surface the
-        # shortfall so it's NOT silently lost (the partial-bind analogue of the
-        # no_spool review; weigh the spool to true up).
+    shortfall = round(requested - applied, 2)
+    if shortfall > 0.05:
+        # Footer usage that didn't make it onto a spool — a toolhead with no bound
+        # spool, a write that failed, or a near-empty spool that capped. Surface it
+        # so it's NOT silently lost (the partial analogue of the no_spool review;
+        # weigh the spool to true up). NB an orphan tool index — one mapping to no
+        # toolhead position — already got its own warning inside _apply_usage_to_printer.
         state.add_log_entry(
-            f"⚠️ {printer_name}: {requested - applied:.1f}g of '{filename}' was on a "
-            f"toolhead with no bound spool — not deducted; weigh that spool to true up.",
-            "WARNING", "ffaa00")
+            f"⚠️ {printer_name}: {shortfall:.1f}g of '{filename}' wasn't deducted "
+            f"(no bound spool, a failed write, or a near-empty spool) — weigh that "
+            f"spool to true up.", "WARNING", "ffaa00")
     return {"status": "deducted", "spools_updated": spools_updated,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
@@ -4706,8 +4716,8 @@ def _confirm_no_spool_review(printer, job_id, rec):
         # remainder rather than silently dropping it (weigh that spool to true up).
         state.add_log_entry(
             f"⚠️ {printer}: {shortfall:.1f}g couldn't be applied (a toolhead still "
-            f"without a bound spool, or a write failed) — weigh that spool to true up.",
-            "WARNING", "ffaa00")
+            f"without a bound spool, a failed write, or a near-empty spool) — weigh "
+            f"that spool to true up.", "WARNING", "ffaa00")
     return jsonify({"status": "confirmed", "applied": details, "shortfall_g": shortfall})
 
 
@@ -4735,8 +4745,18 @@ def api_cancel_deduct_confirm():
         # Usage was computed earlier but no spool was bound. RE-RESOLVE the stored
         # usage_map against whatever's bound NOW (Derek just bound the toolhead) and
         # apply. The pop above is the claim; _confirm_no_spool_review re-stashes if
-        # still unbound so the review is never lost (no terminal 0g).
-        return _confirm_no_spool_review(printer, job_id, rec)
+        # still unbound so the review is never lost (no terminal 0g). Guard the whole
+        # call: an UNEXPECTED raise (corrupt local JSON, a probe error) between the
+        # pop and its controlled re-stash points would otherwise lose the popped
+        # review with no ledger entry — a silent loss. Re-stash + surface on any raise.
+        try:
+            return _confirm_no_spool_review(printer, job_id, rec)
+        except Exception as e:
+            cancel_review_store.add_pending(rec)
+            state.add_log_entry(
+                f"❌ Cancel-review apply failed for {printer} (job {job_id}): {e} — "
+                f"review kept for retry.", "ERROR", "ff4444")
+            return jsonify({"status": "error", "msg": str(e)}), 500
     if kind == "progress_unknown":
         # No measured usage + no preview spools — nothing to auto-apply. Don't let
         # the partial loop below 0g-"confirm" it (that would re-lose it). Re-stash
@@ -6272,7 +6292,7 @@ def _process_pending_cancel_fetches(states, fb_url):
                 # transient, or the file was deleted). Leave queued; the re-queue
                 # already bumped attempts. The max-age window bounds the retries.
                 continue
-            # Any terminal outcome (pending review / no_usage / no_spools /
+            # Any terminal outcome (pending review / pending_unresolved / no_usage /
             # skipped) resolves this entry.
             cancel_fetch_store.pop_pending(printer, job_id)
         except Exception as e:
