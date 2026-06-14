@@ -32,9 +32,17 @@ import print_tracker_store  # noqa: E402
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def _reset_tracker():
-    """Each test starts with an empty PRINT_TRACKER and synchronous dispatch
-    (so the cancel-edge action runs inline, not on a daemon thread)."""
+def _reset_tracker(tmp_path, monkeypatch):
+    """Each test starts with an empty PRINT_TRACKER and synchronous dispatch (so the
+    cancel-edge action runs inline, not on a daemon thread). ALSO isolates EVERY
+    persistent store to a tmp path: a test that reaches the real
+    _create_pending_cancel_review / _enqueue_cancel_fetch (e.g. an unmocked edge whose
+    test printer has no creds → defer) must never leak into the live bind-mounted
+    data/ stores — the recurring XL::7 / XL::J9 dev-queue pollution (2026-06-14)."""
+    monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
+    monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "review.json"))
+    monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetch.json"))
+    monkeypatch.setattr(print_tracker_store, "_STORE_PATH", str(tmp_path / "latch.json"))
     app_module._PRINT_TRACKER.clear()
     prev_async = app_module._CANCEL_DEDUCT_RUN_ASYNC
     app_module._CANCEL_DEDUCT_RUN_ASYNC = False
