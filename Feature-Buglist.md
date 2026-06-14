@@ -1,5 +1,7 @@
 # **New and Unsorted Features/Bugs**
 
+* Printer status collapsed should have a way to show the printer status as well, so the user doesn't have to expand the printer status bar.
+
 * Perhaps standardize the location of the 2 detail modals (spool & filament) so the buttons are in the same location for each, so the user can navigate more efficiently. We could also just think about this one a bit. It might be ok to force the user to pay attention to whats available?
 
 * Spoll archived - weigh the empty for filling in the filament empty spool weight doesn't allow the user to type in a weight, only the up and down ui scroller works for changing values in this field. This needs to be updated. (Also, spool empty weight prompt and filament empty weight prompt, can't we combine these some how so the user doesn't get asked for the same information twice in a row?) perhaps also offer to propagate empty weight up to brand/vendor empty spool weight.
