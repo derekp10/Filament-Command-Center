@@ -4086,13 +4086,20 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
                 new_used = used + weight_used
                 if spoolman_api.update_spool(sid, {"used_weight": new_used}):
                     spools_updated += 1
+                    # Spoolman caps used_weight ≤ initial, so a near-empty spool
+                    # absorbs only `remaining`, not the full `weight_used`. Record the
+                    # ACTUALLY-absorbed grams (= remaining - new_remaining) so the
+                    # ledger and the callers' shortfall math reflect reality — else an
+                    # over-capacity deduct reads as fully applied and the gap is
+                    # silently lost (the clamp the partial-confirm loop also guards).
+                    actual_g = min(float(weight_used), remaining)
                     info = spoolman_api.format_spool_display(spool_data)
                     label = strategy_label or "Auto-deduct"
                     state.add_log_entry(
-                        f"✔️ Auto-deducted {weight_used:.1f}g from Spool #{sid} ({label}): "
+                        f"✔️ Auto-deducted {actual_g:.1f}g from Spool #{sid} ({label}): "
                         f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]",
                         "SUCCESS", info['color'])
-                    details.append({"sid": sid, "grams": weight_used, "remaining": new_remaining})
+                    details.append({"sid": sid, "grams": actual_g, "remaining": new_remaining})
                 else:
                     err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
                     state.add_log_entry(
@@ -4322,28 +4329,37 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     spools_updated, details = _apply_usage_to_printer(
         printer_name, usage_map, fb_url, strategy_label="Complete")
     if spools_updated == 0:
-        # Footer had usage but no spool is loaded at the active toolhead(s) — the
-        # completion analogue of the cancel 'no_spools' path. Surface a WARNING
-        # (never a misleading green "0.0g" SUCCESS) and record grams=0 so an
-        # honest ledger entry stops it re-firing without claiming a phantom
-        # deduct. (A tool index that maps to NO position already got an orphan
-        # warning inside _apply_usage_to_printer; this catches the position-exists-
-        # but-empty case, which that orphan check treats as benign.)
-        used_g = round(sum(usage_map.values()), 1)
-        state.add_log_entry(
-            f"✅ Completed print on {printer_name} ('{filename}') — {used_g:.1f}g in "
-            f"the footer but no mapped spool to deduct from (check the toolhead "
-            f"binding; weigh the spool to true it up).", "WARNING", "ffaa00")
-        print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
-                                          scale=1.0, grams=0)
-        return {"status": "no_spools", "job_id": job_id}
+        # Footer had usage but NO spool is bound at the active toolhead(s). Don't
+        # burn a terminal grams=0 ledger entry (it permanently blocks recovery —
+        # the 2026-06-13 silent-loss bug); stash a RECOVERABLE review carrying the
+        # footer usage_map so the confirm path re-resolves + applies once a spool is
+        # bound. apply wrote nothing when spools_updated==0, so there's nothing to
+        # undo.
+        return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
+                                        usage_map=usage_map, no_spool=True)
+    # Record what was ACTUALLY deducted, not the full footer estimate: on a
+    # multi-tool print where one toolhead has a spool and another doesn't,
+    # _apply_usage_to_printer deducts only the bound one(s), so sum(usage_map) would
+    # over-state the ledger and (single (printer,job_id) key) the unbound position's
+    # grams can't be held pending alongside this recorded deduct.
+    applied = round(sum(d["grams"] for d in details), 2)
+    requested = round(sum(usage_map.values()), 2)
     print_deduct_ledger.record_deduct(
-        printer_name, job_id, filename=filename, scale=1.0,
-        grams=round(sum(usage_map.values()), 2))
-    total = round(sum(d["grams"] for d in details), 1)
+        printer_name, job_id, filename=filename, scale=1.0, grams=applied)
     state.add_log_entry(
-        f"✅ Completed-print deduct on {printer_name}: {total:.1f}g across "
+        f"✅ Completed-print deduct on {printer_name}: {applied:.1f}g across "
         f"{spools_updated} spool(s) ('{filename}').", "SUCCESS")
+    shortfall = round(requested - applied, 2)
+    if shortfall > 0.05:
+        # Footer usage that didn't make it onto a spool — a toolhead with no bound
+        # spool, a write that failed, or a near-empty spool that capped. Surface it
+        # so it's NOT silently lost (the partial analogue of the no_spool review;
+        # weigh the spool to true up). NB an orphan tool index — one mapping to no
+        # toolhead position — already got its own warning inside _apply_usage_to_printer.
+        state.add_log_entry(
+            f"⚠️ {printer_name}: {shortfall:.1f}g of '{filename}' wasn't deducted "
+            f"(no bound spool, a failed write, or a near-empty spool) — weigh that "
+            f"spool to true up.", "WARNING", "ffaa00")
     return {"status": "deducted", "spools_updated": spools_updated,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
@@ -4417,6 +4433,70 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
     return list(merged.values())
 
 
+def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
+                             usage_map=None, *, no_spool=False,
+                             progress_unknown=False, ambiguous=False):
+    """Stash a persistent, RECOVERABLE review for a print whose usage couldn't be
+    finalized — INSTEAD of writing a destructive terminal grams=0 ledger entry that
+    would permanently block recovery (the 2026-06-13 silent-loss bug). Two kinds:
+
+      no_spool         — usage WAS computed (real grams in `usage_map`) but NO spool
+                         is bound to the toolhead, so there's nowhere to deduct. The
+                         confirm endpoint RE-RESOLVES `usage_map` to whatever spool is
+                         bound at apply time, so binding the toolhead later recovers it.
+      progress_unknown — the print was replaced (a back-to-back job change) before we
+                         ever sampled a real progress, so its usage is genuinely
+                         UNMEASURABLE (`usage_map` is None). Surfaced non-destructively
+                         ("weigh the spool and adjust it directly, or Discard").
+
+    Writes NO ledger entry — the review stays recoverable until confirm/dismiss.
+    Idempotent: no-ops if a review is already pending or the job was already settled.
+    Returns a status dict."""
+    if print_deduct_ledger.was_deducted(printer_name, job_id):
+        return {"status": "skipped", "reason": "already processed", "job_id": job_id}
+    if cancel_review_store.has_pending(printer_name, job_id):
+        return {"status": "skipped", "reason": "already pending", "job_id": job_id}
+
+    usage_map = usage_map or {}
+    total = round(sum(usage_map.values()), 2) if usage_map else 0.0
+    # Binary on purpose: this helper ONLY stashes UNRESOLVED reviews. A neither-flag
+    # call must NOT produce kind='partial' — that record (empty spools, no usage_map)
+    # would route into the confirm partial loop and 0g-burn the ledger. Default the
+    # (caller-error) neither case to the non-destructive progress_unknown kind.
+    kind = "no_spool" if no_spool else "progress_unknown"
+
+    if no_spool:
+        msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{filename}') but it "
+               f"couldn't be deducted (no spool bound to the toolhead, or the write was "
+               f"rejected) — Review to apply once it's bound, or Discard.")
+    else:  # progress_unknown
+        msg = (f"❓ {printer_name}: couldn't measure how much '{filename}' used (replaced "
+               f"before a progress reading) — Review to weigh the spool, or Discard.")
+
+    record = {
+        "printer_name": printer_name,
+        "job_id": str(job_id),
+        "filename": filename,
+        "progress": float(reached_fraction or 0.0),
+        "total_grams": total,
+        "spools": [],
+        "ambiguous": bool(ambiguous),
+        "kind": kind,
+        # usage_map drives the confirm RE-RESOLVE for a no_spool review. JSON
+        # stringifies int keys on save, so store them as strings explicitly and let
+        # the confirm path coerce back to int (the resolve keys on int positions).
+        "usage_map": ({str(k): v for k, v in usage_map.items()}
+                      if (no_spool and usage_map) else None),
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    cancel_review_store.add_pending(record)
+    state.add_log_entry(msg, "WARNING", "ffaa00",
+                        meta={"type": "cancel_deduct_pending",
+                              "printer_name": printer_name, "job_id": str(job_id)})
+    return {"status": "pending_unresolved", "kind": kind, "total_grams": total,
+            "job_id": str(job_id)}
+
+
 def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel",
                           ambiguous=False):
     """Queue a print whose gcode couldn't be fetched yet (the selected-file
@@ -4476,7 +4556,7 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
 
 
 def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,
-                                  fb_url=None, ambiguous=False):
+                                  fb_url=None, ambiguous=False, progress_unknown=False):
     """Compute the cancelled-print partial and STASH it for review instead of
     auto-writing (FilaBridge absorption design §9.7). Idempotent against the
     ledger (already confirmed/dismissed) and the pending store (already queued).
@@ -4498,6 +4578,16 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         return {"status": "skipped", "reason": "already processed", "job_id": job_id}
     if cancel_review_store.has_pending(printer_name, job_id):
         return {"status": "skipped", "reason": "already pending", "job_id": job_id}
+
+    if progress_unknown:
+        # We never sampled a real progress for this job (a back-to-back job change
+        # replaced it before the monitor measured it). Prefix-parsing at 0% would
+        # fold to a misleading no_usage 0g and permanently lose it; the footer would
+        # massively over-deduct. So don't compute or download — stash a
+        # non-destructive "couldn't measure usage — weigh the spool" review.
+        return _stash_unresolved_review(printer_name, filename, job_id,
+                                        reached_fraction, usage_map=None,
+                                        progress_unknown=True, ambiguous=ambiguous)
 
     creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
     if not creds:
@@ -4534,17 +4624,15 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
             "complete)").format(p=printer_name, pct=pct) if ambiguous else \
            "🛑 Cancelled print on {p} (~{pct:.0f}%)".format(p=printer_name, pct=pct)
     if not rows:
-        # The print extruded filament but no spool is mapped to the active
-        # toolhead(s) — nothing to deduct from. Record so it doesn't re-queue;
-        # surface so Derek can fix the binding.
-        used_g = round(sum(usage_map.values()), 1)
-        state.add_log_entry(
-            f"{lead} — {used_g:.1f}g used but no mapped spool to deduct from "
-            f"(check toolhead bindings).",
-            "WARNING", "ffaa00")
-        print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
-                                          scale=reached_fraction, grams=0)
-        return {"status": "no_spools", "job_id": job_id}
+        # The print extruded filament but NO spool is bound to the active
+        # toolhead(s) — nothing to deduct from RIGHT NOW. Don't burn a terminal
+        # grams=0 ledger entry (that permanently blocks recovery — the 2026-06-13
+        # silent-loss bug); stash a RECOVERABLE review carrying the computed
+        # usage_map so the confirm path can re-resolve + apply once Derek binds the
+        # toolhead.
+        return _stash_unresolved_review(printer_name, filename, job_id,
+                                        reached_fraction, usage_map=usage_map,
+                                        no_spool=True, ambiguous=ambiguous)
 
     # Re-check after the (slow) gcode download+parse — if the job was processed
     # in the meantime, don't stash a stale pending.
@@ -4581,6 +4669,58 @@ def api_cancel_deduct_pending():
     return jsonify({"pending": cancel_review_store.list_pending()})
 
 
+def _confirm_no_spool_review(printer, job_id, rec):
+    """Apply a `no_spool` review (the record was already popped = the claim). The
+    usage was computed when the print ended but no spool was bound; RE-RESOLVE the
+    stored usage_map against whatever spool is bound to the toolhead NOW and apply
+    it additively (ONLY {used_weight}, archive-on-empty discipline, via the canonical
+    _apply_usage_to_printer loop). If still unbound, RE-STASH the record so it stays
+    recoverable and report `still_no_spool` — never a terminal 0g."""
+    _, fb_url = config_loader.get_api_urls()
+    # JSON stringified the int positions on save — coerce back so the resolve (which
+    # keys on int positions from printer_map) matches. Without this the re-resolve
+    # silently finds nothing and always says "still no spool".
+    umap = {}
+    for k, v in (rec.get("usage_map") or {}).items():
+        try:
+            umap[int(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
+    rows = _resolve_usage_to_spools(printer, umap, fb_url) if umap else []
+    if not rows:
+        cancel_review_store.add_pending(rec)  # re-stash UNCHANGED — still recoverable
+        return jsonify({"status": "still_no_spool",
+                        "msg": "No spool is bound to this printer's toolhead yet — "
+                               "bind it in the Location Manager, then Apply."})
+    # A monitor retry could have settled this job between the pop and now.
+    if print_deduct_ledger.was_deducted(printer, job_id):
+        return jsonify({"status": "already_handled"})
+    spools_updated, details = _apply_usage_to_printer(
+        printer, umap, fb_url, strategy_label="Cancel-review")
+    if spools_updated == 0:
+        cancel_review_store.add_pending(rec)
+        return jsonify({"status": "still_no_spool",
+                        "msg": "No spool is bound to this printer's toolhead yet."})
+    total = round(sum(d["grams"] for d in details), 2)
+    requested = round(sum(umap.values()), 2)
+    print_deduct_ledger.record_deduct(printer, job_id, filename=rec.get('filename'),
+                                      scale=rec.get('progress'), grams=total, confirmed=True)
+    state.add_log_entry(
+        f"✔️ Cancel-review deduct {total:.2f}g across {spools_updated} spool(s) on "
+        f"{printer} (toolhead now bound).", "SUCCESS")
+    shortfall = round(max(0.0, requested - total), 2)
+    if shortfall > 0.05:
+        # Some of the computed usage couldn't be applied — a position still without a
+        # bound spool, or a Spoolman write that failed. The (printer,job_id) ledger
+        # is now recorded so this can't double-apply or re-fire, so surface the
+        # remainder rather than silently dropping it (weigh that spool to true up).
+        state.add_log_entry(
+            f"⚠️ {printer}: {shortfall:.1f}g couldn't be applied (a toolhead still "
+            f"without a bound spool, a failed write, or a near-empty spool) — weigh "
+            f"that spool to true up.", "WARNING", "ffaa00")
+    return jsonify({"status": "confirmed", "applied": details, "shortfall_g": shortfall})
+
+
 @app.route('/api/cancel_deduct/confirm', methods=['POST'])
 def api_cancel_deduct_confirm():
     """Apply a reviewed (optionally nudged) cancel partial-deduct. Body:
@@ -4599,6 +4739,32 @@ def api_cancel_deduct_confirm():
     rec = cancel_review_store.pop_pending(printer, job_id)
     if rec is None:
         return jsonify({"status": "already_handled"})
+
+    kind = rec.get("kind", "partial")
+    if kind == "no_spool":
+        # Usage was computed earlier but no spool was bound. RE-RESOLVE the stored
+        # usage_map against whatever's bound NOW (Derek just bound the toolhead) and
+        # apply. The pop above is the claim; _confirm_no_spool_review re-stashes if
+        # still unbound so the review is never lost (no terminal 0g). Guard the whole
+        # call: an UNEXPECTED raise (corrupt local JSON, a probe error) between the
+        # pop and its controlled re-stash points would otherwise lose the popped
+        # review with no ledger entry — a silent loss. Re-stash + surface on any raise.
+        try:
+            return _confirm_no_spool_review(printer, job_id, rec)
+        except Exception as e:
+            cancel_review_store.add_pending(rec)
+            state.add_log_entry(
+                f"❌ Cancel-review apply failed for {printer} (job {job_id}): {e} — "
+                f"review kept for retry.", "ERROR", "ff4444")
+            return jsonify({"status": "error", "msg": str(e)}), 500
+    if kind == "progress_unknown":
+        # No measured usage + no preview spools — nothing to auto-apply. Don't let
+        # the partial loop below 0g-"confirm" it (that would re-lose it). Re-stash
+        # and tell the user to weigh + adjust the spool directly, or Discard.
+        cancel_review_store.add_pending(rec)
+        return jsonify({"status": "manual_only",
+                        "msg": "Usage couldn't be measured — weigh the spool and "
+                               "adjust it directly, or Discard this review."})
 
     # Only spools that were in the reviewed preview may be deducted — a stray /
     # crafted update for an out-of-scope sid must never touch a different spool.
@@ -5661,7 +5827,8 @@ def _dispatch_completion_edge(printer_name, filename, job_id, fb_url):
         _on_completion_edge(printer_name, filename, job_id, fb_url)
 
 
-def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url):
+def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
+                       progress_unknown=False):
     """Action when a latched in-progress job reaches IDLE/READY WITHOUT our ever
     sampling the terminal STOPPED or FINISHED (2026-06-13): a fast cancel→restart
     that slipped the poll, or a PRINTING→offline→IDLE printer power-cycle. We
@@ -5669,20 +5836,32 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url):
     pipeline flagged ambiguous (compute the partial at the RETAINED progress as
     the confidence hint) — NEVER auto-deduct (that's FilaBridge's cancel
     over-deduct bug). Reaches here only through _dispatch_ambiguous_edge so the
-    off-heartbeat threading contract matches the cancel/completion paths."""
+    off-heartbeat threading contract matches the cancel/completion paths.
+
+    progress_unknown=True (the back-to-back job change): we never sampled a real
+    progress for this job, so its usage is unmeasurable — _create_pending_cancel_
+    review short-circuits to a non-destructive "weigh the spool" review rather than
+    computing a misleading 0g at 0%."""
     # Instant ack (the ambiguous analogue of the cancel instant-ack), so the user
     # isn't met with silence during the async download.
     try:
-        pct = max(0.0, min(1.0, float(progress or 0.0))) * 100
-        state.add_log_entry(
-            f"❓ Print on {printer_name} reached idle without a clear cancel/finish "
-            f"signal (~{pct:.0f}% reached) — computing a review (couldn't confirm "
-            f"completed vs cancelled)…", "INFO")
+        if progress_unknown:
+            state.add_log_entry(
+                f"❓ Print on {printer_name} ('{filename}') was replaced before its "
+                f"progress could be measured — surfacing a review (couldn't measure "
+                f"usage)…", "INFO")
+        else:
+            pct = max(0.0, min(1.0, float(progress or 0.0))) * 100
+            state.add_log_entry(
+                f"❓ Print on {printer_name} reached idle without a clear cancel/finish "
+                f"signal (~{pct:.0f}% reached) — computing a review (couldn't confirm "
+                f"completed vs cancelled)…", "INFO")
     except Exception:
         pass
     try:
         _create_pending_cancel_review(printer_name, filename, job_id, progress,
-                                      fb_url=fb_url, ambiguous=True)
+                                      fb_url=fb_url, ambiguous=True,
+                                      progress_unknown=progress_unknown)
     except Exception as e:
         try:
             state.add_log_entry(
@@ -5692,7 +5871,8 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url):
             pass
 
 
-def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url):
+def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
+                             progress_unknown=False):
     """Run the ambiguous-edge action OFF the heartbeat thread (mirrors
     _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
     (tests)."""
@@ -5700,9 +5880,11 @@ def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url):
         threading.Thread(
             target=_on_ambiguous_edge,
             args=(printer_name, filename, job_id, progress, fb_url),
+            kwargs={"progress_unknown": progress_unknown},
             daemon=True).start()
     else:
-        _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url)
+        _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
+                           progress_unknown=progress_unknown)
 
 
 def _track_print_edge(printer_name, state_info, fb_url):
@@ -5768,6 +5950,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
                             'filename': entry.get('filename'),
                             'job_id': old_jid,
                             'progress': float(entry.get('progress', 0.0)),
+                            # `progress` is set (5854-ish) only from a REAL job sample,
+                            # so its presence tells us whether we ever measured this
+                            # job's progress. Absent ⇒ replaced before any sample ⇒
+                            # its usage is unmeasurable (route to a progress_unknown
+                            # review, not a misleading 0g — the 1053 silent-loss bug).
+                            'progress_sampled': 'progress' in entry,
                         }
                     entry.pop('progress', None)
                     entry.pop('filename', None)
@@ -5787,16 +5975,24 @@ def _track_print_edge(printer_name, state_info, fb_url):
         if prev_job:
             # Surface the outgoing job as an ambiguous review (off-heartbeat,
             # idempotent via the (printer, job_id) ledger + review store) instead of
-            # silently dropping it. Never auto-deducts.
+            # silently dropping it. Never auto-deducts. When we never measured the
+            # outgoing job's progress (replaced before any sample), flag it
+            # progress_unknown so the review is a non-destructive "weigh the spool"
+            # prompt instead of a misleading 0g computed at 0% (the 1053 bug).
+            progress_unknown = not prev_job.get('progress_sampled', False)
             try:
+                detail = ("without measuring its progress — surfacing a review to weigh"
+                          if progress_unknown else
+                          "without a sampled end state — reviewing the previous job "
+                          "(couldn't confirm completed vs cancelled)")
                 state.add_log_entry(
                     f"❓ {printer_name}: print job changed ({job_changed[0]}→{job_changed[1]}) "
-                    f"without a sampled end state — reviewing the previous job "
-                    f"(couldn't confirm completed vs cancelled).", "INFO")
+                    f"{detail}.", "INFO")
             except Exception:
                 pass
             _dispatch_ambiguous_edge(printer_name, prev_job['filename'],
-                                     prev_job['job_id'], prev_job['progress'], fb_url)
+                                     prev_job['job_id'], prev_job['progress'], fb_url,
+                                     progress_unknown=progress_unknown)
         elif job_changed:
             # job_changed but nothing was latched to review (the previous job_id had
             # no PRINTING sample → no filename). Preserve the original INFO log.
@@ -6096,7 +6292,7 @@ def _process_pending_cancel_fetches(states, fb_url):
                 # transient, or the file was deleted). Leave queued; the re-queue
                 # already bumped attempts. The max-age window bounds the retries.
                 continue
-            # Any terminal outcome (pending review / no_usage / no_spools /
+            # Any terminal outcome (pending review / pending_unresolved / no_usage /
             # skipped) resolves this entry.
             cancel_fetch_store.pop_pending(printer, job_id)
         except Exception as e:
