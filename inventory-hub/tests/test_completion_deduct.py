@@ -31,8 +31,11 @@ import cancel_review_store  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _reset_tracker():
+def _reset_tracker(monkeypatch):
     app_module._PRINT_TRACKER.clear()
+    # 22.3: no-op the start-spool snapshot capture so a flag-on PRINTING tick doesn't
+    # hit real Spoolman (a test exercising capture overrides this locally).
+    monkeypatch.setattr(app_module, "_snapshot_active_spools", lambda *a, **k: {})
     prev_async = app_module._CANCEL_DEDUCT_RUN_ASYNC
     app_module._CANCEL_DEDUCT_RUN_ASYNC = False  # synchronous dispatch
     try:
@@ -119,11 +122,11 @@ def test_stopped_still_fires_cancel_not_completion_with_flag_on():
 def test_completed_print_deducts_footer(stores_tmp):
     captured = {}
 
-    def _apply(printer, usage_map, fb_url, strategy_label=""):
+    def _apply(printer, usage_map, fb_url, strategy_label="", active_locs=None):
         captured["usage_map"] = dict(usage_map)
         captured["label"] = strategy_label
-        return 2, [{"sid": 100, "grams": 25.0, "remaining": 900.0},
-                   {"sid": 200, "grams": 40.0, "remaining": 800.0}]
+        return (2, [{"sid": 100, "grams": 25.0, "remaining": 900.0},
+                    {"sid": 200, "grams": 40.0, "remaining": 800.0}], {0, 1})
 
     pm = {"XL-1": {"printer_name": "XL", "position": 0},
           "XL-2": {"printer_name": "XL", "position": 1}}
@@ -178,7 +181,7 @@ def test_completed_print_no_spool_stashes_recoverable_review(stores_tmp):
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
                       side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
-         patch.object(app_module, "_apply_usage_to_printer", return_value=(0, [])), \
+         patch.object(app_module, "_apply_usage_to_printer", return_value=(0, [], {0})), \
          patch.object(app_module.state, "add_log_entry"):
         res = app_module.deduct_completed_print("XL", "done.gcode", "J-9")
     assert res["status"] == "pending_unresolved" and res["kind"] == "no_spool"
@@ -195,8 +198,10 @@ def test_completed_print_partial_bind_records_applied_not_full_and_warns(stores_
     the single (printer,job_id) key, would block the unbound position's recovery),
     and the shortfall must surface as a WARNING — not silent loss (review finding
     F1, 2026-06-13)."""
-    def _apply(printer, usage_map, fb_url, strategy_label=""):
-        return 1, [{"sid": 200, "grams": 40.0, "remaining": 800.0}]  # pos 1 bound; pos 0 unbound
+    def _apply(printer, usage_map, fb_url, strategy_label="", active_locs=None):
+        # pos 1 bound (40g); pos 0 unbound. known={0,1} so the 25g of pos 0 surfaces
+        # as a shortfall (not excluded as an orphan).
+        return 1, [{"sid": 200, "grams": 40.0, "remaining": 800.0}], {0, 1}
     pm = {"XL-1": {"printer_name": "XL", "position": 0},
           "XL-2": {"printer_name": "XL", "position": 1}}
     gcode = "; filament used [g] = 25, 40\n"
@@ -276,7 +281,7 @@ def test_fetch_retry_routes_complete_to_completion_deduct(stores_tmp):
         "attempts": 1, "last_status": "awaiting_fetch"})
     calls = {}
 
-    def _complete(printer, filename, job_id, fb_url=None):
+    def _complete(printer, filename, job_id, fb_url=None, start_spools=None):
         calls["complete"] = (printer, filename, job_id)
         return {"status": "deducted", "job_id": job_id}
 

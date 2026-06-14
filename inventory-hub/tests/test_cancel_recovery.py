@@ -36,6 +36,10 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
     # Run the deduct synchronously so a recovered cancel is observable inline.
     monkeypatch.setattr(app_module, "_CANCEL_DEDUCT_RUN_ASYNC", False)
+    # 22.3: no-op the start-spool snapshot capture (a flag-on PRINTING tick would
+    # otherwise hit real Spoolman). Recovery reads start_spools off the persisted
+    # entry, not via this helper, so this doesn't affect the recovery-path tests.
+    monkeypatch.setattr(app_module, "_snapshot_active_spools", lambda *a, **k: {})
     with app_module._PRINT_TRACKER_LOCK:
         app_module._PRINT_TRACKER.clear()
     yield

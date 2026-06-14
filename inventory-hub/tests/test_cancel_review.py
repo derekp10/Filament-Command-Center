@@ -278,7 +278,7 @@ def test_confirm_no_spool_partial_apply_warns_shortfall():
          patch.object(app_module, "_resolve_usage_to_spools",
                       return_value=[{"sid": 100, "grams": 20.0, "position": 0, "toolhead": "XL-1"}]), \
          patch.object(app_module, "_apply_usage_to_printer",
-                      return_value=(1, [{"sid": 100, "grams": 20.0, "remaining": 880.0}])), \
+                      return_value=(1, [{"sid": 100, "grams": 20.0, "remaining": 880.0}], {0, 1})), \
          patch.object(app_module.state, "add_log_entry") as log:
         r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
                                                json={"printer_name": "XL", "job_id": "NS-P", "updates": {}})
@@ -287,7 +287,7 @@ def test_confirm_no_spool_partial_apply_warns_shortfall():
     assert d["shortfall_g"] == 10.0                                  # 30 requested - 20 applied
     entry = print_deduct_ledger._load()[print_deduct_ledger._key("XL", "NS-P")]
     assert entry["grams"] == 20.0                                    # only the applied 20g
-    assert any(len(c.args) > 1 and c.args[1] == "WARNING" and "couldn't be applied" in str(c.args[0])
+    assert any(len(c.args) > 1 and c.args[1] == "WARNING" and "wasn't deducted" in str(c.args[0])
                for c in log.call_args_list), log.call_args_list
 
 
@@ -308,7 +308,7 @@ def test_apply_usage_records_clamped_grams_not_requested():
          patch.object(app_module.spoolman_api, "format_spool_display",
                       return_value={"text": "#100", "color": "ff0000"}), \
          patch.object(app_module.state, "add_log_entry"):
-        spools_updated, details = app_module._apply_usage_to_printer("XL", {0: 20.0}, "http://fb")
+        spools_updated, details, _known = app_module._apply_usage_to_printer("XL", {0: 20.0}, "http://fb")
     assert spools_updated == 1
     assert len(details) == 1
     assert details[0]["grams"] == 5.0          # absorbed 5g (clamped), NOT the requested 20g
