@@ -242,6 +242,31 @@ def test_back_to_back_job_change_fires_ambiguous_for_previous(
     assert abs(amb[3] - 0.95) < 1e-9
 
 
+def test_job_changed_unsampled_progress_routes_progress_unknown(capture_ambiguous):
+    """A job latched WITHOUT ever sampling a real progress (replaced too fast),
+    then a different job_id: the outgoing job's usage is UNMEASURABLE, so it routes
+    to the ambiguous review flagged progress_unknown=True (a non-destructive 'weigh
+    the spool' review) rather than computing a misleading 0g at 0% — the job-1053
+    silent-loss bug (2026-06-13)."""
+    _drive(["PRINTING", "PRINTING"],
+           jobs={0: _job(filename="/usb/a.gcode", job_id="A", progress=None),
+                 1: _job(filename="/usb/b.gcode", job_id="B", progress=0.1)})
+    assert capture_ambiguous.call_count == 1
+    assert capture_ambiguous.call_args.kwargs.get("progress_unknown") is True
+    assert capture_ambiguous.call_args.args[1] == "/usb/a.gcode"
+
+
+def test_job_changed_sampled_progress_routes_normal_ambiguous(capture_ambiguous):
+    """Same back-to-back change but the outgoing job HAD a real progress sample →
+    progress_unknown=False (compute the partial at its measured progress)."""
+    _drive(["PRINTING", "PRINTING"],
+           jobs={0: _job(filename="/usb/a.gcode", job_id="A", progress=0.6),
+                 1: _job(filename="/usb/b.gcode", job_id="B", progress=0.1)})
+    assert capture_ambiguous.call_count == 1
+    assert capture_ambiguous.call_args.kwargs.get("progress_unknown") is False
+    assert abs(capture_ambiguous.call_args.args[3] - 0.6) < 1e-9
+
+
 def test_job_change_without_latched_filename_no_ambiguous(capture_ambiguous):
     """A job_id seen with NO filename ever latched (defensive — get_printer_job
     normally always carries a filename), then a different job_id: there's nothing

@@ -86,8 +86,55 @@
             </div>`;
     }
 
+    // Unresolved reviews (2026-06-13): usage couldn't be finalized at print-end.
+    //   no_spool         — real grams computed, but NO spool was bound to the
+    //                      toolhead. Apply RE-RESOLVES to whatever's bound now.
+    //   progress_unknown — the print was replaced before a progress reading, so
+    //                      its usage is unmeasurable. Weigh + adjust, or Discard.
+    // Neither carries per-spool nudge rows; both are non-destructive until acted on.
+    function unresolvedCardHtml(rec, kind) {
+        const total = fmtG(rec.total_grams);
+        const isNoSpool = kind === 'no_spool';
+        const header = isNoSpool
+            ? `⚠️ ${esc(rec.printer_name)} — ${total}g computed, no spool bound`
+            : `❓ ${esc(rec.printer_name)} — couldn't measure usage`;
+        const banner = isNoSpool
+            ? `FCC computed this print used <b>${total}g</b> but <b>no spool is bound</b> to the
+               toolhead, so there was nowhere to deduct. <b>Bind the toolhead</b> (Location Manager),
+               then <b>Apply</b> — FCC re-checks and deducts from whatever's bound now. Or
+               <b>Discard</b> if you've already trued it up.`
+            : `FCC couldn't measure how much filament this print used — it was <b>replaced by a new
+               print before a progress reading</b>. <b>Weigh the spool</b> and adjust it directly, or
+               <b>Discard</b> this review.`;
+        const applyBtn = isNoSpool
+            ? `<button type="button" class="btn btn-sm btn-success fw-bold fcc-cr-confirm">Apply (re-check spool)</button>`
+            : '';
+        return `
+            <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
+                 data-kind="${esc(kind)}" data-ambiguous="${rec.ambiguous ? '1' : '0'}"
+                 style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+                    <div style="font-weight:bold;color:${isNoSpool ? '#ffd27a' : '#7ec8ff'};">${header}</div>
+                    <div style="color:#9aa;font-size:0.92rem;">${isNoSpool ? total + 'g' : 'unmeasured'}</div>
+                </div>
+                <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
+                <div style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
+                            background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
+                    ${banner}
+                </div>
+                <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+                    <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
+                            data-armed="0"
+                            title="Permanently drop this review — the spool is NOT deducted">🗑️ Discard</button>
+                    ${applyBtn}
+                </div>
+            </div>`;
+    }
+
     function cardHtml(rec) {
+        const kind = rec.kind || 'partial';
         const pct = Math.round((Number(rec.progress) || 0) * 100);
+        if (kind === 'no_spool' || kind === 'progress_unknown') return unresolvedCardHtml(rec, kind);
         const rows = (rec.spools || []).map(spoolRowHtml).join('');
         const total = (rec.spools || []).reduce((a, s) => a + (Number(s.grams) || 0), 0);
         // Ambiguous (2026-06-13): the print reached idle without an observed
@@ -310,6 +357,11 @@
                     } else if (d.status === 'already_handled') {
                         toast('Already handled elsewhere.', 'info');
                         card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
+                    } else if (d.status === 'still_no_spool' || d.status === 'manual_only') {
+                        // Not applied, but the review is kept server-side — LEAVE the
+                        // card so the user can bind a spool / weigh, then retry Apply.
+                        e.target.disabled = false;
+                        toast(d.msg || 'Not applied — still no spool bound.', 'warning', 7000);
                     } else {
                         e.target.disabled = false;
                         toast(d.msg || 'Confirm failed — check the log.', 'error', 7000);

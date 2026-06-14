@@ -183,7 +183,11 @@ def test_create_pending_no_creds_queues_deferred_fetch():
     assert cancel_fetch_store.has_pending("XL", "J-4b") is True
 
 
-def test_create_pending_no_mapped_spool_records_and_warns():
+def test_no_spool_stashes_recoverable_review_no_ledger():
+    """Usage WAS computed but no spool is bound to the toolhead. Instead of burning
+    a terminal grams=0 ledger entry (the 2026-06-13 silent-loss bug), stash a
+    RECOVERABLE `no_spool` review carrying the computed usage_map — so binding the
+    toolhead later + Apply can re-resolve and deduct it. No ledger write."""
     gcode, frac = _cancelled_gcode()
     printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
     # get_spools_at_location returns nothing → no spool to deduct from.
@@ -196,10 +200,125 @@ def test_create_pending_no_mapped_spool_records_and_warns():
     finally:
         for m in reversed(ctx):
             m.stop()
-    assert out["status"] == "no_spools"
-    assert cancel_review_store.has_pending("XL", "J-6") is False
-    assert print_deduct_ledger.was_deducted("XL", "J-6") is True   # recorded, won't re-queue
-    assert log.call_args.args[1] == "WARNING"
+    assert out["status"] == "pending_unresolved" and out["kind"] == "no_spool"
+    assert cancel_review_store.has_pending("XL", "J-6") is True
+    assert print_deduct_ledger.was_deducted("XL", "J-6") is False   # NOT terminal-0g'd
+    rec = cancel_review_store.get_pending("XL", "J-6")
+    assert rec["kind"] == "no_spool"
+    assert rec["spools"] == []
+    # usage_map carries the computed grams (T0 = 10mm * 2.0 g/mm = 20g), keyed by
+    # position — JSON-serialized so the key is a STRING (the confirm path int()s it).
+    assert rec["usage_map"] == {"0": 20.0}
+    assert log.call_args.kwargs["meta"]["type"] == "cancel_deduct_pending"
+
+
+def test_progress_unknown_short_circuits_to_review_no_compute():
+    """progress_unknown=True must NOT fetch creds or download/compute (the prefix-
+    parse at 0% would fold to a misleading no_usage 0g and lose it permanently) —
+    it stashes a non-destructive progress_unknown review directly: no usage_map, no
+    ledger, recoverable by weighing."""
+    with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module.prusalink_api, "fetch_printer_credentials") as creds, \
+         patch.object(app_module.prusalink_api, "fetch_cancel_gcode") as dl, \
+         patch.object(app_module.state, "add_log_entry"):
+        out = app_module._create_pending_cancel_review(
+            "XL", "f.gcode", "PU-2", 0.0, fb_url="http://fb",
+            ambiguous=True, progress_unknown=True)
+    assert out["status"] == "pending_unresolved" and out["kind"] == "progress_unknown"
+    creds.assert_not_called()    # no credentials fetch
+    dl.assert_not_called()       # no download/compute
+    rec = cancel_review_store.get_pending("XL", "PU-2")
+    assert rec["kind"] == "progress_unknown" and rec["usage_map"] is None
+    assert rec["spools"] == []
+    assert print_deduct_ledger.was_deducted("XL", "PU-2") is False
+
+
+def test_confirm_no_spool_reresolves_and_applies():
+    """Apply on a no_spool review re-resolves the stored usage_map to whatever spool
+    is bound NOW (toolhead just bound) and deducts additively. Exercises the
+    int-key coercion (usage_map key "0" → position 0) end to end."""
+    cancel_review_store.add_pending({
+        "printer_name": "XL", "job_id": "NS-1", "filename": "f.gcode", "progress": 0.4,
+        "total_grams": 20.0, "spools": [], "kind": "no_spool",
+        "usage_map": {"0": 20.0}, "created": "2026-06-13 00:00:00"})
+    spools = {100: {"id": 100, "used_weight": 100.0, "initial_weight": 1000.0}}
+    captured = []
+    with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value={"XL-1": {"printer_name": "XL", "position": 0}}), \
+         patch.object(app_module, "_resolve_active_locs_for_printer",
+                      return_value=[("XL-1", {"position": 0})]), \
+         patch.object(app_module.spoolman_api, "get_spools_at_location",
+                      side_effect=lambda loc: [100] if str(loc).upper() == "XL-1" else []), \
+         patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))), \
+         patch.object(app_module.spoolman_api, "update_spool",
+                      side_effect=lambda sid, data: captured.append((sid, dict(data))) or {"id": sid}), \
+         patch.object(app_module.spoolman_api, "format_spool_display",
+                      return_value={"text": "#100", "color": "ff0000"}), \
+         patch.object(app_module.state, "add_log_entry"):
+        r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
+                                               json={"printer_name": "XL", "job_id": "NS-1", "updates": {}})
+    d = r.get_json()
+    assert d["status"] == "confirmed"
+    assert captured == [(100, {"used_weight": 120.0})]   # 100 + 20g, ONLY used_weight
+    assert print_deduct_ledger.was_deducted("XL", "NS-1") is True
+    assert cancel_review_store.has_pending("XL", "NS-1") is False
+
+
+def test_confirm_no_spool_still_unbound_restashes_no_ledger():
+    """If still no spool is bound at Apply time, the review is RE-STASHED (kept
+    recoverable) and reports still_no_spool — never a terminal 0g, never popped."""
+    cancel_review_store.add_pending({
+        "printer_name": "XL", "job_id": "NS-2", "filename": "f.gcode", "progress": 0.4,
+        "total_grams": 20.0, "spools": [], "kind": "no_spool",
+        "usage_map": {"0": 20.0}, "created": "2026-06-13 00:00:00"})
+    captured = []
+    with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value={"XL-1": {"printer_name": "XL", "position": 0}}), \
+         patch.object(app_module, "_resolve_active_locs_for_printer",
+                      return_value=[("XL-1", {"position": 0})]), \
+         patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=lambda loc: []), \
+         patch.object(app_module.spoolman_api, "update_spool",
+                      side_effect=lambda sid, data: captured.append((sid, data))), \
+         patch.object(app_module.state, "add_log_entry"):
+        r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
+                                               json={"printer_name": "XL", "job_id": "NS-2", "updates": {}})
+    d = r.get_json()
+    assert d["status"] == "still_no_spool"
+    assert captured == []                                            # nothing written
+    assert print_deduct_ledger.was_deducted("XL", "NS-2") is False   # no terminal 0g
+    assert cancel_review_store.has_pending("XL", "NS-2") is True     # re-stashed, recoverable
+
+
+def test_confirm_progress_unknown_is_manual_only_and_restashes():
+    """A progress_unknown review has no usage to auto-apply — confirm must NOT
+    0g-'confirm' it (re-loses it). It re-stashes and reports manual_only."""
+    cancel_review_store.add_pending({
+        "printer_name": "XL", "job_id": "PU-1", "filename": "f.gcode", "progress": 0.0,
+        "total_grams": 0.0, "spools": [], "kind": "progress_unknown",
+        "usage_map": None, "created": "2026-06-13 00:00:00"})
+    r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
+                                           json={"printer_name": "XL", "job_id": "PU-1", "updates": {}})
+    d = r.get_json()
+    assert d["status"] == "manual_only"
+    assert print_deduct_ledger.was_deducted("XL", "PU-1") is False
+    assert cancel_review_store.has_pending("XL", "PU-1") is True     # kept
+
+
+def test_dismiss_unresolved_records_zero_ledger():
+    """Dismiss is the LEGITIMATE terminal-0g for an unresolved review (user says
+    'already handled') — records dismissed + pops it."""
+    for jid, kind in (("D-NS", "no_spool"), ("D-PU", "progress_unknown")):
+        cancel_review_store.add_pending({
+            "printer_name": "XL", "job_id": jid, "filename": "f.gcode", "progress": 0.0,
+            "total_grams": 0.0, "spools": [], "kind": kind, "created": "2026-06-13 00:00:00"})
+        with patch.object(app_module.state, "add_log_entry"):
+            r = app_module.app.test_client().post("/api/cancel_deduct/dismiss",
+                                                   json={"printer_name": "XL", "job_id": jid})
+        assert r.get_json()["status"] == "dismissed"
+        assert print_deduct_ledger.was_deducted("XL", jid) is True
+        assert cancel_review_store.has_pending("XL", jid) is False
 
 
 # ---------------------------------------------------------------------------

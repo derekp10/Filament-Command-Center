@@ -165,24 +165,27 @@ def test_completed_print_download_lock_defers_with_complete_kind(stores_tmp):
     assert print_deduct_ledger.was_deducted("XL", "J-9") is False
 
 
-def test_completed_print_no_spool_surfaces_warning_not_silent(stores_tmp):
-    """Footer has usage but no spool is loaded at the active position → must NOT
-    log a green '0.0g' SUCCESS + record the full footer; surface a WARNING and
-    record grams=0 (honest, can't re-fire). Mirrors the cancel no_spools path."""
+def test_completed_print_no_spool_stashes_recoverable_review(stores_tmp):
+    """Footer has usage but no spool is bound at the active toolhead → must NOT
+    burn a terminal grams=0 ledger entry (permanent silent loss). Stash a
+    RECOVERABLE `no_spool` review carrying the footer usage_map so binding the
+    toolhead + Apply can re-resolve and deduct it. Mirrors the cancel no_spool
+    path (2026-06-13)."""
     pm = {"XL-1": {"printer_name": "XL", "position": 0}}
     gcode = "; filament used [g] = 25\n"
-    logs = []
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.locations_db, "get_active_printer_map", return_value=pm), \
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
                       side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
          patch.object(app_module, "_apply_usage_to_printer", return_value=(0, [])), \
-         patch.object(app_module.state, "add_log_entry", side_effect=lambda *a, **k: logs.append(a)):
+         patch.object(app_module.state, "add_log_entry"):
         res = app_module.deduct_completed_print("XL", "done.gcode", "J-9")
-    assert res["status"] == "no_spools"
-    assert print_deduct_ledger.was_deducted("XL", "J-9") is True  # honest grams=0, no re-fire
-    assert any("no mapped spool" in str(a[0]) and len(a) > 1 and a[1] == "WARNING" for a in logs), logs
+    assert res["status"] == "pending_unresolved" and res["kind"] == "no_spool"
+    assert print_deduct_ledger.was_deducted("XL", "J-9") is False   # NOT terminal-0g'd
+    rec = cancel_review_store.get_pending("XL", "J-9")
+    assert rec and rec["kind"] == "no_spool"
+    assert rec["usage_map"] == {"0": 25.0}                          # footer grams, recoverable
 
 
 def test_fetch_retry_complete_abandoned_when_flag_off(stores_tmp):
