@@ -200,18 +200,60 @@ def test_monotonic_progress_latched(capture_edge):
     assert abs(capture_edge.call_args.args[3] - 0.6) < 1e-9
 
 
-def test_job_id_change_resets_progress_high_water(capture_edge):
+def test_job_id_change_resets_progress_high_water(capture_edge, capture_ambiguous):
     """PRINTING job A @0.7, then a DIFFERENT job B @0.1 starts while still
     in-progress (cancel→reslice→restart faster than a sampled STOPPED). The new
     job must NOT inherit A's 0.7 high-water — B's own cancel deducts B's progress
-    (0.1), else a quick restart over-deducts the new spool."""
+    (0.1), else a quick restart over-deducts the new spool.
+
+    The outgoing job A (latched, never reached an OBSERVED terminal) now routes to
+    the AMBIGUOUS REVIEW at its own 0.7 high-water instead of being silently
+    dropped — closing the back-to-back silent-loss path (2026-06-13)."""
     _drive(["PRINTING", "PRINTING", "STOPPED"],
            jobs={0: _job(filename="/usb/a.gcode", job_id=100, progress=0.7),
                  1: _job(filename="/usb/b.gcode", job_id=200, progress=0.1)})
+    # B's cancel deducts B's OWN progress (the latch reset held).
     assert capture_edge.call_count == 1
     args = capture_edge.call_args.args
     assert args[1] == "/usb/b.gcode" and args[2] == 200
     assert abs(args[3] - 0.1) < 1e-9   # 0.1, NOT max(0.7, 0.1)
+    # A is surfaced as an ambiguous review at its retained 0.7 (not dropped).
+    assert capture_ambiguous.call_count == 1
+    amb = capture_ambiguous.call_args.args
+    assert amb[1] == "/usb/a.gcode" and amb[2] == 100
+    assert abs(amb[3] - 0.7) < 1e-9
+
+
+def test_back_to_back_job_change_fires_ambiguous_for_previous(
+        capture_ambiguous, capture_edge):
+    """Connect auto-queue: job A COMPLETES at ~0.95 and job B auto-starts inside a
+    single tick, so the monitor samples PRINTING(A) → PRINTING(B) and NEVER sees
+    A's FINISHED. A's completion must NOT be silently dropped — it routes to the
+    ambiguous review ('couldn't confirm complete vs cancel') at A's retained 0.95,
+    and never to an auto-deduct edge. The one true silent-loss path the done→ready
+    audit found (2026-06-13)."""
+    _drive(["PRINTING", "PRINTING"],
+           jobs={0: _job(filename="/usb/done.gcode", job_id="A", progress=0.95),
+                 1: _job(filename="/usb/next.gcode", job_id="B", progress=0.02)})
+    assert capture_edge.call_count == 0
+    assert capture_ambiguous.call_count == 1
+    amb = capture_ambiguous.call_args.args
+    assert amb[0] == "XL" and amb[1] == "/usb/done.gcode" and amb[2] == "A"
+    assert abs(amb[3] - 0.95) < 1e-9
+
+
+def test_job_change_without_latched_filename_no_ambiguous(capture_ambiguous):
+    """A job_id seen with NO filename ever latched (defensive — get_printer_job
+    normally always carries a filename), then a different job_id: there's nothing
+    to review, so the job-changed branch logs INFO-only and does NOT fire the
+    ambiguous edge."""
+    with patch.object(app_module.prusalink_api, "get_printer_job",
+                      return_value={"job_id": 1, "progress": 0.3}):
+        app_module._track_print_edge("XL", _state("PRINTING"), "http://fb")
+    with patch.object(app_module.prusalink_api, "get_printer_job",
+                      return_value=_job(filename="/usb/b.gcode", job_id=2, progress=0.1)):
+        app_module._track_print_edge("XL", _state("PRINTING"), "http://fb")
+    assert capture_ambiguous.call_count == 0
 
 
 def test_finished_does_not_fire_cancel(capture_edge):
@@ -893,3 +935,67 @@ def test_pulse_printing_then_idle_creates_ambiguous_review(ledger_tmp):
     assert 100 in sids and abs(sids[100]["grams"] - 20.0) < 1e-6   # T0: 10mm*2.0
     assert 200 not in sids, "untouched toolhead's spool must not be in the preview"
     assert print_deduct_ledger.was_deducted("XL", "A-1") is False
+
+
+def test_pulse_printing_then_ready_creates_ambiguous_review(ledger_tmp):
+    """The user's literal done→ready workflow end-to-end: a PRINTING tick latches
+    the job, then a READY tick (printer set to 'Ready' / dismissed faster than the
+    monitor samples FINISHED) computes the per-tool partial at the retained
+    progress and STASHES a review FLAGGED ambiguous. READY is in the idle
+    allow-list, so it's handled exactly like IDLE — Spoolman is NOT touched, the
+    ledger stays clean until confirm/dismiss (done→ready audit, 2026-06-13)."""
+    gcode, frac = _cancelled_gcode()
+    printer_map = {
+        "XL-1": {"printer_name": "XL", "position": 0},
+        "XL-2": {"printer_name": "XL", "position": 1},
+    }
+    spools = {
+        100: {"id": 100, "used_weight": 100.0, "initial_weight": 1000.0},
+        200: {"id": 200, "used_weight": 50.0, "initial_weight": 1000.0},
+    }
+    spools_at = {"XL-1": [100], "XL-2": [200]}
+    captured = {"updates": []}
+
+    def _update(sid, data):
+        captured["updates"].append((sid, dict(data)))
+        return {"id": sid, **data}
+
+    # get_printer_state: PRINTING on tick 1, READY on tick 2 (no terminal sampled).
+    state_seq = iter([_state("PRINTING"), _state("READY")])
+    job_ret = _job(filename="ready.gcode", job_id="R-1", progress=frac)
+
+    ctx = [
+        patch.object(app_module.config_loader, "load_config", return_value={}),
+        patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map),
+        patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
+        patch.object(app_module.prusalink_api, "get_printer_state",
+                     side_effect=lambda *a, **k: next(state_seq)),
+        patch.object(app_module.prusalink_api, "get_printer_job", return_value=job_ret),
+        patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds),
+        patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
+                     side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}),
+        patch.object(app_module.spoolman_api, "get_spools_at_location",
+                     side_effect=lambda loc: spools_at.get(str(loc).upper(), [])),
+        patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))),
+        patch.object(app_module.spoolman_api, "update_spool", side_effect=_update),
+        patch.object(app_module.spoolman_api, "format_spool_display",
+                     return_value={"text": "#s", "color": "ff0000"}),
+        patch.object(app_module, "print_tracker_store"),          # isolate latch persistence
+        patch.object(app_module, "_process_pending_cancel_fetches"),  # not under test here
+    ]
+    for m in ctx:
+        m.start()
+    try:
+        app_module._cancel_monitor_tick()   # PRINTING → latch
+        app_module._cancel_monitor_tick()   # READY → ambiguous review
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+
+    assert captured["updates"] == [], "ambiguous review must NOT write to Spoolman"
+    pending = cancel_review_store.list_pending()
+    assert len(pending) == 1, pending
+    rec = pending[0]
+    assert rec["printer_name"] == "XL" and rec["job_id"] == "R-1"
+    assert rec.get("ambiguous") is True, "review must be flagged ambiguous"
+    assert print_deduct_ledger.was_deducted("XL", "R-1") is False

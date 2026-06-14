@@ -5735,6 +5735,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
         except Exception:
             job = None
         job_changed = None
+        prev_job = None  # outgoing job's latched details, for the ambiguous review
         with _PRINT_TRACKER_LOCK:
             entry = _PRINT_TRACKER.setdefault(printer_name, {})
             entry['state'] = cur
@@ -5747,15 +5748,27 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 old_jid = entry.get('job_id')
                 # A different (valid) job_id while still in-progress means a NEW
                 # print started without us sampling the previous one's terminal
-                # state (cancel→reslice→restart faster than the poll, or a missed
-                # STOPPED). Reset the stale latch so the new job does NOT inherit
-                # the old progress high-water (which would over-state its %, then
-                # over-deduct on its own cancel). We can't tell from here whether
-                # the previous job was cancelled or completed, so it is NOT
-                # auto-deducted — logged for visibility (usage in this window is
-                # ~0 anyway since reprep takes longer than a poll).
+                # state (cancel→reslice→restart faster than the poll, a missed
+                # STOPPED, or a Connect auto-queue where the previous job COMPLETED
+                # and the next one auto-started inside a single tick). Reset the
+                # stale latch so the new job does NOT inherit the old progress
+                # high-water (which would over-state its %, then over-deduct on its
+                # own cancel) — but FIRST capture the outgoing job so we can route
+                # it to the AMBIGUOUS REVIEW (the same "couldn't confirm cancel vs
+                # complete" path the live active→IDLE edge uses). This used to be
+                # logged INFO-only, which silently dropped a completed-then-requeued
+                # job's deduct — the one true silent-loss path (2026-06-13). It
+                # NEVER auto-deducts, and a reslice cancelled before extrusion folds
+                # to no_usage in the compute (no review line), so this doesn't spam
+                # reviews for normal cancel→reslice churn.
                 if new_jid is not None and old_jid not in (None, '') and str(new_jid) != str(old_jid):
                     job_changed = (old_jid, new_jid)
+                    if entry.get('filename'):
+                        prev_job = {
+                            'filename': entry.get('filename'),
+                            'job_id': old_jid,
+                            'progress': float(entry.get('progress', 0.0)),
+                        }
                     entry.pop('progress', None)
                     entry.pop('filename', None)
                     entry.pop('file_meta', None)
@@ -5771,7 +5784,22 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 prog = job.get('progress')
                 if isinstance(prog, (int, float)):
                     entry['progress'] = max(float(entry.get('progress', 0.0)), float(prog))
-        if job_changed:
+        if prev_job:
+            # Surface the outgoing job as an ambiguous review (off-heartbeat,
+            # idempotent via the (printer, job_id) ledger + review store) instead of
+            # silently dropping it. Never auto-deducts.
+            try:
+                state.add_log_entry(
+                    f"❓ {printer_name}: print job changed ({job_changed[0]}→{job_changed[1]}) "
+                    f"without a sampled end state — reviewing the previous job "
+                    f"(couldn't confirm completed vs cancelled).", "INFO")
+            except Exception:
+                pass
+            _dispatch_ambiguous_edge(printer_name, prev_job['filename'],
+                                     prev_job['job_id'], prev_job['progress'], fb_url)
+        elif job_changed:
+            # job_changed but nothing was latched to review (the previous job_id had
+            # no PRINTING sample → no filename). Preserve the original INFO log.
             try:
                 state.add_log_entry(
                     f"ℹ️ {printer_name}: print job changed ({job_changed[0]}→{job_changed[1]}) "
