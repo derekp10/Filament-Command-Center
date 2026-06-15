@@ -1307,6 +1307,50 @@ def get_spools_at_location(loc_name):
     return [s['id'] for s in get_spools_at_location_detailed(loc_name)]
 
 
+def select_deduct_targets(loc_name):
+    """Pick the spool id(s) to actually deduct from for ONE toolhead query,
+    resolving the multi-spool ambiguity that otherwise N×-over-deducts a position
+    (Group 22.4(1)). Returns (sids: list[int], ambiguous: bool).
+
+    A toolhead query (get_spools_at_location_detailed) can return more than one
+    spool: the CURRENTLY-LOADED spool (is_ghost=False — its `location` IS the
+    toolhead) plus any stale `physical_source` GHOST trail (is_ghost=True — a spool
+    that passed THROUGH this toolhead but is loaded elsewhere now). The ghost is
+    not consuming filament here, so deducting the position's grams from it too is
+    the over-deduct bug. Rule:
+      • DIRECT wins: if any direct (non-ghost) match exists, return ONLY the
+        distinct direct sids and DROP the ghosts.
+      • ghost-only: no direct match → return the distinct ghost sids (preserves
+        today's behavior; the mid-print-swap case where the loaded spool truly
+        LEFT this toolhead is the separate 22.3 attribution gap, not collapsed
+        here).
+      • 0 matches → ([], False) — benign; the caller skips this position.
+    ambiguous=True when 2+ DISTINCT chosen sids remain — genuinely two spools
+    claiming one toolhead, physically impossible at one-spool-per-head, so the
+    caller flags/handles it rather than silently over-deducting. De-dupes by sid.
+
+    NB this de-conflicts WITHIN one toolhead query only. One physical spool feeding
+    TWO toolhead positions (the shared-spool #230 case) is two SEPARATE loc_name
+    queries each returning that one sid — handled additively by the per-position
+    deduct loop, untouched here.
+    """
+    items = get_spools_at_location_detailed(loc_name)
+    direct, ghost, seen = [], [], set()
+    for it in items:
+        try:
+            sid = int(it['id'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        (ghost if it.get('is_ghost') else direct).append(sid)
+    chosen = direct if direct else ghost
+    out = []
+    for sid in chosen:
+        if sid not in seen:
+            seen.add(sid)
+            out.append(sid)
+    return out, len(out) > 1
+
+
 def bucket_spools_by_location(loc_ids, spools=None):
     """Bucket spools across MANY locations in ONE pass, sharing the exact
     match + display logic of get_spools_at_location_detailed.

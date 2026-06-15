@@ -43,6 +43,10 @@ def _reset_tracker(tmp_path, monkeypatch):
     monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "review.json"))
     monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetch.json"))
     monkeypatch.setattr(print_tracker_store, "_STORE_PATH", str(tmp_path / "latch.json"))
+    # 22.3: the start-spool snapshot capture (on a PRINTING tick when the completion
+    # flag is on) would otherwise hit real Spoolman per tick. No-op it by default; a
+    # test that exercises capture overrides locally.
+    monkeypatch.setattr(app_module, "_snapshot_active_spools", lambda *a, **k: {})
     app_module._PRINT_TRACKER.clear()
     prev_async = app_module._CANCEL_DEDUCT_RUN_ASYNC
     app_module._CANCEL_DEDUCT_RUN_ASYNC = False

@@ -61,13 +61,27 @@
             ? window.makeSwatchHtml(s.color, 'longitudinal',
                 { size: 16, borderColor: 'rgba(255,255,255,0.5)', marginRight: 0 })
             : '';
+        // 22.4 residual: a toolhead with 2+ distinct loaded spools is AMBIGUOUS —
+        // the autonomous deduct SKIPS it (can't tell which spool is loaded), so its
+        // grams weren't auto-deducted and it's surfaced here for the reviewer to
+        // resolve. Without a per-row cue the reviewer sees two identical-looking rows
+        // with no hint why. Flag the row (left border + badge) so the bad assignment
+        // is visible. (Distinct from the card-level `rec.ambiguous` cancel-vs-completed
+        // flag — this is a per-spool-row indicator.)
+        const amb = !!s.ambiguous;
+        const ambBorder = amb ? 'border-left:3px solid #ffae42;padding-left:6px;' : '';
+        const ambBadge = amb
+            ? `<span title="This toolhead has more than one spool assigned — FCC can't tell which is loaded, so these grams weren't auto-deducted. Pick the real amount per spool."
+                     style="margin-left:6px;font-size:0.74rem;font-weight:bold;color:#ffae42;
+                            border:1px solid #ffae42;border-radius:4px;padding:0 4px;white-space:nowrap;">⚠️ ambiguous</span>`
+            : '';
         return `
             <div class="fcc-cr-row" data-sid="${s.sid}"
                  style="display:flex;align-items:center;gap:8px;justify-content:space-between;
-                        padding:6px 0;border-bottom:1px solid #2b2c30;">
+                        padding:6px 0;border-bottom:1px solid #2b2c30;${ambBorder}">
                 <div style="min-width:0;flex:1;">
                     ${swatch}
-                    <span style="color:#eee;">${esc(s.display)}</span>
+                    <span style="color:#eee;">${esc(s.display)}</span>${ambBadge}
                     <span style="color:#9aa;font-size:0.92rem;">
                         (${esc(s.toolhead)} · ${fmt(s.remaining_before)}g left)
                     </span>
@@ -137,31 +151,51 @@
         if (kind === 'no_spool' || kind === 'progress_unknown') return unresolvedCardHtml(rec, kind);
         const rows = (rec.spools || []).map(spoolRowHtml).join('');
         const total = (rec.spools || []).reduce((a, s) => a + (Number(s.grams) || 0), 0);
+        // spool_changed (22.3): a COMPLETED print whose toolhead spool changed
+        // mid-print (run-out / M600 replace). The full footer was NOT auto-applied
+        // (it would dump the whole tool's usage on the replacement + record 0g on
+        // the run-out spool); the user splits the grams manually.
+        const spoolChanged = kind === 'spool_changed';
+        const changedPos = (rec.changed_positions || []).join(', ');
         // Ambiguous (2026-06-13): the print reached idle without an observed
         // terminal state, so FCC couldn't confirm cancel vs completion. Reword
         // the header + banner; the grams are computed at the last seen progress
         // (the confidence hint), nudgeable either way.
-        const ambiguous = !!rec.ambiguous;
-        const header = ambiguous
-            ? `❓ ${esc(rec.printer_name)} — ended at ~${pct}% (couldn't confirm: completed or cancelled?)`
-            : `🛑 ${esc(rec.printer_name)} — cancelled at ~${pct}%`;
-        const banner = ambiguous
-            ? `❓ FCC couldn't tell whether this print <b>finished</b> or was <b>cancelled</b> — it
-               reached idle without a clear cancel/finish signal (a fast restart, or the printer
-               power-cycled). The grams below are computed at the last seen progress (~${pct}%).
-               If it actually <b>finished</b>, nudge each spool up to the full amount; if it was
-               <b>cancelled earlier</b>, nudge down. Confirm to deduct, or <b>Discard</b> if it
-               was already handled.`
-            : `⚠️ If you cancelled individual objects mid-print — a per-object / M486 cancel,
-               from the printer or Connect — these grams can read <b>high</b>: the gcode still
-               counts the skipped object's filament, which never left the spool. Nudge each
-               spool down to the real amount before confirming.`;
+        const ambiguous = !spoolChanged && !!rec.ambiguous;
+        let header, banner, headerColor;
+        if (spoolChanged) {
+            headerColor = '#ffb74d';
+            header = `🔁 ${esc(rec.printer_name)} — spool changed mid-print`;
+            banner = `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament
+               run-out or M600) at toolhead position(s) <b>${esc(changedPos)}</b>, so the full
+               slicer total was <b>NOT auto-applied</b> — it would charge the whole tool's usage
+               to the <b>replacement</b> spool and leave the run-out spool at 0g. The rows below
+               are the <b>replacement</b> spool(s) at completion: nudge each <b>down</b> to what
+               it actually used, then weigh + true up the run-out spool separately (it isn't shown
+               here once it left the toolhead). Confirm to deduct, or <b>Discard</b>.`;
+        } else {
+            headerColor = ambiguous ? '#7ec8ff' : '#ffd27a';
+            header = ambiguous
+                ? `❓ ${esc(rec.printer_name)} — ended at ~${pct}% (couldn't confirm: completed or cancelled?)`
+                : `🛑 ${esc(rec.printer_name)} — cancelled at ~${pct}%`;
+            banner = ambiguous
+                ? `❓ FCC couldn't tell whether this print <b>finished</b> or was <b>cancelled</b> — it
+                   reached idle without a clear cancel/finish signal (a fast restart, or the printer
+                   power-cycled). The grams below are computed at the last seen progress (~${pct}%).
+                   If it actually <b>finished</b>, nudge each spool up to the full amount; if it was
+                   <b>cancelled earlier</b>, nudge down. Confirm to deduct, or <b>Discard</b> if it
+                   was already handled.`
+                : `⚠️ If you cancelled individual objects mid-print — a per-object / M486 cancel,
+                   from the printer or Connect — these grams can read <b>high</b>: the gcode still
+                   counts the skipped object's filament, which never left the spool. Nudge each
+                   spool down to the real amount before confirming.`;
+        }
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
-                 data-ambiguous="${ambiguous ? '1' : '0'}"
+                 data-ambiguous="${ambiguous ? '1' : '0'}" data-kind="${esc(kind)}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
-                    <div style="font-weight:bold;color:${ambiguous ? '#7ec8ff' : '#ffd27a'};">${header}</div>
+                    <div style="font-weight:bold;color:${headerColor};">${header}</div>
                     <div style="color:#9aa;font-size:0.92rem;">${fmtG(total)}g total</div>
                 </div>
                 <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
