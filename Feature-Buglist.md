@@ -1,5 +1,7 @@
 # **New and Unsorted Features/Bugs**
 
+* Adding new locations, specifically shelve, row section locations is messy and needs a revision. infact any location that's a sub location isn't easy to add. This whole workflow needs to be re-designed. (Should check to see if we've finished the full refactor on location id and stuff yet.)
+
 * Printer status collapsed should have a way to show the printer status as well, so the user doesn't have to expand the printer status bar.
 
 * Perhaps standardize the location of the 2 detail modals (spool & filament) so the buttons are in the same location for each, so the user can navigate more efficiently. We could also just think about this one a bit. It might be ok to force the user to pay attention to whats available?
