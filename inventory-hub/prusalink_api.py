@@ -1,7 +1,7 @@
 import requests
 import re
 import threading
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 import perf_trace  # L3 latency probe — zero-cost when no trace is active
 import bgcode_decode  # binary-gcode (.bgcode) decoder for the cancel prefix-parse
 
@@ -306,6 +306,77 @@ def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) ->
         if mm > 0 and tool in g_per_mm:
             result[tool] = round(mm * g_per_mm[tool], 4)
     return result
+
+
+# Marker PrusaSlicer emits immediately before each planned color change, e.g.
+# `;COLOR_CHANGE,T0,#FF8800`. Scanning THIS (not the bare `M600`, which a user can
+# remap via `color_change_gcode`) is the deterministic boundary signal. Both the
+# T-index and the hex are optional in older/edge slicer output, so capture
+# defensively. The `\b` after COLOR_CHANGE is load-bearing: without it (and with the
+# optional groups) `.match` would accept any line starting `;COLOR_CHANGE…` —
+# `;COLOR_CHANGE_DATA`, `;COLOR_CHANGEDFOO` — emitting spurious boundaries. Matched
+# per-line (after lstrip), so no MULTILINE needed.
+_COLOR_CHANGE_RE = re.compile(
+    r';\s*COLOR_CHANGE\b(?:\s*,\s*T(\d+))?(?:\s*,\s*(#?[0-9A-Fa-f]{6}))?',
+    re.IGNORECASE)
+
+
+def parse_color_change_segments(gcode_content: str) -> List[Dict]:
+    """22.3(b) SCAFFOLD — the boundary primitive for per-segment apportionment of a
+    single-extruder Color-Change (M600) print.
+
+    PrusaSlicer emits a ``;COLOR_CHANGE,T<n>,#RRGGBB`` marker immediately before each
+    planned color change. This scans the DECODED gcode for those markers and returns
+    the ordered cut boundaries — each marker line's start byte offset, the equivalent
+    file-byte FRACTION (the SAME 0..1 space ``parse_partial_filament_usage`` slices on,
+    so a downstream split can prefix-parse to a boundary directly), the tool index, and
+    the hex color.
+
+    Returns ``[{seq, byte_offset, fraction, tool, color}, …]`` in file order (empty when
+    the print has no color changes — i.e. not a Color-Change print). The segments it
+    implies are ``[0 → b0], [b0 → b1], …, [b_last → 1.0]``.
+
+    SCOPE: segmentation boundaries ONLY. Computing per-segment GRAMS (integrate E
+    between consecutive boundaries with the existing ``parse_partial_filament_usage``
+    E-walk, then attribute segment k → the spool loaded after the k-th resume from the
+    ``swap_log``) is the validated-math step DEFERRED until Derek's real M600 capture
+    confirms the footer/marker behavior (Group 22.3(b)). This function is pure and is
+    NOT wired to any weight write — building the boundary scanner now de-risks that step
+    without touching the live deduct path. Research note: for a single configured
+    extruder the ``filament used [g]`` footer is a SINGLE total (no per-color array), so
+    per-segment grams MUST come from this E-integration, not the footer.
+
+    ⚠️ UNVALIDATED ASSUMPTION (confirm with the real capture before the consumer lands):
+    this relies on the ``;COLOR_CHANGE`` COMMENT line surviving the binary-gcode decode
+    (the whole fleet is ``.bgcode``). If PrusaSlicer's binary encoder strips body comments
+    (or Derek's "output comments" slicer setting is off), the decoded text carries no
+    marker and this returns ``[]`` on every real print — in which case the boundary
+    signal must move to the executable ``M600``/``M601`` line instead. The Group 22.3(b)
+    experiment checklist captures the raw decoded ``.bgcode`` precisely to settle this.
+    """
+    if not gcode_content:
+        return []
+    total_bytes = len(gcode_content.encode('utf-8')) or 1
+    segments: List[Dict] = []
+    consumed = 0
+    seq = 0
+    for line in gcode_content.splitlines(keepends=True):
+        m = _COLOR_CHANGE_RE.match(line.lstrip())
+        if m:
+            color = m.group(2)
+            if color and not color.startswith('#'):
+                color = '#' + color
+            segments.append({
+                "seq": seq,
+                "byte_offset": consumed,
+                "fraction": round(consumed / total_bytes, 6),
+                "tool": int(m.group(1)) if m.group(1) is not None else None,
+                "color": color,
+            })
+            seq += 1
+        consumed += len(line.encode('utf-8'))
+    return segments
+
 
 def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
     """Cached front door for the PrusaLink state probe (L3 fix A).

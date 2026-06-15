@@ -4044,7 +4044,8 @@ def api_smart_move():
     ))
 
 
-def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
+def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
+                            active_locs=None):
     """Deduct per-toolhead grams from the spools currently mapped to
     `printer_name`'s toolheads. `usage_map` is {toolhead_position: grams}.
 
@@ -4052,16 +4053,31 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
     aggressive parse (full-print estimate) and the cancelled-print PARTIAL
     deduct (prefix-parsed grams). MMU-alias positions (e.g. CORE1-M0 vs
     CORE1-M1 — same position in printer_map) are deduped via
-    `processed_positions` so one usage slice isn't applied twice. Writes ONLY
-    `{used_weight}` per the CLAUDE.md write-surface contract — never bundles
-    initial_weight/location/extra, so a partial deduct can't wipe siblings or
-    silently archive a loaded spool. Surfaces LAST_SPOOLMAN_ERROR on rejection.
+    `processed_positions` so one usage slice isn't applied twice. Within a single
+    toolhead, `spoolman_api.select_deduct_targets` drops a stale physical_source
+    GHOST in favour of the directly-loaded spool so a leftover ghost trail can't
+    double-charge the position (22.4(1)); a genuinely-ambiguous toolhead (2+
+    distinct loaded spools, physically impossible at one-spool-per-head) is WARNed
+    and SKIPPED — never silently over-deducted — so its grams surface as a
+    shortfall the caller can true up (vs the interactive preview, which keeps both
+    rows so the reviewer can pick). Writes ONLY `{used_weight}` per the CLAUDE.md
+    write-surface contract — never bundles initial_weight/location/extra, so a
+    partial deduct can't wipe siblings or silently archive a loaded spool. Surfaces
+    LAST_SPOOLMAN_ERROR on rejection.
 
-    Returns (spools_updated, details) where details is a list of
-    {sid, grams, remaining} for each successful deduct.
+    `active_locs` may be passed pre-resolved (by a caller that already resolved it,
+    e.g. the no_spool confirm) so an MMU printer's info.mmu ordering probe runs ONCE
+    instead of per call (22.4(5)); None re-resolves it here.
+
+    Returns (spools_updated, details, known_positions) where details is a list of
+    {sid, grams, remaining} for each successful deduct and known_positions is the set
+    of this printer's real toolhead positions — surfaced so the caller's shortfall
+    (requested-but-not-applied) excludes orphan tool indices, which already got their
+    own WARNING here, instead of double-warning them (22.4(3)).
     """
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2
-    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+    if active_locs is None:
+        printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2
+        active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
     spools_updated = 0
     details = []
     processed_positions = set()
@@ -4076,6 +4092,21 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
         if not loc_spools:
             continue  # try the next alias for this position
         processed_positions.add(toolhead_idx)
+        # >1 spool at one toolhead = a stale GHOST + the current load (or two
+        # mis-assignments). Resolve to the directly-loaded spool; only fetch the
+        # detailed/ghost info in this rare case so the single-spool common path is
+        # untouched. 2+ distinct LOADED spools is unresolvable — warn + skip rather
+        # than guess (which over-deducts or hits the wrong spool); the grams then
+        # show up as a shortfall.
+        if len(loc_spools) > 1:
+            loc_spools, ambiguous = spoolman_api.select_deduct_targets(loc_id)
+            if ambiguous:
+                state.add_log_entry(
+                    f"⚠️ {printer_name}: toolhead {str(loc_id).upper()} has "
+                    f"{len(loc_spools)} spools assigned (sids {sorted(loc_spools)}) — "
+                    f"can't tell which is loaded; {weight_used:.2f}g not deducted, "
+                    f"weigh the spool to true up.", "WARNING", "ffaa00")
+                continue
         for sid in loc_spools:
             spool_data = spoolman_api.get_spool(sid)
             if spool_data and weight_used > 0:
@@ -4113,12 +4144,165 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label=""):
     orphaned = {t: g for t, g in usage_map.items()
                 if t not in known_positions and g > 0}
     if orphaned:
-        lost = round(sum(orphaned.values()), 1)
+        lost = round(sum(orphaned.values()), 2)
         state.add_log_entry(
-            f"⚠️ {printer_name}: {lost:.1f}g on tool index(es) {sorted(orphaned)} "
+            f"⚠️ {printer_name}: {lost:.2f}g on tool index(es) {sorted(orphaned)} "
             f"map to no toolhead position on this printer — not deducted "
             f"(weigh the spool if this looks wrong).", "WARNING", "ffaa00")
-    return spools_updated, details
+    return spools_updated, details, known_positions
+
+
+def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
+                           usage_map, known_positions=None, confirmed=False):
+    """Single source of truth for the tail of an auto-applied deduct: record the
+    ACTUALLY-applied grams in the exactly-once ledger, then surface any shortfall
+    (requested-but-not-applied grams) as a 2dp WARNING so it's never silently lost.
+    Returns (applied, shortfall), both rounded to 2dp.
+
+    Erases the drift the auto-apply sites had grown (22.4(2)/(4)):
+      • the ledger records APPLIED (sum of `details`), not the requested estimate —
+        deduct_cancelled_print used to record sum(usage_map) (the full requested),
+        over-stating it and, via the single (printer,job_id) key, blocking an
+        unbound position's later recovery; the completed/cancel-review paths already
+        recorded applied, so this just aligns the three;
+      • the shortfall WARN is 2dp here, matching the `shortfall_g` API field (the
+        inline sites logged 1dp).
+    `known_positions` (22.4(3)) restricts `requested` to tool indices on a real
+    toolhead so an orphan index doesn't double-fire (its own orphan WARNING already
+    fired inside _apply_usage_to_printer). None means "all indices are known".
+
+    NOT for the api_cancel_deduct_confirm per-sid loop — that deducts user-chosen
+    grams (no requested/usage_map concept), so a shortfall is meaningless there."""
+    applied = round(sum(d['grams'] for d in details), 2)
+    if known_positions is None:
+        requested = round(sum(usage_map.values()), 2)
+    else:
+        requested = round(sum(g for t, g in usage_map.items()
+                              if t in known_positions), 2)
+    extra = {"confirmed": True} if confirmed else {}
+    print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
+                                      scale=scale, grams=applied, **extra)
+    shortfall = round(max(0.0, requested - applied), 2)
+    if shortfall > 0.05:
+        state.add_log_entry(
+            f"⚠️ {printer_name}: {shortfall:.2f}g of '{filename}' wasn't deducted "
+            f"(no bound spool, a failed write, or a near-empty spool) — weigh that "
+            f"spool to true up.", "WARNING", "ffaa00")
+    return applied, shortfall
+
+
+def _snapshot_active_spools(printer_name, fb_url, active_locs=None):
+    """Resolve {toolhead_position: the single loaded sid, or None} for `printer_name`,
+    using the SAME per-position alias-fallthrough + ghost-vs-current pick as
+    _apply_usage_to_printer — so a print-START snapshot and a completion snapshot
+    compare apples-to-apples (22.3 mid-print spool-swap detection). A position is
+    None when it's EMPTY or AMBIGUOUS (2+ distinct loaded spools), so ONLY a clean
+    1→1 sid change between two snapshots ever flags a swap.
+
+    Best-effort: any failure (Spoolman blip, no printer_map) returns {}, so the
+    caller degrades to today's auto-apply rather than crashing the deduct. Per-
+    position cost mirrors the apply loop (one get_spools_at_location per position;
+    select_deduct_targets only on the rare >1 case) — bounded, once per job at start
+    and once at completion; bucket_spools_by_location could collapse it to one fetch
+    later if it shows in a perf trace."""
+    snap = {}
+    try:
+        if active_locs is None:
+            printer_map = locations_db.get_active_printer_map()
+            active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+        processed = set()
+        for loc_id, p_info in active_locs:
+            pos = p_info.get('position', 0)
+            if pos in processed:
+                continue
+            sids = spoolman_api.get_spools_at_location(loc_id)
+            if not sids:
+                continue  # try the next alias for this position (mirror the apply loop)
+            processed.add(pos)
+            if len(sids) > 1:
+                sids, _amb = spoolman_api.select_deduct_targets(loc_id)
+            snap[pos] = sids[0] if len(sids) == 1 else None
+    except Exception:
+        return {}
+    return snap
+
+
+def _validated_start_spools(src, job_id):
+    """Return src's `start_spools` snapshot ONLY if it belongs to `job_id`, else None.
+    `src` is the tracker entry (restart) or the fire dict (live edge). Both job_id
+    sides are str-coerced — get_printer_job can hand back an int job_id while
+    `snapshot_job` is stored as a string, so a bare == would silently invalidate a
+    good snapshot (int 9 != '9'). Guards a stale snapshot from a previous job."""
+    if not src:
+        return None
+    if str(src.get('snapshot_job')) != str(job_id):
+        return None
+    return src.get('start_spools')
+
+
+def _validated_swap_log(src, job_id):
+    """22.3(b): return src's `swap_log` (ordered mid-print swap events) ONLY if its
+    snapshot belongs to `job_id`. swap_log is captured under the same `snapshot_job`
+    as start_spools and popped alongside it on a job change, so it shares the guard —
+    a stale log from a previous job is never carried into a completion deduct."""
+    if not src:
+        return None
+    if str(src.get('snapshot_job')) != str(job_id):
+        return None
+    return src.get('swap_log')
+
+
+def _is_sid_swap(before, after):
+    """True iff `before`→`after` is a confident, clean 1→1 spool change at one toolhead
+    position: both sides present (a None = an EMPTY or ambiguous toolhead, never a
+    confident swap) AND different. Compared as STRINGS so (a) a JSON int↔str round-trip
+    can't make the same sid read as changed, and (b) a non-numeric sid can never raise —
+    the bare `int(a) != int(b)` this replaces could throw a ValueError that the callers'
+    best-effort `except` swallowed into a SILENT full-footer auto-apply (the exact
+    mis-attribution the swap guard exists to prevent). Single source of truth for "did the
+    spool at this position change", shared by the capture (_record_swap_events) and the
+    completion-time detector (deduct_completed_print) so the two can't drift."""
+    return before is not None and after is not None and str(before) != str(after)
+
+
+def _record_swap_events(entry, end_snap, progress):
+    """22.3(b): append ordered mid-print spool-swap events to entry['swap_log'] by
+    diffing a resume-time snapshot (`end_snap` = {position: loaded sid or None}) against
+    the mapping in effect for the segment just printed — start_spools advanced by the
+    destination (`to_sid`) of any prior swap at each position. Only a clean 1→1 sid
+    change flags: None on EITHER side (an empty or ambiguous toolhead) is not a
+    confident swap, mirroring the completion-time guard. Mutates `entry` in place; the
+    caller holds the tracker lock. Returns the count of new events appended.
+
+    Each event is {seq, position, progress, from_sid, to_sid}. `progress` is the
+    boundary % at the pause (the segment that just ended reached it); `seq` is the
+    append order so a downstream apportionment can align segment k → the spool loaded
+    after the k-th resume. Detection only fires when the spool MAPPING changes — i.e.
+    an FCC eject/load at the pause updates Spoolman `location`; a purely physical roll
+    swap with no FCC action is invisible (documented limitation, same as 22.3(c))."""
+    start = entry.get('start_spools') or {}
+    log = list(entry.get('swap_log') or [])
+    # Reconstruct what the just-printed segment was feeding from: the start mapping,
+    # advanced by each prior swap's destination at that position.
+    running = {str(k): v for k, v in start.items()}
+    for ev in log:
+        running[str(ev.get('position'))] = ev.get('to_sid')
+    added = 0
+    for pos, to_sid in end_snap.items():
+        from_sid = running.get(str(pos))
+        if not _is_sid_swap(from_sid, to_sid):
+            continue  # empty/ambiguous on either side, or unchanged — not a swap
+        log.append({
+            "seq": len(log),
+            "position": pos,
+            "progress": float(progress or 0.0),
+            "from_sid": from_sid,
+            "to_sid": to_sid,
+        })
+        added += 1
+    if added:
+        entry['swap_log'] = log
+    return added
 
 
 def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content):
@@ -4266,22 +4450,35 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
         return terminal
 
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
-    spools_updated, details = _apply_usage_to_printer(
+    spools_updated, details, known = _apply_usage_to_printer(
         printer_name, usage_map, fb_url, strategy_label="Cancel")
-    print_deduct_ledger.record_deduct(
-        printer_name, job_id, filename=filename, scale=reached_fraction,
-        grams=round(sum(usage_map.values()), 2))
+    if spools_updated == 0:
+        # Usage WAS computed but no spool is bound to the toolhead — don't burn a
+        # terminal grams=0 ledger entry (it permanently blocks recovery). Stash a
+        # RECOVERABLE no_spool review carrying the usage_map, mirroring the completed
+        # path's guard, so binding the toolhead later recovers it. (This one-shot
+        # primitive isn't on the live edge today — the cancel edge routes through
+        # _create_pending_cancel_review — but keep the three apply sites uniform.)
+        return _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
+                                        usage_map=usage_map, no_spool=True)
     total = round(sum(d["grams"] for d in details), 1)
     state.add_log_entry(
         f"🛑 Cancelled-print partial deduct on {printer_name}: {total:.1f}g across "
         f"{spools_updated} spool(s) at ~{pct:.0f}% progress ('{filename}').",
         "WARNING")
+    # Record the APPLIED grams (was sum(usage_map) = the full requested — the drift
+    # the completed/cancel-review paths didn't have; 22.4(2)) + surface any shortfall
+    # over known positions (22.4(3)).
+    _record_applied_deduct(
+        printer_name, job_id, filename=filename, scale=reached_fraction,
+        details=details, usage_map=usage_map, known_positions=known)
     return {"status": "deducted", "spools_updated": spools_updated,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
 
 def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
-                           ip_address=None, api_key=None):
+                           ip_address=None, api_key=None, start_spools=None,
+                           swap_log=None):
     """Compute + AUTO-APPLY the full per-tool deduct for a COMPLETED (FINISHED)
     print — FCC's Phase-2 takeover of FilaBridge's completion deduct. Uses the
     slicer FOOTER (the full per-tool estimate, exact = what FilaBridge billed;
@@ -4289,6 +4486,22 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     (printer, job_id) ledger. Auto-applies SILENTLY with a ✅ log line — NO
     preview/confirm, because a completion's grams are exact (the cancel review
     exists to nudge the M486/partial over-estimate, which doesn't apply here).
+
+    `start_spools` (22.3): the {position: sid} snapshot captured at print-START. If a
+    USED toolhead's mapped spool CHANGED between start and completion (a mid-print
+    runout/M600 replace), the full footer would dump the whole tool's usage on the
+    REPLACEMENT spool and record 0g on the run-out spool — both wrong. In that case
+    we route the completion to the cancel-REVIEW pipeline (for a manual split)
+    instead of auto-applying. None (the deferred-fetch retry, a restart that lost
+    the snapshot, a capture failure) → skip detection → today's auto-apply (safe).
+
+    `swap_log` (22.3(b)): the ordered list of mid-print swap events captured at each
+    resume (see _record_swap_events). It catches a swap the coarse start-vs-end diff
+    MISSES — most importantly A→B→A (a spool ran out, was replaced, then the original
+    re-loaded, so start==end) — and carries the per-segment history a future
+    apportionment will split on. Today a non-empty swap_log at a USED position routes
+    the completion to the same manual-split review (safe degrade); the validated
+    automatic per-segment split lands once Derek's real M600 data confirms the math.
 
     On a download lock/blip returns 'awaiting_fetch' and queues a deferred fetch
     (kind='complete'): a Connect-STARTED finished print locks the file behind the
@@ -4304,7 +4517,8 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     if not (ip_address and api_key):
         creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
         if not creds:
-            _enqueue_cancel_fetch(printer_name, filename, job_id, 1.0, kind="complete")
+            _enqueue_cancel_fetch(printer_name, filename, job_id, 1.0, kind="complete",
+                                  start_spools=start_spools, swap_log=swap_log)
             return {"status": "awaiting_fetch", "reason": "no credentials", "job_id": job_id}
         ip_address, api_key = creds.get('ip_address'), creds.get('api_key')
 
@@ -4321,13 +4535,56 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
             # Download failed — the Connect finish-screen LOCK (the completion
             # analogue of the cancel-screen lock §9.10). Defer; the monitor
             # retries once the printer leaves FINISHED (→ IDLE, file unlocked).
-            _enqueue_cancel_fetch(printer_name, filename, job_id, 1.0, kind="complete")
+            # Carry start_spools + swap_log so the retry still detects a mid-print
+            # spool swap (the live latch is gone by then; 22.3 deferred-completion fix).
+            _enqueue_cancel_fetch(printer_name, filename, job_id, 1.0, kind="complete",
+                                  start_spools=start_spools, swap_log=swap_log)
             return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
                     "job_id": job_id}
         return terminal
 
-    spools_updated, details = _apply_usage_to_printer(
-        printer_name, usage_map, fb_url, strategy_label="Complete")
+    # Resolve the printer's active toolheads ONCE and share it with both the swap
+    # detection read and the apply, so an MMU printer's info.mmu ordering probe runs
+    # once (22.4(5) pattern).
+    printer_map = locations_db.get_active_printer_map()
+    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+    # 22.3: mid-print spool-swap guard. If a USED toolhead's mapped spool changed
+    # during the print, the full footer would mis-attribute the whole tool's usage to
+    # the replacement — route to a manual-split review instead of auto-applying. Two
+    # detectors, unioned: (22.3c) a coarse start-vs-END snapshot diff, and (22.3b) the
+    # ordered swap_log captured at each resume. swap_log catches a swap the 2-point
+    # diff misses — notably A→B→A (ran out, replaced, original re-loaded → start==end).
+    # Best-effort: any detection error falls through to auto-apply (NEVER block/drop a
+    # completion on a detection bug).
+    if start_spools or swap_log:
+        try:
+            changed = set()
+            used_positions = {p for p, g in usage_map.items() if g > 0}
+            if start_spools:
+                end_snap = _snapshot_active_spools(printer_name, fb_url, active_locs=active_locs)
+                for pos in used_positions:
+                    # Only a clean 1→1 sid change flags. None on EITHER side (empty/
+                    # ambiguous/orphan at start or end) is NOT a confident swap signal —
+                    # the no_spool/shortfall/ambiguous-skip machinery covers those. Shared
+                    # _is_sid_swap predicate (string-compare; no int() so a non-numeric sid
+                    # can't ValueError into a silently-swallowed auto-apply).
+                    if _is_sid_swap(start_spools.get(str(pos)), end_snap.get(pos)):
+                        changed.add(pos)
+            if swap_log:
+                # A captured resume swap at a USED position — already validated 1→1 at
+                # capture time (_record_swap_events), so no re-snapshot needed.
+                for ev in swap_log:
+                    if ev.get('position') in used_positions:
+                        changed.add(ev.get('position'))
+            if changed:
+                return _route_completion_to_review(
+                    printer_name, filename, job_id, usage_map, fb_url, sorted(changed),
+                    active_locs=active_locs, swap_log=swap_log)
+        except Exception:
+            pass  # detection is best-effort; fall through to auto-apply
+
+    spools_updated, details, known = _apply_usage_to_printer(
+        printer_name, usage_map, fb_url, strategy_label="Complete", active_locs=active_locs)
     if spools_updated == 0:
         # Footer had usage but NO spool is bound at the active toolhead(s). Don't
         # burn a terminal grams=0 ledger entry (it permanently blocks recovery —
@@ -4341,40 +4598,97 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     # multi-tool print where one toolhead has a spool and another doesn't,
     # _apply_usage_to_printer deducts only the bound one(s), so sum(usage_map) would
     # over-state the ledger and (single (printer,job_id) key) the unbound position's
-    # grams can't be held pending alongside this recorded deduct.
+    # grams can't be held pending alongside this recorded deduct. _record_applied_deduct
+    # records the applied grams + surfaces any shortfall over KNOWN positions (an
+    # orphan tool index already warned inside the apply loop, so it's excluded here
+    # to avoid a double-warn — 22.4(2)/(3)).
     applied = round(sum(d["grams"] for d in details), 2)
-    requested = round(sum(usage_map.values()), 2)
-    print_deduct_ledger.record_deduct(
-        printer_name, job_id, filename=filename, scale=1.0, grams=applied)
     state.add_log_entry(
         f"✅ Completed-print deduct on {printer_name}: {applied:.1f}g across "
         f"{spools_updated} spool(s) ('{filename}').", "SUCCESS")
-    shortfall = round(requested - applied, 2)
-    if shortfall > 0.05:
-        # Footer usage that didn't make it onto a spool — a toolhead with no bound
-        # spool, a write that failed, or a near-empty spool that capped. Surface it
-        # so it's NOT silently lost (the partial analogue of the no_spool review;
-        # weigh the spool to true up). NB an orphan tool index — one mapping to no
-        # toolhead position — already got its own warning inside _apply_usage_to_printer.
-        state.add_log_entry(
-            f"⚠️ {printer_name}: {shortfall:.1f}g of '{filename}' wasn't deducted "
-            f"(no bound spool, a failed write, or a near-empty spool) — weigh that "
-            f"spool to true up.", "WARNING", "ffaa00")
+    _record_applied_deduct(
+        printer_name, job_id, filename=filename, scale=1.0, details=details,
+        usage_map=usage_map, known_positions=known)
     return {"status": "deducted", "spools_updated": spools_updated,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
 
-def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
+def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_url,
+                               changed_positions, active_locs=None, swap_log=None):
+    """22.3 minimum-viable: a COMPLETED print where a used toolhead's mapped spool
+    CHANGED mid-print is NOT auto-applied (the full footer would dump the whole
+    tool's usage on the replacement spool, zeroing the run-out spool). Stash a
+    'spool_changed' review carrying the completion-time preview rows so the user
+    splits the grams manually — reusing the cancel-review confirm pipeline verbatim
+    (api_cancel_deduct_confirm routes any kind with `spools` rows through the per-sid
+    partial loop). Writes NO ledger (confirm/dismiss owns that), so exactly-once
+    holds via the review store + ledger guards.
+
+    `swap_log` (22.3(b)) is persisted on the review record for two reasons: it's the
+    per-segment history a validated automatic apportionment will split on, and it lets
+    the review surface "this spool ran during segment k" context. It does NOT change
+    today's behavior (the user still splits manually) — it's carried, not yet consumed
+    for the math."""
+    if print_deduct_ledger.was_deducted(printer_name, job_id):
+        # Already settled — clear any stale pending so "ledger ⟹ no pending" holds.
+        cancel_review_store.pop_pending(printer_name, job_id)
+        return {"status": "skipped", "reason": "already processed", "job_id": job_id}
+    if cancel_review_store.has_pending(printer_name, job_id):
+        return {"status": "skipped", "reason": "already pending", "job_id": job_id}
+    rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=active_locs)
+    if not rows:
+        # The replacement isn't bound right now — still recoverable via no_spool.
+        # (Shouldn't usually reach here: a flagged position has a bound end spool.)
+        return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
+                                        usage_map=usage_map, no_spool=True)
+    # Claim the deferred-fetch slot too, so a queued kind='complete' retry (a prior
+    # finish-screen lock) can't later auto-apply the full footer behind this review.
+    cancel_fetch_store.pop_pending(printer_name, job_id)
+    total = round(sum(r['grams'] for r in rows), 2)
+    record = {
+        "printer_name": printer_name,
+        "job_id": str(job_id),
+        "filename": filename,
+        "progress": 1.0,
+        "total_grams": total,
+        "spools": rows,
+        "ambiguous": False,
+        "kind": "spool_changed",
+        "changed_positions": sorted(changed_positions),
+        # 22.3(b): the ordered mid-print swap history (empty when only the coarse
+        # start-vs-end diff fired). Carried for the future per-segment apportionment;
+        # the review still splits manually today.
+        "swap_log": list(swap_log) if swap_log else [],
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    cancel_review_store.add_pending(record)
+    state.add_log_entry(
+        f"🔁 {printer_name}: spool changed mid-print ('{filename}') at toolhead "
+        f"position(s) {sorted(changed_positions)} — full footer NOT auto-applied; "
+        f"review the split: {total:.2f}g across {len(rows)} spool(s).",
+        "WARNING", rows[0]['color'],
+        meta={"type": "cancel_deduct_pending",
+              "printer_name": printer_name, "job_id": str(job_id)})
+    return {"status": "pending_spool_changed", "spools": len(rows), "job_id": str(job_id)}
+
+
+def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None):
     """Read-only resolution of {toolhead_position: grams} → the per-spool rows a
     deduct WOULD touch — the cancel-review PREVIEW (no write). Mirrors
-    _apply_usage_to_printer's MMU-alias/dedup resolution exactly, minus the
-    write, so the preview is faithful to what a confirm will deduct. Each row
-    carries a snapshot of the spool's current used/remaining for display; the
-    actual write (confirm) re-reads current used and applies additively, so a
-    weigh-out between preview and confirm can't be clobbered.
+    _apply_usage_to_printer's MMU-alias/dedup AND ghost-vs-current resolution
+    (`select_deduct_targets`), minus the write, so the preview is faithful to what
+    a confirm will deduct. The one deliberate divergence: where the autonomous
+    apply SKIPS a genuinely-ambiguous toolhead (2+ distinct loaded spools), this
+    interactive preview KEEPS both rows flagged `ambiguous` so the reviewer can see
+    the bad assignment and choose. Each row carries a snapshot of the spool's
+    current used/remaining for display; the actual write (confirm) re-reads current
+    used and applies additively, so a weigh-out between preview and confirm can't be
+    clobbered. `active_locs` may be passed pre-resolved to share an MMU probe with a
+    paired _apply_usage_to_printer call (22.4(5)); None re-resolves it here.
     """
-    printer_map = locations_db.get_active_printer_map()
-    active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+    if active_locs is None:
+        printer_map = locations_db.get_active_printer_map()
+        active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
     rows = []
     processed_positions = set()
     for loc_id, p_info in active_locs:
@@ -4390,6 +4704,13 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
         if not loc_spools:
             continue  # try the next alias for this position
         processed_positions.add(pos)
+        # Mirror the apply loop's ghost-vs-current resolution (22.4(1)); only the
+        # rare >1 case fetches the detailed/ghost info, so the single-spool path is
+        # unchanged. Preview keeps an ambiguous toolhead's rows (flagged) rather
+        # than skipping, so the reviewer can resolve it.
+        ambiguous = False
+        if len(loc_spools) > 1:
+            loc_spools, ambiguous = spoolman_api.select_deduct_targets(loc_id)
         for sid in loc_spools:
             spool = spoolman_api.get_spool(sid)
             if not spool:
@@ -4410,6 +4731,7 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
                 'remaining_after': round(remaining_after, 1),
                 'display': disp.get('text', f"#{sid}"),
                 'color': disp.get('color', '888888'),
+                'ambiguous': bool(ambiguous),
             })
 
     # Merge rows that resolve to the SAME spool. One physical spool can feed more
@@ -4430,6 +4752,10 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url):
             m['remaining_after'] = round(max(0.0, m['remaining_before'] - m['grams']), 1)
             if str(r['toolhead']) not in str(m['toolhead']).split(', '):
                 m['toolhead'] = f"{m['toolhead']}, {r['toolhead']}"
+            # Same-sid rows can't differ in `ambiguous` by construction (a 2+-distinct
+            # case yields different sids that never merge), but OR defensively so the
+            # flag can't be silently dropped if the row schema grows.
+            m['ambiguous'] = bool(m.get('ambiguous')) or bool(r.get('ambiguous'))
     return list(merged.values())
 
 
@@ -4498,7 +4824,7 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
 
 
 def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel",
-                          ambiguous=False):
+                          ambiguous=False, start_spools=None, swap_log=None):
     """Queue a print whose gcode couldn't be fetched yet (the selected-file
     download LOCK, §9.10) for the monitor to retry. `kind` is 'cancel' (default)
     or 'complete' — a COMPLETED Connect-started print locks behind the FINISH
@@ -4506,7 +4832,13 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
     stashed on the record so _process_pending_cancel_fetches routes the retry to
     the right handler (cancel→review, complete→auto-apply). `ambiguous` (carried
     on the record, only meaningful for kind='cancel') means the edge couldn't
-    confirm cancel vs completion, so the retried review stays flagged. Idempotent:
+    confirm cancel vs completion, so the retried review stays flagged.
+    `start_spools` (22.3, kind='complete' only) is the print-start spool snapshot —
+    persisted on the record so the deferred completion retry still gets mid-print
+    spool-swap detection (the live latch is gone by retry time). `swap_log` (22.3(b),
+    kind='complete') is the ordered mid-print swap history, persisted the same way so a
+    deferred completion still detects an A→B→A swap the start-vs-end diff would miss.
+    Idempotent:
     re-queuing the same job bumps `attempts`, PRESERVES `first_seen` (so the
     max-age give-up window is measured from the FIRST sighting), and does NOT
     re-nudge. The nudge logs exactly ONCE, on first queue. Returns True if newly
@@ -4516,13 +4848,17 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
         rec.update({"printer_name": printer_name, "job_id": str(job_id),
                     "filename": filename, "progress": float(reached_fraction),
                     "kind": kind, "ambiguous": bool(ambiguous),
+                    # Preserve an already-captured snapshot/log if this re-queue lacks one.
+                    "start_spools": start_spools or rec.get("start_spools"),
+                    "swap_log": swap_log or rec.get("swap_log"),
                     "attempts": int(rec.get("attempts", 0)) + 1})
         cancel_fetch_store.add_pending(rec)
         return False
     cancel_fetch_store.add_pending({
         "printer_name": printer_name, "job_id": str(job_id), "filename": filename,
         "progress": float(reached_fraction), "first_seen": time.time(),
-        "kind": kind, "ambiguous": bool(ambiguous),
+        "kind": kind, "ambiguous": bool(ambiguous), "start_spools": start_spools,
+        "swap_log": swap_log,
         "attempts": 1, "last_status": "awaiting_fetch",
     })
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
@@ -4677,6 +5013,12 @@ def _confirm_no_spool_review(printer, job_id, rec):
     _apply_usage_to_printer loop). If still unbound, RE-STASH the record so it stays
     recoverable and report `still_no_spool` — never a terminal 0g."""
     _, fb_url = config_loader.get_api_urls()
+    # Resolve the printer's active toolheads ONCE and thread it to BOTH the preview
+    # resolve and the apply, so an MMU printer's info.mmu ordering probe runs once,
+    # not twice (22.4(5)). The apply returns the real toolhead positions (`known`)
+    # so the shortfall excludes orphan tool indices (22.4(3)).
+    printer_map = locations_db.get_active_printer_map()
+    active_locs = _resolve_active_locs_for_printer(printer_map, printer, fb_url)
     # JSON stringified the int positions on save — coerce back so the resolve (which
     # keys on int positions from printer_map) matches. Without this the re-resolve
     # silently finds nothing and always says "still no spool".
@@ -4686,7 +5028,7 @@ def _confirm_no_spool_review(printer, job_id, rec):
             umap[int(k)] = float(v)
         except (TypeError, ValueError):
             continue
-    rows = _resolve_usage_to_spools(printer, umap, fb_url) if umap else []
+    rows = _resolve_usage_to_spools(printer, umap, fb_url, active_locs=active_locs) if umap else []
     if not rows:
         cancel_review_store.add_pending(rec)  # re-stash UNCHANGED — still recoverable
         return jsonify({"status": "still_no_spool",
@@ -4695,29 +5037,21 @@ def _confirm_no_spool_review(printer, job_id, rec):
     # A monitor retry could have settled this job between the pop and now.
     if print_deduct_ledger.was_deducted(printer, job_id):
         return jsonify({"status": "already_handled"})
-    spools_updated, details = _apply_usage_to_printer(
-        printer, umap, fb_url, strategy_label="Cancel-review")
+    spools_updated, details, known = _apply_usage_to_printer(
+        printer, umap, fb_url, strategy_label="Cancel-review", active_locs=active_locs)
     if spools_updated == 0:
         cancel_review_store.add_pending(rec)
         return jsonify({"status": "still_no_spool",
                         "msg": "No spool is bound to this printer's toolhead yet."})
     total = round(sum(d["grams"] for d in details), 2)
-    requested = round(sum(umap.values()), 2)
-    print_deduct_ledger.record_deduct(printer, job_id, filename=rec.get('filename'),
-                                      scale=rec.get('progress'), grams=total, confirmed=True)
     state.add_log_entry(
         f"✔️ Cancel-review deduct {total:.2f}g across {spools_updated} spool(s) on "
         f"{printer} (toolhead now bound).", "SUCCESS")
-    shortfall = round(max(0.0, requested - total), 2)
-    if shortfall > 0.05:
-        # Some of the computed usage couldn't be applied — a position still without a
-        # bound spool, or a Spoolman write that failed. The (printer,job_id) ledger
-        # is now recorded so this can't double-apply or re-fire, so surface the
-        # remainder rather than silently dropping it (weigh that spool to true up).
-        state.add_log_entry(
-            f"⚠️ {printer}: {shortfall:.1f}g couldn't be applied (a toolhead still "
-            f"without a bound spool, a failed write, or a near-empty spool) — weigh "
-            f"that spool to true up.", "WARNING", "ffaa00")
+    # Record applied + surface any shortfall via the shared helper (records confirmed,
+    # 2dp warn matching the shortfall_g field, orphan-excluded — 22.4(2)/(3)/(4)).
+    _, shortfall = _record_applied_deduct(
+        printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
+        details=details, usage_map=umap, known_positions=known, confirmed=True)
     return jsonify({"status": "confirmed", "applied": details, "shortfall_g": shortfall})
 
 
@@ -5715,6 +6049,14 @@ _PRINT_TRACKER_LOCK = threading.Lock()
 # A print is "running" (so we latch the job) in any of these states — a pause is
 # still running. Mirrors the frontend Phase-0 _PRINT_INPROGRESS_STATES.
 _INPROGRESS_PRINT_STATES = frozenset({"PRINTING", "PAUSING", "RESUMING", "PAUSED"})
+# 22.3(b): a mid-print PAUSE/ATTENTION condition that a resume (→PRINTING) follows.
+# An M600 / "Color Change" / filament runout parks the printer at ATTENTION (on
+# /api/v1/status); a user pause shows PAUSED; RESUMING is the brief resume
+# transient. When the SAME (already-snapshotted) job re-enters PRINTING from one
+# of these, the loaded spool MAY have been swapped — that's the swap-event hook
+# that captures the ordered swap_log for per-segment apportionment. A resume from
+# any of these is a safe over-trigger (a no-op when the mapping didn't change).
+_PAUSED_CONDITION_STATES = frozenset({"PAUSED", "PAUSING", "RESUMING", "ATTENTION"})
 # Terminal states that, reached FROM an in-progress state, mean a CANCEL/abort.
 # Cancel terminal states (reached FROM in-progress = a CANCEL/abort). This set
 # ALSO doubles as the "file still download-locked, don't fetch yet" gate in
@@ -5798,13 +6140,17 @@ def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url):
         _on_cancel_edge(printer_name, filename, job_id, progress, fb_url)
 
 
-def _on_completion_edge(printer_name, filename, job_id, fb_url):
+def _on_completion_edge(printer_name, filename, job_id, fb_url, start_spools=None,
+                        swap_log=None):
     """Action on a →FINISHED edge (Phase-2, flag-gated): compute + AUTO-APPLY the
     completion deduct from the slicer footer. No preview/confirm — the grams are
-    exact for a completion. Reaches here only through _dispatch_completion_edge so
-    the off-heartbeat threading contract matches the cancel path."""
+    exact for a completion. `start_spools` (22.3) is the print-start snapshot and
+    `swap_log` (22.3(b)) the ordered mid-print swap history, both for spool-swap
+    detection. Reaches here only through _dispatch_completion_edge so the
+    off-heartbeat threading contract matches the cancel path."""
     try:
-        deduct_completed_print(printer_name, filename, job_id, fb_url=fb_url)
+        deduct_completed_print(printer_name, filename, job_id, fb_url=fb_url,
+                               start_spools=start_spools, swap_log=swap_log)
     except Exception as e:
         try:
             state.add_log_entry(
@@ -5814,7 +6160,8 @@ def _on_completion_edge(printer_name, filename, job_id, fb_url):
             pass
 
 
-def _dispatch_completion_edge(printer_name, filename, job_id, fb_url):
+def _dispatch_completion_edge(printer_name, filename, job_id, fb_url, start_spools=None,
+                              swap_log=None):
     """Run the completion-edge action OFF the heartbeat thread (mirrors
     _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
     (tests)."""
@@ -5822,9 +6169,11 @@ def _dispatch_completion_edge(printer_name, filename, job_id, fb_url):
         threading.Thread(
             target=_on_completion_edge,
             args=(printer_name, filename, job_id, fb_url),
+            kwargs={"start_spools": start_spools, "swap_log": swap_log},
             daemon=True).start()
     else:
-        _on_completion_edge(printer_name, filename, job_id, fb_url)
+        _on_completion_edge(printer_name, filename, job_id, fb_url,
+                            start_spools=start_spools, swap_log=swap_log)
 
 
 def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
@@ -5918,8 +6267,14 @@ def _track_print_edge(printer_name, state_info, fb_url):
             job = None
         job_changed = None
         prev_job = None  # outgoing job's latched details, for the ambiguous review
+        need_snapshot = False  # 22.3: flag a once-per-job start-spool snapshot
+        snap_jid = None
+        need_swap_snapshot = False  # 22.3(b): flag a resume-edge mid-print swap capture
+        swap_jid = None
+        swap_progress = None
         with _PRINT_TRACKER_LOCK:
             entry = _PRINT_TRACKER.setdefault(printer_name, {})
+            prev_state = entry.get('state')  # 22.3(b): pre-overwrite, for resume detection
             entry['state'] = cur
             if job:
                 # Reject blank/zero ids (None/''/'0'/0) — same "blank job" set
@@ -5960,6 +6315,15 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     entry.pop('progress', None)
                     entry.pop('filename', None)
                     entry.pop('file_meta', None)
+                    # 22.3: drop the previous job's start-spool snapshot so the new
+                    # job re-captures its OWN start mapping (the snapshot_job!=jid
+                    # guard below would catch it anyway, but pop defensively so a
+                    # replacement job can never inherit the old start spools).
+                    entry.pop('start_spools', None)
+                    entry.pop('snapshot_job', None)
+                    # 22.3(b): and its mid-print swap history — a replacement job must
+                    # never inherit the old job's swap_log (it's keyed to snapshot_job).
+                    entry.pop('swap_log', None)
                 if job.get('filename'):
                     entry['filename'] = job['filename']
                 if new_jid is not None:
@@ -5972,6 +6336,68 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 prog = job.get('progress')
                 if isinstance(prog, (int, float)):
                     entry['progress'] = max(float(entry.get('progress', 0.0)), float(prog))
+                # 22.3: flag a once-per-job start-spool snapshot — ONLY on a true
+                # PRINTING tick (a job first SEEN mid-pause/runout must not capture the
+                # post-swap mapping as 'start'). The snapshot_job!=jid clause makes it
+                # fire exactly once per job; the Spoolman read happens AFTER the lock.
+                if (cur == 'PRINTING' and new_jid is not None
+                        and entry.get('snapshot_job') != str(new_jid)):
+                    need_snapshot = True
+                    snap_jid = new_jid
+                # 22.3(b): a resume INTO printing from a pause/ATTENTION condition on
+                # the SAME, already-snapshotted job → a mid-print spool swap MAY have
+                # happened (M600 / Color-Change / runout, with an FCC eject/load at the
+                # pause). Flag an off-lock snapshot to diff the mapping. Mutually
+                # exclusive with the START snapshot above (that fires when snapshot_job
+                # != jid; this requires ==), so it can't fire on the job's first
+                # PRINTING tick nor after a job change (which popped snapshot_job).
+                elif (cur == 'PRINTING' and new_jid is not None
+                        and prev_state in _PAUSED_CONDITION_STATES
+                        and entry.get('snapshot_job') == str(new_jid)):
+                    need_swap_snapshot = True
+                    swap_jid = new_jid
+                    # The progress high-water at the resume ≈ where this segment ended
+                    # (the print resumes from the pause point). Recorded as a COARSE HINT
+                    # only — it can read slightly high (a PAUSED pause re-samples progress;
+                    # an ATTENTION/M600 park doesn't) so the deferred per-segment math will
+                    # take the authoritative cut from the gcode `;COLOR_CHANGE` byte
+                    # boundary (parse_color_change_segments), not this %.
+                    swap_progress = float(entry.get('progress', 0.0))
+        # 22.3 (off-lock, like get_printer_job): capture the start-spool snapshot for
+        # mid-print swap detection. ONLY when FCC owns completions — deduct_completed_print
+        # is the sole consumer, so it's dead weight (and a wasted Spoolman read) on
+        # cancel-only prints. _snapshot_active_spools is best-effort ({} on failure), so a
+        # blip leaves start_spools unset and the completion degrades to today's auto-apply.
+        if need_snapshot and _fcc_owns_completion_deduct():
+            snap = _snapshot_active_spools(printer_name, fb_url)
+            with _PRINT_TRACKER_LOCK:
+                e = _PRINT_TRACKER.get(printer_name)
+                # Store only if (a) the read returned something — an empty {} means a
+                # transient Spoolman blip (or a genuinely empty fleet), so DON'T flag
+                # snapshot_job, leaving the once-per-job guard open to retry on the
+                # next PRINTING tick rather than permanently disabling detection for
+                # this job; and (b) the SAME job is still latched (a fast job change
+                # during the off-lock read would otherwise mis-key the snapshot).
+                if snap and e is not None and str(e.get('job_id')) == str(snap_jid):
+                    e['start_spools'] = {str(k): v for k, v in snap.items()}
+                    e['snapshot_job'] = str(snap_jid)
+        # 22.3(b) (off-lock, like the start snapshot): a resume from a pause/ATTENTION
+        # MAY mean the loaded spool was swapped. Snapshot the live mapping and diff it
+        # against the mapping in effect for the segment just printed (start_spools +
+        # any prior swaps) — each clean 1→1 sid change appends an ordered swap_log
+        # event. Best-effort: an empty/failed snapshot just skips (retries next resume).
+        # Same flag gate + same-job re-check as the start snapshot. This release-then-
+        # re-acquire is safe because _track_print_edge has a SINGLE sequential caller
+        # (the _cancel_monitor daemon's per-printer loop) — the job_id re-check guards a
+        # fast job change, not a concurrent same-job writer (none exists). If this is ever
+        # re-attached to the dashboard pulse (it historically was), revisit the locking.
+        if need_swap_snapshot and _fcc_owns_completion_deduct():
+            snap = _snapshot_active_spools(printer_name, fb_url)
+            if snap:
+                with _PRINT_TRACKER_LOCK:
+                    e = _PRINT_TRACKER.get(printer_name)
+                    if e is not None and str(e.get('job_id')) == str(swap_jid):
+                        _record_swap_events(e, snap, swap_progress)
         if prev_job:
             # Surface the outgoing job as an ambiguous review (off-heartbeat,
             # idempotent via the (printer, job_id) ledger + review store) instead of
@@ -6065,6 +6491,21 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 'filename': entry.get('filename'),
                 'job_id': entry.get('job_id', ''),
                 'progress': float(entry.get('progress', 0.0)),
+                # Whether we ever sampled a REAL progress for this job (entry sets
+                # 'progress' only from a job sample). Absent ⇒ a latched-but-unsampled
+                # job (e.g. caught at ATTENTION before any PRINTING tick) → route the
+                # ambiguous edge to a non-destructive progress_unknown review instead
+                # of computing a misleading 0% partial (22.4(6); mirrors the
+                # job-changed path's progress_sampled check).
+                'progress_sampled': 'progress' in entry,
+                # 22.3: the print-start spool snapshot rides the fire dict to the
+                # completion handler (the latch is reset right below, so the entry's
+                # copy is gone). _validated_start_spools re-checks snapshot_job==job_id.
+                'start_spools': entry.get('start_spools'),
+                'snapshot_job': entry.get('snapshot_job'),
+                # 22.3(b): the ordered mid-print swap history rides along too (same
+                # snapshot_job guard via _validated_swap_log).
+                'swap_log': entry.get('swap_log'),
             }
             # Reset the latch to the terminal state so the edge can't re-fire.
             _PRINT_TRACKER[printer_name] = {'state': cur}
@@ -6083,11 +6524,14 @@ def _track_print_edge(printer_name, state_info, fb_url):
             "INFO")
     if fire:
         if fire['kind'] == 'complete':
-            _dispatch_completion_edge(printer_name, fire['filename'],
-                                      fire['job_id'], fb_url)
+            _dispatch_completion_edge(
+                printer_name, fire['filename'], fire['job_id'], fb_url,
+                start_spools=_validated_start_spools(fire, fire['job_id']),
+                swap_log=_validated_swap_log(fire, fire['job_id']))
         elif fire['kind'] == 'ambiguous':
-            _dispatch_ambiguous_edge(printer_name, fire['filename'],
-                                     fire['job_id'], fire['progress'], fb_url)
+            _dispatch_ambiguous_edge(
+                printer_name, fire['filename'], fire['job_id'], fire['progress'],
+                fb_url, progress_unknown=not fire.get('progress_sampled', False))
         else:
             _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
                                   fire['progress'], fb_url)
@@ -6227,6 +6671,8 @@ def _process_pending_cancel_fetches(states, fb_url):
             progress = float(rec.get("progress", 0.0) or 0.0)
             kind = rec.get("kind", "cancel")  # 'cancel' (review) | 'complete' (auto-apply)
             ambiguous = bool(rec.get("ambiguous", False))  # cancel-review "couldn't confirm" flag
+            start_spools = rec.get("start_spools")  # 22.3: carried for the deferred completion swap check
+            swap_log = rec.get("swap_log")  # 22.3(b): ordered mid-print swap history
             if not printer or job_id in (None, ""):
                 cancel_fetch_store.pop_pending(printer, job_id)
                 continue
@@ -6282,7 +6728,11 @@ def _process_pending_cancel_fetches(states, fb_url):
                 if not _fcc_owns_completion_deduct():
                     cancel_fetch_store.pop_pending(printer, job_id)
                     continue
-                result = deduct_completed_print(printer, filename, job_id, fb_url=fb_url)
+                # start_spools + swap_log (if captured before the finish-screen lock)
+                # ride the fetch record so the deferred completion still detects a
+                # mid-print spool swap (22.3/22.3(b)); None when not captured → auto-apply.
+                result = deduct_completed_print(printer, filename, job_id, fb_url=fb_url,
+                                                start_spools=start_spools, swap_log=swap_log)
             else:
                 result = _create_pending_cancel_review(
                     printer, filename, job_id, progress, fb_url=fb_url, ambiguous=ambiguous)
@@ -6350,6 +6800,11 @@ def _recover_one_print_latch(name, entry, fb_url):
     job_id = entry.get('job_id')
     filename = entry.get('filename')
     progress = float(entry.get('progress', 0.0) or 0.0)
+    # Whether a REAL progress was ever sampled for this latched job (the latch sets
+    # 'progress' only from a job sample; print_tracker_store round-trips it verbatim).
+    # Absent ⇒ unsampled → the ambiguous-idle branch routes to a non-destructive
+    # progress_unknown review instead of recovering at a misleading 0% (22.4(6)).
+    progress_sampled = 'progress' in entry
     if not (job_id and filename):
         # No latched job (a bare terminal/idle snapshot) — nothing to recover;
         # seed the baseline state so the first edge-detect has a `prev`.
@@ -6414,7 +6869,12 @@ def _recover_one_print_latch(name, entry, fb_url):
             state.add_log_entry(
                 f"✅ Recovering a completion missed during an FCC restart on {name} "
                 f"('{filename}') — printer still FINISHED.", "INFO")
-            _dispatch_completion_edge(name, filename, job_id, fb_url)
+            # 22.3: the persisted entry round-trips start_spools/snapshot_job/swap_log,
+            # so a restart AFTER the snapshot was captured still detects a mid-print
+            # swap; a restart BEFORE capture has no snapshot → None → auto-apply.
+            _dispatch_completion_edge(name, filename, job_id, fb_url,
+                                      start_spools=_validated_start_spools(entry, job_id),
+                                      swap_log=_validated_swap_log(entry, job_id))
             with _PRINT_TRACKER_LOCK:
                 _PRINT_TRACKER[name] = {'state': cur}
             return True
@@ -6435,7 +6895,8 @@ def _recover_one_print_latch(name, entry, fb_url):
             f"❓ A print ('{filename}', ~{pct:.0f}%) was in progress on {name} when FCC "
             f"restarted and it's now {cur or 'idle'} — surfacing a review (couldn't "
             f"confirm completed vs cancelled).", "WARNING", "ffaa00")
-        _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url)
+        _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url,
+                                 progress_unknown=not progress_sampled)
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {'state': cur}
         return True

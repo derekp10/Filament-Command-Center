@@ -32,9 +32,21 @@ import print_tracker_store  # noqa: E402
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def _reset_tracker():
-    """Each test starts with an empty PRINT_TRACKER and synchronous dispatch
-    (so the cancel-edge action runs inline, not on a daemon thread)."""
+def _reset_tracker(tmp_path, monkeypatch):
+    """Each test starts with an empty PRINT_TRACKER and synchronous dispatch (so the
+    cancel-edge action runs inline, not on a daemon thread). ALSO isolates EVERY
+    persistent store to a tmp path: a test that reaches the real
+    _create_pending_cancel_review / _enqueue_cancel_fetch (e.g. an unmocked edge whose
+    test printer has no creds → defer) must never leak into the live bind-mounted
+    data/ stores — the recurring XL::7 / XL::J9 dev-queue pollution (2026-06-14)."""
+    monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
+    monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "review.json"))
+    monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetch.json"))
+    monkeypatch.setattr(print_tracker_store, "_STORE_PATH", str(tmp_path / "latch.json"))
+    # 22.3: the start-spool snapshot capture (on a PRINTING tick when the completion
+    # flag is on) would otherwise hit real Spoolman per tick. No-op it by default; a
+    # test that exercises capture overrides locally.
+    monkeypatch.setattr(app_module, "_snapshot_active_spools", lambda *a, **k: {})
     app_module._PRINT_TRACKER.clear()
     prev_async = app_module._CANCEL_DEDUCT_RUN_ASYNC
     app_module._CANCEL_DEDUCT_RUN_ASYNC = False

@@ -19,13 +19,27 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module  # noqa: E402
 import print_tracker_store  # noqa: E402
+import cancel_fetch_store  # noqa: E402
+import cancel_review_store  # noqa: E402
+import print_deduct_ledger  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(print_tracker_store, "_STORE_PATH", str(tmp_path / "latch.json"))
+    # Isolate the deduct stores too — a recovery test that drives the real
+    # IDLE→ambiguous / STOPPED→cancel path reaches _create_pending_cancel_review and,
+    # with no creds for the test printer, _enqueue_cancel_fetch — which must land in a
+    # tmp store, NOT the live bind-mounted data/ queue (the XL::J9 leak, 2026-06-14).
+    monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetch.json"))
+    monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "review.json"))
+    monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
     # Run the deduct synchronously so a recovered cancel is observable inline.
     monkeypatch.setattr(app_module, "_CANCEL_DEDUCT_RUN_ASYNC", False)
+    # 22.3: no-op the start-spool snapshot capture (a flag-on PRINTING tick would
+    # otherwise hit real Spoolman). Recovery reads start_spools off the persisted
+    # entry, not via this helper, so this doesn't affect the recovery-path tests.
+    monkeypatch.setattr(app_module, "_snapshot_active_spools", lambda *a, **k: {})
     with app_module._PRINT_TRACKER_LOCK:
         app_module._PRINT_TRACKER.clear()
     yield
