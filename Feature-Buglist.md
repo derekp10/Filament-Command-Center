@@ -1,5 +1,7 @@
 # **New and Unsorted Features/Bugs**
 
+* Drop the round trip logs in activity log. We fixed that issue, I don't think we need that code running anymore. With filabrige out of the way it doesn't make sense I guess. If not let me know and we can re-visit it.
+
 * Adding new locations, specifically shelve, row section locations is messy and needs a revision. infact any location that's a sub location isn't easy to add. This whole workflow needs to be re-designed. (Should check to see if we've finished the full refactor on location id and stuff yet.)
 
 * Printer status collapsed should have a way to show the printer status as well, so the user doesn't have to expand the printer status bar.
