@@ -1100,6 +1100,20 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                             item.style.background = '#444';
                             hiddenInput.value = item.getAttribute('data-id');
                         });
+                        // 21.5 — double-click commits the override in one gesture
+                        // (mouse equivalent of arrow+Enter): select this entry,
+                        // then trigger the same confirm path the Force button
+                        // runs. preConfirm reads #swal-override-loc, which we set
+                        // here first. Single-click + Force and keyboard nav are
+                        // unchanged — dblclick is purely a shortcut on top.
+                        item.addEventListener('dblclick', () => {
+                            clearKbHighlight();
+                            items.forEach(i => i.style.background = 'transparent');
+                            item.style.background = '#444';
+                            hiddenInput.value = item.getAttribute('data-id');
+                            if (confirmShowing()) return; // don't commit while the cancel-confirm overlay is up
+                            Swal.clickConfirm();
+                        });
                         item.addEventListener('mouseenter', () => {
                             clearKbHighlight();
                             if(hiddenInput.value !== item.getAttribute('data-id')) item.style.background = '#222';

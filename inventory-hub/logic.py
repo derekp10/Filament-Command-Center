@@ -477,7 +477,14 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # Determine if this is a single-occupancy target (Printer/Toolhead)
     tgt_info = loc_info_map.get(target)
     is_printer = target in printer_map
-    is_toolhead = tgt_info and tgt_info.get('Type') in ['Tool Head', 'MMU Slot', 'Printer']
+    # 21.3 — single-occupancy = the canonical toolhead type set (Tool Head /
+    # MMU Slot / No MMU Direct Load) plus the dual-role "Printer" row. The old
+    # inline list omitted "No MMU Direct Load" (the Core One direct-load type),
+    # so manually assigning a spool to such a head — when it wasn't ALSO present
+    # in printer_map to be caught by is_printer — skipped the resident auto-eject
+    # and left two spools on one head. Sourced from locations_db.TOOLHEAD_TYPES
+    # so this can't drift out of sync with the rest of the codebase again.
+    is_toolhead = bool(tgt_info) and tgt_info.get('Type') in (locations_db.TOOLHEAD_TYPES | {'Printer'})
 
     undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "ejections": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
 
