@@ -61,13 +61,27 @@
             ? window.makeSwatchHtml(s.color, 'longitudinal',
                 { size: 16, borderColor: 'rgba(255,255,255,0.5)', marginRight: 0 })
             : '';
+        // 22.4 residual: a toolhead with 2+ distinct loaded spools is AMBIGUOUS —
+        // the autonomous deduct SKIPS it (can't tell which spool is loaded), so its
+        // grams weren't auto-deducted and it's surfaced here for the reviewer to
+        // resolve. Without a per-row cue the reviewer sees two identical-looking rows
+        // with no hint why. Flag the row (left border + badge) so the bad assignment
+        // is visible. (Distinct from the card-level `rec.ambiguous` cancel-vs-completed
+        // flag — this is a per-spool-row indicator.)
+        const amb = !!s.ambiguous;
+        const ambBorder = amb ? 'border-left:3px solid #ffae42;padding-left:6px;' : '';
+        const ambBadge = amb
+            ? `<span title="This toolhead has more than one spool assigned — FCC can't tell which is loaded, so these grams weren't auto-deducted. Pick the real amount per spool."
+                     style="margin-left:6px;font-size:0.74rem;font-weight:bold;color:#ffae42;
+                            border:1px solid #ffae42;border-radius:4px;padding:0 4px;white-space:nowrap;">⚠️ ambiguous</span>`
+            : '';
         return `
             <div class="fcc-cr-row" data-sid="${s.sid}"
                  style="display:flex;align-items:center;gap:8px;justify-content:space-between;
-                        padding:6px 0;border-bottom:1px solid #2b2c30;">
+                        padding:6px 0;border-bottom:1px solid #2b2c30;${ambBorder}">
                 <div style="min-width:0;flex:1;">
                     ${swatch}
-                    <span style="color:#eee;">${esc(s.display)}</span>
+                    <span style="color:#eee;">${esc(s.display)}</span>${ambBadge}
                     <span style="color:#9aa;font-size:0.92rem;">
                         (${esc(s.toolhead)} · ${fmt(s.remaining_before)}g left)
                     </span>
