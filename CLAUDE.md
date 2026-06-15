@@ -102,6 +102,7 @@ Until the Config system (Feature-Buglist.md L9) lands, a small number of user pr
 | Key | Type | Values | Owner |
 |-----|------|--------|-------|
 | `fcc.weighEntry.defaultMode` | string | `gross` / `net` / `additive` / `set_used` | `<WeightEntry>` overlay — last mode the user clicked "Set as default" on (or `D` shortcut). Read on overlay open, falls through to the caller-supplied `defaultMode` option when unset/invalid. |
+| `fcc.fab.pos` | JSON `{left,bottom}` | px distances from the viewport's left / bottom edges | `fab_drag.js` — the draggable global search FAB's parked position (buglist 21.1). Written on drag-end; long-press resets to the default. Loaded + viewport-clamped on page load; absent/invalid → bottom-left cmd-deck-band default (clear of buffer weights + the WEIGH QR). |
 
 ## Working Groups (Batched Tasks)
 

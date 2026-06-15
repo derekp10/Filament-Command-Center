@@ -1,5 +1,13 @@
 # **New and Unsorted Features/Bugs**
 
+* With the decoupling of the search badge, now able move, the activitys log badge seems to be weird, and doesn't make sense where it's at now. We may need to re-evaluate how we do this or place this. (Perhaps giving it the ability to be moved as well?)
+
+* Product URL modifications on filament edit window do not save. (this should be tired to a prusament product page, and not a spool specific data link (alphanumerice identifier)) We should probalby clean these when we get the spool id parcer checked and working to group the product url correctly. Apparently this won't save blank, but putting in something that resembles a url (//test) works for clearing it. We should make sure that all fields can be blanked out and save approperiatly.
+
+* Label creation, check to see if Ptouch software locks the csv file that we dump labels into. (Happened with spools, I had ptouch open, and saved data to the CSV, but couldn't find the data.)
+
+* **Code smell / tech-debt: `TOOLHEAD_TYPES` is defined TWICE in `inventory-hub/locations_db.py`** — line ~20 as a plain `set` and line ~547 as a `frozenset`, both module-level with identical contents (`{'Tool Head', 'MMU Slot', 'No MMU Direct Load'}`). The second (later) definition wins at import, so it's harmless today, but it's a drift hazard: an edit to one won't track the other, and a reader can't tell which is authoritative. Surfaced 2026-06-15 while fixing Group 21.3 (the `is_toolhead` single-occupancy check in `logic.py:480` was hand-rolling its own list that had drifted from this canonical set — now sourced from `locations_db.TOOLHEAD_TYPES`). **Fix:** collapse to a single canonical `frozenset` definition (keep the frozenset, delete the earlier `set`), grep for any code that mutated the `set` form (none expected), add a one-line guard test if cheap. Low-risk cleanup; bundle with the next `locations_db` / toolhead-typing touch (group-assignment candidate alongside any future L271 / toolhead-binding work).
+
 * Drop the round trip logs in activity log. We fixed that issue, I don't think we need that code running anymore. With filabrige out of the way it doesn't make sense I guess. If not let me know and we can re-visit it.
 
 * Adding new locations, specifically shelve, row section locations is messy and needs a revision. infact any location that's a sub location isn't easy to add. This whole workflow needs to be re-designed. (Should check to see if we've finished the full refactor on location id and stuff yet.)
@@ -25,23 +33,11 @@
   * **`progress_unknown` not threaded to the restart-recovery + live active→IDLE ambiguous edges (latent/defensive).** A latched job with a `filename` but no sampled `progress` would compute at 0% rather than routing to the non-destructive progress_unknown review. NOT production-triggerable today (`get_printer_job` always supplies a numeric progress), so defensive only.
   * **Confirm `was_deducted` TOCTOU (latent).** The no_spool confirm checks the ledger then applies without a held lock (mirrors the pre-existing partial-confirm loop). Self-healing today (no double-deduct demonstrated); revisit only if a concurrent same-job writer is ever introduced.
 
-* Double clicking on a force location overide entry should just assigne that entry with out having to click force.
-
 * If we update a filaments data in a way that would invalidate the label (Hex/RGB values for example) We should probably surface that, and have a way to push the user to reprint the label and replace it on an existing sample.
-
-* Sometimes filaments that have been in the buffer for a bit (usually after a weigh update) after being scanned into a slot, return back into the buffer. (Could also be some weird issue with having FCC open on to PC's at the same time?)
 
 * Import external link location in edit filament DOES NOT RESET after last use, so its possible that someone could accidently apply the wrong product link to the wrong filament if that doesn't get cleared out after the user is done updating.
 
 * Add missing hex overwrite in edit filament modal. (Found when using a prusa link to update data for the filament.) I also don't think this is grabing the product url thats available on the page while it's scraping, we should look into this to make sure we are getting everything we can when we scrape, reguardless where we scrape at. (Edit filament, Add/Edit filament, etc...)
-
-* Search badge (lower right icon) Now sometimes covers the weight field of a filament in the buffer zone. It was originally moved to provent the weight QR code from being covered, so we need to re-evaluated its location again.
-
-* Ejecting a spool from an attached dryerbox slot from the manage location on a toolhead (XL) Causes the attached filament to refresh, but sometimes not reload the QR codes. This was done using the spool cards eject button.
-
-* Assigning a filament manually through the interface to a toolhead directly should auto eject the currently loaded filament from the toolhead, not leave 2 filaments attached to the same toolhead. (This probably causes some sort of colission down stream in other code that might expect only a single filament in a toolhead. Which should always be the case, 1 spool per head.)
-
-* Queueing a label for a spool from the spool details modal shouldn't cancel out the modal, it should stay open.
 
 * Assigning a filament to a slot takes increadibly long for it to fully resolve. (Processing... to go away) I don't know if there is something we can fix to make this faster, but it's noticibly long, and i'm not sure why that is.
   _[✅ **A+B SHIPPED to `main` 2026-06-10** (`e3b9481`) — **14.6s → 6.5s (−55%)** on a worst-case bound-Core-One assign. Instrumented the whole move pipeline with a per-assign `⏱️` trace (`inventory-hub/perf_trace.py`, Activity-Log + hub.log, zero-cost when idle); the trace proved ~96% of the time was **synchronous timeouts probing the OFFLINE Core One**, not Spoolman. **Fix A** = per-move printer-state probe cache (the auto-deploy recursion was probing the same printer twice); **Fix B** = skip the legacy PrusaLink `/api/printer` fallback on a connection-level timeout (`prusalink_api.py`). Shipped alongside a **feeds-bind-to-Printer fix** (`9fdca65` — Core One is a dual-role `Type:"Printer"` row, the slot-bind validator was rejecting it). **Prod fleet == dev fleet (same physical printers), so the dev numbers represent prod — no separate prod trace needed.** Remaining **~4s was FilaBridge's own `/status`** synchronously probing the offline printer — **RESOLVED 2026-06-13**: FilaBridge was decommissioned in the Phase-2 cutover (FCC no longer consults it on any path), so that tail is gone. See `completed-archive.md`.]_

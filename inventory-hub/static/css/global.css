@@ -922,33 +922,44 @@ body {
     display: inline-block !important;
 }
 
-/* Global Floating Action Button */
+/* Global Floating Action Button (the primary search affordance — used more
+ * than the navbar button, and the one that stays reachable over modals).
+ *
+ * History: dropped at the bottom-right corner it obscured the WEIGH QR on the
+ * cmd-deck (buglist L36 → lifted to bottom:180px); at 180px it then covered the
+ * bottom buffer card's weight readout (buglist 21.1). Every FIXED corner of
+ * this dense dashboard collides with live data, so 21.1 makes the FAB
+ * DRAG-TO-PARK with its position remembered (fab_drag.js): the user puts it
+ * wherever they like, and it defaults to a data-free corner — bottom-LEFT,
+ * inside the cmd-deck band, clear of both the buffer weights (right edge) and
+ * the WEIGH QR (right side). The left/bottom values below are the no-JS /
+ * first-paint fallback + the long-press reset target. */
 .fcc-fab-search {
     position: fixed;
+    left: 30px;
     bottom: 30px;
-    right: 30px;
+    right: auto;
     width: 65px;
     height: 65px;
     border-radius: 50%;
+    /* Above Bootstrap modals (1055) so search stays reachable over a modal;
+     * the search offcanvas (1090) + its backdrop (1085) still open above it. */
     z-index: 1080;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 26px;
     transition: transform 0.2s;
+    touch-action: none;   /* Pointer Events own the drag — no scroll/zoom hijack on touch */
+    cursor: grab;
 }
 .fcc-fab-search:hover {
     transform: scale(1.1);
 }
-
-/* On pages with the dashboard's bottom-pinned command deck (160px tall),
- * lift the FAB above the deck so it doesn't obscure the WEIGH QR code on
- * shorter / scaled viewports. Uses :has() to scope the override only to
- * pages where the deck actually renders — other pages keep the standard
- * bottom-right anchor. (buglist L36, fixed 2026-04-28) */
-body:has(.cmd-deck) .fcc-fab-search {
-    bottom: 180px;
-}
+.fcc-fab-search:active { cursor: grabbing; }
+/* While dragging, kill the hover-scale transition so the circle tracks the
+ * pointer 1:1 instead of easing toward it. */
+.fcc-fab-search.fcc-fab-dragging { transition: none !important; }
 
 .w-90px {
     width: 90px !important;
@@ -1676,12 +1687,12 @@ body:has(.cmd-deck) .fcc-fab-search {
     border-left: none;
 }
 
-/* L184 — Activity Log corner pill. Positioned ABOVE the search FAB
-   so it never blocks the WEIGH QR (cmd-deck) or the search FAB itself.
-   Search FAB lives at bottom:30 (or bottom:180 on dashboard pages
-   via the :has(.cmd-deck) lift); pill sits ~80px above it in both
-   shapes. Initial display:none — JS flips it on when there are
-   unseen entries. */
+/* L184 — Activity Log corner pill. Anchored top-of-deck on the right so it
+   clears the cmd-deck. The search FAB is now DRAG-TO-PARK (buglist 21.1,
+   default bottom-LEFT) so the pill no longer needs to dodge a fixed FAB; if
+   the user parks the FAB near this corner the two small chips may sit close,
+   which is harmless (FAB z1080 wins any overlap). Initial display:none — JS
+   flips it on when there are unseen entries. */
 #fcc-log-pill {
     display: none;
     position: fixed;
@@ -1700,8 +1711,8 @@ body:has(.cmd-deck) .fcc-fab-search {
     user-select: none;
 }
 body:has(.cmd-deck) #fcc-log-pill {
-    /* Dashboard: FAB is lifted to bottom:180px (180 + 65 = 245), so the
-       pill sits another ~15px above that to clear it AND the cmd-deck. */
+    /* Dashboard: clear the 160px bottom-pinned cmd-deck (the draggable FAB no
+       longer dictates this offset). */
     bottom: 260px;
 }
 #fcc-log-pill:hover {

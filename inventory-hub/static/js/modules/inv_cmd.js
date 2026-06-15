@@ -1,10 +1,43 @@
 /* MODULE: COMMAND CENTER (Dashboard & Buffer) - Polished v2 */
 console.log("🚀 Loaded Module: COMMAND CENTER");
 
+// --- BUFFER: recently-assigned-out guard (buglist 21.6) -------------------
+// The buffer is shared server state (/api/state/buffer), reconciled by the 2s
+// loadBuffer heartbeat with a whole-list, last-writer-wins overwrite. When a
+// spool is scanned into a slot it's removed from heldSpools locally + persisted
+// — but a stale server payload (a lost/slow persist, or another open client
+// re-asserting its own buffer) can still carry that spool, and once the 3s
+// time-grace window lapses loadBuffer would overwrite heldSpools with it,
+// "returning" the just-assigned spool to the buffer. This registry records the
+// ids we INTENTIONALLY assigned out so a heartbeat sync can filter them back
+// out (and re-assert the corrected buffer so the server converges). Entries
+// self-expire after a window longer than any pulse cadence; genuinely re-
+// buffering a spool clears its entry (see renderBuffer) so a real re-pickup
+// isn't suppressed. Full bidirectional multi-client sync remains L302.
+window._recentlyAssignedOut = window._recentlyAssignedOut || new Map();
+const ASSIGNED_OUT_TTL_MS = 12000;
+const _markAssignedOut = (id) => {
+    if (id == null) return;
+    window._recentlyAssignedOut.set(String(id), Date.now());
+};
+const _filterRecentlyAssignedOut = (list) => {
+    const now = Date.now();
+    const m = window._recentlyAssignedOut;
+    m.forEach((t, k) => { if (now - t > ASSIGNED_OUT_TTL_MS) m.delete(k); });
+    return (Array.isArray(list) ? list : []).filter(s => !m.has(String(s.id)));
+};
+
 // --- BUFFER UI ---
 const renderBuffer = () => {
     const z = document.getElementById('buffer-zone');
     const n = document.getElementById('buffer-nav-deck');
+
+    // 21.6: any spool genuinely present in the buffer is, by definition, not
+    // "assigned out" — clear its suppression entry so a real re-pickup/re-scan
+    // back into the buffer isn't filtered out by the heartbeat guard.
+    if (window._recentlyAssignedOut && window._recentlyAssignedOut.size) {
+        state.heldSpools.forEach(s => window._recentlyAssignedOut.delete(String(s.id)));
+    }
 
     // 1. Render Dashboard Buffer Zone
     if (z) {
@@ -609,6 +642,7 @@ const processScan = (text, source = 'keyboard') => {
                     const movedId = res.moved;
                     if (movedId != null) {
                         state.heldSpools = state.heldSpools.filter(s => s.id !== movedId);
+                        _markAssignedOut(movedId); // 21.6 — don't let a stale pulse resurrect it
                         renderBuffer();
                     }
                     const extraMsg = res.action === 'assignment_partial'
@@ -935,6 +969,7 @@ const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoo
                 // Drop only the spools we actually moved; preserve the rest.
                 const movedSet = new Set(spoolIds.map(String));
                 state.heldSpools = state.heldSpools.filter(s => !movedSet.has(String(s.id)));
+                movedSet.forEach(id => _markAssignedOut(id)); // 21.6
                 renderBuffer();
                 if (document.getElementById('manage-loc-id').value === tid) refreshManageView(tid);
                 // Dispatch the canonical "something moved" event instead of
@@ -1037,10 +1072,20 @@ const loadBuffer = () => {
                         window.pendingPersist = true;
                     } else {
                         console.log("🔄 Syncing Buffer from Server...");
+                        // 21.6: drop any spool this client just assigned out of
+                        // the buffer — a stale server payload (lost persist or a
+                        // second client's clobber) must not resurrect it.
+                        const cleaned = _filterRecentlyAssignedOut(data);
+                        const wasStale = cleaned.length !== data.length;
                         window.suppressBufferDirty = true;
-                        state.heldSpools = data;
+                        state.heldSpools = cleaned;
                         if (window.renderBuffer) window.renderBuffer();
                         window.suppressBufferDirty = false;
+                        // If we filtered resurrected spools, the server is behind
+                        // us — re-assert the corrected buffer so it converges
+                        // (recovers a dropped persist) instead of fighting us on
+                        // every heartbeat.
+                        if (wasStale) persistBuffer();
                         // [ALEX FIX] Trigger a proactive backfill sync since old DB state didn't track remaining_weight
                         setTimeout(liveRefreshBuffer, 500);
                     }
