@@ -43,6 +43,43 @@ def _pill_center(page: Page):
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 
 
+def test_log_pill_shows_naturally_with_unseen_entries(page: Page):
+    """The drag wiring must NOT interfere with _updateLogPill's show path: an
+    unseen log entry must still surface the pill, on-screen + clickable. Injects
+    a log through the real render path (force=true bypasses the no-wiggle hash)
+    so the test is independent of the dev container's (restart-wiped) log ring."""
+    page.add_init_script(
+        "try { localStorage.removeItem('fcc.logPill.lastSeenTime');"
+        " localStorage.removeItem('fcc.logPill.pos'); } catch(e){}"
+    )
+    _goto_dashboard(page)
+    page.wait_for_function("typeof window._renderLogsPayload === 'function'")
+    page.evaluate(
+        "() => window._renderLogsPayload({logs:[{time:'23:59:59', msg:'diag entry', type:'info'}]}, true)"
+    )
+    page.wait_for_function(
+        "() => { const p = document.getElementById('fcc-log-pill');"
+        " return p && getComputedStyle(p).display !== 'none'; }",
+        timeout=4000,
+    )
+    box = page.locator("#fcc-log-pill").bounding_box()
+    assert box is not None, "pill reports a box-less layout despite display != none"
+    vw = page.evaluate("() => window.innerWidth")
+    vh = page.evaluate("() => window.innerHeight")
+    assert (box["x"] >= 0 and box["y"] >= 0
+            and box["x"] + box["width"] <= vw and box["y"] + box["height"] <= vh), (
+        f"pill surfaced off-screen: {box} in {vw}x{vh}"
+    )
+    # And the surfaced pill must be the clickable top element at its center.
+    cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    top = page.evaluate(
+        "([x,y]) => { const el = document.elementFromPoint(x,y);"
+        " return el ? (el.closest('#fcc-log-pill') ? 'fcc-log-pill' : (el.id||el.className)) : null; }",
+        [cx, cy],
+    )
+    assert top and "fcc-log-pill" in str(top), f"surfaced pill not clickable, got {top!r}"
+
+
 def test_log_pill_tap_opens_overlay(page: Page):
     _goto_dashboard(page)
     _show_pill(page)
