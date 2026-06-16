@@ -2,7 +2,6 @@ import requests # type: ignore
 import state # type: ignore
 import config_loader # type: ignore
 import locations_db # type: ignore  # L271 Phase 2: single hierarchy resolver
-import perf_trace # type: ignore  # L3 latency probe — zero-cost when no trace is active
 import json
 
 def parse_inbound_data(data):
@@ -85,8 +84,7 @@ class SpoolmanRejection(Exception):
 def get_spool(sid):
     sm_url, _ = config_loader.get_api_urls()
     try:
-        with perf_trace.span("spoolman.get_spool"):
-            return parse_inbound_data(requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3).json())
+        return parse_inbound_data(requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3).json())
     except: return None
 
 
@@ -97,8 +95,7 @@ def get_all_spools(allow_archived=True):
     sm_url, _ = config_loader.get_api_urls()
     q = "?allow_archived=true" if allow_archived else ""
     try:
-        with perf_trace.span("spoolman.get_all_spools"):
-            r = requests.get(f"{sm_url}/api/v1/spool{q}", timeout=5)
+        r = requests.get(f"{sm_url}/api/v1/spool{q}", timeout=5)
         if not r.ok:
             return []
         return parse_inbound_data(r.json())
@@ -339,8 +336,7 @@ def update_spool(sid, data):
             clean_data = data
         else:
             clean_data = sanitize_outbound_data(data)
-        with perf_trace.span("spoolman.patch"):
-            r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
+        r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
         if r.ok:
             LAST_SPOOLMAN_ERROR = None
             return r.json()
@@ -397,8 +393,7 @@ def _get_raw_extras(entity, eid):
     then sends `225` (parses as int) and Spoolman 400s."""
     try:
         sm_url, _ = config_loader.get_api_urls()
-        with perf_trace.span("spoolman.get_raw_extras"):
-            r = requests.get(f"{sm_url}/api/v1/{entity}/{eid}", timeout=3)
+        r = requests.get(f"{sm_url}/api/v1/{entity}/{eid}", timeout=3)
         if r.ok:
             return (r.json() or {}).get('extra') or {}
     except Exception:

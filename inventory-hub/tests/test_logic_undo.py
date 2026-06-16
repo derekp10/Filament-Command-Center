@@ -147,6 +147,72 @@ def test_empty_toolhead_buffer_swap(mock_state, mock_spoolman, mock_config, mock
     assert len(mock_state.GLOBAL_BUFFER) == 1
 
 
+def test_undo_log_line_names_spool_and_source(mock_state, mock_spoolman, mock_config, mock_locations, mock_requests):
+    """The Undo activity-log line must name the spool + its source, not just a
+    count (the '↩️ Undid: Moved 1 -> CR' readability bug, 2026-06-15)."""
+    # 1. The move captures the rich display label alongside the source location.
+    logic.perform_smart_move("NEW_SHELF", [123])
+    record = mock_state.UNDO_STACK[0]
+    assert record['labels'][123] == 'Test Spool'
+
+    # 2. Undo emits a readable from→to line (not the count-only summary).
+    logic.perform_undo()
+    logged = [c.args[0] for c in state.add_log_entry.call_args_list if c.args]
+    undo_lines = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undid:")]
+    assert undo_lines, "no Undo line was logged"
+    assert undo_lines[-1] == "↩️ Undid: moved Test Spool from OLD_SHELF -> NEW_SHELF"
+
+
+def test_undo_empty_stack_message_signals_move_only_scope(mock_state):
+    """Hitting Undo with nothing to undo should make the move-only scope clear
+    (Derek hit Undo expecting a weight rollback)."""
+    mock_state.UNDO_STACK = []
+    res = logic.perform_undo()
+    assert res['success'] is False
+    assert "moves only" in res['msg'].lower()
+
+
+def test_undo_log_line_lists_multiple_spools(mock_state, mock_spoolman, mock_config, mock_locations, mock_requests):
+    """A multi-spool undo names every spool + its source, with the destination
+    stated ONCE in the header (not repeated per segment)."""
+    mock_spoolman.get_spool.side_effect = lambda sid: {
+        123: {'id': 123, 'location': 'OLD_A', 'extra': {}},
+        124: {'id': 124, 'location': 'OLD_B', 'extra': {}},
+    }.get(int(sid))
+    mock_spoolman.format_spool_display.side_effect = lambda sd: {
+        123: {'text': 'Spool A', 'color': '#fff'},
+        124: {'text': 'Spool B', 'color': '#000'},
+    }[int(sd['id'])]
+
+    logic.perform_smart_move("NEW_SHELF", [123, 124])
+    logic.perform_undo()
+
+    logged = [c.args[0] for c in state.add_log_entry.call_args_list if c.args]
+    line = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undid:")][-1]
+    assert "2 spools -> NEW_SHELF" in line
+    assert "Spool A from OLD_A" in line
+    assert "Spool B from OLD_B" in line
+    # destination stated once (in the header), not repeated per segment
+    assert line.count("-> NEW_SHELF") == 1, f"target should appear once: {line!r}"
+
+
+def test_undo_legacy_record_without_labels_renders(mock_state):
+    """A record from before the `labels` field (e.g. in-flight across a hot
+    reload) still renders without KeyError, falling back to #sid."""
+    state.UNDO_STACK = [{
+        'target': 'CR', 'moves': {77: 'LR'}, 'ejections': {},
+        'summary': 'Moved 1 -> CR', 'origin': ''
+    }]
+    with patch('logic.requests'), patch('logic.config_loader') as cfg:
+        cfg.get_api_urls.return_value = ("http://spoolman", "http://fb")
+        res = logic.perform_undo()
+
+    assert res['success'] is True
+    logged = [c.args[0] for c in state.add_log_entry.call_args_list if c.args]
+    line = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undid:")][-1]
+    assert "#77 from LR -> CR" in line
+
+
 def test_get_live_spools_data(mock_spoolman):
     """Test rapid Spoolman querying for Live Refresh."""
     # mock_spoolman fixture already sets:
