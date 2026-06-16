@@ -129,6 +129,23 @@ def test_log_pill_position_restored_and_clamped(page: Page):
     assert box2["x"] >= 0 and box2["y"] >= 0, f"log pill must not go off the top/left: {box2}"
 
 
+def test_log_pill_onscreen_after_show_from_far_right_pos(page: Page):
+    """A stored position near the right edge, parked while the pill is HIDDEN
+    (engine measures the fallback width, not the real one), must not overhang the
+    viewport once shown — the fallback-width clamp + the ResizeObserver re-clamp
+    on the display:none→visible transition keep it on-screen."""
+    page.add_init_script(
+        "localStorage.setItem('fcc.logPill.pos', JSON.stringify({left:99999, bottom:200}));"
+    )
+    _goto_dashboard(page, {"width": 1200, "height": 900})
+    _show_pill(page)
+    page.wait_for_timeout(300)  # allow the ResizeObserver re-clamp to settle
+    box = page.locator("#fcc-log-pill").bounding_box()
+    assert box is not None
+    assert box["x"] + box["width"] <= 1200, f"pill overhangs the right edge after show: {box}"
+    assert box["x"] >= 0 and box["y"] >= 0, f"pill stranded off top/left: {box}"
+
+
 def test_log_pill_drag_survives_show_hide_toggle(page: Page):
     """The engine must never touch `display`, so the pill's JS show/hide ('unseen'
     gate) keeps working AND the dragged position persists across a hide→show."""

@@ -44,14 +44,18 @@
         if (logPill && mk) {
             mk(logPill, {
                 key: 'fcc.logPill.pos',
-                // Default = today's resting place (bottom-right, lifted above the
-                // cmd-deck band) expressed as {left,bottom} so nothing visibly
-                // moves until the user drags. Diagonally opposite the FAB default.
+                // Default ≈ today's bottom-right resting place (lifted above the
+                // cmd-deck band), expressed as {left,bottom}. The pill is hidden at
+                // init so its width can't be measured — use a representative
+                // estimate; the engine's ResizeObserver re-clamps to the real width
+                // the instant the pill first shows. Diagonally opposite the FAB.
                 defaultPos: () => {
-                    const w = logPill.offsetWidth || 90;
+                    const w = logPill.offsetWidth || 100;
                     const onDeck = !!document.querySelector('.cmd-deck');
                     return { left: Math.max(30, window.innerWidth - w - 30), bottom: onDeck ? 260 : 110 };
                 },
+                fallbackW: 100,   // representative width while hidden (offsetWidth 0)
+                fallbackH: 44,    // representative height while hidden
                 draggingClass: 'fcc-log-pill-dragging',
                 resetToast: '📡 Activity-Log pill reset to default position',
                 onTap: () => { if (window.openLogPillOverlay) window.openLogPillOverlay(); },

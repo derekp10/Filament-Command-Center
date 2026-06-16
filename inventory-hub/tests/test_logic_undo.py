@@ -213,6 +213,24 @@ def test_undo_legacy_record_without_labels_renders(mock_state):
     assert "#77 from LR -> CR" in line
 
 
+def test_undo_empty_moves_record_no_double_moved(mock_state):
+    """A legacy/no-move record (empty moves + old 'Moved N -> X' summary) must NOT
+    render the double word '↩️ Undid: moved Moved 1 -> CR'."""
+    state.UNDO_STACK = [{
+        'target': 'CR', 'moves': {}, 'ejections': {},
+        'summary': 'Moved 1 -> CR', 'origin': ''
+    }]
+    with patch('logic.requests'), patch('logic.config_loader') as cfg:
+        cfg.get_api_urls.return_value = ("http://spoolman", "http://fb")
+        res = logic.perform_undo()
+
+    assert res['success'] is True
+    logged = [c.args[0] for c in state.add_log_entry.call_args_list if c.args]
+    line = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undid:")][-1]
+    assert line == "↩️ Undid: Moved 1 -> CR", f"unexpected legacy render: {line!r}"
+    assert "moved Moved" not in line
+
+
 def test_get_live_spools_data(mock_spoolman):
     """Test rapid Spoolman querying for Live Refresh."""
     # mock_spoolman fixture already sets:

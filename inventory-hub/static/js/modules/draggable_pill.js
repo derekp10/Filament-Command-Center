@@ -43,14 +43,18 @@
     function makeDraggablePill(el, opts) {
         if (!el || !opts || !opts.key || typeof opts.defaultPos !== 'function') return;
         const draggingClass = opts.draggingClass || 'fcc-dragging';
-        // Clamp box: an explicit size, else the element's rendered box. The pill
-        // is wider than tall and varies with its count text, so measure live;
-        // while hidden (offsetWidth 0) fall back to a conservative constant.
-        const boxW = () => opts.size || el.offsetWidth || 48;
-        const boxH = () => opts.size || el.offsetHeight || 48;
-        const clamp = (p) => {
-            const maxLeft = Math.max(MARGIN, window.innerWidth - boxW() - MARGIN);
-            const maxBottom = Math.max(MARGIN, window.innerHeight - boxH() - MARGIN);
+        // Clamp box: a fixed `size` (the FAB), else the element's live rendered
+        // box. The pill varies with its count text, so measure live; while hidden
+        // (offsetWidth 0) fall back to a caller `fallbackW`/`fallbackH` estimate
+        // (then a conservative constant). The ResizeObserver below re-clamps to
+        // the true width the moment the pill shows.
+        const boxW = () => opts.size || el.offsetWidth || opts.fallbackW || 48;
+        const boxH = () => opts.size || el.offsetHeight || opts.fallbackH || 48;
+        // Optional w/h reuse a box measured once at pointerdown — avoids a forced
+        // reflow (reading offsetWidth right after each apply() write) during a drag.
+        const clamp = (p, w, h) => {
+            const maxLeft = Math.max(MARGIN, window.innerWidth - (w || boxW()) - MARGIN);
+            const maxBottom = Math.max(MARGIN, window.innerHeight - (h || boxH()) - MARGIN);
             return {
                 left: Math.min(Math.max(Number(p.left), MARGIN), maxLeft),
                 bottom: Math.min(Math.max(Number(p.bottom), MARGIN), maxBottom),
@@ -65,7 +69,7 @@
         const load = () => {
             try {
                 const p = JSON.parse(localStorage.getItem(opts.key));
-                if (p && isFinite(p.left) && isFinite(p.bottom)) return clamp(p);
+                if (p && Number.isFinite(p.left) && Number.isFinite(p.bottom)) return clamp(p);
             } catch (_) { /* ignore malformed */ }
             return clamp(opts.defaultPos());
         };
@@ -82,7 +86,7 @@
 
         el.addEventListener('pointerdown', (e) => {
             if (e.button != null && e.button !== 0) return; // primary / touch / pen only
-            down = { x: e.clientX, y: e.clientY, startLeft: pos.left, startBottom: pos.bottom };
+            down = { x: e.clientX, y: e.clientY, startLeft: pos.left, startBottom: pos.bottom, w: boxW(), h: boxH() };
             moved = false; longPressed = false;
             try { el.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
             el.classList.add(draggingClass);
@@ -104,7 +108,7 @@
             if (!moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
             moved = true; clearLongPress();
             // left grows rightward; bottom grows upward → subtract dy.
-            pos = clamp({ left: down.startLeft + dx, bottom: down.startBottom - dy });
+            pos = clamp({ left: down.startLeft + dx, bottom: down.startBottom - dy }, down.w, down.h);
             apply(pos);
         });
 
@@ -137,6 +141,17 @@
 
         // Keep on-screen across window resizes / kiosk rotation.
         window.addEventListener('resize', () => { pos = clamp(pos); apply(pos); });
+
+        // Re-clamp when the ELEMENT's own box changes: a display:none → visible
+        // transition (offsetWidth 0 → real width) or a count-driven width change.
+        // The window 'resize' handler never catches these, so a position parked
+        // while hidden (measured at fallback width) is corrected the instant the
+        // pill shows. apply() only writes position, never size, so this can't loop.
+        if (typeof ResizeObserver !== 'undefined') {
+            try {
+                new ResizeObserver(() => { pos = clamp(pos); apply(pos); }).observe(el);
+            } catch (_) { /* unsupported — window resize still covers viewport changes */ }
+        }
     }
 
     window.makeDraggablePill = makeDraggablePill;

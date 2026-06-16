@@ -1060,12 +1060,14 @@ def perform_undo():
         return f"{label} from {src} -> {target}" if with_target else f"{label} from {src}"
 
     if len(moves) == 1:
-        detail = _undo_seg(next(iter(moves)), True)
+        detail = f"moved {_undo_seg(next(iter(moves)), True)}"
     elif moves:
-        detail = f"{len(moves)} spools -> {target} (" + "; ".join(_undo_seg(s, False) for s in moves) + ")"
+        detail = f"moved {len(moves)} spools -> {target} (" + "; ".join(_undo_seg(s, False) for s in moves) + ")"
     else:
-        detail = last.get('summary', f"-> {target}")  # legacy/no-move record
-    state.add_log_entry(f"↩️ Undid: moved {detail}", "WARNING")
+        # Legacy / no-move record: its summary already reads "Moved N -> target",
+        # so don't prepend a second "moved".
+        detail = last.get('summary', f"moved -> {target}")
+    state.add_log_entry(f"↩️ Undid: {detail}", "WARNING")
     return {"success": True}
 
 def process_audit_scan(scan_result):
