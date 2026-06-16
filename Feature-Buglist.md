@@ -1,5 +1,19 @@
 # **New and Unsorted Features/Bugs**
 
+* Undo button needs an overhaul. I just hit it thinking it might undo the weight (again, I should have know that this probably wasn't wired up yet.) and it ended up changing the location of a filament I don't even recall what it was. just said. "[18:10:25] ↩️ Undid: Moved 1 -> CR" which is not helpful. I now have no idea what filament was moved where? I was able to find out using the application logs in the container. But this data should be surfaced, perhaps a bit more cleanly for the activity log and user readibility.
+
+* all manual weight adjustments should display what it was before, and what it is now. Basically give a break down.
+
+* Pricing and metadata should list how many links are filled in, or atleast note that a product link and a purchase link are added. (I think it only works currently on pruchase links) Yeah, it does it for purchase links, which is cool. we just need to do it also for product links. (same style, matching icon, etc.)
+
+* Add/edit wizzard should have a print filament button for existing filaments. And there should be a print all option if creating multiple. (had an 8 filament round where I just had to click the 8 different buttons.)
+
+* Location field in add/edit filament, when typing in a match, hitting Tab should confirm highlighted item into the field (just like enter does).
+
+* Using a URL to get spool data should save the url to the product link section. (For prusament if it doesn't already exist) On an existing spool.
+
+* Check for possible issues around a hard 1000 spool weight, when actual spool weight might be more (or less). I think were making some assumptions on weight possible, as I've been adding/updating/correcting prusament filament product id's and notice that i keep getting a left over amount as the remaining. (this might be by design to preserver existing weight.) But because some of these spools are unopened, I think it might just be some issues with legacy spools ones before we added the ability to scan a prusament id to get the data. We should just double check the code around that just to make sure.
+
 * With the decoupling of the search badge, now able move, the activitys log badge seems to be weird, and doesn't make sense where it's at now. We may need to re-evaluate how we do this or place this. (Perhaps giving it the ability to be moved as well?)
 
 * Product URL modifications on filament edit window do not save. (this should be tired to a prusament product page, and not a spool specific data link (alphanumerice identifier)) We should probalby clean these when we get the spool id parcer checked and working to group the product url correctly. Apparently this won't save blank, but putting in something that resembles a url (//test) works for clearing it. We should make sure that all fields can be blanked out and save approperiatly.
