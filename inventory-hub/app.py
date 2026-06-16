@@ -3046,18 +3046,7 @@ def api_printer_state(toolhead_id):
     if not printer_name:
         return jsonify({"known": False, "reason": "no_printer_name"})
     _, fb_url = config_loader.get_api_urls()
-    import perf_trace  # L3 latency probe — the frontend pre-move PrusaLink probe leg
-    _probe_owns = perf_trace.start_if_idle(f"printer-state-probe → {(toolhead_id or '').strip().upper()}")
-    try:
-        result = prusalink_api.get_printer_state(fb_url, printer_name)
-    finally:
-        if _probe_owns:
-            _ps = perf_trace.finish()
-            if _ps:
-                try:
-                    state.add_log_entry(_ps, "INFO", "888888")
-                except Exception:
-                    state.logger.info(_ps)
+    result = prusalink_api.get_printer_state(fb_url, printer_name)
     if not result:
         return jsonify({"known": False, "reason": "prusalink_unreachable"})
     return jsonify({

@@ -17,7 +17,13 @@ CSV_FILE = '3D Print Supplies - Locations.csv'
 
 # Location Type constants used for Dryer Box / Toolhead logic.
 DRYER_BOX_TYPE = 'Dryer Box'
-TOOLHEAD_TYPES = {'Tool Head', 'MMU Slot', 'No MMU Direct Load'}
+# Canonical, read-only classifier for the location Types that ARE (or hold) a
+# printer's deploy slot. Membership-only (never mutated); a frozenset so a stray
+# re-added mutable duplicate can't silently shadow it. Consumed across the
+# module's toolhead-classification call sites (printer-promotion migration,
+# room inference, slot-bind validation) and the is_toolhead checks in
+# app.py / logic.py.
+TOOLHEAD_TYPES = frozenset({'Tool Head', 'MMU Slot', 'No MMU Direct Load'})
 
 # A dual-role Printer row (e.g. Core One) IS its own toolhead and is registered
 # in printer_map as its own load position (L271 Phase 3). It is therefore a valid
@@ -539,12 +545,6 @@ def _known_printer_prefixes(printer_map):
         ku = str(key).strip().upper()   # strip so a padded key can't yield a "  XL" prefix
         prefixes.add(ku.split('-', 1)[0] if '-' in ku else ku)
     return prefixes
-
-
-# Location types that legitimately ARE (or hold) a printer's deploy slot, and so
-# may be promoted in place to a first-class Printer row. Any OTHER typed row that
-# happens to share a printer-prefix LocationID is a collision — left untouched.
-TOOLHEAD_TYPES = frozenset({"Tool Head", "MMU Slot", "No MMU Direct Load"})
 
 
 def _resolve_printer_name(printer_id, printer_map):

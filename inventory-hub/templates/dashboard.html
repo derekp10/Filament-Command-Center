@@ -103,8 +103,7 @@
          our overlay tier so opening the overlay still occludes the pill.
          Sized for thumb-tap on the eventual mobile build too. -->
     <button type="button" id="fcc-log-pill" class="btn btn-sm shadow"
-        onclick="window.openLogPillOverlay && window.openLogPillOverlay()"
-        title="New Activity Log entries — click to view">
+        title="New Activity Log entries — tap to view; drag to move">
         <span id="fcc-log-pill-icon">📡</span>
         <span id="fcc-log-pill-count" class="ms-1">0</span>
         <span class="ms-1" style="font-weight:600; font-size:0.8rem;">new</span>
@@ -205,9 +204,12 @@
     {% include 'components/label_spool.html' %}
     {% include 'components/offcanvas_search.html' %}
     {% include 'components/modals_config.html' %}
-    <!-- Global Floating Action Button for Search -->
-    <button class="btn btn-primary shadow-lg border border-info fcc-fab-search"
-        onclick="SearchEngine.open()" title="Global Inventory Search">
+    <!-- Global Floating Action Button for Search. Drag-to-park + click-to-open
+         are owned by fab_drag.js (buglist 21.1) — no inline onclick, so the
+         drag-vs-click threshold can decide between "move it" and "open search". -->
+    <button id="fcc-fab-search" class="btn btn-primary shadow-lg border border-info fcc-fab-search"
+        title="Global Inventory Search — drag to move · long-press to reset position"
+        aria-label="Open global inventory search">
         🔍
     </button>
 

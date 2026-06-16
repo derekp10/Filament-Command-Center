@@ -6,7 +6,6 @@ import tempfile
 import threading
 import state
 import config_schema
-import perf_trace  # L3 latency probe — zero-cost when no trace is active
 
 # Module-global mirroring spoolman_api.LAST_SPOOLMAN_ERROR: set to the last
 # config-write failure string (None on success) so callers never have to
@@ -104,10 +103,9 @@ def load_config():
     
     if os.path.exists(config_file):
         try:
-            with perf_trace.span("config.load"):
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    loaded = json.load(f)
-                    final_config.update(loaded)
+            with open(config_file, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+                final_config.update(loaded)
 
             current_mtime = str(os.path.getmtime(config_file))
             tracker_file = os.path.join(BASE_DIR, '.config_mtime')

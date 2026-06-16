@@ -102,6 +102,8 @@ Until the Config system (Feature-Buglist.md L9) lands, a small number of user pr
 | Key | Type | Values | Owner |
 |-----|------|--------|-------|
 | `fcc.weighEntry.defaultMode` | string | `gross` / `net` / `additive` / `set_used` | `<WeightEntry>` overlay — last mode the user clicked "Set as default" on (or `D` shortcut). Read on overlay open, falls through to the caller-supplied `defaultMode` option when unset/invalid. |
+| `fcc.fab.pos` | JSON `{left,bottom}` | px distances from the viewport's left / bottom edges | `fab_drag.js` (shared `draggable_pill.js` engine) — the draggable global search FAB's parked position (buglist 21.1). Written on drag-end; long-press resets to the default. Loaded + viewport-clamped on page load; absent/invalid → bottom-left cmd-deck-band default (clear of buffer weights + the WEIGH QR). |
+| `fcc.logPill.pos` | JSON `{left,bottom}` | px distances from the viewport's left / bottom edges | `fab_drag.js` (shared `draggable_pill.js` engine) — the draggable Activity-Log "N new" pill's parked position (2026-06-15, `#fcc-log-pill`). Written on drag-end; long-press resets to default. Loaded + viewport-clamped on page load; absent/invalid → a bottom-right default lifted above the cmd-deck band (diagonally opposite the FAB). Position is independent of the pill's JS-toggled show/hide (the separate `fcc.logPill.lastSeenTime` "unseen" gate). |
 
 ## Working Groups (Batched Tasks)
 

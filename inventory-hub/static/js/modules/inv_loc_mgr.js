@@ -673,6 +673,35 @@ window.renderFeedsSection = renderFeedsSection;
 // L206: render path extracted to _renderManagePayload so the bulk-pulse
 // dispatcher can hand pre-fetched contents in without an extra fetch.
 let _refreshManageViewInflight = false;
+// 21.2 self-heal: the manage-view QR codes are generated in rAF-deferred
+// passes (renderList/renderGrid → generateSafeQR, itself double-rAF'd). If a
+// competing render (eject re-render racing the 5s sync-pulse, locations-changed
+// fan-out, etc.) supersedes a render between its innerHTML swap and its QR
+// fill, the placeholders can be left blank — and because every later pulse
+// early-returns on the anti-wiggle hash below, they'd stay blank until the
+// underlying data changes (the reported "card refreshes but QR codes don't
+// reload" on an XL toolhead eject). This sweep re-fills only EMPTY qr-pick/
+// print/trash placeholders, reconstructing each QR's text from the card's
+// data-spool-id, so a dropped pass recovers within one pulse. No-op when every
+// QR is already drawn (the common case) and never touches a filled node.
+const _ensureManageQRsFilled = () => {
+    const list = document.getElementById('manage-contents-list');
+    if (!list) return;
+    list.querySelectorAll('[data-spool-id]').forEach((card) => {
+        const sid = card.getAttribute('data-spool-id');
+        if (!sid) return;
+        card.querySelectorAll("[id^='qr-pick-'],[id^='qr-print-'],[id^='qr-trash-']").forEach((div) => {
+            if (div.querySelector('canvas,img,table')) return; // already drawn
+            let text = null;
+            if (div.id.startsWith('qr-pick-')) text = 'ID:' + sid;
+            else if (div.id.startsWith('qr-print-')) text = 'CMD:PRINT:' + sid;
+            else if (div.id.startsWith('qr-trash-')) text = 'CMD:TRASH:' + sid;
+            if (text) generateSafeQR(div.id, text, 70);
+        });
+    });
+};
+window._ensureManageQRsFilled = _ensureManageQRsFilled;
+
 const _renderManagePayload = (id, d) => {
     const loc = state.allLocations.find(l => l.LocationID == id);
     if (!loc) return false;
@@ -680,7 +709,12 @@ const _renderManagePayload = (id, d) => {
     const bufHash = state.heldSpools.map(s => s.id).join(',');
     const contentHash = JSON.stringify(d);
     const newHash = `${contentHash}|${bufHash}`;
-    if (state.lastLocRenderHash === newHash) return true;
+    if (state.lastLocRenderHash === newHash) {
+        // DOM is unchanged — but a prior render may have dropped its QR pass.
+        // Self-heal any blank placeholders rather than skipping outright (21.2).
+        _ensureManageQRsFilled();
+        return true;
+    }
     state.lastLocRenderHash = newHash;
     // -----------------------
     window.updateManageTitle(loc, d);

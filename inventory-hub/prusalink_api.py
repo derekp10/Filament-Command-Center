@@ -2,7 +2,6 @@ import requests
 import re
 import threading
 from typing import Dict, List, Optional
-import perf_trace  # L3 latency probe — zero-cost when no trace is active
 import bgcode_decode  # binary-gcode (.bgcode) decoder for the cancel prefix-parse
 
 # Per-operation memo for get_printer_state (L3 fix A). A single
@@ -57,8 +56,7 @@ def fetch_all_filabridge_printers(filabridge_url: str) -> Dict[str, Dict]:
     FilaBridge just means the seed retries next boot)."""
     out: Dict[str, Dict] = {}
     try:
-        with perf_trace.span("prusalink.fetch_all_printers"):
-            response = requests.get(f"{filabridge_url}/printers", timeout=5)
+        response = requests.get(f"{filabridge_url}/printers", timeout=5)
         if response.ok:
             printers = (response.json() or {}).get('printers', {}) or {}
             for _pid, pdata in printers.items():
@@ -425,8 +423,7 @@ def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dic
 
     # v1 status — returns {"printer": {"state": "PRINTING", ...}, ...}
     try:
-        with perf_trace.span("prusalink.status"):
-            r = requests.get(f"http://{ip}/api/v1/status", headers=headers, timeout=2)
+        r = requests.get(f"http://{ip}/api/v1/status", headers=headers, timeout=2)
         if r.ok:
             body = r.json() or {}
             printer = body.get("printer") or {}
@@ -446,8 +443,7 @@ def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dic
 
     # Legacy /api/printer — returns {"state": {"text": "Printing", "flags": {...}}, ...}
     try:
-        with perf_trace.span("prusalink.status"):
-            r = requests.get(f"http://{ip}/api/printer", headers=headers, timeout=2)
+        r = requests.get(f"http://{ip}/api/printer", headers=headers, timeout=2)
         if r.ok:
             body = r.json() or {}
             flags = (body.get("state") or {}).get("flags") or {}
@@ -542,8 +538,7 @@ def get_printer_job(filabridge_url: str, printer_name: str) -> Optional[Dict]:
     # v1 job — {"id", "progress"(0-100), "file": {"refs": {"download"}, "path",
     # "name", "meta": {...}}, ...}. 204/empty body when the printer is idle.
     try:
-        with perf_trace.span("prusalink.job"):
-            r = requests.get(f"http://{ip}/api/v1/job", headers=headers, timeout=2)
+        r = requests.get(f"http://{ip}/api/v1/job", headers=headers, timeout=2)
         if r.status_code == 204:
             return None  # no active job
         if r.ok and r.content:
@@ -559,8 +554,7 @@ def get_printer_job(filabridge_url: str, printer_name: str) -> Optional[Dict]:
 
     # Legacy /api/job — {"job": {"file": {"name","path"}}, "progress": {"completion"}}
     try:
-        with perf_trace.span("prusalink.job"):
-            r = requests.get(f"http://{ip}/api/job", headers=headers, timeout=2)
+        r = requests.get(f"http://{ip}/api/job", headers=headers, timeout=2)
         if r.ok and r.content:
             return _parse_legacy_job(r.json() or {})
     except Exception:

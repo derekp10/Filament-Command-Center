@@ -48,6 +48,13 @@
 <!-- Cancelled-print partial-deduct preview/confirm overlay (FilaBridge §9.7). -->
 <script src="{{ url_for('static', filename='js/modules/cancel_review.js') }}?v=1.1"></script>
 <script src="{{ url_for('static', filename='js/modules/shortcuts_registry.js') }}?v=1.0"></script>
+<!-- Shared drag-to-park engine for the search FAB + Activity-Log pill. Must load
+     before fab_drag.js, which wires both affordances to window.makeDraggablePill. -->
+<script src="{{ url_for('static', filename='js/modules/draggable_pill.js') }}?v=1.1"></script>
+<!-- Draggable search FAB + Activity-Log pill + global search shortcuts (buglist
+     21.1 + movable log pill 2026-06-15). Loads after inv_search.js (SearchEngine),
+     shortcuts_registry.js (registerShortcut), and draggable_pill.js. -->
+<script src="{{ url_for('static', filename='js/modules/fab_drag.js') }}?v=1.2"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_config.js') }}?v=1.5"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_settings.js') }}?v=1.8"></script>
 
@@ -162,7 +169,12 @@
                 const idText = document.getElementById('detail-id').innerText;
                 if (idText) {
                     addToQueue({ id: parseInt(idText), type: 'spool', display: document.getElementById('detail-color-name').innerText });
-                    modals.spoolModal.hide();
+                    // 21.4 — keep the spool-details modal OPEN after queueing a
+                    // label (was calling modals.spoolModal.hide()). Sibling of
+                    // Group 17.2's "don't auto-open the queue modal" fix and the
+                    // filament side, which already stays open. The toast is the
+                    // only confirmation the user needs; the queue is reachable
+                    // via the 🛒 Queue button.
                     showToast('Label added to print queue!', 'success');
                 }
             };
