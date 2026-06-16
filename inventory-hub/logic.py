@@ -1,4 +1,5 @@
 import re
+import threading
 import typing
 import urllib.parse
 import requests
@@ -6,7 +7,6 @@ import state
 import config_loader
 import spoolman_api
 import locations_db
-import perf_trace  # L3 latency probe — zero-cost when no trace is active
 
 
 def _active_print_info_for_location(location_str, printer_map=None):
@@ -36,8 +36,7 @@ def _active_print_info_for_location(location_str, printer_map=None):
         # have prusalink_api's `requests` import graph fully satisfied.
         import prusalink_api
         _, fb_url = config_loader.get_api_urls()
-        with perf_trace.span("preflight", rollup=True):
-            state_dict = prusalink_api.get_printer_state(fb_url, printer_name)
+        state_dict = prusalink_api.get_printer_state(fb_url, printer_name)
     except Exception:
         return None
     if not state_dict or not state_dict.get('is_active'):
@@ -327,24 +326,26 @@ def resolve_scan(text):
         
     return {'type': 'error', 'msg': 'Unknown Code'}
 
-def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False):
-    """Trace-wrapping entry point for the slot-move pipeline (L3 latency probe).
+# Thread-local re-entry depth for perform_smart_move. The auto-deploy chain
+# re-enters the wrapper synchronously on the same thread; depth 0 is the
+# outermost move, which owns the per-move printer-state probe cache (L3 fix A).
+_smart_move_depth = threading.local()
 
-    Owns the per-assign timing trace lifecycle: starts the trace on the
-    OUTERMOST call, lets the auto-deploy recursion accumulate its spans into
-    the same trace (so a bound-slot assign reports preflight×2, spoolman.patch×2,
-    …), then emits a one-line breakdown to hub.log + the Activity Log on
-    completion. Also owns the per-move printer-state probe cache (L3 fix A) so
-    the recursion probes a given printer ONCE, not twice. All real work lives in
-    _perform_smart_move_impl — this is a behaviour-neutral wrapper.
+
+def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False):
+    """Entry point for the slot-move pipeline.
+
+    Owns the per-move printer-state probe cache (L3 fix A) so the auto-deploy
+    recursion probes a given printer ONCE, not twice: a thread-local depth guard
+    detects the OUTERMOST call and begins/clears the cache around it, while the
+    recursive re-entry (depth > 0) leaves the outer cache untouched. All real
+    work lives in _perform_smart_move_impl — this is a behaviour-neutral wrapper.
     """
-    owns_trace = perf_trace.start_if_idle(
-        f"slot-assign → {str(target).strip().upper()}"
-        + (f":SLOT:{target_slot}" if target_slot else "")
-        + (f" ({origin})" if origin else "")
-    )
+    depth = getattr(_smart_move_depth, "n", 0)
+    owns_move = depth == 0
+    _smart_move_depth.n = depth + 1
     _pa = None
-    if owns_trace:
+    if owns_move:
         # Deferred import keeps logic.py importable in unit tests that don't
         # satisfy prusalink_api's import graph (mirrors _active_print_info_*).
         try:
@@ -359,20 +360,12 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             confirm_active_print=confirm_active_print,
         )
     finally:
-        if owns_trace:
-            if _pa is not None:
-                try:
-                    _pa.clear_probe_cache()
-                except Exception:
-                    pass
-            summary = perf_trace.finish()
-            if summary:
-                # add_log_entry writes the Activity Log (prod-visible) AND hub.log
-                # in one shot; fall back to hub.log only if the log ring isn't up.
-                try:
-                    state.add_log_entry(summary, "INFO", "888888")
-                except Exception:
-                    state.logger.info(summary)
+        _smart_move_depth.n = getattr(_smart_move_depth, "n", 1) - 1
+        if owns_move and _pa is not None:
+            try:
+                _pa.clear_probe_cache()
+            except Exception:
+                pass
 
 
 def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False):
@@ -486,7 +479,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # so this can't drift out of sync with the rest of the codebase again.
     is_toolhead = bool(tgt_info) and tgt_info.get('Type') in (locations_db.TOOLHEAD_TYPES | {'Printer'})
 
-    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "ejections": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
+    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "labels": {}, "ejections": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
 
     if is_printer or is_toolhead:
         # Check if anyone is already home
@@ -511,6 +504,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         undo_record['moves'][sid] = current_loc
         current_extra: dict = dict(spool_data.get('extra') or {})
         info = spoolman_api.format_spool_display(spool_data)
+        # Capture the rich display label now (already computed for the forward-
+        # move log) so the Undo line can name the spool + source, not just a
+        # count — see perform_undo's readable from→to rendering.
+        undo_record['labels'][sid] = info['text']
         
         new_extra: typing.Dict[str, typing.Any] = dict(current_extra)
         
@@ -1021,7 +1018,7 @@ def perform_force_unassign(spool_id, confirm_active_print=False):
     return False
 
 def perform_undo():
-    if not state.UNDO_STACK: return {"success": False, "msg": "History empty."}
+    if not state.UNDO_STACK: return {"success": False, "msg": "Nothing to undo (Undo reverts spool moves only)."}
     last = state.UNDO_STACK.pop()
     moves = last['moves']
     target = last.get('target')
@@ -1050,7 +1047,27 @@ def perform_undo():
                     # Prepend to buffer so it shows up first
                     state.GLOBAL_BUFFER.insert(0, {'id': int(sid), 'display': info['text'], 'color': info['color']})
                     
-    state.add_log_entry(f"↩️ Undid: {last['summary']}", "WARNING")
+    # Render a readable from→to line: label + source were captured at move time
+    # (logic.py undo_record build). Fall back to bare #sid / UNASSIGNED for legacy
+    # records or a spool deleted between the move and the undo.
+    labels = last.get('labels', {})
+
+    def _undo_seg(sid, with_target):
+        label = labels.get(sid) or labels.get(str(sid)) or f"#{sid}"
+        src = moves.get(sid) or moves.get(str(sid)) or "UNASSIGNED"
+        # The multi-spool header already states the destination, so the per-spool
+        # segments drop the redundant "-> target".
+        return f"{label} from {src} -> {target}" if with_target else f"{label} from {src}"
+
+    if len(moves) == 1:
+        detail = f"moved {_undo_seg(next(iter(moves)), True)}"
+    elif moves:
+        detail = f"moved {len(moves)} spools -> {target} (" + "; ".join(_undo_seg(s, False) for s in moves) + ")"
+    else:
+        # Legacy / no-move record: its summary already reads "Moved N -> target",
+        # so don't prepend a second "moved".
+        detail = last.get('summary', f"moved -> {target}")
+    state.add_log_entry(f"↩️ Undid: {detail}", "WARNING")
     return {"success": True}
 
 def process_audit_scan(scan_result):

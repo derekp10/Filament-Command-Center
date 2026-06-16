@@ -1707,8 +1707,9 @@ body {
     padding: 0.5rem 0.9rem;
     font-size: 0.95rem;
     box-shadow: 0 0 12px rgba(0, 255, 255, 0.4);
-    cursor: pointer;
+    cursor: grab;
     user-select: none;
+    touch-action: none;   /* Pointer Events own the drag — no scroll/zoom hijack on touch */
 }
 body:has(.cmd-deck) #fcc-log-pill {
     /* Dashboard: clear the 160px bottom-pinned cmd-deck (the draggable FAB no
@@ -1727,6 +1728,11 @@ body:has(.cmd-deck) #fcc-log-pill {
 .fcc-log-pill-flash {
     animation: fccLogPillFlash 0.7s ease-out;
 }
+/* Drag-to-park (2026-06-15): while dragging, show the grabbing cursor and kill
+   any in-flight flash animation (its transform:scale would fight the pointer)
+   so the pill tracks the finger 1:1. Position is owned by draggable_pill.js. */
+#fcc-log-pill:active { cursor: grabbing; }
+#fcc-log-pill.fcc-log-pill-dragging { animation: none !important; cursor: grabbing; }
 
 /* L202 — Edit Filament > Import-from-External collapse panel.
    Bug: during the 350ms Bootstrap height transition, the Source <select>

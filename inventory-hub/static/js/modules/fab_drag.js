@@ -1,120 +1,66 @@
-/* MODULE: Draggable search FAB + global search shortcuts (buglist 21.1)
+/* MODULE: Draggable corner affordances + global search shortcuts
  * ---------------------------------------------------------------------------
- * The floating 🔍 search button is the primary search affordance — Derek uses
- * it more than the navbar SEARCH button and relies on it staying reachable over
- * modals (it wins the z-index fight: 1080 > Bootstrap modal 1055). The only
- * defect was that, hard-anchored bottom-right, it covered the bottom buffer
- * card's weight readout. Every fixed corner of this dense dashboard collides
- * with live data, so instead of hiding or re-anchoring it we make it
- * DRAG-TO-PARK with its position remembered, defaulting to a data-free corner.
+ * Wires the two floating corner affordances to the shared drag-to-park engine
+ * (draggable_pill.js → window.makeDraggablePill) and adds keyboard search.
  *
- *   • tap (no drag)      → open search (SearchEngine.open)
- *   • drag (>6px)        → move it; position persisted to localStorage
- *   • long-press (650ms) → reset to the safe default (bottom-left deck band)
- *   • resize             → re-clamp so it can never strand off-screen
+ *   • 🔍 search FAB (buglist 21.1) — the primary search affordance; Derek uses
+ *     it more than the navbar SEARCH button and relies on it staying reachable
+ *     over modals (z-index 1080 > Bootstrap modal 1055). Hard-anchored it covered
+ *     the bottom buffer card's weight readout, so it drag-to-parks instead.
+ *   • 📡 Activity-Log "N new" pill (2026-06-15) — once the FAB became draggable
+ *     the hard-anchored pill looked orphaned beside it; it now drags too, sharing
+ *     the same engine. Its show/hide "unseen" gate stays owned by inv_core.js —
+ *     the engine never touches `display`.
  *
- * Also adds keyboard search — Ctrl/Cmd+K and '/' (there was none before) — so
- * "search always available" doesn't depend on finding the button. Pointer
- * Events unify mouse + touch + stylus in one path; touch-action:none (CSS) lets
- * the drag own touch instead of the browser scrolling.
+ * Each affordance: tap → its action, drag (>6px) → move + persist, long-press →
+ * reset to a data-free default, resize → re-clamp. Also adds keyboard search —
+ * Ctrl/Cmd+K and '/' (there was none before) — so "search always available"
+ * doesn't depend on finding the button.
  *
- * Storage: localStorage 'fcc.fab.pos' = {left, bottom} distances in px. See the
- * CLAUDE.md "User preferences (pre-Config-system)" table.
+ * Storage: localStorage 'fcc.fab.pos' / 'fcc.logPill.pos' = {left, bottom} px.
+ * See the CLAUDE.md "User preferences (pre-Config-system)" table.
  */
 (function () {
     'use strict';
 
-    const KEY = 'fcc.fab.pos';
-    const SIZE = 65;            // matches .fcc-fab-search width/height
-    const MARGIN = 8;           // keep at least this far from any viewport edge
-    const DRAG_THRESHOLD = 6;   // px of movement before a press is a drag, not a click
-    const LONGPRESS_MS = 650;   // hold still this long → reset to default
-
     function init() {
+        const mk = window.makeDraggablePill;
+
+        // --- Draggable 🔍 search FAB ------------------------------------------
         const fab = document.getElementById('fcc-fab-search');
-        if (!fab) return;
+        if (fab && mk) {
+            mk(fab, {
+                key: 'fcc.fab.pos',
+                size: 65,                                      // matches .fcc-fab-search box
+                defaultPos: () => ({ left: 30, bottom: 30 }),  // bottom-left deck band — clear of buffer weights + WEIGH QR
+                draggingClass: 'fcc-fab-dragging',
+                resetToast: '🔍 Search button reset to default position',
+                onTap: () => { if (window.SearchEngine && typeof window.SearchEngine.open === 'function') window.SearchEngine.open(); },
+            });
+        }
 
-        const def = () => ({ left: 30, bottom: 30 }); // bottom-left deck band — clear of buffer weights + WEIGH QR
-        const clamp = (p) => {
-            const maxLeft = Math.max(MARGIN, window.innerWidth - SIZE - MARGIN);
-            const maxBottom = Math.max(MARGIN, window.innerHeight - SIZE - MARGIN);
-            return {
-                left: Math.min(Math.max(Number(p.left), MARGIN), maxLeft),
-                bottom: Math.min(Math.max(Number(p.bottom), MARGIN), maxBottom),
-            };
-        };
-        const apply = (p) => {
-            fab.style.left = p.left + 'px';
-            fab.style.bottom = p.bottom + 'px';
-            fab.style.right = 'auto';
-            fab.style.top = 'auto';
-        };
-        const load = () => {
-            try {
-                const p = JSON.parse(localStorage.getItem(KEY));
-                if (p && isFinite(p.left) && isFinite(p.bottom)) return clamp(p);
-            } catch (_) { /* ignore malformed */ }
-            return def();
-        };
-        const save = (p) => { try { localStorage.setItem(KEY, JSON.stringify(p)); } catch (_) { /* private mode / quota */ } };
-
-        let pos = load();
-        apply(pos);
-
-        let down = null;        // { x, y, startLeft, startBottom }
-        let moved = false;
-        let longPressed = false;
-        let longPressTimer = null;
-        const clearLongPress = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; } };
-
-        fab.addEventListener('pointerdown', (e) => {
-            if (e.button != null && e.button !== 0) return; // primary / touch / pen only
-            down = { x: e.clientX, y: e.clientY, startLeft: pos.left, startBottom: pos.bottom };
-            moved = false; longPressed = false;
-            try { fab.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
-            fab.classList.add('fcc-fab-dragging');
-            clearLongPress();
-            longPressTimer = setTimeout(() => {
-                if (down && !moved) {
-                    longPressed = true;
-                    pos = clamp(def());
-                    apply(pos);
-                    save(pos);
-                    if (window.showToast) window.showToast('🔍 Search button reset to default position', 'info', 2500);
-                }
-            }, LONGPRESS_MS);
-        });
-
-        fab.addEventListener('pointermove', (e) => {
-            if (!down) return;
-            const dx = e.clientX - down.x, dy = e.clientY - down.y;
-            if (!moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
-            moved = true; clearLongPress();
-            // left grows rightward; bottom grows upward → subtract dy.
-            pos = clamp({ left: down.startLeft + dx, bottom: down.startBottom - dy });
-            apply(pos);
-        });
-
-        const endDrag = () => {
-            if (!down) return;
-            clearLongPress();
-            fab.classList.remove('fcc-fab-dragging');
-            const wasMoved = moved, wasLong = longPressed;
-            down = null; moved = false; longPressed = false;
-            if (wasLong) return;                 // long-press already reset; swallow the click
-            if (wasMoved) { save(pos); return; } // a real drag → persist, don't open
-            // a clean tap → open search
-            if (window.SearchEngine && typeof window.SearchEngine.open === 'function') window.SearchEngine.open();
-        };
-        fab.addEventListener('pointerup', endDrag);
-        fab.addEventListener('pointercancel', () => {
-            clearLongPress();
-            fab.classList.remove('fcc-fab-dragging');
-            down = null; moved = false; longPressed = false;
-        });
-
-        // Keep on-screen across window resizes / kiosk rotation.
-        window.addEventListener('resize', () => { pos = clamp(pos); apply(pos); });
+        // --- Draggable 📡 Activity-Log "N new" pill ---------------------------
+        const logPill = document.getElementById('fcc-log-pill');
+        if (logPill && mk) {
+            mk(logPill, {
+                key: 'fcc.logPill.pos',
+                // Default ≈ today's bottom-right resting place (lifted above the
+                // cmd-deck band), expressed as {left,bottom}. The pill is hidden at
+                // init so its width can't be measured — use a representative
+                // estimate; the engine's ResizeObserver re-clamps to the real width
+                // the instant the pill first shows. Diagonally opposite the FAB.
+                defaultPos: () => {
+                    const w = logPill.offsetWidth || 100;
+                    const onDeck = !!document.querySelector('.cmd-deck');
+                    return { left: Math.max(30, window.innerWidth - w - 30), bottom: onDeck ? 260 : 110 };
+                },
+                fallbackW: 100,   // representative width while hidden (offsetWidth 0)
+                fallbackH: 44,    // representative height while hidden
+                draggingClass: 'fcc-log-pill-dragging',
+                resetToast: '📡 Activity-Log pill reset to default position',
+                onTap: () => { if (window.openLogPillOverlay) window.openLogPillOverlay(); },
+            });
+        }
 
         // --- Keyboard: open search from anywhere (none existed before) --------
         const openSearch = () => { if (window.SearchEngine && window.SearchEngine.open) window.SearchEngine.open(); };
@@ -141,6 +87,7 @@
             window.registerShortcut({ id: 'global-search-key', scope: 'Global', keys: ['Ctrl/Cmd', 'K'], description: 'Open global inventory search.' });
             window.registerShortcut({ id: 'global-search-slash', scope: 'Global', keys: ['/'], description: 'Open global inventory search (when not typing / scanning).' });
             window.registerShortcut({ id: 'fab-drag', scope: 'Global', keys: ['drag 🔍'], description: 'Drag the floating search button to move it anywhere; long-press it to reset its position.' });
+            window.registerShortcut({ id: 'log-pill-drag', scope: 'Global', keys: ['drag 📡'], description: 'Drag the Activity-Log pill to move it anywhere; long-press it to reset its position.' });
         }
     }
 

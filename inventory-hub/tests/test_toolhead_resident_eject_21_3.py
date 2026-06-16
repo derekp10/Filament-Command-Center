@@ -103,3 +103,16 @@ def test_canonical_toolhead_types_are_all_covered():
     by perform_smart_move, so this can't silently drift again."""
     for t in logic.locations_db.TOOLHEAD_TYPES:
         assert 99 in _run_move(t), f"type {t!r} skipped the resident auto-eject"
+
+
+def test_toolhead_types_is_single_canonical_frozenset():
+    """locations_db.TOOLHEAD_TYPES collapsed from a duplicate set+frozenset pair
+    (2026-06-15 cleanup) to ONE canonical frozenset. Re-introducing a mutable
+    ``TOOLHEAD_TYPES = {...}`` duplicate would make the surviving binding a plain
+    set, so the isinstance guard catches the drift before it ships."""
+    tt = logic.locations_db.TOOLHEAD_TYPES
+    assert isinstance(tt, frozenset), (
+        f"TOOLHEAD_TYPES must be a frozenset (got {type(tt).__name__}) — a "
+        "re-added mutable duplicate likely shadowed the canonical definition"
+    )
+    assert tt == frozenset({'Tool Head', 'MMU Slot', 'No MMU Direct Load'})
