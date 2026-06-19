@@ -206,6 +206,13 @@ def test_bind_picker_escape_closes(page: Page, open_manage_modal):
     expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
     page.locator("#fcc-bind-picker-search").press("Escape")
     expect(page.locator("#fcc-bind-picker-overlay")).to_be_hidden(timeout=2000)
+    # Escape must close ONLY the picker — the Location Manager modal stays open
+    # (Option-B sweep 2026-06-16: the picker search Escape now stopPropagation's
+    # + is handled ahead of the empty-list guard, so it can't bubble to
+    # Bootstrap's modal-dismiss).
+    assert page.evaluate(
+        "() => document.getElementById('manageModal').classList.contains('show')"
+    ), "Escape on the bind-slot-picker must NOT close the Location Manager modal"
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")

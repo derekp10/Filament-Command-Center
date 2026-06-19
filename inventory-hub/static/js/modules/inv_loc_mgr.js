@@ -473,6 +473,18 @@ const _comboHydrate = (slot, printers) => {
     input.addEventListener('focus', () => { filter(''); open(); });
     input.addEventListener('input', () => { filter(input.value); open(); });
     input.addEventListener('keydown', (e) => {
+        // Escape closes the dropdown only (when open) — handled BEFORE the
+        // empty-list guard below so a "No matches" filter can still be escaped
+        // out of WITHOUT the Escape bubbling to the manage modal (Bootstrap
+        // would otherwise dismiss the whole Location Manager). stopPropagation
+        // is the cure; matches the inv_quickswap bind-picker ordering.
+        if (e.key === 'Escape' && list.style.display !== 'none') {
+            e.preventDefault();
+            e.stopPropagation();
+            close();
+            input.blur();
+            return;
+        }
         if (list.style.display === 'none') return;
         const items = Array.from(list.querySelectorAll('.feeds-combo-item'));
         if (!items.length) return;
@@ -489,10 +501,6 @@ const _comboHydrate = (slot, printers) => {
             e.preventDefault();
             const target = idx >= 0 ? items[idx] : items[0];
             pick(target.dataset.value, target.innerText);
-        } else if (e.key === 'Escape') {
-            e.preventDefault();
-            close();
-            input.blur();
         }
     });
     // Click outside closes.
