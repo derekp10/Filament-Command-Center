@@ -966,6 +966,12 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
             return;
         }
         if (e.key === 'Escape') {
+            // Swallow Escape when the dropdown is open so it closes the
+            // dropdown ONLY — without preventDefault + stopPropagation the
+            // Escape bubbles to the wizard modal and Bootstrap dismisses it.
+            // Matches inv_details.js combobox pattern.
+            e.preventDefault();
+            e.stopPropagation();
             dropdown.style.display = 'none';
         }
     });
@@ -1203,6 +1209,16 @@ window.wizardMaterialKeydown = (event) => {
     const dropdown = document.getElementById('dropdown-material');
     if (!input || !dropdown || dropdown.style.display === 'none') {
         if (event.key === 'Enter') event.preventDefault();
+        return;
+    }
+
+    // Escape closes the suggestion dropdown only — without stopPropagation it
+    // bubbles to the wizard modal and Bootstrap dismisses the whole wizard,
+    // discarding in-progress data. Matches inv_details.js combobox pattern.
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        dropdown.style.display = 'none';
         return;
     }
 
@@ -1925,6 +1941,16 @@ window.wizardMultiselectKeydown = (event, entityType, key) => {
     let visibleOptions = [];
     if (dropdown && dropdown.style.display !== 'none') {
         visibleOptions = Array.from(dropdown.children).filter(el => el.style.display !== 'none');
+    }
+
+    // Escape closes the multi-choice dropdown only (when open) — keep the
+    // wizard modal open (Escape would otherwise bubble to Bootstrap's modal
+    // dismiss and discard the wizard). Matches inv_details.js attribute picker.
+    if (event.key === 'Escape' && dropdown && dropdown.style.display !== 'none') {
+        event.preventDefault();
+        event.stopPropagation();
+        dropdown.style.display = 'none';
+        return;
     }
 
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {

@@ -13,6 +13,7 @@ import prusalink_api # type: ignore
 import logic # type: ignore
 import csv
 import os
+import tempfile
 import json
 import logging
 import time
@@ -1309,6 +1310,73 @@ def api_search_inventory():
 
 # ... (Imports same as before) ...
 
+def _write_label_csv(path, fieldnames, rows, *, overwrite, write_header):
+    """Write label rows to `path` as a CSV.
+
+    OVERWRITE goes through a per-call temp file + ``os.replace`` so the target
+    is never left torn — a crash or a held handle can't produce a half-written
+    label file (the destructive path is the one that truncates, so it's the one
+    worth making atomic). APPEND adds rows at the end in place.
+
+    Either path raises ``PermissionError`` when the target is held open by
+    another process — Brother P-touch keeps the CSV open when its label
+    template links it as a database source, and Excel does the same. We let
+    that propagate so the caller surfaces it (Activity Log + a long toast)
+    instead of swallowing it; the temp file is cleaned up on failure so locked
+    re-export attempts don't accumulate stray ``.tmp`` files. On a lock we tag
+    the raised PermissionError with ``fcc_locked_name`` (the offending file's
+    basename) so the caller names the RIGHT file — the main labels CSV and the
+    slots CSV can be held independently.
+    """
+    def _rm_quiet(p):
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError:
+            pass
+
+    try:
+        if overwrite:
+            folder = os.path.dirname(path) or "."
+            fd, tmp = tempfile.mkstemp(prefix=".labels_", suffix=".csv.tmp", dir=folder)
+            # os.fdopen takes ownership of fd; if it raises (it won't with these
+            # static args, but be leak-proof), close the raw fd ourselves. Once
+            # the `with` owns it, never double-close (the fd number could be
+            # reused) — later failures only clean the temp file.
+            try:
+                f = os.fdopen(fd, "w", newline="", encoding="utf-8")
+            except BaseException:
+                os.close(fd)
+                _rm_quiet(tmp)
+                raise
+            try:
+                with f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                    if write_header:
+                        writer.writeheader()
+                    writer.writerows(rows)
+                    f.flush()
+                    os.fsync(f.fileno())  # durability parity with the house atomic-write helpers
+                # Atomic swap on the same filesystem. Raises PermissionError if
+                # `path` is locked (P-touch / Excel holds the handle).
+                os.replace(tmp, path)
+            except BaseException:
+                _rm_quiet(tmp)
+                raise
+        else:
+            with open(path, "a", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                if write_header:
+                    writer.writeheader()
+                writer.writerows(rows)
+    except PermissionError as e:
+        # Tag which file was actually locked so the caller's message points the
+        # user at the right one (not always the main labels CSV).
+        if not getattr(e, "fcc_locked_name", None):
+            e.fcc_locked_name = os.path.basename(path)
+        raise
+
+
 @app.route('/api/print_batch_csv', methods=['POST'])
 def api_print_batch_csv():
     data = request.json
@@ -1479,18 +1547,23 @@ def api_print_batch_csv():
         if not items_to_print: return jsonify({"success": False, "msg": "No valid data found"})
 
         # --- SMART HEADER LOGIC ---
+        # `folder` is computed unconditionally (it used to only be set when
+        # csv_path contained a separator), so the slots-CSV path below can't
+        # NameError on a bare-filename csv_path. os.path.dirname("") -> "".
+        folder = os.path.dirname(csv_path)
         file_exists = os.path.exists(csv_path)
-        write_mode = 'w' if clear_old else 'a'
-        
+        overwrite = bool(clear_old)
+
         target_headers = []
 
-        if not clear_old and file_exists:
+        if not overwrite and file_exists:
             try:
                 with open(csv_path, 'r', encoding='utf-8') as f:
                     reader = csv.reader(f)
-                    target_headers = next(reader, None)
-            except: pass
-        
+                    target_headers = next(reader, None) or []
+            except Exception:
+                target_headers = []
+
         if not target_headers:
             target_headers = list(core_headers)
             all_keys = set()
@@ -1498,33 +1571,57 @@ def api_print_batch_csv():
             extra_headers = sorted([k for k in all_keys if k not in core_headers])
             target_headers.extend(extra_headers)
 
-        with open(csv_path, write_mode, newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=target_headers, extrasaction='ignore')
-            if clear_old or not file_exists: writer.writeheader()
-            writer.writerows(items_to_print)
+        # Overwrite goes through an atomic temp+replace (never a torn file);
+        # append adds in place. A held handle (P-touch / Excel) raises
+        # PermissionError from either, surfaced in the handlers below.
+        _write_label_csv(csv_path, target_headers, items_to_print,
+                         overwrite=overwrite, write_header=(overwrite or not file_exists))
 
         # --- WRITE SLOTS IF GENERATED ---
-        slots_filename = "slots_to_print.csv"
         if slots_to_print:
-            slots_path = os.path.join(folder, slots_filename)
+            slots_path = os.path.join(folder, "slots_to_print.csv")
             slots_exists = os.path.exists(slots_path)
-            
-            with open(slots_path, write_mode, newline='', encoding='utf-8') as f:
-                # [ALEX FIX] Added "Slot" to fieldnames
-                writer = csv.DictWriter(f, fieldnames=["LocationID", "Slot", "Name", "Cleaned_Name", "QR_Code"])
-                if clear_old or not slots_exists: writer.writeheader()
-                writer.writerows(slots_to_print)
+            _write_label_csv(slots_path,
+                             ["LocationID", "Slot", "Name", "Cleaned_Name", "QR_Code"],
+                             slots_to_print,
+                             overwrite=overwrite, write_header=(overwrite or not slots_exists))
 
         action_word = "Overwritten" if clear_old else "Appended"
         msg = f"{action_word} {len(items_to_print)} items."
         if slots_to_print: msg += f" (+{len(slots_to_print)} Slots)"
-        
+
+        # Activity Log on success too (CLAUDE.md: every outcome logs) so the
+        # user can confirm an export landed even if the toast was missed.
+        try:
+            _slots_note = f" + {len(slots_to_print)} slot label(s)" if slots_to_print else ""
+            state.add_log_entry(
+                f"🏷️ Label CSV ({filename}): {action_word.lower()} {len(items_to_print)} label(s){_slots_note}",
+                "INFO", "0dcaf0")
+        except Exception:
+            pass
+
         return jsonify({"success": True, "count": len(items_to_print), "file": filename, "msg": msg})
 
-    except PermissionError:
-        return jsonify({"success": False, "msg": f"{filename} Locked! Close Excel."})
+    except PermissionError as e:
+        # The CSV is held open by another process — almost always Brother
+        # P-touch (its label template links the CSV as a database source), but
+        # any program that opens it works too. Surface it loudly: it used to
+        # fail with a short toast and no Activity Log line, so a blind-scanning
+        # user never knew the export hadn't landed. Name the file actually held
+        # open (the main labels CSV and slots_to_print.csv can lock independently).
+        locked_name = getattr(e, "fcc_locked_name", None) or filename
+        lock_msg = f"{locked_name} is locked — P-touch or another program has it open. Close it and re-export."
+        try:
+            state.add_log_entry(f"❌ Label CSV export blocked: {lock_msg}", "ERROR", "ff4444")
+        except Exception:
+            pass
+        return jsonify({"success": False, "locked": True, "msg": lock_msg})
     except Exception as e:
         state.logger.error(f"Batch CSV Error: {e}")
+        try:
+            state.add_log_entry(f"❌ Label CSV export failed ({filename}): {e}", "ERROR", "ff4444")
+        except Exception:
+            pass
         return jsonify({"success": False, "msg": str(e)})
 
 # --- EXISTING ROUTES ---

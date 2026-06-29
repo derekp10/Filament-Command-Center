@@ -119,6 +119,35 @@ def test_collapsed_header_chip_clickable(page: Page, base_url):
 
 
 @pytest.mark.usefixtures("require_server", "bound_xl1")
+def test_collapsed_strip_shows_printer_state(page: Page, base_url):
+    """The collapsed header strip leads each printer group with a state chip
+    (buglist 2026-06-13) so live printer state is visible WITHOUT expanding the
+    widget. Same color vocabulary as the expanded badge (shared _stateMeta)."""
+    page.goto(base_url)
+    page.wait_for_selector("#buffer-zone", timeout=10000)
+    # Wait for the bulk-pulse payload (which carries `state`) to render a badge.
+    page.wait_for_function(
+        "() => document.querySelectorAll('#printer-status-widget .fcc-ps-state').length > 0",
+        timeout=12000,
+    )
+    # Collapse so the header chip strip is the active view.
+    page.evaluate(
+        "() => { localStorage.setItem('fcc.printerStatus.collapsed', '0');"
+        "        if (window.togglePrinterStatusWidget) window.togglePrinterStatusWidget(); }"
+    )
+    page.wait_for_timeout(300)
+    groups = page.locator("#printer-status-widget .fcc-ps-header-chips .fcc-ps-printer-group")
+    assert groups.count() >= 1, "collapsed strip should render at least one printer group"
+    # Each group leads with a compact state chip.
+    chip = page.locator(
+        "#printer-status-widget .fcc-ps-header-chips "
+        ".fcc-ps-printer-group .fcc-ps-state.fcc-ps-state-chip"
+    ).first
+    expect(chip).to_be_visible(timeout=3000)
+    assert chip.inner_text().strip(), "state chip must show the printer state text"
+
+
+@pytest.mark.usefixtures("require_server", "bound_xl1")
 def test_widget_visual_collapsed_baseline(page: Page, base_url, snapshot):
     """Pin the collapsed-state header layout. Expanded snapshot would be
     too flaky against live spool weights/colors; collapsed shell stays
