@@ -1604,13 +1604,13 @@ def api_print_batch_csv():
 
     except PermissionError as e:
         # The CSV is held open by another process — almost always Brother
-        # P-touch (its label template links the CSV as a database source) or
-        # Excel. Surface it loudly: it used to fail with a short "Close Excel"
-        # toast and no Activity Log line, so a blind-scanning user never knew
-        # the export hadn't landed. Name the file actually held open (the main
-        # labels CSV and slots_to_print.csv can be locked independently).
+        # P-touch (its label template links the CSV as a database source), but
+        # any program that opens it works too. Surface it loudly: it used to
+        # fail with a short toast and no Activity Log line, so a blind-scanning
+        # user never knew the export hadn't landed. Name the file actually held
+        # open (the main labels CSV and slots_to_print.csv can lock independently).
         locked_name = getattr(e, "fcc_locked_name", None) or filename
-        lock_msg = f"{locked_name} is locked — P-touch or Excel has it open. Close it and re-export."
+        lock_msg = f"{locked_name} is locked — P-touch or another program has it open. Close it and re-export."
         try:
             state.add_log_entry(f"❌ Label CSV export blocked: {lock_msg}", "ERROR", "ff4444")
         except Exception:
