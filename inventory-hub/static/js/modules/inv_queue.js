@@ -131,9 +131,13 @@ window.printQueueCSV = () => {
             .then(r => r.json())
             .then(res => {
                 if (res.success) { showToast(`✅ ${mode} Batch Saved!`); return true; }
-                else { showToast(`❌ Error: ${res.msg}`, "error"); return false; }
+                // Error toasts ride ≥7s so a failed export — most often the CSV
+                // locked by P-touch (or another program) — doesn't slip past
+                // while the user is blind-scanning. res.msg already names the
+                // file, so no mode prefix. The backend also logs it.
+                else { showToast(`❌ ${res.msg}`, "error", 7000); return false; }
             })
-            .catch(e => { showToast("Connection Error", "error"); return false; });
+            .catch(e => { showToast(`❌ Label export failed — connection error`, "error", 7000); return false; });
     };
 
     const promises = [];

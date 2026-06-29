@@ -299,19 +299,25 @@
         </span>`;
     };
 
-    // L56 — printer-state badge. Direct PrusaLink read (no dryer-box
-    // dependency), so this renders for Core One in direct-feed setups
-    // where the toolhead weight only ticks after FilaBridge auto-deduct
-    // (which needs the dryer-box-mediated mapping). state === null means
-    // the printer didn't answer; show "OFFLINE" so the user can tell
-    // it's a probe failure vs. an actual idle printer.
-    const _renderStateBadge = (state) => {
-        if (state === undefined) return '';
+    // L56 — printer-state vocabulary → badge {class,label,title}, in ONE
+    // place so the expanded-row badge (_renderStateBadge) and the collapsed
+    // chip strip (_renderStateChip) never drift on colors/vocabulary. Direct
+    // PrusaLink read (no dryer-box dependency), so it renders for Core One in
+    // direct-feed setups where the toolhead weight only ticks after the FCC
+    // deduct. Returns null when there's nothing to show.
+    //   state === undefined → not probed       → null (no badge)
+    //   state === null      → printer didn't answer → OFFLINE badge
+    const _stateMeta = (state) => {
+        if (state === undefined) return null;
         if (state === null) {
-            return `<span class="fcc-ps-state fcc-ps-state-offline" title="Printer unreachable (offline, networked elsewhere, or cold-rebooting)">OFFLINE</span>`;
+            return {
+                cls: 'fcc-ps-state-offline',
+                label: 'OFFLINE',
+                title: 'Printer unreachable (offline, networked elsewhere, or cold-rebooting)',
+            };
         }
         const raw = String(state.state || '').toUpperCase();
-        if (!raw) return '';
+        if (!raw) return null;
         const isActive = !!state.is_active;
         // PRINTING/PAUSING/RESUMING → active (green-pop)
         // PAUSED → paused (amber)
@@ -322,7 +328,32 @@
         else if (raw === 'PAUSED') cls = 'fcc-ps-state-paused';
         else if (['IDLE', 'READY', 'OPERATIONAL', 'FINISHED', 'STOPPED'].includes(raw)) cls = 'fcc-ps-state-idle';
         else cls = 'fcc-ps-state-attention';
-        return `<span class="fcc-ps-state ${cls}" title="PrusaLink reports: ${raw}">${raw}</span>`;
+        // Escape before the value reaches the badge/chip innerHTML. Real
+        // PrusaLink states are enumerated alphanumerics, but a spoofed printer
+        // is an untrusted source and the chip now sits on the always-visible
+        // collapsed strip — cheap defense, a no-op for normal states. `cls` is
+        // chosen from the raw (compared, never rendered) value above.
+        const safe = raw.replace(/[&<>"]/g, c => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        return { cls, label: safe, title: `PrusaLink reports: ${safe}` };
+    };
+
+    // Expanded-row badge — sits under the printer name (always visible in the
+    // expanded view).
+    const _renderStateBadge = (state) => {
+        const m = _stateMeta(state);
+        if (!m) return '';
+        return `<span class="fcc-ps-state ${m.cls}" title="${m.title}">${m.label}</span>`;
+    };
+
+    // Collapsed chip-strip badge — same color/vocab as the expanded badge,
+    // rendered compact at the head of each printer's chip group so the user
+    // can read live printer state WITHOUT expanding the widget (buglist
+    // 2026-06-13 "show the printer state in the collapsed Printer Status bar").
+    const _renderStateChip = (state) => {
+        const m = _stateMeta(state);
+        if (!m) return '';
+        return `<span class="fcc-ps-state fcc-ps-state-chip ${m.cls}" title="${m.title}">${m.label}</span>`;
     };
 
     const _renderRow = (name, info, idx, total) => {
@@ -386,8 +417,12 @@
         if (headerChips) {
             headerChips.innerHTML = printerNames.map(name => {
                 const safeName = name.replace(/"/g, '&quot;');
+                // Lead each group with a compact state badge so live printer
+                // state (PRINTING / IDLE / PAUSED / OFFLINE …) is visible in
+                // the collapsed strip without expanding the widget.
+                const stateChip = _renderStateChip(rows[name].state);
                 const chips = rows[name].toolheads.map(_renderToolheadCompact).join('');
-                return `<div class="fcc-ps-printer-group" data-printer="${safeName}">${chips}</div>`;
+                return `<div class="fcc-ps-printer-group" data-printer="${safeName}">${stateChip}${chips}</div>`;
             }).join('');
         }
         // Delegated click handler — bound ONCE on the stable widget root

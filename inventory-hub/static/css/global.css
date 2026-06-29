@@ -1478,6 +1478,15 @@ body {
     text-transform: uppercase;
     line-height: 1.2;
 }
+/* Collapsed chip-strip variant — leads each printer group inline next to its
+   mini chips. Same color vocabulary as the expanded badge (resolved by the
+   shared _stateMeta() in inv_printer_status.js); just centered + a touch
+   smaller so it sits flush with the mini chips instead of top-aligned. */
+.fcc-ps-state-chip {
+    align-self: center;
+    flex-shrink: 0;
+    font-size: 0.6rem;
+}
 .fcc-ps-state-printing { background: rgba(16,185,129,0.18); color: #4ade80; border-color: rgba(74,222,128,0.4); }
 .fcc-ps-state-paused   { background: rgba(245,158,11,0.18); color: #ffc107; border-color: rgba(255,193,7,0.4); }
 .fcc-ps-state-idle     { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.18); }

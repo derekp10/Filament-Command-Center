@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from unittest.mock import patch
 
 import pytest
@@ -23,6 +24,21 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module  # noqa: E402
 import locations_db  # noqa: E402
+
+
+def _poll_slot_targets(api_base_url, box, predicate, timeout=8.0):
+    """Poll <box>'s slot_targets until predicate(slot_targets) holds (or timeout);
+    returns the last-seen map. Replaces fixed sleeps so a slow async UI PUT —
+    e.g. against a freshly-restarted dev container — doesn't flake the read."""
+    deadline = time.time() + timeout
+    last = {}
+    while time.time() < deadline:
+        last = (requests.get(f"{api_base_url}/api/dryer_box/{box}/bindings", timeout=5)
+                .json().get("slot_targets", {}))
+        if predicate(last):
+            return last
+        time.sleep(0.3)
+    return last
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +108,8 @@ def test_enumeration_puts_unbound_first(client, sample_locs, tmp_locations_file)
 
 def test_single_slot_put_adds_binding(client, sample_locs, printer_map, tmp_locations_file):
     locations_db.save_locations_list(sample_locs)
-    with patch.object(app_module.config_loader, "load_config",
-                      return_value={"printer_map": printer_map}):
+    with patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value=printer_map):
         r = client.put("/api/dryer_box/PM-DB-A/bindings/1", json={"target": "XL-1"})
     assert r.status_code == 200
     body = r.get_json()
@@ -102,8 +118,8 @@ def test_single_slot_put_adds_binding(client, sample_locs, printer_map, tmp_loca
 
 def test_single_slot_put_unsets_with_null(client, sample_locs, printer_map, tmp_locations_file):
     locations_db.save_locations_list(sample_locs)
-    with patch.object(app_module.config_loader, "load_config",
-                      return_value={"printer_map": printer_map}):
+    with patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value=printer_map):
         r = client.put("/api/dryer_box/PM-DB-B/bindings/1", json={"target": None})
     assert r.status_code == 200
     # PM-DB-B had slot 1 → XL-2; null should clear it.
@@ -114,8 +130,8 @@ def test_single_slot_put_preserves_sibling_bindings(client, sample_locs, printer
     locations_db.save_locations_list(sample_locs)
     # MDB-1 starts with {2: XL-3}. Add {1: XL-1} via single-slot PUT; slot 2
     # must still be XL-3 afterwards.
-    with patch.object(app_module.config_loader, "load_config",
-                      return_value={"printer_map": printer_map}):
+    with patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value=printer_map):
         client.put("/api/dryer_box/MDB-1/bindings/1", json={"target": "XL-1"})
     body = client.get("/api/dryer_box/MDB-1/bindings").get_json()
     assert body["slot_targets"] == {"1": "XL-1", "2": "XL-3"}
@@ -123,8 +139,8 @@ def test_single_slot_put_preserves_sibling_bindings(client, sample_locs, printer
 
 def test_single_slot_put_rejects_bad_target(client, sample_locs, printer_map, tmp_locations_file):
     locations_db.save_locations_list(sample_locs)
-    with patch.object(app_module.config_loader, "load_config",
-                      return_value={"printer_map": printer_map}):
+    with patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value=printer_map):
         r = client.put("/api/dryer_box/PM-DB-A/bindings/1", json={"target": "XL-999"})
     assert r.status_code == 400
     assert r.get_json()["error"] == "validation_failed"
@@ -141,8 +157,8 @@ def test_single_slot_put_raises_duplicate_warning(client, sample_locs, printer_m
     """Binding a slot to a toolhead already bound by another box is a
     warning, not an error — the PUT still succeeds."""
     locations_db.save_locations_list(sample_locs)
-    with patch.object(app_module.config_loader, "load_config",
-                      return_value={"printer_map": printer_map}):
+    with patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value=printer_map):
         # PM-DB-B already has slot 1 → XL-2. Bind MDB-1 slot 1 → XL-2 too.
         r = client.put("/api/dryer_box/MDB-1/bindings/1", json={"target": "XL-2"})
     assert r.status_code == 200
@@ -206,6 +222,13 @@ def test_bind_picker_escape_closes(page: Page, open_manage_modal):
     expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
     page.locator("#fcc-bind-picker-search").press("Escape")
     expect(page.locator("#fcc-bind-picker-overlay")).to_be_hidden(timeout=2000)
+    # Escape must close ONLY the picker — the Location Manager modal stays open
+    # (Option-B sweep 2026-06-16: the picker search Escape now stopPropagation's
+    # + is handled ahead of the empty-list guard, so it can't bubble to
+    # Bootstrap's modal-dismiss).
+    assert page.evaluate(
+        "() => document.getElementById('manageModal').classList.contains('show')"
+    ), "Escape on the bind-slot-picker must NOT close the Location Manager modal"
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
@@ -232,11 +255,10 @@ def test_bind_picker_unbind_button_clears_binding_and_keeps_picker_open(page: Pa
         expect(unbind_btn).to_be_visible(timeout=2000)
         unbind_btn.click()
         # Picker stays open, listing refreshes — slot is now unbound on
-        # the server.
-        page.wait_for_timeout(600)
+        # the server. Poll (don't fixed-sleep) for the async PUT to land.
         expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible()
-        r = requests.get(f"{api_base_url}/api/dryer_box/{victim}/bindings", timeout=5).json()
-        assert r["slot_targets"] == {}, f"Unbind didn't clear slot (got {r['slot_targets']})"
+        targets = _poll_slot_targets(api_base_url, victim, lambda t: t == {})
+        assert targets == {}, f"Unbind didn't clear slot (got {targets})"
     finally:
         requests.put(
             f"{api_base_url}/api/dryer_box/{victim}/bindings",
@@ -269,9 +291,9 @@ def test_bind_picker_rebind_overwrites_existing_target(page: Page, open_manage_m
         # Click the left-side label (box name span). Avoids the Unbind
         # button on the right side of the row.
         row.locator("span.fw-bold").first.click()
-        page.wait_for_timeout(600)
-        r = requests.get(f"{api_base_url}/api/dryer_box/{victim}/bindings", timeout=5).json()
-        assert r["slot_targets"].get("1") == TEST_TOOLHEAD
+        # Poll for the async rebind PUT to land (no fixed sleep).
+        targets = _poll_slot_targets(api_base_url, victim, lambda t: t.get("1") == TEST_TOOLHEAD)
+        assert targets.get("1") == TEST_TOOLHEAD
     finally:
         requests.put(
             f"{api_base_url}/api/dryer_box/{victim}/bindings",
@@ -298,9 +320,9 @@ def test_bind_picker_enter_commits_new_binding(page: Page, open_manage_modal, ap
         # Picker closes on success.
         expect(page.locator("#fcc-bind-picker-overlay")).to_be_hidden(timeout=3000)
 
-        # Server-side persisted?
-        follow = requests.get(f"{api_base_url}/api/dryer_box/{victim}/bindings", timeout=5).json()
-        assert follow["slot_targets"].get("1") == TEST_TOOLHEAD
+        # Server-side persisted? Poll for the async commit to land.
+        targets = _poll_slot_targets(api_base_url, victim, lambda t: t.get("1") == TEST_TOOLHEAD)
+        assert targets.get("1") == TEST_TOOLHEAD
     finally:
         requests.put(
             f"{api_base_url}/api/dryer_box/{victim}/bindings",

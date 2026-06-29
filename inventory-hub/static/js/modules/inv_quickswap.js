@@ -1090,6 +1090,17 @@
 
         search.oninput = () => _pickerFilter(search.value);
         search.onkeydown = (e) => {
+            if (e.key === 'Escape') {
+                // Close the bind picker only — keep the Location Manager modal
+                // open behind it. stopPropagation prevents the Escape from
+                // bubbling to the modal where Bootstrap would dismiss the whole
+                // thing. Handled BEFORE the empty-list guard so an empty filter
+                // list can still be escaped out of.
+                e.preventDefault();
+                e.stopPropagation();
+                window.closeBindSlotPicker();
+                return;
+            }
             const items = _pickerState.filtered;
             if (!items.length) return;
             if (e.key === 'ArrowDown') {
@@ -1103,9 +1114,6 @@
             } else if (e.key === 'Enter') {
                 e.preventDefault();
                 _pickerCommit();
-            } else if (e.key === 'Escape') {
-                e.preventDefault();
-                window.closeBindSlotPicker();
             }
         };
         close.onclick = window.closeBindSlotPicker;
