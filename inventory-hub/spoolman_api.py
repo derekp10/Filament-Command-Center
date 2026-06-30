@@ -448,9 +448,40 @@ def compute_dirty_extras(existing_extras, requested_extras, *, system_managed=fr
         if k in system_managed:
             stripped.append(k)
             continue
+        if _is_delete_sentinel(v):
+            # 23.4 — a delete-sentinel for a key that's already absent/blank is
+            # a no-op (the merge would just pop a missing key). Don't let it
+            # manufacture a dirty set — and a spurious no-change PATCH — on an
+            # otherwise unchanged save (the wizard re-emits a sentinel for every
+            # blank shown extra on edit, many of which were never set).
+            if str(existing.get(k) or '').strip():
+                dirty[k] = v
+            continue
         if str(v) != str(existing.get(k)):
             dirty[k] = v
     return dirty, stripped
+
+
+# 23.4 — Delete-sentinel for clearing an extra. Because `_merge_extras_with_existing`
+# starts from the FULL existing extras and only overlays keys the caller SENT, an
+# OMITTED key means "keep" — so a blanked field could never be deleted (the
+# omit-means-keep guard that protects siblings also blocked deletions). A caller
+# that wants to DELETE a key sends this sentinel as the value; the merge pops the
+# key instead of setting it. Omitting a key still means "keep" (siblings safe);
+# only an explicit sentinel deletes. Existing callers never send it, so this is
+# backward-compatible. MUST stay in sync with the frontend constant
+# `window.FCC_DELETE_EXTRA` (inv_core.js).
+DELETE_EXTRA_SENTINEL = "__FCC_DELETE_EXTRA__"
+
+
+def _is_delete_sentinel(v):
+    """True when a requested extra value is the explicit delete sentinel.
+    Strips surrounding quotes/whitespace so it matches whether or not
+    sanitize_outbound_data has JSON-wrapped the value (JSON_STRING_FIELDS keys
+    arrive wrapped as '"__FCC_DELETE_EXTRA__"')."""
+    if v is None:
+        return False
+    return str(v).strip().strip('"').strip() == DELETE_EXTRA_SENTINEL
 
 
 def _merge_extras_with_existing(existing_extras, requested_extras):
@@ -460,12 +491,31 @@ def _merge_extras_with_existing(existing_extras, requested_extras):
     on our side so partial PATCHes preserve siblings. Requested values win on
     conflict; existing-only keys ride along untouched.
 
+    A requested value equal to DELETE_EXTRA_SENTINEL DELETES that key (pops it
+    from the merged result) — the only way to clear an extra, since an omitted
+    key means "keep" (23.4). The sentinel itself is never forwarded to Spoolman.
+
     Existing extras must be the RAW Spoolman form (still-wrapped JSON-encoded
     strings) — see `_get_raw_extras`. Caller's extras can be either form;
     sanitize_outbound_data downstream normalizes both."""
     merged = dict(existing_extras or {})
     for k, v in (requested_extras or {}).items():
-        merged[k] = v
+        if _is_delete_sentinel(v):
+            if k in SYSTEM_MANAGED_EXTRAS:
+                # 23.4 defense-in-depth: the clear-sentinel must NEVER unseat a
+                # slotted spool. container_slot / physical_source(_slot) and the
+                # auto-archive/audit breadcrumbs are owned solely by
+                # perform_smart_move / perform_smart_eject; any user-edit surface
+                # forwarding the sentinel for one is a bug. Keep the existing
+                # value (compute_dirty_extras also strips these, this is the
+                # primitive-level backstop for direct callers).
+                state.logger.warning(
+                    f"Ignored delete-sentinel on system-managed extra '{k}' (slot-binding protection)"
+                )
+                continue
+            merged.pop(k, None)
+        else:
+            merged[k] = v
     return merged
 
 

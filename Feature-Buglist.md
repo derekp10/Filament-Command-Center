@@ -2,17 +2,11 @@
 
 * all manual weight adjustments should display what it was before, and what it is now. Basically give a break down.
 
-* Pricing and metadata should list how many links are filled in, or atleast note that a product link and a purchase link are added. (I think it only works currently on pruchase links) Yeah, it does it for purchase links, which is cool. we just need to do it also for product links. (same style, matching icon, etc.)
-
 * Add/edit wizzard should have a print filament button for existing filaments. And there should be a print all option if creating multiple. (had an 8 filament round where I just had to click the 8 different buttons.)
 
 * Location field in add/edit filament, when typing in a match, hitting Tab should confirm highlighted item into the field (just like enter does).
 
-* Using a URL to get spool data should save the url to the product link section. (For prusament if it doesn't already exist) On an existing spool.
-
 * Check for possible issues around a hard 1000 spool weight, when actual spool weight might be more (or less). I think were making some assumptions on weight possible, as I've been adding/updating/correcting prusament filament product id's and notice that i keep getting a left over amount as the remaining. (this might be by design to preserver existing weight.) But because some of these spools are unopened, I think it might just be some issues with legacy spools ones before we added the ability to scan a prusament id to get the data. We should just double check the code around that just to make sure.
-
-* Product URL modifications on filament edit window do not save. (this should be tired to a prusament product page, and not a spool specific data link (alphanumerice identifier)) We should probalby clean these when we get the spool id parcer checked and working to group the product url correctly. Apparently this won't save blank, but putting in something that resembles a url (//test) works for clearing it. We should make sure that all fields can be blanked out and save approperiatly.
 
 * Give the single-location-label print endpoint (`api_print_location_label`) the same friendly file-lock message as the batch label-CSV export. Minor consistency follow-up from the 2026-06-18 label-CSV robustness fix (the main P-touch CSV-lock bug is DONE + archived; Derek's 2 P-touch files — one dev-linked, one live-linked — confirmed there's no filename mismatch). Low-pri.
 
@@ -32,12 +26,6 @@
   * **Double MMU probe (micro-opt).** `_confirm_no_spool_review` calls `_resolve_usage_to_spools` then `_apply_usage_to_printer`, each probing `/api/v1/info.mmu` on a dual-alias (MMU) printer. Thread the first call's `active_locs` to probe once.
   * **`progress_unknown` not threaded to the restart-recovery + live active→IDLE ambiguous edges (latent/defensive).** A latched job with a `filename` but no sampled `progress` would compute at 0% rather than routing to the non-destructive progress_unknown review. NOT production-triggerable today (`get_printer_job` always supplies a numeric progress), so defensive only.
   * **Confirm `was_deducted` TOCTOU (latent).** The no_spool confirm checks the ledger then applies without a held lock (mirrors the pre-existing partial-confirm loop). Self-healing today (no double-deduct demonstrated); revisit only if a concurrent same-job writer is ever introduced.
-
-* If we update a filaments data in a way that would invalidate the label (Hex/RGB values for example) We should probably surface that, and have a way to push the user to reprint the label and replace it on an existing sample.
-
-* Import external link location in edit filament DOES NOT RESET after last use, so its possible that someone could accidently apply the wrong product link to the wrong filament if that doesn't get cleared out after the user is done updating.
-
-* Add missing hex overwrite in edit filament modal. (Found when using a prusa link to update data for the filament.) I also don't think this is grabing the product url thats available on the page while it's scraping, we should look into this to make sure we are getting everything we can when we scrape, reguardless where we scrape at. (Edit filament, Add/Edit filament, etc...)
 
 * Assigning a filament to a slot takes increadibly long for it to fully resolve. (Processing... to go away) I don't know if there is something we can fix to make this faster, but it's noticibly long, and i'm not sure why that is.
   _[✅ **A+B SHIPPED to `main` 2026-06-10** (`e3b9481`) — **14.6s → 6.5s (−55%)** on a worst-case bound-Core-One assign. Instrumented the whole move pipeline with a per-assign `⏱️` trace (`inventory-hub/perf_trace.py`, Activity-Log + hub.log, zero-cost when idle); the trace proved ~96% of the time was **synchronous timeouts probing the OFFLINE Core One**, not Spoolman. **Fix A** = per-move printer-state probe cache (the auto-deploy recursion was probing the same printer twice); **Fix B** = skip the legacy PrusaLink `/api/printer` fallback on a connection-level timeout (`prusalink_api.py`). Shipped alongside a **feeds-bind-to-Printer fix** (`9fdca65` — Core One is a dual-role `Type:"Printer"` row, the slot-bind validator was rejecting it). **Prod fleet == dev fleet (same physical printers), so the dev numbers represent prod — no separate prod trace needed.** Remaining **~4s was FilaBridge's own `/status`** synchronously probing the offline printer — **RESOLVED 2026-06-13**: FilaBridge was decommissioned in the Phase-2 cutover (FCC no longer consults it on any path), so that tail is gone. See `completed-archive.md`.]_

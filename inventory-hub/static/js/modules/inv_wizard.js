@@ -358,11 +358,16 @@ const _wizSectionSummarizers = {
         const price = v('wiz-spool-price');
         const comment = v('wiz-spool-comment');
         const url = v('wiz-spool-purchase_url');
+        const purl = v('wiz-spool-product_url');
         const archived = document.getElementById('wiz-spool-archived')?.checked;
         const parts = [];
         if (price) parts.push(`$${price}`);
         if (archived) parts.push('<span class="text-warning">archived</span>');
+        // 23.5 — mirror the purchase-link chip for the product link so the
+        // summary shows BOTH are filled. Icons match the form labels:
+        // 🔗 Purchase Link / 📄 Product Link (modals_wizard.html).
         if (url) parts.push('<span class="text-info">🔗 link</span>');
+        if (purl) parts.push('<span class="text-info">📄 product</span>');
         if (comment) parts.push(`💬 ${_wizEscape(comment.slice(0, 28))}${comment.length > 28 ? '…' : ''}`);
         return parts.join(' · ');
     },
@@ -2637,6 +2642,14 @@ window.wizardSubmit = async () => {
     try {
         const qty = parseInt(getVal('wiz-spool-qty')) || 1;
 
+        // 23.4 — only EDIT mode (→ /api/edit_spool_wizard, a partial PATCH that
+        // merges against the live record) may emit the delete-sentinel for a
+        // blanked extra. CREATE modes build a fresh record, so a blank is simply
+        // omitted (sending the sentinel on create would store a literal token).
+        // The edit_spool prefill loads every shown extra from the live record,
+        // so a blank field here genuinely means "user cleared it".
+        const isWizardEdit = wizardState.mode === 'edit_spool';
+
         // Construct Spool Payload
         let sp_payload = {
             used_weight: getVal('wiz-spool-used') !== "" ? parseFloat(getVal('wiz-spool-used')) : 0,
@@ -2652,12 +2665,16 @@ window.wizardSubmit = async () => {
         // Purchase Link (Spool Extra)
         const purchaseUrl = document.getElementById('wiz-spool-purchase_url')?.value?.trim();
         if (purchaseUrl) sp_payload.extra.purchase_url = purchaseUrl;
+        else if (isWizardEdit) sp_payload.extra.purchase_url = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
 
-        // Product Link (Spool Extra). L351 — gated on a truthy typed value, so an
-        // empty input never clobbers a product_url supplied by a Prusament-scan
-        // override or inherited via the filament fallback (ghost placeholder).
+        // Product Link (Spool Extra). L351 — on CREATE, gated on a truthy typed
+        // value so an empty input never clobbers a product_url supplied by a
+        // Prusament-scan override or inherited via the filament fallback (ghost
+        // placeholder). On EDIT the field holds the spool's OWN value, so a
+        // cleared input is a real delete intent → send the sentinel (23.4).
         const productUrl = document.getElementById('wiz-spool-product_url')?.value?.trim();
         if (productUrl) sp_payload.extra.product_url = productUrl;
+        else if (isWizardEdit) sp_payload.extra.product_url = window.FCC_DELETE_EXTRA;
 
         // Extract Dynamic Spool Fields
         document.querySelectorAll('.dynamic-extra-spool-field').forEach(el => {
@@ -2667,6 +2684,8 @@ window.wizardSubmit = async () => {
                 sp_payload.extra[key] = el.checked;
             } else if (el.value) {
                 sp_payload.extra[key] = el.value;
+            } else if (isWizardEdit) {
+                sp_payload.extra[key] = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
             }
         });
 
@@ -2706,9 +2725,13 @@ window.wizardSubmit = async () => {
             // inv_details.js:1617 by wrapping in literal quotes.
             if (getVal('wiz-fil-nozzle_temp_max') !== "") {
                 f_payload.extra.nozzle_temp_max = `"${getVal('wiz-fil-nozzle_temp_max')}"`;
+            } else if (isWizardEdit) {
+                f_payload.extra.nozzle_temp_max = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
             }
             if (getVal('wiz-fil-bed_temp_max') !== "") {
                 f_payload.extra.bed_temp_max = `"${getVal('wiz-fil-bed_temp_max')}"`;
+            } else if (isWizardEdit) {
+                f_payload.extra.bed_temp_max = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
             }
 
             // Cross-Inherit empty-spool-weight along the chain: Spool → Filament → Vendor.
@@ -2748,6 +2771,8 @@ window.wizardSubmit = async () => {
                     f_payload.extra[key] = el.checked;
                 } else if (el.value) {
                     f_payload.extra[key] = el.value;
+                } else if (isWizardEdit) {
+                    f_payload.extra[key] = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
                 }
             });
 
@@ -2863,6 +2888,43 @@ window.wizardSubmit = async () => {
                 });
             }
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse')); // Instantly trigger UI rebinding across all open panels
+
+            // 23.3 — if this edit_spool save changed a label-bearing FILAMENT
+            // field (color/RGB, Name, Vendor, Material, Type), the printed swatch
+            // is now stale. Reuse the Edit-Filament reprint nudge (it self-gates
+            // on the prior needs_label_print === false).
+            if (wizardState.mode === 'edit_spool' && f_payload && target_fid
+                    && wizardState.editFilamentOriginal
+                    && typeof window._maybePromptLabelReprint === 'function') {
+                const orig = wizardState.editFilamentOriginal;
+                const norm = (s) => String(s == null ? '' : s);
+                const changedNative = {};
+                if (norm(f_payload.name) !== norm(orig.name)) changedNative.name = f_payload.name;
+                if (norm(f_payload.material) !== norm(orig.material)) changedNative.material = f_payload.material;
+                const newVendor = (f_payload.vendor_id != null) ? String(f_payload.vendor_id) : '';
+                if (newVendor !== norm(orig.vendor_id)) changedNative.vendor_id = f_payload.vendor_id;
+                const newHex = String(f_payload.color_hex || '').replace(/^#/, '').toLowerCase();
+                const newMulti = String(f_payload.multi_color_hexes || '').replace(/[#\s]/g, '').toLowerCase();
+                const newDir = String(f_payload.multi_color_direction || '').toLowerCase();
+                if (newHex !== orig.color_hex) changedNative.color_hex = newHex;
+                if (newMulti !== orig.multi_color_hexes) changedNative.multi_color_hexes = newMulti;
+                if (newDir !== orig.multi_color_direction) changedNative.multi_color_direction = newDir;
+                const changedExtras = {};
+                const attrKey = (a) => {
+                    let arr = a;
+                    if (typeof a === 'string') { try { arr = JSON.parse(a); } catch (_) { arr = a ? [a] : []; } }
+                    if (!Array.isArray(arr)) arr = (arr == null || arr === '') ? [] : [arr];
+                    return arr.map(x => String(x).trim().toLowerCase()).filter(Boolean).sort().join('|');
+                };
+                if (attrKey(orig.extra.filament_attributes) !== attrKey(f_payload.extra && f_payload.extra.filament_attributes)) {
+                    changedExtras.filament_attributes = true;
+                }
+                window._maybePromptLabelReprint(
+                    target_fid,
+                    f_payload.name || `Filament #${target_fid}`,
+                    changedNative, changedExtras, orig.extra,
+                );
+            }
 
             // Reset Weigh-Out Protocol tracking on save so subsequent saves don't double-dip
             if (wizardState.mode === 'edit_spool') {
@@ -3153,6 +3215,20 @@ window.openEditWizard = async (spoolId) => {
             if (qtyBox) qtyBox.value = 1;
 
             const f = d.filament;
+            // 23.3 — snapshot the label-bearing filament fields at edit-open so
+            // the save can detect a swatch-invalidating change and reuse the
+            // reprint nudge (same prompt + needs_label_print gate as the
+            // Edit-Filament modal). Values are normalized to match the diff done
+            // against f_payload at submit time.
+            wizardState.editFilamentOriginal = {
+                name: f.name || '',
+                material: f.material || '',
+                vendor_id: (f.vendor && f.vendor.id != null) ? String(f.vendor.id) : '',
+                color_hex: String(f.color_hex || '').replace(/^#/, '').toLowerCase(),
+                multi_color_hexes: String(f.multi_color_hexes || '').replace(/[#\s]/g, '').toLowerCase(),
+                multi_color_direction: String(f.multi_color_direction || '').toLowerCase(),
+                extra: f.extra || {},
+            };
             // Pre-fill Filament
             if (f.vendor) {
                 const match = (wizardState.vendors || []).find(v => (v.name || '').toLowerCase() === (f.vendor.name || '').toLowerCase());
