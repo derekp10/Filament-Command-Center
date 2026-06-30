@@ -2479,15 +2479,41 @@ const _LABEL_BEARING_EXTRA = {
 };
 
 const _maybePromptLabelReprint = (filId, displayName, changed, dirtyExtras, rawExtra) => {
-    if (typeof window.mountOverlay !== 'function') return;
-    // Only nudge when the printed label was previously CONFIRMED. Tri-state:
-    // false = confirmed/printed (prompt), true = already needs print (no-op),
-    // null/absent = unknown/never printed (don't nag a record with no label).
-    const prior = unquoteExtra(rawExtra && rawExtra.needs_label_print);
-    const wasConfirmed = prior === false || prior === 'false' || prior === 'False';
-    if (!wasConfirmed) return;
-
     const has = (o, k) => !!o && Object.prototype.hasOwnProperty.call(o, k);
+
+    // --- Spool labels (LIGHT, no prompt): Brand/Type/Color-NAME also print on
+    // the spool labels of this filament's physical spools, so those go stale
+    // when changed. Hex/RGB are NOT on the spool label, so a hex-only change is
+    // excluded. Flag the filament's spools' needs_label_print so the spool
+    // details badge + print queue surface them (Derek: a heads-up is enough).
+    const spoolLabelChanged = has(changed, 'name') || has(changed, 'material')
+        || has(changed, 'vendor_id') || has(dirtyExtras, 'original_color')
+        || has(dirtyExtras, 'filament_attributes');
+    if (spoolLabelChanged) {
+        fetch(`/api/filament/${encodeURIComponent(filId)}/flag_spool_labels`, { method: 'POST' })
+            .then(r => r.json())
+            .then(d => {
+                if (d && d.success && Array.isArray(d.flagged) && d.flagged.length && window.showToast) {
+                    window.showToast(`Marked ${d.flagged.length} spool label(s) out of date.`, 'info', 4000);
+                }
+            })
+            .catch(() => {});
+    }
+
+    // --- Filament swatch label (HEAVY prompt): the physical sample the user
+    // paints from (the printed RGB is a slicer reference). Push when a printed
+    // sample/label exists that's now stale — keyed off EITHER
+    // needs_label_print===false (confirmed) OR sample_printed===true (a physical
+    // swatch exists), so older/imported records whose needs_label_print drifted
+    // still get the nudge.
+    if (typeof window.mountOverlay !== 'function') return;
+    const priorLabel = unquoteExtra(rawExtra && rawExtra.needs_label_print);
+    const wasConfirmed = priorLabel === false || priorLabel === 'false' || priorLabel === 'False';
+    const priorSample = unquoteExtra(rawExtra && rawExtra.sample_printed);
+    // Mirror the fil-detail-sample badge's truthy parse for consistency.
+    const hasSample = priorSample === true || priorSample === 'true' || priorSample === 'True'
+        || priorSample === 1 || priorSample === '1';
+    if (!wasConfirmed && !hasSample) return;
     // A bare multi_color_direction clear is the save handler's DEFENSIVE
     // single-color cleanup (changed.multi_color_direction = null when a stale
     // native direction lingers), NOT a real color edit. Only count it when an

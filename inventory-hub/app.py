@@ -3888,6 +3888,43 @@ def api_print_queue_set_flag():
         state.logger.error(f"Error setting needs_label_print: {e}")
         return jsonify({"success": False, "msg": str(e)})
 
+@app.route('/api/filament/<fid>/flag_spool_labels', methods=['POST'])
+def api_flag_spool_labels(fid):
+    """23.3 follow-up — a filament edit changed a SPOOL-label-visible field
+    (Brand / Type / Color-name), so the printed labels on that filament's
+    physical spools are now stale. Light touch (no prompt, per Derek): raise
+    needs_label_print on the filament's UNARCHIVED spools so the spool details
+    badge + print queue surface them as needing a reprint. Hex/RGB are NOT
+    printed on the spool label, so the caller only invokes this for non-hex
+    changes. Best-effort + per-spool error surfacing."""
+    try:
+        try:
+            fid_int = int(fid)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "msg": "Invalid filament id"})
+        spools = spoolman_api.get_spools_for_filament(fid_int) or []
+        flagged, errors = [], []
+        for s in spools:
+            if s.get('archived'):
+                continue
+            sid = s.get('id')
+            # Partial extra — _merge_extras_with_existing preserves siblings.
+            if spoolman_api.update_spool(sid, {'extra': {'needs_label_print': True}}):
+                flagged.append(sid)
+            else:
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or 'unknown'
+                errors.append({'id': sid, 'error': err})
+                state.logger.warning(f"flag_spool_labels: spool {sid} update failed: {err}")
+        if flagged:
+            state.add_log_entry(
+                f"🏷️ Flagged {len(flagged)} spool label(s) of filament #{fid_int} as out-of-date after a label-field edit",
+                "INFO", "ffaa00",
+            )
+        return jsonify({"success": True, "flagged": flagged, "errors": errors})
+    except Exception as e:
+        state.logger.error(f"flag_spool_labels error for filament {fid}: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+
 @app.route('/api/print_location_label', methods=['POST'])
 def api_print_location_label():
     # 1. Robust Input Handling
