@@ -1471,6 +1471,10 @@ const _editfilOpenModal = (fil) => {
     const basicTabBtn = document.getElementById('editfil-tab-basic-btn');
     if (basicTabBtn) bootstrap.Tab.getOrCreateInstance(basicTabBtn).show();
 
+    // 23.2 — Reset the Import-from-External panel so the previous filament's
+    // search/source/results/preview can't bleed into this edit (wrong-link risk).
+    if (window.editfilExternalReset) window.editfilExternalReset();
+
     // --- Colors tab: primary picker + dynamic extras w/ reorder ---
     const picker = document.getElementById('editfil-color-picker');
     const hex = document.getElementById('editfil-color-hex');
@@ -2251,7 +2255,11 @@ const _editfilOpenModal = (fil) => {
                     if (k === 'filament_attributes') {
                         mergedExtra[k] = JSON.stringify(v);
                     } else if (v === '' || v == null) {
-                        delete mergedExtra[k];
+                        // 23.4 — send the delete-sentinel so the backend merge
+                        // POPS the key. A client-side `delete` was lost: the
+                        // backend re-merges against the live record, so an
+                        // omitted key means "keep" and blanking silently no-op'd.
+                        mergedExtra[k] = window.FCC_DELETE_EXTRA;
                     } else {
                         mergedExtra[k] = `"${String(v)}"`;
                     }
@@ -2317,6 +2325,14 @@ const _editfilOpenModal = (fil) => {
                 if (window.refreshFilamentSpools) window.refreshFilamentSpools();
                 if (isCreate && window.fetchLocations) window.fetchLocations();
                 bsModal.hide();
+                // 23.3 — if this edit changed a field that PRINTS on the filament
+                // swatch label, the physical sample is now stale. Nudge a reprint
+                // (only when the label was previously CONFIRMED). Uses payload/
+                // dirtyExtras (the change set) + rawExtra (the prior label state).
+                if (!isCreate) {
+                    const dispName = (payload && payload.name) || fil.name || `Filament #${fil.id}`;
+                    _maybePromptLabelReprint(fil.id, dispName, payload, dirtyExtras, rawExtra);
+                }
             } else {
                 showErr(`${isCreate ? 'Create' : 'Update'} failed: ${d && d.msg ? d.msg : 'unknown'}`);
             }
@@ -2435,6 +2451,117 @@ const _editfilShowEscapeConfirm = (bsModal) => {
     document.addEventListener('keydown', keyHandler, true);
     document.getElementById('editfil-esc-no').focus();
 };
+
+// 23.3 — Filament label-invalidation reprint nudge.
+//
+// WHICH fields print on the swatch label (and thus go stale when edited) was
+// read directly from the current P-touch template `Spoolman Filament Lables.lbx`
+// (the visible PLACED fields are Color/RGB, Brand, Type, Color-name — temps and
+// density are in the DB connection but NOT placed, so they don't invalidate the
+// swatch). Mapped back to editable filament fields:
+//   color_hex / multi_color_hexes / multi_color_direction → the swatch + RGB text
+//   name / extra.original_color                           → the "Color" name text
+//   vendor_id                                             → Brand
+//   material / extra.filament_attributes                  → Type (get_smart_type)
+// (Derek 2026-06-29: filament label reprints on color/RGB, Name, Vendor,
+// Material, Type. Spool-label propagation is a separate, deferred scope.)
+const _LABEL_BEARING_NATIVE = {
+    name: 'Name',
+    material: 'Material',
+    vendor_id: 'Vendor',
+    color_hex: 'Color',
+    multi_color_hexes: 'Color',
+    multi_color_direction: 'Color',
+};
+const _LABEL_BEARING_EXTRA = {
+    original_color: 'Color name',
+    filament_attributes: 'Type',
+};
+
+const _maybePromptLabelReprint = (filId, displayName, changed, dirtyExtras, rawExtra) => {
+    if (typeof window.mountOverlay !== 'function') return;
+    // Only nudge when the printed label was previously CONFIRMED. Tri-state:
+    // false = confirmed/printed (prompt), true = already needs print (no-op),
+    // null/absent = unknown/never printed (don't nag a record with no label).
+    const prior = unquoteExtra(rawExtra && rawExtra.needs_label_print);
+    const wasConfirmed = prior === false || prior === 'false' || prior === 'False';
+    if (!wasConfirmed) return;
+
+    const has = (o, k) => !!o && Object.prototype.hasOwnProperty.call(o, k);
+    // A bare multi_color_direction clear is the save handler's DEFENSIVE
+    // single-color cleanup (changed.multi_color_direction = null when a stale
+    // native direction lingers), NOT a real color edit. Only count it when an
+    // actual hex change co-occurs — otherwise editing just a comment on such a
+    // record would falsely claim "you changed Color".
+    const dirOnly = has(changed, 'multi_color_direction')
+        && !has(changed, 'color_hex') && !has(changed, 'multi_color_hexes');
+    const labels = new Set();
+    for (const k of Object.keys(_LABEL_BEARING_NATIVE)) {
+        if (k === 'multi_color_direction' && dirOnly) continue;
+        if (has(changed, k)) labels.add(_LABEL_BEARING_NATIVE[k]);
+    }
+    for (const k of Object.keys(_LABEL_BEARING_EXTRA)) {
+        if (has(dirtyExtras, k)) labels.add(_LABEL_BEARING_EXTRA[k]);
+    }
+    if (labels.size === 0) return;
+    _showLabelReprintPrompt(filId, displayName, [...labels]);
+};
+
+const _showLabelReprintPrompt = (filId, displayName, changedLabels) => {
+    // Load order guarantees window.escHtml is defined (inv_core.js loads first),
+    // but keep the fallback a true escaper so a future defer/module change can't
+    // silently un-escape a user-controlled filament name.
+    const esc = window.escHtml || ((s) => String(s == null ? '' : s)
+        .replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+    const name = displayName || `Filament #${filId}`;
+    const changedTxt = changedLabels.join(', ');
+    const panel = document.createElement('div');
+    panel.style.cssText = 'background:#1e1e1e; color:#fff; border:2px solid #ffc107; '
+        + 'border-radius:10px; padding:22px 26px; max-width:460px; text-align:center; '
+        + 'box-shadow:0 8px 32px rgba(0,0,0,0.6);';
+    panel.innerHTML = `
+        <div style="font-size:2em; line-height:1; margin-bottom:6px;">🏷️</div>
+        <div style="font-size:1.15em; font-weight:bold; margin-bottom:8px;">Printed label is now out of date</div>
+        <div style="color:#ccc; margin-bottom:18px; line-height:1.45;">
+            You changed <span style="color:#ffc107; font-weight:bold;">${esc(changedTxt)}</span> on
+            <span style="color:#fff; font-weight:bold;">${esc(name)}</span>.
+            The printed swatch label no longer matches — reprint it and replace the sample.
+        </div>
+        <div style="display:flex; gap:10px; justify-content:center;">
+            <button type="button" id="fcc-label-reprint-yes" class="btn btn-warning fw-bold">🖨️ Add to print queue</button>
+            <button type="button" id="fcc-label-reprint-no" class="btn btn-outline-secondary">Later</button>
+        </div>
+    `;
+    const handle = window.mountOverlay({
+        id: 'fcc-label-reprint-prompt',
+        content: panel,
+        tier: 'standard',
+        initialFocus: '#fcc-label-reprint-yes',
+    });
+    const yes = panel.querySelector('#fcc-label-reprint-yes');
+    const no = panel.querySelector('#fcc-label-reprint-no');
+    if (yes) yes.addEventListener('click', () => {
+        // addToQueue both raises needs_label_print (surfaces the staleness in the
+        // pending list + Details badge) AND queues the label for the P-touch batch.
+        const queued = (typeof window.addToQueue === 'function')
+            ? window.addToQueue({ id: filId, type: 'filament', display: `Filament #${filId}` })
+            : false;
+        if (window.showToast) {
+            window.showToast(
+                queued
+                    ? `Queued label reprint for filament #${filId}`
+                    : `Filament #${filId} is already in the print queue`,
+                queued ? 'success' : 'info', 4000);
+        }
+        handle.cleanup();
+    });
+    if (no) no.addEventListener('click', () => handle.cleanup());
+};
+
+// 23.3 — exposed so the wizard's edit_spool path (which can also edit
+// label-bearing filament fields) can reuse the exact same confirmation/field
+// logic + mountOverlay prompt rather than re-implementing it.
+window._maybePromptLabelReprint = _maybePromptLabelReprint;
 
 window.openEditFilamentForm = (fil) => {
     if (!fil || !fil.id) { showToast('Missing filament data', 'error'); return; }
@@ -3094,19 +3221,24 @@ window.vendorEditSave = () => {
     // Build payload: native fields top-level, website wrapped for the
     // text-type extras contract (JSON_STRING_FIELDS). Backend's
     // sanitize_outbound_data + _merge_extras_with_existing handle the rest.
+    // No `vid` means we're in create mode (opened via openVendorCreateModal).
+    // POST /api/vendors → returns the new vendor body → dispatch
+    // `vendor:created` so listeners (e.g. the wizard's vendor combobox) can
+    // refetch the vendor list and auto-select the new entry.
+    const isCreate = !vid;
+
     const data = {
         name: name,
         comment: comment,
         external_id: externalId,
         empty_spool_weight: emptyWt,
     };
-    data.extra = { website: website ? `"${website}"` : '' };
+    // 23.4 — on EDIT (PATCH) a blanked website sends the delete-sentinel so the
+    // backend merge POPS it; an empty string would persist a literal '""'
+    // instead of clearing. On CREATE there's nothing to delete, so a blank
+    // stays an empty string.
+    data.extra = { website: website ? `"${website}"` : (isCreate ? '' : window.FCC_DELETE_EXTRA) };
 
-    // No `vid` means we're in create mode (opened via openVendorCreateModal).
-    // POST /api/vendors → returns the new vendor body → dispatch
-    // `vendor:created` so listeners (e.g. the wizard's vendor combobox) can
-    // refetch the vendor list and auto-select the new entry.
-    const isCreate = !vid;
     const url = isCreate ? '/api/vendors' : `/api/vendors/${encodeURIComponent(vid)}`;
     const method = isCreate ? 'POST' : 'PATCH';
     fetch(url, {
@@ -3198,7 +3330,14 @@ document.addEventListener('vendor:updated', (e) => {
         'spool_weight': 'editfil-spool-weight',
         'settings_extruder_temp': 'editfil-nozzle',
         'settings_bed_temp': 'editfil-bed',
-        'color_hex': null,  // color hex requires the color-picker path; skipped in V1
+        // 23.1 — color_hex now applies into the primary color-hex input
+        // (apply special-cases it to drive the picker via a synthetic input
+        // event). product_url/purchase_url ride the existing extra.* branch's
+        // target inputs; apply special-cases their VALUE source because the
+        // diff derives them from external_link/purchase_link, not extra.*.
+        'color_hex': 'editfil-color-hex',
+        'extra.product_url': 'editfil-product-url',
+        'extra.purchase_url': 'editfil-purchase-url',
         'extra.nozzle_temp_max': 'editfil-nozzle-max',
         'extra.bed_temp_max': 'editfil-bed-max',
     };
@@ -3215,6 +3354,8 @@ document.addEventListener('vendor:updated', (e) => {
         'settings_extruder_temp': 'Extruder Temp Min (°C)',
         'settings_bed_temp': 'Bed Temp Min (°C)',
         'color_hex': 'Color hex',
+        'extra.product_url': 'Product URL',
+        'extra.purchase_url': 'Purchase URL',
         'extra.nozzle_temp_max': 'Nozzle Temp Max (°C)',
         'extra.bed_temp_max': 'Bed Temp Max (°C)',
     };
@@ -3243,6 +3384,29 @@ document.addEventListener('vendor:updated', (e) => {
     };
 
     window.editfilExternalCancelPreview = hidePreview;
+
+    // 23.2 — Reset the entire Import-from-External panel so each edit starts
+    // clean. The Edit/Add-Filament modal reuses one set of inputs across every
+    // filament, and importState persists at module scope, so without this the
+    // previous edit's typed query, picked source, multi-result list, and
+    // previewed template all survive into the NEXT filament's edit — risking
+    // "Apply Selected" writing a stale parser's values onto the wrong filament.
+    // Called from _editfilOpenModal on every open (idempotent against abnormal
+    // closes), mirroring wizardReset discipline. hidePreview() already nulls
+    // importState.template + clears the preview rows; this additionally wipes
+    // importState.results, the query text, the source select, and the results
+    // picker.
+    window.editfilExternalReset = () => {
+        hidePreview();
+        importState.results = [];
+        const queryEl = $('editfil-external-query');
+        if (queryEl) queryEl.value = '';
+        const sourceEl = $('editfil-external-source');
+        if (sourceEl) sourceEl.selectedIndex = 0;
+        const resultsEl = $('editfil-external-results');
+        if (resultsEl) { resultsEl.innerHTML = ''; resultsEl.classList.add('d-none'); }
+        setStatus('');
+    };
 
     window.editfilExternalSearch = () => {
         const sourceEl = $('editfil-external-source');
@@ -3401,9 +3565,43 @@ document.addEventListener('vendor:updated', (e) => {
         checks.forEach(cb => {
             const key = cb.dataset.key;
             const inputId = FIELD_TO_INPUT_ID[key];
-            if (!inputId) return;  // skipped (color_hex etc.)
+            if (!inputId) return;  // unmapped key — skip
             const inputEl = document.getElementById(inputId);
             if (!inputEl) return;
+
+            // 23.1 — color_hex: normalize to #rrggbb and drive the hex input
+            // via a synthetic 'input' event so the bound color-picker stays in
+            // sync (a bare .value set wouldn't fire the picker's oninput). The
+            // save handler's captureCurrentValues() then reads editfil-color-hex.
+            if (key === 'color_hex') {
+                let hx = String(tpl.color_hex == null ? '' : tpl.color_hex)
+                    .trim().replace(/^#/, '').toLowerCase();
+                if (/^[0-9a-f]{3}$/.test(hx)) hx = hx.split('').map(c => c + c).join('');  // #fff → ffffff
+                if (!/^[0-9a-f]{6}$/.test(hx)) {
+                    // Don't silently drop a row the user explicitly checked —
+                    // tell them why the parser's color couldn't be applied.
+                    if (window.showToast) window.showToast(`Skipped color: "${tpl.color_hex}" isn't a 6-digit hex.`, 'warning', 4000);
+                    return;
+                }
+                inputEl.value = `#${hx}`;
+                inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+                applied++;
+                return;
+            }
+
+            // 23.1 — product_url / purchase_url: computeFilamentBackfillDiff
+            // derives these from tpl.external_link / tpl.purchase_link (NOT
+            // tpl.extra.*), so read the SAME source the preview row showed
+            // rather than the (empty) extra key the generic branch would read.
+            if (key === 'extra.product_url' || key === 'extra.purchase_url') {
+                const url = (key === 'extra.product_url')
+                    ? (tpl.external_link || '')
+                    : (tpl.purchase_link || tpl.external_link || '');
+                inputEl.value = String(url);
+                applied++;
+                return;
+            }
+
             let val;
             if (key.startsWith('extra.')) {
                 const ek = key.slice('extra.'.length);

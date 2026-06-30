@@ -645,7 +645,10 @@ def _format_vendor_edit_log(vid, before, data):
         if key == 'extra':
             for ek, ev in (value or {}).items():
                 old = before_extra.get(ek, '')
-                if str(old) != str(ev):
+                if spoolman_api._is_delete_sentinel(ev):
+                    # 23.4 — blank-to-clear, not a literal sentinel write.
+                    parts.append(f"extra.{ek}: {old or '(empty)'} → (cleared)")
+                elif str(old) != str(ev):
                     parts.append(f"extra.{ek}: {old or '(empty)'} → {ev or '(empty)'}")
             continue
         old = before.get(key, '')
@@ -2273,7 +2276,11 @@ def _format_filament_edit_log(fid, before, requested):
             for ek in sorted(ex_req.keys()):
                 old = before_extra.get(ek)
                 new = ex_req.get(ek)
-                if old == new:
+                if spoolman_api._is_delete_sentinel(new):
+                    # 23.4 — render a blank-to-clear as a real deletion rather
+                    # than leaking the internal delete-sentinel token.
+                    parts.append(f"extra.{ek}: {_short(old)} → (cleared)")
+                elif old == new:
                     parts.append(f"extra.{ek}: {_short(old)} (unchanged)")
                 else:
                     parts.append(f"extra.{ek}: {_short(old)} → {_short(new)}")
@@ -2707,12 +2714,32 @@ def _handle_prusament_url_scan(res):
     for k in ('prusament_manufacturing_date', 'prusament_length_m'):
         if _pm_norm(obj_extra.get(k)) and not _pm_norm(spool_extra.get(k)):
             pm_fill[k] = obj_extra.get(k)
-    if pm_fill and not spoolman_api.update_spool(sid, {'extra': pm_fill}):
-        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-        state.add_log_entry(
-            f"⚠️ Couldn't refresh Prusament metadata on spool #{sid}: {err}",
-            "WARNING", "ffaa00",
-        )
+    # 23.6 — persist/normalize the scanned URL onto the matched spool's
+    # product_url ("save the url to the product link section"). The matcher
+    # already required the stored product_url to contain the scanned id/hash,
+    # so this UPGRADES a non-canonical shape (query form ?spoolId=<hash>,
+    # trailing-slash/cruft, casing) to the canonical /spool/<id>/<hash> path
+    # form. Idempotent: once stored == canonical the differ-guard skips, so no
+    # per-scan churn. Gated on a hash (canonical needs it); the matched URL is
+    # always a spool-instance URL (it matched the needle), so this never
+    # clobbers a deliberately-set product-PAGE link.
+    if spool_hash:
+        canonical_purl = f"https://prusament.com/spool/{spool_id}/{spool_hash.lower()}"
+        if _pm_norm(spool_extra.get('product_url')) != _pm_norm(canonical_purl):
+            pm_fill['product_url'] = canonical_purl
+    if pm_fill:
+        if spoolman_api.update_spool(sid, {'extra': pm_fill}):
+            if 'product_url' in pm_fill:
+                state.add_log_entry(
+                    f"🔗 Saved the scanned Prusament link to spool #{sid}'s product URL",
+                    "INFO", "00ccff",
+                )
+        else:
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            state.add_log_entry(
+                f"⚠️ Couldn't refresh Prusament metadata on spool #{sid}: {err}",
+                "WARNING", "ffaa00",
+            )
 
     # --- Differ-suggest gate: only prompt when no unarchived spools remain ---
     suggest = []
