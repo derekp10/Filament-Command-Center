@@ -537,6 +537,111 @@ def test_extract_spool_fields_skips_zero_spool_weight(page: Page):
     assert 'spool_weight' not in override
 
 
+def test_extract_spool_fields_skips_initial_weight_when_default(page: Page):
+    """24.K — the parser flags a fabricated 1000g via weight_is_default when
+    the source page omitted net weight. The per-spool override MUST NOT bake
+    that guess into initial_weight (the 'legacy 1000g leak'); the spool then
+    inherits the filament-level weight instead of a fabricated per-spool
+    measured initial. spool_weight (a separate tare reading) is unaffected."""
+    _open_wizard_no_fetches(page)
+    override = page.evaluate("""() => window.extractSpoolFieldsFromTemplate({
+        weight: 1000,
+        weight_is_default: true,
+        spool_weight: 215
+    })""")
+    assert 'initial_weight' not in override, "must not fabricate a 1000g spool initial"
+    assert override['spool_weight'] == 215, "real tare reading still applies"
+
+
+def test_extract_spool_fields_keeps_initial_weight_when_real(page: Page):
+    """24.K corollary — a REAL scraped weight (weight_is_default false / absent)
+    still flows into initial_weight as before, so the guard only suppresses the
+    fabricated default, not genuine readings."""
+    _open_wizard_no_fetches(page)
+    flagged_false = page.evaluate("""() => window.extractSpoolFieldsFromTemplate({
+        weight: 998, weight_is_default: false
+    })""")
+    assert flagged_false['initial_weight'] == 998
+    # absent flag (non-Prusament parser or older payload) behaves as "real".
+    no_flag = page.evaluate("""() => window.extractSpoolFieldsFromTemplate({
+        weight: 750
+    })""")
+    assert no_flag['initial_weight'] == 750
+
+
+def test_apply_filament_fields_blanks_weight_when_default(page: Page):
+    """24.K — applyFilamentFieldsFromTemplate leaves wiz-fil-weight blank with a
+    prompt when the parser only DEFAULTED the net weight, instead of prefilling
+    a fabricated 1000g. A real scraped weight still prefills."""
+    _open_wizard_no_fetches(page)
+    defaulted = page.evaluate("""() => {
+        window.applyFilamentFieldsFromTemplate({ weight: 1000, weight_is_default: true });
+        const el = document.getElementById('wiz-fil-weight');
+        return { value: el.value, placeholder: el.placeholder };
+    }""")
+    assert defaulted['value'] == '', "a defaulted weight must not prefill 1000"
+    assert 'unknown' in defaulted['placeholder'].lower(), "should prompt the user for the real weight"
+
+    real = page.evaluate("""() => {
+        window.applyFilamentFieldsFromTemplate({ weight: 850 });
+        return document.getElementById('wiz-fil-weight').value;
+    }""")
+    assert real == '850', "a real scraped weight still prefills"
+
+
+def test_calc_remaining_aborts_without_known_net_weight(page: Page):
+    """24.K — the weight calc helpers must NOT fabricate a 1000g net basis when
+    no net weight is known anywhere (the abort the create-path blanking relies
+    on). With both initial_weight and fil-weight blank, the calc leaves the
+    output field untouched; once a real net weight is supplied, it computes."""
+    _open_wizard_no_fetches(page)
+    result = page.evaluate("""() => {
+        document.getElementById('wiz-spool-initial_weight').value = '';
+        document.getElementById('wiz-fil-weight').value = '';
+        document.getElementById('wiz-spool-remaining').value = '';
+        document.getElementById('wiz-spool-used').value = '100';
+        window.wizardCalcRemainingFromUsed();
+        const aborted = document.getElementById('wiz-spool-remaining').value;
+        // Supply a real net weight; the calc should now compute remaining.
+        document.getElementById('wiz-fil-weight').value = '600';
+        window.wizardCalcRemainingFromUsed();
+        return { aborted, computed: document.getElementById('wiz-spool-remaining').value };
+    }""")
+    assert result['aborted'] == '', "calc must not fabricate remaining without a net weight"
+    assert float(result['computed']) == 500, "600g net − 100g used → 500g remaining"
+
+
+def test_backfill_diff_skips_weight_when_default(page: Page):
+    """24.K — computeFilamentBackfillDiff must NOT propose importing a parser's
+    DEFAULTED 1000g into an existing filament: neither silent-fill an unset
+    weight nor overwrite a real stored one. A genuine scraped weight still
+    flows. (Mirrors the create-path guard on the edit-import sibling surface.)"""
+    _open_wizard_no_fetches(page)
+    # Existing weight unset + defaulted scrape → no silent-fill, no mismatch.
+    unset = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', weight: 0, extra: {}},
+        {material: 'PLA', weight: 1000, weight_is_default: true, extra: {}},
+        []
+    )""")
+    assert 'weight' not in unset['silent']
+    assert not any(m['key'] == 'weight' for m in unset['mismatches'])
+    # Existing REAL weight differs + defaulted scrape → no overwrite proposed.
+    stored = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', weight: 750, extra: {}},
+        {material: 'PLA', weight: 1000, weight_is_default: true, extra: {}},
+        []
+    )""")
+    assert 'weight' not in stored['silent']
+    assert not any(m['key'] == 'weight' for m in stored['mismatches'])
+    # A genuine scraped weight still silent-fills an unset field.
+    real = page.evaluate("""() => window.computeFilamentBackfillDiff(
+        {id: 1, material: 'PLA', weight: 0, extra: {}},
+        {material: 'PLA', weight: 820, extra: {}},
+        []
+    )""")
+    assert real['silent']['weight'] == 820
+
+
 # --- wizardResetSpoolRows / lock interaction ------------------------------
 
 def test_badge_update_does_not_destroy_url_inputs(page: Page):

@@ -1084,8 +1084,11 @@ window.wizardCalcUsedWeight = () => {
     let netWt = parseFloat(document.getElementById('wiz-spool-initial_weight').value);
     if (isNaN(netWt)) {
         netWt = parseFloat(document.getElementById('wiz-fil-weight').value);
-        if (isNaN(netWt)) netWt = 1000; // standard assumption if completely hidden
     }
+    // 24.K — don't silently assume 1kg when no net weight is known anywhere.
+    // Abort the derivation so the user supplies a real net weight first (a
+    // defaulted-weight Prusament scan now leaves wiz-fil-weight blank).
+    if (isNaN(netWt)) return;
 
     let used = (netWt + emptyWt) - scaleWt;
     if (used < 0) used = 0;
@@ -1107,9 +1110,10 @@ window.wizardCalcUsedFromRemaining = () => {
     
     let netWt = parseFloat(document.getElementById('wiz-spool-initial_weight').value);
     if (isNaN(netWt)) {
-        netWt = parseFloat(document.getElementById('wiz-fil-weight').value) || 1000;
+        netWt = parseFloat(document.getElementById('wiz-fil-weight').value);
     }
-    
+    if (isNaN(netWt)) return;  // 24.K — no known net weight; don't assume 1kg
+
     let used = netWt - remaining;
     if (used < 0) used = 0;
     if (used > netWt) used = netWt;
@@ -1124,9 +1128,10 @@ window.wizardCalcRemainingFromUsed = () => {
     
     let netWt = parseFloat(document.getElementById('wiz-spool-initial_weight').value);
     if (isNaN(netWt)) {
-        netWt = parseFloat(document.getElementById('wiz-fil-weight').value) || 1000;
+        netWt = parseFloat(document.getElementById('wiz-fil-weight').value);
     }
-    
+    if (isNaN(netWt)) return;  // 24.K — no known net weight; don't assume 1kg
+
     let remaining = netWt - used;
     if (remaining < 0) remaining = 0;
 
@@ -2468,7 +2473,19 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
 
     document.getElementById('wiz-fil-diameter').value = temp.diameter || temp.settings_extrusion_diameter || 1.75;
     document.getElementById('wiz-fil-density').value = temp.density || temp.settings_density || 1.24;
-    document.getElementById('wiz-fil-weight').value = temp.weight || 1000;
+    // 24.K — when the parser only DEFAULTED the net weight (weight_is_default),
+    // leave the field blank with a prompt instead of prefilling a fabricated
+    // 1kg, so the user supplies the real weight rather than silently inheriting
+    // 1000g. A real scraped weight still prefills as before.
+    const _filWeightEl = document.getElementById('wiz-fil-weight');
+    if (_filWeightEl) {
+        if (temp.weight_is_default) {
+            _filWeightEl.value = '';
+            _filWeightEl.placeholder = 'Net weight unknown — enter grams';
+        } else {
+            _filWeightEl.value = temp.weight || 1000;
+        }
+    }
     document.getElementById('wiz-fil-empty_weight').value = temp.spool_weight || '';
 
     if (document.getElementById('wiz-fil-settings_extruder_temp')) {
@@ -2541,7 +2558,14 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
 // will merge onto each created spool. Does NOT touch the DOM.
 window.extractSpoolFieldsFromTemplate = (temp) => {
     const override = { extra: {} };
-    if (temp.weight !== undefined && temp.weight !== null && !Number.isNaN(Number(temp.weight))) {
+    // 24.K — honor the parser's `weight_is_default` flag. When the source page
+    // omitted net weight the parser substitutes 1000g and sets the flag; baking
+    // that into the per-spool initial_weight records a FABRICATED measured value
+    // (the "legacy 1000g leak"). Skip it so the spool inherits the filament's
+    // canonical weight instead of a bogus per-spool initial — the user can still
+    // type a real weight in Step 3 before submit.
+    if (!temp.weight_is_default
+        && temp.weight !== undefined && temp.weight !== null && !Number.isNaN(Number(temp.weight))) {
         override.initial_weight = Number(temp.weight);
     }
     if (temp.spool_weight !== undefined && temp.spool_weight !== null && Number(temp.spool_weight) > 0) {
@@ -3882,6 +3906,14 @@ window.computeFilamentBackfillDiff = (existing, parsedTemplate, knownAttrs) => {
         const stored = ex[key];
         const scanned = tp[key];
         if (_isUnset(scanned)) continue;
+        // 24.K — never import a parser's DEFAULTED 1000g net weight into an
+        // existing filament. When the scrape only assumed the weight
+        // (weight_is_default), skip the 'weight' field so it neither
+        // silent-fills nor overwrites a real stored weight — parity with the
+        // wizard create-path guard in extractSpoolFieldsFromTemplate /
+        // applyFilamentFieldsFromTemplate. (spool_weight is a real tare reading,
+        // unaffected by weight_is_default.)
+        if (key === 'weight' && tp.weight_is_default) continue;
         if (_isUnset(stored)) {
             out.silent[key] = scanned;
         } else if (Math.abs(Number(stored) - Number(scanned)) > threshold) {
