@@ -964,10 +964,35 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
             const pick = visible.find(el => el.classList.contains('active')) || visible[0];
             if (pick) {
                 freshSearch.value = pick.dataset.label;
-                hidden.value = pick.dataset.value;
                 dropdown.style.display = 'none';
+                // Only fire change when the value actually changed, so confirming
+                // an already-selected value doesn't spuriously flip the wizard's
+                // dirty flag (mirrors wizardComboboxSet's bubbles:false rationale).
+                if (hidden.value !== pick.dataset.value) {
+                    hidden.value = pick.dataset.value;
+                    hidden.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+            return;
+        }
+        if (e.key === 'Tab') {
+            // 25.I — Tab confirms the highlighted/typed match like Enter, but does
+            // NOT preventDefault so focus advances naturally ("confirm and move
+            // on"). Shared helper → covers BOTH the location and vendor comboboxes.
+            // Guard a pass-through Tab on an UNTOUCHED field: confirm ONLY when an
+            // item is highlighted OR the user typed a query — otherwise a bare
+            // tab-through would write the sentinel (visible[0], e.g. "-- Generic
+            // --") into the box AND spuriously flip wizardState.isDirty via the
+            // bubbling change (false "Unsaved Changes" prompt). Also skip the
+            // dispatch when the value is unchanged.
+            const active = visible.find(el => el.classList.contains('active'));
+            const pick = active || (freshSearch.value.trim() ? visible[0] : null);
+            if (pick && hidden.value !== pick.dataset.value) {
+                freshSearch.value = pick.dataset.label;
+                hidden.value = pick.dataset.value;
                 hidden.dispatchEvent(new Event('change', { bubbles: true }));
             }
+            dropdown.style.display = 'none';
             return;
         }
         if (e.key === 'Escape') {
@@ -2652,6 +2677,154 @@ window.wizardExternalSelected = () => {
     }
 };
 
+// 25.3 — pure change-diff for "which FILAMENT fields flag a label reprint",
+// extracted from the edit_spool submit path so the fields it detects can't
+// silently drift from the primary Edit-Filament path. Returns
+// { changedNative, changedExtras } keyed EXACTLY as _maybePromptLabelReprint
+// (inv_details.js) expects. Previously the wizard diffed only name/…/color +
+// filament_attributes and OMITTED original_color, so a Color-NAME (manufacturer
+// original_color) change through the wizard didn't flag the spools for reprint
+// while the primary path did (Group 23.3 parity gap).
+window.wizardBuildFilamentLabelDiff = (orig, fPayload) => {
+    orig = orig || {};
+    fPayload = fPayload || {};
+    const norm = (s) => String(s == null ? '' : s);
+    const changedNative = {};
+    if (norm(fPayload.name) !== norm(orig.name)) changedNative.name = fPayload.name;
+    if (norm(fPayload.material) !== norm(orig.material)) changedNative.material = fPayload.material;
+    const newVendor = (fPayload.vendor_id != null) ? String(fPayload.vendor_id) : '';
+    if (newVendor !== norm(orig.vendor_id)) changedNative.vendor_id = fPayload.vendor_id;
+    const newHex = String(fPayload.color_hex || '').replace(/^#/, '').toLowerCase();
+    const newMulti = String(fPayload.multi_color_hexes || '').replace(/[#\s]/g, '').toLowerCase();
+    const newDir = String(fPayload.multi_color_direction || '').toLowerCase();
+    if (newHex !== orig.color_hex) changedNative.color_hex = newHex;
+    if (newMulti !== orig.multi_color_hexes) changedNative.multi_color_hexes = newMulti;
+    if (newDir !== orig.multi_color_direction) changedNative.multi_color_direction = newDir;
+
+    const changedExtras = {};
+    const origExtra = orig.extra || {};
+    const newExtra = fPayload.extra || {};
+    const attrKey = (a) => {
+        let arr = a;
+        if (typeof a === 'string') { try { arr = JSON.parse(a); } catch (_) { arr = a ? [a] : []; } }
+        if (!Array.isArray(arr)) arr = (arr == null || arr === '') ? [] : [arr];
+        return arr.map(x => String(x).trim().toLowerCase()).filter(Boolean).sort().join('|');
+    };
+    if (attrKey(origExtra.filament_attributes) !== attrKey(newExtra.filament_attributes)) {
+        changedExtras.filament_attributes = true;
+    }
+    // 25.3 — original_color (manufacturer Color-NAME) prints on the spool label,
+    // so a change must flag the spools for reprint. Only compare when the wizard
+    // actually COLLECTED the field (it's a .dynamic-extra-field relocated into
+    // the Color panel; in edit mode a rendered field always lands in extra —
+    // value, or the delete-sentinel when cleared) so an unchanged edit can't
+    // false-flag. Strip the JSON quote-wrap on both sides (stored values are
+    // wrapped; the raw form value is not); the sentinel/blank both normalize to
+    // "" so clearing the name correctly counts as a change.
+    const ocNorm = (v) => (v == null || v === window.FCC_DELETE_EXTRA)
+        ? '' : String(v).replace(/^"|"$/g, '').trim();
+    if (Object.prototype.hasOwnProperty.call(newExtra, 'original_color')
+            && ocNorm(origExtra.original_color) !== ocNorm(newExtra.original_color)) {
+        changedExtras.original_color = true;
+    }
+    return { changedNative, changedExtras };
+};
+
+// 25.H — render post-save "Queue label" affordances into #wiz-postcreate-actions.
+// One chip per spool (dedups vs window.labelQueue, turns green once queued);
+// CREATE mode adds a "Queue All" for multi-spool rounds (an 8-spool round used to
+// need 8 individual clicks); EDIT mode renders a chip for the edited spool (it
+// previously had none). The wizard modal stays open across all modes, so these
+// are visible post-save. Extracted from wizardSubmit so it's unit-testable.
+window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) => {
+    const actionRow = document.getElementById('wiz-postcreate-actions');
+    if (!actionRow) return;
+    actionRow.innerHTML = '';
+
+    const makeQueueChip = (sid) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-sm btn-outline-info fw-bold fcc-wiz-queue-label';
+        btn.dataset.spoolId = String(sid);
+        btn.title = `Queue a print label for Spool #${sid}`;
+        btn.innerText = `🖨️ #${sid}`;
+        const markQueued = () => {
+            btn.classList.remove('btn-outline-info');
+            btn.classList.add('btn-success');
+            btn.disabled = true;
+        };
+        btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            if (typeof window.addToQueue !== 'function') return;
+            if (Array.isArray(window.labelQueue) && window.labelQueue.find(q => q.id === sid && q.type === 'spool')) {
+                if (typeof showToast === 'function') showToast(`Spool #${sid} already in queue`, 'info', 2000);
+                markQueued();
+                return;
+            }
+            window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
+            if (typeof showToast === 'function') showToast(`Queued label for Spool #${sid}`, 'success', 2500);
+            markQueued();
+        });
+        return { btn, markQueued };
+    };
+
+    const isEdit = mode === 'edit_spool';
+    const createdSpools = (!isEdit && Array.isArray(createdSpoolsArg)) ? createdSpoolsArg : [];
+    const editSid = (isEdit && editSpoolId) ? editSpoolId : null;
+    if (!createdSpools.length && !editSid) return;
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'small text-light fw-bold me-2';
+    labelEl.innerText = 'Queue label:';
+    actionRow.appendChild(labelEl);
+
+    const chips = [];
+    createdSpools.forEach(sid => {
+        if (!sid) return;
+        const c = makeQueueChip(sid);
+        chips.push(c);
+        actionRow.appendChild(c.btn);
+    });
+    if (editSid) {
+        const c = makeQueueChip(editSid);
+        chips.push(c);
+        actionRow.appendChild(c.btn);
+    }
+
+    // "Queue All" — only worthwhile for a multi-spool CREATE round. Dedups via
+    // the same window.labelQueue check + reports how many were newly added.
+    if (createdSpools.length > 1) {
+        const allBtn = document.createElement('button');
+        allBtn.type = 'button';
+        allBtn.className = 'btn btn-sm btn-info fw-bold ms-1 fcc-wiz-queue-all';
+        allBtn.title = 'Queue print labels for every spool just created';
+        allBtn.innerText = `🖨️ Queue All (${createdSpools.length})`;
+        allBtn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            if (typeof window.addToQueue !== 'function') return;
+            let added = 0, already = 0;
+            createdSpools.forEach(sid => {
+                if (!sid) return;
+                if (Array.isArray(window.labelQueue) && window.labelQueue.find(q => q.id === sid && q.type === 'spool')) {
+                    already++;
+                    return;
+                }
+                window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
+                added++;
+            });
+            chips.forEach(c => c.markQueued());
+            allBtn.classList.remove('btn-info');
+            allBtn.classList.add('btn-success');
+            allBtn.disabled = true;
+            if (typeof showToast === 'function') {
+                const extra = already ? ` (${already} already queued)` : '';
+                showToast(`Queued ${added} label${added === 1 ? '' : 's'}${extra}`, 'success', 3000);
+            }
+        });
+        actionRow.appendChild(allBtn);
+    }
+};
+
 window.wizardSubmit = async () => {
     document.getElementById('btn-wiz-submit').disabled = true;
     const msg = document.getElementById('wiz-status-msg');
@@ -2881,36 +3054,11 @@ window.wizardSubmit = async () => {
             // more..." auto-prompt three seconds later — can't clobber
             // them before the user gets a chance to click. Only fires
             // on create (edit-spool mode doesn't carry created_spools).
-            const actionRow = document.getElementById('wiz-postcreate-actions');
-            if (actionRow) actionRow.innerHTML = '';
-            if (actionRow && wizardState.mode !== 'edit_spool' && Array.isArray(data.created_spools) && data.created_spools.length) {
-                const labelEl = document.createElement('span');
-                labelEl.className = 'small text-light fw-bold me-2';
-                labelEl.innerText = 'Queue label:';
-                actionRow.appendChild(labelEl);
-                data.created_spools.forEach(sid => {
-                    const btn = document.createElement('button');
-                    btn.type = 'button';
-                    btn.className = 'btn btn-sm btn-outline-info fw-bold fcc-wiz-queue-label';
-                    btn.dataset.spoolId = String(sid);
-                    btn.title = `Queue a print label for Spool #${sid}`;
-                    btn.innerText = `🖨️ #${sid}`;
-                    btn.addEventListener('click', (ev) => {
-                        ev.preventDefault();
-                        if (!sid || typeof window.addToQueue !== 'function') return;
-                        if (Array.isArray(window.labelQueue) && window.labelQueue.find(q => q.id === sid && q.type === 'spool')) {
-                            if (typeof showToast === 'function') showToast(`Spool #${sid} already in queue`, 'info', 2000);
-                            return;
-                        }
-                        window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
-                        if (typeof showToast === 'function') showToast(`Queued label for Spool #${sid}`, 'success', 2500);
-                        btn.classList.remove('btn-outline-info');
-                        btn.classList.add('btn-success');
-                        btn.disabled = true;
-                    });
-                    actionRow.appendChild(btn);
-                });
-            }
+            // 25.H — render the post-save queue-label affordances (per-spool
+            // chips + "Queue All" for multi-create; a chip for the edited spool
+            // in edit mode). Extracted to a helper so it's unit-testable.
+            window.wizardRenderPostSaveQueueActions(
+                wizardState.mode, data.created_spools, wizardState.editSpoolId);
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse')); // Instantly trigger UI rebinding across all open panels
 
             // 23.3 — if this edit_spool save changed a label-bearing FILAMENT
@@ -2921,28 +3069,10 @@ window.wizardSubmit = async () => {
                     && wizardState.editFilamentOriginal
                     && typeof window._maybePromptLabelReprint === 'function') {
                 const orig = wizardState.editFilamentOriginal;
-                const norm = (s) => String(s == null ? '' : s);
-                const changedNative = {};
-                if (norm(f_payload.name) !== norm(orig.name)) changedNative.name = f_payload.name;
-                if (norm(f_payload.material) !== norm(orig.material)) changedNative.material = f_payload.material;
-                const newVendor = (f_payload.vendor_id != null) ? String(f_payload.vendor_id) : '';
-                if (newVendor !== norm(orig.vendor_id)) changedNative.vendor_id = f_payload.vendor_id;
-                const newHex = String(f_payload.color_hex || '').replace(/^#/, '').toLowerCase();
-                const newMulti = String(f_payload.multi_color_hexes || '').replace(/[#\s]/g, '').toLowerCase();
-                const newDir = String(f_payload.multi_color_direction || '').toLowerCase();
-                if (newHex !== orig.color_hex) changedNative.color_hex = newHex;
-                if (newMulti !== orig.multi_color_hexes) changedNative.multi_color_hexes = newMulti;
-                if (newDir !== orig.multi_color_direction) changedNative.multi_color_direction = newDir;
-                const changedExtras = {};
-                const attrKey = (a) => {
-                    let arr = a;
-                    if (typeof a === 'string') { try { arr = JSON.parse(a); } catch (_) { arr = a ? [a] : []; } }
-                    if (!Array.isArray(arr)) arr = (arr == null || arr === '') ? [] : [arr];
-                    return arr.map(x => String(x).trim().toLowerCase()).filter(Boolean).sort().join('|');
-                };
-                if (attrKey(orig.extra.filament_attributes) !== attrKey(f_payload.extra && f_payload.extra.filament_attributes)) {
-                    changedExtras.filament_attributes = true;
-                }
+                // 25.3 — shared diff (includes original_color now); see
+                // window.wizardBuildFilamentLabelDiff.
+                const { changedNative, changedExtras } =
+                    window.wizardBuildFilamentLabelDiff(orig, f_payload);
                 window._maybePromptLabelReprint(
                     target_fid,
                     f_payload.name || `Filament #${target_fid}`,

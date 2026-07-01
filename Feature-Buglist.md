@@ -1,11 +1,5 @@
 # **New and Unsorted Features/Bugs**
 
-* Spool-label invalidation parity — the wizard's edit-spool path doesn't flag spool labels on a Color-name-only change. The Group 23.3 spool-label flag (`POST /api/filament/<id>/flag_spool_labels`, raised when a spool-visible field — Brand/Type/Color-name — changes so the spool's `needs_label_print` is set) fires correctly from the primary Edit-Filament modal, but the wizard `edit_spool` save (`inv_wizard.js:~2896-2927`) re-implements its own change-diff and OMITS `original_color`, so editing ONLY the color name via the wizard won't flag the filament's spools for reprint. Minor / secondary surface (the main edit path is correct). Fix: include `original_color` in the wizard edit_spool `changedExtras` diff (ideally share the trigger logic with `inv_details` to stop future drift). Surfaced 2026-06-29 by the Group 23 cleanup verification → filed into Group 25 (25.3).
-
-* Add/edit wizzard should have a print filament button for existing filaments. And there should be a print all option if creating multiple. (had an 8 filament round where I just had to click the 8 different buttons.)
-
-* Location field in add/edit filament, when typing in a match, hitting Tab should confirm highlighted item into the field (just like enter does).
-
 * Give the single-location-label print endpoint (`api_print_location_label`) the same friendly file-lock message as the batch label-CSV export. Minor consistency follow-up from the 2026-06-18 label-CSV robustness fix (the main P-touch CSV-lock bug is DONE + archived; Derek's 2 P-touch files — one dev-linked, one live-linked — confirmed there's no filename mismatch). Low-pri.
 
 * Adding new locations, specifically shelve, row section locations is messy and needs a revision. infact any location that's a sub location isn't easy to add. This whole workflow needs to be re-designed. (Should check to see if we've finished the full refactor on location id and stuff yet.)
