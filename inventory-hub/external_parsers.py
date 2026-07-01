@@ -76,6 +76,9 @@ class BaseParser:
             "material": str,
             "vendor": {"name": str},
             "weight": float,
+            "weight_is_default": bool,  # optional — True when `weight` is a 1000g
+                                        # guess (page omitted net weight), so
+                                        # consumers don't treat it as authoritative
             "spool_weight": float,
             "diameter": float,
             "density": float,
@@ -337,7 +340,13 @@ class AmazonParser(BaseParser):
             
             # 3. Weight Regex Parsing
             weight = 1000.0 # Default fallback
-            
+            # 24.K — track whether a real weight was extracted from the title.
+            # Stays True (a guess) unless an explicit "X KG" is found, so the
+            # 1000g fallback is never treated as an authoritative manufacturer
+            # reading by the L200 correction / wizard create-path (parity with
+            # PrusamentParser's weight_is_default).
+            weight_is_default = True
+
             # Try to look for total weight first e.g. "4KG" or "1.5 KG"
             total_match = re.search(r'(\d+(?:\.\d+)?)\s*KG', title_upper)
             if total_match:
@@ -345,10 +354,13 @@ class AmazonParser(BaseParser):
                     val = float(total_match.group(1))
                     if 0.1 <= val <= 20.0: # Sanity check
                         weight = val * 1000.0
+                        weight_is_default = False
                 except ValueError:
                     pass
 
-            # If we still think it's 1000g, check if we found multipack keywords
+            # If we still think it's 1000g, check if we found multipack keywords.
+            # (Multipack scales the *assumed* 1kg/roll, so the per-roll weight is
+            # still a guess — weight_is_default stays True.)
             if weight == 1000.0:
                 multipack = 1
                 mp_match = re.search(r'(\d+)\s*(?:pk|pack|rolls|spools|kg/roll)', title_upper)
@@ -379,6 +391,7 @@ class AmazonParser(BaseParser):
                 "material": material,
                 "vendor": {"name": brand},
                 "weight": float(weight),
+                "weight_is_default": weight_is_default,
                 "spool_weight": 200.0, # Guess standard spool weight
                 "diameter": 1.75,
                 "density": float(density),
@@ -454,6 +467,10 @@ class ThreeDFPParser(BaseParser):
                 "material": material,
                 "vendor": {"name": name.split()[0] if name else "Generic"},
                 "weight": 1000.0, # Defaulting, can be refined
+                # 24.K — 3DFP never extracts a real net weight, so the 1000g is
+                # always a guess; flag it so the L200 correction / wizard
+                # create-path never treats it as authoritative.
+                "weight_is_default": True,
                 "spool_weight": spool_weight,
                 "diameter": 1.75,
                 "density": density,

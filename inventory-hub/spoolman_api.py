@@ -1329,6 +1329,9 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
         'is_ghost': is_ghost,             # Flag for UI
         'deployed_to': sloc if is_ghost else None, # Where is it really?
         'remaining_weight': s.get('remaining_weight'),
+        # 24.K — expose initial_weight so the printer-status bar can scale fill to
+        # the spool's OWN capacity instead of a hard-coded 1000g denominator.
+        'initial_weight': s.get('initial_weight'),
         'details': info.get('details', {})
     }
 

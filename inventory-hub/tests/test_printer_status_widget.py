@@ -288,6 +288,49 @@ def test_occupied_unbound_toolhead_shows_spool(page: Page, base_url):
 
 
 @pytest.mark.usefixtures("require_server")
+def test_bar_scales_to_initial_weight(page: Page, base_url):
+    """24.K — the weight bar fills relative to the spool's OWN initial_weight,
+    not a hard-coded 1000g denominator. A 500g spool full at 250g must read
+    50%, not 25%. Falls back to /1000 when initial_weight is absent, and the
+    100% cap holds for an over-measured spool (remaining > initial)."""
+    page.goto(base_url)
+    page.wait_for_selector("#printer-status-widget", timeout=10000)
+    page.wait_for_function(
+        "() => typeof window.refreshPrinterStatusWidgetFromAggregate === 'function'",
+        timeout=8000,
+    )
+    page.evaluate(
+        """() => window.refreshPrinterStatusWidgetFromAggregate({
+            'ZZ Scale Test': { state: null, toolheads: [
+                { id: 'ZS-1', position: 0, unbound: false,
+                  item: { id: 8101, color: '00AAFF', remaining_weight: 250,
+                          initial_weight: 500, display: '#8101 half-of-500g' } },
+                { id: 'ZS-2', position: 1, unbound: false,
+                  item: { id: 8102, color: '00AAFF', remaining_weight: 250,
+                          display: '#8102 no-initial' } },
+                { id: 'ZS-3', position: 2, unbound: false,
+                  item: { id: 8103, color: '00AAFF', remaining_weight: 600,
+                          initial_weight: 500, display: '#8103 over-cap' } }
+            ]}
+        })"""
+    )
+    widget = page.locator("#printer-status-widget")
+    fill1 = widget.locator(".fcc-ps-th[data-toolhead='ZS-1'] .fcc-ps-th-bar-fill").first
+    expect(fill1).to_be_visible(timeout=4000)
+    assert fill1.evaluate("el => el.style.width") == "50%", "250/500 should fill 50%"
+    # No initial_weight → graceful fallback to the 1000g denominator (250/1000).
+    w2 = widget.locator(".fcc-ps-th[data-toolhead='ZS-2'] .fcc-ps-th-bar-fill").first.evaluate(
+        "el => el.style.width"
+    )
+    assert w2 == "25%", f"missing initial_weight should fall back to /1000 (25%), got {w2}"
+    # Over-measured spool (remaining > initial) stays capped at 100%.
+    w3 = widget.locator(".fcc-ps-th[data-toolhead='ZS-3'] .fcc-ps-th-bar-fill").first.evaluate(
+        "el => el.style.width"
+    )
+    assert w3 == "100%", f"600/500 should cap at 100%, got {w3}"
+
+
+@pytest.mark.usefixtures("require_server")
 def test_l56_printer_status_payload_includes_state(api_base_url):
     """L56 — dashboard_pulse's printer_status section must carry each
     printer's PrusaLink state alongside the toolhead list, so a printer's

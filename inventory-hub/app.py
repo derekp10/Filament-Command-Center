@@ -1044,6 +1044,40 @@ def api_create_inventory_wizard():
         return jsonify({"success": False, "msg": str(e)})
 
 
+def _log_manual_weight_change(spool_id, pre, post):
+    """24.F — write a before➔after Activity-Log breakdown for a MANUAL weight
+    adjustment (mirrors the auto-deduct wording at _apply_usage_to_printer).
+
+    Shared by every manual weight funnel — the generic /api/spool/update and
+    the wizard edit-spool save — so "all manual weight adjustments display a
+    breakdown" holds consistently. Best-effort: a log failure never breaks the
+    caller's response. Skips silently when `pre` (the pre-update snapshot) is
+    missing — a transient get_spool blip — rather than logging fabricated
+    0.0g "before" values. Callers gate on a weight field actually being dirty
+    so non-weight edits never reach here. The L200 Prusament correction has its
+    own dedicated log and does NOT route through this.
+    """
+    if not pre:
+        return
+    try:
+        def _wf(d, k):
+            v = (d or {}).get(k)
+            return float(v) if isinstance(v, (int, float)) else 0.0
+        old_rem, new_rem = _wf(pre, 'remaining_weight'), _wf(post, 'remaining_weight')
+        old_used, new_used = _wf(pre, 'used_weight'), _wf(post, 'used_weight')
+        old_init, new_init = _wf(pre, 'initial_weight'), _wf(post, 'initial_weight')
+        total_note = (f"  [total {old_init:.1f}g ➔ {new_init:.1f}g]"
+                      if abs(old_init - new_init) >= 0.05 else "")
+        color = (spoolman_api.format_spool_display(post) or {}).get('color', '888888')
+        state.add_log_entry(
+            f"✏️ Weight updated — Spool #{spool_id}: "
+            f"[{old_rem:.1f}g ➔ {new_rem:.1f}g remaining] "
+            f"(used {old_used:.1f}g ➔ {new_used:.1f}g){total_note}",
+            "INFO", color)
+    except Exception as _log_e:
+        state.logger.warning(f"24.F weight-log skipped for spool {spool_id}: {_log_e}")
+
+
 @app.route('/api/edit_spool_wizard', methods=['POST'])
 def api_edit_spool_wizard():
     """Endpoint to handle natively editing Filaments and Spools from the Wizard Edit UI."""
@@ -1104,6 +1138,12 @@ def api_edit_spool_wizard():
                         "msg": f"Failed to update Spool {spool_id}: {err}",
                         "error": err,
                     })
+                # 24.F — the wizard edit-spool save is ALSO a manual weight surface.
+                # Log the before➔after breakdown when a weight field was dirty
+                # (`spool_data` is the dirty diff at this point; `original_spool` is
+                # the pre snapshot — None when get_spool blipped, handled by helper).
+                if any(k in spool_data for k in ("used_weight", "initial_weight")):
+                    _log_manual_weight_change(spool_id, original_spool, spool_res)
 
         # Update Filament Second (if applicable)
         if filament_id and filament_data:
@@ -1150,6 +1190,15 @@ def api_spool_update():
         if not res:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
             return jsonify({"status": "error", "msg": f"Failed to update spool: {err}", "error": err})
+
+        # 24.F — Manual weight adjustments leave a before➔after breakdown in the
+        # Activity Log. Fire ONLY when a weight field was actually requested so
+        # location/extra-only edits don't spam the log. `pre` is the pre-update
+        # snapshot fetched above; `res` is the live post-update spool dict (Spoolman
+        # may have clamped used_weight ≤ initial, so post values come from `res`).
+        # Shared with the wizard edit-spool save via _log_manual_weight_change.
+        if any(k in updates for k in ("used_weight", "initial_weight", "remaining_weight")):
+            _log_manual_weight_change(spool_id, pre, res)
 
         post_archived = bool(res.get('archived', False))
         auto_archived = (not pre_archived) and post_archived
