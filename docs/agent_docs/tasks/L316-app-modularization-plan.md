@@ -1,6 +1,6 @@
 # L316 — app.py Modularization Plan (the carve)
 
-**Status:** IN PROGRESS 2026-07-01 on `feature/l316-app-modularization`.
+**Status:** ✅ CARVE COMPLETE 2026-07-01 on `feature/l316-app-modularization` — all 11 extraction steps executed (commits `dcbf48a` → `8ac386e`); **app.py 7,429 → ~370 lines**. Steps 1–9 were clean scripted moves with zero-to-minor test repoints; steps 10+11 landed as one atomic commit (deduct/monitor cross-patching) with ~120 patch/assign sites repointed across 9 test files. CLAUDE.md gained the backend module map + patch-semantics rules. Final full-sweep verification vs the pinned 21-red baseline recorded below when complete.
 **Precondition (DONE):** characterization layer committed (`32c59ac`) — `test_route_table_pin.py` (77 routes + `app.<name>` reachability) + 12 `test_l316_charact_*.py` files (282 tests, all host-runnable/offline). Baseline full sweep pinned: **21 failed / 1770 passed / 12 skipped** (`RUN_INTEGRATION=1`, 2026-07-01 — all 21 are the known Group-26 test-infra debt; exact list in the session scratchpad `baseline_sweep.txt`). Coverage audit + patch-target inventory + per-seam refactor notes saved in the session scratchpad (`audit_extract.json`, `refactor_notes.md`).
 
 ## Architecture

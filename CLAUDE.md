@@ -26,7 +26,7 @@ Prod: Hosted on a TrueNAS server. Keep deployment, storage, and networking sugge
 - **Quick-Swap**: Location Manager → open a toolhead (Tool Head / MMU Slot / No MMU Direct Load) → "⚡ Quick-Swap Slots" grid aggregates every (box, slot) feeding that toolhead. Tap or keyboard-nav + Enter to swap. `Q` focuses the grid; arrow keys move; Enter triggers confirm overlay (inline div, never nested Swal).
 - **Keyboard shortcut reference**: `?` button in the dashboard title bar (or the `?` key anywhere outside inputs). Any new shortcut added elsewhere should call `window.registerShortcut({id, scope, keys, description})` in `static/js/modules/shortcuts_registry.js` so the overlay stays complete.
 - **Indxx forward-compat**: the model scales to an arbitrary number of toolheads by simply adding entries to `config.json:printer_map`. No schema change required for the planned Core One+ → indxx upgrade (8–10 toolheads).
-- **Legacy**: the old `config.json:feeder_map` key was retired in M7. A back-compat migration in `app.py` still runs on startup so any surviving install gets its entries imported into `slot_targets` automatically the first time it boots the new code.
+- **Legacy**: the old `config.json:feeder_map` key was retired in M7. A back-compat migration in `startup_migrations.py` (called from `app.py` at import) still runs on startup so any surviving install gets its entries imported into `slot_targets` automatically the first time it boots the new code.
 
 ## Project Conventions
 
@@ -49,6 +49,36 @@ Prod: Hosted on a TrueNAS server. Keep deployment, storage, and networking sugge
 - **Keyboard nav idiom**: arrow keys move a `.kb-active` class between focusable items (wraps at edges), Enter confirms, Escape cancels or prompts. Auto-focus the primary input when a modal opens. Force Location modal + Quick-Swap grid are reference implementations.
 - **Activity Log + Toasts**: every scan outcome (success, warning, error, partial) writes an Activity Log entry AND raises a toast. Error toasts use ≥7 s durations so blind-scanning failures don't slip past. Success toasts 4 s. `showToast(msg, type, duration)` where `type` is one of `success` / `error` / `warning` / `info`.
 
+## Backend module map (L316 modularization, 2026-07-01)
+
+`app.py` (7,429 lines pre-carve) was split into flat modules at the `inventory-hub/` root. `app.py` (~370 lines) is now the orchestrator + compatibility namespace: build-version machinery + the `/` dashboard route, the startup-migration calls, one import per module (which registers its routes), a re-export block per module (so `app.<name>` keeps working for tests and cross-module callers), and the `__main__` launch block.
+
+| Module | Owns |
+|--------|------|
+| `app_core.py` | The Flask `app` object + the Cache-Control after_request hook. Route modules do `from app_core import app`. |
+| `startup_migrations.py` | The six idempotent locations.json migrations + backup prune + pending-cancel-review re-surface, called from app.py at import. |
+| `labels_csv.py` | Label/text helpers (emoji map, hex/color/type resolution, flatten_json), `_write_label_csv`, and the three label endpoints. |
+| `routes_locations.py` | `/api/locations` synthesizer, location save/delete, spool/filament delete, merge, undo, contents/details. |
+| `routes_inventory.py` | Vendor CRUD, read proxies, FIELD_ORDER schema cluster, wizard create/edit, `/api/spool/update`, external + global search. |
+| `routes_scan.py` | `api_identify_scan` dispatcher, buffer/clear, manage_contents, update_filament + edit-log formatter, the Prusament cluster + apply_weights. |
+| `routes_bindings.py` | Dryer-box bindings/slot-order, printer state/map/creds, Quick-Swap, machine toolhead_slots. |
+| `routes_print_queue.py` | Queue pending/mark_printed/set_flag + flag_spool_labels. |
+| `routes_config_attrs.py` | L18 config GET/PUT/export/import + the L58 filament-attributes manager. |
+| `print_deduct.py` | The FCC-native deduct engine (cancel/completion, review pipeline, cancel_deduct routes, smart_move, `_resolve_active_locs_for_printer`). |
+| `print_monitor.py` | `_PRINT_TRACKER` latch, edge handlers, the cancel-monitor daemon, restart recovery, boot creds seed. Imports `print_deduct` (one-way). No routes. |
+| `routes_state_pulse.py` | audit_session + audit-idle watchdog + `/api/logs`, persistence routes, pulse sections, `/api/dashboard_pulse`. |
+
+Rules that keep the test suite's patch semantics intact (violating these silently rots tests — they stop intercepting without failing):
+
+- **Module-qualified collaborator calls only** (`spoolman_api.update_spool(...)`, `state.add_log_entry(...)`); NEVER `from spoolman_api import update_spool` — tests patch attributes on the shared module objects.
+- **`spoolman_api.LAST_SPOOLMAN_ERROR` is always an attribute read**, adjacent to the failing call.
+- **Patch a private helper on its DEFINING module** (`patch.object(print_deduct, '_apply_usage_to_printer')`), not on `app` — app's re-exports serve reads/direct calls only; internal callers resolve names from their own module globals.
+- **New backend modules stay FLAT at `inventory-hub/` root** — `tests/test_no_direct_extra_patch.py` scans `*.py` non-recursively, and the deploy/Dockerfile (`COPY . /app`) needs no change for flat files.
+- **Nothing may start the cancel-monitor daemon at import** — the spawn + creds seed live under app.py's `__main__` only.
+- **Source-text canaries** use `tests/source_family.py:read_app_family()` (app.py + all carve modules) — never grep app.py alone.
+- The route table is pinned by `tests/test_route_table_pin.py` (all 77 routes + strict `app.<name>` identity). Adding/removing a route means updating the pin deliberately.
+- Container runtime is **Python 3.9** — no 3.10+ syntax in backend modules.
+
 ## Spool / Filament write surfaces
 
 Every code path that calls `spoolman_api.update_spool` or `update_filament` has the same two failure modes: (1) Spoolman replaces the whole `extra` dict on PATCH so partial payloads silently wipe siblings; (2) on rejection both functions return `None` and most callers don't surface the actual error body. Both are the root of the 2026-04-26 / 2026-04-27 prod outages.
@@ -63,25 +93,25 @@ Conventions every write surface MUST follow:
 
 Inventory of current production write surfaces (keep this list updated when adding new ones):
 
-| File:Line | Endpoint / Function | Notes |
-|-----------|--------------------|-------|
-| `app.py:1095` | `api_edit_spool_wizard` spool save | Uses `compute_dirty_extras` with SYSTEM_MANAGED_EXTRAS guard. |
-| `app.py:1106` | `api_edit_spool_wizard` filament save | Surfaces `LAST_SPOOLMAN_ERROR` in response JSON. |
-| `app.py:1932` | `/api/locations` cascade unassign | Best-effort fire-and-forget; logs each failure. |
-| `app.py:1145` | `/api/spool/update` generic partial update | `update_spool` (read-merge-write extras + `used_weight ≤ initial_weight` cap + auto-archive/unarchive on remaining); surfaces `LAST_SPOOLMAN_ERROR` in the `error`/`msg` response fields. ⚠️ Sending `initial_weight` here runs `_auto_archive_on_empty`/`_auto_unarchive_on_refill` — a too-low total can silently archive+unassign a loaded spool. The L200 path deliberately does NOT use this; see the dedicated endpoint below. |
-| `app.py:1227` | `/api/spool/prusament_apply_weights` (L200) | Confirm-apply for the Prusament-scan spool-weight correction. RE-VALIDATES against the live spool (refuses if archived, or if the new total would leave remaining ≤ ~0 and trip auto-archive), writes only `initial_weight`/`spool_weight` via `update_spool_or_raise` (used_weight preserved). Returns `status: success`/`blocked`/`error`. Hardened per the 2026-06-05 adversarial review. |
-| `app.py:2221` | `/api/update_filament` quick-edit | Reference impl — surfaces error in response JSON. |
-| `app.py:2718` | spool label-confirm scan | Logs ERROR with Spoolman body; emits "already verified" info path. |
-| `app.py:2791` | filament label-confirm scan | Same pattern as spool side. |
-| `app.py:3723` | `/api/print_queue/mark_printed` (spool) | Returns Spoolman error in response. |
-| `app.py:3734` | `/api/print_queue/mark_printed` (filament) | Returns Spoolman error in response. |
-| `app.py:3758` | `/api/print_queue/set_flag` (spool) | Returns Spoolman error in response. |
-| `app.py:3768` | `/api/print_queue/set_flag` (filament) | Returns Spoolman error in response. |
-| `app.py:~3890` | `/api/filament/<id>/flag_spool_labels` (Group 23.3) | Light label-invalidation: raises `needs_label_print` on a filament's UNARCHIVED spools when a spool-label-visible filament field (Brand/Type/Color-name, NOT hex) changed. Partial extra via `update_spool` (siblings preserved, no archive side-effect — no weight fields); per-spool best-effort + `errors[]` in response. |
-| `app.py:4014` | `/api/backfill_spool_weights` | Per-spool `errors` list in response. |
-| `app.py:4087` | print deduct — `_apply_usage_to_printer` | **FCC-native print-usage deduct** (replaced the FilaBridge auto-deduct in the 2026-06-13 Phase-2 cutover). Writes `used_weight` via `update_spool` per toolhead; the shared primitive for BOTH the cancelled-print partial deduct (`deduct_cancelled_print`, app.py:4218 — decode `.bgcode` + per-tool prefix-parse to the cancel/M73 point) AND the FINISHED completion deduct. Exactly-once via `print_deduct_ledger`; activity-log on failure. |
-| `app.py:4638` | cancel/ambiguous-review confirm-apply | User-confirmed deduct: re-reads CURRENT `used_weight` (so a weigh-out between preview and confirm isn't clobbered), clamps grams to real remaining, writes `used_weight` via `update_spool`; activity-log on success/failure. |
-| `app.py:679` | `PATCH /api/vendors/<id>` Vendor Edit modal save | Uses `update_vendor_or_raise`; merges `extra` against existing record so partial PATCH preserves siblings; activity log on both success and rejection; surfaces Spoolman error body in response JSON for the modal to toast at 7s. |
+| Module (post-L316) | Endpoint / Function | Notes |
+|--------------------|--------------------|-------|
+| `routes_inventory.py` | `api_edit_spool_wizard` spool save | Uses `compute_dirty_extras` with SYSTEM_MANAGED_EXTRAS guard. |
+| `routes_inventory.py` | `api_edit_spool_wizard` filament save | Surfaces `LAST_SPOOLMAN_ERROR` in response JSON. |
+| `routes_locations.py` | `/api/locations` cascade unassign | Best-effort fire-and-forget; logs each failure. |
+| `routes_inventory.py` | `/api/spool/update` generic partial update | `update_spool` (read-merge-write extras + `used_weight ≤ initial_weight` cap + auto-archive/unarchive on remaining); surfaces `LAST_SPOOLMAN_ERROR` in the `error`/`msg` response fields. ⚠️ Sending `initial_weight` here runs `_auto_archive_on_empty`/`_auto_unarchive_on_refill` — a too-low total can silently archive+unassign a loaded spool. The L200 path deliberately does NOT use this; see the dedicated endpoint below. |
+| `routes_scan.py` | `/api/spool/prusament_apply_weights` (L200) | Confirm-apply for the Prusament-scan spool-weight correction. RE-VALIDATES against the live spool (refuses if archived, or if the new total would leave remaining ≤ ~0 and trip auto-archive), writes only `initial_weight`/`spool_weight` via `update_spool_or_raise` (used_weight preserved). Returns `status: success`/`blocked`/`error`. Hardened per the 2026-06-05 adversarial review. |
+| `routes_scan.py` | `/api/update_filament` quick-edit | Reference impl — surfaces error in response JSON. |
+| `routes_scan.py` | spool label-confirm scan (in `api_identify_scan`) | Logs ERROR with Spoolman body; emits "already verified" info path. |
+| `routes_scan.py` | filament label-confirm scan (in `api_identify_scan`) | Same pattern as spool side. |
+| `routes_print_queue.py` | `/api/print_queue/mark_printed` (spool) | Returns Spoolman error in response. |
+| `routes_print_queue.py` | `/api/print_queue/mark_printed` (filament) | Returns Spoolman error in response. |
+| `routes_print_queue.py` | `/api/print_queue/set_flag` (spool) | Returns Spoolman error in response. |
+| `routes_print_queue.py` | `/api/print_queue/set_flag` (filament) | Returns Spoolman error in response. |
+| `routes_print_queue.py` | `/api/filament/<id>/flag_spool_labels` (Group 23.3) | Light label-invalidation: raises `needs_label_print` on a filament's UNARCHIVED spools when a spool-label-visible filament field (Brand/Type/Color-name, NOT hex) changed. Partial extra via `update_spool` (siblings preserved, no archive side-effect — no weight fields); per-spool best-effort + `errors[]` in response. |
+| `print_deduct.py` | `/api/backfill_spool_weights` | Per-spool `errors` list in response. |
+| `print_deduct.py` | print deduct — `_apply_usage_to_printer` | **FCC-native print-usage deduct** (replaced the FilaBridge auto-deduct in the 2026-06-13 Phase-2 cutover). Writes `used_weight` via `update_spool` per toolhead; the shared primitive for BOTH the cancelled-print partial deduct (`deduct_cancelled_print` — decode `.bgcode` + per-tool prefix-parse to the cancel/M73 point) AND the FINISHED completion deduct. Exactly-once via `print_deduct_ledger`; activity-log on failure. |
+| `print_deduct.py` | cancel/ambiguous-review confirm-apply (`api_cancel_deduct_confirm`) | User-confirmed deduct: re-reads CURRENT `used_weight` (so a weigh-out between preview and confirm isn't clobbered), clamps grams to real remaining, writes `used_weight` via `update_spool`; activity-log on success/failure. |
+| `routes_inventory.py` | `PATCH /api/vendors/<id>` Vendor Edit modal save | Uses `update_vendor_or_raise`; merges `extra` against existing record so partial PATCH preserves siblings; activity log on both success and rejection; surfaces Spoolman error body in response JSON for the modal to toast at 7s. |
 | `logic.py:524` | `perform_smart_move` unseat existing | Read-merge-write reference impl; logs failure. |
 | `logic.py:575` | `perform_smart_move` toolhead branch | Activity log on failure with Spoolman body. |
 | `logic.py:603` | `perform_smart_move` dryer branch | Activity log on failure. |
@@ -93,7 +123,7 @@ Inventory of current production write surfaces (keep this list updated when addi
 
 ### Weight-entry surfaces (known fragmentation hot-spot)
 
-Within the table above, the weight-touching entries are themselves a fragmented sub-system: `app.py:3723` (mark_printed), `app.py:4014` (backfill), `app.py:4087`/`4638` (FCC-native print deduct `_apply_usage_to_printer` + cancel-review confirm — replaced the retired FilaBridge deduct paths), plus the frontend modals (`inv_weigh_out.js` weigh-out, `inv_wizard.js` empty-weight fields, `inv_details.js` post-archive prompt + filament edit). Each accepts a slightly different input form (gross / net / additive / delta / field-only) with inconsistent terminology and inconsistent empty-spool-weight resolution.
+Within the table above, the weight-touching entries are themselves a fragmented sub-system: `routes_print_queue.py` (mark_printed), `print_deduct.py` (backfill + the FCC-native print deduct `_apply_usage_to_printer` + cancel-review confirm — replaced the retired FilaBridge deduct paths), plus the frontend modals (`inv_weigh_out.js` weigh-out, `inv_wizard.js` empty-weight fields, `inv_details.js` post-archive prompt + filament edit). Each accepts a slightly different input form (gross / net / additive / delta / field-only) with inconsistent terminology and inconsistent empty-spool-weight resolution.
 
 Phase 1 (current branch) extracted `resolveEmptySpoolWeight` into `static/js/modules/weight_utils.js` so the cascade has one canonical home. Phase 2 (separate branch — see `Feature-Buglist.md` "Unified weight-entry component") will build a single `<WeightEntry>`-style component reused by every weight surface, with mode-aware input (gross / net / additive / delta), shared missing-empty-weight prompt, and a preview of the computed `used_weight` before submit. **Don't add new weight-entry UI before Phase 2** — feed any new requirements into that design instead.
 
