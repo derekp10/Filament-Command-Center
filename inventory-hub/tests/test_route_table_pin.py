@@ -134,6 +134,7 @@ def test_every_handler_reachable_via_app_module():
             f"app.{name} not reachable — moved without a compatibility re-export?"
         )
         view = app_module.app.view_functions[rule.endpoint]
-        assert getattr(app_module, name) is view or callable(getattr(app_module, name)), (
-            f"app.{name} exists but is not the registered view function"
+        assert getattr(app_module, name) is view, (
+            f"app.{name} is not the registered view function — a re-export "
+            f"points at the wrong callable (stale copy / wrapper / shadowed name)"
         )

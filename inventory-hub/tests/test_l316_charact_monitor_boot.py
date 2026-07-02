@@ -424,9 +424,17 @@ def test_monitor_loop_recovery_failure_does_not_prevent_ticks():
         order.append("tick")
         raise _StopLoop()  # BaseException -> escapes the Exception guard
 
+    # Backstop escape: if the tick patch ever stops intercepting (the exact
+    # carve failure mode this suite guards) the loop would otherwise spin
+    # forever with REAL 30s sleeps and hang the whole sweep — a patched
+    # sleep turns that into a fast _StopLoop failure instead.
+    def _sleep_escape(_secs):
+        raise _StopLoop()
+
     with patch.object(app_module, "_recover_print_tracker_on_start",
                       side_effect=RuntimeError("recovery boom")), \
          patch.object(app_module, "_cancel_monitor_tick", side_effect=fake_tick), \
+         patch.object(app_module.time, "sleep", _sleep_escape), \
          patch.object(app_module.state, "logger", MagicMock()) as logger:
         with pytest.raises(_StopLoop):
             app_module._cancel_monitor_loop()
