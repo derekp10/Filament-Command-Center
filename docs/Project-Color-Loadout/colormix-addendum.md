@@ -16,6 +16,19 @@
   `;COLOR_CHANGE`/M600. So the sliced output is standard multi-tool G-code with a per-tool
   `; filament used [g]` footer (verified shape: `; filament used [g] = 0.00, 6.35, 0.00, 0.00, 0.00`).
 
+## ⚠️ ColorMix is NOT the Group 22.3(b) case — do not conflate them
+
+Two genuinely different problems:
+
+| | **ColorMix (this addendum)** | **Group 22.3(b) (the deduct task)** |
+|---|---|---|
+| What happens | 2–3 spools **already loaded at once** (separate XL toolheads / MMU slots); printer **alternates automatically** per-layer | ONE toolhead; **you physically swap a *different* spool onto it** mid-print (coded `M600`/Color-Change on a single extruder, or a runout replacement) |
+| Is a spool swapped? | **No** — every constituent stays bound to its toolhead the whole print | **Yes** — the same toolhead holds spool A, then spool B, … over time |
+| Deduct today | ✅ **Handled** — per-tool `; filament used [g]` footer already attributes each constituent's grams to its bound spool (XL toolchanger; MMU caveat below) | ❌ **The hard, deferred problem** — one toolhead's grams must be **split** across the spools that occupied it, via swap-detection + per-segment E-integration |
+| Validation needs | A real ColorMix `.3mf`/`.bgcode` (checklist below) | Derek's **single-extruder M600 capture** — a *separate* experiment (task file `22-…md` §22.3(b), lines 89-96) |
+
+**The only place they touch:** if a ColorMix **constituent runs out** mid-print and you swap that one roll, THAT roll-swap is an ordinary 22.3(b) runout event — a runout like any other, nothing ColorMix-specific. ColorMix *itself* (all constituents loaded, no runout) never invokes 22.3(b).
+
 ## Impact on the existing L391 design, by phase
 
 | Phase | Original assumption | ColorMix change |
@@ -48,6 +61,11 @@ searching combinations + ratios and computing the integrated (area-weighted) col
   per-tool, so the per-tool `; filament used [g]` footer maps each constituent's grams to its bound
   spool with **no new deduct code** — the same mechanism any multi-tool XL print uses. L391's job is
   the *planning/shortage* side (before the print), not the deduct (after).
+  - ⚠️ **MMU caveat:** ColorMix on an **MMU** (single nozzle, N slots → ONE physical toolhead
+    position) hits the same "N footer indices, one position" mapping-collapse the single-extruder
+    M600 case does (task file §22.3(b), scenario-1 gotcha) — so per-slot attribution there is NOT
+    automatic and must be verified. Derek's **XL is a toolchanger** (each color on its own physical
+    position), so the common case IS cleanly handled; this caveat only bites a future MMU-ColorMix.
 
 ## What's machine-readable TODAY (checked 2026-07-02) vs. needs a real slice
 
@@ -71,6 +89,10 @@ searching combinations + ratios and computing the integrated (area-weighted) col
    stored — this is the Phase-2 parser input.
 5. Weigh the real per-color result if feasible, to validate the consumption-split math.
 
-This same capture also settles the **Group 22.3(b)** open question (does `;COLOR_CHANGE` survive the
-decode for the *single-extruder* M600 case) — general comments already proven to survive
-(`; prepare for purge` came through the decode intact).
+**This ColorMix capture does NOT validate Group 22.3(b).** ColorMix (toolchanger/MMU) emits `Tn` tool
+changes, not `;COLOR_CHANGE`/`M600`, so a ColorMix slice contains no color-change markers to test —
+22.3(b) needs Derek's separate **single-extruder M600 / "Color Change" capture** (its own checklist in
+`tasks/22-…md` §22.3(b)). The one useful cross-over data point already in hand: general comments **do**
+survive the bgcode decode (`; prepare for purge` came through the existing single-tool fixture intact),
+which *raises confidence* that `;COLOR_CHANGE` will survive too — but that still has to be confirmed on
+a real single-extruder color-change slice, not here.
