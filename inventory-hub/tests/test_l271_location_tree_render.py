@@ -32,7 +32,10 @@ def test_synthesized_rows_expose_parent_id():
     """The 3 synthesized /api/locations rows (synthetic Virtual Room,
     Unassigned, UNKNOWN) each carry parent_id:None so the frontend reads
     row.parent_id uniformly."""
-    app = _read("app.py")
+    # L316: the synthesizer moves to routes_locations.py — read the whole
+    # app-module family (see tests/source_family.py).
+    import source_family
+    app = source_family.read_app_family()
     assert app.count('"parent_id": None') >= 3
 
 
@@ -40,7 +43,8 @@ def test_post_stamps_immediate_parent():
     """Phase 3.5: api_save_location stamps the IMMEDIATE parent at write time
     (longest existing-row prefix), while the Spoolman-native synthesized row
     still derives the flat prefix."""
-    app = _read("app.py")
+    import source_family
+    app = source_family.read_app_family()
     assert "locations_db.immediate_parent_for(" in app, (
         "api_save_location must stamp the immediate parent at write time"
     )

@@ -18,9 +18,11 @@ import locations_db
 
 
 def _read_app():
-    here = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    with open(os.path.join(here, "app.py"), "r", encoding="utf-8") as f:
-        return f.read()
+    """Concatenated source of app.py + the L316 carve modules — the blocks
+    these canaries grep for now live across several flat modules extracted
+    from app.py. See tests/source_family.py."""
+    import source_family
+    return source_family.read_app_family()
 
 
 PRINTER_MAP = {
