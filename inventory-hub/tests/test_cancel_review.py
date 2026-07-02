@@ -16,7 +16,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app as app_module  # noqa: E402
+import app as app_module
+import print_deduct  # L316: patch targets / live seams for moved symbols
+import print_monitor  # L316: live mutable-seam values  # noqa: E402
 import cancel_review_store  # noqa: E402
 import cancel_fetch_store  # noqa: E402
 import print_deduct_ledger  # noqa: E402
@@ -246,7 +248,7 @@ def test_confirm_no_spool_reresolves_and_applies():
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.locations_db, "get_active_printer_map",
                       return_value={"XL-1": {"printer_name": "XL", "position": 0}}), \
-         patch.object(app_module, "_resolve_active_locs_for_printer",
+         patch.object(print_deduct, "_resolve_active_locs_for_printer",
                       return_value=[("XL-1", {"position": 0})]), \
          patch.object(app_module.spoolman_api, "get_spools_at_location",
                       side_effect=lambda loc: [100] if str(loc).upper() == "XL-1" else []), \
@@ -275,9 +277,9 @@ def test_confirm_no_spool_partial_apply_warns_shortfall():
         "total_grams": 30.0, "spools": [], "kind": "no_spool",
         "usage_map": {"0": 20.0, "1": 10.0}, "created": "2026-06-13 00:00:00"})
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
-         patch.object(app_module, "_resolve_usage_to_spools",
+         patch.object(print_deduct, "_resolve_usage_to_spools",
                       return_value=[{"sid": 100, "grams": 20.0, "position": 0, "toolhead": "XL-1"}]), \
-         patch.object(app_module, "_apply_usage_to_printer",
+         patch.object(print_deduct, "_apply_usage_to_printer",
                       return_value=(1, [{"sid": 100, "grams": 20.0, "remaining": 880.0}], {0, 1})), \
          patch.object(app_module.state, "add_log_entry") as log:
         r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
@@ -300,7 +302,7 @@ def test_apply_usage_records_clamped_grams_not_requested():
     printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
     spools = {100: {"id": 100, "used_weight": 995.0, "initial_weight": 1000.0}}  # 5g remaining
     with patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map), \
-         patch.object(app_module, "_resolve_active_locs_for_printer",
+         patch.object(print_deduct, "_resolve_active_locs_for_printer",
                       return_value=[("XL-1", {"position": 0})]), \
          patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=lambda loc: [100]), \
          patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))), \
@@ -322,7 +324,7 @@ def test_confirm_no_spool_unexpected_raise_restashes_review():
         "printer_name": "XL", "job_id": "NS-R", "filename": "f.gcode", "progress": 1.0,
         "total_grams": 20.0, "spools": [], "kind": "no_spool",
         "usage_map": {"0": 20.0}, "created": "2026-06-13 00:00:00"})
-    with patch.object(app_module, "_confirm_no_spool_review", side_effect=RuntimeError("boom")), \
+    with patch.object(print_deduct, "_confirm_no_spool_review", side_effect=RuntimeError("boom")), \
          patch.object(app_module.state, "add_log_entry"):
         r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
                                                json={"printer_name": "XL", "job_id": "NS-R", "updates": {}})
@@ -355,7 +357,7 @@ def test_confirm_no_spool_still_unbound_restashes_no_ledger():
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.locations_db, "get_active_printer_map",
                       return_value={"XL-1": {"printer_name": "XL", "position": 0}}), \
-         patch.object(app_module, "_resolve_active_locs_for_printer",
+         patch.object(print_deduct, "_resolve_active_locs_for_printer",
                       return_value=[("XL-1", {"position": 0})]), \
          patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=lambda loc: []), \
          patch.object(app_module.spoolman_api, "update_spool",
@@ -415,7 +417,7 @@ def test_resolve_usage_merges_same_spool_across_positions():
     usage_map = {3: 0.84, 4: 0.81}   # both positions feed the SAME spool #230
     spools = {230: {"id": 230, "used_weight": 700.0, "initial_weight": 1258.0}}
     with patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map), \
-         patch.object(app_module, "_resolve_active_locs_for_printer",
+         patch.object(print_deduct, "_resolve_active_locs_for_printer",
                       return_value=[("XL-4", {"position": 3}), ("XL-5", {"position": 4})]), \
          patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=lambda loc: [230]), \
          patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))), \
@@ -441,7 +443,7 @@ def test_resolve_usage_distinct_spools_stay_separate():
               200: {"id": 200, "used_weight": 50.0, "initial_weight": 1000.0}}
     at = {"XL-1": [100], "XL-2": [200]}
     with patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map), \
-         patch.object(app_module, "_resolve_active_locs_for_printer",
+         patch.object(print_deduct, "_resolve_active_locs_for_printer",
                       return_value=[("XL-1", {"position": 0}), ("XL-2", {"position": 1})]), \
          patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=lambda loc: at.get(str(loc).upper(), [])), \
          patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))), \
@@ -481,7 +483,7 @@ def test_process_fetch_gated_off_while_locked():
     for st in ({"state": "STOPPED"}, {"state": "PRINTING"}, None):
         cancel_fetch_store.add_pending({"printer_name": "XL", "job_id": "G-1",
             "filename": "f.gcode", "progress": 0.5, "first_seen": time.time(), "attempts": 1})
-        with patch.object(app_module, "_create_pending_cancel_review") as cpr:
+        with patch.object(print_deduct, "_create_pending_cancel_review") as cpr:
             app_module._process_pending_cancel_fetches({"XL": st}, "http://fb")
             cpr.assert_not_called()
         assert cancel_fetch_store.has_pending("XL", "G-1") is True
@@ -511,7 +513,7 @@ def test_process_fetch_locked_then_unlocks_across_ticks():
     spools = {100: {"id": 100, "used_weight": 100.0, "initial_weight": 1000.0}}
     _queue("T-1", progress=frac)
     # tick 1 — still STOPPED (locked): no attempt, stays queued
-    with patch.object(app_module, "_create_pending_cancel_review") as cpr:
+    with patch.object(print_deduct, "_create_pending_cancel_review") as cpr:
         app_module._process_pending_cancel_fetches({"XL": {"state": "STOPPED"}}, "http://fb")
         cpr.assert_not_called()
     assert cancel_fetch_store.has_pending("XL", "T-1") is True
@@ -544,15 +546,15 @@ def test_process_fetch_still_locked_when_idle_stays_queued():
 def test_process_fetch_resolved_in_ledger_drops_entry():
     _queue("R-1")
     print_deduct_ledger.record_deduct("XL", "R-1", filename="f.gcode")
-    with patch.object(app_module, "_create_pending_cancel_review") as cpr:
+    with patch.object(print_deduct, "_create_pending_cancel_review") as cpr:
         app_module._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
         cpr.assert_not_called()   # already processed → no re-compute
     assert cancel_fetch_store.has_pending("XL", "R-1") is False
 
 
 def test_process_fetch_max_age_gives_up_and_records():
-    _queue("M-1", first_seen=time.time() - app_module._CANCEL_FETCH_MAX_AGE_S - 10)
-    with patch.object(app_module, "_create_pending_cancel_review") as cpr, \
+    _queue("M-1", first_seen=time.time() - print_monitor._CANCEL_FETCH_MAX_AGE_S - 10)
+    with patch.object(print_deduct, "_create_pending_cancel_review") as cpr, \
          patch.object(app_module.state, "add_log_entry") as log:
         app_module._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
         cpr.assert_not_called()

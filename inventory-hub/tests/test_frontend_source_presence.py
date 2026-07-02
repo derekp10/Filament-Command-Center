@@ -79,6 +79,10 @@ def test_inv_weigh_out_logic_exists():
 
 
 def test_app_spools_by_filament_allow_archived():
-    """Ensures app.py handles allow_archived fallback for spools_by_filament."""
-    content = _read("app.py")
+    """Ensures the backend handles allow_archived fallback for spools_by_filament.
+
+    L316: the handler moves to print_deduct.py — read the whole app-module
+    family (see tests/source_family.py)."""
+    import source_family
+    content = source_family.read_app_family()
     assert "allow_archived = request.args.get('allow_archived'," in content, "Missing allow_archived query param parser"

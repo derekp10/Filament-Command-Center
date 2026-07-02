@@ -21,7 +21,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app as app_module  # noqa: E402
+import app as app_module
+import labels_csv  # L316 step 3: moved-symbol patch targets live here now  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -106,9 +107,9 @@ def _stub_label_helpers(monkeypatch):
     """Decouple the endpoint test from label data-extraction internals."""
     monkeypatch.setattr(app_module.spoolman_api, "get_spool", lambda sid: _fake_spool(sid))
     monkeypatch.setattr(app_module.config_loader, "load_config", lambda: {})
-    monkeypatch.setattr(app_module, "get_color_name", lambda f: "TestColor")
-    monkeypatch.setattr(app_module, "get_smart_type", lambda m, e: "PLA")
-    monkeypatch.setattr(app_module, "get_best_hex", lambda f: "AABBCC")
+    monkeypatch.setattr(labels_csv, "get_color_name", lambda f: "TestColor")
+    monkeypatch.setattr(labels_csv, "get_smart_type", lambda m, e: "PLA")
+    monkeypatch.setattr(labels_csv, "get_best_hex", lambda f: "AABBCC")
 
 
 def test_endpoint_surfaces_lock_loudly(client, monkeypatch):
@@ -118,7 +119,7 @@ def test_endpoint_surfaces_lock_loudly(client, monkeypatch):
     def _locked(*a, **k):
         raise PermissionError(13, "locked")
 
-    monkeypatch.setattr(app_module, "_write_label_csv", _locked)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", _locked)
     monkeypatch.setattr(app_module.state, "add_log_entry", lambda msg, *a, **k: logs.append((msg,) + tuple(a)))
 
     resp = client.post("/api/print_batch_csv", json={"ids": [1], "mode": "spool", "clear_old": True})
@@ -140,7 +141,7 @@ def test_endpoint_logs_success(client, monkeypatch):
         captured["rows"] = list(rows)
         captured["overwrite"] = overwrite
 
-    monkeypatch.setattr(app_module, "_write_label_csv", _capture)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", _capture)
     monkeypatch.setattr(app_module.state, "add_log_entry", lambda msg, *a, **k: logs.append((msg,) + tuple(a)))
 
     resp = client.post("/api/print_batch_csv", json={"ids": [1, 2], "mode": "spool", "clear_old": True})
