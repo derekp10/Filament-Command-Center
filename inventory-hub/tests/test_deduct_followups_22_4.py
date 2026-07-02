@@ -29,7 +29,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app as app_module  # noqa: E402
+import app as app_module
+import print_deduct  # L316: patch targets / live seams for moved symbols
+import print_monitor  # L316: patch targets for moved symbols  # noqa: E402
 import spoolman_api  # noqa: E402
 import print_deduct_ledger  # noqa: E402
 import cancel_review_store  # noqa: E402
@@ -39,12 +41,12 @@ import cancel_fetch_store  # noqa: E402
 @pytest.fixture(autouse=True)
 def _reset_tracker():
     app_module._PRINT_TRACKER.clear()
-    prev_async = app_module._CANCEL_DEDUCT_RUN_ASYNC
-    app_module._CANCEL_DEDUCT_RUN_ASYNC = False  # synchronous dispatch
+    prev_async = print_monitor._CANCEL_DEDUCT_RUN_ASYNC
+    print_monitor._CANCEL_DEDUCT_RUN_ASYNC = False  # synchronous dispatch
     try:
         yield
     finally:
-        app_module._CANCEL_DEDUCT_RUN_ASYNC = prev_async
+        print_monitor._CANCEL_DEDUCT_RUN_ASYNC = prev_async
         app_module._PRINT_TRACKER.clear()
 
 
@@ -83,7 +85,7 @@ def _apply_ctx(printer_map, active_locs, detailed_at, spools, logs=None):
 
     ctx = [
         patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map),
-        patch.object(app_module, "_resolve_active_locs_for_printer", return_value=active_locs),
+        patch.object(print_deduct, "_resolve_active_locs_for_printer", return_value=active_locs),
         patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=_ids),
         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed",
                      side_effect=lambda loc: detailed_at.get(str(loc).upper(), [])),
@@ -467,7 +469,7 @@ def _latch(printer, state, job, fb="http://fb"):
 def test_live_ambiguous_unsampled_routes_progress_unknown():
     # PRINTING with progress=None → latch has filename but NO 'progress' key.
     _latch("XL", "PRINTING", {"filename": "f.gcode", "job_id": 7, "progress": None})
-    with patch.object(app_module, "_dispatch_ambiguous_edge") as disp:
+    with patch.object(print_monitor, "_dispatch_ambiguous_edge") as disp:
         app_module._track_print_edge("XL", {"state": "IDLE"}, "http://fb")
     disp.assert_called_once()
     assert disp.call_args.kwargs.get("progress_unknown") is True
@@ -475,7 +477,7 @@ def test_live_ambiguous_unsampled_routes_progress_unknown():
 
 def test_live_ambiguous_sampled_routes_normal():
     _latch("XL", "PRINTING", {"filename": "f.gcode", "job_id": 7, "progress": 0.5})
-    with patch.object(app_module, "_dispatch_ambiguous_edge") as disp:
+    with patch.object(print_monitor, "_dispatch_ambiguous_edge") as disp:
         app_module._track_print_edge("XL", {"state": "IDLE"}, "http://fb")
     disp.assert_called_once()
     assert disp.call_args.kwargs.get("progress_unknown") is False
@@ -487,7 +489,7 @@ def test_recover_idle_unsampled_progress_unknown():
     # one, so construct it literally) → unsampled → progress_unknown=True.
     entry = {"state": "PRINTING", "job_id": 7, "filename": "f.gcode"}
     with patch.object(app_module.prusalink_api, "get_printer_state", return_value={"state": "IDLE"}), \
-         patch.object(app_module, "_dispatch_ambiguous_edge") as disp, \
+         patch.object(print_monitor, "_dispatch_ambiguous_edge") as disp, \
          patch.object(app_module.state, "add_log_entry"):
         acted = app_module._recover_one_print_latch("XL", entry, "http://fb")
     assert acted is True
@@ -498,7 +500,7 @@ def test_recover_idle_unsampled_progress_unknown():
 def test_recover_idle_sampled_normal():
     entry = {"state": "PRINTING", "job_id": 7, "filename": "f.gcode", "progress": 0.6}
     with patch.object(app_module.prusalink_api, "get_printer_state", return_value={"state": "IDLE"}), \
-         patch.object(app_module, "_dispatch_ambiguous_edge") as disp, \
+         patch.object(print_monitor, "_dispatch_ambiguous_edge") as disp, \
          patch.object(app_module.state, "add_log_entry"):
         app_module._recover_one_print_latch("XL", entry, "http://fb")
     disp.assert_called_once()

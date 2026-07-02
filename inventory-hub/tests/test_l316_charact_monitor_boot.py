@@ -29,7 +29,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app as app_module  # noqa: E402
+import app as app_module
+import startup_migrations  # L316: the seed calls the prune helper module-qualified
+import print_monitor  # L316: patch targets for moved symbols  # noqa: E402
 import state  # noqa: E402
 
 
@@ -238,7 +240,7 @@ def test_seed_happy_path_backup_prune_save_and_log():
                       return_value=(migrated, True)) as seed, \
          patch.object(app_module.locations_db, "save_locations_list",
                       return_value=True) as save, \
-         patch.object(app_module, "_prune_locations_backups") as prune, \
+         patch.object(startup_migrations, "_prune_locations_backups") as prune, \
          patch("shutil.copy2") as copy2, \
          patch.object(app_module.state, "logger", MagicMock()) as logger:
         app_module._seed_printer_credentials_from_filabridge()
@@ -271,7 +273,7 @@ def test_seed_save_failure_logs_error_no_exception():
                       return_value=(rows, True)), \
          patch.object(app_module.locations_db, "save_locations_list",
                       return_value=False), \
-         patch.object(app_module, "_prune_locations_backups"), \
+         patch.object(startup_migrations, "_prune_locations_backups"), \
          patch("shutil.copy2"), \
          patch.object(app_module.state, "logger", MagicMock()) as logger:
         app_module._seed_printer_credentials_from_filabridge()  # must not raise
@@ -317,7 +319,7 @@ def test_seed_backup_failure_still_saves():
                       return_value=(migrated, True)), \
          patch.object(app_module.locations_db, "save_locations_list",
                       return_value=True) as save, \
-         patch.object(app_module, "_prune_locations_backups") as prune, \
+         patch.object(startup_migrations, "_prune_locations_backups") as prune, \
          patch("shutil.copy2", side_effect=OSError("disk full")), \
          patch.object(app_module.state, "logger", MagicMock()) as logger:
         app_module._seed_printer_credentials_from_filabridge()
@@ -393,9 +395,9 @@ def test_monitor_loop_recovery_first_tick_error_swallowed_adaptive_sleep():
         if len(sleeps) >= 3:
             raise _StopLoop()
 
-    with patch.object(app_module, "_recover_print_tracker_on_start",
+    with patch.object(print_monitor, "_recover_print_tracker_on_start",
                       side_effect=fake_recover) as recover, \
-         patch.object(app_module, "_cancel_monitor_tick", side_effect=fake_tick), \
+         patch.object(print_monitor, "_cancel_monitor_tick", side_effect=fake_tick), \
          patch.object(app_module.time, "sleep", fake_sleep), \
          patch.object(app_module.state, "logger", MagicMock()) as logger:
         with pytest.raises(_StopLoop):
@@ -431,9 +433,9 @@ def test_monitor_loop_recovery_failure_does_not_prevent_ticks():
     def _sleep_escape(_secs):
         raise _StopLoop()
 
-    with patch.object(app_module, "_recover_print_tracker_on_start",
+    with patch.object(print_monitor, "_recover_print_tracker_on_start",
                       side_effect=RuntimeError("recovery boom")), \
-         patch.object(app_module, "_cancel_monitor_tick", side_effect=fake_tick), \
+         patch.object(print_monitor, "_cancel_monitor_tick", side_effect=fake_tick), \
          patch.object(app_module.time, "sleep", _sleep_escape), \
          patch.object(app_module.state, "logger", MagicMock()) as logger:
         with pytest.raises(_StopLoop):

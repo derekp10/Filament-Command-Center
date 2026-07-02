@@ -19,7 +19,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app as app_module  # noqa: E402
+import app as app_module
+import print_deduct  # L316: patch targets / live seams for moved symbols
+import print_monitor  # L316: patch targets for moved symbols  # noqa: E402
 import prusalink_api  # noqa: E402
 import print_deduct_ledger  # noqa: E402
 import cancel_review_store  # noqa: E402
@@ -46,14 +48,14 @@ def _reset_tracker(tmp_path, monkeypatch):
     # 22.3: the start-spool snapshot capture (on a PRINTING tick when the completion
     # flag is on) would otherwise hit real Spoolman per tick. No-op it by default; a
     # test that exercises capture overrides locally.
-    monkeypatch.setattr(app_module, "_snapshot_active_spools", lambda *a, **k: {})
+    monkeypatch.setattr(print_deduct, "_snapshot_active_spools", lambda *a, **k: {})
     app_module._PRINT_TRACKER.clear()
-    prev_async = app_module._CANCEL_DEDUCT_RUN_ASYNC
-    app_module._CANCEL_DEDUCT_RUN_ASYNC = False
+    prev_async = print_monitor._CANCEL_DEDUCT_RUN_ASYNC
+    print_monitor._CANCEL_DEDUCT_RUN_ASYNC = False
     try:
         yield
     finally:
-        app_module._CANCEL_DEDUCT_RUN_ASYNC = prev_async
+        print_monitor._CANCEL_DEDUCT_RUN_ASYNC = prev_async
         app_module._PRINT_TRACKER.clear()
 
 
@@ -63,7 +65,7 @@ def capture_edge():
     tests assert WHAT fires (and with which latched values) independently of the
     deduct itself. This seam (`_on_cancel_edge`) is stable across slice 2a/5."""
     m = MagicMock()
-    with patch.object(app_module, "_on_cancel_edge", m):
+    with patch.object(print_monitor, "_on_cancel_edge", m):
         yield m
 
 
@@ -74,7 +76,7 @@ def capture_ambiguous():
     printer power-cycle). Separate seam from _on_cancel_edge so the cancel tests
     stay clean. _on_ambiguous_edge(printer, filename, job_id, progress, fb_url)."""
     m = MagicMock()
-    with patch.object(app_module, "_on_ambiguous_edge", m):
+    with patch.object(print_monitor, "_on_ambiguous_edge", m):
         yield m
 
 
@@ -299,7 +301,7 @@ def test_finished_does_not_fire_cancel(capture_edge):
     test_completion_deduct — mock that seam so this stays a pure cancel-detection
     assertion with NO real deduct side-effects regardless of the live config flag
     (which is ON in dev, so an unmocked FINISHED would hit the real printer)."""
-    with patch.object(app_module, "_on_completion_edge"):
+    with patch.object(print_monitor, "_on_completion_edge"):
         _drive(["PRINTING", "FINISHED"])
     assert capture_edge.call_count == 0
 
@@ -413,7 +415,7 @@ def test_observed_finished_then_idle_not_ambiguous(capture_ambiguous):
     ambiguous: prev=FINISHED on the IDLE tick is not in-progress. This is the key
     no-spam guard — normal completions must never raise an ambiguous review.
     (Flag forced off so FINISHED takes the non-firing branch.)"""
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=False):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=False):
         _drive(["PRINTING", "FINISHED", "IDLE"], jobs={0: _job(progress=0.99)})
     assert capture_ambiguous.call_count == 0
 
@@ -668,7 +670,7 @@ def test_cancel_creates_pending_once_on_real_daemon_thread(ledger_tmp):
         captured["updates"].append((sid, dict(data)))
         return {"id": sid, **data}
 
-    app_module._CANCEL_DEDUCT_RUN_ASYNC = True   # fixture restores it
+    print_monitor._CANCEL_DEDUCT_RUN_ASYNC = True   # fixture restores it
     ctx = [
         patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
         patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map),
@@ -798,8 +800,8 @@ def _tick_busy_for(state_str, job=None):
          patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value=_state(state_str)), \
          patch.object(app_module.prusalink_api, "get_printer_job", return_value=job), \
-         patch.object(app_module, "print_tracker_store"), \
-         patch.object(app_module, "_process_pending_cancel_fetches"):
+         patch.object(print_monitor, "print_tracker_store"), \
+         patch.object(print_monitor, "_process_pending_cancel_fetches"):
         return app_module._cancel_monitor_tick()
 
 
@@ -838,8 +840,8 @@ def test_tick_offline_backs_off():
          patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value=None), \
          patch.object(app_module.prusalink_api, "get_printer_job", return_value=None), \
-         patch.object(app_module, "print_tracker_store"), \
-         patch.object(app_module, "_process_pending_cancel_fetches"):
+         patch.object(print_monitor, "print_tracker_store"), \
+         patch.object(print_monitor, "_process_pending_cancel_fetches"):
         assert app_module._cancel_monitor_tick() is False
 
 
@@ -852,7 +854,7 @@ def test_cancel_edge_logs_instant_ack():
     partial…' line BEFORE the (slow, async) gcode download — so the user isn't
     met with 30-60s of silence on a slow .bgcode pull."""
     logs = []
-    with patch.object(app_module, "_create_pending_cancel_review") as review, \
+    with patch.object(print_deduct, "_create_pending_cancel_review") as review, \
          patch.object(app_module.state, "add_log_entry",
                       side_effect=lambda *a, **k: logs.append(a)):
         app_module._on_cancel_edge("XL", "/usb/p.bgcode", "J-1", 0.62, "http://fb")
@@ -865,7 +867,7 @@ def test_ambiguous_edge_logs_instant_ack():
     """_on_ambiguous_edge logs its own instant-ack ('… couldn't confirm …') and
     routes to the review pipeline with ambiguous=True."""
     logs = []
-    with patch.object(app_module, "_create_pending_cancel_review") as review, \
+    with patch.object(print_deduct, "_create_pending_cancel_review") as review, \
          patch.object(app_module.state, "add_log_entry",
                       side_effect=lambda *a, **k: logs.append(a)):
         app_module._on_ambiguous_edge("XL", "/usb/p.bgcode", "J-2", 0.26, "http://fb")
@@ -877,14 +879,14 @@ def test_ambiguous_edge_logs_instant_ack():
 def test_cancel_monitor_start_idempotent():
     """The daemon starts at most once per process (no real thread spawned in the
     test — threading.Thread is mocked)."""
-    app_module._cancel_monitor_started = False
+    print_monitor._cancel_monitor_started = False
     try:
         with patch.object(app_module.threading, "Thread") as T:
             app_module._start_cancel_monitor()
             app_module._start_cancel_monitor()
         assert T.call_count == 1
     finally:
-        app_module._cancel_monitor_started = False
+        print_monitor._cancel_monitor_started = False
 
 
 def test_pulse_no_longer_drives_detection():
@@ -892,7 +894,7 @@ def test_pulse_no_longer_drives_detection():
     cancel detection (that's the daemon's job now), so an unfocused/closed
     dashboard can't cause missed cancels."""
     printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
-    with patch.object(app_module, "_track_print_edge") as tpe, \
+    with patch.object(print_monitor, "_track_print_edge") as tpe, \
          patch.object(app_module.config_loader, "load_config", return_value={}), \
          patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map), \
          patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
@@ -950,8 +952,8 @@ def test_pulse_printing_then_idle_creates_ambiguous_review(ledger_tmp):
         patch.object(app_module.spoolman_api, "update_spool", side_effect=_update),
         patch.object(app_module.spoolman_api, "format_spool_display",
                      return_value={"text": "#s", "color": "ff0000"}),
-        patch.object(app_module, "print_tracker_store"),          # isolate latch persistence
-        patch.object(app_module, "_process_pending_cancel_fetches"),  # not under test here
+        patch.object(print_monitor, "print_tracker_store"),          # isolate latch persistence
+        patch.object(print_monitor, "_process_pending_cancel_fetches"),  # not under test here
     ]
     for m in ctx:
         m.start()
@@ -1017,8 +1019,8 @@ def test_pulse_printing_then_ready_creates_ambiguous_review(ledger_tmp):
         patch.object(app_module.spoolman_api, "update_spool", side_effect=_update),
         patch.object(app_module.spoolman_api, "format_spool_display",
                      return_value={"text": "#s", "color": "ff0000"}),
-        patch.object(app_module, "print_tracker_store"),          # isolate latch persistence
-        patch.object(app_module, "_process_pending_cancel_fetches"),  # not under test here
+        patch.object(print_monitor, "print_tracker_store"),          # isolate latch persistence
+        patch.object(print_monitor, "_process_pending_cancel_fetches"),  # not under test here
     ]
     for m in ctx:
         m.start()

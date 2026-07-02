@@ -28,7 +28,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app as app_module  # noqa: E402
+import app as app_module
+import print_deduct  # L316: patch targets / live seams for moved symbols
+import print_monitor  # L316: patch targets for moved symbols  # noqa: E402
 import print_deduct_ledger  # noqa: E402
 import cancel_review_store  # noqa: E402
 import cancel_fetch_store  # noqa: E402
@@ -43,14 +45,14 @@ def _reset(tmp_path, monkeypatch):
     monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "review.json"))
     monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetch.json"))
     monkeypatch.setattr(print_tracker_store, "_STORE_PATH", str(tmp_path / "latch.json"))
-    prev_async = app_module._CANCEL_DEDUCT_RUN_ASYNC
-    app_module._CANCEL_DEDUCT_RUN_ASYNC = False
+    prev_async = print_monitor._CANCEL_DEDUCT_RUN_ASYNC
+    print_monitor._CANCEL_DEDUCT_RUN_ASYNC = False
     with app_module._PRINT_TRACKER_LOCK:
         app_module._PRINT_TRACKER.clear()
     try:
         yield
     finally:
-        app_module._CANCEL_DEDUCT_RUN_ASYNC = prev_async
+        print_monitor._CANCEL_DEDUCT_RUN_ASYNC = prev_async
         with app_module._PRINT_TRACKER_LOCK:
             app_module._PRINT_TRACKER.clear()
 
@@ -72,15 +74,15 @@ def _completion_ctx(usage_map, end_snap, rows=None):
     ctx = [
         patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
         patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds),
-        patch.object(app_module, "_compute_cancel_usage", return_value=(dict(usage_map), None)),
+        patch.object(print_deduct, "_compute_cancel_usage", return_value=(dict(usage_map), None)),
         patch.object(app_module.locations_db, "get_active_printer_map", return_value=PM),
-        patch.object(app_module, "_resolve_active_locs_for_printer", return_value=ACTIVE),
-        patch.object(app_module, "_snapshot_active_spools", return_value=dict(end_snap)),
-        patch.object(app_module, "_resolve_usage_to_spools",
+        patch.object(print_deduct, "_resolve_active_locs_for_printer", return_value=ACTIVE),
+        patch.object(print_deduct, "_snapshot_active_spools", return_value=dict(end_snap)),
+        patch.object(print_deduct, "_resolve_usage_to_spools",
                      return_value=(rows if rows is not None else
                                    [{"sid": 999, "grams": 25.0, "color": "ff0000",
                                      "toolhead": "XL-1", "position": 0}])),
-        patch.object(app_module, "_apply_usage_to_printer", apply_mock),
+        patch.object(print_deduct, "_apply_usage_to_printer", apply_mock),
         patch.object(app_module.state, "add_log_entry"),
     ]
     return ctx, apply_mock
@@ -132,11 +134,11 @@ def test_no_snapshot_degrades_to_auto_apply():
     snap = MagicMock(return_value={0: 999})
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
-         patch.object(app_module, "_compute_cancel_usage", return_value=({0: 25.0}, None)), \
+         patch.object(print_deduct, "_compute_cancel_usage", return_value=({0: 25.0}, None)), \
          patch.object(app_module.locations_db, "get_active_printer_map", return_value=PM), \
-         patch.object(app_module, "_resolve_active_locs_for_printer", return_value=ACTIVE), \
-         patch.object(app_module, "_snapshot_active_spools", snap), \
-         patch.object(app_module, "_apply_usage_to_printer", apply_mock), \
+         patch.object(print_deduct, "_resolve_active_locs_for_printer", return_value=ACTIVE), \
+         patch.object(print_deduct, "_snapshot_active_spools", snap), \
+         patch.object(print_deduct, "_apply_usage_to_printer", apply_mock), \
          patch.object(app_module.state, "add_log_entry"):
         res = app_module.deduct_completed_print("XL", "f.gcode", "J-3", start_spools=None)
     assert res["status"] == "deducted"
@@ -184,11 +186,11 @@ def test_detection_exception_falls_through_to_auto_apply():
     apply_mock = MagicMock(return_value=(1, [{"sid": 100, "grams": 25.0, "remaining": 900.0}], {0}))
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
-         patch.object(app_module, "_compute_cancel_usage", return_value=({0: 25.0}, None)), \
+         patch.object(print_deduct, "_compute_cancel_usage", return_value=({0: 25.0}, None)), \
          patch.object(app_module.locations_db, "get_active_printer_map", return_value=PM), \
-         patch.object(app_module, "_resolve_active_locs_for_printer", return_value=ACTIVE), \
-         patch.object(app_module, "_snapshot_active_spools", side_effect=RuntimeError("boom")), \
-         patch.object(app_module, "_apply_usage_to_printer", apply_mock), \
+         patch.object(print_deduct, "_resolve_active_locs_for_printer", return_value=ACTIVE), \
+         patch.object(print_deduct, "_snapshot_active_spools", side_effect=RuntimeError("boom")), \
+         patch.object(print_deduct, "_apply_usage_to_printer", apply_mock), \
          patch.object(app_module.state, "add_log_entry"):
         res = app_module.deduct_completed_print("XL", "f.gcode", "J-6", start_spools={"0": 100})
     assert res["status"] == "deducted"
@@ -228,13 +230,13 @@ def test_single_tool_core_one_rekey_and_swap_routes():
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
                       side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
          patch.object(app_module.locations_db, "get_active_printer_map", return_value=pm), \
-         patch.object(app_module, "_resolve_active_locs_for_printer",
+         patch.object(print_deduct, "_resolve_active_locs_for_printer",
                       return_value=[("CORE1-M0", {"position": 0})]), \
-         patch.object(app_module, "_snapshot_active_spools", return_value={0: 999}), \
-         patch.object(app_module, "_resolve_usage_to_spools",
+         patch.object(print_deduct, "_snapshot_active_spools", return_value={0: 999}), \
+         patch.object(print_deduct, "_resolve_usage_to_spools",
                       return_value=[{"sid": 999, "grams": 25.0, "color": "ff0000",
                                      "toolhead": "CORE1-M0", "position": 0}]), \
-         patch.object(app_module, "_apply_usage_to_printer", apply_mock), \
+         patch.object(print_deduct, "_apply_usage_to_printer", apply_mock), \
          patch.object(app_module.state, "add_log_entry"):
         res = app_module.deduct_completed_print("CORE1", "f.gcode", "J-8", start_spools={"0": 100})
     assert res["status"] == "pending_spool_changed"
@@ -252,8 +254,8 @@ def _latch(state, job, fb="http://fb"):
 
 def test_snapshot_captured_once_per_job():
     snap = MagicMock(return_value={0: 100})
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
-         patch.object(app_module, "_snapshot_active_spools", snap):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_deduct, "_snapshot_active_spools", snap):
         for _ in range(3):  # three PRINTING ticks, SAME job
             _latch("PRINTING", {"filename": "f.gcode", "job_id": 9, "progress": 0.4})
     assert snap.call_count == 1
@@ -263,8 +265,8 @@ def test_snapshot_captured_once_per_job():
 
 def test_snapshot_recaptured_on_job_change():
     snap = MagicMock(side_effect=[{0: 100}, {0: 200}])
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
-         patch.object(app_module, "_snapshot_active_spools", snap):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_deduct, "_snapshot_active_spools", snap):
         _latch("PRINTING", {"filename": "a.gcode", "job_id": 9, "progress": 0.4})
         _latch("PRINTING", {"filename": "b.gcode", "job_id": 10, "progress": 0.1})
     assert snap.call_count == 2
@@ -274,8 +276,8 @@ def test_snapshot_recaptured_on_job_change():
 
 def test_capture_skipped_when_flag_off():
     snap = MagicMock(return_value={0: 100})
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=False), \
-         patch.object(app_module, "_snapshot_active_spools", snap):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=False), \
+         patch.object(print_deduct, "_snapshot_active_spools", snap):
         _latch("PRINTING", {"filename": "f.gcode", "job_id": 9, "progress": 0.4})
     snap.assert_not_called()
     assert "start_spools" not in app_module._PRINT_TRACKER["XL"]
@@ -285,8 +287,8 @@ def test_capture_skipped_when_first_seen_paused():
     """A job first SEEN mid-PAUSE (e.g. monitor started during a runout) must NOT
     snapshot the post-swap mapping as 'start'."""
     snap = MagicMock(return_value={0: 100})
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
-         patch.object(app_module, "_snapshot_active_spools", snap):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_deduct, "_snapshot_active_spools", snap):
         _latch("PAUSED", {"filename": "f.gcode", "job_id": 9, "progress": 0.4})
     snap.assert_not_called()
     assert "start_spools" not in app_module._PRINT_TRACKER.get("XL", {})
@@ -294,9 +296,9 @@ def test_capture_skipped_when_first_seen_paused():
 
 def test_fire_dict_threads_snapshot_to_completion():
     deduct = MagicMock(return_value={"status": "deducted"})
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
-         patch.object(app_module, "_snapshot_active_spools", return_value={0: 100}), \
-         patch.object(app_module, "deduct_completed_print", deduct), \
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_deduct, "_snapshot_active_spools", return_value={0: 100}), \
+         patch.object(print_deduct, "deduct_completed_print", deduct), \
          patch.object(app_module.state, "add_log_entry"):
         _latch("PRINTING", {"filename": "f.gcode", "job_id": 9, "progress": 0.9})
         _latch("FINISHED", None)
@@ -312,9 +314,9 @@ def test_restart_recovery_threads_persisted_snapshot():
     entry = {"state": "PRINTING", "job_id": 9, "filename": "f.gcode", "progress": 0.9,
              "start_spools": {"0": 100}, "snapshot_job": "9"}
     disp = MagicMock()
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value={"state": "FINISHED"}), \
-         patch.object(app_module, "_dispatch_completion_edge", disp), \
+         patch.object(print_monitor, "_dispatch_completion_edge", disp), \
          patch.object(app_module.state, "add_log_entry"):
         app_module._recover_one_print_latch("XL", entry, "http://fb")
     disp.assert_called_once()
@@ -324,9 +326,9 @@ def test_restart_recovery_threads_persisted_snapshot():
 def test_restart_recovery_no_snapshot_degrades():
     entry = {"state": "PRINTING", "job_id": 9, "filename": "f.gcode", "progress": 0.9}
     disp = MagicMock()
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value={"state": "FINISHED"}), \
-         patch.object(app_module, "_dispatch_completion_edge", disp), \
+         patch.object(print_monitor, "_dispatch_completion_edge", disp), \
          patch.object(app_module.state, "add_log_entry"):
         app_module._recover_one_print_latch("XL", entry, "http://fb")
     disp.assert_called_once()
@@ -348,7 +350,7 @@ def test_snapshot_active_spools_resolution():
     detailed = {"XL-1": [{"id": 100, "is_ghost": False}],
                 "XL-2": [{"id": 200, "is_ghost": False}, {"id": 999, "is_ghost": True}]}
     with patch.object(app_module.locations_db, "get_active_printer_map", return_value=PM), \
-         patch.object(app_module, "_resolve_active_locs_for_printer", return_value=ACTIVE), \
+         patch.object(print_deduct, "_resolve_active_locs_for_printer", return_value=ACTIVE), \
          patch.object(app_module.spoolman_api, "get_spools_at_location",
                       side_effect=lambda loc: [d["id"] for d in detailed.get(str(loc).upper(), [])]), \
          patch.object(app_module.spoolman_api, "get_spools_at_location_detailed",
@@ -429,17 +431,17 @@ def test_deferred_complete_retry_routes_on_swap():
         "first_seen": time.time(), "kind": "complete", "start_spools": {"0": 100},
         "attempts": 1, "last_status": "awaiting_fetch"})
     apply_mock = MagicMock(name="apply")
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
          patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
-         patch.object(app_module, "_compute_cancel_usage", return_value=({0: 25.0}, None)), \
+         patch.object(print_deduct, "_compute_cancel_usage", return_value=({0: 25.0}, None)), \
          patch.object(app_module.locations_db, "get_active_printer_map", return_value=PM), \
-         patch.object(app_module, "_resolve_active_locs_for_printer", return_value=ACTIVE), \
-         patch.object(app_module, "_snapshot_active_spools", return_value={0: 999}), \
-         patch.object(app_module, "_resolve_usage_to_spools",
+         patch.object(print_deduct, "_resolve_active_locs_for_printer", return_value=ACTIVE), \
+         patch.object(print_deduct, "_snapshot_active_spools", return_value={0: 999}), \
+         patch.object(print_deduct, "_resolve_usage_to_spools",
                       return_value=[{"sid": 999, "grams": 25.0, "color": "ff0000",
                                      "toolhead": "XL-1", "position": 0}]), \
-         patch.object(app_module, "_apply_usage_to_printer", apply_mock), \
+         patch.object(print_deduct, "_apply_usage_to_printer", apply_mock), \
          patch.object(app_module.state, "add_log_entry"):
         app_module._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
     apply_mock.assert_not_called()
@@ -469,8 +471,8 @@ def test_capture_skips_storing_on_empty_snapshot_blip():
     tick must NOT flag snapshot_job — so the next tick retries instead of permanently
     disabling detection for the whole job."""
     snap = MagicMock(side_effect=[{}, {0: 100}])
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
-         patch.object(app_module, "_snapshot_active_spools", snap):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_deduct, "_snapshot_active_spools", snap):
         _latch("PRINTING", {"filename": "f.gcode", "job_id": 9, "progress": 0.4})
         assert "snapshot_job" not in app_module._PRINT_TRACKER["XL"]   # blip -> not flagged
         _latch("PRINTING", {"filename": "f.gcode", "job_id": 9, "progress": 0.5})

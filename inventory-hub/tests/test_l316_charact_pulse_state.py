@@ -25,7 +25,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import app as app_module  # noqa: E402
+import app as app_module
+import routes_state_pulse  # L316: patch targets for moved symbols  # noqa: E402
 
 
 def _client():
@@ -52,13 +53,13 @@ def _capture_logs(monkeypatch):
 def _patch_all_pulse_sections_forbidden(monkeypatch):
     """Patch all four section helpers to explode if invoked — used by tests
     that pin which sections do NOT fire."""
-    monkeypatch.setattr(app_module, "_pulse_section_logs",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs",
                         _fail_if_called("_pulse_section_logs"))
-    monkeypatch.setattr(app_module, "_pulse_section_locations",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_locations",
                         _fail_if_called("_pulse_section_locations"))
-    monkeypatch.setattr(app_module, "_pulse_section_manage",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_manage",
                         _fail_if_called("_pulse_section_manage"))
-    monkeypatch.setattr(app_module, "_pulse_section_printer_status",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_printer_status",
                         _fail_if_called("_pulse_section_printer_status"))
 
 
@@ -273,7 +274,7 @@ def test_pulse_include_parsing_is_case_and_whitespace_insensitive(monkeypatch):
     logs_payload = {"logs": [], "status": {"spoolman": True},
                     "audit_active": False, "undo_available": False}
     calls = []
-    monkeypatch.setattr(app_module, "_pulse_section_logs",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs",
                         lambda: calls.append("logs") or logs_payload)
     monkeypatch.setattr(app_module.state, "GLOBAL_BUFFER", [])
     client = _client()
@@ -291,7 +292,7 @@ def test_pulse_logs_dispatch_passthrough(monkeypatch):
     logs_payload = {"logs": [{"msg": "x"}], "status": {"spoolman": True},
                     "audit_active": True, "undo_available": True}
     calls = []
-    monkeypatch.setattr(app_module, "_pulse_section_logs",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs",
                         lambda: calls.append(1) or logs_payload)
     client = _client()
 
@@ -309,7 +310,7 @@ def test_pulse_status_derived_from_single_logs_call(monkeypatch):
     logs_payload = {"logs": [{"msg": "x"}], "status": {"spoolman": True},
                     "audit_active": True, "undo_available": False}
     calls = []
-    monkeypatch.setattr(app_module, "_pulse_section_logs",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs",
                         lambda: calls.append(1) or logs_payload)
     client = _client()
 
@@ -325,7 +326,7 @@ def test_pulse_status_defaults_false_on_sparse_logs_payload(monkeypatch):
     """The status derivation uses .get(..., False) at every hop — a logs
     payload of just {'status': {}} yields all-False status bits rather
     than a KeyError."""
-    monkeypatch.setattr(app_module, "_pulse_section_logs",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs",
                         lambda: {"status": {}})
     client = _client()
 
@@ -341,7 +342,7 @@ def test_pulse_logs_and_status_share_one_section_call(monkeypatch):
     logs_payload = {"logs": [], "status": {"spoolman": True},
                     "audit_active": False, "undo_available": True}
     calls = []
-    monkeypatch.setattr(app_module, "_pulse_section_logs",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs",
                         lambda: calls.append(1) or logs_payload)
     client = _client()
 
@@ -364,7 +365,7 @@ def test_pulse_status_section_vanishes_when_logs_helper_raises(monkeypatch):
     def _boom():
         raise RuntimeError("health check exploded")
 
-    monkeypatch.setattr(app_module, "_pulse_section_logs", _boom)
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs", _boom)
     client = _client()
 
     r = client.get("/api/dashboard_pulse?include=logs,status")
@@ -381,7 +382,7 @@ def test_pulse_locations_dispatch_passthrough(monkeypatch):
     its value verbatim in the 'locations' slot."""
     sentinel = [{"LocationID": "Unassigned"}, {"LocationID": "XL-1"}]
     calls = []
-    monkeypatch.setattr(app_module, "_pulse_section_locations",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_locations",
                         lambda: calls.append(1) or sentinel)
     client = _client()
 
@@ -397,7 +398,7 @@ def test_pulse_locations_error_is_isolated(monkeypatch):
     def _boom():
         raise RuntimeError("locations corrupt")
 
-    monkeypatch.setattr(app_module, "_pulse_section_locations", _boom)
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_locations", _boom)
     monkeypatch.setattr(app_module.state, "GLOBAL_BUFFER", [{"id": 5}])
     client = _client()
 
@@ -426,7 +427,7 @@ def test_pulse_manage_omitted_without_manage_id(monkeypatch):
     """include=manage WITHOUT manage_id silently omits the section (no
     error) and never calls _pulse_section_manage; other sections still
     come through."""
-    monkeypatch.setattr(app_module, "_pulse_section_manage",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_manage",
                         _fail_if_called("_pulse_section_manage"))
     monkeypatch.setattr(app_module.state, "GLOBAL_BUFFER", [])
     client = _client()
@@ -447,7 +448,7 @@ def test_pulse_manage_id_uppercased_and_payload_passthrough(monkeypatch):
         seen.append(loc_id)
         return sentinel
 
-    monkeypatch.setattr(app_module, "_pulse_section_manage", fake_manage)
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_manage", fake_manage)
     client = _client()
 
     r = client.get(
@@ -462,7 +463,7 @@ def test_pulse_manage_error_slot_carries_id(monkeypatch):
     def _boom(loc_id):
         raise RuntimeError("spoolman down")
 
-    monkeypatch.setattr(app_module, "_pulse_section_manage", _boom)
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_manage", _boom)
     client = _client()
 
     r = client.get("/api/dashboard_pulse?include=manage&manage_id=xl-1")
@@ -476,7 +477,7 @@ def test_pulse_printer_status_dispatch_and_error_isolation(monkeypatch):
     the slot with the response still 200."""
     sentinel = {"XL": {"toolheads": [], "state": None}}
     calls = []
-    monkeypatch.setattr(app_module, "_pulse_section_printer_status",
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_printer_status",
                         lambda: calls.append(1) or sentinel)
     client = _client()
 
@@ -487,7 +488,7 @@ def test_pulse_printer_status_dispatch_and_error_isolation(monkeypatch):
     def _boom():
         raise RuntimeError("probe failed")
 
-    monkeypatch.setattr(app_module, "_pulse_section_printer_status", _boom)
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_printer_status", _boom)
     r2 = client.get("/api/dashboard_pulse?include=printer_status")
     assert r2.status_code == 200
     assert r2.get_json() == {"printer_status": {"error": "probe failed"}}
