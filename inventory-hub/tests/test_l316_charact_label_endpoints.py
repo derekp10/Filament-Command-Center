@@ -25,7 +25,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app as app_module  # noqa: E402
+import app as app_module
+import labels_csv  # L316 step 3: moved-symbol patch targets live here now  # noqa: E402
 
 
 @pytest.fixture
@@ -94,9 +95,9 @@ def _csv_rows(path):
 def _stub_label_helpers(monkeypatch):
     """Decouple batch-endpoint tests from the data-extraction helpers
     (same idiom as tests/test_label_csv_export.py)."""
-    monkeypatch.setattr(app_module, "get_color_name", lambda f: "TestColor")
-    monkeypatch.setattr(app_module, "get_smart_type", lambda m, e: "TestType")
-    monkeypatch.setattr(app_module, "get_best_hex", lambda f: "AABBCC")
+    monkeypatch.setattr(labels_csv, "get_color_name", lambda f: "TestColor")
+    monkeypatch.setattr(labels_csv, "get_smart_type", lambda m, e: "TestType")
+    monkeypatch.setattr(labels_csv, "get_best_hex", lambda f: "AABBCC")
 
 
 LOC_ROWS = [
@@ -301,7 +302,7 @@ def test_batch_location_dedup_fallback_and_slot_fanout_exact_rows(client, tmp_pa
     monkeypatch.setattr(app_module.requests, "get", _fake_get)
 
     spy = _WriterSpy()
-    monkeypatch.setattr(app_module, "_write_label_csv", spy)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", spy)
 
     resp = client.post("/api/print_batch_csv",
                        json={"ids": ["SH-A1", "SH-A1", "999"],
@@ -362,7 +363,7 @@ def test_batch_location_spoolman_fallback_failure_uses_raw_id(client, tmp_path, 
     monkeypatch.setattr(app_module.requests, "get", _fake_get)
 
     spy = _WriterSpy()
-    monkeypatch.setattr(app_module, "_write_label_csv", spy)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", spy)
 
     body = client.post("/api/print_batch_csv",
                        json={"ids": ["999"], "mode": "location",
@@ -380,7 +381,7 @@ def test_batch_location_max_spools_key_case_insensitive(client, tmp_path, monkey
     _set_locations(monkeypatch,
                    [{"LocationID": "SH-B2", "Name": "B2 Shelf", " max SPOOLS ": "2"}])
     spy = _WriterSpy()
-    monkeypatch.setattr(app_module, "_write_label_csv", spy)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", spy)
 
     body = client.post("/api/print_batch_csv",
                        json={"ids": ["SH-B2"], "mode": "location",
@@ -399,7 +400,7 @@ def test_batch_location_max_spools_one_writes_no_slots_file(client, tmp_path, mo
     _mount_output(monkeypatch, tmp_path)
     _set_locations(monkeypatch, [{"LocationID": "SH-C1", "Name": "C1", "Max Spools": "1"}])
     spy = _WriterSpy()
-    monkeypatch.setattr(app_module, "_write_label_csv", spy)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", spy)
 
     body = client.post("/api/print_batch_csv",
                        json={"ids": ["SH-C1"], "mode": "location",
@@ -423,7 +424,7 @@ def test_batch_location_row_missing_exact_locationid_key_fails_whole_export(clie
     _set_locations(monkeypatch, [{"locationid": "WEIRD-1", "Name": "W"}])
     logs = _capture_logs(monkeypatch)
     spy = _WriterSpy()
-    monkeypatch.setattr(app_module, "_write_label_csv", spy)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", spy)
 
     body = client.post("/api/print_batch_csv",
                        json={"ids": ["WEIRD-1"], "mode": "location",
@@ -465,7 +466,7 @@ def test_batch_filament_mode_exact_row_headers_and_temp_formatting(client, tmp_p
     monkeypatch.setattr(app_module.spoolman_api, "get_filament",
                         lambda fid: FILAMENT_7 if fid == 7 else None)
     spy = _WriterSpy()
-    monkeypatch.setattr(app_module, "_write_label_csv", spy)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", spy)
 
     body = client.post("/api/print_batch_csv",
                        json={"ids": [7], "mode": "filament",
@@ -511,15 +512,15 @@ def test_batch_filament_mode_absent_or_zero_temps_render_empty_and_brand_unsanit
     # NOTE: pins current behavior; see suspected_bugs (0-temp rendered blank;
     # sanitize asymmetry between spool and filament modes)."""
     _mount_output(monkeypatch, tmp_path)
-    monkeypatch.setattr(app_module, "get_color_name", lambda f: "TestColor")
-    monkeypatch.setattr(app_module, "get_smart_type", lambda m, e: "TestType")
-    monkeypatch.setattr(app_module, "get_best_hex", lambda f: "")
+    monkeypatch.setattr(labels_csv, "get_color_name", lambda f: "TestColor")
+    monkeypatch.setattr(labels_csv, "get_smart_type", lambda m, e: "TestType")
+    monkeypatch.setattr(labels_csv, "get_best_hex", lambda f: "")
     monkeypatch.setattr(
         app_module.spoolman_api, "get_filament",
         lambda fid: {"id": 8, "material": "PLA", "vendor": {"name": "\U0001f99d Labs"},
                      "extra": {}, "settings_bed_temp": 0})
     spy = _WriterSpy()
-    monkeypatch.setattr(app_module, "_write_label_csv", spy)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", spy)
 
     body = client.post("/api/print_batch_csv",
                        json={"ids": [8], "mode": "filament",
@@ -572,7 +573,7 @@ def test_batch_empty_queue_and_no_valid_data_guards(client, tmp_path, monkeypatc
     'No valid data found' without any writer call."""
     _mount_output(monkeypatch, tmp_path)
     spy = _WriterSpy()
-    monkeypatch.setattr(app_module, "_write_label_csv", spy)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", spy)
 
     assert client.post("/api/print_batch_csv",
                        json={"ids": [], "mode": "spool"}).get_json() == {
@@ -603,7 +604,7 @@ def test_batch_generic_writer_exception_surfaces_str_and_error_log(client, tmp_p
     def _boom(*a, **k):
         raise ValueError("boom simulated")
 
-    monkeypatch.setattr(app_module, "_write_label_csv", _boom)
+    monkeypatch.setattr(labels_csv, "_write_label_csv", _boom)
 
     body = client.post("/api/print_batch_csv",
                        json={"ids": [1], "mode": "spool",
