@@ -1,5 +1,7 @@
 # **New and Unsorted Features/Bugs**
 
+* Spool weight is still a little funny. I had issues getting it to take the total weight from a scale, and properly deducting the known empty spool weight. I had to enter data in to different fields to get it to recalculate correctly. I think this needs to be fixed. This was though the add/edit inventory wizzard. I also noted that the quick update weight had no way to input total spool weight, and that it seemd to be doing some 1000g restrictions, which were suppose to have been fixed in a recent update to the code to address this. it's like spool weight is being used to fill in the inital total used weight? while it works, it was a pain to get that data in there, and I don't know if this is the clearest way we could represent this.
+
 * Check to see if prusa slicer 2.9.6 or the latest firmware for the core one or the XL has any changes that effect our filament usage tracking.
   _[✅ **CHECKED 2026-07-02 — NO IMPACT. Every format FCC's deduct engine parses is intact; no code change needed.** Reviewed PrusaSlicer **2.9.6** (final 2.9-line release) + Core One/XL firmware **6.5.7** (2026-06-18, latest stable) + INDX **6.6.0** (2026-06-25, first INDX release), cross-referenced against FCC's parse surfaces (`prusalink_api.py` `parse_footer_usage`/`parse_partial_filament_usage`/`parse_color_change_segments`, `bgcode_decode.py`)._
   _• **`.bgcode` container = still version 1** (libbgcode spec unchanged). `bgcode_decode.py`'s constants all still match: block types 0–5, compression 0–3 (incl. heatshrink win11/4 + win12/4), G-code encodings 0–2 (incl. MeatPack + MeatPack-with-comments). Decode path unaffected. (FCC doesn't even read the header version field, so it's forward-tolerant to any structure-preserving bump.)_
@@ -355,7 +357,7 @@ There continues to be inconsistency with switching out spools when a box slot is
 
 # **On Hold**
 * Amazon Parser: Multi-pack spools with different colors (e.g. 4x1kg) currently calculate as a single 4000g spool instead of 4 individual 1000g spools.
-* `test_amazon_parser_matching` is failing — BeautifulSoup4 is not installed in the Docker container. Parser returns empty results because the import fails silently. Blocked until `pip install beautifulsoup4` is added to the Docker image. Found during structural test fix work (4/15/2026).
+* `test_amazon_parser_matching` is failing — BeautifulSoup4 is not installed in the Docker container. Parser returns empty results because the import fails silently. Blocked until `pip install beautifulsoup4` is added to the Docker image. Found during structural test fix work (4/15/2026). Should check to see if this is also a viable alternative for parcing: https://github.com/omkarcloud/botasaurus
 * Continue to support Spoolman's "Import from External" feature... Purchase emails, or Amazon/Vendor product pages, Onlyspoolz.com.
 * Standardize the size of all QR codes to match that of the sizes used on the command center. (Audit, eject, drop, etc).
 * Spoolman ExternalID is not a visible field in Spoolman UI. Very low priority.
