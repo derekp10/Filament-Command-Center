@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template # type: ignore
+from flask import request, jsonify, render_template # type: ignore
 import requests # type: ignore
 import state # type: ignore
 import config_loader # type: ignore
@@ -134,7 +134,11 @@ def _format_version_from(sha, ts):
 
 
 VERSION = _format_version()
-app = Flask(__name__)
+# L316 step 1: the Flask instance + the Cache-Control after_request hook live
+# in app_core.py so extracted route modules can register on the same object
+# without importing this module. Re-imported here so `from app import app` /
+# `app_module.app` keep working everywhere.
+from app_core import app, add_header  # noqa: E402
 
 # L347 follow-up — prune old locations.json.pre-*.bak migration backups.
 # Each migration that fires writes a timestamped .bak; nothing deletes
@@ -392,11 +396,6 @@ except Exception as _cr_err:
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
-
-@app.after_request
-def add_header(r):
-    r.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    return r
 
 @app.route('/')
 def dashboard():
