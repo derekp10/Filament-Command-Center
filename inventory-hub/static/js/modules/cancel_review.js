@@ -69,6 +69,7 @@
         // is visible. (Distinct from the card-level `rec.ambiguous` cancel-vs-completed
         // flag — this is a per-spool-row indicator.)
         const amb = !!s.ambiguous;
+        const isRunout = !!s.runout;
         const ambBorder = amb ? 'border-left:3px solid #ffae42;padding-left:6px;' : '';
         const ambBadge = amb
             ? `<span title="This toolhead has more than one spool assigned — FCC can't tell which is loaded, so these grams weren't auto-deducted. Pick the real amount per spool."
@@ -81,7 +82,9 @@
                         padding:6px 0;border-bottom:1px solid #2b2c30;${ambBorder}">
                 <div style="min-width:0;flex:1;">
                     ${swatch}
-                    <span style="color:#eee;">${esc(s.display)}</span>${ambBadge}
+                    <span style="color:#eee;">${esc(s.display)}</span>${ambBadge}${isRunout ? `<span title="Ran out mid-print (sensor tripped) — charged its own segment up to the swap, plus the sensor-to-nozzle remnant when a per-printer path value is configured."
+                     style="margin-left:6px;font-size:0.74rem;font-weight:bold;color:#ff8a65;
+                            border:1px solid #ff8a65;border-radius:4px;padding:0 4px;white-space:nowrap;">ran out</span>` : ''}
                     <span style="color:#9aa;font-size:0.92rem;">
                         (${esc(s.toolhead)} · ${fmt(s.remaining_before)}g left)
                     </span>
@@ -163,10 +166,18 @@
         // (the confidence hint), nudgeable either way.
         const ambiguous = !spoolChanged && !!rec.ambiguous;
         let header, banner, headerColor;
+        const autoSplit = spoolChanged && !!rec.auto_split;
         if (spoolChanged) {
             headerColor = '#ffb74d';
             header = `🔁 ${esc(rec.printer_name)} — spool changed mid-print`;
-            banner = `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament
+            banner = autoSplit
+                ? `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament run-out
+               or M600) at toolhead position(s) <b>${esc(changedPos)}</b>. FCC <b>auto-split</b>
+               the slicer total by the swap point — each row below is charged only <b>its own
+               segment</b> (the run-out spool up to the swap, the replacement after it), pre-filled.
+               Just <b>Confirm</b>, or nudge if you weighed it. The run-out spool's sensor→nozzle
+               remnant is included when a per-printer path value is configured. Or <b>Discard</b>.`
+                : `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament
                run-out or M600) at toolhead position(s) <b>${esc(changedPos)}</b>, so the full
                slicer total was <b>NOT auto-applied</b> — it would charge the whole tool's usage
                to the <b>replacement</b> spool and leave the run-out spool at 0g. The rows below

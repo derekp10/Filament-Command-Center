@@ -376,6 +376,48 @@ def parse_color_change_segments(gcode_content: str) -> List[Dict]:
     return segments
 
 
+def compute_segment_usage(ip_address: str, api_key: str, filename: str,
+                          boundaries) -> Optional[Dict]:
+    """22.3(b) runout/swap split: download+decode a print file ONCE and report the
+    CUMULATIVE per-tool grams extruded up to each mid-print swap ``boundary`` — the
+    input a per-segment apportionment needs (segment k grams = cum[k] − cum[k−1]).
+
+    ``boundaries`` is an ordered list of PrusaLink progress fractions (0..1, the same
+    ``progress`` stored on each ``swap_log`` event). Each is remapped to the decoded
+    G-code position via :func:`bgcode_decode.progress_to_decoded_fraction` (the M73
+    time-progress inversion, scale-validated 2026-06-12) and prefix-parsed with
+    :func:`parse_partial_filament_usage`.
+
+    Returns ``{"footer": {tool: grams}, "cums": [ {tool: grams}, … ]}`` — the full-job
+    footer plus one cumulative dict per boundary (same order as ``boundaries``) — or
+    ``None`` on any download/decode/parse failure so the caller degrades to the
+    full-footer manual-split review rather than writing a guessed number.
+    """
+    raw = _download_file_bytes(ip_address, api_key, filename)
+    if raw is None:
+        return None
+    try:
+        if bgcode_decode.is_bgcode(raw):
+            dec = bgcode_decode.decode_bgcode(raw)
+            gcode = dec.get("gcode") or ""
+            def _remap(p):
+                return bgcode_decode.progress_to_decoded_fraction(dec, p)
+        else:
+            gcode = raw.decode("utf-8", "replace")
+            def _remap(p):
+                return max(0.0, min(1.0, float(p)))
+        if not gcode:
+            return None
+        footer = parse_footer_usage(gcode)
+        if not footer:
+            return None
+        cums = [parse_partial_filament_usage(gcode, _remap(b)) for b in boundaries]
+        return {"footer": footer, "cums": cums}
+    except Exception as e:
+        print(f"compute_segment_usage: failed for {filename}: {e}")
+        return None
+
+
 def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
     """Cached front door for the PrusaLink state probe (L3 fix A).
 

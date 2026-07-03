@@ -284,6 +284,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
         need_swap_snapshot = False  # 22.3(b): flag a resume-edge mid-print swap capture
         swap_jid = None
         swap_progress = None
+        swap_runout = False
         with _PRINT_TRACKER_LOCK:
             entry = _PRINT_TRACKER.setdefault(printer_name, {})
             prev_state = entry.get('state')  # 22.3(b): pre-overwrite, for resume detection
@@ -336,6 +337,10 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     # 22.3(b): and its mid-print swap history — a replacement job must
                     # never inherit the old job's swap_log (it's keyed to snapshot_job).
                     entry.pop('swap_log', None)
+                    # 22.3(b): and the pending runout-progress markers, so a replacement
+                    # job can't inherit the prior job's frozen pause position / flag.
+                    entry.pop('pause_progress', None)
+                    entry.pop('saw_attention', None)
                 if job.get('filename'):
                     entry['filename'] = job['filename']
                 if new_jid is not None:
@@ -374,7 +379,14 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     # an ATTENTION/M600 park doesn't) so the deferred per-segment math will
                     # take the authoritative cut from the gcode `;COLOR_CHANGE` byte
                     # boundary (parse_color_change_segments), not this %.
-                    swap_progress = float(entry.get('progress', 0.0))
+                    # 22.3(b) runout accuracy: PREFER the frozen pause progress (sampled
+                    # during the ATTENTION park below — the true swap byte position) over
+                    # the pre-runout PRINTING high-water, which lags by up to one poll
+                    # (measured ~3 g off, 2026-07-02). `saw_attention` ⇒ this pause was a
+                    # RUNOUT, so the split charges the run-out spool the path remnant.
+                    swap_progress = max(float(entry.get('progress', 0.0)),
+                                        float(entry.get('pause_progress', 0.0)))
+                    swap_runout = bool(entry.get('saw_attention'))
         # 22.3 (off-lock, like get_printer_job): capture the start-spool snapshot for
         # mid-print swap detection. ONLY when FCC owns completions — deduct_completed_print
         # is the sole consumer, so it's dead weight (and a wasted Spoolman read) on
@@ -409,7 +421,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 with _PRINT_TRACKER_LOCK:
                     e = _PRINT_TRACKER.get(printer_name)
                     if e is not None and str(e.get('job_id')) == str(swap_jid):
-                        print_deduct._record_swap_events(e, snap, swap_progress)
+                        print_deduct._record_swap_events(e, snap, swap_progress,
+                                                         runout=swap_runout)
+                        # Consume the pause markers so a SUBSEQUENT pause/swap in the
+                        # same job starts from a clean slate (next runout re-samples).
+                        e.pop('pause_progress', None)
+                        e.pop('saw_attention', None)
         if prev_job:
             # Surface the outgoing job as an ambiguous review (off-heartbeat,
             # idempotent via the (printer, job_id) ledger + review store) instead of
@@ -446,6 +463,20 @@ def _track_print_edge(printer_name, state_info, fb_url):
     # AMBIGUOUS-idle edge against the latched prev state.
     fire = None
     cancel_without_latch = False
+    # 22.3(b) runout accuracy: an ATTENTION park (filament runout / M600) FREEZES the job
+    # at the pause byte position, and /api/v1/job reports that frozen progress. The
+    # in-progress block is SKIPPED for ATTENTION (it's not an in-progress state), so
+    # sample the frozen progress HERE (network OUTSIDE the lock) — the resume-edge swap
+    # event then cuts at the TRUE runout point instead of the stale pre-runout PRINTING
+    # high-water (the ~3 g lag measured 2026-07-02).
+    pause_progress = None
+    if cur == 'ATTENTION':
+        try:
+            _pj = prusalink_api.get_printer_job(fb_url, printer_name)
+            if _pj and isinstance(_pj.get('progress'), (int, float)):
+                pause_progress = float(_pj['progress'])
+        except Exception:
+            pause_progress = None
     with _PRINT_TRACKER_LOCK:
         entry = _PRINT_TRACKER.get(printer_name)
         prev = entry.get('state') if entry else None
@@ -526,6 +557,14 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 cancel_without_latch = True
             if entry is not None:
                 entry['state'] = cur
+                # 22.3(b): during an ATTENTION runout park of a latched job, record the
+                # frozen pause progress + that an ATTENTION was seen (so a swap on the
+                # resume is treated as a RUNOUT). Keep the MAX across re-polls.
+                if cur == 'ATTENTION' and entry.get('filename'):
+                    entry['saw_attention'] = True
+                    if pause_progress is not None:
+                        entry['pause_progress'] = max(
+                            float(entry.get('pause_progress', 0.0)), pause_progress)
             else:
                 _PRINT_TRACKER[printer_name] = {'state': cur}
 
