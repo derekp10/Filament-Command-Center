@@ -1,6 +1,14 @@
 # **New and Unsorted Features/Bugs**
 
+* Add support to overwrite hex on edit filament advanced tab. (I thought this was already included (Prod build: commit 93d6d5be • 2026-06-29 10:59)) also parcer field isn't resetting between different filament loads. A prusa one was still in the parcing section while looking at a sunlu one.
+
 * Spool weight is still a little funny. I had issues getting it to take the total weight from a scale, and properly deducting the known empty spool weight. I had to enter data in to different fields to get it to recalculate correctly. I think this needs to be fixed. This was though the add/edit inventory wizzard. I also noted that the quick update weight had no way to input total spool weight, and that it seemd to be doing some 1000g restrictions, which were suppose to have been fixed in a recent update to the code to address this. it's like spool weight is being used to fill in the inital total used weight? while it works, it was a pain to get that data in there, and I don't know if this is the clearest way we could represent this.
+
+* Setting remaining weight in add/edit filament wizzard doesn't seem to auto assign the unassign and archive flags to the spool. Can't remember if this was by design or just a missed bug.
+
+* Bulk way out modal. Saving one line item, resets the text box on other items in the list on re-draw. We should preserve the text, or provide a save all function/button, or atleast warn that we could loose data if we can't preserve the keyed in value in the text field.
+
+* Expanded print status, might be nice to have the meterial type on there so that you can see without having to open the filament details.
 
 * **Per-printer settings section in the Config tool (refactor).** `config_schema.py` only supports FLAT scalar fields (bool/int/float/string/select) — one value per key. Genuinely per-printer values need a per-printer **map** field type + a UI renderer (the "per-printer settings" modularization). First customer: **`path_filament_g`** (the runout sensor→nozzle remnant, Group 22.3b) shipped 2026-07-03 as a **single value for all printers** (Config → Behavior) as an interim — the reader already accepts a `{printer_name: grams}` map for when this lands (Core One ~2 g, XL ~4 g). Other candidates that would move here: printer creds, nozzle offsets, per-printer path length. Overlaps the **L18 Phase 5** config-modal-reorg follow-up (fold together). _(Derek 2026-07-03: per-printer settings are worth modularizing; "the whole thing probably needs a bit of refactoring.")_
 
