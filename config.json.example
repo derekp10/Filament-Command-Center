@@ -26,11 +26,8 @@
     "comment_bindings": "Dryer-box-to-toolhead bindings are stored per-slot on each Dryer Box location in locations.json under extra.slot_targets — edit via Location Manager UI.",
     "dryer_slots": [],
 
-    "comment_pathfil": "--- MID-PRINT SWAP DEDUCT (22.3b): sensor->nozzle filament (grams) charged to a RUN-OUT spool as waste — the remnant between the runout sensor and the nozzle that leaves the spool but is never deposited (you pull it at the swap). Keyed by printer NAME; 'default' applies to the rest; omit / 0 = deposited-only (the run-out spool is then a couple grams light, and usually gets run to empty anyway). Core One ~2g (short path), XL ~4g (long path). A scalar (e.g. 2) applies to all printers.",
-    "path_filament_g": {
-        "default": 0,
-        "My Printer": 2
-    },
+    "comment_pathfil": "--- MID-PRINT SWAP DEDUCT (22.3b): grams between the runout sensor and the nozzle, pulled out (never printed) when you swap a run-out spool. Added to the run-out spool's auto-deduct so its weight matches the empty spool. 0 = off. EDIT THIS IN THE CONFIG TOOL (Behavior section), not here. Typical ~2 (Core One) / ~4 (XL); one value covers all printers for now. Advanced: a {printer_name: grams} map is also honored by the reader for a future per-printer version.",
+    "path_filament_g": 0,
 
     "auto_recover_filabridge_errors": true
 }
