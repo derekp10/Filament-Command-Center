@@ -140,7 +140,10 @@
                 // Include the unbound flag so binding a/unbinding a slot while a
                 // spool stays loaded still re-renders the 🔗 hint (occupancy no
                 // longer toggles with binding now that contents are ungated).
-                return th.id + (th.unbound ? '!u' : '') + ':' + (it ? `${it.id}:${it.color || ''}:${Math.round(it.remaining_weight || 0)}` : 'empty');
+                // 24.K — include rounded initial_weight so a correction that
+                // changes the bar's denominator (e.g. an L200 weight fix) still
+                // re-renders even if remaining happens to round the same.
+                return th.id + (th.unbound ? '!u' : '') + ':' + (it ? `${it.id}:${it.color || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
             }).join(','));
         });
         return parts.join('||');
@@ -208,8 +211,14 @@
         }
         const weight = (it.remaining_weight !== undefined && it.remaining_weight !== null)
             ? Number(it.remaining_weight) : 0;
-        // 1000g = full bar; widget caps at 100% so heavier spools just stay full.
-        const pct = Math.max(0, Math.min(100, (weight / 1000) * 100));
+        // 24.K — scale the bar to the spool's OWN initial_weight (a 500g spool
+        // full at 500g should read 100%, not 50%). Fall back to 1000g when
+        // initial_weight is missing / zero / invalid so behavior is unchanged
+        // for spools without it. The 100% cap keeps an over-measured spool
+        // (remaining > initial) from overflowing the bar.
+        const initial = (it.initial_weight !== undefined && it.initial_weight !== null && Number(it.initial_weight) > 0)
+            ? Number(it.initial_weight) : 1000;
+        const pct = Math.max(0, Math.min(100, (weight / initial) * 100));
         const barColor = _weightPalette(weight);
         const chipHtml = window.SpoolCardBuilder
             ? window.SpoolCardBuilder.buildCard(it, 'printer-status', {})

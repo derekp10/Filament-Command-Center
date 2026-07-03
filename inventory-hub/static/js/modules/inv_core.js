@@ -103,6 +103,15 @@ const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
 const escAttr = escHtml;
 window.escHtml = escHtml;
 
+// 23.4 — Shared delete-sentinel for clearing a Spoolman `extra` field. The
+// backend merge (spoolman_api._merge_extras_with_existing) treats an OMITTED
+// key as "keep" so partial PATCHes don't wipe siblings; a key whose value is
+// THIS sentinel is the explicit "delete this extra" signal (the merge pops it,
+// never forwards it to Spoolman). Every edit surface that lets the user blank
+// an extra (edit-filament, wizard spool-edit, vendor edit) sends this instead
+// of dropping the key client-side. MUST match spoolman_api.DELETE_EXTRA_SENTINEL.
+window.FCC_DELETE_EXTRA = '__FCC_DELETE_EXTRA__';
+
 const showToast = (msg, type = 'info', duration = 2000) => {
     let c = document.getElementById('toast-container');
     if (!c) { c = document.createElement('div'); c.id = 'toast-container'; document.body.appendChild(c); }

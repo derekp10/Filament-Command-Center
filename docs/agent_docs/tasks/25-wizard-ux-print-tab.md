@@ -1,14 +1,16 @@
-# Group 25: Wizard UX — Print Affordances & Tab-Confirm
+# Group 25: Wizard UX — Print, Tab-Confirm & Spool-Label Parity
 
 **Branch name (when started):** `feature/wizard-ux-print-tab`
-**Estimated effort:** ~2–3 hours
-**Risk:** **LOW.** Pure-frontend, all in [inv_wizard.js](../../../inventory-hub/static/js/modules/inv_wizard.js). No backend / Spoolman-write changes. The label "print" here means **queue a label** (`window.addToQueue`), NOT the print-usage deduct (Group 22) — different subsystem.
+**Estimated effort:** ~3–4 hours
+**Risk:** **LOW.** Pure-frontend, all in [inv_wizard.js](../../../inventory-hub/static/js/modules/inv_wizard.js). No backend / Spoolman-write changes (25.3 reuses the existing `flag_spool_labels` endpoint). The label "print" here means **queue a label** (`window.addToQueue`), NOT the print-usage deduct (Group 22) — different subsystem.
 
-> **Status: TODO** — filed 2026-06-15 by `/refresh-groups`, both items grounded against real code by a 7-agent triage workflow. Two small add/edit-wizard interaction-polish items that share one file. **Do NOT nest under the DONE Group 10 (Wizard UX Overhaul) or Group 17 (post-create chips)** — completed epics get lifted on archive, so nested follow-ups vanish ([[feedback_standalone_followups_not_under_completed_epics]]).
+> **Status: ✅ DONE 2026-07-01** (`feature/group-25-wizard-ux-print-tab` → `dev`). All 3 items shipped, pure-frontend `inv_wizard.js`. **25.I**: `Tab` branch in the shared `wizardBindCombobox` keydown confirms the highlighted/typed item (location + vendor) without `preventDefault` so focus advances. **25.3**: extracted `window.wizardBuildFilamentLabelDiff(orig, fPayload)` + added the `original_color` comparison it was missing, so a wizard Color-name edit flags spool labels via the shared `_maybePromptLabelReprint` (parity with the primary Edit-Filament path). **25.H**: extracted `window.wizardRenderPostSaveQueueActions(...)` — a "🖨️ Queue All" button for multi-create rounds + a queue chip in edit mode (previously none). 11-agent adversarial review found + fixed 1 real bug (a pass-through Tab fired a bubbling `change` → spurious `isDirty` flip → false "Unsaved Changes" prompt; now guarded on actual-change, applied to Enter too). 13 new tests (`test_wizard_group25.py`) + 34 green regression, 0 regressions. Original scope below.
+>
+> _Original (filed 2026-06-15 by `/refresh-groups`; 25.3 added 2026-06-29 from the Group 23 cleanup verification):_ Three small add/edit-wizard interaction-polish items that share one file. **Did NOT nest under the DONE Group 10 (Wizard UX Overhaul) or Group 17 (post-create chips)** — completed epics get lifted on archive, so nested follow-ups vanish ([[feedback_standalone_followups_not_under_completed_epics]]).
 
 ## Why these are one group
 
-Both are self-contained UX polish on the Add/Edit Wizard in the SAME file (`inv_wizard.js`) — one is the post-create/edit print affordance, the other a combobox keydown tweak. They share no surface with Group 23 (which is `inv_details.js` editfilExternal import/scrape). Cohesive, low-risk, ship together.
+All three are self-contained UX/parity polish on the Add/Edit Wizard in the SAME file (`inv_wizard.js`) — the post-create/edit print affordance (25.H), a combobox keydown tweak (25.I), and the edit_spool change-diff parity fix (25.3). They share no surface with the now-DONE Group 23 (which was `inv_details.js` editfilExternal import/scrape), though 25.3 restores parity with a Group 23.3 behavior. Cohesive, low-risk, ship together.
 
 ## Items
 
@@ -29,9 +31,16 @@ Both are self-contained UX polish on the Add/Edit Wizard in the SAME file (`inv_
 **Fix:** add a `Tab` branch mirroring the Enter branch (confirm `.active`, fallback `visible[0]`). **UX choice (Derek's wording implies Enter's behavior):** confirm-then-let-Tab's-default-advance-focus (do NOT `preventDefault`) — Enter confirms + closes but doesn't advance focus; letting Tab proceed gives the natural "confirm and move on." ~5 lines.
 **Surface:** `inv_wizard.js:935-971` (`wizardBindCombobox` keydown; Enter branch at :957-967 is the template).
 
+### 25.3 — Spool-label flag parity: wizard `edit_spool` omits `original_color` (buglist 2026-06-29, from the Group 23 cleanup verification)
+**Buglist:** the Group 23.3 spool-label flag (`POST /api/filament/<id>/flag_spool_labels`, raised when a spool-visible field — Brand/Type/Color-name — changes so the spool's `needs_label_print` is set) fires correctly from the PRIMARY Edit-Filament modal (`inv_details.js`), but the wizard `edit_spool` save **re-implements its own change-diff** (`inv_wizard.js:~2896-2927`) and **OMITS `original_color`** — so editing ONLY the color name through the wizard won't flag the filament's spools for reprint.
+**Grounded (Group 23 verification, 2026-06-29):** the wizard reuse path diffs only `filament_attributes` into its `changedExtras`, not `original_color`; the primary path's `spoolLabelChanged` (inv_details.js) correctly triggers on `original_color`. Secondary-surface partial-reuse gap — not a failure of 23.3 itself (which is DONE + verified).
+**Fix:** include `original_color` in the wizard `edit_spool` `changedExtras` diff so it fires the same `flag_spool_labels` call. **Better:** extract the shared "which fields flag spool labels" trigger into one helper used by BOTH `inv_details` and `inv_wizard` so the two diffs can't drift again. No backend change (the endpoint already exists).
+**Surface:** `inv_wizard.js:~2896-2927` (the edit_spool change-diff); reference `inv_details.js` `spoolLabelChanged` (the correct trigger) + `POST /api/filament/<id>/flag_spool_labels`.
+
 ## Recommended order
 1. **25.I** (highest value / lowest risk — ~5-line keydown branch, fixes keyboard muscle-memory on every location/vendor field).
-2. **25.H** "Queue All" (small loop in the existing chip block), then the print-existing button in the edit-spool path.
+2. **25.3** (small, contained — add `original_color` to the wizard edit_spool diff; ideally extract the shared trigger helper while you're there).
+3. **25.H** "Queue All" (small loop in the existing chip block), then the print-existing button in the edit-spool path.
 
 ## Out of scope / do NOT do
 - Backend / Spoolman changes — both items are frontend-only.

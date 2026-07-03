@@ -64,6 +64,7 @@ def test_prusament_parser_valid_url():
     assert spool["material"] == "PLA"
     assert spool["vendor"]["name"] == "Prusament"
     assert spool["weight"] == 1050.0  # Exact scraped net weight
+    assert spool["weight_is_default"] is False  # real scraped reading, not the 1000g guess
     assert spool["spool_weight"] == 250.0
     assert spool["color_hex"] == "000000"
     assert spool["color_name"] == "Galaxy Black"
@@ -112,10 +113,37 @@ def test_amazon_parser_matching():
     assert spool["vendor"]["name"] == "OVERTURE"
     assert spool["material"] == "PETG"
     assert spool["weight"] == 1000.0
+    # 24.K — the title contains "1kg Spool", so the KG regex extracted a REAL
+    # 1kg weight → weight_is_default must be False (not the silent fallback).
+    assert spool["weight_is_default"] is False
     assert spool["color_name"] == "Black"
     assert spool["density"] == 1.27 # PETG
     assert "PETG" in spool["name"]
     assert spool["external_link"] == url
+
+def test_amazon_parser_weight_is_default_when_title_omits_weight():
+    """24.K — when the Amazon title carries no extractable weight, the parser
+    falls back to 1000g and MUST flag it so the L200 correction / wizard
+    create-path never treat the guess as authoritative."""
+    url = "https://www.amazon.com/dp/B07XYZNOWT"
+    mock_html = """
+    <html><body>
+        <div data-asin="B07XYZNOWT">
+            <h2>HATCHBOX PLA 3D Printer Filament, Dimensional Accuracy +/- 0.03 mm, Black</h2>
+        </div>
+    </body></html>
+    """
+    with patch('requests.get') as mock_get:
+        mock_response = Mock()
+        mock_response.ok = True
+        mock_response.text = mock_html
+        mock_get.return_value = mock_response
+        res = AmazonParser.search(url)
+
+    assert len(res) == 1
+    spool = res[0]
+    assert spool["weight"] == 1000.0          # silent fallback
+    assert spool["weight_is_default"] is True  # ...but flagged as a guess
 
 def test_amazon_parser_invalid_query():
     # Should ignore non-amazon URLs to prevent accidental scraping loops
@@ -154,6 +182,9 @@ def test_threedfp_parser_matching():
     assert spool["density"] == 1.21
     assert spool["spool_weight"] == 140.0
     assert spool["weight"] == 1000.0  # Default metric
+    # 24.K — 3DFP never extracts a real net weight, so the 1000g is ALWAYS a
+    # guess and must be flagged.
+    assert spool["weight_is_default"] is True
     assert spool["color_hex"] == "F8F8F8"
     assert spool["external_link"] == url
 
@@ -161,3 +192,27 @@ def test_threedfp_parser_invalid_query():
     from external_parsers import ThreeDFPParser
     res = ThreeDFPParser.search("PLA Black")
     assert len(res) == 0
+
+def test_prusament_parser_weight_is_default_when_absent():
+    """24.K — a Prusament page that omits the net weight makes the parser
+    fall back to 1000g; weight_is_default must be True (parity with the
+    L200 guard already pinned in test_prusament_scan.py)."""
+    url = "https://prusament.com/spool/17705/abc123/"
+    mock_html = """
+    <html><body>
+    <script>
+    var spoolData = '{"ff_goods_id": 17705, "spool_weight": 250, "filament": {"name": "P PLA Mouse", "material": "PLA", "color_rgb": "#CCCCCC", "color_name": "Pearl Mouse"}}';
+    </script>
+    </body></html>
+    """
+    with patch('requests.get') as mock_get:
+        mock_response = Mock()
+        mock_response.ok = True
+        mock_response.text = mock_html
+        mock_get.return_value = mock_response
+        res = PrusamentParser.search(url)
+
+    assert len(res) == 1
+    spool = res[0]
+    assert spool["weight"] == 1000.0
+    assert spool["weight_is_default"] is True

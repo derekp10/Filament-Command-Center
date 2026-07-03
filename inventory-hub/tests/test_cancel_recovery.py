@@ -17,7 +17,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app as app_module  # noqa: E402
+import app as app_module
+import print_deduct  # L316: patch targets / live seams for moved symbols
+import print_monitor  # L316: patch targets for moved symbols  # noqa: E402
 import print_tracker_store  # noqa: E402
 import cancel_fetch_store  # noqa: E402
 import cancel_review_store  # noqa: E402
@@ -35,11 +37,11 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "review.json"))
     monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
     # Run the deduct synchronously so a recovered cancel is observable inline.
-    monkeypatch.setattr(app_module, "_CANCEL_DEDUCT_RUN_ASYNC", False)
+    monkeypatch.setattr(print_monitor, "_CANCEL_DEDUCT_RUN_ASYNC", False)
     # 22.3: no-op the start-spool snapshot capture (a flag-on PRINTING tick would
     # otherwise hit real Spoolman). Recovery reads start_spools off the persisted
     # entry, not via this helper, so this doesn't affect the recovery-path tests.
-    monkeypatch.setattr(app_module, "_snapshot_active_spools", lambda *a, **k: {})
+    monkeypatch.setattr(print_deduct, "_snapshot_active_spools", lambda *a, **k: {})
     with app_module._PRINT_TRACKER_LOCK:
         app_module._PRINT_TRACKER.clear()
     yield
@@ -85,7 +87,7 @@ def test_tick_persists_tracker_snapshot():
          patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value={"state": "IDLE"}), \
          patch.object(app_module.prusalink_api, "get_printer_job", return_value=None), \
-         patch.object(app_module, "_process_pending_cancel_fetches"):
+         patch.object(print_monitor, "_process_pending_cancel_fetches"):
         app_module._cancel_monitor_tick()
     saved = print_tracker_store.load()
     assert "XL" in saved and saved["XL"]["state"] == "IDLE"
@@ -101,7 +103,7 @@ def _recover_with(persisted, cur_state, cur_job=None):
          patch.object(app_module.prusalink_api, "get_printer_state",
                       return_value=({"state": cur_state} if cur_state is not None else None)), \
          patch.object(app_module.prusalink_api, "get_printer_job", return_value=cur_job), \
-         patch.object(app_module, "_dispatch_cancel_edge") as dispatch, \
+         patch.object(print_monitor, "_dispatch_cancel_edge") as dispatch, \
          patch.object(app_module.state, "add_log_entry") as log:
         app_module._recover_print_tracker_on_start()
     return dispatch, log
@@ -152,8 +154,8 @@ def test_recover_idle_after_inprogress_surfaces_ambiguous_review():
     with patch.object(print_tracker_store, "load", return_value={"XL": _entry()}), \
          patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value={"state": "IDLE"}), \
-         patch.object(app_module, "_dispatch_cancel_edge") as cancel_disp, \
-         patch.object(app_module, "_dispatch_ambiguous_edge") as amb_disp, \
+         patch.object(print_monitor, "_dispatch_cancel_edge") as cancel_disp, \
+         patch.object(print_monitor, "_dispatch_ambiguous_edge") as amb_disp, \
          patch.object(app_module.state, "add_log_entry") as log:
         app_module._recover_print_tracker_on_start()
     cancel_disp.assert_not_called()
@@ -175,8 +177,8 @@ def test_recover_attention_restores_latch_no_fire():
     with patch.object(print_tracker_store, "load", return_value=persisted), \
          patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value={"state": "ATTENTION"}), \
-         patch.object(app_module, "_dispatch_cancel_edge") as cancel_disp, \
-         patch.object(app_module, "_dispatch_ambiguous_edge") as amb_disp:
+         patch.object(print_monitor, "_dispatch_cancel_edge") as cancel_disp, \
+         patch.object(print_monitor, "_dispatch_ambiguous_edge") as amb_disp:
         app_module._recover_print_tracker_on_start()
     cancel_disp.assert_not_called()
     amb_disp.assert_not_called()
@@ -189,7 +191,7 @@ def test_recover_finished_no_fire_no_warn():
     the cutover flag is OFF (the pre-Phase-C behavior). The flag is mocked off so
     this stays deterministic regardless of the live config value (dev currently
     runs with fcc_owns_completion_deduct ON for the Phase-D rehearsal)."""
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=False):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=False):
         dispatch, log = _recover_with({"XL": _entry()}, "FINISHED")
     dispatch.assert_not_called()
     log.assert_not_called()

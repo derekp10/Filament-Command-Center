@@ -24,7 +24,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app as app_module  # noqa: E402
+import app as app_module
+import print_deduct  # L316: patch targets / live seams for moved symbols
+import print_monitor  # L316: patch targets for moved symbols  # noqa: E402
 import print_deduct_ledger  # noqa: E402
 import cancel_fetch_store  # noqa: E402
 import cancel_review_store  # noqa: E402
@@ -35,13 +37,13 @@ def _reset_tracker(monkeypatch):
     app_module._PRINT_TRACKER.clear()
     # 22.3: no-op the start-spool snapshot capture so a flag-on PRINTING tick doesn't
     # hit real Spoolman (a test exercising capture overrides this locally).
-    monkeypatch.setattr(app_module, "_snapshot_active_spools", lambda *a, **k: {})
-    prev_async = app_module._CANCEL_DEDUCT_RUN_ASYNC
-    app_module._CANCEL_DEDUCT_RUN_ASYNC = False  # synchronous dispatch
+    monkeypatch.setattr(print_deduct, "_snapshot_active_spools", lambda *a, **k: {})
+    prev_async = print_monitor._CANCEL_DEDUCT_RUN_ASYNC
+    print_monitor._CANCEL_DEDUCT_RUN_ASYNC = False  # synchronous dispatch
     try:
         yield
     finally:
-        app_module._CANCEL_DEDUCT_RUN_ASYNC = prev_async
+        print_monitor._CANCEL_DEDUCT_RUN_ASYNC = prev_async
         app_module._PRINT_TRACKER.clear()
 
 
@@ -79,16 +81,16 @@ def _drive(states, jobs=None):
 
 def test_finished_does_not_fire_when_flag_off():
     comp = MagicMock()
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=False), \
-         patch.object(app_module, "_on_completion_edge", comp):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=False), \
+         patch.object(print_monitor, "_on_completion_edge", comp):
         _drive(["PRINTING", "FINISHED"], jobs={0: _job(job_id=9)})
     assert comp.call_count == 0
 
 
 def test_finished_fires_completion_when_flag_on():
     comp = MagicMock()
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
-         patch.object(app_module, "_on_completion_edge", comp):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_monitor, "_on_completion_edge", comp):
         _drive(["PRINTING", "FINISHED"],
                jobs={0: _job(filename="/usb/done.gcode", job_id=9, progress=0.95)})
     assert comp.call_count == 1
@@ -99,18 +101,18 @@ def test_finished_fires_completion_when_flag_on():
 
 def test_finished_with_flag_on_does_not_fire_a_cancel():
     cancel, comp = MagicMock(), MagicMock()
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
-         patch.object(app_module, "_on_cancel_edge", cancel), \
-         patch.object(app_module, "_on_completion_edge", comp):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_monitor, "_on_cancel_edge", cancel), \
+         patch.object(print_monitor, "_on_completion_edge", comp):
         _drive(["PRINTING", "FINISHED"])
     assert cancel.call_count == 0 and comp.call_count == 1
 
 
 def test_stopped_still_fires_cancel_not_completion_with_flag_on():
     cancel, comp = MagicMock(), MagicMock()
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
-         patch.object(app_module, "_on_cancel_edge", cancel), \
-         patch.object(app_module, "_on_completion_edge", comp):
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_monitor, "_on_cancel_edge", cancel), \
+         patch.object(print_monitor, "_on_completion_edge", comp):
         _drive(["PRINTING", "STOPPED"])
     assert cancel.call_count == 1 and comp.call_count == 0
 
@@ -136,7 +138,7 @@ def test_completed_print_deducts_footer(stores_tmp):
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
                       side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
-         patch.object(app_module, "_apply_usage_to_printer", side_effect=_apply):
+         patch.object(print_deduct, "_apply_usage_to_printer", side_effect=_apply):
         res = app_module.deduct_completed_print("XL", "done.gcode", "J-9")
     assert res["status"] == "deducted"
     # The FOOTER array (25, 40) is deducted — NOT a prefix-parse of the 1mm body.
@@ -148,7 +150,7 @@ def test_completed_print_deducts_footer(stores_tmp):
 def test_completed_print_exactly_once(stores_tmp):
     print_deduct_ledger.record_deduct("XL", "J-9", filename="done.gcode", scale=1.0, grams=65)
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
-         patch.object(app_module, "_apply_usage_to_printer") as apply_mock:
+         patch.object(print_deduct, "_apply_usage_to_printer") as apply_mock:
         res = app_module.deduct_completed_print("XL", "done.gcode", "J-9")
     assert res["status"] == "skipped"
     apply_mock.assert_not_called()
@@ -158,7 +160,7 @@ def test_completed_print_download_lock_defers_with_complete_kind(stores_tmp):
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode", return_value=None), \
-         patch.object(app_module, "_apply_usage_to_printer") as apply_mock:
+         patch.object(print_deduct, "_apply_usage_to_printer") as apply_mock:
         res = app_module.deduct_completed_print("XL", "done.gcode", "J-9")
     assert res["status"] == "awaiting_fetch"
     apply_mock.assert_not_called()
@@ -181,7 +183,7 @@ def test_completed_print_no_spool_stashes_recoverable_review(stores_tmp):
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
                       side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
-         patch.object(app_module, "_apply_usage_to_printer", return_value=(0, [], {0})), \
+         patch.object(print_deduct, "_apply_usage_to_printer", return_value=(0, [], {0})), \
          patch.object(app_module.state, "add_log_entry"):
         res = app_module.deduct_completed_print("XL", "done.gcode", "J-9")
     assert res["status"] == "pending_unresolved" and res["kind"] == "no_spool"
@@ -211,7 +213,7 @@ def test_completed_print_partial_bind_records_applied_not_full_and_warns(stores_
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
                       side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
-         patch.object(app_module, "_apply_usage_to_printer", side_effect=_apply), \
+         patch.object(print_deduct, "_apply_usage_to_printer", side_effect=_apply), \
          patch.object(app_module.state, "add_log_entry", side_effect=lambda *a, **k: logs.append(a)):
         res = app_module.deduct_completed_print("XL", "done.gcode", "J-P")
     assert res["status"] == "deducted"
@@ -231,8 +233,8 @@ def test_fetch_retry_complete_abandoned_when_flag_off(stores_tmp):
         "progress": 1.0, "first_seen": time.time(), "kind": "complete",
         "attempts": 1, "last_status": "awaiting_fetch"})
     states = {"XL": _state("IDLE")}  # unlocked, but flag is now OFF
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=False), \
-         patch.object(app_module, "deduct_completed_print") as comp:
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=False), \
+         patch.object(print_deduct, "deduct_completed_print") as comp:
         app_module._process_pending_cancel_fetches(states, "http://fb")
     comp.assert_not_called()
     assert cancel_fetch_store.get_pending("XL", "J-9") is None  # abandoned
@@ -288,9 +290,9 @@ def test_fetch_retry_routes_complete_to_completion_deduct(stores_tmp):
     # Printer is IDLE → file unlocked → the retry should fire deduct_completed_print
     # (flag still ON — the cutover is in effect).
     states = {"XL": _state("IDLE")}
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
-         patch.object(app_module, "deduct_completed_print", side_effect=_complete) as comp, \
-         patch.object(app_module, "_create_pending_cancel_review") as review:
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_deduct, "deduct_completed_print", side_effect=_complete) as comp, \
+         patch.object(print_deduct, "_create_pending_cancel_review") as review:
         app_module._process_pending_cancel_fetches(states, "http://fb")
     assert calls.get("complete") == ("XL", "done.gcode", "J-9")
     review.assert_not_called()
@@ -307,8 +309,8 @@ def test_fetch_retry_ambiguous_routes_to_review_flagged(stores_tmp):
         "progress": 0.26, "first_seen": time.time(), "kind": "cancel",
         "ambiguous": True, "attempts": 1, "last_status": "awaiting_fetch"})
     states = {"XL": _state("IDLE")}  # unlocked
-    with patch.object(app_module, "deduct_completed_print") as comp, \
-         patch.object(app_module, "_create_pending_cancel_review",
+    with patch.object(print_deduct, "deduct_completed_print") as comp, \
+         patch.object(print_deduct, "_create_pending_cancel_review",
                       return_value={"status": "pending", "job_id": "J-7"}) as review:
         app_module._process_pending_cancel_fetches(states, "http://fb")
     comp.assert_not_called()
@@ -325,7 +327,7 @@ def test_fetch_retry_plain_cancel_routes_with_ambiguous_false(stores_tmp):
         "progress": 0.5, "first_seen": time.time(), "kind": "cancel",
         "attempts": 1, "last_status": "awaiting_fetch"})
     states = {"XL": _state("IDLE")}
-    with patch.object(app_module, "_create_pending_cancel_review",
+    with patch.object(print_deduct, "_create_pending_cancel_review",
                       return_value={"status": "pending", "job_id": "J-8"}) as review:
         app_module._process_pending_cancel_fetches(states, "http://fb")
     review.assert_called_once()
@@ -339,7 +341,7 @@ def test_fetch_retry_waits_while_finished_locked(stores_tmp):
         "attempts": 1, "last_status": "awaiting_fetch"})
     # Still FINISHED (finish screen up) → file locked → must NOT attempt yet.
     states = {"XL": _state("FINISHED")}
-    with patch.object(app_module, "deduct_completed_print") as comp:
+    with patch.object(print_deduct, "deduct_completed_print") as comp:
         app_module._process_pending_cancel_fetches(states, "http://fb")
     comp.assert_not_called()
     assert cancel_fetch_store.get_pending("XL", "J-9") is not None  # still queued
@@ -367,9 +369,9 @@ def test_enqueue_default_kind_is_cancel(stores_tmp):
 
 def test_recover_finished_fires_completion_when_flag_on():
     entry = {"state": "PRINTING", "job_id": "J-9", "filename": "done.gcode", "progress": 0.9}
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=True), \
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value=_state("FINISHED")), \
-         patch.object(app_module, "_dispatch_completion_edge") as disp:
+         patch.object(print_monitor, "_dispatch_completion_edge") as disp:
         acted = app_module._recover_one_print_latch("XL", entry, "http://fb")
     assert acted is True
     disp.assert_called_once()
@@ -378,9 +380,9 @@ def test_recover_finished_fires_completion_when_flag_on():
 
 def test_recover_finished_noop_when_flag_off():
     entry = {"state": "PRINTING", "job_id": "J-9", "filename": "done.gcode", "progress": 0.9}
-    with patch.object(app_module, "_fcc_owns_completion_deduct", return_value=False), \
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=False), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value=_state("FINISHED")), \
-         patch.object(app_module, "_dispatch_completion_edge") as disp:
+         patch.object(print_monitor, "_dispatch_completion_edge") as disp:
         acted = app_module._recover_one_print_latch("XL", entry, "http://fb")
     assert acted is False
     disp.assert_not_called()

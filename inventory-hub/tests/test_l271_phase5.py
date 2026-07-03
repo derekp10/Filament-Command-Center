@@ -403,13 +403,18 @@ def test_reject_duplicate_locationid(api_base_url, require_server):
 # ---------------------------------------------------------------------------
 
 def test_migration_wired_at_startup():
-    app = _read("app.py")
+    # L316: the startup block lives in startup_migrations.py now — read the
+    # whole app-module family (see tests/source_family.py).
+    import source_family
+    app = source_family.read_app_family()
     assert "migrate_shelf_grouping_rows_if_needed" in app, "Phase 5 migration must run at startup"
     assert "pre-wall-row-synthesis-migration" in app, "must take a timestamped backup"
 
 
 def test_parent_validation_present_in_save():
-    app = _read("app.py")
+    # L316: api_save_location moves to routes_locations.py — family read.
+    import source_family
+    app = source_family.read_app_family()
     assert "A location can't be its own parent" in app
     assert "is not an existing location" in app
     assert "is_descendant(" in app, "must reject descendant-cycle parents"

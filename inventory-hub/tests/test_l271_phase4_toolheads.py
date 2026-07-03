@@ -24,9 +24,11 @@ import locations_db
 
 
 def _read_app():
-    here = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    with open(os.path.join(here, "app.py"), "r", encoding="utf-8") as f:
-        return f.read()
+    """Concatenated source of app.py + the L316 carve modules — the startup
+    block this file's canary greps for now lives in startup_migrations.py
+    (and the PUT handler moves to routes_bindings.py). See tests/source_family.py."""
+    import source_family
+    return source_family.read_app_family()
 
 
 # A deliberately NON-CONTIGUOUS example (XL-5 at position 5) — proves the migration

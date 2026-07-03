@@ -88,6 +88,16 @@ CONFIG_SCHEMA = [
                "(the slicer footer, same as FilaBridge billed). Turn this ON the "
                "SAME moment you stop the FilaBridge container — otherwise completed "
                "prints double-deduct (FilaBridge + FCC)."),
+    Field("path_filament_g", "Runout path filament (g)", "float", 0,
+          section="behavior", scope="server", min=0, max=50,
+          help="Grams of filament between the runout SENSOR and the nozzle that you pull "
+               "out (never printed) when swapping a run-out spool. On a mid-print runout, "
+               "FCC adds this to the RUN-OUT spool's automatic deduct so its weight lands "
+               "at the now-empty spool; the replacement spool is never affected, and a "
+               "deliberate (non-runout) swap doesn't add it. 0 = off — the run-out spool "
+               "just reads a couple grams heavy until you zero it (usually fine, it's "
+               "empty). Typical: ~2 g short-path (Core One), ~4 g longer-path (XL). One "
+               "value covers all printers for now; a per-printer version is planned."),
     Field("fcc.weighEntry.defaultMode", "Default weigh-in mode", "select", "additive",
           section="client", scope="client",
           choices=["gross", "net", "additive", "set_used"],
