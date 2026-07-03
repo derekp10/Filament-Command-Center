@@ -458,7 +458,7 @@ def _is_sid_swap(before, after):
     return before is not None and after is not None and str(before) != str(after)
 
 
-def _record_swap_events(entry, end_snap, progress):
+def _record_swap_events(entry, end_snap, progress, runout=False):
     """22.3(b): append ordered mid-print spool-swap events to entry['swap_log'] by
     diffing a resume-time snapshot (`end_snap` = {position: loaded sid or None}) against
     the mapping in effect for the segment just printed — start_spools advanced by the
@@ -491,6 +491,10 @@ def _record_swap_events(entry, end_snap, progress):
             "progress": float(progress or 0.0),
             "from_sid": from_sid,
             "to_sid": to_sid,
+            # 22.3(b): True when this pause was an ATTENTION runout (sensor tripped) vs
+            # a deliberate manual/PAUSED early swap — the split charges the run-out
+            # spool the sensor→nozzle `path_filament_g` remnant only on a runout.
+            "runout": bool(runout),
         })
         added += 1
     if added:
@@ -772,7 +776,8 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
             if changed:
                 return _route_completion_to_review(
                     printer_name, filename, job_id, usage_map, fb_url, sorted(changed),
-                    active_locs=active_locs, swap_log=swap_log)
+                    active_locs=active_locs, swap_log=swap_log,
+                    ip_address=ip_address, api_key=api_key, start_spools=start_spools)
         except Exception:
             pass  # detection is best-effort; fall through to auto-apply
 
@@ -806,8 +811,160 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
 
+def _tool_grams(cum, pos):
+    """Grams at toolhead position `pos` from a per-tool prefix-parse/footer dict.
+    Single-extruder prints fold onto one tool, so a sole entry IS this position."""
+    if not cum:
+        return 0.0
+    if pos in cum:
+        return float(cum[pos])
+    if str(pos) in cum:
+        return float(cum[str(pos)])
+    if len(cum) == 1:
+        return float(next(iter(cum.values())))
+    return 0.0
+
+
+def _compute_swap_split(ip_address, api_key, filename, usage_map, swap_log,
+                        start_spools, path_filament_g=0.0):
+    """22.3(b): compute the per-segment spool→grams split for a COMPLETED print whose
+    toolhead spool changed mid-print (runout or a deliberate early swap). Returns
+    ``{position: [ {sid, grams, segment, runout}, … ]}`` — one row per spool that fed
+    the position, each charged only ITS segment's grams — or ``None`` on any failure so
+    the caller degrades to the full-footer manual-split review.
+
+    Per position: segment 0's spool = ``start_spools[pos]`` (the original / run-out);
+    segment k's spool = the k-th swap's ``to_sid``. Segment grams = the prefix-parse
+    cumulative diff at the swap boundaries; the LAST segment = footer − prior, so the
+    per-spool grams sum EXACTLY to the slicer's per-tool total (no E-walk drift). On a
+    segment whose ending swap is a RUNOUT (``ev['runout']``), ``path_filament_g`` (the
+    sensor→nozzle remnant that leaves the spool but never deposits — pulled at the swap)
+    is added to that run-out spool.
+    """
+    if not swap_log:
+        return None
+    # Fetch+decode ONCE; cumulative grams at every swap boundary (progress order).
+    all_events = sorted(swap_log, key=lambda e: (e.get('position', 0),
+                                                 float(e.get('progress') or 0.0)))
+    progresses = [float(e.get('progress') or 0.0) for e in all_events]
+    seg = prusalink_api.compute_segment_usage(ip_address, api_key, filename, progresses)
+    if not seg:
+        return None
+    footer = seg.get('footer') or {}
+    cums = seg.get('cums') or []
+    if len(cums) != len(all_events):
+        return None
+    cum_by_id = {id(ev): cums[i] for i, ev in enumerate(all_events)}
+
+    by_pos = {}
+    for ev in swap_log:
+        by_pos.setdefault(ev.get('position', 0), []).append(ev)
+
+    start_spools = start_spools or {}
+    result = {}
+    for pos, evs in by_pos.items():
+        evs = sorted(evs, key=lambda e: float(e.get('progress') or 0.0))
+        footer_pos = _tool_grams(footer, pos)
+        if footer_pos <= 0:
+            return None  # no footer grams for a swapped position → don't guess
+        seg_grams, prev = [], 0.0
+        for ev in evs:
+            c = _tool_grams(cum_by_id.get(id(ev)) or {}, pos)
+            # Cumulative must be monotonic and within the footer; a bad remap/parse
+            # that regresses or overshoots means we can't trust the split.
+            if c < prev - 0.01 or c > footer_pos + 0.01:
+                return None
+            seg_grams.append(max(0.0, c - prev))
+            prev = c
+        seg_grams.append(max(0.0, footer_pos - prev))  # tail segment ties to the total
+        seg_spools = [start_spools.get(str(pos)) or start_spools.get(pos)]
+        for ev in evs:
+            seg_spools.append(ev.get('to_sid'))
+        rows = []
+        for k, (sid, grams) in enumerate(zip(seg_spools, seg_grams)):
+            if sid is None:
+                continue
+            is_runout = bool(k < len(evs) and evs[k].get('runout'))
+            extra = path_filament_g if (is_runout and path_filament_g) else 0.0
+            rows.append({'sid': sid, 'grams': round(grams + extra, 2),
+                         'segment': k, 'runout': is_runout})
+        if rows:
+            result[pos] = rows
+    return result or None
+
+
+def _path_filament_g(printer_name):
+    """Per-printer sensor->nozzle filament (grams) charged to a RUN-OUT spool: the
+    remnant that leaves the spool but never deposits on the part (the user pulls it
+    at the swap). Read from config `path_filament_g` — a {printer_name: grams} map
+    (with an optional 'default'), or a scalar applied to all printers. 0.0 when
+    unset, so the split is deposited-only (a couple grams light on the run-out
+    spool, which usually gets run to empty anyway). Core One ~2 g, XL ~4 g."""
+    try:
+        cfg = config_loader.load_config() or {}
+    except Exception:
+        return 0.0
+    pf = cfg.get('path_filament_g')
+    if isinstance(pf, dict):
+        v = pf.get(printer_name, pf.get('default', 0))
+    elif isinstance(pf, (int, float)):
+        v = pf
+    else:
+        v = 0
+    try:
+        return max(0.0, float(v))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _split_to_review_rows(split):
+    """Turn a :func:`_compute_swap_split` result (``{position: [{sid, grams, segment,
+    runout}, …]}``) into cancel-review ``spools`` rows — one row per spool, charged its
+    OWN segment's grams, with the current used/remaining snapshot for display. Archived
+    run-out spools resolve by sid. Same-sid segments (an A→B→A re-load) are SUMMED so
+    there is exactly one row per spool (the confirm loop keys by sid, so two same-sid
+    rows would silently collapse to one deduct). Returns ``None`` if any spool can't be
+    read, so the caller falls back to the full-footer manual review."""
+    by_sid = {}
+    for pos, seg_rows in split.items():
+        for r in seg_rows:
+            sid = r['sid']
+            agg = by_sid.setdefault(sid, {'grams': 0.0, 'position': pos, 'runout': False})
+            agg['grams'] += float(r.get('grams', 0) or 0)
+            agg['runout'] = agg['runout'] or bool(r.get('runout'))
+    rows = []
+    for sid, agg in by_sid.items():
+        spool = spoolman_api.get_spool(sid)
+        if not spool:
+            return None
+        used = float(spool.get('used_weight', 0) or 0)
+        initial = float(spool.get('initial_weight', 0) or 0)
+        grams = round(agg['grams'], 2)
+        remaining_before = max(0.0, initial - used)
+        remaining_after = max(0.0, remaining_before - grams)
+        disp = spoolman_api.format_spool_display(spool)
+        rows.append({
+            'sid': sid,
+            'toolhead': '',
+            'position': agg['position'],
+            'grams': grams,
+            'current_used': round(used, 2),
+            'initial_weight': round(initial, 2),
+            'remaining_before': round(remaining_before, 1),
+            'remaining_after': round(remaining_after, 1),
+            'display': disp.get('text', "#%s" % sid),
+            'color': disp.get('color', '888888'),
+            'ambiguous': False,
+            'runout': agg['runout'],
+            'auto_split': True,
+        })
+    rows.sort(key=lambda r: r['sid'])
+    return rows or None
+
+
 def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_url,
-                               changed_positions, active_locs=None, swap_log=None):
+                               changed_positions, active_locs=None, swap_log=None,
+                               ip_address=None, api_key=None, start_spools=None):
     """22.3 minimum-viable: a COMPLETED print where a used toolhead's mapped spool
     CHANGED mid-print is NOT auto-applied (the full footer would dump the whole
     tool's usage on the replacement spool, zeroing the run-out spool). Stash a
@@ -828,7 +985,22 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         return {"status": "skipped", "reason": "already processed", "job_id": job_id}
     if cancel_review_store.has_pending(printer_name, job_id):
         return {"status": "skipped", "reason": "already pending", "job_id": job_id}
-    rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=active_locs)
+    # 22.3(b) AUTO-SPLIT: when the gcode is fetchable, charge EACH spool that fed the
+    # toolhead only its OWN segment's grams (run-out spool 0->swap, replacement
+    # swap->end) so both are shown + settled together. Degrades to the full-footer
+    # manual review when there's no swap_log (coarse start-vs-end diff only) or the
+    # gcode can't be fetched/parsed. The confirm loop applies every `spools` row by
+    # sid, so there's no confirm-side change either way.
+    split_rows = None
+    if swap_log and ip_address and api_key:
+        split = _compute_swap_split(
+            ip_address, api_key, filename, usage_map, swap_log,
+            start_spools, path_filament_g=_path_filament_g(printer_name))
+        if split:
+            split_rows = _split_to_review_rows(split)
+    auto_split = bool(split_rows)
+    rows = split_rows or _resolve_usage_to_spools(
+        printer_name, usage_map, fb_url, active_locs=active_locs)
     if not rows:
         # The replacement isn't bound right now — still recoverable via no_spool.
         # (Shouldn't usually reach here: a flagged position has a bound end spool.)
@@ -847,22 +1019,27 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         "spools": rows,
         "ambiguous": False,
         "kind": "spool_changed",
+        # 22.3(b): True when the per-segment grams were AUTO-computed (each row's
+        # `grams` is that spool's OWN segment, pre-filled for one-tap confirm);
+        # False = the legacy full-footer-on-current-spool manual split.
+        "auto_split": auto_split,
         "changed_positions": sorted(changed_positions),
-        # 22.3(b): the ordered mid-print swap history (empty when only the coarse
-        # start-vs-end diff fired). Carried for the future per-segment apportionment;
-        # the review still splits manually today.
+        # The ordered mid-print swap history (empty when only the coarse start-vs-end
+        # diff fired) — the per-segment source + the review's context.
         "swap_log": list(swap_log) if swap_log else [],
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     cancel_review_store.add_pending(record)
+    how = "auto-split proposed" if auto_split else "full footer NOT auto-applied"
     state.add_log_entry(
         f"🔁 {printer_name}: spool changed mid-print ('{filename}') at toolhead "
-        f"position(s) {sorted(changed_positions)} — full footer NOT auto-applied; "
+        f"position(s) {sorted(changed_positions)} — {how}; "
         f"review the split: {total:.2f}g across {len(rows)} spool(s).",
         "WARNING", rows[0]['color'],
         meta={"type": "cancel_deduct_pending",
               "printer_name": printer_name, "job_id": str(job_id)})
-    return {"status": "pending_spool_changed", "spools": len(rows), "job_id": str(job_id)}
+    return {"status": "pending_spool_changed", "spools": len(rows),
+            "job_id": str(job_id), "auto_split": auto_split}
 
 
 def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None):

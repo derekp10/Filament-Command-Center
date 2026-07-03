@@ -87,8 +87,11 @@ def test_record_clean_change_appends_event():
     entry = {"start_spools": {"0": 100}}
     n = app_module._record_swap_events(entry, {0: 200}, 0.5)
     assert n == 1
+    # runout defaults False (feature/runout-auto-split 2026-07-03: a manual/PAUSED swap,
+    # not an ATTENTION runout, so no sensor→nozzle path remnant is charged).
     assert entry["swap_log"] == [
-        {"seq": 0, "position": 0, "progress": 0.5, "from_sid": 100, "to_sid": 200}]
+        {"seq": 0, "position": 0, "progress": 0.5, "from_sid": 100, "to_sid": 200,
+         "runout": False}]
 
 
 def test_record_same_sid_no_event():
