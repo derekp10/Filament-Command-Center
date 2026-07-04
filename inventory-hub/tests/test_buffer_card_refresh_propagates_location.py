@@ -29,16 +29,22 @@ def _read(name: str) -> str:
     return (JS_DIR / name).read_text(encoding="utf-8")
 
 
-def _find_live_refresh_buffer(src: str) -> str:
-    """Return just the body of the `liveRefreshBuffer` function so the
-    asserts below don't false-positive on similar code elsewhere in the
-    file (e.g., loadBuffer or renderBuffer)."""
+def _find_refresh_payload_body(src: str) -> str:
+    """Return just the body of the `_renderSpoolsRefreshPayload` function so
+    the asserts below don't false-positive on similar code elsewhere in the
+    file (e.g., loadBuffer or renderBuffer).
+
+    L206 moved the diff/mutation loop OUT of `liveRefreshBuffer` (which now
+    only fetches /api/spools/refresh and delegates) and INTO
+    `_renderSpoolsRefreshPayload`, so the bulk-pulse dispatcher can feed a
+    spools_refresh payload straight into the diff loop without a second
+    fetch. The propagation logic these tests guard lives there now."""
     m = re.search(
-        r"const\s+liveRefreshBuffer\s*=\s*\(\s*\)\s*=>\s*\{(.+?)^};",
+        r"const\s+_renderSpoolsRefreshPayload\s*=\s*\([^)]*\)\s*=>\s*\{(.+?)^};",
         src,
         re.DOTALL | re.MULTILINE,
     )
-    assert m, "liveRefreshBuffer function not found in inv_cmd.js"
+    assert m, "_renderSpoolsRefreshPayload function not found in inv_cmd.js"
     return m.group(1)
 
 
@@ -48,26 +54,26 @@ def _find_live_refresh_buffer(src: str) -> str:
 
 class TestLiveRefreshBufferDiffCheck:
     def test_diff_check_includes_location(self):
-        body = _find_live_refresh_buffer(_read("inv_cmd.js"))
+        body = _find_refresh_payload_body(_read("inv_cmd.js"))
         assert re.search(r"fresh\.location\s*!==\s*s\.location", body), \
-            "liveRefreshBuffer must compare fresh.location vs s.location " \
+            "_renderSpoolsRefreshPayload must compare fresh.location vs s.location " \
             "or backend-driven moves won't trigger a re-render (buglist L40)"
 
     def test_diff_check_includes_is_ghost(self):
-        body = _find_live_refresh_buffer(_read("inv_cmd.js"))
+        body = _find_refresh_payload_body(_read("inv_cmd.js"))
         assert re.search(r"fresh\.is_ghost\s*!==\s*s\.is_ghost", body), \
-            "liveRefreshBuffer must compare fresh.is_ghost vs s.is_ghost " \
+            "_renderSpoolsRefreshPayload must compare fresh.is_ghost vs s.is_ghost " \
             "(deployed-vs-buffered transitions need this)"
 
     def test_diff_check_includes_slot(self):
-        body = _find_live_refresh_buffer(_read("inv_cmd.js"))
+        body = _find_refresh_payload_body(_read("inv_cmd.js"))
         assert re.search(r"fresh\.slot\s*!==\s*s\.slot", body), \
-            "liveRefreshBuffer must compare fresh.slot vs s.slot"
+            "_renderSpoolsRefreshPayload must compare fresh.slot vs s.slot"
 
     def test_diff_check_includes_deployed_to(self):
-        body = _find_live_refresh_buffer(_read("inv_cmd.js"))
+        body = _find_refresh_payload_body(_read("inv_cmd.js"))
         assert re.search(r"fresh\.deployed_to\s*!==\s*s\.deployed_to", body), \
-            "liveRefreshBuffer must compare fresh.deployed_to vs s.deployed_to"
+            "_renderSpoolsRefreshPayload must compare fresh.deployed_to vs s.deployed_to"
 
 
 # ---------------------------------------------------------------------------
@@ -76,21 +82,21 @@ class TestLiveRefreshBufferDiffCheck:
 
 class TestLiveRefreshBufferMutation:
     def test_mutation_copies_location(self):
-        body = _find_live_refresh_buffer(_read("inv_cmd.js"))
+        body = _find_refresh_payload_body(_read("inv_cmd.js"))
         assert re.search(r"s\.location\s*=\s*fresh\.location", body), \
-            "liveRefreshBuffer detects a location change but doesn't copy it " \
-            "onto state.heldSpools — renderBuffer will use the stale value"
+            "_renderSpoolsRefreshPayload detects a location change but doesn't " \
+            "copy it onto state.heldSpools — renderBuffer will use the stale value"
 
     def test_mutation_copies_is_ghost(self):
-        body = _find_live_refresh_buffer(_read("inv_cmd.js"))
+        body = _find_refresh_payload_body(_read("inv_cmd.js"))
         assert re.search(r"s\.is_ghost\s*=\s*fresh\.is_ghost", body)
 
     def test_mutation_copies_slot(self):
-        body = _find_live_refresh_buffer(_read("inv_cmd.js"))
+        body = _find_refresh_payload_body(_read("inv_cmd.js"))
         assert re.search(r"s\.slot\s*=\s*fresh\.slot", body)
 
     def test_mutation_copies_deployed_to(self):
-        body = _find_live_refresh_buffer(_read("inv_cmd.js"))
+        body = _find_refresh_payload_body(_read("inv_cmd.js"))
         assert re.search(r"s\.deployed_to\s*=\s*fresh\.deployed_to", body)
 
 

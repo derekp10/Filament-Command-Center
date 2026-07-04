@@ -15,6 +15,8 @@ Covers:
 """
 from __future__ import annotations
 
+import re
+
 from playwright.sync_api import Page, expect
 
 
@@ -246,3 +248,104 @@ def test_apply_skips_unchecked_rows(page: Page):
     assert page.locator("#editfil-diameter").input_value() == ""
     # Density was checked → applied.
     assert page.locator("#editfil-density").input_value() == "1.24"
+
+
+# ---------------------------------------------------------------------------
+# Group 26.9 — coverage backfill for Group-23 import-apply behaviors that were
+# previously verified only by code-read (23.1 color_hex + product_url apply,
+# 23.2 panel reset on reopen).
+# ---------------------------------------------------------------------------
+
+def _render_preview(page: Page, template: dict) -> None:
+    """Render the import preview directly from a controlled parser template
+    (bypassing the network search) so a test can pin exactly how one scraped
+    field applies. Uses the same render path the search flow feeds into."""
+    page.evaluate("(tpl) => window.editfilExternalRenderPreview(tpl)", template)
+    expect(page.locator("#editfil-external-preview:not(.d-none)")).to_have_count(1)
+
+
+def _check_and_apply(page: Page, key: str) -> None:
+    page.evaluate(
+        "(k) => { const cb = document.querySelector(`.editfil-import-row[data-key=\"${k}\"]`);"
+        "  if (cb) cb.checked = true; }",
+        key,
+    )
+    page.evaluate("() => window.editfilExternalApplySelected()")
+
+
+def test_import_apply_color_hex_expands_and_syncs_picker(page: Page):
+    """23.1 — a scraped 3-digit color_hex is expanded to #rrggbb, written to the
+    color-hex input, and the bound color picker is kept in sync via the
+    synthetic input event (a bare .value set wouldn't fire the picker)."""
+    _wait_ready(page)
+    _open_edit_filament(page, {
+        "id": 601, "name": "NoColor", "material": "PLA",
+        "vendor": {"id": 1, "name": "V"},
+    })
+    _render_preview(page, {"color_hex": "abc", "material": "PLA"})
+    expect(page.locator(".editfil-import-row[data-key='color_hex']")).to_have_count(1)
+    _check_and_apply(page, "color_hex")
+    assert page.locator("#editfil-color-hex").input_value().lower() == "#aabbcc"
+    assert page.locator("#editfil-color-picker").input_value().lower() == "#aabbcc"
+
+
+def test_import_apply_bad_hex_skips_with_warning(page: Page):
+    """23.1 — a non-6-digit scraped color is skipped (not written) and the user
+    gets a 'Skipped color' warning instead of a silent drop."""
+    _wait_ready(page)
+    page.evaluate(
+        """() => {
+            window.__toasts = [];
+            const orig = window.showToast;
+            window.showToast = (msg, type, dur) => {
+                window.__toasts.push({msg: msg, type: type});
+                return orig && orig(msg, type, dur);
+            };
+        }"""
+    )
+    _open_edit_filament(page, {
+        "id": 602, "name": "NoColor", "material": "PLA",
+        "vendor": {"id": 1, "name": "V"},
+    })
+    _render_preview(page, {"color_hex": "nothex", "material": "PLA"})
+    _check_and_apply(page, "color_hex")
+    toasts = page.evaluate("() => window.__toasts || []")
+    assert any("Skipped color" in (t.get("msg") or "") for t in toasts), toasts
+    # The junk value must NOT have been written into the hex input.
+    assert "nothex" not in page.locator("#editfil-color-hex").input_value().lower()
+
+
+def test_import_apply_writes_product_url_from_external_link(page: Page):
+    """23.1 — the parser's external_link is applied into the product-url input
+    (the consumer used to drop it even though the parser scraped it)."""
+    _wait_ready(page)
+    _open_edit_filament(page, {
+        "id": 603, "name": "NoUrl", "material": "PLA",
+        "vendor": {"id": 1, "name": "V"},
+    })
+    _render_preview(page, {"external_link": "https://example.com/galaxy", "material": "PLA"})
+    expect(page.locator(".editfil-import-row[data-key='extra.product_url']")).to_have_count(1)
+    _check_and_apply(page, "extra.product_url")
+    assert page.locator("#editfil-product-url").input_value() == "https://example.com/galaxy"
+
+
+def test_external_reset_clears_panel_on_reopen(page: Page):
+    """23.2 — reopening the Edit Filament modal resets the import panel so a
+    prior edit's typed query and rendered preview can't leak onto the next
+    filament (editfilExternalReset fires from _editfilOpenModal on every open)."""
+    _wait_ready(page)
+    _stub_external_search(page)
+    _open_edit_filament(page, {
+        "id": 604, "name": "First", "material": "PLA",
+        "vendor": {"id": 1, "name": "V"},
+    })
+    page.locator("#editfil-external-query").fill("galaxy black")
+    page.evaluate("() => window.editfilExternalSearch()")
+    expect(page.locator("#editfil-external-preview:not(.d-none)")).to_have_count(1)
+    # Reopen with a DIFFERENT filament — the reset must wipe query + preview.
+    _open_edit_filament(page, {
+        "id": 605, "name": "Second", "material": "PETG",
+        "vendor": {"id": 1, "name": "V"},
+    })
+    assert page.locator("#editfil-external-query").input_value() == ""
+    expect(page.locator("#editfil-external-preview")).to_have_class(re.compile(r"\bd-none\b"))

@@ -1349,9 +1349,13 @@ def test_edit_modal_slicer_profile_clear(page: Page):
 
     payload = page.evaluate("() => window.__lastFetchPayload")
     extra = payload["data"]["extra"]
-    # Empty string in dirty diff → update-mode merge deletes the key from
-    # mergedExtra, so the merged extras dict carries no slicer_profile.
-    assert "slicer_profile" not in extra
+    # Group 23.4: blanking an extra in EDIT mode no longer omits the key
+    # (omit == "keep", per the sibling-wipe guard). The edit surface now sends
+    # the delete-sentinel (window.FCC_DELETE_EXTRA) so the backend explicitly
+    # clears it — _merge_extras_with_existing pops the sentinel before it ever
+    # reaches Spoolman. So the outbound payload carries the sentinel, not a
+    # missing key.
+    assert extra["slicer_profile"] == "__FCC_DELETE_EXTRA__"
 
 
 # --- Slicer profile fact card + pencil overlay (Filament Details Modal) ----

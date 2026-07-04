@@ -278,6 +278,64 @@ def test_prusament_scan_fetch_failure_is_reported(client):
 
 
 # ---------------------------------------------------------------------------
+# 23.6 — canonical product_url UPGRADE on a matched scan (coverage backfill,
+# Group 26.9). Verified-by-code-read before; now pinned.
+# ---------------------------------------------------------------------------
+
+def _product_url_writes(upd_mock):
+    """Every product_url value written via update_spool(sid, {'extra': {...}})."""
+    out = []
+    for call in upd_mock.call_args_list:
+        args = call.args
+        if len(args) >= 2 and isinstance(args[1], dict):
+            extra = args[1].get("extra") or {}
+            if "product_url" in extra:
+                out.append(extra["product_url"])
+    return out
+
+
+def test_prusament_scan_upgrades_query_form_product_url_to_canonical(client):
+    """23.6 — a matched spool storing product_url in the non-canonical query
+    form (?spoolId=<hash>) is UPGRADED to the canonical /spool/<id>/<hash> path
+    form on scan (persist "save the url to the product link section")."""
+    scanned = "https://prusament.com/spool/17705/730b53b325/"
+    stored = {"id": 71,
+              "extra": {"product_url": "https://prusament.com/spool/?spoolId=730b53b325"},
+              "filament": {"id": 7}}
+    blank_fil = {"id": 7, "name": "Prusament PLA", "settings_extruder_temp": None,
+                 "settings_bed_temp": None, "extra": {}}
+    # Strip parser extras so pm_fill carries ONLY the product_url upgrade.
+    with patch("external_parsers.search_external", return_value=[_parsed_obj(extra={})]), \
+         patch("spoolman_api.get_all_spools", return_value=[stored]), \
+         patch("spoolman_api.get_filament", return_value=blank_fil), \
+         patch("spoolman_api.get_spools_for_filament", return_value=[stored]), \
+         patch("spoolman_api.update_spool", return_value={"id": 71}) as upd, \
+         patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
+        res = _scan(client, url=scanned)
+    assert res["type"] == "prusament_matched"
+    assert _product_url_writes(upd) == ["https://prusament.com/spool/17705/730b53b325"]
+
+
+def test_prusament_scan_canonical_product_url_is_idempotent(client):
+    """23.6 — when the matched spool ALREADY stores the canonical product_url,
+    the scan must NOT re-write it (the differ-guard skips → no per-scan churn)."""
+    scanned = "https://prusament.com/spool/17705/730b53b325/"
+    canonical = "https://prusament.com/spool/17705/730b53b325"
+    stored = {"id": 71, "extra": {"product_url": canonical}, "filament": {"id": 7}}
+    blank_fil = {"id": 7, "name": "Prusament PLA", "settings_extruder_temp": None,
+                 "settings_bed_temp": None, "extra": {}}
+    with patch("external_parsers.search_external", return_value=[_parsed_obj(extra={})]), \
+         patch("spoolman_api.get_all_spools", return_value=[stored]), \
+         patch("spoolman_api.get_filament", return_value=blank_fil), \
+         patch("spoolman_api.get_spools_for_filament", return_value=[stored]), \
+         patch("spoolman_api.update_spool", return_value={"id": 71}) as upd, \
+         patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
+        res = _scan(client, url=scanned)
+    assert res["type"] == "prusament_matched"
+    assert _product_url_writes(upd) == []   # no product_url churn
+
+
+# ---------------------------------------------------------------------------
 # L200 — spool weight-field correction from a matched Prusament scan.
 # `_compute_prusament_spool_weight_diff` is pure (used-preserving model);
 # the handler attaches its result to the prusament_matched payload — computed,
