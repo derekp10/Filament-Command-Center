@@ -31,16 +31,31 @@ def _open_wizard_fresh(page: Page) -> None:
 
 
 def _force_close_wizard(page: Page) -> None:
-    """Dismiss the wizard without the unsaved-changes guard tripping."""
-    page.evaluate("""
-        const m = bootstrap.Modal.getInstance(document.getElementById('wizardModal'));
-        if (m) {
+    """Dismiss the wizard without the unsaved-changes guard tripping.
+
+    Bootstrap swallows `.hide()` when the modal is still mid-transition (its
+    `_isTransitioning` guard), which intermittently left the wizard `.show`
+    so the chained `hidden.bs.modal` reopen never fired (Group 26.7). Hide,
+    and if a transition race ate the call, settle briefly and retry."""
+    def _hide():
+        page.evaluate("""
+            const el = document.getElementById('wizardModal');
+            const m = bootstrap.Modal.getInstance(el) || bootstrap.Modal.getOrCreateInstance(el);
             // wizardState is script-scoped, not on window — reference by name.
             try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}
-            m.hide();
-        }
-    """)
-    expect(page.locator("#wizardModal")).not_to_be_visible(timeout=5_000)
+            if (m) m.hide();
+        """)
+    for attempt in range(3):
+        _hide()
+        if attempt == 2:
+            # Final attempt: let the assertion raise directly if it still fails.
+            expect(page.locator("#wizardModal")).not_to_be_visible(timeout=3_000)
+            return
+        try:
+            expect(page.locator("#wizardModal")).not_to_be_visible(timeout=2_500)
+            return
+        except AssertionError:
+            page.wait_for_timeout(300)  # let the in-flight transition settle, then retry
 
 
 def _pick_first_real_location(page: Page) -> str:

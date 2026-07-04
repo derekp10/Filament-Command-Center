@@ -230,7 +230,7 @@ def test_escape_key_pops_breadcrumb_instead_of_closing(page: Page, open_manage_m
 
 
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
-def test_escape_key_walks_out_of_three_level_stack(page: Page, base_url: str):
+def test_escape_key_walks_out_of_three_level_stack(page: Page, base_url: str, reset_dom_state_js):
     """Regression: user reported going Location List → Toolhead → Dryer Box
     (via Edit Full Bindings) and then Escaping; 3 escapes would get them
     back to the location list but no further — locMgrModal wouldn't
@@ -240,8 +240,22 @@ def test_escape_key_walks_out_of_three_level_stack(page: Page, base_url: str):
     already hidden."""
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    # Group 26.5: this test passed in isolation but failed mid-sweep because a
+    # prior test left a modal/backdrop/focus state behind, so a fresh
+    # open here rendered `#manageModal` hidden. Clear that pollution before the
+    # first interaction (conftest's canonical DOM-reset), then wait for
+    # state.allLocations to populate — openManage / openLocationsModal silently
+    # no-op until it does (the same guard the open_manage_modal fixture bakes
+    # in), so a slow mid-sweep locations fetch would otherwise leave the modal
+    # stack unopened.
+    page.evaluate(reset_dom_state_js)
     page.wait_for_function("() => typeof window.openManage === 'function'", timeout=5000)
-    page.wait_for_timeout(500)
+    page.wait_for_function(
+        "() => typeof state === 'object' && Array.isArray(state.allLocations) "
+        "&& state.allLocations.length > 0",
+        timeout=10000,
+    )
+    page.wait_for_timeout(300)
 
     # Level 1: open the Locations manager.
     page.evaluate("window.openLocationsModal && window.openLocationsModal()")

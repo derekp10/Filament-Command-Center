@@ -49,12 +49,23 @@ def test_visual_quickswap_kb_active(page: Page, open_manage_modal, snapshot):
     snapshot(page.locator("#manage-quickswap-section"), "quickswap-grid-kb-active")
 
 
-@pytest.mark.usefixtures("require_server", "bound_slot")
-def test_visual_quickswap_confirm_overlay(page: Page, open_manage_modal, snapshot):
-    open_manage_modal(TEST_TOOLHEAD)
-    page.locator(".fcc-qs-slot").first.click()
-    expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=2000)
-    snapshot(page.locator("#fcc-quickswap-confirm-overlay"), "quickswap-confirm-overlay")
+@pytest.mark.usefixtures("require_server")
+def test_visual_quickswap_confirm_overlay(page: Page, open_manage_modal, snapshot, bound_loaded_slot):
+    box, slot, toolhead = (
+        bound_loaded_slot["box"], bound_loaded_slot["slot"], bound_loaded_slot["toolhead"]
+    )
+    open_manage_modal(toolhead)
+    page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first.click()
+    # ~3s active-print probe before the overlay mounts (offline dev printers).
+    expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=8000)
+    # Snapshot the bounded confirm CARD, not the full-viewport backdrop: the
+    # backdrop is semi-transparent, so capturing it bakes the live dashboard
+    # (activity-log timestamps, backlog count) into the baseline and guarantees
+    # a >1% drift on every run. The card (`.border-info`, min-width 420px) is
+    # the only bordered panel inside the overlay and pins the layout/styling.
+    card = page.locator("#fcc-quickswap-confirm-overlay .border-info").first
+    expect(card).to_be_visible()
+    snapshot(card, "quickswap-confirm-overlay")
 
 
 @pytest.mark.usefixtures("require_server")

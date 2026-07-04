@@ -20,9 +20,16 @@ def _setup_page_with_held_spool(page: Page, spool_id=42):
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.doAssign === 'function'")
-    # Inject a known spool into the buffer state object.
+    # Inject a known spool into the buffer state object. Also stamp
+    # window.lastLocalBufferChange so the 2s loadBuffer poll's "local change
+    # wins" grace window (3s) skips overwriting our injected spool with the
+    # empty server buffer mid-test — that race intermittently emptied
+    # state.heldSpools and failed `assert <id> in []` (Group 26.8).
     page.evaluate(
-        "(sid) => { state.heldSpools = [{id: sid, display: '#' + sid, color: 'ff0000'}]; }",
+        "(sid) => {"
+        " state.heldSpools = [{id: sid, display: '#' + sid, color: 'ff0000'}];"
+        " window.lastLocalBufferChange = Date.now();"
+        " }",
         spool_id,
     )
 
@@ -212,6 +219,8 @@ def _setup_active_print_overlay(page: Page):
             return orig(url, opts);
         };
         state.heldSpools = [{id: 99, display: '#99', color: 'ff0000'}];
+        // 26.8: protect the injected buffer from the 2s loadBuffer poll overwrite.
+        window.lastLocalBufferChange = Date.now();
         state.allLocations = (state.allLocations || []).filter(l => l.LocationID !== 'XL-1');
         state.allLocations.push({LocationID: 'XL-1', Type: 'Tool Head', 'Max Spools': '1', Name: 'XL-1'});
         const m = document.getElementById('manage-loc-id');

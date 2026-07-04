@@ -152,3 +152,25 @@ def test_spool_save_payload_only_includes_purchase_url_when_user_typed(page: Pag
     assert payload_extras.get("purchase_url") == "https://store.example/spool-1"
 
     _force_close_wizard(page)
+
+
+def test_metadata_summary_shows_product_chip_when_product_url_filled(page: Page):
+    """23.5 (Group 26.9 coverage backfill) — the Pricing & Metadata section
+    summary shows a '📄 product' chip when the spool's product_url is filled,
+    mirroring the '🔗 link' purchase chip. Previously the summary advertised
+    only purchase-side fields, so a filled product link was invisible."""
+    _open_wizard_fresh(page)
+    summary = page.locator(
+        "button.fcc-wiz-section-toggle[data-bs-target='#wiz-spool-metadata-panel'] "
+        ".fcc-wiz-section-summary"
+    )
+    # No product_url yet → no product chip in the summary.
+    page.evaluate("() => window.wizardRefreshSectionSummary('wiz-spool-metadata-panel')")
+    assert "📄 product" not in (summary.inner_html() or "")
+
+    # Fill the product link → the chip appears on the next summary refresh.
+    page.locator("#wiz-spool-product_url").fill("https://store.example/prod-1")
+    page.evaluate("() => window.wizardRefreshSectionSummary('wiz-spool-metadata-panel')")
+    expect(summary).to_contain_text("📄 product")
+
+    _force_close_wizard(page)

@@ -99,33 +99,19 @@ def test_return_overlay_flags_missing_origin_explicitly(page: Page, open_manage_
 # Overlay close-with-manage-modal
 # ---------------------------------------------------------------------------
 
-def _find_bound_and_loaded(api_base_url):
-    payload = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json()
-    for entry in payload.get("slots", []):
-        if not entry.get("target"):
-            continue
-        contents = requests.get(
-            f"{api_base_url}/api/get_contents?id={entry['box']}", timeout=5
-        ).json()
-        for it in contents or []:
-            if str(it.get("slot", "")).replace('"', '').strip() == str(entry["slot"]):
-                return entry["box"], str(entry["slot"]), entry["target"]
-    return None
-
-
 @pytest.mark.usefixtures("require_server")
-def test_confirm_overlay_dismisses_when_modal_closes_via_x(page: Page, open_manage_modal, api_base_url):
+def test_confirm_overlay_dismisses_when_modal_closes_via_x(page: Page, open_manage_modal, bound_loaded_slot):
     """Open a confirm, X-close the manage modal. Re-opening the same
     toolhead must not inherit the stale confirm overlay."""
-    hit = _find_bound_and_loaded(api_base_url)
-    if not hit:
-        pytest.skip("No bound+loaded slot available to open a confirm against.")
-    box, slot, toolhead = hit
+    box, slot, toolhead = (
+        bound_loaded_slot["box"], bound_loaded_slot["slot"], bound_loaded_slot["toolhead"]
+    )
     open_manage_modal(toolhead)
     btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     btn.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
-    expect(overlay).to_be_visible(timeout=2000)
+    # ~3s active-print probe before the overlay mounts (offline dev printers).
+    expect(overlay).to_be_visible(timeout=8000)
 
     # Hide the manage modal without dismissing the confirm first.
     # Group 15 — the confirm overlay's full-screen backdrop now correctly
@@ -149,16 +135,13 @@ def test_confirm_overlay_dismisses_when_modal_closes_via_x(page: Page, open_mana
 
 
 @pytest.mark.usefixtures("require_server")
-def test_bind_picker_dismisses_when_modal_closes_via_x(page: Page, open_manage_modal, api_base_url):
+def test_bind_picker_dismisses_when_modal_closes_via_x(page: Page, open_manage_modal, real_toolhead):
     """Same discipline for the Bind-a-Slot picker."""
-    hit = _find_bound_and_loaded(api_base_url)
-    if not hit:
-        pytest.skip("No bound+loaded slot available to open the picker against.")
-    _, _, toolhead = hit
+    toolhead = real_toolhead
     open_manage_modal(toolhead)
     page.locator("#quickswap-bind-slot-btn").click()
     picker = page.locator("#fcc-bind-picker-overlay")
-    expect(picker).to_be_visible(timeout=3000)
+    expect(picker).to_be_visible(timeout=5000)
 
     page.locator("#manageModal .modal-header .btn-close").click()
     page.wait_for_timeout(500)
