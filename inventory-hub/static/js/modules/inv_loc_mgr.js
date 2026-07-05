@@ -1476,7 +1476,20 @@ window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, 
     setProcessing(true);
     window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: loc }) })
         .then(r => r.json())
-        .then(() => { setProcessing(false); if(window.fetchLocations) window.fetchLocations(); refreshManageView(loc); showToast("Cleared!"); })
+        .then((res) => {
+            setProcessing(false);
+            if(window.fetchLocations) window.fetchLocations();
+            refreshManageView(loc);
+            // 27.6 — a bulk clear leaves SLOTTED spools (toolhead/MMU-loaded) in
+            // place on purpose. Be honest about it rather than always saying
+            // "Cleared!": warn when survivors remain so the user knows the
+            // location isn't actually empty (matches the backend Activity Log).
+            if (res && Array.isArray(res.skipped_slotted) && res.skipped_slotted.length) {
+                showToast(res.msg || `${res.skipped_slotted.length} slotted spool(s) left in place — unload the slot to remove them.`, "warning", 7000);
+            } else {
+                showToast("Cleared!");
+            }
+        })
         .catch(() => { setProcessing(false); showToast("Eject-all failed", "error", 7000); });
 });
 
