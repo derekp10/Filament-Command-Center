@@ -386,7 +386,9 @@ def api_save_location():
 @app.route('/api/locations', methods=['DELETE'])
 def api_delete_location():
     target = request.args.get('id', '').strip()
-    if not target: return jsonify({"success": False})
+    # 28.B1 — a missing/blank id is a client validation error: answer 400 with a
+    # message rather than a bare 200 {"success": false}.
+    if not target: return jsonify({"success": False, "msg": "No location id provided."}), 400
     confirm_active = request.args.get('confirm_active_print', '').strip().lower() in ('1', 'true', 'yes')
 
     current = locations_db.load_locations_list()
@@ -451,7 +453,14 @@ def api_delete_spool(sid):
     action in the spool details modal (see inv_details.js). The frontend
     is responsible for the double-confirm UX (type-the-id pattern); this
     endpoint trusts the request and just executes the delete."""
-    snapshot = spoolman_api.get_spool(sid) or {}
+    # 28.B3 — existence guard: a nonexistent (or unreadable) spool fails closed
+    # with 404 instead of blindly attempting the delete and surfacing a Spoolman
+    # rejection as a 502. Fail-closed also avoids a blind delete on a transient
+    # get_spool blip.
+    snapshot = spoolman_api.get_spool(sid)
+    if snapshot is None:
+        state.add_log_entry(f"⚠️ Delete Spool #{sid}: not found in Spoolman", "WARNING", "ff8800")
+        return jsonify({"success": False, "error": "Spool not found"}), 404
     label = f"#{sid}"
     fil = snapshot.get('filament') or {}
     if fil.get('name'):
@@ -493,6 +502,11 @@ def api_delete_filament(fid):
             state.add_log_entry(f"❌ Cascade delete: failed to delete Spool #{sid} (parent Filament {fil_label}): {err}",
                                 "ERROR", "ff4444")
             spool_errors.append({"spool_id": sid, "error": err})
+            # 28.B2 — stop on the FIRST child failure ('abort' should abort):
+            # the filament delete will be aborted anyway, so continuing to delete
+            # the remaining children is needlessly destructive. Leaves a coherent
+            # partial state (only children before the failure are gone).
+            break
 
     if spool_errors:
         # Don't try to delete the filament if any child spool failed —

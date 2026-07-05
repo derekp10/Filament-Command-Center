@@ -173,23 +173,24 @@ def test_location_label_second_post_appends_without_duplicate_header(client, tmp
 
 def test_location_label_unassigned_special_case_no_slots(client, tmp_path, monkeypatch):
     """Pins the UNASSIGNED synthetic row: no DB lookup, Name 'Unassigned',
-    Max Spools 0 so no slots file is created, and the WRITTEN LocationID is
-    the uppercased scanned id ('UNASSIGNED'), not the synthetic row's
-    'Unassigned' — the handler always writes target_id."""
+    Max Spools 0 so no slots file is created.
+    28.A11 — the WRITTEN LocationID + LOC: QR now carry the synthetic row's
+    STORED casing ('Unassigned'), not the uppercased scanned id, so a
+    lowercase-stored id round-trips."""
     _mount_output(monkeypatch, tmp_path)
     _set_locations(monkeypatch, [])  # lookup list is irrelevant for UNASSIGNED
 
     resp = client.post("/api/print_location_label", json={"id": "Unassigned"})
     body = resp.get_json()
     assert body["success"] is True
-    assert body["msg"].startswith("Queue: UNASSIGNED in ")
+    assert body["msg"].startswith("Queue: Unassigned in ")
     assert "Slots" not in body["msg"]
 
     assert _csv_rows(tmp_path / "labels_locations.csv") == [{
-        "LocationID": "UNASSIGNED",
+        "LocationID": "Unassigned",
         "Name": "Unassigned",
         "Cleaned_Name": "Unassigned",
-        "QR_Code": "LOC:UNASSIGNED",
+        "QR_Code": "LOC:Unassigned",
     }]
     assert not (tmp_path / "slots_to_print.csv").exists()
 
@@ -387,7 +388,7 @@ def test_batch_location_max_spools_key_case_insensitive(client, tmp_path, monkey
                        json={"ids": ["SH-B2"], "mode": "location",
                              "clear_old": True}).get_json()
     assert body["success"] is True
-    assert body["msg"] == "Overwritten 1 items. (+2 Slots)"
+    assert body["msg"] == "Overwritten 1 item. (+2 Slots)"  # 28.A12 — singular
     assert len(spy.calls) == 2
     assert [r["QR_Code"] for r in spy.calls[1]["rows"]] == [
         "LOC:SH-B2:SLOT:1", "LOC:SH-B2:SLOT:2"]
@@ -406,35 +407,31 @@ def test_batch_location_max_spools_one_writes_no_slots_file(client, tmp_path, mo
                        json={"ids": ["SH-C1"], "mode": "location",
                              "clear_old": True}).get_json()
     assert body["success"] is True
-    assert body["msg"] == "Overwritten 1 items."
+    assert body["msg"] == "Overwritten 1 item."  # 28.A12 — singular grammar
     assert len(spy.calls) == 1
     assert spy.calls[0]["path"] == str(tmp_path / "labels_locations.csv")
 
 
-def test_batch_location_row_missing_exact_locationid_key_fails_whole_export(client, tmp_path, monkeypatch):
-    """The location-mode pre-load builds loc_lookup via row['LocationID'] —
-    an EXACT key access. One row stored with a differently-cased key (e.g.
-    'locationid') raises KeyError and the generic handler fails the ENTIRE
-    batch with msg \"'LocationID'\" plus an ERROR Activity Log entry.
-
-    # NOTE: pins current behavior; see suspected_bugs — inconsistent with the
-    # case-insensitive key matching used for 'Max Spools' later in this same
-    # handler and with api_print_location_label's tolerant lookup."""
+def test_batch_location_row_with_lowercase_locationid_key_matches(client, tmp_path, monkeypatch):
+    """28.A8 FIX — the location-mode pre-load builds loc_lookup with
+    case-insensitive LocationID key access. A row stored with a
+    differently-cased key ('locationid') is matched instead of raising KeyError
+    and failing the WHOLE batch — consistent with the case-insensitive
+    'Max Spools' matching later in this handler and api_print_location_label."""
     _mount_output(monkeypatch, tmp_path)
     _set_locations(monkeypatch, [{"locationid": "WEIRD-1", "Name": "W"}])
-    logs = _capture_logs(monkeypatch)
     spy = _WriterSpy()
     monkeypatch.setattr(labels_csv, "_write_label_csv", spy)
 
     body = client.post("/api/print_batch_csv",
                        json={"ids": ["WEIRD-1"], "mode": "location",
                              "clear_old": True}).get_json()
-    assert body["success"] is False
-    assert body["msg"] == "'LocationID'"        # raw str(KeyError)
-    assert spy.calls == []
-    assert any(len(t) > 1 and t[1] == "ERROR"
-               and "Label CSV export failed (labels_locations.csv)" in t[0]
-               for t in logs), logs
+    assert body["success"] is True
+    assert body["count"] == 1
+    assert len(spy.calls) == 1  # no Max Spools -> no slots write
+    assert spy.calls[0]["rows"] == [
+        {"LocationID": "WEIRD-1", "Name": "W",
+         "QR_Code": "LOC:WEIRD-1", "Cleaned_Name": "W"}]
 
 
 # ===========================================================================
@@ -478,9 +475,11 @@ def test_batch_filament_mode_exact_row_headers_and_temp_formatting(client, tmp_p
     assert len(spy.calls) == 1
     call = spy.calls[0]
     assert call["path"] == str(tmp_path / "labels_swatch.csv")
-    # core headers first, then flatten_json extras sorted alphabetically
+    # core headers first, then flatten_json extras sorted alphabetically.
+    # 28.A7 — FILAMENT_7's empty `extra: {}` now yields a preserved 'extra'
+    # column (empty value) instead of vanishing; it sorts between density and id.
     assert call["fieldnames"] == SWATCH_CORE_HEADERS + [
-        "density", "id", "material", "settings_bed_temp",
+        "density", "extra", "id", "material", "settings_bed_temp",
         "settings_extruder_temp", "vendor_name"]
     assert call["rows"] == [{
         "ID": 7,
@@ -497,20 +496,19 @@ def test_batch_filament_mode_exact_row_headers_and_temp_formatting(client, tmp_p
         "id": 7,
         "material": "PETG",
         "vendor_name": "Acme",
+        "extra": "",   # 28.A7 — empty nested container preserved as a column
         "settings_extruder_temp": 240,
         "settings_bed_temp": 85,
         "density": 1.27,
     }]
 
 
-def test_batch_filament_mode_absent_or_zero_temps_render_empty_and_brand_unsanitized(client, tmp_path, monkeypatch):
-    """Pins the falsy-temp rendering: absent nozzle temp AND a literal 0 bed
-    temp both become '' (a deliberate 0°C prints blank), absent density
-    becomes '', and — unlike spool/location modes — the filament branch does
-    NOT run sanitize_label_text, so emoji survive into Brand.
-
-    # NOTE: pins current behavior; see suspected_bugs (0-temp rendered blank;
-    # sanitize asymmetry between spool and filament modes)."""
+def test_batch_filament_mode_absent_temp_blank_zero_temp_renders_and_brand_sanitized(client, tmp_path, monkeypatch):
+    """28.A9 + 28.A10 FIX — an ABSENT nozzle temp still renders '' (None), but a
+    literal 0 bed temp now renders '0°C' (0 is a real value, not falsy-blank);
+    absent density stays ''. And the filament branch now runs
+    sanitize_label_text like spool/location modes, so the raccoon emoji becomes
+    'Raccoon' in Brand instead of surviving into the P-touch swatch CSV."""
     _mount_output(monkeypatch, tmp_path)
     monkeypatch.setattr(labels_csv, "get_color_name", lambda f: "TestColor")
     monkeypatch.setattr(labels_csv, "get_smart_type", lambda m, e: "TestType")
@@ -528,11 +526,11 @@ def test_batch_filament_mode_absent_or_zero_temps_render_empty_and_brand_unsanit
     assert body["success"] is True
 
     row = spy.calls[0]["rows"][0]
-    assert row["Temp_Nozzle"] == ""
-    assert row["Temp_Bed"] == ""       # 0 is falsy -> blank, not '0°C'
+    assert row["Temp_Nozzle"] == ""    # absent -> None -> blank
+    assert row["Temp_Bed"] == "0°C"    # 28.A10 — literal 0 is a real value now
     assert row["Density"] == ""
     assert row["QR_Code"] == "FIL:8"
-    assert row["Brand"] == "\U0001f99d Labs"  # raccoon emoji NOT sanitized in filament mode
+    assert row["Brand"] == "Raccoon Labs"  # 28.A9 — sanitized in filament mode
     assert (row["Red"], row["Green"], row["Blue"]) == ("", "", "")
 
 
@@ -554,7 +552,7 @@ def test_batch_append_reuses_existing_header_order(client, tmp_path, monkeypatch
                        json={"ids": [7], "mode": "filament",
                              "clear_old": False}).get_json()
     assert body["success"] is True
-    assert body["msg"] == "Appended 1 items."
+    assert body["msg"] == "Appended 1 item."  # 28.A12 — singular grammar
 
     assert _csv_lines(seeded) == [
         "QR_Code,ID,Brand",   # single header, ORIGINAL custom order preserved

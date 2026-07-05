@@ -93,12 +93,11 @@ def test_hex_to_rgb_bad_input_returns_empty_string_triple():
     assert app_module.hex_to_rgb('ZZZZZZ') == ("", "", "")    # ValueError swallow
 
 
-def test_hex_to_rgb_length_guard_runs_before_hash_strip():
-    """# NOTE: pins current behavior; see suspected_bugs.
-    The len() guard checks the RAW string (before lstrip('#')), so a
-    '#'-prefixed 5-digit hex passes the guard and the blue channel is parsed
-    from a single digit: '#AABBC' → (170, 187, 12)."""
-    assert app_module.hex_to_rgb('#AABBC') == (170, 187, 12)
+def test_hex_to_rgb_hash_stripped_before_length_guard():
+    """28.A1 FIX — the '#' is stripped BEFORE the length guard, so a
+    '#'-prefixed short hex is rejected to ('','','') instead of parsing the
+    blue channel from a single digit. '#AABBC' → 5 payload digits → reject."""
+    assert app_module.hex_to_rgb('#AABBC') == ("", "", "")
 
 
 def test_hex_to_rgb_extra_trailing_chars_ignored():
@@ -159,11 +158,10 @@ def test_get_smart_type_falsy_attrs_filtered():
     assert result == 'Silk PETG'
 
 
-def test_get_smart_type_attrs_without_material_has_trailing_space():
-    """# NOTE: pins current behavior; see suspected_bugs.
-    With attrs present but material None/empty, the f-string leaves a
-    TRAILING SPACE ('Matte ') — that exact string lands in the label CSV."""
-    assert app_module.get_smart_type(None, {'filament_attributes': '["Matte"]'}) == 'Matte '
+def test_get_smart_type_attrs_without_material_no_trailing_space():
+    """28.A2 FIX — with attrs present but material None/empty, only the non-empty
+    parts are joined, so there is NO trailing space: 'Matte' (not 'Matte ')."""
+    assert app_module.get_smart_type(None, {'filament_attributes': '["Matte"]'}) == 'Matte'
 
 
 # ---------------------------------------------------------------------------
@@ -200,12 +198,11 @@ def test_get_color_name_missing_extra_key_uses_name():
     assert app_module.get_color_name({'name': 'NoExtra'}) == 'NoExtra'
 
 
-def test_get_color_name_name_fallback_not_quote_stripped():
-    """# NOTE: pins current behavior; see suspected_bugs.
-    The name FALLBACK is returned verbatim — NOT clean_string'd — an
-    asymmetry with the original_color path. A JSON-quoted name would print
-    with literal quotes on the label."""
-    assert app_module.get_color_name({'extra': {}, 'name': '"Quoted"'}) == '"Quoted"'
+def test_get_color_name_name_fallback_quote_stripped():
+    """28.A3 FIX — the name FALLBACK is now clean_string'd too (symmetry with
+    the original_color path), so a JSON-quoted name loses its literal quotes
+    on the label."""
+    assert app_module.get_color_name({'extra': {}, 'name': '"Quoted"'}) == 'Quoted'
 
 
 # ---------------------------------------------------------------------------
@@ -239,12 +236,12 @@ def test_get_best_hex_empty_top_level_falls_to_extra():
     assert app_module.get_best_hex(item) == 'ABCDEF'
 
 
-def test_get_best_hex_empty_first_segment_falls_to_color_hex():
-    """# NOTE: pins current behavior; see suspected_bugs.
-    ',445566' (empty FIRST segment) skips multi entirely and falls back to
-    color_hex — the valid second segment is never considered."""
+def test_get_best_hex_empty_first_segment_uses_next_segment():
+    """28.A4 FIX — an empty FIRST segment (',445566') is skipped and the valid
+    second segment is used, rather than abandoning multi_color_hexes for
+    color_hex."""
     item = {'multi_color_hexes': ',445566', 'color_hex': 'AAAAAA'}
-    assert app_module.get_best_hex(item) == 'AAAAAA'
+    assert app_module.get_best_hex(item) == '445566'
 
 
 def test_get_best_hex_empty_input_returns_empty_string():
@@ -282,19 +279,18 @@ def test_sanitize_label_text_multi_emoji_replaces_all():
     assert app_module.sanitize_label_text(combo) == 'RaccoonBoltFireBoxWarn'
 
 
-def test_sanitize_label_text_bare_warning_sign_not_mapped():
-    """# NOTE: pins current behavior; see suspected_bugs.
-    The Warn key includes VS16 (U+FE0F); a BARE U+26A0 warning sign does not
-    match and passes through to the CSV un-translated."""
-    assert app_module.sanitize_label_text('\u26a0 hot') == '\u26a0 hot'
+def test_sanitize_label_text_bare_warning_sign_now_mapped():
+    """28.A5 FIX \u2014 the map keys are bare base code points matched in both bare
+    and emoji-presentation form, so a BARE U+26A0 warning sign is now mapped to
+    'Warn' instead of passing through un-translated."""
+    assert app_module.sanitize_label_text('\u26a0 hot') == 'Warn hot'
 
 
-def test_sanitize_label_text_bolt_with_vs16_leaves_stray_selector():
-    """# NOTE: pins current behavior; see suspected_bugs.
-    The Bolt key is bare U+26A1 (no VS16), so an emoji-presentation bolt
-    (U+26A1 U+FE0F) is replaced but the VS16 is LEFT BEHIND in the output —
-    an invisible non-ASCII char lands in the label CSV."""
-    assert app_module.sanitize_label_text('\u26a1\ufe0f go') == 'Bolt\ufe0f go'
+def test_sanitize_label_text_bolt_with_vs16_no_stray_selector():
+    """28.A5 FIX — the emoji-presentation form (base + U+FE0F) is replaced as a
+    unit, so an emoji-presentation bolt (U+26A1 U+FE0F) becomes 'Bolt' with NO
+    stray invisible VS16 left behind in the label CSV."""
+    assert app_module.sanitize_label_text('\u26a1\ufe0f go') == 'Bolt go'
 
 
 def test_sanitize_label_text_unknown_emoji_passthrough():
@@ -329,21 +325,20 @@ def test_flatten_json_nested_dict_and_list_key_mangling():
     }
 
 
-def test_flatten_json_scalar_input_yields_empty_key():
-    """# NOTE: pins current behavior; see suspected_bugs.
-    A bare scalar hits the else-branch with name='' and the trailing-trim
-    slices to an EMPTY-STRING KEY: {'': 'x'} — which would become a blank
-    CSV column header."""
-    assert app_module.flatten_json('x') == {'': 'x'}
+def test_flatten_json_scalar_input_yields_value_key():
+    """28.A6 FIX — a bare scalar gets a 'value' header (not an empty-string key
+    that would become a blank CSV column header)."""
+    assert app_module.flatten_json('x') == {'value': 'x'}
 
 
-def test_flatten_json_empty_containers_yield_empty_dict():
-    """Empty dict/list produce no keys at all (the branch recurses over
-    nothing) — the container itself is silently dropped."""
+def test_flatten_json_empty_containers_preserve_nested_column():
+    """28.A7 FIX — a NESTED empty dict/list is preserved as an empty-string
+    column instead of vanishing (no silent loss). A TOP-LEVEL empty container
+    has no key, so it still yields {}."""
     assert app_module.flatten_json({}) == {}
     assert app_module.flatten_json([]) == {}
-    # ...including when nested: an empty list value vanishes entirely.
-    assert app_module.flatten_json({'a': [], 'b': 1}) == {'b': 1}
+    # ...but a nested empty list keeps its column (empty value, not dropped).
+    assert app_module.flatten_json({'a': [], 'b': 1}) == {'a': '', 'b': 1}
 
 
 def test_flatten_json_top_level_list_indices():
@@ -357,13 +352,13 @@ def test_flatten_json_list_of_dicts():
     assert app_module.flatten_json({'a': [{'b': 1}, {'b': 2}]}) == {'a_0_b': 1, 'a_1_b': 2}
 
 
-def test_flatten_json_mangled_key_collision_last_wins():
-    """# NOTE: pins current behavior; see suspected_bugs.
-    'a_b' as a literal key and {'a': {'b': ...}} mangle to the SAME output
-    key; iteration order (dict insertion order) decides — the later entry
-    silently overwrites the earlier one."""
-    assert app_module.flatten_json({'a_b': 1, 'a': {'b': 2}}) == {'a_b': 2}
-    assert app_module.flatten_json({'a': {'b': 2}, 'a_b': 1}) == {'a_b': 1}
+def test_flatten_json_mangled_key_collision_disambiguated():
+    """28.A7 FIX — 'a_b' as a literal key and {'a': {'b': ...}} mangle to the
+    SAME output key; instead of the later entry silently overwriting the
+    earlier one, the collision is disambiguated with a '__N' suffix so both
+    values survive (order-preserving: the first writer keeps the base key)."""
+    assert app_module.flatten_json({'a_b': 1, 'a': {'b': 2}}) == {'a_b': 1, 'a_b__2': 2}
+    assert app_module.flatten_json({'a': {'b': 2}, 'a_b': 1}) == {'a_b': 2, 'a_b__2': 1}
 
 
 def test_flatten_json_none_value_preserved():

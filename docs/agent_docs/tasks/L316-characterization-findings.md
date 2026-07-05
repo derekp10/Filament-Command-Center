@@ -1,6 +1,6 @@
 # L316 characterization findings — 50 suspected bugs (2026-07-01)
 
-Pinned by the test layer; triage with Derek. **✅ The 10 🔴 Priority reds (findings 18/21/22/25/27/34/40/41/46/49) were FIXED by Group 27 (2026-07-05)** — each pin was flipped to assert the corrected behavior (some renamed; see the per-finding `✅ FIXED` notes below for the current pin name). The remaining 🟠/🟡 findings stay pinned as-is (Groups 28/29).
+Pinned by the test layer; triage with Derek. **✅ The 10 🔴 Priority reds (findings 18/21/22/25/27/34/40/41/46/49) were FIXED by Group 27 (2026-07-05)** — each pin was flipped to assert the corrected behavior (some renamed; see the per-finding `✅ FIXED` notes below for the current pin name). **✅ The 25 🟠 oranges (findings 1–7, 9–17, 19, 20, 23, 24, 30–33, 35) were FIXED by Group 28 (2026-07-05, `feature/group-28-l316-charact-oranges` → `dev`+`main`)** — each pin was likewise flipped to assert the fix (many renamed to the corrected contract; the current names are in the six `test_l316_charact_{label_helpers,label_endpoints,record_deletes,wizard_error_paths,scan_audit,queue_flags}.py` files, and the per-cluster fix list + Derek's four behavior forks are in `completed-archive.md`). The remaining 🟡 findings (36–39, 42–45, 47, 48, 50, plus doc-notes 28/29) stay pinned as-is (Group 29).
 
 
 ## label-helpers (inventory-hub/tests/test_l316_charact_label_helpers.py)

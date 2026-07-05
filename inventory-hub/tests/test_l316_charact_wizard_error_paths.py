@@ -125,10 +125,10 @@ def test_wizard_update_filament_rejection_surfaces_spoolman_error(monkeypatch):
 
 
 def test_wizard_spool_committed_before_filament_rejection(monkeypatch):
-    """Spool is written FIRST; a subsequent filament rejection still returns
-    success:False even though the spool change already persisted.
-    # NOTE: pins current behavior; see suspected_bugs (partial-write reported
-    # as overall failure, response carries no hint the spool part landed)."""
+    """28.B5 FIX — the spool is written FIRST; a subsequent filament rejection
+    still returns success:False (the filament failure is real), but the response
+    now reports the partial persist honestly: spool_saved:True and a msg that
+    says the spool part landed."""
     pre = {"id": 77, "archived": False, "initial_weight": 1000,
            "used_weight": 200, "remaining_weight": 800}
     post = {"id": 77, "archived": False, "initial_weight": 1000,
@@ -153,7 +153,8 @@ def test_wizard_spool_committed_before_filament_rejection(monkeypatch):
     assert len(spool_writes) == 1, "spool write must have been attempted before the filament save"
     assert spool_writes[0][0] == 77
     assert body["success"] is False
-    assert body["msg"] == "Filament update rejected: HTTP 422: nope"
+    assert body["spool_saved"] is True
+    assert body["msg"] == "Spool saved, but filament update rejected: HTTP 422: nope"
 
 
 def test_wizard_extras_diff_uses_system_managed_guard(monkeypatch):
@@ -271,10 +272,10 @@ def test_create_filament_success_logs_and_returns_filament(monkeypatch):
     assert args == ("SUCCESS", "00ff00")
 
 
-def test_create_filament_rejection_returns_500_generic_msg(monkeypatch):
-    """create_filament -> None maps to HTTP 500 with the fixed generic msg.
-    # NOTE: pins current behavior; see suspected_bugs — unlike its sibling
-    # api_create_vendor, this branch does NOT surface LAST_SPOOLMAN_ERROR."""
+def test_create_filament_rejection_surfaces_last_spoolman_error(monkeypatch):
+    """28.B4 FIX — create_filament -> None now surfaces LAST_SPOOLMAN_ERROR in
+    the msg (matching api_create_vendor and the CLAUDE.md error-surfacing
+    convention), still at HTTP 500 and with no SUCCESS log."""
     monkeypatch.setattr(app_module.spoolman_api, "create_filament", lambda data: None)
     monkeypatch.setattr(app_module.spoolman_api, "LAST_SPOOLMAN_ERROR",
                         "HTTP 400: vendor_id unknown", raising=False)
@@ -285,8 +286,7 @@ def test_create_filament_rejection_returns_500_generic_msg(monkeypatch):
     body = r.get_json()
     assert r.status_code == 500
     assert body["success"] is False
-    assert body["msg"] == "Spoolman rejected the filament create."
-    assert "HTTP 400" not in body["msg"]  # the Spoolman body is NOT surfaced today
+    assert body["msg"] == "HTTP 400: vendor_id unknown"  # Spoolman body surfaced
     assert calls == []  # no SUCCESS log on rejection
 
 
@@ -424,10 +424,9 @@ def test_add_choice_delegates_and_passes_result_through(monkeypatch):
     assert r.get_json() == result
 
 
-def test_add_choice_missing_field_returns_200_success_false(monkeypatch):
-    """Missing new_choice: validation failure returns HTTP 200 (not 400) with
-    the fixed msg, and the schema-write delegate is never called.
-    # NOTE: pins current behavior; see suspected_bugs (200-not-400 quirk)."""
+def test_add_choice_missing_field_returns_400(monkeypatch):
+    """28.B6 FIX — a missing required field is a client validation error → HTTP
+    400 (was 200), with the same msg; the schema-write delegate is never called."""
     called = []
     monkeypatch.setattr(
         app_module.spoolman_api, "update_extra_field_choices",
@@ -437,7 +436,7 @@ def test_add_choice_missing_field_returns_200_success_false(monkeypatch):
         "entity_type": "filament",
         "key": "filament_attributes",
     })
-    assert r.status_code == 200
+    assert r.status_code == 400
     assert r.get_json() == {"success": False, "msg": "Missing required fields."}
     assert called == []
 

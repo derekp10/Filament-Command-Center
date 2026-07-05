@@ -139,9 +139,11 @@ def test_delete_spool_rejection_surfaces_spoolman_error_as_502(monkeypatch):
 
 def test_delete_spool_rejection_fallback_error_when_no_spoolman_body(monkeypatch):
     """When LAST_SPOOLMAN_ERROR is unset (None) the route substitutes the literal
-    fallback string 'Spoolman rejected the delete'."""
+    fallback string 'Spoolman rejected the delete'. (28.B3 — the spool must
+    EXIST to reach the delete, so get_spool returns a real snapshot here; a
+    None snapshot now short-circuits to 404 before the delete.)"""
     client = app_module.app.test_client()
-    monkeypatch.setattr(app_module.spoolman_api, "get_spool", lambda sid: None)
+    monkeypatch.setattr(app_module.spoolman_api, "get_spool", lambda sid: {"id": sid})
     monkeypatch.setattr(app_module.spoolman_api, "delete_spool", lambda sid: False)
     monkeypatch.setattr(app_module.spoolman_api, "LAST_SPOOLMAN_ERROR", None, raising=False)
     _capture_logs(monkeypatch)
@@ -152,21 +154,27 @@ def test_delete_spool_rejection_fallback_error_when_no_spoolman_body(monkeypatch
     assert r.get_json()["error"] == "Spoolman rejected the delete"
 
 
-def test_delete_spool_missing_snapshot_falls_back_to_bare_id_label(monkeypatch):
-    """get_spool -> None (already gone / Spoolman blip): the label falls back to
-    '#<id>' with no parenthesized name, no exception, and the delete proceeds."""
+def test_delete_spool_missing_returns_404_no_delete_attempt(monkeypatch):
+    """28.B3 FIX — get_spool -> None (nonexistent / unreadable) now fails CLOSED:
+    a 404 {'success': False, 'error': 'Spool not found'} is returned, delete_spool
+    is NEVER attempted (no blind delete on a blip), and a WARNING/ff8800 log
+    names the missing id."""
     client = app_module.app.test_client()
+    delete_calls = []
     monkeypatch.setattr(app_module.spoolman_api, "get_spool", lambda sid: None)
-    monkeypatch.setattr(app_module.spoolman_api, "delete_spool", lambda sid: True)
+    monkeypatch.setattr(
+        app_module.spoolman_api, "delete_spool",
+        lambda sid: delete_calls.append(sid) or True,
+    )
     calls = _capture_logs(monkeypatch)
 
     r = client.delete("/api/spool/42")
 
-    assert r.status_code == 200
-    assert r.get_json() == {"success": True, "deleted_spool_id": 42}
+    assert r.status_code == 404
+    assert r.get_json() == {"success": False, "error": "Spool not found"}
+    assert delete_calls == []  # fail-closed: no delete attempted
     msg, args, _ = calls[0]
-    assert "Deleted Spool #42" in msg
-    assert "(" not in msg  # no filament-name suffix
+    assert "Delete Spool #42: not found" in msg
     assert args == ("WARNING", "ff8800")
 
 
@@ -253,13 +261,10 @@ def test_delete_filament_cascade_deletes_spools_first_then_filament(monkeypatch)
 
 
 def test_delete_filament_child_failure_aborts_filament_delete(monkeypatch):
-    """ABORT SEMANTICS: any child-spool failure -> 502 with a spool_errors list and
-    the filament delete is NEVER attempted. The child sweep itself CONTINUES past
-    the failure (spool 3 is still deleted after spool 2 fails), so
-    deleted_spool_ids reports every success — pin both halves.
-    # NOTE: pins current behavior; see suspected_bugs — the sweep is best-effort
-    # (keeps deleting remaining children after a failure), only the filament
-    # delete is aborted."""
+    """28.B2 FIX — STOP-ON-FIRST-FAILURE: the first child-spool failure aborts
+    the whole cascade — the remaining children (#3) are NOT deleted and the
+    filament delete is NEVER attempted. deleted_spool_ids reports only the
+    successes before the failure, leaving a coherent partial state."""
     client = app_module.app.test_client()
     order = _patch_filament_cascade(
         monkeypatch,
@@ -278,12 +283,13 @@ def test_delete_filament_child_failure_aborts_filament_delete(monkeypatch):
     assert body == {
         "success": False,
         "error": "Some child spools could not be deleted; filament left in place.",
-        "deleted_spool_ids": [1, 3],
+        "deleted_spool_ids": [1],
         "spool_errors": [{"spool_id": 2, "error": "HTTP 409: in use"}],
     }
-    # The filament delete must never have been attempted.
+    # The filament delete must never have been attempted, and the sweep stopped
+    # at the first failure (#3 never touched).
     assert ("delete_filament", 7) not in order
-    assert order == [("delete_spool", 1), ("delete_spool", 2), ("delete_spool", 3)]
+    assert order == [("delete_spool", 1), ("delete_spool", 2)]
     # Per-failed-spool ERROR log naming the parent filament.
     assert len(calls) == 1
     msg, args, _ = calls[0]
@@ -368,19 +374,17 @@ def test_delete_filament_zero_children_plain_delete_no_cascade_wording(monkeypat
 # DELETE /api/locations  (api_delete_location — route layer only)
 # ---------------------------------------------------------------------------
 
-def test_delete_location_blank_id_returns_200_success_false_no_save(monkeypatch):
-    """Missing/blank ?id short-circuits to a bare {'success': False} — with HTTP
-    200, no error/msg key, and no load or save of the locations store.
-    # NOTE: pins current behavior; see suspected_bugs — a validation failure
-    # answering 200 (not 400) with no message is the shipped contract."""
+def test_delete_location_blank_id_returns_400_with_msg_no_save(monkeypatch):
+    """28.B1 FIX — a missing/blank ?id is a client validation error: HTTP 400
+    with a message, and still no load or save of the locations store."""
     client = app_module.app.test_client()
     saves = _patch_locations(monkeypatch, [])
     _capture_logs(monkeypatch)
 
     r = client.delete("/api/locations")
 
-    assert r.status_code == 200
-    assert r.get_json() == {"success": False}
+    assert r.status_code == 400
+    assert r.get_json() == {"success": False, "msg": "No location id provided."}
     assert saves == []
 
 
