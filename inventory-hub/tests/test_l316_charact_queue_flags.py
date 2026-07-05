@@ -192,74 +192,68 @@ def test_set_flag_filament_rejection_surfaces_last_spoolman_error(client):
 # /api/print_queue/set_flag — fall-throughs and quirks (pinned AS-IS)
 # ---------------------------------------------------------------------------
 
-def test_set_flag_unknown_type_returns_bare_falsy(client):
-    """Unknown type falls through to HTTP 200 {'success': False} with NO 'msg'
-    key — inv_queue.js turns this into its generic 'Failed to flag' toast.
-    # NOTE: pins current behavior; see suspected_bugs (no msg, no 4xx)."""
+def test_set_flag_unknown_type_returns_msg(client):
+    """28.C5 FIX — an unknown type now returns HTTP 200 {'success': False} WITH
+    an 'Unknown type: <type>' msg (was a bare, message-less {'success': False});
+    neither getter fires."""
     with patch.object(app_module.spoolman_api, "get_spool") as mock_gs, \
          patch.object(app_module.spoolman_api, "get_filament") as mock_gf:
         res = client.post("/api/print_queue/set_flag", json={"id": 10, "type": "gizmo"})
 
     assert res.status_code == 200
-    assert res.get_json() == {"success": False}
-    assert "msg" not in res.get_json()
+    assert res.get_json() == {"success": False, "msg": "Unknown type: gizmo"}
     mock_gs.assert_not_called()
     mock_gf.assert_not_called()
 
 
-def test_set_flag_spool_not_found_returns_bare_falsy(client):
-    """get_spool -> None (unknown id) also lands on the bare {'success': False}
-    fall-through — no msg, no 404, and update_spool is never attempted.
-    # NOTE: pins current behavior; see suspected_bugs."""
+def test_set_flag_spool_not_found_returns_msg(client):
+    """28.C5 FIX — get_spool -> None (unknown id) now returns a not-found msg
+    instead of a bare {'success': False}; update_spool is never attempted."""
     with patch.object(app_module.spoolman_api, "get_spool", return_value=None), \
          patch.object(app_module.spoolman_api, "update_spool") as mock_update:
         res = client.post("/api/print_queue/set_flag", json={"id": 999, "type": "spool"})
 
     assert res.status_code == 200
-    assert res.get_json() == {"success": False}
+    assert res.get_json() == {"success": False, "msg": "Spool #999 not found"}
     mock_update.assert_not_called()
 
 
-def test_set_flag_missing_id_is_forwarded_as_none_not_4xx(client):
-    """There is NO missing-id validation (asymmetric with mark_printed's
-    'Missing ID or Type' check): a payload without 'id' calls get_spool(None)
-    and — when that returns None — falls through to 200 {'success': False}.
-    # NOTE: pins current behavior; see suspected_bugs (None hits the live
-    Spoolman lookup in prod, and the client gets no reason string)."""
-    with patch.object(app_module.spoolman_api, "get_spool", return_value=None) as mock_get:
+def test_set_flag_missing_id_returns_missing_msg(client):
+    """28.C3 FIX — set_flag now has a missing-id guard mirroring mark_printed:
+    a payload without 'id' returns 'Missing ID or Type' and NEVER calls
+    get_spool(None) against live Spoolman."""
+    with patch.object(app_module.spoolman_api, "get_spool") as mock_get:
         res = client.post("/api/print_queue/set_flag", json={"type": "spool"})
 
     assert res.status_code == 200
-    assert res.get_json() == {"success": False}
-    mock_get.assert_called_once_with(None)
+    assert res.get_json() == {"success": False, "msg": "Missing ID or Type"}
+    mock_get.assert_not_called()
 
 
-def test_set_flag_missing_type_returns_bare_falsy(client):
-    """No 'type' in the payload skips both branches -> bare {'success': False}
-    at HTTP 200, and neither getter fires.
-    # NOTE: pins current behavior; see suspected_bugs."""
+def test_set_flag_missing_type_returns_missing_msg(client):
+    """28.C3 FIX — no 'type' in the payload returns 'Missing ID or Type' (was a
+    bare message-less {'success': False}); neither getter fires."""
     with patch.object(app_module.spoolman_api, "get_spool") as mock_gs, \
          patch.object(app_module.spoolman_api, "get_filament") as mock_gf:
         res = client.post("/api/print_queue/set_flag", json={"id": 10})
 
     assert res.status_code == 200
-    assert res.get_json() == {"success": False}
+    assert res.get_json() == {"success": False, "msg": "Missing ID or Type"}
     mock_gs.assert_not_called()
     mock_gf.assert_not_called()
 
 
-def test_set_flag_string_id_passed_through_uncoerced(client):
-    """Quirk pin: set_flag does NOT int-coerce the id (mark_printed does, and
-    rejects non-numeric legacy ids with a dedicated msg). A string id like
-    'legacy_foo' is handed to get_spool verbatim.
-    # NOTE: pins current behavior; see suspected_bugs (asymmetry with
-    mark_printed's legacy-ID rejection)."""
-    with patch.object(app_module.spoolman_api, "get_spool", return_value=None) as mock_get:
+def test_set_flag_legacy_string_id_rejected(client):
+    """28.C4 FIX — set_flag now int-coerces the id and rejects non-numeric
+    legacy ids with a dedicated msg (symmetric with mark_printed), instead of
+    handing 'legacy_foo' to get_spool verbatim."""
+    with patch.object(app_module.spoolman_api, "get_spool") as mock_get:
         res = client.post("/api/print_queue/set_flag",
                           json={"id": "legacy_foo", "type": "spool"})
 
-    assert res.get_json() == {"success": False}
-    mock_get.assert_called_once_with("legacy_foo")
+    assert res.get_json() == {
+        "success": False, "msg": "Legacy IDs cannot be flagged. Please scan."}
+    mock_get.assert_not_called()
 
 
 def test_set_flag_exception_surfaces_str_of_exception(client):
@@ -277,26 +271,23 @@ def test_set_flag_exception_surfaces_str_of_exception(client):
     assert "Error setting needs_label_print" in mock_err.call_args[0][0]
 
 
-def test_set_flag_malformed_json_is_framework_400(client):
-    """`data = request.json` runs BEFORE the handler's try block, so a
-    malformed JSON body never reaches the {'success': False, 'msg': ...}
-    contract — Flask answers with its own 400. A carve that switches to
-    request.get_json(silent=True) (the api_quickswap idiom) would flip this
-    to 200; that must be a conscious decision.
-    # NOTE: pins current behavior; see suspected_bugs."""
+def test_set_flag_malformed_json_returns_json_error(client):
+    """28.C6 FIX — set_flag parses with request.get_json(silent=True), so a
+    malformed JSON body is coerced to {} and answered with the endpoint's own
+    JSON contract (HTTP 200 'Missing ID or Type') instead of a framework 400."""
     res = client.post("/api/print_queue/set_flag",
                       data="{not json", content_type="application/json")
-    assert res.status_code == 400
+    assert res.status_code == 200
+    assert res.get_json() == {"success": False, "msg": "Missing ID or Type"}
 
 
-def test_set_flag_non_json_content_type_is_framework_415(client):
-    """Same strict-request.json pin for the wrong content type: Flask 3.x
-    raises UnsupportedMediaType -> HTTP 415, bypassing the endpoint's JSON
-    error contract entirely.
-    # NOTE: pins current behavior; see suspected_bugs."""
+def test_set_flag_non_json_content_type_returns_json_error(client):
+    """28.C6 FIX — a wrong content type no longer raises Flask's 415; silent
+    parse yields {} and the endpoint answers its JSON error contract."""
     res = client.post("/api/print_queue/set_flag",
                       data="id=10", content_type="text/plain")
-    assert res.status_code == 415
+    assert res.status_code == 200
+    assert res.get_json() == {"success": False, "msg": "Missing ID or Type"}
 
 
 # ---------------------------------------------------------------------------
@@ -382,13 +373,10 @@ def test_mark_printed_filament_not_found_generic_msg(client):
 @pytest.mark.parametrize("payload", [
     {"type": "filament"},          # no id
     {"id": 5},                     # no type
-    {"id": 0, "type": "filament"}, # falsy id — `if not item_id` treats 0 as missing
 ])
 def test_mark_printed_missing_id_or_type(client, payload):
-    """Missing (or falsy — id 0 counts) id/type short-circuits to
-    'Missing ID or Type' before any Spoolman call.
-    # NOTE: pins current behavior; see suspected_bugs (id=0 is swallowed by
-    the truthiness check — harmless today since Spoolman ids start at 1)."""
+    """Missing id/type short-circuits to 'Missing ID or Type' before any
+    Spoolman call."""
     with patch.object(app_module.spoolman_api, "get_filament") as mock_gf, \
          patch.object(app_module.spoolman_api, "get_spool") as mock_gs:
         res = client.post("/api/print_queue/mark_printed", json=payload)
@@ -397,6 +385,22 @@ def test_mark_printed_missing_id_or_type(client, payload):
     assert res.get_json() == {"success": False, "msg": "Missing ID or Type"}
     mock_gf.assert_not_called()
     mock_gs.assert_not_called()
+
+
+def test_mark_printed_id_zero_is_not_missing(client):
+    """28.C7 FIX — id=0 is a real id, not 'missing' (the `if not item_id` check
+    became `item_id in (None, '')`): it is int-coerced and passed to the lookup,
+    which returns None (Spoolman ids start at 1) → the shared not-found msg."""
+    with patch.object(app_module.spoolman_api, "get_filament",
+                      return_value=None) as mock_gf, \
+         patch.object(app_module.spoolman_api, "update_filament") as mock_update:
+        res = client.post("/api/print_queue/mark_printed",
+                          json={"id": 0, "type": "filament"})
+
+    assert res.status_code == 200
+    assert res.get_json() == {"success": False, "msg": "Item not found or update failed"}
+    mock_gf.assert_called_once_with(0)
+    mock_update.assert_not_called()
 
 
 def test_mark_printed_unknown_type_generic_msg(client):

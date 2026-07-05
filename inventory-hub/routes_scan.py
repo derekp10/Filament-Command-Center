@@ -219,6 +219,13 @@ def api_manage_contents():
     # unassigns, and clear-location ops all inherit the same safety net.
     confirm_active_print = bool(data.get('confirm_active_print', False))
 
+    # 28.C1 — reject an unrecognized action with an accurate message. Without
+    # this an unknown action fell through to the 'Spool not found' guard below
+    # (misleading — nothing was looked up) and the terminal bare return was
+    # unreachable.
+    if action not in ('clear_location', 'add', 'remove', 'force_unassign'):
+        return jsonify({"success": False, "msg": f"Unknown action: {action}"})
+
     if action == 'clear_location':
         contents = spoolman_api.get_spools_at_location_detailed(loc_id)
         # Pre-flight: if the box being cleared is itself a toolhead that's
@@ -322,7 +329,9 @@ def api_manage_contents():
             target_slot=slot_arg, origin=origin,
             confirm_active_print=confirm_active_print,
         ))
-    return jsonify({"success": False})
+    # 28.C1 — the action set is validated at the top, so control never reaches
+    # here; a defensive JSON error keeps Flask from returning None if it ever did.
+    return jsonify({"success": False, "msg": f"Unknown action: {action}"})
 
 def _pm_norm(v):
     """Normalize a stored temp/URL value (a native number, or a possibly
@@ -696,7 +705,16 @@ def api_identify_scan():
         # real abandonment. Updating BEFORE process_audit_scan so an
         # explicit CMD:DONE/CMD:CANCEL still ends the session cleanly.
         state.AUDIT_SESSION['last_activity_ts'] = time.time()
-        logic.process_audit_scan(res)
+        audit_res = logic.process_audit_scan(res)
+        # 28.C2 — propagate an audit-scan error to the scanner UI (the frontend
+        # toasts res.type=='error') instead of always answering cmd:clear and
+        # leaving the failure in the Activity Log only. A successful audit scan
+        # still returns the buffer-clear signal.
+        if isinstance(audit_res, dict) and audit_res.get('status') == 'error':
+            return jsonify({
+                "type": "error",
+                "msg": audit_res.get('msg') or "Scan not allowed during audit.",
+            })
         return jsonify({"type": "command", "cmd": "clear"})
 
     if not res: return jsonify({"type": "unknown"})

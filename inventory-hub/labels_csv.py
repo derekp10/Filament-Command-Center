@@ -29,9 +29,13 @@ def clean_string(s):
     return s
 
 def hex_to_rgb(hex_str):
-    if not hex_str or len(hex_str) < 6: return "", "", ""
+    # 28.A1 — strip the leading '#' BEFORE the length guard so a '#'-prefixed
+    # short hex (e.g. '#AABBC') is rejected instead of parsing the blue channel
+    # from a single digit. len() must measure the actual hex payload.
+    if not hex_str: return "", "", ""
+    clean_hex = hex_str.lstrip('#')
+    if len(clean_hex) < 6: return "", "", ""
     try:
-        clean_hex = hex_str.lstrip('#')
         return int(clean_hex[0:2], 16), int(clean_hex[2:4], 16), int(clean_hex[4:6], 16)
     except ValueError:
         return "", "", ""
@@ -45,52 +49,99 @@ def get_smart_type(material, extra_data):
     except json.JSONDecodeError: attrs_list = []
     
     clean_attrs = [clean_string(a) for a in attrs_list if a]
-    if clean_attrs: return f"{' '.join(clean_attrs)} {material}"
-    return material
+    # 28.A2 — join only the non-empty parts so an empty material doesn't leave a
+    # trailing space ('Matte ') in the label CSV Type column.
+    parts = clean_attrs + ([material] if material else [])
+    return ' '.join(parts)
 
 def get_color_name(item_data):
     extra = item_data.get('extra', {})
     if 'original_color' in extra:
         val = clean_string(extra['original_color'])
         if val: return val
-    return item_data.get('name', 'Unknown')
+    # 28.A3 — quote-strip the name fallback too (symmetry with the
+    # original_color path); a JSON-quoted filament name would otherwise print
+    # with literal quotes on the label.
+    return clean_string(item_data.get('name', 'Unknown'))
 
 def get_best_hex(item_data):
     extra = item_data.get('extra', {})
     multi_hex = item_data.get('multi_color_hexes') or extra.get('multi_color_hexes')
     if multi_hex:
-        first_hex = multi_hex.split(',')[0].strip()
-        if first_hex: return first_hex
+        # 28.A4 — return the first NON-EMPTY comma-segment; an empty leading
+        # segment (',445566') must not abandon multi_color_hexes entirely.
+        for seg in multi_hex.split(','):
+            seg = seg.strip()
+            if seg: return seg
     return item_data.get('color_hex', '')
 
 def sanitize_label_text(text):
     if not isinstance(text, str): return str(text)
-    # 🛠️ EMOJI TRANSLATION MAP
+    # 🛠️ EMOJI TRANSLATION MAP — keys are the BARE base code points. Each is
+    # matched in both its emoji-presentation form (base + U+FE0F VS16) and its
+    # bare form, so (28.A5): a bare ⚠ (U+26A0) is mapped, and an emoji-
+    # presentation ⚡️ (U+26A1 U+FE0F) is replaced WITHOUT leaving a stray
+    # invisible VS16 in the P-touch CSV. VS16 on unmapped emoji is untouched.
     replacements = {
         "🦝": "Raccoon",
         "⚡": "Bolt",
         "🔥": "Fire",
         "📦": "Box",
-        "⚠️": "Warn"
+        "⚠": "Warn",
     }
+    vs16 = "️"  # U+FE0F variation selector (emoji-presentation form)
     for char, name in replacements.items():
-        text = text.replace(char, name)
+        text = text.replace(char + vs16, name)  # emoji-presentation form first
+        text = text.replace(char, name)         # bare form
     return text
 
 
 def flatten_json(y):
+    """Flatten a nested dict/list into single-level column→value pairs for the
+    label CSV extras spillover.
+
+    28.A6 / 28.A7 — no silent data loss:
+      - a bare scalar input gets a 'value' key (not an empty-string header);
+      - a NESTED empty dict/list is preserved as an empty-string column instead
+        of vanishing (a top-level empty container still yields {} — no key);
+      - a mangled-key COLLISION (a literal 'a_b' key vs a nested {'a':{'b'}})
+        is disambiguated with a '__N' suffix so neither value is overwritten.
+    """
     out = {}
+
+    def _put(key, value):
+        # 28.A7 — never silently overwrite a colliding mangled key.
+        if key not in out:
+            out[key] = value
+            return
+        n = 2
+        while f"{key}__{n}" in out:
+            n += 1
+        out[f"{key}__{n}"] = value
+
     def flatten(x, name=''):
         if type(x) is dict:
+            if not x:
+                # 28.A7 — a nested empty dict would otherwise emit no column;
+                # keep it (a top-level empty container has no key → skip).
+                if name:
+                    _put(name[:-1], '')
+                return
             for a in x:
                 flatten(x[a], name + a + '_')
         elif type(x) is list:
+            if not x:
+                if name:
+                    _put(name[:-1], '')
+                return
             i = 0
             for a in x:
                 flatten(a, name + str(i) + '_')
                 i += 1
         else:
-            out[name[:-1]] = x
+            # 28.A6 — a bare scalar (name='') gets a 'value' header, not ''.
+            _put(name[:-1] if name else 'value', x)
+
     flatten(y)
     return out
 
@@ -218,7 +269,18 @@ def api_print_batch_csv():
         if mode == 'location':
             # Load local CSV first
             loc_list = locations_db.load_locations_list()
-            loc_lookup = {str(row['LocationID']): row for row in loc_list}
+            # 28.A8 — case-insensitive LocationID key access. One row stored with
+            # a differently-cased key (e.g. 'locationid') must NOT KeyError and
+            # fail the whole batch — matches the tolerant 'Max Spools' matching
+            # below and api_print_location_label's lookup.
+            for row in loc_list:
+                rid = None
+                for k, v in row.items():
+                    if str(k).strip().lower() == 'locationid':
+                        rid = str(v)
+                        break
+                if rid is not None:
+                    loc_lookup[rid] = row
 
         # --- 4. BUILD ROWS ---
         seen_ids = set() # [ALEX FIX] Deduplication tracker
@@ -315,19 +377,24 @@ def api_print_batch_csv():
                 fil_extra = raw_data.get('extra', {})
                 
                 row_data['ID'] = item_id
-                row_data['Brand'] = vendor_data.get('name', 'Unknown') if vendor_data else 'Unknown'
-                row_data['Color'] = get_color_name(fil_data)
+                # 28.A9 — sanitize Brand/Color/Type in swatch mode too (spool and
+                # location modes already do); without this, emoji reach the
+                # P-touch swatch CSV unsanitized.
+                row_data['Brand'] = sanitize_label_text(vendor_data.get('name', 'Unknown') if vendor_data else 'Unknown')
+                row_data['Color'] = sanitize_label_text(get_color_name(fil_data))
                 raw_material = fil_data.get('material', 'Unknown')
-                row_data['Type'] = get_smart_type(raw_material, fil_extra)
+                row_data['Type'] = sanitize_label_text(get_smart_type(raw_material, fil_extra))
                 hex_val = get_best_hex(fil_data)
                 row_data['Hex'] = hex_val
                 r, g, b = hex_to_rgb(hex_val)
                 row_data['Red'] = r; row_data['Green'] = g; row_data['Blue'] = b
 
+                # 28.A10 — a deliberate 0°C bed/extruder temp is a real value:
+                # test `is not None`, not falsiness, so it prints '0°C' not blank.
                 t_noz = fil_data.get('settings_extruder_temp')
-                row_data['Temp_Nozzle'] = f"{t_noz}°C" if t_noz else ""
+                row_data['Temp_Nozzle'] = f"{t_noz}°C" if t_noz is not None else ""
                 t_bed = fil_data.get('settings_bed_temp')
-                row_data['Temp_Bed'] = f"{t_bed}°C" if t_bed else ""
+                row_data['Temp_Bed'] = f"{t_bed}°C" if t_bed is not None else ""
                 dens = fil_data.get('density')
                 row_data['Density'] = f"{dens} g/cm³" if dens else ""
                 row_data['QR_Code'] = f"FIL:{item_id}"
@@ -383,7 +450,10 @@ def api_print_batch_csv():
                              overwrite=overwrite, write_header=(overwrite or not slots_exists))
 
         action_word = "Overwritten" if clear_old else "Appended"
-        msg = f"{action_word} {len(items_to_print)} items."
+        # 28.A12 — pluralize the item count ('1 item.' not '1 items.'). Slot
+        # fan-out only fires for Max Spools > 1 so the slot count is always ≥2.
+        n_items = len(items_to_print)
+        msg = f"{action_word} {n_items} {'item' if n_items == 1 else 'items'}."
         if slots_to_print: msg += f" (+{len(slots_to_print)} Slots)"
 
         # Activity Log on success too (CLAUDE.md: every outcome logs) so the
@@ -476,7 +546,20 @@ def api_print_location_label():
                 if str(k).strip().lower() == 'name':
                     loc_name = str(v)
                     break
-        
+
+        # 28.A11 — write the row's STORED LocationID casing (+ its LOC: QR)
+        # rather than the uppercased scanned id, so labels printed from a
+        # lowercase-stored LocationID round-trip. Falls back to target_id when
+        # the row carries no LocationID key.
+        stored_id = target_id
+        if isinstance(loc_data, dict):
+            for k, v in loc_data.items():
+                if str(k).strip().lower() == 'locationid':
+                    sv = str(v).strip()
+                    if sv:
+                        stored_id = sv
+                    break
+
         # Sanitize
         clean_name = sanitize_label_text(loc_name)
 
@@ -487,10 +570,10 @@ def api_print_location_label():
             writer = csv.DictWriter(f, fieldnames=headers)
             if not file_exists: writer.writeheader()
             writer.writerow({
-                "LocationID": target_id, 
+                "LocationID": stored_id,
                 "Name": loc_name,
                 "Cleaned_Name": clean_name,
-                "QR_Code": f"LOC:{target_id}" # [ALEX FIX] Added Prefix
+                "QR_Code": f"LOC:{stored_id}" # [ALEX FIX] Added Prefix
             })
             
         # 5. Robust Slot Logic
@@ -515,11 +598,11 @@ def api_print_location_label():
                 
                 for i in range(1, max_spools + 1):
                     writer.writerow({
-                        "LocationID": target_id,
+                        "LocationID": stored_id,
                         "Slot": f"Slot {i}",
                         "Name": f"{loc_name} Slot {i}",
                         "Cleaned_Name": f"{clean_name} Slot {i}",
-                        "QR_Code": f"LOC:{target_id}:SLOT:{i}"
+                        "QR_Code": f"LOC:{stored_id}:SLOT:{i}"
                     })
             slots_generated = True
 
@@ -527,7 +610,7 @@ def api_print_location_label():
         abs_path = str(os.path.abspath(output_dir))
         short_path = "..." + abs_path[-30:] if len(abs_path) > 30 else abs_path # type: ignore
         
-        msg = f"Queue: {target_id}"
+        msg = f"Queue: {stored_id}"
         if slots_generated: msg += f" (+{max_spools} Slots)"
         msg += f" in {short_path}"
         

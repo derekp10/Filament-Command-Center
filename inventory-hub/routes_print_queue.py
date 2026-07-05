@@ -67,11 +67,17 @@ def api_print_queue_pending():
 
 @app.route('/api/print_queue/mark_printed', methods=['POST'])
 def api_print_queue_mark_printed():
-    data = request.json
+    # 28.C6 — parse leniently so malformed JSON / wrong content-type return this
+    # endpoint's JSON {success:false,msg} contract instead of a framework
+    # 400/415 (the api_quickswap idiom).
+    data = request.get_json(silent=True) or {}
     item_id = data.get('id')
     item_type = data.get('type')
-    
-    if not item_id or not item_type:
+
+    # 28.C7 — id=0 is a real (if out-of-range) id, not "missing"; only None /
+    # '' / absent count as missing (Spoolman ids start at 1, so 0 will simply
+    # fail the lookup below).
+    if item_id in (None, '') or not item_type:
         return jsonify({"success": False, "msg": "Missing ID or Type"})
         
     # Strictly reject legacy IDs (they usually start with strings or have weird formats). Make sure it's int convertible.
@@ -114,9 +120,21 @@ def api_print_queue_mark_printed():
 
 @app.route('/api/print_queue/set_flag', methods=['POST'])
 def api_print_queue_set_flag():
-    data = request.json
+    # 28.C3–C7 — harmonized with mark_printed (they are mirror endpoints):
+    #   C6 lenient parse (JSON error contract, not framework 400/415),
+    #   C3 missing-id/type guard, C7 id=0 is a real id (not "missing"),
+    #   C4 int-coerce + reject legacy ids, C5 every fall-through carries a msg.
+    data = request.get_json(silent=True) or {}
     item_id = data.get('id')
     item_type = data.get('type')
+
+    if item_id in (None, '') or not item_type:
+        return jsonify({"success": False, "msg": "Missing ID or Type"})
+
+    try:
+        item_id = int(item_id)
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "msg": "Legacy IDs cannot be flagged. Please scan."})
 
     try:
         if item_type == 'spool':
@@ -129,6 +147,7 @@ def api_print_queue_set_flag():
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
                 state.logger.error(f"set_flag: spool {item_id} update failed: {err}")
                 return jsonify({"success": False, "msg": err})
+            return jsonify({"success": False, "msg": f"Spool #{item_id} not found"})
         elif item_type == 'filament':
             fd = spoolman_api.get_filament(item_id)
             if fd:
@@ -139,7 +158,8 @@ def api_print_queue_set_flag():
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
                 state.logger.error(f"set_flag: filament {item_id} update failed: {err}")
                 return jsonify({"success": False, "msg": err})
-        return jsonify({"success": False})
+            return jsonify({"success": False, "msg": f"Filament #{item_id} not found"})
+        return jsonify({"success": False, "msg": f"Unknown type: {item_type}"})
     except Exception as e:
         state.logger.error(f"Error setting needs_label_print: {e}")
         return jsonify({"success": False, "msg": str(e)})

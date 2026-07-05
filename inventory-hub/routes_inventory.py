@@ -67,7 +67,11 @@ def api_create_filament():
                 "SUCCESS", "00ff00",
             )
             return jsonify({"success": True, "filament": created})
-        return jsonify({"success": False, "msg": "Spoolman rejected the filament create."}), 500
+        # 28.B4 — surface the Spoolman rejection body (matches api_create_vendor
+        # and the CLAUDE.md error-surfacing convention) instead of a fixed
+        # generic message the user can't act on.
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the filament create."
+        return jsonify({"success": False, "msg": err}), 500
     except Exception as e:
         state.logger.error(f"Failed to create filament: {e}")
         return jsonify({"success": False, "msg": str(e)}), 500
@@ -409,7 +413,8 @@ def api_external_fields_add_choice():
     new_choice = data.get('new_choice')
     
     if not all([entity_type, key, new_choice]):
-         return jsonify({"success": False, "msg": "Missing required fields."})
+         # 28.B6 — a missing required field is a client validation error → 400.
+         return jsonify({"success": False, "msg": "Missing required fields."}), 400
          
     res = spoolman_api.update_extra_field_choices(entity_type, key, [new_choice])
     return jsonify(res)
@@ -566,6 +571,11 @@ def api_edit_spool_wizard():
         return jsonify({"success": False, "msg": "Missing Spool ID for edit session."})
 
     try:
+        # 28.B5 — track whether the spool half actually persisted so a later
+        # filament rejection reports partial success accurately (the spool write
+        # commits BEFORE the filament write; a filament failure must not be
+        # reported as if nothing landed).
+        spool_committed = False
         # Update Spool First
         if spool_data:
             # Prevent 500 errors by only passing actual changes to Spoolman
@@ -631,6 +641,7 @@ def api_edit_spool_wizard():
                         "msg": f"Failed to update Spool {spool_id}: {err}",
                         "error": err,
                     })
+                spool_committed = True
                 # 24.F — the wizard edit-spool save is ALSO a manual weight surface.
                 # Log the before➔after breakdown when a weight field was dirty
                 # (`spool_data` is the dirty diff at this point; `original_spool` is
@@ -644,10 +655,16 @@ def api_edit_spool_wizard():
             if not fil_res:
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
                 state.logger.warning(f"Failed to cleanly update Filament {filament_id} during spool edit: {err}")
+                # 28.B5 — if the spool half already committed, say so (partial
+                # persist reported honestly, not as a total failure). Retry is
+                # benign: the spool diff comes up empty on the second pass.
+                msg = (f"Spool saved, but filament update rejected: {err}"
+                       if spool_committed else f"Filament update rejected: {err}")
                 return jsonify({
                     "success": False,
-                    "msg": f"Filament update rejected: {err}",
+                    "msg": msg,
                     "error": err,
+                    "spool_saved": spool_committed,
                 })
 
         return jsonify({"success": True, "spool_id": spool_id})

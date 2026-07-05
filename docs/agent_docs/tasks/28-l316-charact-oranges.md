@@ -4,7 +4,7 @@
 **Estimated effort:** ~6–10 hours (25 mostly-small fixes across three module clusters, each + its pin-test update)
 **Risk:** **LOW–MEDIUM.** Individually small, but they span label CSV generation (P-touch output correctness), delete/create endpoints, and the scan + print-queue input contracts. Verify label-mode changes against a real P-touch CSV, and the endpoint changes against the JSON error contract.
 
-> **Status: TODO** — filed 2026-07-01 by `/refresh-groups`. The 25 🟠 findings from the **L316 characterization layer** (buglist lines 23–25). Every finding is PINNED as *current* behavior by a `tests/test_l316_charact_*.py` test — **fixing one = update its pin in the SAME commit.** Full annotated write-up + pin-test names: [L316-characterization-findings.md](L316-characterization-findings.md).
+> **Status: ✅ DONE 2026-07-05** (`feature/group-28-l316-charact-oranges` → `dev`+`main`). All 25 🟠 findings fixed, each pin flipped to assert the corrected behavior in the same change (several pins renamed). Four behavior forks decided with Derek (15 stop-on-first-failure; 19 `spool_saved` partial-persist reporting; 30/31/33 `set_flag`↔`mark_printed` harmonization; 7 `flatten_json` no-silent-loss). 285 charact + route-table pins green, 0 regressions. Per-item detail in `completed-archive.md`. _Filed 2026-07-01 by `/refresh-groups`; every finding was PINNED as current behavior by a `tests/test_l316_charact_*.py` test — pin-test names in [L316-characterization-findings.md](L316-characterization-findings.md)._
 
 ## Why these are one group
 
