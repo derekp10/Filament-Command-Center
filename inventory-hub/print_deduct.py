@@ -102,18 +102,29 @@ def api_get_multi_spool_filaments():
         
         if isinstance(all_spools, list):
             for s in all_spools:
-                if not isinstance(s, dict) or s.get('archived'): continue # Skip archived
-                fid = s.get('filament', {}).get('id')
-                if not fid: continue
-                
-                if fid not in fil_counts: 
-                    fil_counts[fid] = 0
-                    fil_spools[fid] = []
-                    fil_names[fid] = s.get('filament', {}).get('name', '')
-                    fil_vendors[fid] = s.get('filament', {}).get('vendor', {}).get('name', '')
-                    
-                fil_counts[fid] += 1
-                fil_spools[fid].append(s['id'])
+                # 27.7 — per-spool guard: one malformed entry (missing 'id',
+                # or filament/vendor present-but-null) previously raised inside
+                # this loop, tripped the blanket except below, and poisoned the
+                # WHOLE response to [] — hiding every valid candidate. Skip the
+                # bad record (logged) and keep aggregating the rest.
+                try:
+                    if not isinstance(s, dict) or s.get('archived'): continue # Skip archived
+                    fil = s.get('filament') or {}
+                    fid = fil.get('id')
+                    if not fid: continue
+
+                    if fid not in fil_counts:
+                        fil_counts[fid] = 0
+                        fil_spools[fid] = []
+                        fil_names[fid] = fil.get('name', '')
+                        fil_vendors[fid] = (fil.get('vendor') or {}).get('name', '')
+
+                    fil_counts[fid] += 1
+                    fil_spools[fid].append(s['id'])
+                except Exception as _spool_err:
+                    state.logger.error(
+                        f"Multi-Spool: skipping malformed spool entry: {_spool_err}")
+                    continue
             
         # 3. Filter for > 1
         candidates = []

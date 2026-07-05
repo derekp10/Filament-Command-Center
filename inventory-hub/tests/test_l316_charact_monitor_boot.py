@@ -89,18 +89,22 @@ def test_completion_flag_none_config_swallowed_to_false():
         assert app_module._fcc_owns_completion_deduct() is False
 
 
-def test_completion_flag_truthiness_coercion():
-    """The flag value is bool()-coerced, NOT parsed: any non-empty string —
-    including the string 'false' — reads as True, while ''/0 read as False.
-    # NOTE: pins current behavior; see suspected_bugs (a hand-edited config
-    # with "fcc_owns_completion_deduct": "false" would ENABLE the deduct).
-    """
-    for raw, expected in [("false", True), ("yes", True), (1, True),
-                          ("", False), (0, False), (None, False)]:
+def test_completion_flag_parses_bool_string_and_numeric_forms():
+    """27.4 FIX — the flag is PARSED, not bool()-coerced: the JSON string
+    'false' now reads as False (pre-fix it read True — a dangerous safety-flag
+    inversion that ENABLED the completion deduct). 'true'/'1'/'yes'/'on' read
+    True; ''/'0'/'no'/'off' read False; real bools + numerics pass through;
+    anything unrecognized defaults safe (False)."""
+    for raw, expected in [
+        ("false", False), ("False", False), ("FALSE", False), (" false ", False),
+        ("0", False), ("no", False), ("off", False), ("", False),
+        ("true", True), ("True", True), ("1", True), ("yes", True), ("on", True),
+        (True, True), (False, False), (1, True), (0, False), (None, False),
+    ]:
         with patch.object(app_module.config_loader, "load_config",
                           return_value={"fcc_owns_completion_deduct": raw}):
             assert app_module._fcc_owns_completion_deduct() is expected, (
-                f"bool coercion drifted for raw={raw!r}"
+                f"flag parse drifted for raw={raw!r}"
             )
 
 
@@ -330,14 +334,13 @@ def test_seed_backup_failure_still_saves():
                for m in warn_msgs), warn_msgs
 
 
-def test_seed_inner_seed_exception_propagates():
-    """locations_db.seed_printer_credentials raising PROPAGATES out of
-    _seed_printer_credentials_from_filabridge — it is NOT inside any of the
-    function's try/excepts, and the __main__ call site (app.py:7428) is also
-    unwrapped, so this would kill the serving-process launch path before
-    _start_cancel_monitor despite the docstring's 'never blocks startup'.
-    # NOTE: pins current behavior; see suspected_bugs.
-    """
+def test_seed_inner_seed_exception_is_swallowed():
+    """27.2 FIX — locations_db.seed_printer_credentials raising is now SWALLOWED
+    inside _seed_printer_credentials_from_filabridge (warning logged, save
+    skipped, no re-raise) so it can't kill the serving-process launch path
+    before _start_cancel_monitor. The docstring's 'never blocks startup'
+    contract now holds; the __main__ call site is also wrapped as
+    belt-and-suspenders for any other unexpected raise."""
     rows = _unseeded_rows()
     with patch.object(app_module.locations_db, "load_locations_list",
                       return_value=rows), \
@@ -348,10 +351,11 @@ def test_seed_inner_seed_exception_propagates():
          patch.object(app_module.locations_db, "seed_printer_credentials",
                       side_effect=RuntimeError("seed exploded")), \
          patch.object(app_module.locations_db, "save_locations_list") as save, \
-         patch.object(app_module.state, "logger", MagicMock()):
-        with pytest.raises(RuntimeError, match="seed exploded"):
-            app_module._seed_printer_credentials_from_filabridge()
+         patch.object(app_module.state, "logger", MagicMock()) as logger:
+        app_module._seed_printer_credentials_from_filabridge()  # must NOT raise
     save.assert_not_called()
+    warn_msgs = [str(c.args[0]) for c in logger.warning.call_args_list]
+    assert any("seeding failed" in m for m in warn_msgs), warn_msgs
 
 
 # ---------------------------------------------------------------------------

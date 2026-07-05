@@ -413,12 +413,15 @@ def test_mark_printed_unknown_type_generic_msg(client):
     mock_gf.assert_not_called()
 
 
-def test_mark_printed_non_intable_id_type_raises_uncaught(client):
-    """The legacy-ID gate catches ONLY ValueError; an id that raises TypeError
-    from int() (e.g. a JSON array) escapes the handler entirely — the int()
-    call sits BEFORE the try block. Under TESTING the exception propagates to
-    the test client; in prod this is an unhandled 500.
-    # NOTE: pins current behavior; see suspected_bugs."""
-    with pytest.raises(TypeError):
-        client.post("/api/print_queue/mark_printed",
-                    json={"id": ["nested"], "type": "spool"})
+def test_mark_printed_non_intable_id_type_returns_json_error(client):
+    """27.3 FIX — the legacy-ID gate now catches TypeError as well as
+    ValueError, so a JSON-array id (which raises TypeError from int()) returns
+    the JSON error contract at HTTP 200 instead of escaping the handler as an
+    unhandled 500."""
+    res = client.post("/api/print_queue/mark_printed",
+                      json={"id": ["nested"], "type": "spool"})
+    assert res.status_code == 200
+    assert res.get_json() == {
+        "success": False,
+        "msg": "Legacy IDs cannot be manually marked printed. Please scan.",
+    }

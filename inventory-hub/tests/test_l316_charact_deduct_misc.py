@@ -189,26 +189,32 @@ def test_multi_spool_exception_swallowed_to_empty_list(monkeypatch):
     assert 'Multi-Spool Error' in mock_logger.error.call_args[0][0]
 
 
-def test_multi_spool_malformed_spool_degrades_entire_response(monkeypatch):
-    """A single spool dict WITHOUT an 'id' key raises KeyError inside the
-    aggregation loop, which the blanket except swallows — so ONE malformed
-    entry silently degrades the ENTIRE response to [], hiding every other
-    valid candidate with no user-visible signal.
-    # NOTE: pins current behavior; see suspected_bugs
+def test_multi_spool_malformed_spool_is_skipped_valid_candidates_survive(monkeypatch):
+    """27.7 FIX — a single malformed spool (missing 'id' key) is now skipped by
+    the per-spool guard (logged) and the VALID fid-7 group STILL returns,
+    instead of the blanket except poisoning the entire response to [] and
+    hiding every other valid candidate.
     """
     _mock_urls(monkeypatch)
     mock_logger = _capture_logger(monkeypatch)
     _fake_requests_get(monkeypatch, [
         _spool(101, 7),
         _spool(102, 7),
-        # Malformed: no 'id' key → s['id'] KeyError mid-loop.
+        # Malformed: no 'id' key → s['id'] KeyError, caught per-spool.
         {'archived': False, 'filament': {'id': 9, 'name': 'X'}},
     ])
 
     res = _client().get('/api/get_multi_spool_filaments')
     assert res.status_code == 200
-    assert res.get_json() == []  # valid fid-7 group lost too
+    assert res.get_json() == [{
+        'id': 7,
+        'display': 'Acme - Blue',
+        'count': 2,
+        'spool_ids': [101, 102],
+    }]
+    # The one bad entry was logged (skipped), not swallowed to nothing.
     mock_logger.error.assert_called_once()
+    assert 'skipping malformed spool' in mock_logger.error.call_args[0][0]
 
 
 # ---------------------------------------------------------------------------

@@ -195,17 +195,19 @@ def test_wizard_extras_diff_uses_system_managed_guard(monkeypatch):
     assert any("refused to write system-managed extras" in m for m in warn_msgs)
 
 
-def test_wizard_get_spool_none_forwards_raw_payload(monkeypatch):
-    """When the pre-fetch blips (get_spool -> None) the handler SKIPS the
-    dirty-diff AND the system-managed strip and forwards the raw request
-    payload — including container_slot — straight to update_spool.
-    # NOTE: pins current behavior; see suspected_bugs (a Spoolman blip
-    # reopens the Item-4 slot-clobber window)."""
-    sent = {}
+def test_wizard_get_spool_none_fails_closed_no_raw_forward(monkeypatch):
+    """27.1 FIX — when the pre-fetch blips (get_spool -> None) the handler now
+    FAILS CLOSED: without the original record it can't run the dirty-diff OR
+    the SYSTEM_MANAGED strip, so forwarding the raw payload (which carries
+    container_slot / physical_source) would reopen the Item-4 slot-clobber
+    window. update_spool is NEVER called; the response surfaces the error."""
+    called = []
     monkeypatch.setattr(app_module.spoolman_api, "get_spool", lambda sid: None)
     monkeypatch.setattr(
         app_module.spoolman_api, "update_spool",
-        lambda sid, data: sent.update({"sid": sid, "data": data}) or {"id": sid})
+        lambda sid, data: called.append((sid, data)) or {"id": sid})
+    monkeypatch.setattr(app_module.spoolman_api, "LAST_SPOOLMAN_ERROR",
+                        "HTTP 503: Spoolman unavailable", raising=False)
     _capture_logs(monkeypatch)
 
     payload = {"used_weight": 550,
@@ -214,9 +216,11 @@ def test_wizard_get_spool_none_forwards_raw_payload(monkeypatch):
         "spool_id": 42,
         "spool_data": payload,
     })
-    assert r.get_json()["success"] is True
-    assert sent["sid"] == 42
-    assert sent["data"] == payload  # verbatim, system-managed key included
+    body = r.get_json()
+    assert body["success"] is False
+    assert called == []  # raw-payload PATCH refused — no slot-clobber
+    assert body["error"] == "HTTP 503: Spoolman unavailable"
+    assert body["msg"] == "Failed to update Spool 42: HTTP 503: Spoolman unavailable"
 
 
 def test_wizard_no_dirty_changes_skips_update_spool(monkeypatch):

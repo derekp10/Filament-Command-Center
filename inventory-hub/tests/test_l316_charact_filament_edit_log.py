@@ -233,11 +233,11 @@ def test_update_filament_success_logs_formatted_edit_line(client):
     )
 
 
-def test_update_filament_committed_write_with_raising_logger_reports_failure(client):
-    """If add_log_entry raises AFTER a successful Spoolman write, the except
-    swallows it and the response says success:false even though the write
-    COMMITTED — the user retries and double-writes.
-    # NOTE: pins current behavior; see suspected_bugs."""
+def test_update_filament_committed_write_survives_raising_logger(client):
+    """27.8 FIX — a crash in the activity-log formatting AFTER a successful
+    Spoolman write no longer inverts the committed write into success:false
+    (which made the user retry and double-write). The log failure is caught +
+    logged; the response still reports success:true with the updated record."""
     with patch("spoolman_api.get_filament", return_value={"id": 5, "name": "Old"}), \
          patch("spoolman_api.update_filament", return_value={"id": 5, "name": "New"}), \
          patch.object(app_module.state, "add_log_entry",
@@ -245,8 +245,9 @@ def test_update_filament_committed_write_with_raising_logger_reports_failure(cli
          patch.object(app_module.state.logger, "error") as logerr:
         r = client.post("/api/update_filament", json={"id": 5, "data": {"name": "New"}})
     body = r.get_json()
-    assert body == {"success": False, "msg": "log boom"}
+    assert body == {"success": True, "filament": {"id": 5, "name": "New"}}
     logerr.assert_called_once()
+    assert "activity-log write failed" in logerr.call_args[0][0]
 
 
 # ---------------------------------------------------------------------------

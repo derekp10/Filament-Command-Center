@@ -1,6 +1,6 @@
 # L316 characterization findings — 50 suspected bugs (2026-07-01)
 
-Pinned as-is by the test layer; none fixed. Triage with Derek.
+Pinned by the test layer; triage with Derek. **✅ The 10 🔴 Priority reds (findings 18/21/22/25/27/34/40/41/46/49) were FIXED by Group 27 (2026-07-05)** — each pin was flipped to assert the corrected behavior (some renamed; see the per-finding `✅ FIXED` notes below for the current pin name). The remaining 🟠/🟡 findings stay pinned as-is (Groups 28/29).
 
 
 ## label-helpers (inventory-hub/tests/test_l316_charact_label_helpers.py)
@@ -48,7 +48,7 @@ Pinned as-is by the test layer; none fixed. Triage with Derek.
 
 17. api_create_filament (app.py:595): the create_filament->None rejection branch returns the fixed generic msg 'Spoolman rejected the filament create.' WITHOUT surfacing spoolman_api.LAST_SPOOLMAN_ERROR — breaks the CLAUDE.md error-surfacing convention; its sibling api_create_vendor (app.py:629) does surface the body. Pinned as-is in test_create_filament_rejection_returns_500_generic_msg.
 
-18. api_edit_spool_wizard (app.py:1097-1133): when the pre-fetch blips (get_spool returns None) the handler skips BOTH the dirty-diff and the SYSTEM_MANAGED_EXTRAS strip and forwards the raw request payload — including container_slot / physical_source — verbatim to update_spool, reopening the Item-4 slot-clobber window during a Spoolman blip. Pinned as-is in test_wizard_get_spool_none_forwards_raw_payload.
+18. **✅ FIXED (Group 27, 2026-07-05).** api_edit_spool_wizard (now `routes_inventory.py`): a get_spool→None pre-fetch blip skipped BOTH the dirty-diff and the SYSTEM_MANAGED_EXTRAS strip and forwarded the raw payload (incl. container_slot / physical_source) verbatim, reopening the Item-4 slot-clobber window. FIX: fail closed — surface LAST_SPOOLMAN_ERROR, no raw-payload PATCH. Pin now: test_wizard_get_spool_none_fails_closed_no_raw_forward.
 
 19. api_edit_spool_wizard ordering: the spool write commits (and emits the 24.F weight log) BEFORE the filament update; a filament rejection then returns success:False with no indication the spool half already persisted (partial write reported as total failure; retry is mostly benign because the second diff comes up empty). Pinned in test_wizard_spool_committed_before_filament_rejection.
 
@@ -57,22 +57,22 @@ Pinned as-is by the test layer; none fixed. Triage with Derek.
 
 ## scan-audit (inventory-hub/tests/test_l316_charact_scan_audit.py)
 
-21. app.py ~2874/2945: identify_scan spool (and filament) branch — when spoolman_api.get_spool returns None (deleted/unknown id), the handler falls through every branch to the terminal `return jsonify(res)` and echoes the bare resolver dict {'type':'spool','id':N} with no display/location/error fields; the frontend receives a 'spool'-typed payload it can't render and no failure signal. Pinned in test_spool_scan_unknown_spool_echoes_bare_resolver_result.
+21. **✅ FIXED (Group 27, 2026-07-05).** identify_scan spool (and filament) branch (now `routes_scan.py`): a get_spool/get_filament→None (deleted/unknown id) fell through to the terminal `return jsonify(res)` and echoed the bare resolver dict {'type':'spool','id':N} with no failure signal. FIX: return {'type':'error','msg':'… not found'} (frontend toasts res.type=='error') + a WARNING Activity-Log line, for BOTH branches. Pins now: test_spool_scan_unknown_spool_returns_error_payload + test_filament_scan_unknown_filament_returns_error_payload.
 
-22. app.py 2417-2425: manage_contents clear_location silently SKIPS any spool with a real slot value (slot truthy and != 'None') — only unslotted spools are ejected, yet the response is still {'success': true} with no log/warning about the survivors. The ghost skip is documented ([ALEX FIX] comment); the slotted skip is not. Pinned in test_clear_location_ejects_only_unslotted_non_ghosts.
+22. **✅ FIXED (Group 27, 2026-07-05).** manage_contents clear_location (now `routes_scan.py`) SKIPPED any slotted spool yet returned bare {'success': true} with no warning about the survivors. FIX (Derek's call — keep slotted, warn+report; a slotted spool is loaded into a toolhead/MMU): still ejects unslotted, but surfaces the survivors in the response (ejected[]/skipped_slotted[]/msg) + a WARNING Activity-Log line; the "Nuke all unslotted" button toasts the honest result. Pin now: test_clear_location_ejects_unslotted_and_surfaces_slotted_survivors.
 
 23. app.py 2438/2481: an unrecognized manage_contents action returns {'success': false, 'msg': 'Spool not found'} (misleading message — nothing was looked up), and the terminal `return jsonify({"success": False})` at app.py:2481 is unreachable in practice. Pinned in test_unknown_action_returns_spool_not_found.
 
 24. app.py 2839-2846: while an audit session is active, process_audit_scan's return value is discarded — the route answers {'type':'command','cmd':'clear'} even when the handler reports {'status':'error'} (e.g. a disallowed command), so the scanner UI gets no route-level failure signal (Activity Log only). Pinned in test_active_audit_hijacks_spool_scan_and_refreshes_watchdog.
 
-25. app.py 2831-2837: CMD:AUDIT scanned DURING an active audit session silently reset_audit()s and restarts — all in-progress scanned/expected/rogue state is wiped with no confirmation, because the activation branch sits above the active-session delegation. Pinned in test_cmd_audit_during_active_session_restarts_fresh.
+25. **✅ FIXED (Group 27, 2026-07-05).** CMD:AUDIT scanned DURING an active audit session (now `routes_scan.py`) silently reset_audit()'d and restarted — wiping in-progress scanned/expected/rogue state. FIX (Derek's call — no-op + info line): the active-session check now sits ABOVE the reset; re-scanning CMD:AUDIT mid-audit preserves state, refreshes the idle watchdog, logs "Audit already in progress …", and the user ends via CMD:CANCEL/CMD:DONE. Pin now: test_cmd_audit_during_active_session_is_noop_preserves_state.
 
 
 ## filament-edit-log (d:/My Documents/Documents/3D Printing/Filament Command Center/inventory-hub/tests/test_l316_charact_filament_edit_log.py)
 
 26. api_update_filament generic-Exception branch returns HTTP 200 with {success:false, msg:str(e)} — NOT a 500 (the audit/assignment said '500 shape'; the code jsonify()s at default 200). Pinned as-is in test_update_filament_generic_exception_returns_200_with_str.
 
-27. Committed-write-reported-as-failure: in api_update_filament the activity-log formatting (_format_filament_edit_log + state.add_log_entry) runs INSIDE the try AFTER a successful update_filament, so any exception there (formatter crash on unexpected shape, logger failure) returns success:false for a write that already COMMITTED to Spoolman — the user retries and double-writes. Pinned in test_update_filament_committed_write_with_raising_logger_reports_failure (matches the audit's warning on this symbol).
+27. **✅ FIXED (Group 27, 2026-07-05).** api_update_filament (now `routes_scan.py`): the activity-log formatting ran INSIDE the try AFTER a successful update_filament, so a formatter/logger crash returned success:false for an already-COMMITTED write → user retries + double-writes. FIX: format+log moved to its own guarded block AFTER the success-determining try; a log crash is logged but the response still reports success:true. Pin now: test_update_filament_committed_write_survives_raising_logger.
 
 28. Doc staleness, not code: CLAUDE.md's Group 23.4 section says the delete-sentinel behavior is pinned by tests/test_delete_sentinel.py, but that file only covers the spoolman_api merge helpers — the '(cleared)' render in _format_filament_edit_log had zero coverage until this file.
 
@@ -89,7 +89,7 @@ Pinned as-is by the test layer; none fixed. Triage with Derek.
 
 33. Both endpoints evaluate strict `request.json` BEFORE their try blocks: malformed JSON -> framework HTML 400, wrong content-type -> 415 (Flask 3.1 UnsupportedMediaType), bypassing the endpoints' JSON {'success': false, msg} error contract entirely — unlike api_quickswap's request.get_json(silent=True) idiom. A carve that 'harmonizes' this flips the status codes. Pinned in the 400/415 tests.
 
-34. mark_printed's legacy-ID gate catches ONLY ValueError from int(item_id); a JSON-array id raises TypeError before the try block and escapes the handler — unhandled 500 in prod. Pinned via pytest.raises(TypeError) in test_mark_printed_non_intable_id_type_raises_uncaught.
+34. **✅ FIXED (Group 27, 2026-07-05).** mark_printed's legacy-ID gate (now `routes_print_queue.py`) caught ONLY ValueError from int(item_id); a JSON-array id raised TypeError → unhandled 500 in prod. FIX: broadened to `except (ValueError, TypeError)` so a non-scalar id returns the JSON error contract at HTTP 200. Pin now: test_mark_printed_non_intable_id_type_returns_json_error.
 
 35. mark_printed treats id=0 as missing (`if not item_id` truthiness) and returns 'Missing ID or Type' — harmless today (Spoolman ids start at 1) but pinned in the parametrized missing-field test.
 
@@ -107,9 +107,9 @@ Pinned as-is by the test layer; none fixed. Triage with Derek.
 
 ## monitor-boot (inventory-hub/tests/test_l316_charact_monitor_boot.py)
 
-40. _seed_printer_credentials_from_filabridge: the inner locations_db.seed_printer_credentials call (app.py:7171) is NOT inside any try/except, and the __main__ call site (app.py:7428) is also unwrapped — a raising seed PROPAGATES and would kill the serving-process launch path before _start_cancel_monitor, contradicting the function docstring's 'Best-effort: never blocks startup'. Pinned as-is in test_seed_inner_seed_exception_propagates.
+40. **✅ FIXED (Group 27, 2026-07-05).** _seed_printer_credentials_from_filabridge (now `print_monitor.py`): the inner locations_db.seed_printer_credentials call AND the `__main__` call site were both unwrapped — a raising seed would kill the serving-process launch before _start_cancel_monitor. FIX: wrapped the seed call (try/except→WARNING, return) + a belt-and-suspenders wrap at the `__main__` site; boot survives + the monitor still starts. Pin now: test_seed_inner_seed_exception_is_swallowed.
 
-41. _fcc_owns_completion_deduct (app.py:6295) bool()-coerces the raw config value instead of parsing it — a hand-edited config with "fcc_owns_completion_deduct": "false" (JSON string) reads as True and ENABLES FCC's completion deduct. Minor footgun; pinned in test_completion_flag_truthiness_coercion.
+41. **✅ FIXED (Group 27, 2026-07-05).** _fcc_owns_completion_deduct (now `print_monitor.py`) bool()-coerced the raw config value — the JSON string "false" read as True and ENABLED the completion deduct (a dangerous safety-flag inversion). FIX: real parser (bools + numerics + "true"/"false"/"1"/"0"/"yes"/"no"/"on"/"off"; default safe False). Pin now: test_completion_flag_parses_bool_string_and_numeric_forms.
 
 
 ## bindings-errors (inventory-hub/tests/test_l316_charact_bindings_errors.py)
@@ -125,7 +125,7 @@ Pinned as-is by the test layer; none fixed. Triage with Derek.
 
 ## deduct-misc (inventory-hub/tests/test_l316_charact_deduct_misc.py)
 
-46. api_get_multi_spool_filaments (app.py:4094-4139): one malformed spool entry poisons the whole response — a spool dict missing the 'id' key raises KeyError at fil_spools[fid].append(s['id']) mid-loop, the blanket except swallows it, and the endpoint returns [] (HTTP 200), silently hiding every OTHER valid multi-spool candidate with only a state.logger.error line. Same failure class for a filament with 'vendor': None (dict .get('vendor', {}) returns None when the key is present-but-null, then None.get('name') AttributeErrors). Pinned in test_multi_spool_malformed_spool_degrades_entire_response.
+46. **✅ FIXED (Group 27, 2026-07-05).** api_get_multi_spool_filaments (now `print_deduct.py`): one malformed spool entry (missing 'id', or 'vendor': None) tripped the blanket except and poisoned the whole response to [] (HTTP 200), hiding every valid candidate. FIX: per-spool try/except (skip+log the bad record) + null-safe filament/vendor reads; valid candidates still return. Pin now: test_multi_spool_malformed_spool_is_skipped_valid_candidates_survive.
 
 47. api_get_multi_spool_filaments display string: f'{vendor} - {name}'.strip(' -') strips ALL leading/trailing spaces AND hyphens, so a legitimate vendor/name that starts or ends with '-' (e.g. name '-EOL-') gets its dashes eaten in the picker display. Cosmetic; fallback behavior pinned in test_multi_spool_display_fallbacks (not the dash-eating edge itself).
 
@@ -134,7 +134,7 @@ Pinned as-is by the test layer; none fixed. Triage with Derek.
 
 ## pulse-state (inventory-hub/tests/test_l316_charact_pulse_state.py)
 
-49. /api/dashboard_pulse (app.py ~7341-7353): when the shared _pulse_section_logs helper raises, the derived 'status' section is silently OMITTED instead of carrying an error slot — include=status alone returns {} entirely. This contradicts the endpoint docstring's promise that 'Sections that error individually return {"error": ...} in their slot'; the nav-bar spoolman/audit/undo dot gets neither data nor an error signal. Pinned by test_pulse_status_section_vanishes_when_logs_helper_raises.
+49. **✅ FIXED (Group 27, 2026-07-05).** /api/dashboard_pulse (now `routes_state_pulse.py`): when the shared _pulse_section_logs helper raised, the derived 'status' section was silently OMITTED (include=status alone returned {}), contradicting the docstring's per-section-isolation promise; the nav-bar dot got no signal. FIX: on a logs-helper error, the 'status' slot carries {'error': str(e)}. Pin now: test_pulse_status_section_carries_error_when_logs_helper_raises.
 
 50. /api/state/buffer and /api/state/queue (app.py 6100/6107): POST stores ANY JSON type verbatim into state.GLOBAL_BUFFER/GLOBAL_QUEUE — no list validation (unlike /api/spools/refresh, which 400s on a non-list). One malformed client write poisons the persisted buffer/queue served to every dashboard until the next good write. Pinned by test_state_buffer_post_non_list_value_stored_verbatim.
 
