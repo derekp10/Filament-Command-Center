@@ -363,6 +363,14 @@ if __name__ == '__main__':
         # FilaBridge Phase-2 gate: relocate printer creds onto the Printer rows
         # (one-time, prime-only) BEFORE the cancel monitor starts, so its first
         # PrusaLink probe reads creds locally rather than from FilaBridge.
-        print_monitor._seed_printer_credentials_from_filabridge()
+        # 27.2 — belt-and-suspenders: the seed is best-effort and must never
+        # stop the cancel monitor from starting, so any unexpected raise here
+        # (not just the inner seed call the helper already guards) is contained.
+        try:
+            print_monitor._seed_printer_credentials_from_filabridge()
+        except Exception as _seed_boot_err:
+            state.logger.warning(
+                f"printer-creds seed raised at boot (monitor still starting): "
+                f"{_seed_boot_err}")
         print_monitor._start_cancel_monitor()
     app.run(host='0.0.0.0', port=8000, use_reloader=_dev, debug=False)

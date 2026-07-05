@@ -26,6 +26,23 @@ import requests
 # Make the inventory-hub app modules importable from tests.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# ---------------------------------------------------------------------------
+# Windows console UTF-8 (Group 26.2)
+# ---------------------------------------------------------------------------
+# The app's Activity-Log lines carry emoji (state.add_log_entry → logger via a
+# `StreamHandler(sys.stdout)`; see state.py). On Windows the console defaults to
+# cp1252, and under pytest's fd-level capture sys.stdout stays the real cp1252
+# TextIOWrapper — so those emoji raise UnicodeEncodeError during logging emit
+# and spew multi-line tracebacks that bury real test output. Reconfigure the std
+# streams to UTF-8 HERE, at conftest import (before any test imports state.py, so
+# its StreamHandler captures the reconfigured stream). No-op where reconfigure is
+# unavailable (older streams) or the stream is already UTF-8.
+for _utf8_stream in (sys.stdout, sys.stderr):
+    try:
+        _utf8_stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (AttributeError, ValueError, OSError):
+        pass
+
 
 DEFAULT_BASE_URL = os.environ.get("INVENTORY_HUB_URL", "http://localhost:8000")
 DEFAULT_DEV_SPOOLMAN = os.environ.get("DEV_SPOOLMAN_URL", "http://192.168.1.29:7913")
@@ -281,6 +298,126 @@ def seed_via_ui(api_base_url: str):
         pytest.skip("UI bindings path ships with M4; use seed_dryer_box until then.")
 
     return _seed
+
+
+# ---------------------------------------------------------------------------
+# Quick-Swap overlay fixture (Group 26.3)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def bound_loaded_slot(api_base_url):
+    """A deterministic bound + loaded Quick-Swap slot for overlay/confirm tests.
+
+    The Quick-Swap confirm overlay + bind-picker only render for a slot that is
+    (a) bound to a REAL toolhead and (b) actually holds a spool. On a bare dev
+    state the fixture boxes are bound-but-empty, so `.fcc-qs-slot` stays disabled
+    (`slot N is empty — scan a spool into the buffer`) and the overlays never
+    mount — the root cause of the six pre-existing overlay reds this fixture
+    fixes. (The old per-file `bound_slot` fixtures bound an EMPTY slot; the old
+    `_find_*` helpers could return a slot bound to a virtual `PRINTER:*` target,
+    which doesn't render a grid at all.)
+
+    Discovers a dryer-box slot that ALREADY holds a spool (get_contents) and
+    ensures it is bound to a real toolhead (never a virtual `PRINTER:*`
+    whole-printer target). Mutates ONLY the slot binding, and only when the slot
+    isn't already bound to a real toolhead — restored on teardown; no spool is
+    ever moved, so dev inventory is left exactly as found. Yields
+    ``{"box", "slot", "toolhead", "spool_id"}``. Skips (does not fail) when dev
+    state has no loaded dryer-box slot, mirroring the sibling helpers these
+    tests previously used.
+    """
+    # Real toolheads only (exclude PRINTER:* virtual whole-printer targets).
+    pm = requests.get(f"{api_base_url}/api/printer_map", timeout=5).json().get("printers", {})
+    real_toolheads = [
+        str(e.get("location_id", "")).upper()
+        for entries in pm.values() for e in (entries or [])
+        if str(e.get("location_id", "")).strip()
+    ]
+    if not real_toolheads:
+        pytest.skip("No real toolheads in printer_map to bind a slot against.")
+
+    slots = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json().get("slots", [])
+    boxes = sorted({s["box"] for s in slots})
+
+    # Find a box slot that currently holds a spool (no spool is moved to create
+    # one — we only read what's already loaded).
+    loaded = None  # (box, slot, spool_id)
+    for box in boxes:
+        try:
+            contents = requests.get(
+                f"{api_base_url}/api/get_contents?id={box}", timeout=5
+            ).json() or []
+        except requests.RequestException:
+            continue
+        for it in contents:
+            sl = str(it.get("slot", "")).replace('"', '').strip()
+            if sl:
+                loaded = (box, sl, it.get("id"))
+                break
+        if loaded:
+            break
+    if not loaded:
+        pytest.skip("No loaded dryer-box slot in dev state to open an overlay against.")
+    box, slot, spool_id = loaded
+
+    # Prefer the slot's CURRENT binding when it already targets a real toolhead —
+    # then we mutate nothing at all.
+    snap = requests.get(f"{api_base_url}/api/dryer_box/{box}/bindings", timeout=5).json()
+    original = snap.get("slot_targets", {}) or {}
+    current = str(original.get(str(slot), "")).upper()
+    mutated = False
+    if current in real_toolheads:
+        toolhead = current
+    else:
+        toolhead = real_toolheads[0]
+        new_targets = dict(original)
+        new_targets[str(slot)] = toolhead
+        requests.put(
+            f"{api_base_url}/api/dryer_box/{box}/bindings",
+            json={"slot_targets": new_targets},
+            timeout=5,
+        )
+        mutated = True
+
+    yield {"box": box, "slot": str(slot), "toolhead": toolhead, "spool_id": spool_id}
+
+    if mutated:
+        requests.put(
+            f"{api_base_url}/api/dryer_box/{box}/bindings",
+            json={"slot_targets": original},
+            timeout=5,
+        )
+
+
+@pytest.fixture
+def real_toolhead(api_base_url):
+    """A pure (non-dual-role) toolhead location id for the bind-slot picker.
+
+    The bind-slot picker's single-toolhead branch only renders for a location
+    row typed 'Tool Head' / 'MMU Slot' / 'No MMU Direct Load'. A dual-role
+    Printer row (e.g. CORE1, whose sole toolhead is named after the printer
+    rather than `<printer>-N`) makes the picker's printer-branch option list
+    empty, so it never mounts — which is why `bound_loaded_slot` (which can
+    yield CORE1) is wrong for the bind-picker test. Skips when the fleet has no
+    pure toolhead.
+    """
+    pm = requests.get(f"{api_base_url}/api/printer_map", timeout=5).json().get("printers", {})
+    toolhead_ids = [
+        str(e.get("location_id", "")).strip().upper()
+        for entries in pm.values() for e in (entries or [])
+        if str(e.get("location_id", "")).strip()
+    ]
+    locs = requests.get(f"{api_base_url}/api/locations", timeout=8).json()
+    rows = locs.get("locations") if isinstance(locs, dict) else locs
+    types = {
+        str(r.get("LocationID", "")).upper(): str(r.get("Type", ""))
+        for r in (rows or [])
+    }
+    for tid in toolhead_ids:
+        t = types.get(tid, "")
+        if t and t != "Printer":
+            return tid
+    pytest.skip("No pure (non-Printer) toolhead in the fleet for the bind picker.")
 
 
 # ---------------------------------------------------------------------------

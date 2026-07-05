@@ -354,14 +354,11 @@ def test_pulse_logs_and_status_share_one_section_call(monkeypatch):
     assert body["status"]["undo_available"] is True
 
 
-def test_pulse_status_section_vanishes_when_logs_helper_raises(monkeypatch):
-    """When _pulse_section_logs raises: the 'logs' slot gets {'error': str(e)}
-    per the documented per-section isolation, but the 'status' slot is
-    silently OMITTED (the derivation guard `'status' in logs_payload` fails
-    on the error dict) — status requested alone returns {} entirely.
-    # NOTE: pins current behavior; see suspected_bugs — the endpoint
-    # docstring promises erroring sections return {'error': ...} in their
-    # slot, but 'status' gets no slot at all when the shared logs call dies."""
+def test_pulse_status_section_carries_error_when_logs_helper_raises(monkeypatch):
+    """27.9 FIX — when the shared _pulse_section_logs health check raises, the
+    derived 'status' section now honors the endpoint's documented per-section
+    isolation contract and carries {'error': str(e)} (so the nav-bar
+    spoolman/audit/undo dot gets a signal), instead of being silently omitted."""
     def _boom():
         raise RuntimeError("health check exploded")
 
@@ -370,11 +367,14 @@ def test_pulse_status_section_vanishes_when_logs_helper_raises(monkeypatch):
 
     r = client.get("/api/dashboard_pulse?include=logs,status")
     assert r.status_code == 200
-    assert r.get_json() == {"logs": {"error": "health check exploded"}}
+    assert r.get_json() == {
+        "logs": {"error": "health check exploded"},
+        "status": {"error": "health check exploded"},
+    }
 
     r2 = client.get("/api/dashboard_pulse?include=status")
     assert r2.status_code == 200
-    assert r2.get_json() == {}
+    assert r2.get_json() == {"status": {"error": "health check exploded"}}
 
 
 def test_pulse_locations_dispatch_passthrough(monkeypatch):

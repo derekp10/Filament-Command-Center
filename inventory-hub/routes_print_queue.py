@@ -75,9 +75,12 @@ def api_print_queue_mark_printed():
         return jsonify({"success": False, "msg": "Missing ID or Type"})
         
     # Strictly reject legacy IDs (they usually start with strings or have weird formats). Make sure it's int convertible.
+    # 27.3 — also catch TypeError: a JSON-array/object id (e.g. [123]) raises
+    # TypeError from int(), which a ValueError-only guard let escape as an
+    # unhandled 500. Non-scalar ids now return the same JSON error contract.
     try:
         item_id = int(item_id)
-    except ValueError:
+    except (ValueError, TypeError):
         return jsonify({"success": False, "msg": "Legacy IDs cannot be manually marked printed. Please scan."})
         
     try:

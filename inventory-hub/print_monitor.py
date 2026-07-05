@@ -103,11 +103,24 @@ _CANCEL_DEDUCT_RUN_ASYNC = True
 
 def _fcc_owns_completion_deduct():
     """The Phase-2 cutover flag (default False → FilaBridge owns completions, this
-    code stays dark). Only consulted on an actual in-progress→FINISHED edge."""
+    code stays dark). Only consulted on an actual in-progress→FINISHED edge.
+
+    27.4 — the value is PARSED, not bool()-coerced: a hand-edited config with the
+    JSON string "false" must read as False. A naive bool() made any non-empty
+    string (incl. "false") truthy, silently ENABLING the completion deduct — a
+    safety flag that inverts on a string is dangerous. Accepts real bools,
+    numerics, and the common string forms; anything unrecognized defaults safe."""
     try:
-        return bool(config_loader.load_config().get("fcc_owns_completion_deduct", False))
+        raw = config_loader.load_config().get("fcc_owns_completion_deduct", False)
     except Exception:
         return False
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return raw != 0
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("true", "1", "yes", "on")
+    return False
 
 
 def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
@@ -1020,8 +1033,17 @@ def _seed_printer_credentials_from_filabridge():
             "🔐 Printer-creds seed: FilaBridge /printers unreachable or empty; "
             "will retry next boot (rows still missing creds).")
         return
-    _cred_migrated, _cred_changed = locations_db.seed_printer_credentials(
-        _cred_locs, _fb_printers, prime_only=True)
+    try:
+        _cred_migrated, _cred_changed = locations_db.seed_printer_credentials(
+            _cred_locs, _fb_printers, prime_only=True)
+    except Exception as _seed_err:
+        # 27.2 — a raising seed must NOT propagate out of this best-effort boot
+        # helper (docstring: "never blocks startup"). Degrade to a warning and
+        # let the cancel monitor start; the seed retries next boot.
+        state.logger.warning(
+            f"printer-creds seed: seeding failed (boot continues, retries next "
+            f"boot): {_seed_err}")
+        return
     if not _cred_changed:
         return
     try:

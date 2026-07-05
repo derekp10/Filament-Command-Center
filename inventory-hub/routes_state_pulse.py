@@ -354,18 +354,27 @@ def api_dashboard_pulse():
     # logs and status share the underlying Spoolman+FilaBridge health
     # check, so we invoke the handler at most once per request.
     if 'logs' in include or 'status' in include:
+        logs_error = None
         try:
             logs_payload = _pulse_section_logs()
         except Exception as e:
-            logs_payload = {'error': str(e)}
+            logs_error = str(e)
+            logs_payload = {'error': logs_error}
         if 'logs' in include:
             out['logs'] = logs_payload
-        if 'status' in include and isinstance(logs_payload, dict) and 'status' in logs_payload:
-            out['status'] = {
-                'spoolman': logs_payload['status'].get('spoolman', False),
-                'audit_active': logs_payload.get('audit_active', False),
-                'undo_available': logs_payload.get('undo_available', False),
-            }
+        if 'status' in include:
+            # 27.9 — the derived status section must honor the endpoint's
+            # per-section isolation contract: when the shared logs health
+            # check DIES, carry {'error': ...} in the status slot (so the
+            # nav-bar dot gets a signal) instead of silently omitting it.
+            if logs_error is not None:
+                out['status'] = {'error': logs_error}
+            elif isinstance(logs_payload, dict) and 'status' in logs_payload:
+                out['status'] = {
+                    'spoolman': logs_payload['status'].get('spoolman', False),
+                    'audit_active': logs_payload.get('audit_active', False),
+                    'undo_available': logs_payload.get('undo_available', False),
+                }
 
     if 'locations' in include:
         try:

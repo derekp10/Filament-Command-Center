@@ -36,23 +36,6 @@ def bound_slot(api_base_url):
     )
 
 
-def _find_loaded_bound_slot(api_base_url):
-    """Return (box, slot, toolhead) for a slot that has a spool AND is
-    already bound. Used to exercise the enabled button path without
-    depending on a specific fixture box being pre-loaded."""
-    payload = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json()
-    for entry in payload.get("slots", []):
-        if not entry.get("target"):
-            continue
-        contents = requests.get(
-            f"{api_base_url}/api/get_contents?id={entry['box']}", timeout=5
-        ).json()
-        for it in contents or []:
-            if str(it.get("slot", "")).replace('"', '').strip() == str(entry["slot"]):
-                return entry["box"], str(entry["slot"]), entry["target"]
-    return None
-
-
 @pytest.mark.usefixtures("require_server", "bound_slot")
 def test_quickswap_grid_visible_on_bound_toolhead(page: Page, open_manage_modal):
     open_manage_modal(TEST_TOOLHEAD)
@@ -82,51 +65,65 @@ def test_quickswap_keyboard_q_focuses_first_slot(page: Page, open_manage_modal):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_quickswap_tap_opens_confirm_overlay(page: Page, open_manage_modal, api_base_url):
-    hit = _find_loaded_bound_slot(api_base_url)
-    if not hit:
-        pytest.skip("No bound-and-loaded slot available in dev state.")
-    box, slot, toolhead = hit
+def test_quickswap_tap_opens_confirm_overlay(page: Page, open_manage_modal, bound_loaded_slot):
+    box, slot, toolhead = (
+        bound_loaded_slot["box"], bound_loaded_slot["slot"], bound_loaded_slot["toolhead"]
+    )
     open_manage_modal(toolhead)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=8000)
     test_btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     expect(test_btn).to_be_visible(timeout=3000)
     test_btn.click()
-    expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=2000)
+    # showConfirmOverlay awaits a ~3s active-print probe before it mounts the
+    # overlay (offline dev printers hit the full timeout) — allow probe + network.
+    expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=8000)
     expect(page.locator("#fcc-quickswap-confirm-title")).to_contain_text(box)
     expect(page.locator("#fcc-quickswap-confirm-title")).to_contain_text(toolhead)
 
 
-@pytest.mark.usefixtures("require_server", "bound_slot")
-def test_quickswap_confirm_overlay_cancel_dismisses(page: Page, open_manage_modal):
-    open_manage_modal(TEST_TOOLHEAD)
-    page.locator(".fcc-qs-slot").first.click()
+@pytest.mark.usefixtures("require_server")
+def test_quickswap_confirm_overlay_cancel_dismisses(page: Page, open_manage_modal, bound_loaded_slot):
+    box, slot, toolhead = (
+        bound_loaded_slot["box"], bound_loaded_slot["slot"], bound_loaded_slot["toolhead"]
+    )
+    open_manage_modal(toolhead)
+    page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
-    # showConfirmOverlay awaits a 3s active-print probe before mounting; 6s
+    # showConfirmOverlay awaits a ~3s active-print probe before mounting; 8s
     # gives headroom for probe + network under sweep load. Same pattern as
     # test_quickswap_deposit_and_header (Group 14.2).
-    expect(overlay).to_be_visible(timeout=6000)
+    expect(overlay).to_be_visible(timeout=8000)
     page.locator("#fcc-quickswap-no").click()
     expect(overlay).to_be_hidden(timeout=2000)
 
 
 @pytest.mark.usefixtures("require_server")
-def test_quickswap_confirm_yes_actually_performs_swap(page: Page, open_manage_modal, api_base_url):
+def test_quickswap_confirm_yes_actually_performs_swap(page: Page, open_manage_modal, bound_loaded_slot):
     """Regression guard: a duplicate window.quickSwapTap definition was
     overriding the real handler, so clicking Yes did nothing. This test
     catches that class of bug by watching the /api/quickswap request
-    fire in response to the Yes click."""
-    hit = _find_loaded_bound_slot(api_base_url)
-    if not hit:
-        pytest.skip("No bound-and-loaded slot available in dev state.")
-    box, slot, toolhead = hit
+    fire in response to the Yes click.
+
+    The swap POST is stubbed (fulfilled client-side) so the assertion stays
+    non-destructive — the request still fires and is asserted, but the backend
+    never mutates real inventory (which would consume the bound_loaded_slot)."""
+    box, slot, toolhead = (
+        bound_loaded_slot["box"], bound_loaded_slot["slot"], bound_loaded_slot["toolhead"]
+    )
+    page.route(
+        "**/api/quickswap",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"status": "success"}'
+        ),
+    )
     open_manage_modal(toolhead)
     expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=8000)
     test_btn = page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first
     expect(test_btn).to_be_visible(timeout=3000)
     test_btn.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
-    expect(overlay).to_be_visible(timeout=2000)
+    # ~3s active-print probe before the overlay mounts (offline dev printers).
+    expect(overlay).to_be_visible(timeout=8000)
     with page.expect_request(
         lambda req: req.url.endswith("/api/quickswap") and req.method == "POST",
         timeout=3000,
@@ -138,12 +135,16 @@ def test_quickswap_confirm_yes_actually_performs_swap(page: Page, open_manage_mo
     assert body["slot"] == slot
 
 
-@pytest.mark.usefixtures("require_server", "bound_slot")
-def test_quickswap_escape_in_overlay_closes_overlay_only(page: Page, open_manage_modal):
-    open_manage_modal(TEST_TOOLHEAD)
-    page.locator(".fcc-qs-slot").first.click()
+@pytest.mark.usefixtures("require_server")
+def test_quickswap_escape_in_overlay_closes_overlay_only(page: Page, open_manage_modal, bound_loaded_slot):
+    box, slot, toolhead = (
+        bound_loaded_slot["box"], bound_loaded_slot["slot"], bound_loaded_slot["toolhead"]
+    )
+    open_manage_modal(toolhead)
+    page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first.click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
-    expect(overlay).to_be_visible(timeout=2000)
+    # ~3s active-print probe before the overlay mounts (offline dev printers).
+    expect(overlay).to_be_visible(timeout=8000)
     page.keyboard.press("Escape")
     expect(overlay).to_be_hidden(timeout=2000)
     # The manage modal should still be open.

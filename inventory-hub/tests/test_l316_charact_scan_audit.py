@@ -75,13 +75,13 @@ def test_cmd_audit_activates_session_and_returns_clear(client):
     assert second_args[0] == "Scan a Location label to begin checking."
 
 
-def test_cmd_audit_during_active_session_restarts_fresh(client):
-    """The CMD:AUDIT branch sits ABOVE the active-session delegation check,
-    so re-scanning CMD:AUDIT mid-audit does NOT route to process_audit_scan
-    (which would answer 'Command not allowed in Audit') — it silently
-    reset_audit()s and starts over, wiping in-progress scan state.
-    # NOTE: pins current behavior; see suspected_bugs (progress lost with
-    # no confirmation)."""
+def test_cmd_audit_during_active_session_is_noop_preserves_state(client):
+    """27.5 FIX — the CMD:AUDIT branch now checks for an active session FIRST:
+    re-scanning CMD:AUDIT mid-audit no longer silently reset_audit()s and wipes
+    in-progress scanned/expected/rogue state. It's a no-op that refreshes the
+    idle watchdog and logs an 'already in progress' info line; the user ends the
+    audit explicitly via CMD:CANCEL/CMD:DONE. process_audit_scan is NOT called
+    (no delegation) and the response is still {'cmd':'clear'}."""
     state.AUDIT_SESSION.update({
         "active": True,
         "location_id": "LR-MDB-1",
@@ -91,20 +91,21 @@ def test_cmd_audit_during_active_session_restarts_fresh(client):
         "last_activity_ts": time.time() - 999.0,
     })
     before = time.time()
-    with patch.object(app_module.state, "add_log_entry"), \
+    with patch.object(app_module.state, "add_log_entry") as log, \
          patch.object(app_module.logic, "process_audit_scan") as pas:
         r = client.post("/api/identify_scan",
                         json={"text": "CMD:AUDIT", "source": "barcode"})
 
     assert r.get_json() == {"type": "command", "cmd": "clear"}
-    pas.assert_not_called()  # restart, not delegation
+    pas.assert_not_called()  # no-op, not delegation
     sess = state.AUDIT_SESSION
     assert sess["active"] is True
-    assert sess["location_id"] is None
-    assert sess["expected_items"] == []
-    assert sess["scanned_items"] == []
-    assert sess["rogue_items"] == []
-    assert sess["last_activity_ts"] >= before
+    assert sess["location_id"] == "LR-MDB-1"       # preserved
+    assert sess["expected_items"] == [101, 102]     # preserved
+    assert sess["scanned_items"] == [101]           # preserved
+    assert sess["rogue_items"] == [999]             # preserved
+    assert sess["last_activity_ts"] >= before       # watchdog refreshed
+    assert any("already in progress" in c[0][0] for c in log.call_args_list)
 
 
 # ---------------------------------------------------------------------------
@@ -334,18 +335,31 @@ def test_spool_scan_ghost_without_slot_extra_keeps_display_slot(client):
     assert body["slot"] == "1"
 
 
-def test_spool_scan_unknown_spool_echoes_bare_resolver_result(client):
-    """get_spool → None (deleted/unknown id) skips the whole spool-branch
-    body and FALLS THROUGH to the terminal `return jsonify(res)` — the
-    client receives the bare resolver dict with NO display/location/ghost
-    fields and no error type.
-    # NOTE: pins current behavior; see suspected_bugs."""
+def test_spool_scan_unknown_spool_returns_error_payload(client):
+    """27.10 FIX — get_spool → None (deleted/unknown id) now returns a
+    renderable scan-failure payload {'type':'error','msg':...} (the frontend
+    toasts res.type=='error') plus a WARNING Activity-Log line, instead of
+    falling through to the bare, unrenderable {'type':'spool','id':N}."""
     with patch.object(app_module.spoolman_api, "get_spool", return_value=None), \
-         patch.object(app_module.spoolman_api, "format_spool_display") as fsd:
+         patch.object(app_module.spoolman_api, "format_spool_display") as fsd, \
+         patch.object(app_module.state, "add_log_entry") as log:
         r = client.post("/api/identify_scan",
                         json={"text": "ID:424242", "source": "keyboard"})
     fsd.assert_not_called()
-    assert r.get_json() == {"type": "spool", "id": 424242}
+    assert r.get_json() == {"type": "error", "msg": "Spool #424242 not found"}
+    assert any("not found" in c[0][0] for c in log.call_args_list)
+
+
+def test_filament_scan_unknown_filament_returns_error_payload(client):
+    """27.10 FIX (filament side) — get_filament → None returns the same
+    renderable {'type':'error'} scan-failure payload + WARNING log rather than
+    the bare {'type':'filament','id':N} the UI would try to open as real."""
+    with patch.object(app_module.spoolman_api, "get_filament", return_value=None), \
+         patch.object(app_module.state, "add_log_entry") as log:
+        r = client.post("/api/identify_scan",
+                        json={"text": "FIL:99999", "source": "keyboard"})
+    assert r.get_json() == {"type": "error", "msg": "Filament #99999 not found"}
+    assert any("not found" in c[0][0] for c in log.call_args_list)
 
 
 # ---------------------------------------------------------------------------
@@ -479,16 +493,17 @@ def test_add_returns_perform_smart_move_result_verbatim(client):
 # 6. /api/manage_contents — clear_location mapping.
 # ---------------------------------------------------------------------------
 
-def test_clear_location_ejects_only_unslotted_non_ghosts(client):
-    """clear_location skips ghosts (documented ALEX FIX) AND any spool with
-    a real slot value (undocumented — slotted spools survive a 'clear' and
-    the response still says success). Only unslotted spools ('' / 'None' /
-    missing) get perform_smart_eject, each with confirm_active_print=True
-    (bulk clear bypasses per-spool prompts).
-    # NOTE: pins current behavior; see suspected_bugs (slotted-spool skip)."""
+def test_clear_location_ejects_unslotted_and_surfaces_slotted_survivors(client):
+    """27.6 FIX — clear_location still skips ghosts (documented ALEX FIX) AND
+    still does NOT auto-eject slotted spools (loaded into a toolhead/MMU —
+    ejecting them on a bulk clear would unassign a live feed), but it no longer
+    reports a bare success: the slotted survivors are surfaced in the response
+    (ejected[] + skipped_slotted[] + msg) and a WARNING Activity-Log line names
+    them. Only unslotted spools ('' / 'None' / missing) get perform_smart_eject,
+    each with confirm_active_print=True (bulk clear bypasses per-spool prompts)."""
     contents = [
-        {"id": 1, "is_ghost": True, "slot": ""},   # ghost → skipped
-        {"id": 2, "slot": "2"},                     # slotted → skipped (!)
+        {"id": 1, "is_ghost": True, "slot": ""},   # ghost → skipped (not surfaced)
+        {"id": 2, "slot": "2"},                     # slotted → kept + surfaced
         {"id": 3, "slot": ""},                      # empty slot → ejected
         {"id": 4, "slot": "None"},                  # 'None' string → ejected
         {"id": 5},                                  # no slot key → ejected
@@ -497,18 +512,25 @@ def test_clear_location_ejects_only_unslotted_non_ghosts(client):
                       return_value=contents) as gl, \
          patch.object(app_module.logic, "_active_print_info_for_location",
                       return_value=None) as ap, \
-         patch.object(app_module.logic, "perform_smart_eject") as eject:
+         patch.object(app_module.logic, "perform_smart_eject") as eject, \
+         patch.object(app_module.state, "add_log_entry") as log:
         r = client.post("/api/manage_contents", json={
             "action": "clear_location", "location": "lr-mdb-1",
         })
 
-    assert r.get_json() == {"success": True}
+    body = r.get_json()
+    assert body["success"] is True
+    assert body["ejected"] == [3, 4, 5]
+    assert body["skipped_slotted"] == [2]          # slotted survivor surfaced
+    assert "left in place" in body["msg"]
     gl.assert_called_once_with("LR-MDB-1")   # strip().upper() canonicalized
     ap.assert_called_once_with("LR-MDB-1")
     ejected = [c[0][0] for c in eject.call_args_list]
     assert ejected == [3, 4, 5]
     for c in eject.call_args_list:
         assert c[1] == {"confirm_active_print": True}
+    assert any("slotted spool(s) left in place" in c[0][0]
+               for c in log.call_args_list)
 
 
 def test_clear_location_confirm_flag_skips_active_print_probe(client):

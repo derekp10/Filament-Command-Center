@@ -603,6 +603,24 @@ def api_edit_spool_wizard():
 
                 spool_data = dirty_spool_data
                 state.logger.info(f"DIRTY SPOOL DATA: {dirty_spool_data}")
+            else:
+                # 27.1 — a Spoolman blip on the pre-fetch (get_spool -> None)
+                # must NOT degrade into a raw full-overwrite PATCH: without the
+                # original we can't run the dirty-diff OR the SYSTEM_MANAGED
+                # strip, so forwarding the raw payload would ship container_slot
+                # / physical_source verbatim and reopen the Item-4 slot-clobber
+                # window (the April-outage class the write-surface conventions
+                # exist to prevent). Fail closed and surface the error.
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or (
+                    f"Could not read Spool {spool_id} before edit")
+                state.logger.warning(
+                    f"edit_spool_wizard: pre-edit get_spool({spool_id}) returned "
+                    f"None; refusing to write a raw-payload PATCH. {err}")
+                return jsonify({
+                    "success": False,
+                    "msg": f"Failed to update Spool {spool_id}: {err}",
+                    "error": err,
+                })
 
             if spool_data:
                 spool_res = spoolman_api.update_spool(spool_id, spool_data)

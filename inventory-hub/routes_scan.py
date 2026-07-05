@@ -182,20 +182,30 @@ def api_update_filament():
     before = spoolman_api.get_filament(fid) or {}
     try:
         updated = spoolman_api.update_filament(fid, data)
-        if updated:
-            state.add_log_entry(
-                _format_filament_edit_log(fid, before, data),
-                "SUCCESS", "00ff00",
-            )
-            return jsonify({"success": True, "filament": updated})
+    except Exception as e:
+        state.logger.error(f"Failed to update filament #{fid}: {e}")
+        return jsonify({"success": False, "msg": str(e)})
+
+    if not updated:
         # Surface the stashed Spoolman error body so the UI can tell the user
         # WHY the update was rejected (invalid field, bad vendor_id, etc.)
         # instead of showing an opaque "rejected" message.
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "No response body"
         return jsonify({"success": False, "msg": f"Spoolman rejected update: {err}"})
+
+    # 27.8 — the write COMMITTED. Format+log the audit line in its OWN guarded
+    # block, OUTSIDE the success-determining try: a formatter/logger crash must
+    # NOT invert a committed write into success:false (which made the user retry
+    # and double-write). Log the log-failure and still report success.
+    try:
+        state.add_log_entry(
+            _format_filament_edit_log(fid, before, data),
+            "SUCCESS", "00ff00",
+        )
     except Exception as e:
-        state.logger.error(f"Failed to update filament #{fid}: {e}")
-        return jsonify({"success": False, "msg": str(e)})
+        state.logger.error(
+            f"Filament #{fid} updated OK but activity-log write failed: {e}")
+    return jsonify({"success": True, "filament": updated})
 
 @app.route('/api/manage_contents', methods=['POST'])
 def api_manage_contents():
@@ -224,6 +234,8 @@ def api_manage_contents():
                     "active_print": ap,
                     "msg": f"{ap['printer_name']} is {ap['state']} — clearing this location will disrupt the print.",
                 })
+        ejected_ids = []
+        skipped_slotted = []
         for spool in contents:
             # [ALEX FIX] Protect "Ghost" items from being ejected when a box is cleared
             if spool.get('is_ghost'):
@@ -232,6 +244,28 @@ def api_manage_contents():
             slot_val = spool.get('slot', '')
             if not slot_val or slot_val == 'None' or slot_val == '':
                 logic.perform_smart_eject(spool['id'], confirm_active_print=True)
+                ejected_ids.append(spool['id'])
+            else:
+                # 27.6 — a spool loaded into a real slot (toolhead / MMU) is
+                # deliberately NOT auto-ejected by a bulk clear (that would
+                # silently unassign a live feed). Collect the survivors so the
+                # caller learns the location isn't actually empty rather than
+                # getting a bare success.
+                skipped_slotted.append(spool['id'])
+        if skipped_slotted:
+            _surv = ", ".join(str(i) for i in skipped_slotted)
+            state.add_log_entry(
+                f"⚠️ Cleared {loc_id}: {len(ejected_ids)} unslotted spool(s) "
+                f"ejected; {len(skipped_slotted)} slotted spool(s) left in place "
+                f"(IDs {_surv}) — unload the slot to remove.",
+                "WARNING", "ffaa00")
+            return jsonify({
+                "success": True,
+                "ejected": ejected_ids,
+                "skipped_slotted": skipped_slotted,
+                "msg": f"{len(skipped_slotted)} slotted spool(s) left in place — "
+                       f"unload the slot to remove them.",
+            })
         return jsonify({"success": True})
 
     spool_id = None
@@ -639,6 +673,16 @@ def api_identify_scan():
     res = logic.resolve_scan(text)
 
     if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
+        if state.AUDIT_SESSION.get('active'):
+            # 27.5 — re-scanning CMD:AUDIT mid-audit must NOT silently
+            # reset_audit() and wipe in-progress scanned/expected/rogue state.
+            # No-op: refresh the idle watchdog and tell the user an audit is
+            # already running (they end it explicitly via CMD:CANCEL/CMD:DONE).
+            state.AUDIT_SESSION['last_activity_ts'] = time.time()
+            state.add_log_entry(
+                "🕵️‍♀️ Audit already in progress — scan a Location to continue, "
+                "or CMD:CANCEL to end.", "INFO", "ff00ff")
+            return jsonify({"type": "command", "cmd": "clear"})
         state.reset_audit()
         state.AUDIT_SESSION['active'] = True
         state.AUDIT_SESSION['last_activity_ts'] = time.time()
@@ -749,7 +793,16 @@ def api_identify_scan():
                 "deployed_to": sloc if is_ghost else None,
                 "label_already_verified": label_already_verified
             })
-            
+
+        # 27.10 — unknown/deleted spool id (get_spool -> None): the branch above
+        # was skipped, so return a renderable scan-failure payload (the frontend
+        # toasts res.type=='error') + a WARNING log, instead of falling through
+        # to the bare resolver dict {'type':'spool','id':N} the UI can't render.
+        state.add_log_entry(
+            f"❌ Spool #{sid} not found (deleted or unknown id) — scan dropped",
+            "WARNING", "ffaa00")
+        return jsonify({"type": "error", "msg": f"Spool #{sid} not found"})
+
     if res['type'] == 'filament':
         fid = res['id']
         data = spoolman_api.get_filament(fid)
@@ -790,6 +843,15 @@ def api_identify_scan():
 
             name = data.get('name', 'Unknown Filament')
             return jsonify({"type": "filament", "id": int(fid), "display": name, "label_already_verified": label_already_verified})
+
+        # 27.10 — unknown/deleted filament id (get_filament -> None): same
+        # renderable scan-failure contract as the spool branch, instead of
+        # falling through to the bare {'type':'filament','id':N} resolver dict
+        # (which the UI would try to open as a real filament).
+        state.add_log_entry(
+            f"❌ Filament #{fid} not found (deleted or unknown id) — scan dropped",
+            "WARNING", "ffaa00")
+        return jsonify({"type": "error", "msg": f"Filament #{fid} not found"})
 
     if res['type'] == 'prusament_url':
         return _handle_prusament_url_scan(res)
