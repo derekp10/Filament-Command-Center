@@ -117,8 +117,8 @@ def test_active_audit_hijacks_spool_scan_and_refreshes_watchdog(client):
     logic.process_audit_scan and must NOT reach the normal spool branch —
     even a 'barcode'-source ID: scan (which would otherwise flip the
     needs_label_print flag via update_spool). The route also refreshes
-    last_activity_ts BEFORE delegating, and returns {'cmd':'clear'}
-    regardless of what process_audit_scan reports."""
+    last_activity_ts BEFORE delegating; when the handler reports an error the
+    route now surfaces it (28.C2) rather than answering a bare cmd:clear."""
     stale = time.time() - 999.0
     state.AUDIT_SESSION.update({
         "active": True,
@@ -137,10 +137,10 @@ def test_active_audit_hijacks_spool_scan_and_refreshes_watchdog(client):
                         json={"text": "ID:10", "source": "barcode"})
     after = time.time()
 
-    # Route response is 'clear' even though the (patched) audit handler
-    # reported an error — the delegation result is discarded.
-    # NOTE: pins current behavior; see suspected_bugs.
-    assert r.get_json() == {"type": "command", "cmd": "clear"}
+    # 28.C2 FIX — the audit handler's error status is now propagated to the
+    # scanner UI as a renderable {'type':'error'} payload (the frontend toasts
+    # it) instead of being discarded behind a bare cmd:clear.
+    assert r.get_json() == {"type": "error", "msg": "not allowed"}
     pas.assert_called_once_with({"type": "spool", "id": 10})
     gs.assert_not_called()   # normal spool branch never ran
     us.assert_not_called()   # label-verify write never ran
@@ -569,11 +569,10 @@ def test_force_unassign_truthiness_mapping(client, result, expected):
     fu.assert_called_once_with(55, confirm_active_print=False)
 
 
-def test_unknown_action_returns_spool_not_found(client):
-    """An unrecognized action never sets spool_id, so it dead-ends at the
-    'Spool not found' guard — NOT the terminal bare {'success': False}
-    (that line is unreachable in practice).
-    # NOTE: pins current behavior; see suspected_bugs (misleading message)."""
+def test_unknown_action_returns_unknown_action_msg(client):
+    """28.C1 FIX — an unrecognized action is rejected up front with an accurate
+    'Unknown action: <action>' message instead of dead-ending at the misleading
+    'Spool not found' guard (nothing was looked up)."""
     r = client.post("/api/manage_contents",
                     json={"action": "frobnicate", "spool_id": "55"})
-    assert r.get_json() == {"success": False, "msg": "Spool not found"}
+    assert r.get_json() == {"success": False, "msg": "Unknown action: frobnicate"}
