@@ -173,6 +173,9 @@ const openSpoolDetails = (id, silent = false) => {
 
             document.getElementById('detail-color-name').innerText = fil.name || "Unknown";
             document.getElementById('detail-hex').innerText = (fil.color_hex || "").toUpperCase();
+            // 30.1 — show the RGB triplet under the hex (shared window.rgbText;
+            // blank/invalid hex renders nothing).
+            document.getElementById('detail-rgb').innerText = window.rgbText(fil.color_hex);
             document.getElementById('detail-comment').value = d.comment || "";
 
             // Filament attributes are a filament-level property; surface them
@@ -301,6 +304,8 @@ const openFilamentDetails = (fid, silent = false) => {
             document.getElementById('fil-detail-material').innerText = d.material || "Unknown";
             document.getElementById('fil-detail-color-name').innerText = d.name || "Unknown";
             document.getElementById('fil-detail-hex').innerText = (d.color_hex || "").toUpperCase();
+            // 30.1 — RGB triplet under the hex (shared window.rgbText).
+            document.getElementById('fil-detail-rgb').innerText = window.rgbText(d.color_hex);
 
             document.getElementById('fil-detail-temp-nozzle').innerText = d.settings_extruder_temp ? `${d.settings_extruder_temp}°C` : "--";
             document.getElementById('fil-detail-temp-bed').innerText = d.settings_bed_temp ? `${d.settings_bed_temp}°C` : "--";

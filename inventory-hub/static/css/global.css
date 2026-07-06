@@ -229,6 +229,11 @@ body {
 .modal-content .text-secondary,
 .modal-body .text-muted,
 .modal-body .text-secondary,
+/* 30.2 — the search offcanvas root is `.text-bg-dark` (same #212529 bg), which
+   the token selectors above don't match; cover it so muted text there (e.g. the
+   RGB readout) is rescued too, matching the details-modal readout. */
+.text-bg-dark .text-muted,
+.text-bg-dark .text-secondary,
 [class*="bg-black"] .text-muted,
 [class*="bg-black"] .text-secondary {
     color: #aaa !important; /* ~6.6:1 on #212529 */
@@ -236,12 +241,14 @@ body {
 .bg-dark .text-success,
 .modal-content .text-success,
 .modal-body .text-success,
+.text-bg-dark .text-success,
 [class*="bg-black"] .text-success {
     color: #4ade80 !important; /* ~8:1 on #212529, still clearly green */
 }
 .bg-dark .text-primary,
 .modal-content .text-primary,
 .modal-body .text-primary,
+.text-bg-dark .text-primary,
 [class*="bg-black"] .text-primary {
     color: #60a5fa !important; /* ~7:1 on #212529, still clearly blue */
 }
@@ -1538,7 +1545,10 @@ body {
     background: transparent;
     border: 1px solid rgba(255,255,255,0.25);
     border-radius: 6px;
-    padding: 0;
+    /* 30.3 — a little bottom breathing room so the lower color/material text
+       isn't flush against the panel border (overflow:hidden clips it). Kept
+       small — not a resize; left/right stay 0 so the top bar spans edge-to-edge. */
+    padding: 0 0 5px;
     overflow: hidden;
     transition: transform 0.15s, border-color 0.15s;
 }
@@ -1599,6 +1609,16 @@ body {
 }
 .fcc-ps-chip {
     font-size: 0.82rem;
+}
+/* 30.4 — compact material line under the color name on the expanded
+   printer-status panel. Indented past the 12px swatch + gap so it aligns
+   under the color name; muted but dark-theme readable. */
+.fcc-ps-chip-mat {
+    font-size: 0.7rem;
+    line-height: 1.1;
+    color: rgba(255,255,255,0.6);
+    margin-top: 1px;
+    padding-left: 20px;
 }
 /* Default (expanded) view: per-printer rows with full schematic blocks;
    the inline header chip strip is hidden. */

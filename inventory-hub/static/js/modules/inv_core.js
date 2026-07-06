@@ -479,12 +479,37 @@ const makeSwatchHtml = (color, direction = 'longitudinal', opts = {}) => {
 };
 window.makeSwatchHtml = makeSwatchHtml;
 
+// Normalize a raw hex string to canonical `#rrggbb`, or null if it isn't a
+// valid color. Single source of truth for the color surfaces (30.1 details-
+// modal RGB display, 30.2 search-box live sync) — folds in the Group 23.1
+// import-apply hardening: trim, optional leading '#', lowercase, expand a
+// 3-digit shorthand (`fff` → `ffffff`), strict 6-digit validate. Returns null
+// for garbage so callers can reject without clobbering.
+const normalizeHex = (raw) => {
+    let h = String(raw == null ? '' : raw).trim().replace(/^#/, '').toLowerCase();
+    if (/^[0-9a-f]{3}$/.test(h)) h = h.split('').map(c => c + c).join('');
+    return /^[0-9a-f]{6}$/.test(h) ? `#${h}` : null;
+};
+window.normalizeHex = normalizeHex;
+
 const hexToRgb = (hex) => {
-    if (!hex) return { r: '', g: '', b: '' };
-    hex = hex.replace('#', '');
-    const i = parseInt(hex, 16);
+    // 30.1 — route through normalizeHex so 3-digit shorthand expands and
+    // garbage rejects. The old bare `parseInt(hex,16)` mis-parsed shorthand
+    // (`fff` → 4095) and returned NaN channels for invalid input.
+    const norm = normalizeHex(hex);
+    if (!norm) return { r: '', g: '', b: '' };
+    const i = parseInt(norm.slice(1), 16);
     return { r: (i >> 16) & 255, g: (i >> 8) & 255, b: i & 255 };
 };
+window.hexToRgb = hexToRgb;
+
+// Human-readable "rgb(r, g, b)" for a hex, or '' when the hex is blank/invalid.
+// Shared by the details-modal RGB line (30.1) and the search-box readout (30.2).
+const rgbText = (hex) => {
+    const { r, g, b } = hexToRgb(hex);
+    return r === '' ? '' : `rgb(${r}, ${g}, ${b})`;
+};
+window.rgbText = rgbText;
 
 // --- DATA FETCHERS ---
 // L28 polling guard: see updateLogState for rationale. Same pattern.

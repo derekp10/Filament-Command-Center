@@ -53,6 +53,11 @@
                     <button class="btn btn-outline-secondary px-2 py-0" type="button" id="global-search-clear-color"
                         title="Clear Color Filter">❌</button>
                 </div>
+                <!-- 30.2 — live RGB readout of the color filter. Hidden until a
+                     valid hex is entered so it doesn't consume a flex gap in the
+                     empty state (keeps the empty offcanvas layout unchanged). -->
+                <span id="global-search-color-rgb" class="text-secondary small font-monospace"
+                    style="display:none;" title="RGB of the color filter"></span>
 
                 <!-- Quick Filters -->
                 <select id="global-search-material"

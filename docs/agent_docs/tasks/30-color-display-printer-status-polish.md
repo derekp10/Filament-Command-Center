@@ -4,7 +4,9 @@
 **Estimated effort:** ~3–5 hours (four small frontend touches)
 **Risk:** **LOW.** Mostly frontend — a display addition, a color-input sync, a CSS sizing tweak, and one printer-status text add (a small pulse-payload field if the material isn't already surfaced). No data migration. Verify visually against the running dev container (screenshots / the visual-regression harness where it applies).
 
-> **Status: TODO** — filed 2026-07-01 by `/refresh-groups`; **30.4 added 2026-07-03** (`/refresh-groups`). Four small new UI items from the buglist (lines 5, 7, 9 + Derek's 2026-07-03 print-status material-type ask). Bundled as one sweep because two share color-handling code (hex ↔ RGB ↔ picker) and two touch the printer-status widget — all quick, low-risk frontend polish (the Group 21 "new-bug sweep" shape).
+> **Status: ✅ DONE 2026-07-05** (`feature/group-30-color-display-printer-status` → `dev`; released to `main`+prod-pending with Group 29). All 4 items shipped (frontend-only): 30.1 RGB-under-hex in both details modals, 30.2 search-box hex live-sync (picker + new RGB readout), 30.3 5px panel breathing room, 30.4 material line on the expanded chip + repaint-fingerprint. Consolidated onto one `normalizeHex`/`hexToRgb`/`rgbText` helper. A 4-lens adversarial review found + fixed one contrast defect (30.2 readout on the `text-bg-dark` offcanvas → extended the dark-contrast guard). 29 live behavioral checks + 28 E2E green, 0 regressions. Per-item detail archived in `completed-archive.md`. _(Original filing note preserved below.)_
+>
+> **Status (original): TODO** — filed 2026-07-01 by `/refresh-groups`; **30.4 added 2026-07-03** (`/refresh-groups`). Four small new UI items from the buglist (lines 5, 7, 9 + Derek's 2026-07-03 print-status material-type ask). Bundled as one sweep because two share color-handling code (hex ↔ RGB ↔ picker) and two touch the printer-status widget — all quick, low-risk frontend polish (the Group 21 "new-bug sweep" shape).
 
 ## Why these are one group
 
