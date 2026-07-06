@@ -101,6 +101,138 @@ class TestAutoArchiveOnEmpty:
 
 
 # ---------------------------------------------------------------------------
+# 31.2 — inherit-weight spools (no own initial_weight) fall back to the
+# parent filament's net weight for the archive/unarchive remaining math.
+# ---------------------------------------------------------------------------
+
+class TestInheritWeightFallback:
+    """A spool with initial_weight=None inherits its net capacity from its
+    filament (same as Spoolman's remaining_weight). Before 31.2 the auto-
+    archive/unarchive helpers bailed early on the None initial, so emptying an
+    inherit-weight spool via the wizard/quick-weigh never archived it."""
+
+    def test_archive_uses_filament_weight_when_initial_none(self):
+        # used == filament net weight → remaining 0 → archive.
+        data = {"used_weight": 1000}
+        sm._auto_archive_on_empty(
+            data, None, 0, existing_location="PM-XL-Buffer-1",
+            existing_filament_weight=1000,
+        )
+        assert data["archived"] is True
+        assert data["location"] == ""
+
+    def test_archive_respects_filament_weight_not_yet_empty(self):
+        # remaining still > 0 against the inherited net → no archive.
+        data = {"used_weight": 600}
+        sm._auto_archive_on_empty(
+            data, None, 0, existing_location="PM-XL-Buffer-1",
+            existing_filament_weight=1000,
+        )
+        assert "archived" not in data
+
+    def test_no_archive_when_neither_initial_nor_filament_known(self):
+        # No effective initial anywhere → quiet no-op (can't judge remaining).
+        data = {"used_weight": 1000}
+        sm._auto_archive_on_empty(
+            data, None, 0, existing_location="PM-XL-Buffer-1",
+            existing_filament_weight=None,
+        )
+        assert "archived" not in data
+
+    def test_own_initial_still_wins_over_filament_weight(self):
+        # Spool has its own initial → filament weight is ignored.
+        data = {"used_weight": 500}
+        sm._auto_archive_on_empty(
+            data, 800, 0, existing_location="PM-XL-Buffer-1",
+            existing_filament_weight=1000,
+        )
+        # remaining = 800 - 500 = 300 > 0 → no archive (uses 800, not 1000).
+        assert "archived" not in data
+
+    def test_unarchive_uses_filament_weight_when_initial_none(self):
+        existing = {
+            "archived": True,
+            "initial_weight": None,
+            "used_weight": 1000,
+            "location": "",
+            "filament": {"weight": 1000},
+            "extra": {"fcc_pre_archive_location": "PM-XL-Buffer-1"},
+        }
+        data = {"used_weight": 200}  # remaining 800 against inherited net
+        sm._auto_unarchive_on_refill(data, existing)
+        assert data["archived"] is False
+        assert data["location"] == "PM-XL-Buffer-1"
+
+    def test_unarchive_noop_when_no_effective_initial(self):
+        existing = {
+            "archived": True,
+            "initial_weight": None,
+            "used_weight": 1000,
+            "location": "",
+            "filament": {},  # no weight to inherit
+            "extra": {},
+        }
+        data = {"used_weight": 200}
+        sm._auto_unarchive_on_refill(data, existing)
+        assert "archived" not in data
+
+
+class TestUpdateSpoolInheritWeightArchive:
+    """update_spool wiring: an inherit-weight spool (get_spool returns
+    initial_weight=None + a nested filament.weight) auto-archives on empty."""
+
+    def test_inherit_weight_spool_archives_via_update_spool(self):
+        existing = {
+            "id": 42,
+            "initial_weight": None,
+            "used_weight": 400,
+            "archived": False,
+            "location": "PM-XL-Buffer-1",
+            "filament": {"id": 7, "weight": 1000},
+            "extra": {},
+        }
+        captured = {}
+
+        def fake_patch(url, json, **kw):
+            captured["json"] = json
+            return _mock_response(True, {**existing, **json})
+
+        with patch.object(sm, "get_spool", return_value=existing), \
+             patch.object(sm, "_get_raw_extras", return_value={}), \
+             patch("spoolman_api.requests.patch", side_effect=fake_patch):
+            res = sm.update_spool(42, {"used_weight": 1000})
+
+        assert res is not None
+        assert captured["json"]["archived"] is True
+        assert captured["json"]["location"] == ""
+
+    def test_inherit_weight_spool_unarchives_via_update_spool(self):
+        existing = {
+            "id": 42,
+            "initial_weight": None,
+            "used_weight": 1000,
+            "archived": True,
+            "location": "",
+            "filament": {"id": 7, "weight": 1000},
+            "extra": {"fcc_pre_archive_location": "PM-XL-Buffer-1"},
+        }
+        captured = {}
+
+        def fake_patch(url, json, **kw):
+            captured["json"] = json
+            return _mock_response(True, {**existing, **json})
+
+        with patch.object(sm, "get_spool", return_value=existing), \
+             patch.object(sm, "_get_raw_extras", return_value={"fcc_pre_archive_location": '"PM-XL-Buffer-1"'}), \
+             patch("spoolman_api.requests.patch", side_effect=fake_patch):
+            res = sm.update_spool(42, {"used_weight": 200})
+
+        assert res is not None
+        assert captured["json"]["archived"] is False
+        assert captured["json"]["location"] == "PM-XL-Buffer-1"
+
+
+# ---------------------------------------------------------------------------
 # 13.6 Part B — auto-archive slot binding cleanup
 # ---------------------------------------------------------------------------
 

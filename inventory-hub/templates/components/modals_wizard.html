@@ -358,6 +358,16 @@
                     </button>
                     <div id="wiz-spool-weight-panel" class="collapse">
                         <div class="row g-3 fcc-wiz-section-panel">
+                            <!-- 31.1 — guided scale entry: one input (gross), tare
+                                 auto-deducted into remaining/used via <WeightEntry>. -->
+                            <div class="col-12">
+                                <button type="button" class="btn btn-sm btn-outline-info"
+                                    id="wiz-spool-weigh-launch" onclick="window.wizardOpenWeightEntry()">
+                                    ⚖️ Weigh from scale…
+                                </button>
+                                <span class="text-secondary small ms-2">Put the spool on a scale and type the
+                                    gross weight — the empty-spool tare is deducted for you.</span>
+                            </div>
                             <div class="col-md-4">
                                 <label class="form-label small text-secondary mb-1">
                                     Spool Weight (g)

@@ -107,11 +107,16 @@
             availableModes = ['gross', 'net', 'additive', 'set_used'],
             showAutoArchive = false,
             autoArchiveDefault = true,
+            // 31.1 — the wizard opens this to catalog a spool of unknown
+            // original net weight: gross/net then yield the available filament
+            // directly (gross − tare) and report it via payload.derived_initial.
+            allowUnknownInitial = false,
             onSubmit = null,
             onCancel = null,
         } = options;
 
         const initial = Number(spool.initial_weight) || 0;
+        const initialKnown = initial > 0;
         const currentUsed = Number(spool.used_weight) || 0;
         let currentEmpty = (empty_spool_weight !== null && empty_spool_weight !== '' &&
                              Number(empty_spool_weight) > 0) ? Number(empty_spool_weight) : null;
@@ -171,7 +176,7 @@
                                 ↩ from <span id="fcc-we-tare-source">${escapeHtml(currentSource || '')}</span>
                             </span>
                         </span><br>
-                        <span>Initial weight: <strong style="color:#eee;">${fmtG(initial)}</strong>
+                        <span>Initial weight: <strong style="color:#eee;">${initialKnown ? fmtG(initial) : 'unknown — set from what’s on the spool'}</strong>
                               &nbsp;·&nbsp; Currently used: <strong style="color:#eee;">${fmtG(currentUsed)}</strong></span>
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -294,6 +299,7 @@
                 initial_weight: initial,
                 current_used: currentUsed,
                 empty_spool_weight: currentEmpty,
+                allow_unknown_initial: allowUnknownInitial,
             });
             if (r.error) {
                 previewEl.textContent = `Invalid input (${r.error}).`;
@@ -305,6 +311,21 @@
                 previewEl.textContent = 'Empty-spool weight is missing — we’ll ask you for it on Save.';
                 previewEl.style.color = '#f5b342';
                 warnEl.textContent = '';
+                return;
+            }
+            if (r.derived_initial !== null && r.derived_initial !== undefined) {
+                // 31.1 — unknown-original-net: what's on the spool now becomes
+                // its full capacity, so the meaningful number is available.
+                previewEl.innerHTML = `Available on spool <strong>${fmtG(r.remaining)}</strong> ` +
+                    `&nbsp;·&nbsp; recorded as a full <strong>${fmtG(r.derived_initial)}</strong> spool (used 0)`;
+                previewEl.style.color = '#cfd';
+                // Mode-aware clamp note — 'low' can come from Net (negative
+                // value) too, not just Gross-below-tare.
+                warnEl.textContent = (r.capped === 'low')
+                    ? (mode === 'gross'
+                        ? '⚠ Gross is below the empty-spool weight — clamped to 0.'
+                        : '⚠ Value clamped to 0 (cannot go negative).')
+                    : '';
                 return;
             }
             previewEl.innerHTML = `Initial <strong>${fmtG(initial)}</strong> &nbsp;→&nbsp; ` +
@@ -329,6 +350,7 @@
                 initial_weight: initial,
                 current_used: currentUsed,
                 empty_spool_weight: currentEmpty,
+                allow_unknown_initial: allowUnknownInitial,
             });
             if (r.error) { warnEl.textContent = `Invalid input (${r.error}).`; return; }
             if (r.requires_empty) {
@@ -336,13 +358,19 @@
                 // allowSkip lets the user submit their input as Net (treat
                 // the typed value as filament remaining) without persisting a
                 // tare. 13.7 — see Feature-Buglist.md.
+                // 31.1 review fix: NEVER offer Skip when the original net is
+                // unknown. Skip downgrades gross→net, i.e. reinterprets the
+                // typed value as filament remaining; with no known capacity to
+                // reconcile against, a gross reading (which INCLUDES the spool
+                // tare) would be recorded as the spool's full net — overstating
+                // filament by exactly the tare. Force a real tare entry instead.
                 const promptCtx = context || {};
                 const tare = await window.promptMissingEmptyWeight({
                     vendor: promptCtx.vendor || '',
                     material: promptCtx.material || '',
                     color: promptCtx.color || '',
                     color_hex: promptCtx.color_hex || spool.color_hex || null,
-                    allowSkip: true,
+                    allowSkip: !allowUnknownInitial,
                 });
                 if (tare === null) return;  // user cancelled
                 let effectiveMode = mode;
@@ -363,6 +391,7 @@
                     initial_weight: initial,
                     current_used: currentUsed,
                     empty_spool_weight: currentEmpty,
+                    allow_unknown_initial: allowUnknownInitial,
                 });
                 if (r.error || r.requires_empty) {
                     warnEl.textContent = 'Could not compute used_weight.';
@@ -382,6 +411,9 @@
                 empty_spool_weight: currentEmpty,
                 auto_archive: autoArchiveEl ? autoArchiveEl.checked : false,
                 capped: r.capped,
+                // 31.1 — present only on the unknown-original-net path; carries
+                // the derived spool capacity so the caller seeds initial_weight.
+                derived_initial: r.derived_initial,
             };
             cleanup();
             if (typeof onSubmit === 'function') onSubmit(payload);
