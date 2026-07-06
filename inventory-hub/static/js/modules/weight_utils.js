@@ -108,6 +108,7 @@ window.parseAdditiveInput = parseAdditiveInput;
 //     raw_used,         // number | null  — pre-clamp value (for explanatory UI)
 //     capped,           // 'high' | 'low' | null — direction of any clamp
 //     requires_empty,   // boolean        — gross mode w/ no resolved tare
+//     derived_initial,  // number | null  — set only in the unknown-initial path
 //     error,            // string | null  — input validation message
 //   }
 //
@@ -117,7 +118,13 @@ window.parseAdditiveInput = parseAdditiveInput;
 //     "ALEX FIX" cap in spoolman_api.update_spool — preview shows what the
 //     backend would actually persist).
 //   - Returns error: 'invalid_value' for NaN / non-numeric input.
-//   - Returns error: 'invalid_initial' if initial_weight is missing or <= 0.
+//   - Returns error: 'invalid_initial' if initial_weight is missing or <= 0,
+//     UNLESS `allow_unknown_initial` is true (31.1 — the wizard's
+//     catalog-a-spool case). With no known original net, gross/net modes then
+//     treat what's on the spool NOW as its full capacity: remaining = the
+//     available filament (gross − tare, or the net value directly), used = 0,
+//     and `derived_initial` carries that capacity back to the caller so it can
+//     seed initial_weight. additive/set_used still require a known initial.
 //   - Gross mode with missing empty_spool_weight returns
 //     `requires_empty: true` and `used_weight: null` so the caller can prompt.
 function computeUsedWeight({
@@ -126,6 +133,7 @@ function computeUsedWeight({
     initial_weight,
     current_used = 0,
     empty_spool_weight = null,
+    allow_unknown_initial = false,
 } = {}) {
     const result = {
         used_weight: null,
@@ -133,11 +141,13 @@ function computeUsedWeight({
         raw_used: null,
         capped: null,
         requires_empty: false,
+        derived_initial: null,
         error: null,
     };
 
     const initial = Number(initial_weight);
-    if (!(initial > 0)) {
+    const initialKnown = initial > 0;
+    if (!initialKnown && !allow_unknown_initial) {
         result.error = 'invalid_initial';
         return result;
     }
@@ -145,6 +155,32 @@ function computeUsedWeight({
     const num = Number(value);
     if (value === null || value === undefined || value === '' || Number.isNaN(num)) {
         result.error = 'invalid_value';
+        return result;
+    }
+
+    // 31.1 — unknown-original-net path. Derive the spool's available filament
+    // directly (no original capacity needed) and treat it as a full spool.
+    if (!initialKnown) {
+        let remaining;
+        if (mode === 'gross') {
+            const tare = Number(empty_spool_weight);
+            if (!(tare > 0)) {
+                result.requires_empty = true;
+                return result;
+            }
+            remaining = num - tare;          // available = gross − tare
+        } else if (mode === 'net') {
+            remaining = num;                 // value IS the available filament
+        } else {
+            // additive / set_used are meaningless without a known initial.
+            result.error = 'invalid_initial';
+            return result;
+        }
+        if (remaining < 0) { remaining = 0; result.capped = 'low'; }
+        result.derived_initial = remaining;  // seeds the new spool's net capacity
+        result.raw_used = 0;
+        result.used_weight = 0;
+        result.remaining = remaining;
         return result;
     }
 

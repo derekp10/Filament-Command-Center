@@ -1181,6 +1181,82 @@ window.wizardClearScaleWeight = () => {
     window.wizardCalcRemainingFromUsed();
 };
 
+// 31.1 — Guided scale entry for the wizard weight grid. Derek's pain: with a
+// gross scale reading + a known empty-spool tare he couldn't tell which of the
+// six fields to fill to get the tare deducted into remaining/total. This opens
+// the shared <WeightEntry> overlay (gross/net + live preview + missing-tare
+// prompt) and writes the computed values back into the grid — no more hunting.
+// When no original net weight is known anywhere (the reason we dropped the
+// hard-coded 1000g), it catalogs "what's on the spool now" (gross − tare) as
+// the spool's full capacity via WeightEntry's allowUnknownInitial path.
+window.wizardOpenWeightEntry = () => {
+    if (!window.WeightEntry || typeof window.WeightEntry.openModal !== 'function') return;
+
+    const num = (id) => {
+        const el = document.getElementById(id);
+        const raw = (el && el.value != null ? el.value : '').trim();
+        if (raw === '') return null;
+        const n = parseFloat(raw);
+        return Number.isNaN(n) ? null : n;
+    };
+
+    // Tare: the spool's own empty weight, else the filament's (inherited).
+    let tare = num('wiz-spool-empty_weight');
+    if (tare === null) tare = num('wiz-fil-empty_weight');
+    // Net (initial): spool override, else the filament net weight. May be unknown.
+    let net = num('wiz-spool-initial_weight');
+    if (net === null) net = num('wiz-fil-weight');
+    const currentUsed = num('wiz-spool-used') || 0;
+    const initialKnown = net !== null && net > 0;
+
+    // Context for the header + missing-tare prompt. The human-readable vendor
+    // name lives in the visible search box; `wiz-fil-vendor-sel` is a hidden
+    // <input> holding only the numeric id (no selectedIndex).
+    const vendorName = (document.getElementById('wiz-fil-vendor-search')?.value || '').trim();
+    const material = document.getElementById('wiz-fil-material')?.value || '';
+    const color = document.getElementById('wiz-fil-color_name')?.value || '';
+    const colorHexEl = document.querySelector('input[id^="wiz-fil-color_hex_"]');
+    const colorHex = colorHexEl ? colorHexEl.value.replace('#', '') : null;
+    const display = [vendorName, material, color].filter(Boolean).join(' - ') || 'New Spool';
+
+    window.WeightEntry.openModal({
+        title: 'Weigh from Scale',
+        spool: {
+            id: wizardState.editSpoolId || '',
+            initial_weight: initialKnown ? net : 0,
+            used_weight: currentUsed,
+            display,
+            color_hex: colorHex,
+        },
+        empty_spool_weight: tare,
+        context: { vendor: vendorName, material, color, color_hex: colorHex },
+        defaultMode: 'gross',
+        // additive / set_used need a known original net — only offer them then.
+        availableModes: initialKnown ? ['gross', 'net', 'additive', 'set_used'] : ['gross', 'net'],
+        allowUnknownInitial: !initialKnown,
+        showAutoArchive: false,  // 31.2 — archive stays a save-time decision, not a live toggle.
+        onSubmit: (payload) => {
+            const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+            // Persist the tare the user entered/confirmed if the field was blank.
+            const emptyEl = document.getElementById('wiz-spool-empty_weight');
+            if (payload.empty_spool_weight != null &&
+                (emptyEl && emptyEl.value != null ? emptyEl.value : '').trim() === '') {
+                setVal('wiz-spool-empty_weight', window.fmtGramsPrecise(payload.empty_spool_weight));
+            }
+            if (payload.derived_initial != null) {
+                // Unknown-net path: record what's on the spool now as its full capacity.
+                setVal('wiz-spool-initial_weight', window.fmtGramsPrecise(payload.derived_initial));
+                setVal('wiz-spool-used', '0');
+            } else {
+                setVal('wiz-spool-used', window.fmtGramsPrecise(payload.used_weight));
+            }
+            // Recompute remaining from the freshly-set net + used; clear the raw scale field.
+            window.wizardCalcRemainingFromUsed();
+            setVal('wiz-spool-scale', '');
+        },
+    });
+};
+
 // --- DATA FETCHERS ---
 const wizardFetchMaterials = () => {
     return fetch('/api/filaments')

@@ -166,7 +166,8 @@ def sanitize_outbound_data(data):
     data['extra'] = clean_extra
     return data
 
-def _auto_archive_on_empty(data, existing_initial, existing_used, existing_location=None):
+def _auto_archive_on_empty(data, existing_initial, existing_used, existing_location=None,
+                           existing_filament_weight=None):
     """Mutates `data` in-place to add {archived: True, location: ''} when the
     post-update state would leave remaining_weight at 0 (or below).
 
@@ -174,6 +175,15 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
     (weigh-out, wizard edit, slurp-in from CSV, etc.) automatically archives
     and unassigns it — per the user's 2026-04-22 answer of "Auto" on the
     archive-on-zero backlog item.
+
+    `existing_filament_weight` (31.2) is the parent filament's net weight. A
+    spool with no `initial_weight` of its own INHERITS its net capacity from its
+    filament — this is exactly how Spoolman computes `remaining_weight`. Without
+    this fallback, emptying an inherit-weight spool via the wizard / quick-weigh
+    never auto-archived (the effective initial resolved to None → early return).
+    The archive decision stays a save-time server-side consequence (never a
+    live-UI toggle) so weight-fiddling in the editor can't lock a spool
+    archived; the symmetric `_auto_unarchive_on_refill` is the recovery net.
 
     When `existing_location` is non-empty, plants it on
     `extra.fcc_pre_archive_location` as a breadcrumb so a later refill
@@ -187,6 +197,11 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
         return  # nothing weight-related in this update
     new_used = data.get('used_weight', existing_used)
     new_initial = data.get('initial_weight', existing_initial)
+    # 31.2 — fall back to the parent filament's net weight when the spool has no
+    # initial_weight of its own (inherit-weight spool). Matches Spoolman's own
+    # remaining_weight math and lets the wizard/quick-weigh auto-archive fire.
+    if new_initial is None:
+        new_initial = existing_filament_weight
     if new_used is None or new_initial is None:
         return
     try:
@@ -250,6 +265,11 @@ def _auto_unarchive_on_refill(data, existing):
         return
     new_used = data.get('used_weight', existing.get('used_weight'))
     new_initial = data.get('initial_weight', existing.get('initial_weight'))
+    # 31.2 — same inherit-weight fallback as _auto_archive_on_empty. Without it,
+    # a refill on an inherit-weight spool wouldn't auto-unarchive, stranding a
+    # mis-typed spool locked in archived status (the exact failure Derek flagged).
+    if new_initial is None:
+        new_initial = (existing.get('filament') or {}).get('weight')
     if new_used is None or new_initial is None:
         return
     try:
@@ -300,6 +320,7 @@ def update_spool(sid, data):
             existing.get('initial_weight'),
             existing.get('used_weight'),
             existing_location=existing.get('location'),
+            existing_filament_weight=(existing.get('filament') or {}).get('weight'),
         )
         if data.get('archived') and not pre_archived:
             try:
