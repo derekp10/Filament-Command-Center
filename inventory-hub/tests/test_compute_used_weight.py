@@ -165,6 +165,79 @@ def test_compute_used_weight_invalid_initial(page: Page):
         assert r["used_weight"] is None
 
 
+# --- 31.1 allow_unknown_initial (catalog a spool of unknown original net) ----
+
+
+@pytest.mark.parametrize(
+    "args,expected",
+    [
+        # GROSS with unknown net: available = gross - tare, recorded as full.
+        # gross 645, tare 220 -> derived_initial 425, used 0, remaining 425.
+        (
+            {"mode": "gross", "value": 645, "initial_weight": 0,
+             "empty_spool_weight": 220, "allow_unknown_initial": True},
+            {"derived_initial": 425, "used_weight": 0, "remaining": 425,
+             "capped": None, "requires_empty": False, "error": None},
+        ),
+        # NET with unknown net: the value IS the available filament.
+        (
+            {"mode": "net", "value": 425, "initial_weight": None,
+             "allow_unknown_initial": True},
+            {"derived_initial": 425, "used_weight": 0, "remaining": 425,
+             "capped": None, "requires_empty": False, "error": None},
+        ),
+        # GROSS unknown net, missing tare -> still prompts for empty weight.
+        (
+            {"mode": "gross", "value": 645, "initial_weight": 0,
+             "empty_spool_weight": None, "allow_unknown_initial": True},
+            {"derived_initial": None, "requires_empty": True, "error": None},
+        ),
+        # GROSS unknown net, gross below tare (typo) -> clamp available to 0.
+        (
+            {"mode": "gross", "value": 100, "initial_weight": 0,
+             "empty_spool_weight": 220, "allow_unknown_initial": True},
+            {"derived_initial": 0, "used_weight": 0, "remaining": 0,
+             "capped": "low", "error": None},
+        ),
+        # ADDITIVE/SET_USED are meaningless without a known net -> hard error.
+        (
+            {"mode": "additive", "value": 50, "initial_weight": 0,
+             "allow_unknown_initial": True},
+            {"error": "invalid_initial", "derived_initial": None},
+        ),
+    ],
+    ids=[
+        "unknown-gross-derives-available",
+        "unknown-net-value-is-available",
+        "unknown-gross-missing-tare-prompts",
+        "unknown-gross-below-tare-clamps-zero",
+        "unknown-additive-still-errors",
+    ],
+)
+def test_compute_used_weight_unknown_initial(page: Page, args, expected):
+    _open_dashboard(page)
+    result = page.evaluate("(a) => window.computeUsedWeight(a)", args)
+    for key, val in expected.items():
+        assert result[key] == val, (
+            f"computeUsedWeight({args}).{key} = {result[key]!r}, expected {val!r}"
+        )
+
+
+def test_compute_used_weight_known_initial_ignores_unknown_flag(page: Page):
+    """A known initial always takes the normal path even with the flag set —
+    guarantees openQuickWeigh (which never passes the flag) is unaffected and
+    the wizard's known-net case still computes used_weight, not derived_initial."""
+    _open_dashboard(page)
+    r = page.evaluate(
+        "(a) => window.computeUsedWeight(a)",
+        {"mode": "gross", "value": 645, "initial_weight": 1000,
+         "empty_spool_weight": 220, "allow_unknown_initial": True},
+    )
+    assert r["derived_initial"] is None
+    assert r["used_weight"] == 575
+    assert r["remaining"] == 425
+
+
 def test_compute_used_weight_invalid_value(page: Page):
     """Empty / NaN / non-numeric value returns error: 'invalid_value'."""
     _open_dashboard(page)

@@ -95,7 +95,7 @@
 | 28 | 🟠 L316 Characterization — Labels/CSV + Deletes/Wizard + Scan/Queue | 25 | ~6–10 hrs | `DONE` 2026-07-05 (`feature/group-28-l316-charact-oranges` → `dev`+`main`) | [28-l316-charact-oranges.md](tasks/28-l316-charact-oranges.md) |
 | 29 | 🟡 L316 Characterization — Attrs Manager + Bindings + State/Pulse | 14 (10 fixes + 4 notes) | ~4–7 hrs | `DONE` 2026-07-05 (`feature/group-29-l316-charact-yellows` → `dev`) | [29-l316-charact-yellows.md](tasks/29-l316-charact-yellows.md) |
 | 30 | 🎨 Color Display & Printer-Status Polish | 4 | ~3–5 hrs | `DONE` 2026-07-05 (`feature/group-30-color-display-printer-status` → `dev`) | [30-color-display-printer-status-polish.md](tasks/30-color-display-printer-status-polish.md) |
-| 31 | ⚖️ Weight-Entry Fixes & Unification | 3 | ~5–9 hrs | `TODO` (filed 2026-07-03) | [31-weight-entry-fixes-unification.md](tasks/31-weight-entry-fixes-unification.md) |
+| 31 | ⚖️ Weight-Entry Fixes & Unification | 3 | ~5–9 hrs | `DONE` 2026-07-05 (`feature/group-31-weight-entry-fixes` → `dev`+`main`) | [31-weight-entry-fixes-unification.md](tasks/31-weight-entry-fixes-unification.md) |
 | 32 | 🧪 Bulletproof-Sweep Flake Cleanup | 3 | ~2–4 hrs | `TODO` (filed 2026-07-03) | [32-bulletproof-sweep-flake-cleanup.md](tasks/32-bulletproof-sweep-flake-cleanup.md) |
 
 ## Items NOT Grouped (Solo, Deferred, or On Hold)

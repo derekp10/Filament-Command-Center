@@ -90,6 +90,15 @@ const setWeighOutMode = (mode) => {
 window.openWeighOutModal = () => {
     // Sync UI to state.heldSpools but ignore processed ones for this session
     processedWeighIds.clear();
+    // 31.3 review fix: start every session fresh. Closing the modal does NOT
+    // clear #weigh-out-list, so rows (with any un-submitted text) linger in the
+    // hidden DOM. Wipe them BEFORE the first render so the preserve-text
+    // snapshot in renderWeighOutList captures nothing on open and can't
+    // resurrect a stale reading into a perceived-fresh weigh-out session. The
+    // in-session save / buffer-updated redraws still preserve text (the rows
+    // exist at that point).
+    const listEl = document.getElementById('weigh-out-list');
+    if (listEl) listEl.innerHTML = '';
     renderWeighOutList();
     modals.weighOutModal.show();
 
@@ -144,6 +153,17 @@ const renderWeighOutList = () => {
     const emptyMsg = document.getElementById('weigh-out-empty');
     const countBadge = document.getElementById('weigh-out-count');
 
+    // 31.3 — Saving one row (or any buffer-updated pulse) rebuilds this whole
+    // list via innerHTML, which blows away the un-submitted text the user has
+    // already keyed into the OTHER rows. Snapshot every row's current input
+    // value (keyed by spool id) BEFORE the rebuild so we can restore the ones
+    // whose spool is still in the list afterwards. Preserve-text is the
+    // least-surprising fix (vs. a Save-All button or a data-loss warning).
+    const preservedInputs = {};
+    container.querySelectorAll('.weigh-input').forEach((inp) => {
+        if (inp.value !== '') preservedInputs[inp.dataset.id] = inp.value;
+    });
+
     const activeSpools = state.heldSpools.filter(s => !processedWeighIds.has(s.id));
 
     countBadge.innerText = `${activeSpools.length} Spools Ready`;
@@ -194,6 +214,19 @@ const renderWeighOutList = () => {
     });
 
     container.innerHTML = html;
+
+    // 31.3 — Restore the values snapshotted above onto the rebuilt rows and
+    // recompute each preview so the row reads exactly as the user left it
+    // (the saved row is already dropped from activeSpools, so its value is
+    // intentionally not restored). A row that just got its value cleared is
+    // left blank; only non-empty entries were captured.
+    Object.entries(preservedInputs).forEach(([id, value]) => {
+        const inp = container.querySelector(`.weigh-input[data-id="${id}"]`);
+        if (inp) {
+            inp.value = value;
+            window.updateWeighRowPreview(inp);
+        }
+    });
 };
 
 // Compute used_weight for a row given the modal-level mode + the cached
