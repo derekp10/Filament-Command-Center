@@ -7,16 +7,52 @@ teardown so the real Spoolman dev DB never drifts.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 import requests
+from requests.exceptions import (
+    ConnectionError as ReqConnectionError,
+    ConnectTimeout,
+    ReadTimeout,
+)
+
+# Group 32.2 — transport-level errors that a bounded retry rides out. NOT HTTP
+# status errors (those are real responses and must never be retried away).
+_TRANSPORT_ERRORS = (ReadTimeout, ConnectTimeout, ReqConnectionError)
+
+
+def _req(method, url, *, attempts=4, backoff=0.75, **kwargs):
+    """`requests` call with a bounded retry on TRANSPORT-level errors only.
+
+    Under the saturated `RUN_INTEGRATION=1` sweep the dev container + Spoolman
+    can blow a tight read timeout even though the request itself is fine — the
+    two `test_bulk_set_*` flakes. This rides out that transient load WITHOUT
+    masking a genuine slowdown: each attempt still enforces a real timeout, and
+    after `attempts` the last error is re-raised (a consistently-slow server
+    still fails the test). A 15 s floor per attempt gives a very tight caller
+    value headroom under load; fast responses (e.g. a 400) return immediately
+    regardless. Poll-not-fixed-sleep, per the conftest `require_server` idiom.
+    """
+    if kwargs.get("timeout") is not None:
+        kwargs["timeout"] = max(kwargs["timeout"], 15)
+    last = None
+    for i in range(max(1, attempts)):
+        try:
+            return requests.request(method, url, **kwargs)
+        except _TRANSPORT_ERRORS as e:
+            last = e
+            if i < attempts - 1:
+                time.sleep(backoff * (i + 1))
+    assert last is not None  # the loop always runs ≥1 attempt, so last is set
+    raise last
 
 
 def _pick_target(api_base_url: str):
     """Pull a deterministic target filament from the report endpoint.
     Picks the first non-archived filament so the test runs the same
     against any seeded dev DB."""
-    r = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10)
+    r = _req("get", f"{api_base_url}/api/filament_attributes/report", timeout=10)
     assert r.ok, r.text
     body = r.json()
     assert body.get("success"), body
@@ -26,10 +62,10 @@ def _pick_target(api_base_url: str):
 
 
 def _snapshot_attrs(api_base_url: str, fid: int):
-    r = requests.get(f"{api_base_url}/api/filaments/{fid}", timeout=5)
+    r = _req("get", f"{api_base_url}/api/filaments/{fid}", timeout=5)
     if not r.ok:
         # fall back to the report — same shape, just slower
-        r2 = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10)
+        r2 = _req("get", f"{api_base_url}/api/filament_attributes/report", timeout=10)
         body = r2.json()
         fil = next((f for f in body["filaments"] if f["id"] == fid), None)
         assert fil is not None
@@ -55,7 +91,8 @@ def _snapshot_attrs(api_base_url: str, fid: int):
 def _restore(api_base_url: str, fid: int, original):
     """Restore the filament's attribute list to its original snapshot.
     Used in test teardown so the dev DB is never left drifted."""
-    requests.post(
+    _req(
+        "post",
         f"{api_base_url}/api/update_filament",
         json={"id": fid, "field": "extra.filament_attributes",
               "value": json.dumps(original)},
@@ -97,7 +134,8 @@ def test_bulk_set_add_then_remove(api_base_url):
     assert candidate, "no candidate choice available — every choice already on target"
 
     try:
-        r = requests.post(
+        r = _req(
+            "post",
             f"{api_base_url}/api/filament_attributes/bulk_set",
             json={"filament_ids": [fid], "add": [candidate]},
             timeout=10,
@@ -112,7 +150,8 @@ def test_bulk_set_add_then_remove(api_base_url):
         assert candidate in after_add, after_add
 
         # Idempotent re-add → unchanged.
-        r2 = requests.post(
+        r2 = _req(
+            "post",
             f"{api_base_url}/api/filament_attributes/bulk_set",
             json={"filament_ids": [fid], "add": [candidate]},
             timeout=10,
@@ -122,7 +161,8 @@ def test_bulk_set_add_then_remove(api_base_url):
         assert body2.get("unchanged") == 1
 
         # Remove brings it back out.
-        r3 = requests.post(
+        r3 = _req(
+            "post",
             f"{api_base_url}/api/filament_attributes/bulk_set",
             json={"filament_ids": [fid], "remove": [candidate]},
             timeout=10,
@@ -140,7 +180,8 @@ def test_bulk_set_add_then_remove(api_base_url):
 @pytest.mark.usefixtures("require_server")
 def test_bulk_set_validates_payload(api_base_url):
     """Empty filament_ids or empty add+remove → 400 with a useful message."""
-    r1 = requests.post(
+    r1 = _req(
+        "post",
         f"{api_base_url}/api/filament_attributes/bulk_set",
         json={"filament_ids": [], "add": ["x"]},
         timeout=5,
@@ -149,7 +190,8 @@ def test_bulk_set_validates_payload(api_base_url):
     assert "filament_ids" in r1.json().get("msg", "").lower()
 
     target, _ = _pick_target(api_base_url)
-    r2 = requests.post(
+    r2 = _req(
+        "post",
         f"{api_base_url}/api/filament_attributes/bulk_set",
         json={"filament_ids": [target["id"]]},
         timeout=5,
