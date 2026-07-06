@@ -273,11 +273,22 @@ const SpoolCardBuilder = {
             }
             const compactName = info.line3
                 || (item.display || '').replace(/^#\d+\s*/, '').replace(/^\[.*?\]\s*/, '');
+            // 30.4 — show the loaded filament's material (e.g. "PETG") on a
+            // compact second line so it's visible without opening the filament-
+            // details modal. Material is already in the pulse payload as
+            // item.details.material (no backend change).
+            const material = (item.details && item.details.material) || '';
+            const matLine = material
+                ? `<div class="fcc-ps-chip-mat text-truncate">${material}</div>`
+                : '';
             return `
-                <div class="fcc-ps-chip d-flex align-items-center gap-2" style="font-size:0.85rem; line-height:1.2;">
-                    ${swatch}
-                    <span class="text-light fw-bold text-truncate" style="max-width:140px;">${compactName}</span>
-                    <span class="ms-auto fw-bold" style="color:${weightColor};">${weightStr}</span>
+                <div class="fcc-ps-chip" style="font-size:0.85rem; line-height:1.2;">
+                    <div class="d-flex align-items-center gap-2">
+                        ${swatch}
+                        <span class="text-light fw-bold text-truncate" style="max-width:140px;">${compactName}</span>
+                        <span class="ms-auto fw-bold" style="color:${weightColor};">${weightStr}</span>
+                    </div>
+                    ${matLine}
                 </div>
             `;
         }

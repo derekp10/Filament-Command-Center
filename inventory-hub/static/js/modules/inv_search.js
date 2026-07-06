@@ -39,11 +39,41 @@ const SearchEngine = {
             // Color picker sets the hex field implicitly
             const picker = document.getElementById('global-search-color-picker');
             const hexInput = document.getElementById('global-search-color-hex');
+            const rgbOut = document.getElementById('global-search-color-rgb');
+            // 30.2 — set the RGB readout text AND toggle its visibility, so an
+            // empty readout consumes no flex gap in the row (keeps the no-color
+            // layout unchanged).
+            const setRgbOut = (txt) => {
+                if (!rgbOut) return;
+                rgbOut.textContent = txt || '';
+                rgbOut.style.display = txt ? '' : 'none';
+            };
             if (picker && hexInput) {
                 picker.addEventListener('input', (e) => {
                     hexInput.value = e.target.value;
+                    setRgbOut(window.rgbText(e.target.value)); // 30.2
                     this.debounceTrigger();
                 });
+            }
+
+            // 30.2 — reverse sync: typing/pasting a hex into the field updates
+            // the picker swatch + the RGB readout. `input` fires on paste too
+            // (covers the paste ask); `change` catches blur/programmatic sets.
+            // normalizeHex first so a 3-digit or '#'-less hex still resolves and
+            // garbage never clobbers the picker; a partial/invalid value mid-typing
+            // leaves the picker + readout untouched.
+            if (hexInput) {
+                const syncColorFromHex = () => {
+                    const norm = window.normalizeHex(hexInput.value);
+                    if (norm) {
+                        if (picker) picker.value = norm;
+                        setRgbOut(window.rgbText(norm));
+                    } else if (!hexInput.value.trim()) {
+                        setRgbOut('');   // field cleared → hide the readout
+                    }
+                };
+                hexInput.addEventListener('input', syncColorFromHex);
+                hexInput.addEventListener('change', syncColorFromHex);
             }
 
             const clearColorBtn = document.getElementById('global-search-clear-color');
@@ -51,6 +81,7 @@ const SearchEngine = {
                 clearColorBtn.addEventListener('click', () => {
                     hexInput.value = '';
                     if (picker) picker.value = '#000000';
+                    setRgbOut('');   // 30.2
                     this.debounceTrigger();
                 });
             }
@@ -77,6 +108,7 @@ const SearchEngine = {
                     if (h) h.value = '';
                     if (m) m.value = '';
                     if (c) c.value = '#000000';
+                    setRgbOut('');   // 30.2
                     if (mw) mw.value = '';
                     if (mxw) mxw.value = '';
                     if (s) s.checked = true;
