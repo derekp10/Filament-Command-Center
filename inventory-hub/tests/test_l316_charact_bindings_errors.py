@@ -117,13 +117,12 @@ def test_return_unregistered_toolhead_is_404_bad_toolhead(client):
 def test_return_all_toolheads_empty_is_404_no_spool_with_sorted_candidates(client):
     """Virtual-printer fan-out where every toolhead is empty must 404 with
     action=return_no_spool. Pins: `toolhead` in the body is the REQUESTED
-    prefix (contrast return_no_binding below), `candidates` is the sorted
-    fan-out list, every candidate was probed in that sorted order, and a
-    WARNING log names them comma-joined.
+    prefix, `candidates` is the sorted fan-out list, every candidate was probed
+    in that sorted order, and a WARNING log names them comma-joined.
 
-    # NOTE: pins current behavior; see suspected_bugs — the sort is
-    # LEXICOGRAPHIC, so XL-10 orders before XL-2. On a 10+ toolhead printer
-    # (indxx) that changes both probe order and which loaded spool "wins".
+    # 29.B1 FIX: the sort is now NATURAL/numeric (XL-2 before XL-10), not
+    # lexicographic. On a 10+ toolhead printer (indxx) this fixes both the
+    # probe order and which loaded toolhead the return acts on.
     """
     printer_map = {
         "XL-1": {"printer_name": "XL", "position": 0},
@@ -141,11 +140,11 @@ def test_return_all_toolheads_empty_is_404_no_spool_with_sorted_candidates(clien
     body = r.get_json()
     assert body["action"] == "return_no_spool"
     assert body["toolhead"] == "XL"  # requested prefix, NOT an active toolhead
-    assert body["candidates"] == ["XL-1", "XL-10", "XL-2"]  # lexicographic sort
-    assert [c.args[0] for c in probe.call_args_list] == ["XL-1", "XL-10", "XL-2"]
+    assert body["candidates"] == ["XL-1", "XL-2", "XL-10"]  # natural/numeric sort
+    assert [c.args[0] for c in probe.call_args_list] == ["XL-1", "XL-2", "XL-10"]
     mv.assert_not_called()
     msg, level, color = log.call_args[0]
-    assert "XL-1, XL-10, XL-2 is empty" in msg  # multi-candidate comma join
+    assert "XL-1, XL-2, XL-10 is empty" in msg  # multi-candidate comma join
     assert level == "WARNING"
     assert color == "ffaa00"
 
@@ -171,9 +170,12 @@ def test_return_single_toolhead_empty_no_spool_names_it_bare(client):
 
 def test_return_no_source_and_no_binding_is_404_reporting_active_toolhead(client):
     """Loaded spool with no physical_source and NO dryer box bound to the
-    active toolhead must 404 with action=return_no_binding. Pins the field
-    asymmetry vs return_no_spool: here `toolhead` is the ACTIVE toolhead the
-    fan-out landed on and `requested` carries the original prefix."""
+    active toolhead must 404 with action=return_no_binding.
+
+    # 29.B3 FIX: `toolhead` is now the REQUESTED value in EVERY error branch
+    # (consistent with return_no_spool). The resolved active toolhead the
+    # fan-out landed on is reported separately as `active_toolhead`;
+    # `requested` is retained as a back-compat alias."""
     printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
     locs = [
         # A dryer box exists but is bound to a DIFFERENT toolhead.
@@ -190,8 +192,9 @@ def test_return_no_source_and_no_binding_is_404_reporting_active_toolhead(client
     assert r.status_code == 404
     body = r.get_json()
     assert body["action"] == "return_no_binding"
-    assert body["toolhead"] == "XL-1"   # the ACTIVE toolhead, not the prefix
-    assert body["requested"] == "XL"    # the original request, preserved
+    assert body["toolhead"] == "XL"            # 29.B3: now the REQUESTED value, uniform across branches
+    assert body["active_toolhead"] == "XL-1"   # the resolved toolhead, reported separately
+    assert body["requested"] == "XL"           # back-compat alias, unchanged
     mv.assert_not_called()
     msg, level, color = log.call_args[0]
     assert "XL-1 has no bound dryer box slot and no physical_source" in msg
@@ -323,8 +326,8 @@ def test_put_printer_creds_unchanged_skips_save_and_returns_200(client):
     changed-guard must SKIP save entirely and return 200 ok:True (a broken
     save mock proves save was never consulted).
 
-    # NOTE: pins current behavior; see suspected_bugs — the 'Printer
-    # connection updated' INFO log fires even though nothing changed.
+    # 29.B2 FIX: the 'Printer connection updated' INFO log no longer fires on
+    # the no-op path — only on an actual change.
     """
     with patch.object(app_module.locations_db, "load_locations_list",
                       return_value=_printer_rows()), \
@@ -339,7 +342,5 @@ def test_put_printer_creds_unchanged_skips_save_and_returns_200(client):
     assert body["ok"] is True
     assert body["error"] is None
     save.assert_not_called()
-    # Current behavior: the success log fires on the no-op path too.
-    log.assert_called_once()
-    msg = log.call_args[0][0]
-    assert "Printer connection updated for XL Printer" in msg
+    # 29.B2: no "updated" log on the unchanged path.
+    log.assert_not_called()

@@ -183,8 +183,11 @@ def api_update_filament():
     try:
         updated = spoolman_api.update_filament(fid, data)
     except Exception as e:
+        # 29.C2 — an unexpected exception is a server-side failure, so answer
+        # HTTP 500 (not a bare 200) while still surfacing the exception text so
+        # the modal can toast a real reason.
         state.logger.error(f"Failed to update filament #{fid}: {e}")
-        return jsonify({"success": False, "msg": str(e)})
+        return jsonify({"success": False, "msg": str(e)}), 500
 
     if not updated:
         # Surface the stashed Spoolman error body so the UI can tell the user
@@ -620,14 +623,21 @@ def _handle_prusament_url_scan(res):
     # product_url ("save the url to the product link section"). The matcher
     # already required the stored product_url to contain the scanned id/hash,
     # so this UPGRADES a non-canonical shape (query form ?spoolId=<hash>,
-    # trailing-slash/cruft, casing) to the canonical /spool/<id>/<hash> path
-    # form. Idempotent: once stored == canonical the differ-guard skips, so no
-    # per-scan churn. Gated on a hash (canonical needs it); the matched URL is
-    # always a spool-instance URL (it matched the needle), so this never
-    # clobbers a deliberately-set product-PAGE link.
+    # casing) to the canonical /spool/<id>/<hash> path form. Idempotent: once
+    # stored == canonical the differ-guard skips, so no per-scan churn. Gated
+    # on a hash (canonical needs it); the matched URL is always a spool-instance
+    # URL (it matched the needle), so this never clobbers a deliberately-set
+    # product-PAGE link.
     if spool_hash:
         canonical_purl = f"https://prusament.com/spool/{spool_id}/{spool_hash.lower()}"
-        if _pm_norm(spool_extra.get('product_url')) != _pm_norm(canonical_purl):
+        # 29.N4 — compare trailing-slash-tolerant. The physical QR encodes the
+        # URL WITH a trailing slash (.../<hash>/), which differs from the
+        # canonical (no slash) under a bare _pm_norm and fired ONE spurious
+        # upgrade write on the first scan of such a spool. rstrip('/') makes an
+        # otherwise-canonical stored URL a true no-op (query-form / casing
+        # differences still upgrade).
+        stored_purl = _pm_norm(spool_extra.get('product_url')).rstrip('/')
+        if stored_purl != _pm_norm(canonical_purl):
             pm_fill['product_url'] = canonical_purl
     if pm_fill:
         if spoolman_api.update_spool(sid, {'extra': pm_fill}):

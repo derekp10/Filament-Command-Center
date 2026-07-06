@@ -99,17 +99,33 @@ def test_state_buffer_post_without_key_resets_to_empty(monkeypatch):
     assert client.get("/api/state/buffer").get_json() == []
 
 
-def test_state_buffer_post_non_list_value_stored_verbatim(monkeypatch):
-    """A non-list 'buffer' value is stored as-is — the endpoint has NO type
-    validation (unlike /api/spools/refresh, which 400s on a non-list).
-    # NOTE: pins current behavior; see suspected_bugs."""
+def test_state_buffer_post_non_list_value_rejected_400(monkeypatch):
+    """29.C1 FIX — a non-list 'buffer' value is now REJECTED with 400 (mirrors
+    /api/spools/refresh) instead of stored verbatim; GLOBAL_BUFFER is left
+    untouched so one malformed client write can't poison the buffer served to
+    every dashboard."""
     monkeypatch.setattr(app_module.state, "GLOBAL_BUFFER", [])
     client = _client()
 
     r = client.post("/api/state/buffer", json={"buffer": {"not": "a list"}})
-    assert r.get_json() == {"success": True}
-    assert app_module.state.GLOBAL_BUFFER == {"not": "a list"}
-    assert client.get("/api/state/buffer").get_json() == {"not": "a list"}
+    assert r.status_code == 400
+    assert r.get_json() == {"error": "buffer must be a list"}
+    # Unchanged: the bad write never landed.
+    assert app_module.state.GLOBAL_BUFFER == []
+    assert client.get("/api/state/buffer").get_json() == []
+
+
+def test_state_queue_post_non_list_value_rejected_400(monkeypatch):
+    """29.C1 FIX — the queue endpoint gains the same list-validation guard as
+    the buffer: a non-list 'queue' value 400s and GLOBAL_QUEUE is untouched."""
+    monkeypatch.setattr(app_module.state, "GLOBAL_QUEUE", [])
+    client = _client()
+
+    r = client.post("/api/state/queue", json={"queue": {"not": "a list"}})
+    assert r.status_code == 400
+    assert r.get_json() == {"error": "queue must be a list"}
+    assert app_module.state.GLOBAL_QUEUE == []
+    assert client.get("/api/state/queue").get_json() == []
 
 
 # ---------------------------------------------------------------------------

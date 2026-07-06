@@ -4,7 +4,9 @@
 **Estimated effort:** ~4–7 hours (10 actionable fixes + 3 doc/observation notes to resolve, each fix + its pin-test update)
 **Risk:** **LOW.** The lowest-severity tier — edge-case robustness, response-shape consistency, a lexicographic sort that only bites the 10+-toolhead future, and persistence-input validation. A few require a "decide which behavior is intended" call before coding.
 
-> **Status: TODO** — filed 2026-07-01 by `/refresh-groups`. The 🟡 findings from the **L316 characterization layer** (buglist lines 26–28), plus the folded doc/observation notes. Every fix-finding is PINNED by a `tests/test_l316_charact_*.py` test — **fixing one = update its pin in the SAME commit.** Full annotated write-up + pin-test names: [L316-characterization-findings.md](L316-characterization-findings.md).
+> **Status: ✅ DONE 2026-07-05** (`feature/group-29-l316-charact-yellows` → `dev`). All 10 actionable fixes + 4 notes shipped (findings 36–39, 42–45, 47, 48, 50, plus notes 26/28/29), each pin flipped to the corrected behavior in the same change; 338 tests green / 0 regressions; a 4-lens adversarial diff-review returned zero confirmed findings. Three decisions with Derek: 29.A2 docstring→code, 29.A3 `success = updated>0 or unchanged>0`, 29.B3 `toolhead`=requested + new `active_toolhead`. N3 needed no change (CLAUDE.md was already correct); N1 removed the dead `cfg` (no longer part of the vestigial-FB item). Per-item detail archived in `completed-archive.md`. **This closes the last L316 characterization tier — all 50 findings resolved (Groups 27+28+29).** _(Original filing note preserved below.)_
+>
+> **Status (original): TODO** — filed 2026-07-01 by `/refresh-groups`. The 🟡 findings from the **L316 characterization layer** (buglist lines 26–28), plus the folded doc/observation notes. Every fix-finding is PINNED by a `tests/test_l316_charact_*.py` test — **fixing one = update its pin in the SAME commit.** Full annotated write-up + pin-test names: [L316-characterization-findings.md](L316-characterization-findings.md).
 
 ## Why these are one group
 

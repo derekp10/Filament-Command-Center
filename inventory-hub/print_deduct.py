@@ -130,7 +130,14 @@ def api_get_multi_spool_filaments():
         candidates = []
         for fid, count in fil_counts.items():
             if count > 1:
-                display_name = f"{fil_vendors.get(fid, '')} - {fil_names.get(fid, '')}".strip(" -")
+                # 29.C3 — build the display conditionally instead of
+                # f"{v} - {n}".strip(" -"). The old strip ate legitimate
+                # leading/trailing hyphens in a vendor/name (e.g. a name
+                # "-EOL-" rendered as "EOL"); only the " - " separator should
+                # be conditional, never the content.
+                vendor = str(fil_vendors.get(fid, '') or '').strip()
+                name = str(fil_names.get(fid, '') or '').strip()
+                display_name = f"{vendor} - {name}" if (vendor and name) else (vendor or name)
                 candidates.append({
                     "id": fid,
                     "display": display_name,
@@ -211,6 +218,13 @@ def api_backfill_spool_weights(fid):
         errors = []
         for sp in spools:
             sid = sp.get('id')
+            # 29.N2 — a malformed spool entry with no 'id' (only reachable with
+            # malformed Spoolman data) would otherwise PATCH /spool/None. Skip
+            # it (logged) rather than issue a nonsense write.
+            if not sid:
+                state.logger.warning(
+                    f"backfill_spool_weights: skipping spool entry with no id: {sp}")
+                continue
             sp_wt = sp.get('spool_weight')
             if _positive(sp_wt):
                 skipped += 1
