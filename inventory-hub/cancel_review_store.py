@@ -18,6 +18,8 @@ import json
 import os
 import threading
 
+import atomic_store
+
 # Overridable by tests (monkeypatch this attribute to a tmp path).
 _STORE_PATH = os.path.join(os.path.dirname(__file__), "data", "pending_cancel_deducts.json")
 _LOCK = threading.Lock()
@@ -44,7 +46,8 @@ def _save(data: dict) -> None:
     tmp = _STORE_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
-    os.replace(tmp, _STORE_PATH)
+    # 32.1 — retry on the Windows host↔container bind-mount sharing collision.
+    atomic_store.replace_with_retry(tmp, _STORE_PATH)
 
 
 def add_pending(record: dict) -> None:

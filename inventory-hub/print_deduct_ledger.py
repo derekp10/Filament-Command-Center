@@ -25,6 +25,8 @@ import json
 import os
 import threading
 
+import atomic_store
+
 # Overridable by tests (monkeypatch this attribute to a tmp path).
 _LEDGER_PATH = os.path.join(os.path.dirname(__file__), "data", "print_deduct_ledger.json")
 _LOCK = threading.Lock()
@@ -55,7 +57,8 @@ def _save(data: dict) -> None:
     tmp = _LEDGER_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
-    os.replace(tmp, _LEDGER_PATH)
+    # 32.1 — retry on the Windows host↔container bind-mount sharing collision.
+    atomic_store.replace_with_retry(tmp, _LEDGER_PATH)
 
 
 def was_deducted(printer_name, job_id) -> bool:
