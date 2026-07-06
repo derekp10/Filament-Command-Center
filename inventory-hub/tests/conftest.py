@@ -514,11 +514,17 @@ def snapshot(pytestconfig, request):
             f"See {actual_path} and {diff_path}"
         )
 
-    def _capture_locator(locator) -> bytes:
+    def _capture_locator(locator, screenshot_kwargs=None) -> bytes:
         """Screenshot a locator, expanding the viewport first if the
         element is taller/wider than the current window so content
         that would normally require scrolling inside the modal actually
         lands in the image.
+
+        ``screenshot_kwargs`` are forwarded to ``locator.screenshot`` — use
+        ``mask=[locator, ...]`` to blank intentionally-nondeterministic regions
+        (e.g. QR codes whose payload embeds a per-render session id) so they
+        can't drift the pixel diff. Masked regions are painted a solid color by
+        Playwright, so the surrounding layout is still pinned.
         """
         page = locator.page
         # Measure the full scrollable dimensions of the locator (not just
@@ -537,7 +543,7 @@ def snapshot(pytestconfig, request):
             # Scroll the element into view so fixed-position overlays render
             # with their full body visible.
             locator.scroll_into_view_if_needed()
-            return locator.screenshot()
+            return locator.screenshot(**(screenshot_kwargs or {}))
         finally:
             page.set_viewport_size(BASELINE_VIEWPORT)
 
@@ -564,7 +570,7 @@ def snapshot(pytestconfig, request):
         # Capture current screenshot as bytes (don't write yet).
         if isinstance(page_or_locator, Locator):
             try:
-                actual = _capture_locator(page_or_locator)
+                actual = _capture_locator(page_or_locator, kwargs)
             except Exception:
                 # Fallback: plain locator screenshot if viewport resize
                 # isn't supported (e.g. headless context quirk).

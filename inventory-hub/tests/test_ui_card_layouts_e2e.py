@@ -1,6 +1,7 @@
 import pytest
 from playwright.sync_api import Page, expect
 
+@pytest.mark.usefixtures("require_server")
 def test_fancy_button_layout_applied(page: Page):
     """
     E2E structural test verifying that all filament cards (black, solid, and multi-color)
@@ -10,7 +11,33 @@ def test_fancy_button_layout_applied(page: Page):
     2. Inner .cham-body does NOT have the glaring glossy inset ring or top border artifacts.
     """
     page.goto("http://localhost:8000")
-    
+
+    # Seed the buffer deterministically instead of depending on whatever the
+    # shared dev buffer happens to hold — a prior clean_buffer test empties it,
+    # and then `.buffer-item` never renders and this test times out (Group 33.5).
+    # Inject a synthetic spool through the REAL render path (SpoolCardBuilder) so
+    # the produced card is structurally identical to a live buffer card, and
+    # stamp lastLocalBufferChange so the 2s loadBuffer poll's 3s grace won't wipe
+    # it mid-render.
+    #
+    # suppressBufferDirty MUST be set around renderBuffer(): without it the
+    # render's persist branch (inv_cmd.js) POSTs this synthetic spool to the
+    # SHARED server GLOBAL_BUFFER, leaking id 990001 into every later test that
+    # loads the dashboard without clean_buffer — a self-inflicted cross-test
+    # pollution source. The flag skips only the persist; the DOM still renders.
+    page.wait_for_function(
+        "() => typeof renderBuffer === 'function' && typeof state === 'object' && !!window.SpoolCardBuilder",
+        timeout=10000,
+    )
+    page.evaluate(
+        "window.suppressBufferDirty = true;"
+        " state.heldSpools = [{ id: 990001, display: '#990001', color: 'ff8800',"
+        " color_direction: 'longitudinal', remaining_weight: 500 }];"
+        " window.lastLocalBufferChange = Date.now();"
+        " renderBuffer();"
+        " window.suppressBufferDirty = false;"
+    )
+
     # Wait for the buffer grid/deck to load the dynamically styled spool elements
     page.wait_for_selector(".buffer-item", timeout=10000)
     

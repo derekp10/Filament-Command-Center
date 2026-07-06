@@ -63,7 +63,15 @@ def test_pin_printers_floats_to_top(page: Page, base_url: str, require_server):
     _open_mgr(page, base_url)
     try:
         page.evaluate("window.toggleLocPinPrinters()")
-        page.wait_for_timeout(500)
+        # toggleLocPinPrinters fires an ASYNC fetchLocations() re-render; under
+        # concurrent sweep load the /api/locations round-trip can outlast a fixed
+        # 500ms sleep, so poll for the pinned marker (the "🖨️ Printers" divider
+        # row) to appear rather than sleeping a guess (Group 33.1).
+        page.wait_for_function(
+            "() => [...document.querySelectorAll('#location-table tr.loc-divider')]"
+            ".some(tr => /Printers/.test(tr.textContent))",
+            timeout=8000,
+        )
         rows = _rows(page)
         order = [r["divider"] or r["id"] for r in rows]
         # a "Printers" divider exists and the first printer precedes the first room
