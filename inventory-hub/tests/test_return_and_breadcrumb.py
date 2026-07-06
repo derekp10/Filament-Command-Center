@@ -319,13 +319,17 @@ def test_edit_full_bindings_auto_expands_feeds_section(page: Page, open_manage_m
     # Before: Feeds is a dryer-box-only section, invisible here.
     expect(page.locator("#manage-feeds-section")).to_be_hidden()
     page.locator("#quickswap-edit-bindings-btn").click()
-    # Now on the dryer box view.
-    page.wait_for_timeout(700)
-    feeds_section = page.locator("#manage-feeds-section")
-    expect(feeds_section).to_be_visible(timeout=5000)
-    # Body must be expanded, toggle label reflects that.
-    expect(page.locator("#feeds-body")).to_be_visible()
-    expect(page.locator("#feeds-toggle-btn")).to_have_text("Hide")
+    # Clicking "Edit Full Bindings" chains THREE sequential fetches before the
+    # Feeds section renders and auto-expands: openManage's /api/get_contents,
+    # then renderFeedsSection's Promise.all([fetchPrinterMap, dryer_box bindings]).
+    # Under saturated full-sweep load that chain outlasts the old fixed 700ms +
+    # 5s wait, so poll the full end-state (section visible → body expanded →
+    # toggle flipped to Hide) with a load-tolerant timeout rather than sleeping a
+    # guess. Each expect resolves as soon as its condition holds (Group 33.6).
+    expect(page.locator("#manage-feeds-section")).to_be_visible(timeout=12000)
+    # Body must be expanded (auto-expand fired), toggle label reflects that.
+    expect(page.locator("#feeds-body")).to_be_visible(timeout=12000)
+    expect(page.locator("#feeds-toggle-btn")).to_have_text("Hide", timeout=12000)
 
 
 @pytest.mark.usefixtures("require_server")

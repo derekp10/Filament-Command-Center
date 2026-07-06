@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 from playwright.sync_api import Page, expect
+from playwright.sync_api import TimeoutError as PWTimeoutError
 
 
 # Toast-visibility tolerance. The scan POSTs to /api/identify_scan and the error
@@ -68,11 +69,25 @@ def test_ui_slot_scan_no_buffer_triggers_pickup_flow(page: Page, base_url: str):
     Spoolman, so we only assert the flow is triggered (manager opens or
     a toast appears) — not the specific outcome."""
     _goto_and_wait(page, base_url)
-    # Buffer is already clean from the fixture.
+    # Buffer is already clean from the fixture (server-side /api/buffer/clear).
+    # Stamp lastLocalBufferChange so a stray loadBuffer poll can't repopulate the
+    # buffer between page-load and scan (which would push the scan down the LOAD
+    # path instead of the empty-buffer PICKUP path we mean to exercise).
+    page.evaluate("state.heldSpools = []; window.lastLocalBufferChange = Date.now();")
     _fire_scan(page, "LOC:LR-MDB-1:SLOT:1")
-    # Either a success toast (picked up), a "slot empty" toast, or the
-    # manage modal opens. All three are valid for this flow.
-    page.wait_for_timeout(1500)
+    # Either a success toast (picked up), a "slot empty" toast, or the manage
+    # modal opens — all three are valid outcomes for this flow. Poll for any of
+    # them (up to 8s) rather than a fixed 1.5s sleep: under concurrent sweep load
+    # the pickup POST response (and its toast) can land later than 1.5s, which is
+    # the whole flake (Group 33.2).
+    _outcome = (
+        "() => document.querySelectorAll('.toast-msg').length > 0"
+        " || document.querySelectorAll(\"#manageModal.show, #manageModal[style*='display: block']\").length > 0"
+    )
+    try:
+        page.wait_for_function(_outcome, timeout=8000)
+    except PWTimeoutError:
+        pass  # fall through to the friendly assert below
     has_toast = page.locator(".toast-msg").count() > 0
     manage_open = page.locator("#manageModal.show, #manageModal[style*='display: block']").count() > 0
     assert has_toast or manage_open, (
