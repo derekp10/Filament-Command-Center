@@ -98,14 +98,25 @@ def api_audit_session():
 @app.route('/api/state/buffer', methods=['GET', 'POST'])
 def api_state_buffer():
     if request.method == 'POST':
-        state.GLOBAL_BUFFER = request.json.get('buffer', [])
+        # 29.C1 — validate the payload is a list before persisting (mirrors
+        # /api/spools/refresh). Without this, a malformed client write stored
+        # ANY JSON type verbatim into GLOBAL_BUFFER and poisoned the buffer
+        # served to every dashboard until the next good write.
+        buf = (request.json or {}).get('buffer', [])
+        if not isinstance(buf, list):
+            return jsonify({"error": "buffer must be a list"}), 400
+        state.GLOBAL_BUFFER = buf
         return jsonify({"success": True})
     return jsonify(state.GLOBAL_BUFFER)
 
 @app.route('/api/state/queue', methods=['GET', 'POST'])
 def api_state_queue():
     if request.method == 'POST':
-        state.GLOBAL_QUEUE = request.json.get('queue', [])
+        # 29.C1 — same list-validation guard as the buffer above.
+        q = (request.json or {}).get('queue', [])
+        if not isinstance(q, list):
+            return jsonify({"error": "queue must be a list"}), 400
+        state.GLOBAL_QUEUE = q
         return jsonify({"success": True})
     return jsonify(state.GLOBAL_QUEUE)
 

@@ -198,16 +198,16 @@ def test_update_filament_rejection_falls_back_to_no_response_body(client):
     assert body["msg"] == "Spoolman rejected update: No response body"
 
 
-def test_update_filament_generic_exception_returns_200_with_str(client):
-    """A raising update_filament is caught: success:false with msg == str(e),
-    state.logger.error fired naming the filament id.
-    # NOTE: pins current behavior; see suspected_bugs — the generic-Exception
-    # branch returns HTTP 200 (not a 500) with the raw exception text."""
+def test_update_filament_generic_exception_returns_500_with_str(client):
+    """29.C2 FIX — a raising update_filament is a server-side failure, so the
+    generic-Exception branch now answers HTTP 500 (was a bare 200) with
+    success:false + msg == str(e); state.logger.error still fires naming the
+    filament id."""
     with patch("spoolman_api.get_filament", return_value={"id": 5}), \
          patch("spoolman_api.update_filament", side_effect=RuntimeError("boom")), \
          patch.object(app_module.state.logger, "error") as logerr:
         r = client.post("/api/update_filament", json={"id": 5, "data": {"name": "X"}})
-    assert r.status_code == 200
+    assert r.status_code == 500
     body = r.get_json()
     assert body == {"success": False, "msg": "boom"}
     logerr.assert_called_once()
@@ -395,6 +395,34 @@ def test_prusament_product_url_upgrade_skips_when_already_canonical():
     assert res["filled"] == []
     assert res["conflicts"] == []
     assert res["spool_weight"] is None
+    upd_fil.assert_not_called()
+    upd_spool.assert_not_called()
+    log.assert_not_called()
+
+
+def test_prusament_product_url_upgrade_skips_when_stored_has_trailing_slash():
+    """29.N4 FIX — a stored product_url that is canonical EXCEPT for a trailing
+    slash (the exact shape the physical QR encodes, .../<hash>/) is now treated
+    as already-canonical: the compare is trailing-slash tolerant, so pm_fill
+    stays empty, update_spool is never called, and no spurious one-time upgrade
+    write fires. (Before the fix, `_pm_norm` left the trailing slash on, so the
+    first scan of such a spool always PATCHed the canonical no-slash form.)"""
+    matched = {"id": 42,
+               "extra": {"product_url": _URL,   # trailing-slash QR form
+                         "prusament_manufacturing_date": "2026-01-02",
+                         "prusament_length_m": "330"},
+               "filament": {"id": 7}}
+    with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
+         patch("spoolman_api.get_all_spools", return_value=[matched]), \
+         patch("spoolman_api.get_filament", return_value=_FIL_SYNCED), \
+         patch("spoolman_api.get_spools_for_filament", return_value=[]), \
+         patch("spoolman_api.update_filament_or_raise") as upd_fil, \
+         patch("spoolman_api.update_spool") as upd_spool, \
+         patch.object(app_module.state, "add_log_entry") as log:
+        res = _direct_scan()
+    assert res["type"] == "prusament_matched"
+    assert res["status"] == "ok"
+    assert res["spool_id"] == 42
     upd_fil.assert_not_called()
     upd_spool.assert_not_called()
     log.assert_not_called()

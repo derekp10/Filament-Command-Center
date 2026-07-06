@@ -13,12 +13,14 @@ Preserved semantics (see the carve plan):
   patching app_module.prusalink_api attributes keep intercepting).
 - config_loader._canonicalize_printer_map is a deliberate private-name
   cross-module dependency of the PUT validator; carried verbatim.
-- api_quickswap_return's unused cfg = config_loader.load_config() is
-  vestigial FilaBridge residue — kept verbatim in the pure move (removal
-  belongs to the vestigial-FB-artifacts buglist item).
+- api_quickswap_return's unused cfg = config_loader.load_config() was
+  vestigial FilaBridge residue — REMOVED in Group 29 (finding 45), so it is
+  no longer part of the vestigial-FB-artifacts buglist item.
 
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
+import re
+
 from flask import request, jsonify  # type: ignore
 
 import state  # type: ignore
@@ -247,10 +249,13 @@ def api_put_printer_creds():
     else:
         api_key = api_key_in if api_key_in else None
     rows, changed = locations_db.set_printer_credentials(rows, name, ip, api_key)
-    if changed and not locations_db.save_locations_list(rows):
-        state.add_log_entry(f"🔐 Printer connection save FAILED for {name}", "ERROR", "ff4444")
-        return jsonify({"ok": False, "error": "could not persist printer connection"}), 500
-    state.add_log_entry(f"🔐 Printer connection updated for {name}", "INFO")
+    if changed:
+        if not locations_db.save_locations_list(rows):
+            state.add_log_entry(f"🔐 Printer connection save FAILED for {name}", "ERROR", "ff4444")
+            return jsonify({"ok": False, "error": "could not persist printer connection"}), 500
+        # 29.B2 — only log the "updated" INFO line on an ACTUAL change; a no-op
+        # PUT with identical creds no longer emits a misleading "updated" entry.
+        state.add_log_entry(f"🔐 Printer connection updated for {name}", "INFO")
     return jsonify({"ok": True, "error": None})
 
 
@@ -259,6 +264,15 @@ def _pm_prefix(k):
     matching locations_db._known_printer_prefixes."""
     k = str(k).strip().upper()
     return k.split('-', 1)[0] if '-' in k else k
+
+
+def _natural_key(s):
+    """29.B1 — natural/numeric sort key so "XL-2" orders before "XL-10"
+    (lexicographic sort put "XL-10" first, which the 10+-toolhead indxx
+    forward-compat cares about — CLAUDE.md "Indxx forward-compat"). Splits a
+    LocationID into alternating text/number runs; digit runs compare as ints.
+    """
+    return [int(t) if t.isdigit() else t for t in re.split(r'(\d+)', str(s))]
 
 
 def _printer_map_blocked_removals(old_map, new_map):
@@ -512,7 +526,8 @@ def api_quickswap_return():
         )
         return jsonify({"action": "return_bad_request", "error": "toolhead required"}), 400
 
-    cfg = config_loader.load_config()
+    # 29.N1 — the vestigial `cfg = config_loader.load_config()` (unused
+    # FilaBridge residue) was removed here; printer_map is the sole source.
     printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
 
     # Build the list of toolhead IDs we should check. For a virtual
@@ -524,7 +539,11 @@ def api_quickswap_return():
         candidate_toolheads = [toolhead]
     else:
         prefix = toolhead + '-'
-        candidate_toolheads = sorted(k for k in pm_keys_up if k.startswith(prefix))
+        # 29.B1 — natural sort (XL-2 before XL-10), not lexicographic. This
+        # order determines both the probe order and which loaded toolhead the
+        # return acts on when a virtual-printer prefix fans out.
+        candidate_toolheads = sorted(
+            (k for k in pm_keys_up if k.startswith(prefix)), key=_natural_key)
 
     if not candidate_toolheads:
         state.add_log_entry(
@@ -603,8 +622,15 @@ def api_quickswap_return():
             "WARNING", "ffaa00"
         )
         return jsonify({
+            # 29.B3 — `toolhead` now uniformly means the REQUESTED value in
+            # every error branch (return_no_spool already reported the request
+            # there). The resolved active toolhead this branch landed on is
+            # reported separately as `active_toolhead`; `requested` is retained
+            # as a back-compat alias. (At this point `toolhead` is still the
+            # original request — the re-tag to active happens only on success.)
             "action": "return_no_binding",
-            "toolhead": active_toolhead,
+            "toolhead": toolhead,
+            "active_toolhead": active_toolhead,
             "requested": toolhead,
         }), 404
     # Re-tag toolhead in the response to the actual one we acted on.

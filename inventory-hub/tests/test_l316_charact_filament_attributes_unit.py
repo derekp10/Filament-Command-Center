@@ -177,19 +177,19 @@ def test_report_aggregation_shape_and_sort(client, monkeypatch):
     assert body["filaments"][2]["attributes"] == []
 
 
-def test_report_counts_can_gain_keys_outside_choices(client, monkeypatch):
-    """A filament carrying an attribute NOT in the schema choice list adds
-    that rogue key to `counts`.
-    # NOTE: pins current behavior; see suspected_bugs — the live test
-    # (test_filament_attributes_bulk_api.test_report_shape) asserts counts
-    # keys are a SUBSET of choices, which this data would violate."""
+def test_report_counts_restricted_to_choices_rogue_surfaced_separately(client, monkeypatch):
+    """29.A1 FIX — a filament carrying an attribute NOT in the schema choice
+    list no longer inflates `counts` (the live report-shape test asserts counts
+    keys are a SUBSET of choices). The rogue attribute is surfaced explicitly in
+    the new `rogue_counts` map instead of being silently folded into counts."""
     fields = [_attr_field(["Silk"])]
     filaments = [{"id": 1, "extra": {"filament_attributes": '["Rogue"]'}}]
     _install_wire(monkeypatch, fields=fields, filaments=filaments)
 
     body = client.get("/api/filament_attributes/report").get_json()
     assert body["success"] is True
-    assert body["counts"] == {"Silk": 0, "Rogue": 1}
+    assert body["counts"] == {"Silk": 0}
+    assert body["rogue_counts"] == {"Rogue": 1}
 
 
 def test_report_field_list_http_error(client, monkeypatch):
@@ -245,8 +245,9 @@ def test_bulk_set_per_id_error_surface_and_warning_log(client, monkeypatch):
     LAST_SPOOLMAN_ERROR propagated verbatim into errors[]. Partial success
     still counts `updated`, and errors escalate the summary log to
     WARNING/ffaa00.
-    # NOTE: pins current behavior — top-level success stays True even when
-    # some ids errored; callers must read errors[], not success."""
+    # 29.A3: partial success (>=1 id processed) keeps top-level success:true;
+    # only the all-errored case flips to false — see
+    # test_bulk_set_all_errored_reports_success_false below."""
     fils = {
         5: {"id": 5, "extra": {"filament_attributes": '["Old"]'}},
         7: {"id": 7, "extra": {}},
@@ -281,6 +282,27 @@ def test_bulk_set_per_id_error_surface_and_warning_log(client, monkeypatch):
     msg, a, _k = logs[0]
     assert "bulk-set" in msg
     assert a == ("WARNING", "ffaa00")
+
+
+def test_bulk_set_all_errored_reports_success_false(client, monkeypatch):
+    """29.A3 FIX — when EVERY id errors (nothing updated, nothing unchanged),
+    the top-level `success` is now False (was True), so a caller reading only
+    `success` can't mistake a total failure for a win. Partial success (>=1
+    processed) still reports True (pinned above)."""
+    monkeypatch.setattr(app_module.spoolman_api, "get_filament", lambda fid: None)
+    _capture_logs(monkeypatch)
+
+    r = client.post("/api/filament_attributes/bulk_set",
+                    json={"filament_ids": [1, 2], "add": ["New"]})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["success"] is False
+    assert body["updated"] == 0
+    assert body["unchanged"] == 0
+    assert body["errors"] == [
+        {"id": 1, "msg": "filament not found"},
+        {"id": 2, "msg": "filament not found"},
+    ]
 
 
 def test_bulk_set_null_last_error_falls_back_to_unknown(client, monkeypatch):
@@ -536,15 +558,47 @@ def test_remove_choice_restore_failure_collected_and_continues(client, monkeypat
     assert a == ("WARNING", "ffaa00")
 
 
+def test_remove_choice_restore_non_requestexception_collected(client, monkeypatch):
+    """29.A4 FIX — a restore PATCH raising a NON-RequestException (any bug or
+    unexpected error mid-restore, AFTER the schema was already deleted +
+    recreated) is now caught by the broadened `except Exception` and collected
+    into restore_failures — instead of escaping as a bare HTTP 500 over a
+    half-migrated schema with some filaments unrestored and no report. The loop
+    continues; the overall response stays success:true."""
+    fields, filaments = _remove_fixture()
+    _install_wire(monkeypatch, fields=fields, filaments=filaments)
+
+    patch_calls = []
+
+    def boom_patch(url, json=None, **kw):
+        patch_calls.append(url)
+        fid = int(url.rstrip("/").rsplit("/", 1)[-1])
+        if fid == 1:
+            raise ValueError("non-request boom")  # NOT a requests.RequestException
+        return _Resp()
+
+    monkeypatch.setattr(requests_module, "patch", boom_patch)
+    logs = _capture_logs(monkeypatch)
+
+    body = client.post("/api/filament_attributes/remove_choice",
+                       json={"choice": "A", "force": True}).get_json()
+    assert body["success"] is True
+    assert body["stripped"] == 1
+    assert body["restored"] == 1
+    assert body["restore_failures"] == [{"id": 1, "msg": "non-request boom"}]
+    # Both restores were ATTEMPTED — the raise did not abort the loop.
+    assert [u.rsplit("/", 1)[-1] for u in patch_calls] == ["1", "2"]
+    assert logs[-1][1] == ("WARNING", "ffaa00")
+
+
 def test_remove_choice_happy_path_order_and_payloads(client, monkeypatch):
     """Pins the full destructive-migration contract:
       - operation ORDER: snapshot reads (GET field, GET filaments) ->
         schema DELETE -> schema POST recreate -> restore PATCHes. Restores
         fire ONLY after a successful recreate.
-        # NOTE: pins current behavior; see suspected_bugs — the handler's
-        # docstring claims filaments are stripped BEFORE the schema delete,
-        # but the implementation deletes/recreates the schema FIRST and
-        # strips during the restore loop afterward.
+        # 29.A2: the handler docstring was corrected to describe THIS order
+        # (delete/recreate the schema FIRST, strip during the restore loop) —
+        # the earlier strip-BEFORE-delete claim was never what shipped.
       - recreate payload carries name/field_type/multi_choice from the old
         field def and the sorted survivor choice list.
       - every restore body is the filament's FULL extras dict (siblings
@@ -718,3 +772,29 @@ def test_sweep_commit_happy_path_selected_subset(client, monkeypatch):
     assert patches["2"] == {"extra": {"nozzle_temp_max": '"240"'}}
     assert len(logs) == 1
     assert logs[0][1] == ("INFO", "00ccff")
+
+
+def test_sweep_restore_non_requestexception_collected(client, monkeypatch):
+    """29.A4 FIX — the sweep_unused restore loop got the same broadened
+    `except Exception`: a non-RequestException mid-restore lands in
+    restore_failures, the loop continues to the remaining filaments, and the
+    response stays success:true (rather than a bare 500 over a half-migrated
+    schema)."""
+    fields, filaments = _sweep_fixture()
+    _install_wire(monkeypatch, fields=fields, filaments=filaments)
+
+    def boom_patch(url, json=None, **kw):
+        fid = int(url.rstrip("/").rsplit("/", 1)[-1])
+        if fid == 1:
+            raise ValueError("sweep boom")  # NOT a requests.RequestException
+        return _Resp()
+
+    monkeypatch.setattr(requests_module, "patch", boom_patch)
+    _capture_logs(monkeypatch)
+
+    body = client.post("/api/filament_attributes/sweep_unused",
+                       json={"force": True, "choices": ["B"]}).get_json()
+    assert body["success"] is True
+    assert body["removed"] == ["B"]
+    assert body["restored"] == 1
+    assert body["restore_failures"] == [{"id": 1, "msg": "sweep boom"}]
