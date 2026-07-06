@@ -115,8 +115,15 @@ def test_multispool_dryer_box_scan_still_sends_full_buffer(page: Page, base_url:
     )
     assert multi_id, "no multi-spool non-toolhead in dev environment"
 
+    # Stamp lastLocalBufferChange in the SAME evaluate as the injection so the
+    # 2s loadBuffer poll's "local change wins" 3s grace skips overwriting our
+    # synthetic spools with real (empty) server state mid-test — without it a
+    # poll firing between injection and scan empties state.heldSpools and the
+    # scan sends the wrong `spools`. The sibling topmost-spool test above already
+    # does this; this one was missing it (Group 33.3, matches Group 26.8 idiom).
     page.evaluate(
         """() => {
+            window.lastLocalBufferChange = Date.now();
             state.heldSpools = [
                 { id: 9991, display: 'TOP', color: '#ff0000', remaining_weight: 500 },
                 { id: 9992, display: 'BOTTOM', color: '#00ff00', remaining_weight: 500 },
