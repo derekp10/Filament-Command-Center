@@ -194,6 +194,8 @@ def api_filament_attributes_report():
 
     filaments = []
     counts = {c: 0 for c in choices}
+    rogue_counts = {}          # 29.A1 — attrs carried by a filament but NOT in the schema
+    choice_set = set(choices)
     for f in raw:
         fid = f.get("id")
         if fid is None:
@@ -201,7 +203,15 @@ def api_filament_attributes_report():
         extras = f.get("extra") or {}
         attrs = spoolman_api._parse_filament_attrs_value(extras.get("filament_attributes"))
         for a in attrs:
-            counts[a] = counts.get(a, 0) + 1
+            # 29.A1 — keep `counts` restricted to the schema choice list (the
+            # live report-shape test asserts counts keys are a SUBSET of
+            # choices). A rogue attribute — one a record still carries that is
+            # no longer a schema choice — is surfaced explicitly in
+            # `rogue_counts` instead of silently inflating `counts`.
+            if a in choice_set:
+                counts[a] += 1
+            else:
+                rogue_counts[a] = rogue_counts.get(a, 0) + 1
         filaments.append({
             "id": fid,
             "name": f.get("name") or "",
@@ -218,6 +228,7 @@ def api_filament_attributes_report():
         "choices": choices,
         "filaments": filaments,
         "counts": counts,
+        "rogue_counts": rogue_counts,
     })
 
 
@@ -287,8 +298,14 @@ def api_filament_attributes_bulk_set():
         "INFO" if not errors else "WARNING",
         "00ccff" if not errors else "ffaa00",
     )
+    # 29.A3 — reflect per-id failure in the top-level result. `success` is True
+    # only when at least one id was actually processed (updated, or already
+    # correct); an all-errored call (updated == 0 and unchanged == 0) now
+    # reports success:false so a caller reading only `success` can't mistake a
+    # total failure for a win. Partial success (>=1 processed) stays True with
+    # the per-id detail in errors[].
     return jsonify({
-        "success": True,
+        "success": updated > 0 or unchanged > 0,
         "updated": updated,
         "unchanged": unchanged,
         "errors": errors,
@@ -320,10 +337,22 @@ def api_filament_attributes_remove_choice():
 
     Safety: counts usage across all filaments first. If usage > 0 and
     `force` is not truthy, refuses and returns `usage_count` so the UI
-    can prompt the user. With `force: true`, strips the choice from
-    every filament that carries it BEFORE deleting from the schema —
-    that ordering matters so a mid-operation crash doesn't leave the
-    field referencing a value still attached to records.
+    can prompt the user.
+
+    With `force: true`, runs the destructive schema migration in this
+    order (29.A2 — docstring corrected to match the shipped implementation;
+    an earlier draft claimed strip-BEFORE-delete, which is NOT what runs):
+      1. snapshot every filament's FULL extras dict (raw wire form),
+      2. DELETE the field from the schema,
+      3. POST-recreate it without the doomed choice,
+      4. restore each filament's extras with the choice filtered out of
+         filament_attributes.
+    Sending the WHOLE extras dict back on restore is what preserves
+    siblings (Spoolman's PATCH replaces the entire `extra` sub-document).
+    If the recreate POST fails the field is left MISSING and the response
+    says so (re-run setup_fields.py). A per-filament restore failure is
+    collected into `restore_failures` without aborting the remaining
+    restores.
     """
     import json as _json
     import requests as _req
@@ -461,7 +490,13 @@ def api_filament_attributes_remove_choice():
                 restored += 1
             else:
                 restore_failures.append({"id": fid, "msg": f"HTTP {pr.status_code}: {pr.text[:120]}"})
-        except _req.RequestException as e:
+        except Exception as e:
+            # 29.A4 — broadened from _req.RequestException: any OTHER exception
+            # raised mid-restore (AFTER the schema was already deleted +
+            # recreated) previously escaped as a bare HTTP 500 with some
+            # filaments unrestored and NO restore_failures report. Catch it so
+            # a partial restore stays visible in restore_failures instead of
+            # surfacing as an opaque 500 over a half-migrated schema.
             restore_failures.append({"id": fid, "msg": str(e)[:200]})
 
     level = "INFO" if not restore_failures else "WARNING"
@@ -645,7 +680,13 @@ def api_filament_attributes_sweep_unused():
                 restored += 1
             else:
                 restore_failures.append({"id": fid, "msg": f"HTTP {pr.status_code}: {pr.text[:120]}"})
-        except _req.RequestException as e:
+        except Exception as e:
+            # 29.A4 — broadened from _req.RequestException: any OTHER exception
+            # raised mid-restore (AFTER the schema was already deleted +
+            # recreated) previously escaped as a bare HTTP 500 with some
+            # filaments unrestored and NO restore_failures report. Catch it so
+            # a partial restore stays visible in restore_failures instead of
+            # surfacing as an opaque 500 over a half-migrated schema.
             restore_failures.append({"id": fid, "msg": str(e)[:200]})
 
     state.add_log_entry(

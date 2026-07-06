@@ -148,6 +148,29 @@ def test_multi_spool_display_fallbacks(monkeypatch):
     assert by_id[8]['display'] == 'Acme'
 
 
+def test_multi_spool_display_preserves_content_hyphens(monkeypatch):
+    """29.C3 FIX — the display is now built conditionally instead of
+    f"{v} - {n}".strip(" -"), so legitimate leading/trailing hyphens in a
+    vendor or name survive: 'Acme' + '-EOL-' -> 'Acme - -EOL-' (was 'Acme -
+    -EOL'), and a name-less vendor '-X-' shows '-X-' intact (was 'X')."""
+    _mock_urls(monkeypatch)
+    _fake_requests_get(monkeypatch, [
+        # fid 10: vendor + hyphen-wrapped name (count>1 to become a candidate).
+        {'id': 1, 'archived': False,
+         'filament': {'id': 10, 'name': '-EOL-', 'vendor': {'name': 'Acme'}}},
+        {'id': 2, 'archived': False,
+         'filament': {'id': 10, 'name': '-EOL-', 'vendor': {'name': 'Acme'}}},
+        # fid 11: name-less, hyphen-wrapped vendor.
+        {'id': 3, 'archived': False, 'filament': {'id': 11, 'vendor': {'name': '-X-'}}},
+        {'id': 4, 'archived': False, 'filament': {'id': 11, 'vendor': {'name': '-X-'}}},
+    ])
+
+    body = _client().get('/api/get_multi_spool_filaments').get_json()
+    by_id = {c['id']: c for c in body}
+    assert by_id[10]['display'] == 'Acme - -EOL-'
+    assert by_id[11]['display'] == '-X-'
+
+
 def test_multi_spool_spoolman_not_ok_returns_empty_list(monkeypatch):
     """A non-ok Spoolman response degrades to HTTP 200 + [] (no error status,
     no error body) — the frontend picker just shows nothing."""
@@ -384,6 +407,38 @@ def test_backfill_per_spool_failure_collected_loop_continues(monkeypatch):
     assert body['skipped'] == 0
     # Loop continued past the failure — all three spools were attempted.
     assert [c[0] for c in update_calls] == [1, 2, 3]
+
+
+def test_backfill_malformed_spool_no_id_skipped(monkeypatch):
+    """29.N2 FIX — a spool list entry with no 'id' (only reachable with
+    malformed Spoolman data) is now SKIPPED (logged) instead of issuing a
+    PATCH aimed at /spool/None. Valid spools in the same batch are still
+    updated and update_spool is never called with a None id."""
+    _mock_urls(monkeypatch)
+    mock_logger = _capture_logger(monkeypatch)
+    monkeypatch.setattr(
+        app_module.spoolman_api, 'get_filament',
+        lambda fid: {'id': 7, 'spool_weight': 250, 'vendor': None},
+    )
+    _fake_requests_get(monkeypatch, [
+        {'id': 1, 'spool_weight': 0},
+        {'spool_weight': 0},            # malformed: no 'id' → skipped
+        {'id': 3, 'spool_weight': None},
+    ])
+    update_calls = _record_update_spool(monkeypatch)
+
+    res = _client().post('/api/backfill_spool_weights/7')
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body['success'] is True
+    assert body['updated'] == 2
+    assert body['updated_ids'] == [1, 3]
+    assert body['errors'] == []
+    # update_spool was NEVER called with a None id.
+    assert [c[0] for c in update_calls] == [1, 3]
+    # The malformed entry was logged as a warning naming the missing id.
+    mock_logger.warning.assert_called_once()
+    assert 'no id' in mock_logger.warning.call_args[0][0]
 
 
 @pytest.mark.parametrize('spool_payload', [[], None])

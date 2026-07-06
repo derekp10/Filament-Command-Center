@@ -143,7 +143,10 @@
                 // 24.K — include rounded initial_weight so a correction that
                 // changes the bar's denominator (e.g. an L200 weight fix) still
                 // re-renders even if remaining happens to round the same.
-                return th.id + (th.unbound ? '!u' : '') + ':' + (it ? `${it.id}:${it.color || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
+                // 30.4 — include material so a material-only change (e.g. a
+                // material correction, or a same-color/same-weight swap) still
+                // repaints the new material line.
+                return th.id + (th.unbound ? '!u' : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
             }).join(','));
         });
         return parts.join('||');
