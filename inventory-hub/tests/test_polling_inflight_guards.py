@@ -130,6 +130,25 @@ def test_refresh_manage_view_inflight_guard():
     ), "refreshManageView: missing .catch() on get_contents fetch chain"
 
 
+def test_load_queue_inflight_guard():
+    """loadQueue (2s setInterval → /api/state/queue) is the structural twin
+    of loadBuffer (same cadence, same tiny /api/state/* local-JSON endpoint,
+    same socket-exhaustion vector) but was left OUT of the original L28 sweep.
+    Guarded 2026-07-06 after the buglist fixability triage surfaced it."""
+    src = _read("static", "js", "modules", "inv_queue.js")
+    _assert_guard(
+        src,
+        guard_var="_loadQueueInflight",
+        fn_signature_pattern=r"const\s+loadQueue\s*=",
+        label="loadQueue",
+    )
+    assert re.search(
+        r"fetch\(['\"]/api/state/queue['\"]\).*?\.catch\(",
+        src,
+        flags=re.DOTALL,
+    ), "loadQueue: missing .catch() on /api/state/queue fetch chain"
+
+
 def test_printer_status_inflight_guard_unchanged():
     """Printer Status widget already had an inflight guard before L28;
     pin it so the regression net catches anyone who removes it."""

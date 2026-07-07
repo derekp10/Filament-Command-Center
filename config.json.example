@@ -3,7 +3,6 @@
     "server_ip": "192.168.1.100",
     "SCRAPER_API_KEY": "",
     "spoolman_port": 7912,
-    "filabridge_port": 5000,
     "sync_delay": 0.5,
     
     "comment_paths": "--- PATHS & BACKUPS ---",
@@ -27,7 +26,5 @@
     "dryer_slots": [],
 
     "comment_pathfil": "--- MID-PRINT SWAP DEDUCT (22.3b): grams between the runout sensor and the nozzle, pulled out (never printed) when you swap a run-out spool. Added to the run-out spool's auto-deduct so its weight matches the empty spool. 0 = off. EDIT THIS IN THE CONFIG TOOL (Behavior section), not here. Typical ~2 (Core One) / ~4 (XL); one value covers all printers for now. Advanced: a {printer_name: grams} map is also honored by the reader for a future per-printer version.",
-    "path_filament_g": 0,
-
-    "auto_recover_filabridge_errors": true
+    "path_filament_g": 0
 }

@@ -81,11 +81,9 @@ def load_config():
     defaults = {
         "server_ip": "127.0.0.1",
         "spoolman_port": 7912,
-        "filabridge_port": 5000,
         "sync_delay": 0.5,
         "printer_map": {},
         "dryer_slots": [],
-        "auto_recover_filabridge_errors": True,
         # FilaBridge Phase-2 cutover: when True, FCC deducts filament on FINISHED
         # prints (the slicer footer) instead of FilaBridge. Default False so the
         # code ships DARK — flip it the same moment the FilaBridge container is
@@ -148,7 +146,7 @@ def load_config():
             elif hasattr(state, 'logger'):
                 state.logger.critical(
                     f"config.json unreadable ({e}) and no usable backup — running on DEFAULTS; "
-                    "Spoolman/FilaBridge hosts may be wrong until config.json is repaired.")
+                    "the Spoolman host may be wrong until config.json is repaired.")
     else:
         if hasattr(state, 'logger'):
             state.logger.warning(f"Config file not found at {config_file}")
@@ -170,12 +168,15 @@ def load_config():
 def get_api_urls():
     cfg = load_config()
     server_ip = cfg.get("server_ip")
-    # Spoolman and FilaBridge need NOT share a host. filabridge_ip is optional —
-    # when blank/absent it falls back to server_ip, so existing single-host
-    # configs behave identically.
-    fb_host = cfg.get("filabridge_ip") or server_ip
     sm_url = f"http://{server_ip}:{cfg.get('spoolman_port')}"
-    fb_url = f"http://{fb_host}:{cfg.get('filabridge_port')}/api"
+    # fb_url is VESTIGIAL post-FilaBridge-decommission (2026-06-13). The
+    # filabridge_ip/filabridge_port config keys were removed; the only remaining
+    # dereference is a fail-soft boot credential seed against the now-stopped
+    # FilaBridge. Kept as a well-formed placeholder purely so the (sm_url, fb_url)
+    # signature and its ~7 `_, fb_url = get_api_urls()` callers don't change.
+    # Full removal (drop fb_url + the filabridge_url params threaded through
+    # prusalink_api) is filed as its own follow-up.
+    fb_url = f"http://{server_ip}:5000/api"
     return sm_url, fb_url
 
 

@@ -34,14 +34,12 @@ SEED = {
     "server_ip": "192.168.1.29",
     "SCRAPER_API_KEY": "secret-key-123",
     "spoolman_port": 7913,
-    "filabridge_port": 5001,
     "sync_delay": 0.5,
     "spoolman_db_path": "\\\\TRUENAS\\App_Data\\Spoolman\\spoolman.db",
     "print_settings": {"mode": "browser", "csv_path": "/output/test_queue.csv"},
     "buy_more_url_template": "https://www.amazon.com/s?k={{vendor}}",
     "printer_map": {"xl-1": {"printer_name": "🦝 XL", "position": 0}},
     "dryer_slots": ["PM-DB-1", "PM-DB-2"],
-    "auto_recover_filabridge_errors": True,
 }
 
 
@@ -94,9 +92,11 @@ def test_save_preserves_unknown_keys(cfg_file):
 
 
 def test_save_bool_coerces_and_persists(cfg_file):
-    result = config_loader.save_config({"auto_recover_filabridge_errors": "false"})
+    # fcc_owns_completion_deduct is the surviving server-scope bool field
+    # (auto_recover_filabridge_errors was removed in the FilaBridge cleanup).
+    result = config_loader.save_config({"fcc_owns_completion_deduct": "true"})
     assert result["ok"] is True
-    assert _read(cfg_file)["auto_recover_filabridge_errors"] is False
+    assert _read(cfg_file)["fcc_owns_completion_deduct"] is True
 
 
 # --- Criterion #4 ---------------------------------------------------------
@@ -208,7 +208,7 @@ def test_save_fresh_install_seeds_full_defaults(tmp_path, monkeypatch):
     on_disk = _read(missing)
     assert on_disk["sync_delay"] == 1.5
     # complete file seeded from defaults, NOT a lone {"sync_delay": 1.5}
-    for k in ("server_ip", "spoolman_port", "filabridge_port", "printer_map", "dryer_slots"):
+    for k in ("server_ip", "spoolman_port", "printer_map", "dryer_slots"):
         assert k in on_disk
 
 
@@ -532,43 +532,27 @@ def test_save_connection_settings_persist(cfg_file):
     assert list(on_disk["printer_map"].keys()) == ["xl-1"]
 
 
-# --- Spoolman / FilaBridge host decoupling (optional filabridge_ip) ---
+# --- Spoolman host + vestigial fb_url (FilaBridge config keys removed post-cutover) ---
 
-def test_filabridge_ip_optional_allows_blank():
-    assert config_schema.coerce_and_validate("filabridge_ip", "") == ""
-    assert config_schema.coerce_and_validate("filabridge_ip", "   ") == ""
-    with pytest.raises(config_schema.ConfigValidationError):
-        config_schema.coerce_and_validate("filabridge_ip", "bad host!")
-    # server_ip is NOT optional — blank is rejected
+def test_server_ip_required_rejects_blank():
+    # server_ip is NOT optional — blank is rejected. (It used to be paired with
+    # an optional filabridge_ip field, removed in the FilaBridge cleanup.)
     with pytest.raises(config_schema.ConfigValidationError):
         config_schema.coerce_and_validate("server_ip", "")
 
 
-def test_get_api_urls_falls_back_to_server_ip(tmp_path, monkeypatch):
-    seed = {"server_ip": "10.0.0.1", "spoolman_port": 7000, "filabridge_port": 5050}
+def test_get_api_urls_vestigial_fb_url_derives_from_server_ip(tmp_path, monkeypatch):
+    # Post-FilaBridge-decommission: filabridge_ip / filabridge_port were removed
+    # from the schema. A config lacking them loads cleanly, sm_url is well-formed,
+    # and fb_url is a vestigial server_ip-derived placeholder — kept only so the
+    # (sm_url, fb_url) 2-tuple signature and its callers don't have to change.
+    seed = {"server_ip": "10.0.0.1", "spoolman_port": 7000}
     p = tmp_path / "config.json"
     p.write_text(json.dumps(seed), encoding="utf-8")
     monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
     sm, fb = config_loader.get_api_urls()
     assert sm == "http://10.0.0.1:7000"
-    assert fb == "http://10.0.0.1:5050/api"  # no filabridge_ip -> falls back
-
-
-def test_get_api_urls_uses_separate_filabridge_host(tmp_path, monkeypatch):
-    seed = {"server_ip": "10.0.0.1", "spoolman_port": 7000,
-            "filabridge_ip": "10.0.0.99", "filabridge_port": 5050}
-    p = tmp_path / "config.json"
-    p.write_text(json.dumps(seed), encoding="utf-8")
-    monkeypatch.setattr(config_loader, "get_config_path", lambda: (str(p), "TEST"))
-    sm, fb = config_loader.get_api_urls()
-    assert sm == "http://10.0.0.1:7000"
-    assert fb == "http://10.0.0.99:5050/api"  # FilaBridge on its own host
-
-
-def test_save_filabridge_ip_persists(cfg_file):
-    result = config_loader.save_config({"filabridge_ip": "10.0.0.99"})
-    assert result["ok"] is True
-    assert _read(cfg_file)["filabridge_ip"] == "10.0.0.99"
+    assert fb == "http://10.0.0.1:5000/api"
 
 
 # --- Phase 2 review test-gaps: empty-secret GET + no-log-leak ---
@@ -915,7 +899,7 @@ def test_import_patch_leaves_omitted_keys(client, cfg_file):
     assert on_disk["sync_delay"] == 4.0
     assert on_disk["server_ip"] == "192.168.1.29"
     assert on_disk["spoolman_port"] == 7913
-    assert on_disk["auto_recover_filabridge_errors"] is True
+    assert on_disk["dryer_slots"] == ["PM-DB-1", "PM-DB-2"]
 
 
 def test_import_apply_write_fault_is_500(client, monkeypatch):
