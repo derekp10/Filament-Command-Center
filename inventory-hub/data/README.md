@@ -23,7 +23,6 @@ guarantee than trying to remember to ignore individual files.
 |---|---|---|
 | `locations.json` | Canonical list of locations + per-slot `slot_targets` bindings | Written by `locations_db.py` whenever a location is added/edited or a Dryer Box binding changes |
 | `locations.json.pre-feedermap-migration-*.bak` | Backup taken once, before the legacy `config.json:feeder_map` → `slot_targets` migration runs on first boot | Written by `app.py` startup the first time a non-empty `feeder_map` is seen |
-| `filabridge_error_snapshots.json` | Cached Filabridge error snapshot store (ID → spool snapshot data) for the error-recovery flow | Written by the Filabridge error-recovery routines in `app.py` |
 
 None of these should ever appear in `git status` as "modified" or "new."
 The root `.gitignore` has the pattern:

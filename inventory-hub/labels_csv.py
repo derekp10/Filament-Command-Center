@@ -563,18 +563,21 @@ def api_print_location_label():
         # Sanitize
         clean_name = sanitize_label_text(loc_name)
 
-        # 4. Write Main Label
+        # 4. Write Main Label — route through _write_label_csv (same helper the
+        # batch export uses) so a held handle raises a PermissionError tagged
+        # with fcc_locked_name, and this endpoint inherits the house write
+        # semantics instead of a bare open('a').
         file_exists = os.path.exists(loc_file)
-        with open(loc_file, 'a', newline='', encoding='utf-8') as f:
-            headers = ["LocationID", "Name", "Cleaned_Name", "QR_Code"]
-            writer = csv.DictWriter(f, fieldnames=headers)
-            if not file_exists: writer.writeheader()
-            writer.writerow({
+        _write_label_csv(
+            loc_file,
+            ["LocationID", "Name", "Cleaned_Name", "QR_Code"],
+            [{
                 "LocationID": stored_id,
                 "Name": loc_name,
                 "Cleaned_Name": clean_name,
-                "QR_Code": f"LOC:{stored_id}" # [ALEX FIX] Added Prefix
-            })
+                "QR_Code": f"LOC:{stored_id}"  # [ALEX FIX] Added Prefix
+            }],
+            overwrite=False, write_header=not file_exists)
             
         # 5. Robust Slot Logic
         max_spools = 1
@@ -590,20 +593,18 @@ def api_print_location_label():
         slots_generated = False
         if max_spools > 1:
             slot_exists = os.path.exists(slot_file)
-            with open(slot_file, 'a', newline='', encoding='utf-8') as f:
+            _write_label_csv(
+                slot_file,
                 # [ALEX FIX] Added "Slot" field
-                headers = ["LocationID", "Slot", "Name", "Cleaned_Name", "QR_Code"]
-                writer = csv.DictWriter(f, fieldnames=headers)
-                if not slot_exists: writer.writeheader()
-                
-                for i in range(1, max_spools + 1):
-                    writer.writerow({
-                        "LocationID": stored_id,
-                        "Slot": f"Slot {i}",
-                        "Name": f"{loc_name} Slot {i}",
-                        "Cleaned_Name": f"{clean_name} Slot {i}",
-                        "QR_Code": f"LOC:{stored_id}:SLOT:{i}"
-                    })
+                ["LocationID", "Slot", "Name", "Cleaned_Name", "QR_Code"],
+                [{
+                    "LocationID": stored_id,
+                    "Slot": f"Slot {i}",
+                    "Name": f"{loc_name} Slot {i}",
+                    "Cleaned_Name": f"{clean_name} Slot {i}",
+                    "QR_Code": f"LOC:{stored_id}:SLOT:{i}"
+                } for i in range(1, max_spools + 1)],
+                overwrite=False, write_header=not slot_exists)
             slots_generated = True
 
         # 6. Build User Message
@@ -616,6 +617,21 @@ def api_print_location_label():
         
         return jsonify({"success": True, "msg": msg})
 
+    except PermissionError as e:
+        # Same loud-lock contract as /api/print_batch_csv: the CSV is held open
+        # by another process — almost always Brother P-touch, whose label
+        # template links the CSV as a database source. This used to fall through
+        # to the generic branch below and return a bare str(e) with no `locked`
+        # flag and no Activity Log line, so a blind-scanning user never knew the
+        # queue failed. Name the file actually locked (labels_locations.csv and
+        # slots_to_print.csv can be held independently) via fcc_locked_name.
+        locked_name = getattr(e, "fcc_locked_name", None) or os.path.basename(loc_file)
+        lock_msg = f"{locked_name} is locked — P-touch or another program has it open. Close it and re-queue."
+        try:
+            state.add_log_entry(f"❌ Location label blocked: {lock_msg}", "ERROR", "ff4444")
+        except Exception:
+            pass
+        return jsonify({"success": False, "locked": True, "msg": lock_msg})
     except Exception as e:
         state.logger.error(f"Print Label Error: {e}")
         return jsonify({"success": False, "msg": str(e)})

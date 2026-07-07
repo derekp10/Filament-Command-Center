@@ -248,15 +248,13 @@ def test_location_label_no_id_and_unknown_id_guards(client, tmp_path, monkeypatc
     assert not (tmp_path / "slots_to_print.csv").exists()
 
 
-def test_location_label_write_failure_is_quiet_no_activity_log_no_locked_flag(client, tmp_path, monkeypatch):
-    """A locked labels_locations.csv (P-touch holding the handle) surfaces as
-    a bare {'success': False, 'msg': str(e)} — NO 'locked' flag and NO
-    Activity Log entry, unlike /api/print_batch_csv's loud-lock contract.
-
-    # NOTE: pins current behavior; see suspected_bugs — this endpoint predates
-    # the 2026-06-18 loud-error work and is the known-open 'single-label
-    # endpoint' buglist item. Also pins that it uses a raw open('a') instead
-    # of _write_label_csv (no atomicity, no fcc_locked_name tagging)."""
+def test_location_label_lock_surfaces_friendly_message_and_activity_log(client, tmp_path, monkeypatch):
+    """FIXED (finding 8, single-label-endpoint buglist item): a locked
+    labels_locations.csv (P-touch holding the handle) now surfaces the same
+    loud-lock contract as /api/print_batch_csv — a friendly 'is locked' message,
+    a `locked: True` flag for the UI, and an ERROR Activity Log entry naming the
+    file. Also pins that the endpoint now routes through _write_label_csv, so the
+    PermissionError arrives tagged with fcc_locked_name (the file basename)."""
     _mount_output(monkeypatch, tmp_path)
     _set_locations(monkeypatch, LOC_ROWS)
     logs = _capture_logs(monkeypatch)
@@ -272,9 +270,12 @@ def test_location_label_write_failure_is_quiet_no_activity_log_no_locked_flag(cl
 
     body = client.post("/api/print_location_label", json={"id": "PM-DB-XL-L"}).get_json()
     assert body["success"] is False
-    assert body["msg"] == "[Errno 13] locked by test"   # raw str(e), no friendly wording
-    assert "locked" not in body                          # no lock flag for the UI
-    assert logs == []                                    # no Activity Log entry (silent failure)
+    assert body["locked"] is True                        # lock flag for the UI
+    assert "is locked" in body["msg"]                    # friendly wording
+    assert "labels_locations.csv" in body["msg"]         # fcc_locked_name → the right file
+    assert len(logs) == 1                                # loud, not silent
+    assert logs[0][1] == "ERROR"
+    assert "Location label blocked" in logs[0][0]
     assert not (tmp_path / "labels_locations.csv").exists()
 
 
