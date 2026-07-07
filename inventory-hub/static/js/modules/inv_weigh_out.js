@@ -344,10 +344,13 @@ window.saveWeighOutRow = async (idStr) => {
     const remainingAfter = Math.max(0, details.initial - r.used_weight);
     const autoToggle = document.getElementById('weigh-auto-archive');
     const autoArchive = !!(autoToggle && autoToggle.checked && remainingAfter <= 0);
-    window.saveSpoolWeight(id, null, { used_weight: r.used_weight }, autoArchive);
+    // Forward this row's resolved empty-spool-weight (the just-entered tare when
+    // the gross missing-tare prompt fired above, otherwise the spool/filament/
+    // vendor cascade value) so the post-archive record prompt is pre-filled.
+    window.saveSpoolWeight(id, null, { used_weight: r.used_weight }, autoArchive, details.empty);
 };
 
-window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts = null) => {
+window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts = null, emptyPrefill = null) => {
     let updates = updatesObj || {};
     if (newWeight !== null && newWeight !== "" && !isNaN(newWeight)) {
         updates.remaining_weight = parseFloat(newWeight);
@@ -402,11 +405,14 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 setProcessing(false);
                 showToast(`Updated Spool #${id}`, 'success');
                 // Spool just auto-archived (weight hit 0) AND its filament
-                // has no empty_spool_weight yet — prompt the user to weigh
-                // the now-empty spool. Fires after the toast so it doesn't
-                // stack on top of weigh-out success feedback.
+                // has no empty_spool_weight yet — prompt the user to record
+                // the now-empty spool's weight. Fires after the toast so it
+                // doesn't stack on top of weigh-out success feedback.
+                // `emptyPrefill` carries the tare the user already entered
+                // during a Gross weigh so this is a one-click pre-filled
+                // confirm rather than a second, redundant ask.
                 if (res && res.needs_empty_weight_prompt && res.filament_id && window.showArchiveEmptyWeightPrompt) {
-                    setTimeout(() => window.showArchiveEmptyWeightPrompt(id, res.filament_id), 400);
+                    setTimeout(() => window.showArchiveEmptyWeightPrompt(id, res.filament_id, emptyPrefill), 400);
                 }
                 
                 // Visual feedback that it's done
@@ -539,7 +545,9 @@ window.openQuickWeigh = (spoolId) => {
                     // the toggle is on AND the spool emptied).
                     const autoArchive = !!payload.auto_archive &&
                         Math.max(0, initial - payload.used_weight) <= 0;
-                    window.saveSpoolWeight(d.id, null, updates, autoArchive);
+                    // Forward the tare WeightEntry collected (Gross-mode missing-
+                    // tare prompt) so the post-archive record prompt is pre-filled.
+                    window.saveSpoolWeight(d.id, null, updates, autoArchive, payload.empty_spool_weight);
                 },
             });
         })
