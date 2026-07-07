@@ -6,7 +6,7 @@ from this schema and GET/PUT /api/config validate against the same definitions,
 so adding the Nth setting later is a one-line `Field` edit — not UI + backend +
 persistence triplicate work.
 
-Phase 2 adds the connection settings (server_ip, filabridge_ip, ports) and a
+Phase 2 adds the connection settings (server_ip, spoolman_port) and a
 masked SCRAPER_API_KEY secret. printer_map / dryer_slots remain NOT editable
 (preserved untouched by save_config's passthrough merge). See
 docs/agent_docs/tasks/L18-config-system-design.md for the phased plan.
@@ -55,7 +55,7 @@ _IP_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 SECTIONS = [
     Section("connection", "🔌 Connection",
-            "Spoolman / FilaBridge endpoints. Changes apply immediately — a wrong "
+            "Spoolman endpoint. Changes apply immediately — a wrong "
             "value drops the connection until you fix it back here."),
     Section("behavior", "⚙️ Behavior"),
     Section("client", "🖥️ This Browser", "Stored per-device in this browser, not synced."),
@@ -65,13 +65,8 @@ CONFIG_SCHEMA = [
     # Connection — defaults MUST mirror config_loader.load_config()'s defaults.
     Field("server_ip", "Spoolman host / IP", "ip", "127.0.0.1",
           section="connection", scope="server",
-          help="Host running Spoolman (and FilaBridge too, unless overridden below)."),
+          help="Host running Spoolman."),
     Field("spoolman_port", "Spoolman port", "port", 7912,
-          section="connection", scope="server", min=1, max=65535),
-    Field("filabridge_ip", "FilaBridge host / IP", "ip", "",
-          section="connection", scope="server", optional=True,
-          help="Leave blank if FilaBridge runs on the same host as Spoolman."),
-    Field("filabridge_port", "FilaBridge port", "port", 5000,
           section="connection", scope="server", min=1, max=65535),
     Field("SCRAPER_API_KEY", "Scraper API key", "secret", "",
           section="connection", scope="server",
@@ -79,9 +74,6 @@ CONFIG_SCHEMA = [
     Field("sync_delay", "Sync delay (seconds)", "float", 0.5,
           section="behavior", scope="server", min=0, max=10,
           help="Pause between Spoolman sync operations."),
-    Field("auto_recover_filabridge_errors", "Auto-recover FilaBridge errors", "bool", True,
-          section="behavior", scope="server",
-          help="Automatically retry FilaBridge writes that failed."),
     Field("fcc_owns_completion_deduct", "FCC owns completed-print deduct", "bool", False,
           section="behavior", scope="server",
           help="Phase-2 cutover: when ON, FCC deducts filament on FINISHED prints "
@@ -152,7 +144,7 @@ def coerce_and_validate(key, value):
             coerced = str(value).strip()
             if not coerced:
                 if f.optional:
-                    coerced = ""  # blank allowed (e.g. filabridge_ip -> falls back to server_ip)
+                    coerced = ""  # blank allowed for optional ip/host fields
                 else:
                     raise ConfigValidationError(f"{f.label}: required")
             elif not _IP_HOST_RE.match(coerced):

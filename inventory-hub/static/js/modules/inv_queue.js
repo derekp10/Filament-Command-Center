@@ -237,7 +237,14 @@ const persistQueue = () => {
 };
 
 let queueInitialLoad = true;
+let _loadQueueInflight = false;
 const loadQueue = () => {
+    // In-flight guard (L28): loadQueue polls /api/state/queue every 2s — the
+    // same socket-exhaustion vector as loadBuffer. A momentarily slow backend
+    // could otherwise stack ticks until Chrome hit ERR_NO_BUFFER_SPACE. Skip a
+    // tick while one is already outstanding; reset in .finally().
+    if (_loadQueueInflight) return;
+    _loadQueueInflight = true;
     const issuedAt = Date.now();
     fetch('/api/state/queue')
         .then(r => r.json())
@@ -270,7 +277,8 @@ const loadQueue = () => {
                 queueInitialLoad = false;
             }
         })
-        .catch(e => console.warn("Queue Load Failed", e));
+        .catch(e => console.warn("Queue Load Failed", e))
+        .finally(() => { _loadQueueInflight = false; });
 };
 
 document.addEventListener('inventory:queue-updated', persistQueue);

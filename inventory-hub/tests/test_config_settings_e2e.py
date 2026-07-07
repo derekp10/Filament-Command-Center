@@ -42,13 +42,15 @@ def _open_settings(page: Page, base_url: str, reset_dom_state_js: str):
 def test_settings_card_renders_all_fields(page: Page, base_url: str, reset_dom_state_js: str):
     _open_settings(page, base_url, reset_dom_state_js)
     sync = page.locator('.cfgset-input[data-key="sync_delay"]')
-    auto = page.locator('.cfgset-input[data-key="auto_recover_filabridge_errors"]')
+    # fcc_owns_completion_deduct is the surviving server bool field
+    # (auto_recover_filabridge_errors was removed in the FilaBridge cleanup).
+    deduct = page.locator('.cfgset-input[data-key="fcc_owns_completion_deduct"]')
     mode = page.locator(MODE_SEL)
     expect(sync).to_be_visible()
-    expect(auto).to_be_visible()
+    expect(deduct).to_be_visible()
     expect(mode).to_be_visible()
     assert sync.evaluate("el => el.type") == "number"
-    assert auto.evaluate("el => el.type") == "checkbox"
+    assert deduct.evaluate("el => el.type") == "checkbox"
     assert mode.evaluate("el => el.tagName.toLowerCase()") == "select"
     expect(page.locator("#cfgset-save")).to_be_visible()
 
@@ -118,9 +120,8 @@ def test_phase2_secret_and_connection_fields_render(page: Page, base_url: str, r
     assert sec.evaluate("el => el.style.webkitTextSecurity") == "disc"
     # no type=password anywhere in the card -> Chrome's credential heuristic can't fire
     assert page.locator('#config-generated-settings input[type="password"]').count() == 0
-    # ip fields render as text, port as number
+    # ip field renders as text, port as number
     assert page.locator('.cfgset-input[data-key="server_ip"]').evaluate("el => el.type") == "text"
-    assert page.locator('.cfgset-input[data-key="filabridge_ip"]').evaluate("el => el.type") == "text"
     assert page.locator('.cfgset-input[data-key="spoolman_port"]').evaluate("el => el.type") == "number"
 
 

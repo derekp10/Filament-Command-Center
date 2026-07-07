@@ -1260,7 +1260,18 @@ window.refreshFilamentSpools = () => {
 //
 // Option-B from the backlog: a dedicated modal, bigger affordance than a
 // toast, with explicit "Save" / "Later" / "Cancel" paths.
-window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId) => {
+// Post-archive "record the empty weight" prompt. Combines what used to be two
+// back-to-back asks: the Gross-weigh missing-tare prompt (which collected the
+// value but threw it away) and this filament-persist prompt (which re-asked).
+// Now `prefillWeight` carries the tare the user already entered during the
+// weigh so this is a one-click CONFIRM, not a re-entry (Derek's "one pre-filled
+// confirm" choice, 2026-07-06). Also offers to PROPAGATE the value up to the
+// vendor/brand default. Routed through window.mountOverlay (not Swal) per the
+// CLAUDE.md "weight UI through <WeightEntry>/mountOverlay, no nested Swal" rule.
+//   empty-weight storage cascade (all NATIVE Spoolman number fields):
+//     spool.spool_weight > filament.spool_weight > vendor.empty_spool_weight
+//   this prompt writes the FILAMENT default (always) + the VENDOR default (opt-in).
+window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight = null) => {
     if (!filamentId) return;
     let fil;
     try {
@@ -1273,94 +1284,145 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId) => {
     if (!fil || !fil.id) return;
 
     const vendorName = (fil.vendor && fil.vendor.name) ? fil.vendor.name : 'Unknown';
+    const vendorId = fil.vendor && fil.vendor.id;
     const material = fil.material || 'Unknown';
     const colorName = fil.name || 'Unknown';
+    // Offer the brand/vendor propagate only when we have a vendor id AND the
+    // vendor default is still unset (Number > 0 = set). This prompt only fires
+    // when filament+vendor are both blank, so a propagate write is always a
+    // fill-blank, never a silent overwrite.
+    const vendorWt = Number(fil.vendor && fil.vendor.empty_spool_weight);
+    const canPropagate = !!vendorId && !(vendorWt > 0);
 
-    const result = await Swal.fire({
-        target: document.body,
-        title: '📦 Spool archived — weigh the empty?',
-        html: `
-            <div class="text-start">
-                <p class="text-light mb-2">
-                    Spool <strong>#${spoolId}</strong> just hit 0g and was auto-archived.
-                    Its filament <strong>#${fil.id}</strong>
-                    (<em>${vendorName} ${material}, ${colorName}</em>)
-                    has no recorded <strong>empty spool weight</strong>.
-                </p>
-                <p class="text-light small mb-3">
-                    Put the now-empty spool on your scale and enter the measured weight below.
-                    The value will be saved to the filament, so every future spool of this filament
-                    inherits it automatically.
-                </p>
-                <label class="form-label text-warning small mb-1">Empty spool weight (g)</label>
-                <input type="number" step="0.1" min="0" id="fcc-archive-empty-wt"
-                    class="form-control bg-dark text-white border-warning" autocomplete="off"
-                    placeholder="e.g. 167">
-                <small class="text-secondary d-block mt-2">
-                    Tap <strong>Later</strong> to dismiss without saving — you can enter the weight
-                    any time from the Filament Details modal.
-                </small>
+    const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    // Pre-fill from the tare the user already typed during the Gross weigh, so
+    // this is a confirm rather than a re-ask. Blank when no tare was collected
+    // (e.g. a Net-mode weigh that emptied the spool).
+    const pre = Number(prefillWeight);
+    const prefillAttr = (Number.isFinite(pre) && pre > 0) ? ` value="${pre}"` : '';
+
+    const propagateRow = canPropagate ? `
+            <label style="display:flex; align-items:flex-start; gap:8px; margin-top:12px; cursor:pointer;">
+                <input type="checkbox" id="fcc-archive-propagate" class="form-check-input" style="margin-top:3px; flex:0 0 auto;">
+                <span class="small" style="color:#ddd;">Also set as <strong>${esc(vendorName)}</strong>'s default empty spool weight
+                    <span style="color:#9aa;">— every ${esc(vendorName)} spool without its own weight inherits it.</span></span>
+            </label>` : '';
+
+    const content = `
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:460px; text-align:left;">
+            <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">📦 Spool archived — record the empty weight?</div>
+            <p style="color:#ddd; margin-bottom:8px; font-size:0.95em;">
+                Spool <strong>#${esc(spoolId)}</strong> just hit 0g and was auto-archived. Its filament
+                <strong>#${esc(fil.id)}</strong> (<em>${esc(vendorName)} ${esc(material)}, ${esc(colorName)}</em>)
+                has no recorded <strong>empty spool weight</strong>.
+            </p>
+            <p style="color:#bbb; font-size:0.82em; margin-bottom:12px;">
+                Put the now-empty spool on your scale and enter the measured weight. It's saved to the
+                filament so every future spool of it inherits the value.
+            </p>
+            <label class="form-label text-warning small mb-1">Empty spool weight (g)</label>
+            <input type="number" step="0.1" min="0" id="fcc-archive-empty-wt"
+                class="form-control bg-dark text-white border-warning" autocomplete="off"
+                placeholder="e.g. 167"${prefillAttr}>
+            <div id="fcc-archive-empty-err" class="text-danger small" style="margin-top:4px;"></div>
+            ${propagateRow}
+            <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
+                <button id="fcc-archive-later" class="btn btn-secondary btn-sm">Later</button>
+                <button id="fcc-archive-save" class="btn btn-warning btn-sm" style="min-width:120px;">Save weight</button>
             </div>
-        `,
-        background: '#1e1e1e',
-        color: '#fff',
-        showCancelButton: true,
-        showDenyButton: true,
-        confirmButtonText: 'Save weight',
-        denyButtonText: 'Later',
-        cancelButtonText: 'Cancel',
-        confirmButtonColor: '#ffc107',
-        denyButtonColor: '#6c757d',
-        allowEscapeKey: true,
-        focusConfirm: false,
-        didOpen: () => {
-            const wtEl = Swal.getPopup().querySelector('#fcc-archive-empty-wt');
-            if (wtEl) {
-                wtEl.focus();
-                // L46: Swal2 doesn't auto-bind Enter to confirm when preConfirm
-                // is wired up — surface our own keydown handler so the user
-                // can submit by pressing Enter from the input.
-                wtEl.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        Swal.clickConfirm();
-                    }
-                });
-            }
-        },
-        preConfirm: () => {
-            const raw = Swal.getPopup().querySelector('#fcc-archive-empty-wt')?.value;
-            if (raw === '' || raw == null) {
-                Swal.showValidationMessage('Enter a weight or tap Later.');
-                return false;
-            }
-            const n = Number(raw);
-            if (!Number.isFinite(n) || n <= 0) {
-                Swal.showValidationMessage('Weight must be a positive number.');
-                return false;
-            }
-            return n;
-        },
+        </div>
+    `;
+
+    let handle = null;
+    let saving = false;
+    const cleanup = () => { if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; } };
+
+    handle = window.mountOverlay({
+        id: 'fcc-archive-empty-overlay',
+        content,
+        tier: 'standard',
+        initialFocus: '#fcc-archive-empty-wt',
+        onEscape: cleanup,   // Escape == "Later" (no-op); mountOverlay owns Escape
     });
+    const ov = handle.element;
+    const wtEl = ov.querySelector('#fcc-archive-empty-wt');
+    const errEl = ov.querySelector('#fcc-archive-empty-err');
+    const propEl = ov.querySelector('#fcc-archive-propagate');
+    const saveBtn = ov.querySelector('#fcc-archive-save');
+    const laterBtn = ov.querySelector('#fcc-archive-later');
 
-    if (!result.isConfirmed) return;  // Later / Cancel / Escape — all no-op
+    // Pre-filled → select it so the user can confirm with Enter or overtype.
+    if (wtEl && wtEl.value) { try { wtEl.select(); } catch (_) { /* noop */ } }
 
-    const weight = result.value;
-    try {
-        const r = await fetch('/api/update_filament', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: fil.id, data: { spool_weight: weight } }),
-        });
-        const d = await r.json();
-        if (d && d.success) {
-            showToast(`Saved ${weight}g as Filament #${fil.id} empty weight.`, 'success');
-        } else {
-            showToast(`Save failed: ${d && d.msg ? d.msg : 'unknown'}`, 'error', 7000);
+    const doSave = async () => {
+        const raw = wtEl ? wtEl.value : '';
+        const n = Number(raw);
+        if (raw === '' || raw == null || !Number.isFinite(n) || n <= 0) {
+            if (errEl) errEl.textContent = 'Enter a positive weight, or tap Later.';
+            if (wtEl) wtEl.focus();
+            return;
         }
-    } catch (e) {
-        showToast(`Save error: ${e.message || e}`, 'error', 7000);
-    }
+        if (errEl) errEl.textContent = '';
+        // Re-entrancy guard: doSave awaits the filament (+ vendor) writes, and
+        // Enter-to-confirm is the primary path here — a rapid double-Enter while
+        // the first write is in flight would otherwise fire duplicate POST/PATCH
+        // (same value, so no corruption, but duplicate writes + Activity Log
+        // lines). The disabled button gates clicks but NOT the input's Enter
+        // handler, so latch on a flag. Placed AFTER validation so a corrected
+        // retry after an invalid entry isn't blocked.
+        if (saving) return;
+        saving = true;
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.innerText = '⏳'; }
+        const propagate = !!(propEl && propEl.checked);
+
+        // 1) Persist to the FILAMENT (native spool_weight) — future spools inherit.
+        let filOk = false;
+        try {
+            const r = await fetch('/api/update_filament', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: fil.id, data: { spool_weight: n } }),
+            });
+            const d = await r.json();
+            filOk = !!(d && d.success);
+            if (!filOk) showToast(`Save failed: ${d && d.msg ? d.msg : 'unknown'}`, 'error', 7000);
+        } catch (e) {
+            showToast(`Save error: ${e.message || e}`, 'error', 7000);
+        }
+        if (!filOk) { saving = false; if (saveBtn) { saveBtn.disabled = false; saveBtn.innerText = 'Save weight'; } return; }
+
+        // 2) Optionally propagate the SAME value up to the VENDOR/brand default
+        //    (native empty_spool_weight; a partial PATCH with no `extra` key
+        //    leaves the vendor's sibling extras untouched — verified against
+        //    spoolman_api.update_vendor's merge branch).
+        if (propagate && vendorId) {
+            try {
+                const vr = await fetch(`/api/vendors/${vendorId}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ data: { empty_spool_weight: n } }),
+                });
+                const vd = await vr.json();
+                if (vr.ok && vd && vd.success) {
+                    showToast(`Saved ${n}g on Filament #${fil.id} and as ${vendorName}'s default.`, 'success');
+                } else {
+                    showToast(`Filament saved; ${vendorName} default failed: ${(vd && (vd.error || vd.msg)) || 'error'}`, 'warning', 7000);
+                }
+            } catch (e) {
+                showToast(`Filament saved; ${vendorName} default error: ${e.message || e}`, 'warning', 7000);
+            }
+        } else {
+            showToast(`Saved ${n}g as Filament #${fil.id} empty weight.`, 'success');
+        }
+        cleanup();
+    };
+
+    if (saveBtn) saveBtn.onclick = doSave;
+    if (laterBtn) laterBtn.onclick = cleanup;
+    if (wtEl) wtEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); doSave(); }
+    });
 };
 
 // --- Edit Filament / Add Filament (Bootstrap modal) ---
