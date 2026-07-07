@@ -920,7 +920,12 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
     ov.addEventListener('keydown', keyHandler, true);
     if (window.attachConfirmQRs && ov) {
         qrSession = window.attachConfirmQRs({
-            host: ov,
+            // Mount the QR row inside the dialog PANEL, not the overlay root.
+            // The root is a centered flex-ROW (overlay_mount.js), so appending
+            // the QR row there lays it out BESIDE the panel (the "QR codes on
+            // the right" bug). handle.panel makes it stack below the buttons,
+            // matching the Quick-Swap confirm.
+            host: handle.panel,
             onConfirm: proceed,
             onCancel: cleanup,
             theme: 'warning',

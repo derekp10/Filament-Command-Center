@@ -236,7 +236,8 @@ def capture_post_archive_prompt(page: Page) -> None:
     page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 7); }")
     page.wait_for_selector("#fcc-archive-empty-wt", state="visible", timeout=5_000)
     time.sleep(0.4)
-    _save(page, "05_post_archive_prompt.png", locator=".swal2-popup")
+    # 2026-07-06: prompt migrated Swal -> mountOverlay (#fcc-archive-empty-overlay).
+    _save(page, "05_post_archive_prompt.png", locator="#fcc-archive-empty-overlay")
 
 
 def capture_filabridge_manual_recovery(page: Page) -> None:

@@ -1264,7 +1264,10 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     ov.addEventListener('keydown', keyHandler, true);
     if (window.attachConfirmQRs && ov) {
         qrSession = window.attachConfirmQRs({
-            host: ov,
+            // Mount inside the dialog PANEL, not the overlay root (a centered
+            // flex-ROW), so the QR row stacks below the buttons instead of
+            // landing beside the panel ("QR codes on the right" bug).
+            host: handle.panel,
             onConfirm: proceed,
             onCancel: cleanup,
             theme: 'warning',
