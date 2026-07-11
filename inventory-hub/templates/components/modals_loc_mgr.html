@@ -84,7 +84,11 @@
                      sends an explicit null. Populated in openEdit/openAddModal. -->
                 <div class="mb-3">
                     <label class="form-label">Parent <span class="text-muted fw-normal">(where it nests)</span></label>
-                    <select class="form-select" id="edit-parent"></select>
+                    <div class="input-group">
+                        <select class="form-select" id="edit-parent"></select>
+                        <button type="button" class="btn btn-outline-info" id="edit-parent-browse"
+                            onclick="openParentTreePicker()" title="Browse the location tree to pick a parent">🌳 Browse…</button>
+                    </div>
                     <div id="edit-parent-breadcrumb" class="small text-info mt-1" style="min-height:1.2em;"></div>
                 </div>
                 <div class="mb-3">

@@ -235,6 +235,106 @@ def _verify_locations_file(expected_list):
         return False, f"{e!r} — file prefix: {snippet!r}"
 
 
+def _read_prior_locations_raw():
+    """Raw on-disk locations list WITHOUT load_locations_list's migration hooks
+    — used by the write-time orphan guard to diff an incoming save against the
+    current file. Returns [] on any read/parse problem.
+
+    An empty prior makes the guard fall back to "grandfather nothing": every
+    NORMAL save (one that doesn't itself introduce a genuine orphan) still
+    proceeds untouched, so it's fail-open for the common case. The only save it
+    could then block is one whose new_list ITSELF carries a genuine orphan —
+    which is exactly the guard's intended target — so a lost prior never blocks
+    a legitimate save, it just loses the ability to grandfather a pre-existing
+    orphan. (A truly corrupt file is caught earlier by load_locations_list,
+    which raises before any save is attempted.)"""
+    try:
+        if not os.path.exists(JSON_FILE):
+            return []
+        with open(JSON_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _canonical_parent_id(row):
+    """The stored parent_id for a row, canonicalized to None or an uppercased
+    id — mirrors how every write path persists it. A row with no `parent_id`
+    key resolves via the first-segment fallback (matches resolve_parent) so the
+    prior-vs-new diff in _find_new_orphans compares like against like."""
+    if not isinstance(row, dict):
+        return None
+    if 'parent_id' in row:
+        pid = row.get('parent_id')
+        if pid in (None, ''):
+            return None
+        s = str(pid).strip()
+        return s.upper() if s else None
+    return location_prefix(row.get('LocationID'))
+
+
+def _find_new_orphans(new_list, prior_list):
+    """Rows in `new_list` carrying an EXPLICIT parent_id that is a
+    NEWLY-INTRODUCED orphan: the parent references no row in new_list, is not a
+    PSEUDO_ROOM_PREFIXES member, and is not the row's own first segment — AND
+    the row is new or its parent_id changed vs `prior_list`. Returns a list of
+    (LocationID, parent_id) tuples (empty = clean).
+
+    The "own first segment is always acceptable" clause is the migration-safety
+    keystone: it lets Phase-1A's `XL-1 → parent XL` (and every other boot
+    migration mid-state) persist even before the XL row exists, while still
+    catching a UI-created deep row whose explicit parent points at a genuinely
+    bogus id. Rows with no `parent_id` key (the Auto-derive path) are always
+    safe and skipped. The strong per-edit validation lives at the API layer
+    (api_save_location → 400); this is the store-level backstop.
+
+    NOTE (Derek 2026-07-08): the one real-world trigger is creating a child
+    under a brand-new parent id that hasn't been created yet — that is correctly
+    refused here. The check is intentionally lenient elsewhere (an own-prefix
+    orphan floats to root harmlessly at render time) so it can never brick the
+    boot-migration convergence chain.
+    """
+    if not isinstance(new_list, list):
+        return []
+    existing_ids = {
+        str(r.get('LocationID', '')).strip().upper()
+        for r in new_list
+        if isinstance(r, dict) and str(r.get('LocationID', '')).strip()
+    }
+    prior = {}
+    for r in (prior_list or []):
+        if not isinstance(r, dict):
+            continue
+        lid = str(r.get('LocationID', '')).strip().upper()
+        if lid:
+            prior[lid] = _canonical_parent_id(r)
+    orphans = []
+    for r in new_list:
+        if not isinstance(r, dict) or 'parent_id' not in r:
+            continue  # Auto-derive path (no explicit parent_id) is always safe.
+        lid = str(r.get('LocationID', '')).strip().upper()
+        if not lid:
+            continue  # a blank-LocationID row is malformed elsewhere; don't guess.
+        pid = r.get('parent_id')
+        # Canonicalize via the SAME helper the prior map uses so the diff compares
+        # like against like — incl. whitespace-only parent_id → None (a hand-edited
+        # '  ' must read as top-level, not as an '' orphan that false-rejects the save).
+        pid_norm = _canonical_parent_id(r)
+        if pid_norm is None:
+            continue  # explicit top-level
+        if pid_norm in PSEUDO_ROOM_PREFIXES:
+            continue  # virtual room (PM/PJ/TST) — no real row by design
+        if pid_norm in existing_ids:
+            continue  # references a real row
+        if pid_norm == location_prefix(lid):
+            continue  # own first segment — legacy flat default, migration-safe
+        # A genuine orphan — flag only if newly introduced (new row OR parent changed).
+        if lid not in prior or prior.get(lid) != pid_norm:
+            orphans.append((r.get('LocationID'), pid))
+    return orphans
+
+
 def save_locations_list(new_list):
     """Saves location configurations to the JSON file via atomic write
     with a verify-after-write tripwire.
@@ -254,6 +354,27 @@ def save_locations_list(new_list):
     # instead of claiming success after a silent save failure.
     if not new_list:
         return False
+
+    # Group-34 Phase 0 — write-time orphan guard. Refuse to persist a row that
+    # was NEWLY given an explicit parent_id pointing at no real row (and not a
+    # pseudo-room prefix, and not the row's own first segment). Diffed against
+    # the prior on-disk file so pre-existing orphans + every boot-migration
+    # mid-state are grandfathered. Fail-OPEN on an internal validation error;
+    # only a positively-detected new orphan blocks. See _find_new_orphans.
+    try:
+        _orphans = _find_new_orphans(new_list, _read_prior_locations_raw())
+    except Exception as _orphan_err:
+        state.logger.warning(f"parent_id write-validation skipped (internal error): {_orphan_err}")
+        _orphans = []
+    if _orphans:
+        _detail = ", ".join(f"{lid!r}→parent {pid!r}" for lid, pid in _orphans[:10])
+        state.logger.critical(
+            f"🚫 locations.json save REFUSED — {len(_orphans)} row(s) would be newly "
+            f"orphaned (parent_id points at no existing row / pseudo-room / first "
+            f"segment): {_detail}. No changes written."
+        )
+        return False
+
     try:
         _write_locations_atomic(new_list)
     except Exception as e:
@@ -346,13 +467,22 @@ def migrate_feeder_map_if_needed(loc_list, feeder_map):
     return loc_list, changed
 
 
-def derive_parent_id_from_prefix(loc_id):
-    """Compute the legacy prefix-based parent for a LocationID.
+def location_prefix(loc_id):
+    """Return the first '-'-delimited segment of a LocationID, uppercased —
+    or None if the id is not a string or has no '-'.
 
-    Returns the uppercased substring before the first '-', or None if the
-    LocationID has no '-' (top-level rows like rooms have no parent). Used
-    by the Phase-1A migration and by resolve_parent() as a fallback when a
-    row has no explicit parent_id yet.
+    Group-34 Phase 0: the sanctioned FIRST-SEGMENT helper. This is a pure
+    STRING operation on the id itself — deliberately NOT a `parent_id` tree
+    walk. It stays load-bearing for ROWLESS ids that have no `parent_id` to
+    trust: the flat spool-location matchers (spoolman_api), the /api/locations
+    synthesizer's virtual-row parent stamp, the boot-migration idempotency
+    guards, `immediate_parent_for`'s Auto fallback, and the room-resolution
+    fallback in `_parent_of`. Keeping it FLAT is a locked safety contract — a
+    room-level clear must reach cart-rows but NOT a nested printer's live
+    toolhead (see `_build_location_match`).
+
+    MUST return None on a no-dash id (the synthesizer stamp depends on it — a
+    dash-free Spoolman-native location must not self-parent).
     """
     if not isinstance(loc_id, str):
         return None
@@ -362,11 +492,18 @@ def derive_parent_id_from_prefix(loc_id):
     return s.split('-', 1)[0].upper()
 
 
+# Group-34 Phase-5: the historical prefix-deriver name (which conflated
+# first-segment string-matching — now location_prefix() — with hierarchy
+# derivation, the footgun this cluster removed) is RETIRED. Every caller reads
+# location_prefix(); the retirement is pinned by test_prefix_derivation_is_retired
+# (which greps every backend module for the retired name + inline prefix shortcuts).
+
+
 def resolve_parent(row_or_id, loc_list=None):
     """Return the parent LocationID for a row dict or a LocationID string.
 
     Prefers an explicit `parent_id` on the row when present (Phase-1A and
-    later schema). Falls back to derive_parent_id_from_prefix() for rows
+    later schema). Falls back to location_prefix() for rows
     that haven't been migrated yet — keeps callers safe during the gradual
     consumer-migration phases. `loc_list` is accepted for forward-compat
     (Phase 3 will validate the FK against it) and ignored in Phase 1A.
@@ -378,8 +515,8 @@ def resolve_parent(row_or_id, loc_list=None):
                 return None
             s = str(explicit).strip()
             return s.upper() if s else None
-        return derive_parent_id_from_prefix(row_or_id.get('LocationID'))
-    return derive_parent_id_from_prefix(row_or_id)
+        return location_prefix(row_or_id.get('LocationID'))
+    return location_prefix(row_or_id)
 
 
 # Prefixes that are NOT real rooms — the prefix-derivation can produce them, but
@@ -424,7 +561,7 @@ def _parent_of(loc_upper, parent_map, strict=False):
         return parent_map[loc_upper]
     if strict:
         return None
-    return derive_parent_id_from_prefix(loc_upper)
+    return location_prefix(loc_upper)
 
 
 def is_descendant(child, ancestor, parent_map=None, loc_list=None, strict=False):
@@ -526,7 +663,7 @@ def migrate_parent_ids_if_needed(loc_list):
         if 'parent_id' in row:
             continue  # already migrated; respect operator-set value
         loc_id = row.get('LocationID')
-        parent = derive_parent_id_from_prefix(loc_id)
+        parent = location_prefix(loc_id)
         row['parent_id'] = parent  # may be None for top-level rows
         state.logger.info(
             f"🔄 Backfilled parent_id: {loc_id} → {parent!r}"
@@ -961,7 +1098,7 @@ def immediate_parent_for(loc_id, loc_list=None):
         for r in loc_list
         if isinstance(r, dict) and str(r.get('LocationID', '')).strip()
     }
-    return _immediate_parent_from_rows(loc_id, existing_upper) or derive_parent_id_from_prefix(loc_id)
+    return _immediate_parent_from_rows(loc_id, existing_upper) or location_prefix(loc_id)
 
 
 def _derive_printer_room(printer_row, loc_list, room_by_name):
@@ -1005,7 +1142,7 @@ def migrate_immediate_parent_ids_if_needed(loc_list):
       A resolved room with no on-disk Room row is rejected (warn, leave as-is).
     - **Idempotent + respects operator overrides:** a row is re-parented ONLY
       when its current `parent_id` still equals its OLD default
-      (`derive_parent_id_from_prefix`, i.e. the flat value the earlier
+      (`location_prefix`, i.e. the flat value the earlier
       migrations wrote) AND the new target differs. A row already at its
       immediate target, or carrying a deliberate value that differs from both,
       is left untouched. So the 2nd boot is a no-op (changed=False), and a hand
@@ -1053,9 +1190,9 @@ def migrate_immediate_parent_ids_if_needed(loc_list):
                 )
                 continue
         else:
-            target = _immediate_parent_from_rows(lid, existing_upper) or derive_parent_id_from_prefix(lid)
+            target = _immediate_parent_from_rows(lid, existing_upper) or location_prefix(lid)
 
-        old_default = derive_parent_id_from_prefix(lid)  # the flat value Phase 1A/2.5 wrote
+        old_default = location_prefix(lid)  # the flat value Phase 1A/2.5 wrote
 
         if 'parent_id' not in row:
             # Pre-1A row that never got backfilled — set the immediate target now.
@@ -1281,7 +1418,7 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
         lid = str(sh.get('LocationID', '')).strip()
         cur = sh.get('parent_id')
         cur_norm = None if cur in (None, '') else str(cur).strip().upper()
-        old_default = derive_parent_id_from_prefix(lid)
+        old_default = location_prefix(lid)
         if cur_norm in (None, old_default) and cur_norm != row_id:
             sh['parent_id'] = row_id
             changed = True

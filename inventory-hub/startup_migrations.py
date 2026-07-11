@@ -96,8 +96,10 @@ def run_startup_migrations():
                     _prune_locations_backups()
                 except Exception as _bk_err:
                     state.logger.warning(f"Could not write pre-migration backup: {_bk_err}")
-                locations_db.save_locations_list(_migrated)
-                state.logger.info("💾 Legacy feeder_map migrated into locations.json — you can safely delete feeder_map from config.json now.")
+                if locations_db.save_locations_list(_migrated):
+                    state.logger.info("💾 Legacy feeder_map migrated into locations.json — you can safely delete feeder_map from config.json now.")
+                else:
+                    state.logger.error("❌ feeder_map migration save FAILED — locations.json left unchanged; will retry next boot.")
     except Exception as _mig_err:
         state.logger.error(f"feeder_map migration skipped due to error: {_mig_err}")
 
@@ -120,8 +122,10 @@ def run_startup_migrations():
                 _prune_locations_backups()
             except Exception as _bk_err:
                 state.logger.warning(f"Could not write pre-parent-id-migration backup: {_bk_err}")
-            locations_db.save_locations_list(_phase1a_migrated)
-            state.logger.info("💾 parent_id backfilled across locations.json — Phase-1A migration complete.")
+            if locations_db.save_locations_list(_phase1a_migrated):
+                state.logger.info("💾 parent_id backfilled across locations.json — Phase-1A migration complete.")
+            else:
+                state.logger.error("❌ Phase-1A parent_id backfill save FAILED — locations.json left unchanged; will retry next boot.")
     except Exception as _p1a_err:
         state.logger.error(f"parent_id migration skipped due to error: {_p1a_err}")
 

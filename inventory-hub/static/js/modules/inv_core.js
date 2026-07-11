@@ -102,6 +102,11 @@ const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
 ));
 const escAttr = escHtml;
 window.escHtml = escHtml;
+// Export escAttr too — cross-module callers (e.g. the Group-34 parent tree
+// picker in inv_loc_mgr.js) reach it via window; without this a
+// `window.escAttr || identity` fallback silently disables attribute escaping
+// (stored-XSS via a LocationID interpolated into a data-* attribute).
+window.escAttr = escAttr;
 
 // 23.4 — Shared delete-sentinel for clearing a Spoolman `extra` field. The
 // backend merge (spoolman_api._merge_extras_with_existing) treats an OMITTED
@@ -511,6 +516,45 @@ const rgbText = (hex) => {
 };
 window.rgbText = rgbText;
 
+// Group-34 Phase 0 — the shared parent_id tree primitive. The
+// LocationID→parent_id walk was duplicated across _renderLocationsPayload (the
+// LM render), _locDescendants (cycle guard) and _locBreadcrumbChain (the Edit
+// modal breadcrumb); extract it once so those three — and the Phase-2
+// add-redesign tree picker — all read identical structure. Returns:
+//   byId       Map(UC id -> row)
+//   parentOf   Map(UC id -> UC parent id | null) — null when the parent isn't a
+//              real row (orphan floats to root); independent of shouldFloat
+//   childrenOf Map(UC parent id -> [rows]) — attached only under real-row
+//              parents, minus any row shouldFloat() pulls to root
+//   roots      [rows] with no real parent (or floated)
+// `uc` defaults to the toUpperCase() both existing call sites already use (no
+// trim, so re-wiring them is byte-identical). `shouldFloat(row)` optionally
+// forces a row to root even under a real parent (the render's pin-printers
+// mode) WITHOUT disturbing parentOf. No sorting — callers order as they need.
+window.buildLocationTree = function buildLocationTree(rows, opts) {
+    opts = opts || {};
+    const uc = opts.uc || ((v) => String(v == null ? '' : v).toUpperCase());
+    const shouldFloat = opts.shouldFloat || null;
+    const list = Array.isArray(rows) ? rows : [];
+    const byId = new Map();
+    list.forEach(r => byId.set(uc(r.LocationID), r));
+    const parentOf = new Map();
+    const childrenOf = new Map();
+    const roots = [];
+    list.forEach(r => {
+        const pid = r.parent_id != null ? uc(r.parent_id) : null;
+        const realParent = !!(pid && byId.has(pid));
+        parentOf.set(uc(r.LocationID), realParent ? pid : null);
+        if (realParent && !(shouldFloat && shouldFloat(r))) {
+            if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+            childrenOf.get(pid).push(r);
+        } else {
+            roots.push(r);
+        }
+    });
+    return { byId, parentOf, childrenOf, roots };
+};
+
 // --- DATA FETCHERS ---
 // L28 polling guard: see updateLogState for rationale. Same pattern.
 // L206: split fetch + render so the bulk-pulse dispatcher can hand
@@ -548,6 +592,23 @@ const _renderLocationsPayload = (d) => {
             const pinPrinters = _readPinPrinters();
             const upper = (v) => String(v == null ? '' : v).toUpperCase();
             const isPrinterRow = (r) => String(r.Type || '').toLowerCase() === 'printer';
+            // Group-34: the per-row "➕ Add child" affordance is offered on shelf/leaf
+            // kinds only. Suppressed on printer topology (Printer + toolhead types —
+            // their source of truth is the printer-map editor, not the parent_id tree,
+            // so a toolhead created via api_save_location would be invisible to
+            // Quick-Swap + print-deduct) and on synthetic/virtual rows.
+            const NO_ADD_CHILD_TYPES = new Set(['printer', 'tool head', 'mmu slot',
+                'no mmu direct load', 'virtual', 'virtual room', 'unknown',
+                'spoolman native', 'unassigned']);
+            const canAddChild = (r) => {
+                // The synthetic Unassigned/UNKNOWN buckets are identified by id (the
+                // UNKNOWN row can carry a non-'Unknown' Type), so guard the id too —
+                // not just the Type suppress-set.
+                const idU = String(r.LocationID || '').trim().toUpperCase();
+                if (idU === 'UNASSIGNED' || idU === 'UNKNOWN') return false;
+                const t = String(r.Type || '').trim().toLowerCase();
+                return !!t && !NO_ADD_CHILD_TYPES.has(t);
+            };
 
             // The always-pinned virtual rows live OUTSIDE the tree.
             const unassignedRow = d.find(l => upper(l.LocationID) === 'UNASSIGNED');
@@ -585,21 +646,13 @@ const _renderLocationsPayload = (d) => {
             // {divider: label}.
             const display = [];
             if (state.locSortBy === 'LocationID') {
-                const byId = new Map();
-                bodyRows.forEach(r => byId.set(upper(r.LocationID), r));
-                const childrenOf = new Map();
-                const roots = [];
-                bodyRows.forEach(r => {
-                    const pid = r.parent_id != null ? upper(r.parent_id) : null;
-                    // A row attaches to its parent UNLESS the parent isn't a real
-                    // row (orphan → root) or pin-mode floats printers to the top.
-                    const attach = pid && byId.has(pid) && !(pinPrinters && isPrinterRow(r));
-                    if (attach) {
-                        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
-                        childrenOf.get(pid).push(r);
-                    } else {
-                        roots.push(r);
-                    }
+                // A row attaches to its parent UNLESS the parent isn't a real
+                // row (orphan → root) or pin-mode floats printers to the top.
+                // buildLocationTree (inv_core Phase-0 helper) owns the walk; the
+                // pin-float is passed as shouldFloat so behavior is unchanged.
+                const { childrenOf, roots } = window.buildLocationTree(bodyRows, {
+                    uc: upper,
+                    shouldFloat: (r) => pinPrinters && isPrinterRow(r),
                 });
                 const visited = new Set();
                 const visit = (row, depth, ancestors) => {
@@ -760,6 +813,7 @@ const _renderLocationsPayload = (d) => {
                     <td class="col-status">${statusHtml}</td>
                     <td class="col-actions text-end" style="white-space: nowrap;">
                         <button class="btn btn-sm btn-outline-light me-1 btn-qr" data-id="${lidEsc}" title="Show QR">📱 QR</button>
+                        ${canAddChild(l) ? `<button class="btn btn-sm btn-outline-success me-1 btn-add-child" data-id="${lidEsc}" title="Add a child location here">➕</button>` : ''}
                         ${l.Type !== 'Virtual' ? `
                         <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>
                         <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>
