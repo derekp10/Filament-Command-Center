@@ -485,19 +485,20 @@ def test_api_machine_toolhead_slots_404_on_unknown_printer(client, tmp_locations
 # so future phases can lean on the field as a source of truth.
 # ---------------------------------------------------------------------------
 
-def test_derive_parent_id_from_prefix_basic():
-    assert locations_db.derive_parent_id_from_prefix("LR-MDB-1") == "LR"
-    assert locations_db.derive_parent_id_from_prefix("CORE1-M0") == "CORE1"
-    assert locations_db.derive_parent_id_from_prefix("PM-DB-XL-L") == "PM"
-    assert locations_db.derive_parent_id_from_prefix("LR") is None
-    assert locations_db.derive_parent_id_from_prefix("") is None
-    assert locations_db.derive_parent_id_from_prefix(None) is None
-    assert locations_db.derive_parent_id_from_prefix(123) is None
+def test_location_prefix_first_segment():
+    # Group-34 Phase-5: derive_parent_id_from_prefix retired → location_prefix.
+    assert locations_db.location_prefix("LR-MDB-1") == "LR"
+    assert locations_db.location_prefix("CORE1-M0") == "CORE1"
+    assert locations_db.location_prefix("PM-DB-XL-L") == "PM"
+    assert locations_db.location_prefix("LR") is None
+    assert locations_db.location_prefix("") is None
+    assert locations_db.location_prefix(None) is None
+    assert locations_db.location_prefix(123) is None
 
 
-def test_derive_parent_id_uppercases():
-    assert locations_db.derive_parent_id_from_prefix("lr-mdb-1") == "LR"
-    assert locations_db.derive_parent_id_from_prefix("core1-m0") == "CORE1"
+def test_location_prefix_uppercases():
+    assert locations_db.location_prefix("lr-mdb-1") == "LR"
+    assert locations_db.location_prefix("core1-m0") == "CORE1"
 
 
 def test_resolve_parent_prefers_explicit():

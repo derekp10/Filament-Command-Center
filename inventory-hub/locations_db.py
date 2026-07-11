@@ -492,14 +492,11 @@ def location_prefix(loc_id):
     return s.split('-', 1)[0].upper()
 
 
-# Back-compat alias. The historical name `derive_parent_id_from_prefix`
-# conflated first-segment string-matching (KEEP) with hierarchy derivation
-# (RETIRED). Group-34 Phase 0 renamed it to location_prefix() and re-pointed
-# every load-bearing caller onto the new name; this alias keeps the old name
-# resolving until it is formally retired in a later phase (the source canary
-# + a couple of unit references still reference it). Do NOT add new callers of
-# this name.
-derive_parent_id_from_prefix = location_prefix
+# Group-34 Phase-5: the historical prefix-deriver name (which conflated
+# first-segment string-matching — now location_prefix() — with hierarchy
+# derivation, the footgun this cluster removed) is RETIRED. Every caller reads
+# location_prefix(); the retirement is pinned by test_prefix_derivation_is_retired
+# (which greps every backend module for the retired name + inline prefix shortcuts).
 
 
 def resolve_parent(row_or_id, loc_list=None):

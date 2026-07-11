@@ -2,11 +2,11 @@
 
 Phase 0 is deliberately behavior-preserving except for ONE net-new guard:
 
-  1. `derive_parent_id_from_prefix` was renamed to `location_prefix()` (a
-     back-compat alias keeps the old name resolving until a later phase). The
-     first-segment behavior — incl. the load-bearing None-on-no-dash contract
-     the /api/locations synthesizer stamp depends on — must be preserved
-     byte-for-byte.
+  1. `derive_parent_id_from_prefix` was renamed to `location_prefix()` and the
+     old name is now RETIRED (Phase-5). The first-segment behavior — incl. the
+     load-bearing None-on-no-dash contract the /api/locations synthesizer stamp
+     depends on — is preserved byte-for-byte; the retirement + no-inline-prefix
+     grep-gate are pinned by test_prefix_derivation_is_retired.
   2. `save_locations_list` now REFUSES to persist a NEWLY-INTRODUCED orphan
      (a row given an explicit parent_id pointing at no real row / pseudo-room /
      the row's own first segment). Diffed against the prior on-disk file so
@@ -69,11 +69,33 @@ def test_location_prefix_non_string_is_none():
     assert L.location_prefix(["LR-1"]) is None
 
 
-def test_backcompat_alias_is_the_same_function():
-    """The historical name still resolves (source canary + a couple unit refs
-    ride on it) — it IS location_prefix until it's formally retired later."""
-    assert L.derive_parent_id_from_prefix is L.location_prefix
-    assert L.derive_parent_id_from_prefix("LR-MDB-1") == "LR"
+def test_prefix_derivation_is_retired():
+    """Group-34 Phase-5 grep-gate: the retired name `derive_parent_id_from_prefix`
+    is GONE from every backend module, and no inline BARE `split('-')[0]`
+    hierarchy-prefix shortcut survives. The sanctioned first-segment helper is
+    location_prefix() (which uses the two-arg `split('-', 1)[0]`); the B2 printer-
+    prefix family also uses the two-arg form and is deliberately out of scope, so
+    banning only the bare one-arg form never false-fails on it. Scans every *.py
+    at the inventory-hub root non-recursively (tests/ excluded), mirroring
+    test_no_direct_extra_patch."""
+    import glob
+    offenders_name, offenders_split = [], []
+    for path in glob.glob(os.path.join(_HUB, "*.py")):
+        with open(path, "r", encoding="utf-8") as f:
+            src = f.read()
+        base = os.path.basename(path)
+        if "derive_parent_id_from_prefix" in src:
+            offenders_name.append(base)
+        if "split('-')[0]" in src or 'split("-")[0]' in src:
+            offenders_split.append(base)
+    assert not offenders_name, (
+        f"the retired name derive_parent_id_from_prefix still appears in: "
+        f"{offenders_name} — every caller must read location_prefix()"
+    )
+    assert not offenders_split, (
+        f"an inline bare split('-')[0] hierarchy-prefix shortcut appears in: "
+        f"{offenders_split} — derive a first segment via location_prefix() instead"
+    )
 
 
 def test_location_prefix_wired_at_load_bearing_sites():
