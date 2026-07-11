@@ -102,6 +102,11 @@ const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
 ));
 const escAttr = escHtml;
 window.escHtml = escHtml;
+// Export escAttr too — cross-module callers (e.g. the Group-34 parent tree
+// picker in inv_loc_mgr.js) reach it via window; without this a
+// `window.escAttr || identity` fallback silently disables attribute escaping
+// (stored-XSS via a LocationID interpolated into a data-* attribute).
+window.escAttr = escAttr;
 
 // 23.4 — Shared delete-sentinel for clearing a Spoolman `extra` field. The
 // backend merge (spoolman_api._merge_extras_with_existing) treats an OMITTED
@@ -587,6 +592,23 @@ const _renderLocationsPayload = (d) => {
             const pinPrinters = _readPinPrinters();
             const upper = (v) => String(v == null ? '' : v).toUpperCase();
             const isPrinterRow = (r) => String(r.Type || '').toLowerCase() === 'printer';
+            // Group-34: the per-row "➕ Add child" affordance is offered on shelf/leaf
+            // kinds only. Suppressed on printer topology (Printer + toolhead types —
+            // their source of truth is the printer-map editor, not the parent_id tree,
+            // so a toolhead created via api_save_location would be invisible to
+            // Quick-Swap + print-deduct) and on synthetic/virtual rows.
+            const NO_ADD_CHILD_TYPES = new Set(['printer', 'tool head', 'mmu slot',
+                'no mmu direct load', 'virtual', 'virtual room', 'unknown',
+                'spoolman native', 'unassigned']);
+            const canAddChild = (r) => {
+                // The synthetic Unassigned/UNKNOWN buckets are identified by id (the
+                // UNKNOWN row can carry a non-'Unknown' Type), so guard the id too —
+                // not just the Type suppress-set.
+                const idU = String(r.LocationID || '').trim().toUpperCase();
+                if (idU === 'UNASSIGNED' || idU === 'UNKNOWN') return false;
+                const t = String(r.Type || '').trim().toLowerCase();
+                return !!t && !NO_ADD_CHILD_TYPES.has(t);
+            };
 
             // The always-pinned virtual rows live OUTSIDE the tree.
             const unassignedRow = d.find(l => upper(l.LocationID) === 'UNASSIGNED');
@@ -791,6 +813,7 @@ const _renderLocationsPayload = (d) => {
                     <td class="col-status">${statusHtml}</td>
                     <td class="col-actions text-end" style="white-space: nowrap;">
                         <button class="btn btn-sm btn-outline-light me-1 btn-qr" data-id="${lidEsc}" title="Show QR">📱 QR</button>
+                        ${canAddChild(l) ? `<button class="btn btn-sm btn-outline-success me-1 btn-add-child" data-id="${lidEsc}" title="Add a child location here">➕</button>` : ''}
                         ${l.Type !== 'Virtual' ? `
                         <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>
                         <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>

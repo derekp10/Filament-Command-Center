@@ -1786,28 +1786,267 @@ window.saveLocation = () => {
         });
 };
 
-window.openAddModal = () => {
+// Group-34 add-redesign (S2/S4): infer a child's Type + Max Spools from the
+// parent's kind, and auto-generate an editable LocationID from parent + type +
+// next sibling index. Both are NON-BINDING pre-fills the user always sees and
+// can override. Shelf hierarchy: Room → Wall Shelf → Row → Section (all
+// unbounded, Max 0 = no cap); only slotted Dryer Boxes get a real Max. An
+// UNKNOWN/custom parent kind falls back to Storage/1 — never structural/0 — so
+// a child is always loadable (add-redesign correction #2).
+const _inferChildDefaults = (parentType) => {
+    switch (String(parentType || '').trim().toLowerCase()) {
+        case 'room':       return { type: 'Wall Shelf', max: '0' };
+        case 'wall shelf': return { type: 'Row',        max: '0' };
+        case 'row':        return { type: 'Section',    max: '0' };
+        case 'cart':       return { type: 'Storage',    max: '0' };
+        default:           return { type: 'Storage',    max: '1' };
+    }
+};
+
+// Short segment code per type for the auto-generated id (readable + never
+// all-numeric, satisfying the NO-relabel invariant's LOC:-label contract).
+const _TYPE_ABBR = {
+    'wall shelf': 'WL', 'row': 'R', 'section': 'SC', 'cart': 'CT',
+    'dryer box': 'DB', 'storage': 'ST', 'shelf': 'SH', 'sliding drawer': 'SD',
+    'room': 'RM',
+};
+const _typeSegmentAbbr = (type) => {
+    const t = String(type || '').trim().toLowerCase();
+    if (_TYPE_ABBR[t]) return _TYPE_ABBR[t];
+    const letters = t.replace(/[^a-z]/g, '').toUpperCase();
+    return letters.slice(0, 2) || 'X';
+};
+
+// Suggest `PARENT-<ABBR><next>` — the next unused index among the parent's
+// existing children whose id starts with that segment. New-rows-only; never
+// renames an existing id.
+const _suggestChildId = (parentId, type) => {
+    const p = String(parentId || '').trim();
+    if (!p) return '';
+    const abbr = _typeSegmentAbbr(type);
+    const prefix = `${p}-${abbr}`;
+    const re = new RegExp('^' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)$', 'i');
+    let maxN = 0;
+    (state.allLocations || []).forEach(r => {
+        const m = re.exec(String(r.LocationID || '').trim());
+        if (m) maxN = Math.max(maxN, parseInt(m[1], 10) || 0);
+    });
+    return `${prefix}${maxN + 1}`;
+};
+
+// The parent LocationID for the current CREATE flow ('' = top-level / global
+// Add). Drives the auto-id regeneration when the user changes the Type.
+let _locCreateParentId = '';
+
+// Shared modal-open for CREATE (global Add + per-row Add-child). parentId
+// undefined → global blank Add (Parent = Auto); a LocationID → Add-child
+// pre-seeded under that row with inferred Type/Max + a suggested editable id.
+const _openLocModalForCreate = ({ parentId, type, max, suggestId }) => {
     modals.locMgrModal.hide();
+    _locCreateParentId = parentId ? String(parentId) : '';
     document.getElementById('edit-original-id').value = "";
-    document.getElementById('edit-id').value = "";
+    const idInput = document.getElementById('edit-id');
+    const sid = suggestId ? _suggestChildId(parentId, type) : '';
+    idInput.value = sid;
+    idInput.dataset.fccAutogen = sid;   // remember the untouched suggestion
     document.getElementById('edit-name').value = "";
-    document.getElementById('edit-max').value = "1";
-    // L271 Phase 5 — default Type to Storage (the <select> was never reset on
-    // Add, so it used to inherit the last-edited row's Type) and default the
-    // Parent selector to Auto so a fresh id derives its parent from the prefix.
-    _populateTypeSelect('Storage');
-    _populateParentSelect('', undefined);
+    document.getElementById('edit-max').value = max;
+    _populateTypeSelect(type);
+    _populateParentSelect('', parentId);   // undefined → Auto; a LocationID → pre-selected
+
+    // Regenerate the suggested id when the Type changes — but ONLY in Add-child
+    // mode with an untouched autogen id (never clobber a hand-typed id or an
+    // edit). Bound once on the persistent <select> element.
+    const typeSel = document.getElementById('edit-type');
+    if (typeSel && !typeSel._fccAutoIdBound) {
+        typeSel.addEventListener('change', () => {
+            const ii = document.getElementById('edit-id');
+            const orig = document.getElementById('edit-original-id');
+            if (!ii || !orig || orig.value) return;                       // ADD mode only
+            if (!_locCreateParentId) return;                             // Add-child only
+            if (ii.value && ii.value !== ii.dataset.fccAutogen) return;  // user edited — respect it
+            const ns = _suggestChildId(_locCreateParentId, typeSel.value);
+            ii.value = ns; ii.dataset.fccAutogen = ns;
+        });
+        typeSel._fccAutoIdBound = true;
+    }
+
     modals.locModal.show();
-    // 8.1 — auto-focus the Location ID field on Add (this is the
-    // first field the user fills in; Edit focuses Friendly Name
-    // instead since ID is rarely changed).
+    // 8.1 — auto-focus the Location ID field on Add (the first field filled;
+    // Edit focuses Friendly Name instead since ID is rarely changed).
     const locModalEl = document.getElementById('locModal');
     if (locModalEl) {
         locModalEl.addEventListener('shown.bs.modal', () => {
             const n = document.getElementById('edit-id');
-            if (n) n.focus();
+            if (n) { n.focus(); if (n.select) n.select(); }
         }, { once: true });
     }
+};
+
+window.openAddModal = () => {
+    // Global "Add Location": blank, Type Storage, Parent Auto (fresh id derives
+    // its parent from the prefix).
+    _openLocModalForCreate({ parentId: undefined, type: 'Storage', max: '1', suggestId: false });
+};
+
+// Group-34 (S1): per-row "➕ Add child" — keeps tree context; pre-seeds Parent =
+// this row + inferred Type/Max + a suggested editable id. Suppressed on
+// Printer/toolhead rows in the render (canAddChild), so this only fires on a
+// shelf/leaf parent.
+window.openAddChild = (parentId) => {
+    const parent = (state.allLocations || []).find(l => String(l.LocationID) === String(parentId));
+    if (!parent) {
+        if (typeof showToast === 'function') showToast('Parent location not found — reload and try again.', 'error', 7000);
+        return;
+    }
+    const inf = _inferChildDefaults(parent.Type);
+    _openLocModalForCreate({ parentId: parent.LocationID, type: inf.type, max: inf.max, suggestId: true });
+};
+
+// Group-34 (S3): a mountOverlay expand/collapse tree picker for the Parent
+// field, reachable via the "🌳 Browse…" button. Built over the shared
+// window.buildLocationTree helper (the same structure the LM table renders
+// from). It writes back into #edit-parent and emits the SAME save contract as
+// the <select> — picking a node sets that LocationID; "Auto"/"Top level" map to
+// the sentinels. Self + descendants + synthetic/excluded kinds are filtered out
+// (no cycles), mirroring _populateParentSelect. The overlay never FORCES a
+// concrete node onto a row whose parent isn't selectable (PM/PJ pseudo-prefix,
+// Virtual parent) — it just pre-highlights whatever the <select> already holds
+// (Auto in that case), per add-redesign correction #4.
+window.openParentTreePicker = () => {
+    const sel = document.getElementById('edit-parent');
+    if (!sel) return;
+    const locModalEl = document.getElementById('locModal');
+    const selfIdUpper = _locUC(document.getElementById('edit-original-id').value || '');
+    // Own the fetch — state.allLocations is only warm as a side-effect of the LM
+    // render; fall back to it if the fetch fails.
+    const build = (rows) => _renderParentTreePicker(
+        Array.isArray(rows) && rows.length ? rows : (state.allLocations || []),
+        selfIdUpper, sel, locModalEl);
+    fetch('/api/locations')
+        .then(r => (r.ok ? r.json() : Promise.reject()))
+        .then(build)
+        .catch(() => build(state.allLocations || []));
+};
+
+const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
+    const esc = window.escHtml || ((s) => s);
+    // escAttr === escHtml (both escape quotes); fall back to escHtml, never to
+    // identity — a raw LocationID in data-tp-val is a stored-XSS vector.
+    const escA = window.escAttr || window.escHtml || ((s) => s);
+    // Exclude self + its descendants + synthetic/excluded kinds — mirrors
+    // _populateParentSelect's option set so the picker can't offer an invalid
+    // parent. Compute descendants from the SAME rows the picker renders (NOT
+    // state.allLocations) so the cycle guard can't miss a descendant a fresh
+    // fetch surfaced but the last LM render didn't (divergent-source race).
+    const { childrenOf: _allKids } = window.buildLocationTree(rows || [], { uc: _locUC });
+    const _kidIds = (id) => (_allKids.get(id) || []).map(r => _locUC(r.LocationID));
+    const exclude = new Set();
+    if (selfIdUpper) {
+        exclude.add(selfIdUpper);
+        const stack = [..._kidIds(selfIdUpper)];
+        while (stack.length) {
+            const c = stack.pop();
+            if (exclude.has(c)) continue;
+            exclude.add(c);
+            _kidIds(c).forEach(g => { if (!exclude.has(g)) stack.push(g); });
+        }
+    }
+    const pickable = (rows || []).filter(r => {
+        const idU = _locUC(r.LocationID);
+        if (!idU || exclude.has(idU)) return false;
+        const t = String(r.Type || '');
+        if (idU === 'UNASSIGNED' || t === 'Virtual' || t === 'Virtual Room' || t === 'Unknown' || !t) return false;
+        return true;
+    });
+    // buildLocationTree over the pickable set gives childrenOf + roots (a pickable
+    // row whose parent isn't itself pickable floats to root — exactly right).
+    const { childrenOf, roots } = window.buildLocationTree(pickable, { uc: _locUC });
+
+    const cmp = (a, b) => (String(a.Name || a.LocationID).toLowerCase() < String(b.Name || b.LocationID).toLowerCase() ? -1 : 1);
+    const flat = [];
+    const visit = (row, depth) => {
+        flat.push({ row, depth });
+        (childrenOf.get(_locUC(row.LocationID)) || []).slice().sort(cmp).forEach(k => visit(k, depth + 1));
+    };
+    roots.slice().sort(cmp).forEach(r => visit(r, 0));
+
+    const panel = document.createElement('div');
+    panel.className = 'card bg-dark text-light shadow-lg';
+    panel.style.cssText = 'width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;border:1px solid #0dcaf0;';
+    let html = `
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span class="fw-bold text-info">🌳 Pick a parent location</span>
+        <button type="button" class="btn-close btn-close-white" data-tp="cancel" title="Cancel"></button>
+      </div>
+      <div class="card-body p-0" style="overflow:auto;">
+        <div class="list-group list-group-flush">
+          <button type="button" class="list-group-item list-group-item-action bg-dark text-light fcc-tp-node" data-tp-val="${escA(_LOC_PARENT_NONE)}">— Top level (no parent) —</button>
+          <button type="button" class="list-group-item list-group-item-action bg-dark text-light fcc-tp-node" data-tp-val="${escA(_LOC_PARENT_AUTO)}">— Auto (derive from ID) —</button>`;
+    flat.forEach(({ row, depth }) => {
+        const pad = 12 + depth * 20;
+        const label = row.Name ? `${row.Name} (${row.LocationID})` : row.LocationID;
+        html += `<button type="button" class="list-group-item list-group-item-action bg-dark text-light fcc-tp-node" data-tp-val="${escA(row.LocationID)}" style="padding-left:${pad}px;">`
+            + `<span class="text-muted small me-1">${depth ? '↳' : '📍'}</span>${esc(label)} `
+            + `<span class="badge bg-secondary ms-1">${esc(row.Type || '')}</span></button>`;
+    });
+    html += `</div></div>`;
+    panel.innerHTML = html;
+
+    let handle;
+    const nodes = () => Array.from(panel.querySelectorAll('.fcc-tp-node'));
+    const setActive = (idx) => {
+        const ns = nodes();
+        if (!ns.length) return;
+        idx = (idx + ns.length) % ns.length;
+        ns.forEach(n => { n.classList.remove('kb-active'); n.classList.remove('active'); });
+        ns[idx].classList.add('kb-active'); ns[idx].classList.add('active');
+        ns[idx].scrollIntoView({ block: 'nearest' });
+        try { ns[idx].focus(); } catch (_) { /* noop */ }
+    };
+    const pick = (val) => {
+        if (val === _LOC_PARENT_NONE || val === _LOC_PARENT_AUTO) {
+            sel.value = val;
+        } else {
+            const curU = _locUC(val);
+            let opt = Array.from(sel.options).find(o => o.value.toUpperCase() === curU);
+            if (!opt) { opt = document.createElement('option'); opt.value = val; opt.textContent = val; sel.appendChild(opt); }
+            sel.value = opt.value;
+        }
+        sel.dispatchEvent(new Event('change'));   // sync breadcrumb (bound in _populateParentSelect)
+        if (handle) handle.cleanup();
+    };
+
+    panel.addEventListener('click', (e) => {
+        if (e.target.closest('[data-tp="cancel"]')) { if (handle) handle.cleanup(); return; }
+        const node = e.target.closest('.fcc-tp-node');
+        if (node) pick(node.dataset.tpVal);
+    });
+    panel.addEventListener('keydown', (e) => {
+        const ns = nodes();
+        const cur = ns.findIndex(n => n.classList.contains('kb-active'));
+        if (e.key === 'ArrowDown') { e.preventDefault(); setActive(cur + 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(cur - 1); }
+        else if (e.key === 'Enter') { e.preventDefault(); const n = ns[cur] || ns[0]; if (n) pick(n.dataset.tpVal); }
+    });
+
+    handle = window.mountOverlay({
+        id: 'fcc-parent-tree-picker',
+        content: panel,
+        tier: 'standard',
+        host: locModalEl,           // auto-clean if the edit modal closes underneath
+        backdrop: true,
+        backdropDismiss: true,
+        occlude: ['#edit-parent', '#edit-type', '#edit-type-custom'],
+    });
+    // Pre-highlight the currently-selected parent (or the first node) without
+    // forcing a concrete node onto an Auto/unselectable-parent row.
+    setTimeout(() => {
+        const ns = nodes();
+        const curVal = sel.value;
+        let idx = ns.findIndex(n => n.dataset.tpVal === curVal || _locUC(n.dataset.tpVal) === _locUC(curVal));
+        setActive(idx >= 0 ? idx : 0);
+    }, 0);
 };
 
 window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, { method: 'DELETE' }).then(fetchLocations));

@@ -155,6 +155,8 @@
                 }
                 const qr = e.target.closest('.btn-qr');
                 if (qr) { window.showGlobalQrModal(qr.dataset.id); return; }
+                const addChild = e.target.closest('.btn-add-child');
+                if (addChild) { window.openAddChild(addChild.dataset.id); return; }
                 const btn = e.target.closest('.btn-manage');
                 if (btn) window.openManage(btn.dataset.id);
                 else if (e.target.closest('.btn-edit')) window.openEdit(e.target.closest('.btn-edit').dataset.id);
