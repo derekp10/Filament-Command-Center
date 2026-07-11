@@ -1295,7 +1295,7 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
     location" is a LOCATION-STRING query, deliberately distinct from the nested
     `parent_id` tree (which drives the Location-Manager render, the occupancy
     rollup, and room resolution). The child match is the FLAT first-segment
-    (`derive_parent_id_from_prefix`), NOT a transitive `is_descendant` walk —
+    (`location_prefix`), NOT a transitive `is_descendant` walk —
     this preserves the exact pre-3.5 query behavior on the now-nested tree:
       • a ROOM query reaches its cart-ROWS (their first segment IS the room) but
         NOT a nested printer's toolheads (first segment is the printer) — so a
@@ -1317,7 +1317,7 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
             match = True
     elif sloc.upper() == target_loc_upper:
         match = True
-    elif locations_db.derive_parent_id_from_prefix(sloc) == target_loc_upper:
+    elif locations_db.location_prefix(sloc) == target_loc_upper:
         match = True
 
     # 2. [ALEX FIX] Physical Source Match (The Ghost Logic)
@@ -1325,7 +1325,7 @@ def _build_location_match(s, target_loc_upper, check_unassigned=False):
     p_source_raw = str(extra.get('physical_source', '')).strip().replace('"', '')
     if not match and not check_unassigned:
         p_source = p_source_raw.upper()
-        if p_source == target_loc_upper or locations_db.derive_parent_id_from_prefix(p_source) == target_loc_upper:
+        if p_source == target_loc_upper or locations_db.location_prefix(p_source) == target_loc_upper:
             match = True
             is_ghost = True
             # Strip quotes from the slot too!
@@ -1478,8 +1478,8 @@ def get_spools_at_location_strict(loc_name):
         # pre-3.5 (e.g. a printer key reaches its toolheads; a room does NOT
         # reach a nested printer's toolheads). See _build_location_match.
         if (sloc == target or p_source == target
-                or locations_db.derive_parent_id_from_prefix(sloc) == target
-                or locations_db.derive_parent_id_from_prefix(p_source) == target):
+                or locations_db.location_prefix(sloc) == target
+                or locations_db.location_prefix(p_source) == target):
             ids.append(s['id'])
     return ids
 

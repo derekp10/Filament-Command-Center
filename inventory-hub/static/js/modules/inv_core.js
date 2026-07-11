@@ -511,6 +511,45 @@ const rgbText = (hex) => {
 };
 window.rgbText = rgbText;
 
+// Group-34 Phase 0 — the shared parent_id tree primitive. The
+// LocationID→parent_id walk was duplicated across _renderLocationsPayload (the
+// LM render), _locDescendants (cycle guard) and _locBreadcrumbChain (the Edit
+// modal breadcrumb); extract it once so those three — and the Phase-2
+// add-redesign tree picker — all read identical structure. Returns:
+//   byId       Map(UC id -> row)
+//   parentOf   Map(UC id -> UC parent id | null) — null when the parent isn't a
+//              real row (orphan floats to root); independent of shouldFloat
+//   childrenOf Map(UC parent id -> [rows]) — attached only under real-row
+//              parents, minus any row shouldFloat() pulls to root
+//   roots      [rows] with no real parent (or floated)
+// `uc` defaults to the toUpperCase() both existing call sites already use (no
+// trim, so re-wiring them is byte-identical). `shouldFloat(row)` optionally
+// forces a row to root even under a real parent (the render's pin-printers
+// mode) WITHOUT disturbing parentOf. No sorting — callers order as they need.
+window.buildLocationTree = function buildLocationTree(rows, opts) {
+    opts = opts || {};
+    const uc = opts.uc || ((v) => String(v == null ? '' : v).toUpperCase());
+    const shouldFloat = opts.shouldFloat || null;
+    const list = Array.isArray(rows) ? rows : [];
+    const byId = new Map();
+    list.forEach(r => byId.set(uc(r.LocationID), r));
+    const parentOf = new Map();
+    const childrenOf = new Map();
+    const roots = [];
+    list.forEach(r => {
+        const pid = r.parent_id != null ? uc(r.parent_id) : null;
+        const realParent = !!(pid && byId.has(pid));
+        parentOf.set(uc(r.LocationID), realParent ? pid : null);
+        if (realParent && !(shouldFloat && shouldFloat(r))) {
+            if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+            childrenOf.get(pid).push(r);
+        } else {
+            roots.push(r);
+        }
+    });
+    return { byId, parentOf, childrenOf, roots };
+};
+
 // --- DATA FETCHERS ---
 // L28 polling guard: see updateLogState for rationale. Same pattern.
 // L206: split fetch + render so the bulk-pulse dispatcher can hand
@@ -585,21 +624,13 @@ const _renderLocationsPayload = (d) => {
             // {divider: label}.
             const display = [];
             if (state.locSortBy === 'LocationID') {
-                const byId = new Map();
-                bodyRows.forEach(r => byId.set(upper(r.LocationID), r));
-                const childrenOf = new Map();
-                const roots = [];
-                bodyRows.forEach(r => {
-                    const pid = r.parent_id != null ? upper(r.parent_id) : null;
-                    // A row attaches to its parent UNLESS the parent isn't a real
-                    // row (orphan → root) or pin-mode floats printers to the top.
-                    const attach = pid && byId.has(pid) && !(pinPrinters && isPrinterRow(r));
-                    if (attach) {
-                        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
-                        childrenOf.get(pid).push(r);
-                    } else {
-                        roots.push(r);
-                    }
+                // A row attaches to its parent UNLESS the parent isn't a real
+                // row (orphan → root) or pin-mode floats printers to the top.
+                // buildLocationTree (inv_core Phase-0 helper) owns the walk; the
+                // pin-float is passed as shouldFloat so behavior is unchanged.
+                const { childrenOf, roots } = window.buildLocationTree(bodyRows, {
+                    uc: upper,
+                    shouldFloat: (r) => pinPrinters && isPrinterRow(r),
                 });
                 const visited = new Set();
                 const visit = (row, depth, ancestors) => {

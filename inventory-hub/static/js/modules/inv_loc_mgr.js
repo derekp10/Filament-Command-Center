@@ -1516,20 +1516,18 @@ const _locUC = (v) => String(v == null ? '' : v).toUpperCase();
 // Every descendant id of a row (excludes self). Cycle-guarded. Used to keep the
 // Parent <select> from offering a row's own subtree (which would make a cycle).
 const _locDescendants = (idUpper) => {
-    const childrenOf = new Map();
-    (state.allLocations || []).forEach(r => {
-        const pid = r.parent_id != null ? _locUC(r.parent_id) : null;
-        if (!pid) return;
-        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
-        childrenOf.get(pid).push(_locUC(r.LocationID));
-    });
+    // Group-34 Phase 0: walk the shared window.buildLocationTree child-map
+    // (childrenOf stores rows → map to UC ids here). Byte-identical to the old
+    // inline map for descendants of a real node.
+    const { childrenOf } = window.buildLocationTree(state.allLocations || [], { uc: _locUC });
+    const kidsOf = (id) => (childrenOf.get(id) || []).map(r => _locUC(r.LocationID));
     const out = new Set();
-    const stack = [...(childrenOf.get(idUpper) || [])];
+    const stack = [...kidsOf(idUpper)];
     while (stack.length) {
         const c = stack.pop();
         if (out.has(c)) continue;
         out.add(c);
-        (childrenOf.get(c) || []).forEach(g => { if (!out.has(g)) stack.push(g); });
+        kidsOf(c).forEach(g => { if (!out.has(g)) stack.push(g); });
     }
     return out;
 };
@@ -1551,16 +1549,17 @@ const _locAutoDeriveParent = (lid) => {
 // Root→parent friendly chain for the breadcrumb readout. Cycle-guarded.
 const _locBreadcrumbChain = (parentIdUpper) => {
     if (!parentIdUpper) return null;
-    const byId = new Map();
-    (state.allLocations || []).forEach(r => byId.set(_locUC(r.LocationID), r));
+    // Group-34 Phase 0: walk UP via the shared tree's parentOf map. parentOf
+    // returns null at the first non-real parent, so the chain terminates
+    // exactly where the old byId.has() guard did.
+    const { byId, parentOf } = window.buildLocationTree(state.allLocations || [], { uc: _locUC });
     const rows = [];
     const seen = new Set();
     let cur = parentIdUpper;
     while (cur && byId.has(cur) && !seen.has(cur)) {
         rows.push(byId.get(cur));
         seen.add(cur);
-        const r = byId.get(cur);
-        cur = r.parent_id != null ? _locUC(r.parent_id) : null;
+        cur = parentOf.get(cur) || null;
     }
     rows.reverse();
     if (!rows.length) return null;

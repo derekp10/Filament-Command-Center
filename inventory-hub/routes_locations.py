@@ -67,7 +67,7 @@ def api_get_locations():
                 # (uppercased); None for a dash-free native name. A Spoolman
                 # name can be mixed-case, so the tree grouping in inv_core.js
                 # compares parent_id vs LocationID case-insensitively.
-                "parent_id": locations_db.derive_parent_id_from_prefix(loc_name),
+                "parent_id": locations_db.location_prefix(loc_name),
             }
             
     csv_rows = list(local_map.values())
