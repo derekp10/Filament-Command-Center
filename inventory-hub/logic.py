@@ -479,7 +479,13 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # so this can't drift out of sync with the rest of the codebase again.
     is_toolhead = bool(tgt_info) and tgt_info.get('Type') in (locations_db.TOOLHEAD_TYPES | {'Printer'})
 
-    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "labels": {}, "ejections": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
+    # L298 Phase 0 — undo hardening: `extras` snapshots each moved spool's
+    # system-managed extras (container_slot / physical_source /
+    # physical_source_slot) as they were BEFORE the move, so perform_undo can
+    # restore them — not just `location` — making an undo a TRUE rollback (the
+    # spool returns to its exact slot + ghost state). Benefits single moves too;
+    # a prerequisite for a trustworthy bulk-move undo.
+    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "extras": {}, "labels": {}, "ejections": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
 
     if is_printer or is_toolhead:
         # Check if anyone is already home
@@ -503,6 +509,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         current_loc = spool_data.get('location', '').strip().upper()
         undo_record['moves'][sid] = current_loc
         current_extra: dict = dict(spool_data.get('extra') or {})
+        # L298 Phase 0: snapshot the pre-move system-managed extras (absent → ''
+        # so undo clears a key the move adds). perform_undo overlays these back.
+        undo_record['extras'][sid] = {
+            k: current_extra.get(k, '') for k in spoolman_api.SYSTEM_MANAGED_EXTRAS
+        }
         info = spoolman_api.format_spool_display(spool_data)
         # Capture the rich display label now (already computed for the forward-
         # move log) so the Undo line can name the spool + source, not just a
@@ -1025,9 +1036,25 @@ def perform_undo():
     origin = last.get('origin', '')
     sm_url, _ = config_loader.get_api_urls()
     
-    # Reassign each moved spool back to its origin location in Spoolman.
+    # Reassign each moved spool back to its origin location in Spoolman, and
+    # (L298 Phase 0) restore the pre-move system-managed extras so the undo is a
+    # TRUE rollback — the spool returns to its exact slot + ghost trail, not just
+    # its location. Read-merge-write: overlay ONLY the snapshotted keys so sibling
+    # extras survive Spoolman's whole-`extra`-replace PATCH. A legacy record
+    # without 'extras' (pre-L298) restores location only, exactly as before.
+    extras_by_sid = last.get('extras', {})
     for sid, loc in moves.items():
-        requests.patch(f"{sm_url}/api/v1/spool/{sid}", json={"location": loc})
+        payload: typing.Dict[str, typing.Any] = {"location": loc}
+        snap = extras_by_sid.get(sid)
+        if snap is None:
+            snap = extras_by_sid.get(str(sid))
+        if snap is not None:
+            cur = spoolman_api.get_spool(sid) or {}
+            merged = dict(cur.get('extra') or {})
+            for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
+                merged[k] = snap.get(k, '')
+            payload["extra"] = merged
+        requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=payload)
     # [ALEX FIX] Revert Smart Ejections
     ejections = last.get('ejections', {})
     for ejected_sid, original_loc in ejections.items():

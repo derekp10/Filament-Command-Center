@@ -25,6 +25,12 @@ def mock_state():
 @pytest.fixture
 def mock_spoolman():
     with patch('logic.spoolman_api') as mock_api:
+        # L298 Phase 0 — the undo snapshot/restore iterates
+        # spoolman_api.SYSTEM_MANAGED_EXTRAS; a bare MagicMock would iterate empty,
+        # so give it the real key set to exercise the true rollback behavior.
+        mock_api.SYSTEM_MANAGED_EXTRAS = frozenset(
+            {'container_slot', 'physical_source', 'physical_source_slot'}
+        )
         # Mock spoolman API responses
         mock_api.get_spool.return_value = {
             'id': 123,
@@ -88,7 +94,9 @@ def test_standard_undo_recording(mock_state, mock_spoolman, mock_config, mock_lo
     assert len(mock_state.UNDO_STACK) == 0
 
     # Ensure Spoolman was told to put it back
-    mock_requests.patch.assert_called_with("http://spoolman/api/v1/spool/123", json={"location": "OLD_SHELF"})
+    # L298 Phase 0: undo now restores the pre-move system-managed extras too
+    # (all '' here — the mock spool had an empty extra), via read-merge-write.
+    mock_requests.patch.assert_called_with("http://spoolman/api/v1/spool/123", json={"location": "OLD_SHELF", "extra": {"container_slot": "", "physical_source": "", "physical_source_slot": ""}})
 
     # Ensure buffer wasn't polluted
     assert len(mock_state.GLOBAL_BUFFER) == 0
@@ -117,12 +125,60 @@ def test_buffer_restoration_undo(mock_state, mock_spoolman, mock_config, mock_lo
     assert mock_state.GLOBAL_BUFFER[0]['display'] == 'Test Spool'
 
     # Ensure Spoolman was ALSO told to put it back (buffer shouldn't prevent physical rollback)
-    mock_requests.patch.assert_called_with("http://spoolman/api/v1/spool/123", json={"location": "OLD_SHELF"})
+    # L298 Phase 0: undo now restores the pre-move system-managed extras too
+    # (all '' here — the mock spool had an empty extra), via read-merge-write.
+    mock_requests.patch.assert_called_with("http://spoolman/api/v1/spool/123", json={"location": "OLD_SHELF", "extra": {"container_slot": "", "physical_source": "", "physical_source_slot": ""}})
 
 
-def test_missing_ghost_cleanup_on_undo():
-    """Test Case 3: Reverting a Ghost move properly clears the phantom physical_source"""
-    pass
+def test_missing_ghost_cleanup_on_undo(mock_state, mock_spoolman, mock_config, mock_locations, mock_requests):
+    """Test Case 3 (L298 Phase 0): reverting a move that stamped a phantom
+    physical_source properly CLEARS it on undo — while preserving sibling extras.
+    Pre-fix, perform_undo restored only `location`, leaving the ghost trail."""
+    # Post-move the spool carries a phantom physical_source/slot (the ghost) plus
+    # an unrelated sibling extra; the undo record snapshotted the PRE-move state
+    # (no ghost). Undo must read-merge-write: clear the 3 system-managed keys back
+    # to their pre-move '' and keep spool_type.
+    mock_spoolman.get_spool.return_value = {
+        'id': 123, 'location': 'NEW_SHELF',
+        'extra': {'physical_source': 'HOME-BOX', 'physical_source_slot': '2',
+                  'container_slot': '3', 'spool_type': 'PLA'},
+    }
+    mock_state.UNDO_STACK = [{
+        'target': 'NEW_SHELF', 'moves': {123: 'OLD_SHELF'},
+        'extras': {123: {'container_slot': '', 'physical_source': '', 'physical_source_slot': ''}},
+        'labels': {123: 'Test Spool'}, 'ejections': {}, 'origin': '',
+    }]
+    assert logic.perform_undo()['success'] is True
+    _, kwargs = mock_requests.patch.call_args
+    payload = kwargs['json']
+    assert payload['location'] == 'OLD_SHELF'
+    assert payload['extra']['physical_source'] == ''        # phantom ghost cleared
+    assert payload['extra']['physical_source_slot'] == ''
+    assert payload['extra']['container_slot'] == ''
+    assert payload['extra']['spool_type'] == 'PLA'          # sibling extra preserved
+
+
+def test_undo_restores_prior_slot_and_ghost(mock_state, mock_spoolman, mock_config, mock_locations, mock_requests):
+    """L298 Phase 0: a full rollback — a spool moved OUT of a bound slot returns
+    to its exact prior container_slot + physical_source on undo (not just its
+    location). This is what makes a bulk-move undo trustworthy."""
+    # Snapshot = the spool's real prior seat; current (post-move) state differs.
+    mock_spoolman.get_spool.return_value = {
+        'id': 123, 'location': 'DEST', 'extra': {'container_slot': '', 'physical_source': '', 'spool_type': 'PETG'},
+    }
+    mock_state.UNDO_STACK = [{
+        'target': 'DEST', 'moves': {123: 'PM-DB-XL-L'},
+        'extras': {123: {'container_slot': '2', 'physical_source': 'PM-DB-XL-L', 'physical_source_slot': '2'}},
+        'labels': {123: 'Test Spool'}, 'ejections': {}, 'origin': '',
+    }]
+    assert logic.perform_undo()['success'] is True
+    _, kwargs = mock_requests.patch.call_args
+    payload = kwargs['json']
+    assert payload['location'] == 'PM-DB-XL-L'
+    assert payload['extra']['container_slot'] == '2'          # exact prior slot restored
+    assert payload['extra']['physical_source'] == 'PM-DB-XL-L'
+    assert payload['extra']['physical_source_slot'] == '2'
+    assert payload['extra']['spool_type'] == 'PETG'          # sibling preserved
 
 def test_empty_toolhead_buffer_swap(mock_state, mock_spoolman, mock_config, mock_locations, mock_requests):
     """Test Case 4: Verify origin='buffer' is retained when moving into an empty toolhead slot."""

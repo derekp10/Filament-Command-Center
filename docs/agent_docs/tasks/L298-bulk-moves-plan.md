@@ -1,7 +1,33 @@
 # L298 — Bulk Moves: Phased Plan & Design Decisions
 
-> **Status:** SCOPING (2026-07-07). Research complete (6-agent workflow, all claims file:line-grounded). No code yet — this doc + the design decisions below gate the build.
+> **Status:** 🚧 IN PROGRESS — **Phase 0 (undo-hardening) DONE + merged to `dev`** (2026-07-11, `b4a26e8`). Phases 1–4 remain. See the 🚀 HANDOFF block below for exactly where to pick up.
 > **Feature:** "Scan Box A (source) and Shelf B (destination), then *move EVERYTHING from Box A to Shelf B*." (Feature-Buglist.md "🔄 Bulk Moves"; working-groups L298, UNBLOCKED 2026-06-04 once the L271 data model shipped.)
+
+## 🚀 HANDOFF — where the next chat picks up (2026-07-11)
+
+**Git / branch state:**
+- **Group 34 (location-tree cluster) is on `origin/dev` (`ed8cdd0`)** — Phase 0 spine (`location_prefix()` + write-orphan-guard + `buildLocationTree`), Phase-5 prefix-retirement, and the sub-location add-redesign S1–S4. Bulk Moves builds ON TOP of it (D2's flat source enumeration uses the `location_prefix()`-backed matchers; the self/descendant guard uses `locations_db.is_descendant`).
+- **Bulk Moves Phase 0 (undo-hardening) is committed (`b4a26e8`) + merged to `dev`.** Start the next session by branching off `dev`:
+  ```
+  git checkout dev && git pull && git checkout -b feature/bulk-moves-l298-p1
+  ```
+- Nothing is on `main`/prod yet — `dev` only (there's a pre-existing prod-pull backlog; a `dev→main` release + TrueNAS pull ships everything at once).
+
+**✅ Phase 0 DONE — what it delivered (Phase 1 relies on it):**
+- `logic.perform_smart_move` now snapshots each moved spool's pre-move system-managed extras (`container_slot`/`physical_source`/`physical_source_slot`) into `undo_record['extras'][sid]`; `logic.perform_undo` read-merge-writes them back on undo — so a bulk (or single) undo is a **TRUE rollback**: exact slot + ghost trail restored, sibling extras preserved, and a legacy record without `extras` restores location-only (back-compat). Uses `spoolman_api.SYSTEM_MANAGED_EXTRAS` (module-qualified).
+- Tests (`tests/test_logic_undo.py`): filled the stubbed `test_missing_ghost_cleanup_on_undo`; added `test_undo_restores_prior_slot_and_ghost`; the `mock_spoolman` fixture now sets the real `SYSTEM_MANAGED_EXTRAS` (a bare MagicMock iterates empty). So `perform_undo` is now trustworthy for the bulk tally D4 wanted.
+
+**⏭️ NEXT — Phase 1: backend `POST /api/bulk_move`** (full spec under "Phased build plan" below; the reuse map + risks are above). The move ENGINE already exists — `perform_smart_move(dest, [source_loc])` expands a location string to every spool there. Phase 1 is the **wrapper**, in order:
+1. **Resolve source** via `get_spools_at_location_detailed(source)` using the **fail-closed `_strict`** reader — a transient Spoolman outage must NOT make the source look empty (= a silent no-op that "succeeds" moving nothing).
+2. **Skip rules** (mirror `clear_location`, report as "left in place"): deployed **ghosts** (`is_ghost`), **slotted/loaded** toolhead feeds, **archived**, **buffered**.
+3. **Pre-flights the single-move path LACKS:** **capacity** (D3 — bounded Dryer-Box dest: movable > free slots → BLOCK the whole batch + report; unbounded Room/Shelf/Cart `Max Spools` 0/blank → no cap); **single-occupancy** dest (Tool Head/MMU/Printer → reject); **self/descendant** (`locations_db.is_descendant` → reject target==source or target a descendant of source); **source-side active-print** (single-move only guards the DEST).
+4. **One `perform_smart_move(dest, [movable_ids], confirm_active_print=...)`** — **NEVER hand-roll spool writes** (that path is the 2026-04-26/27 outage class; CLAUDE.md "Spool / Filament write surfaces"). Delegate everything.
+5. **Honest tally** `{moved, skipped:[{id,reason}], failed:[{id,err}], requires_confirm?}` — `perform_smart_move` returns a bare `{status:success}` even on partial failure, so collect a per-spool tally.
+- Home: `routes_scan.py` or `routes_locations.py`. Pin with unit tests mirroring `clear_location` + `test_auto_slot_pick`.
+
+**Then Phases 2–4** (unchanged from below): `CMD:BULKMOVE` shapeshift deck-QR + LM "Move all →" button (D1 = BOTH); `mountOverlay` preview/confirm panel; feedback + edge-hardening + full sweep. **All decisions locked:** D1 = both entries · D2 = FLAT scope · D3 = BLOCK+report · D4 = ✅ (Phase 0). Safe-default decisions are enumerated under "Design decisions".
+
+**Build/verify recipe (this repo):** pytest runs on the HOST via `"C:/Python314/python.exe" -m pytest tests/... -p no:cacheprovider -q` (Windows interpreter mismatch — see CLAUDE.md Testing); the live dev container is `http://localhost:8000`; prefix `RUN_INTEGRATION=1` to enable `@pytest.mark.integration` + live-server E2E; `.py`/`.html`/`.js` hot-reload on the dev container (FCC_DEV=1). Cadence held all of Group 34 + Phase 0: **build → adversarial review (Workflow, runtime-topology lens) → verify against the live container → full offline sweep → commit**; repeat per phase.
 
 ## TL;DR — the engine already exists
 
@@ -61,7 +87,7 @@ already works, and per-spool it does read-merge-write of `extra` (sibling-wipe-s
 
 ## Phased build plan
 
-- **Phase 0 (if D4=b) — Undo hardening.** Snapshot per-spool `extra` (≥ the 3 SYSTEM_MANAGED_EXTRAS) into the undo record; restore them in `perform_undo`. Fill the stubbed `test_missing_ghost_cleanup_on_undo` ([test_logic_undo.py:123](../../../inventory-hub/tests/test_logic_undo.py#L123)). Benefits single moves too.
+- **Phase 0 — Undo hardening. ✅ DONE 2026-07-11 (`b4a26e8`, on `dev`).** Snapshotted per-spool `extra` (the 3 SYSTEM_MANAGED_EXTRAS) into `undo_record['extras']`; restored via read-merge-write in `perform_undo` (siblings preserved, legacy records back-compat). Filled the stubbed `test_missing_ghost_cleanup_on_undo` + added `test_undo_restores_prior_slot_and_ghost`. Benefits single moves too. 11 undo + 110 blast-radius + full sweep (2150) green.
 - **Phase 1 — Backend endpoint.** `POST /api/bulk_move {source, dest, confirm_active_print?}` in `routes_scan.py` (or `routes_locations.py`): resolve source via `get_spools_at_location_detailed` (fail-closed), apply the skip rules, run the capacity + single-occupancy + self/descendant + source-active-print pre-flights, then **one `perform_smart_move(dest, [movable_ids], confirm_active_print=...)`**, and return an honest `{moved, skipped:[{id,reason}], failed:[{id,err}], requires_confirm?}` tally. Pin with unit tests (mirror `clear_location` + `test_auto_slot_pick`).
 - **Phase 2 — Scan/mode wiring (D1).** `CMD:BULKMOVE` in `resolve_scan` + `api_identify_scan` + `inv_cmd.js:processScan`; `BULK_MOVE_SESSION` in `state.py` with an idle-watchdog; `registerShapeshiftQR` deck slot (idle → source → dest → commit); a `/api/bulk_move_session` poll like `/api/audit_session`. (+ optional Location-Manager button.)
 - **Phase 3 — Preview/confirm UI.** A `mountOverlay` panel (audit-panel shape): stats header, "Will move" / "Skipped (reason)" tile sections (reuse `_renderTile`), Commit/Cancel as button+QR pairs; active-print `requires_confirm` surfaced as one batch confirm.
