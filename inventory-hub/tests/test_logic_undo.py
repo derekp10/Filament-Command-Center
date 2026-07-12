@@ -93,10 +93,13 @@ def test_standard_undo_recording(mock_state, mock_spoolman, mock_config, mock_lo
     assert undo_result['success'] == True
     assert len(mock_state.UNDO_STACK) == 0
 
-    # Ensure Spoolman was told to put it back
+    # Ensure Spoolman was told to put it back.
     # L298 Phase 0: undo now restores the pre-move system-managed extras too
-    # (all '' here — the mock spool had an empty extra), via read-merge-write.
-    mock_requests.patch.assert_called_with("http://spoolman/api/v1/spool/123", json={"location": "OLD_SHELF", "extra": {"container_slot": "", "physical_source": "", "physical_source_slot": ""}})
+    # (all '' here — the mock spool had an empty extra). The write routes through
+    # spoolman_api.update_spool (which sanitizes to wire form + read-merge-writes),
+    # NOT a raw requests.patch — pinning the 2026-07-11 wire-format fix.
+    mock_spoolman.update_spool.assert_called_with(123, {"location": "OLD_SHELF", "extra": {"container_slot": "", "physical_source": "", "physical_source_slot": ""}})
+    mock_requests.patch.assert_not_called()
 
     # Ensure buffer wasn't polluted
     assert len(mock_state.GLOBAL_BUFFER) == 0
@@ -126,8 +129,8 @@ def test_buffer_restoration_undo(mock_state, mock_spoolman, mock_config, mock_lo
 
     # Ensure Spoolman was ALSO told to put it back (buffer shouldn't prevent physical rollback)
     # L298 Phase 0: undo now restores the pre-move system-managed extras too
-    # (all '' here — the mock spool had an empty extra), via read-merge-write.
-    mock_requests.patch.assert_called_with("http://spoolman/api/v1/spool/123", json={"location": "OLD_SHELF", "extra": {"container_slot": "", "physical_source": "", "physical_source_slot": ""}})
+    # (all '' here — the mock spool had an empty extra), via update_spool.
+    mock_spoolman.update_spool.assert_called_with(123, {"location": "OLD_SHELF", "extra": {"container_slot": "", "physical_source": "", "physical_source_slot": ""}})
 
 
 def test_missing_ghost_cleanup_on_undo(mock_state, mock_spoolman, mock_config, mock_locations, mock_requests):
@@ -149,8 +152,8 @@ def test_missing_ghost_cleanup_on_undo(mock_state, mock_spoolman, mock_config, m
         'labels': {123: 'Test Spool'}, 'ejections': {}, 'origin': '',
     }]
     assert logic.perform_undo()['success'] is True
-    _, kwargs = mock_requests.patch.call_args
-    payload = kwargs['json']
+    args, _ = mock_spoolman.update_spool.call_args   # update_spool(sid, payload)
+    payload = args[1]
     assert payload['location'] == 'OLD_SHELF'
     assert payload['extra']['physical_source'] == ''        # phantom ghost cleared
     assert payload['extra']['physical_source_slot'] == ''
@@ -172,13 +175,71 @@ def test_undo_restores_prior_slot_and_ghost(mock_state, mock_spoolman, mock_conf
         'labels': {123: 'Test Spool'}, 'ejections': {}, 'origin': '',
     }]
     assert logic.perform_undo()['success'] is True
-    _, kwargs = mock_requests.patch.call_args
-    payload = kwargs['json']
+    args, _ = mock_spoolman.update_spool.call_args   # update_spool(sid, payload)
+    payload = args[1]
     assert payload['location'] == 'PM-DB-XL-L'
     assert payload['extra']['container_slot'] == '2'          # exact prior slot restored
     assert payload['extra']['physical_source'] == 'PM-DB-XL-L'
     assert payload['extra']['physical_source_slot'] == '2'
     assert payload['extra']['spool_type'] == 'PETG'          # sibling preserved
+
+def test_undo_extra_payload_reaches_spoolman_wire_sanitized(mock_state, monkeypatch):
+    """REGRESSION (caught live 2026-07-11): the undo extra-restore must reach
+    Spoolman as JSON-encoded strings. Pre-fix, perform_undo raw-PATCHed the
+    snapshot with unwrapped '' values → Spoolman 400'd the WHOLE request
+    (location included) → the undo silently no-op'd while reporting success. The
+    Phase-0 mock tests all patched the HTTP layer, so none could see the
+    wire-format rejection. This runs the REAL spoolman_api.update_spool (mocking
+    ONLY the HTTP layer) and asserts every extra value on the wire is valid JSON
+    and the unrelated sibling extra survives."""
+    import json as _json
+    import spoolman_api
+
+    state.UNDO_STACK = [{
+        'target': 'DEST', 'moves': {123: 'PM-DB-XL-L'},
+        'extras': {123: {'container_slot': '', 'physical_source': '', 'physical_source_slot': ''}},
+        'labels': {123: 'S'}, 'ejections': {}, 'origin': '',
+    }]
+
+    # The live spool carries a sibling extra (wire form) that must survive.
+    existing_spool = {'id': 123, 'location': 'DEST', 'extra': {'spool_type': '"PLA"'}}
+    captured = {}
+
+    class _GetResp:
+        ok = True
+        status_code = 200
+        def json(self):
+            return existing_spool
+
+    class _PatchResp:
+        ok = True
+        status_code = 200
+        def json(self):
+            return {'id': 123}
+
+    fake_requests = MagicMock()
+    fake_requests.get.side_effect = lambda *a, **k: _GetResp()
+    def _patch(url, json=None, *a, **k):
+        captured['json'] = json
+        return _PatchResp()
+    fake_requests.patch.side_effect = _patch
+
+    monkeypatch.setattr(spoolman_api, 'requests', fake_requests)
+    monkeypatch.setattr(spoolman_api.config_loader, 'get_api_urls', lambda: ('http://sm', 'http://fb'))
+
+    assert logic.perform_undo()['success'] is True
+
+    # A PATCH reached the wire (pre-fix, the raw logic.requests path meant
+    # spoolman_api.update_spool was never called → this stays empty).
+    assert 'json' in captured, "no PATCH was sent — undo did not write via update_spool"
+    payload = captured['json']
+    assert payload['location'] == 'PM-DB-XL-L'
+    # EVERY extra value must be valid JSON on the wire — the guard against the bug.
+    for k, v in payload['extra'].items():
+        _json.loads(v)  # raises on the pre-fix raw '' → the regression trip-wire
+    assert _json.loads(payload['extra']['container_slot']) == ''   # restored empty
+    assert _json.loads(payload['extra']['spool_type']) == 'PLA'    # sibling preserved
+
 
 def test_empty_toolhead_buffer_swap(mock_state, mock_spoolman, mock_config, mock_locations, mock_requests):
     """Test Case 4: Verify origin='buffer' is retained when moving into an empty toolhead slot."""
@@ -259,11 +320,15 @@ def test_undo_legacy_record_without_labels_renders(mock_state):
         'target': 'CR', 'moves': {77: 'LR'}, 'ejections': {},
         'summary': 'Moved 1 -> CR', 'origin': ''
     }]
-    with patch('logic.requests'), patch('logic.config_loader') as cfg:
+    # A legacy record (no 'extras') restores location only, but still routes the
+    # write through spoolman_api.update_spool — mock it so no live call is made.
+    with patch('logic.spoolman_api.update_spool', return_value={'id': 77}) as upd, \
+         patch('logic.config_loader') as cfg:
         cfg.get_api_urls.return_value = ("http://spoolman", "http://fb")
         res = logic.perform_undo()
 
     assert res['success'] is True
+    upd.assert_called_once_with(77, {"location": "LR"})   # location-only restore
     logged = [c.args[0] for c in state.add_log_entry.call_args_list if c.args]
     line = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undid:")][-1]
     assert "#77 from LR -> CR" in line

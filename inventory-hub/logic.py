@@ -1034,14 +1034,19 @@ def perform_undo():
     moves = last['moves']
     target = last.get('target')
     origin = last.get('origin', '')
-    sm_url, _ = config_loader.get_api_urls()
-    
+
     # Reassign each moved spool back to its origin location in Spoolman, and
     # (L298 Phase 0) restore the pre-move system-managed extras so the undo is a
     # TRUE rollback — the spool returns to its exact slot + ghost trail, not just
-    # its location. Read-merge-write: overlay ONLY the snapshotted keys so sibling
-    # extras survive Spoolman's whole-`extra`-replace PATCH. A legacy record
-    # without 'extras' (pre-L298) restores location only, exactly as before.
+    # its location. The write MUST go through spoolman_api.update_spool, NOT a raw
+    # requests.patch: update_spool sanitizes each extra to Spoolman's JSON-string
+    # wire form (`""` not ``) and read-merge-writes so siblings survive the
+    # whole-`extra`-replace PATCH. A raw PATCH sent the snapshotted empties
+    # unwrapped, so Spoolman 400'd the ENTIRE request (location included) and the
+    # undo silently no-op'd while still reporting success — caught live 2026-07-11
+    # (the Phase-0 mock-only tests couldn't see the wire-format rejection). It
+    # also now surfaces a rejection to the Activity Log instead of dropping it
+    # silently. A legacy record without 'extras' (pre-L298) restores location only.
     extras_by_sid = last.get('extras', {})
     for sid, loc in moves.items():
         payload: typing.Dict[str, typing.Any] = {"location": loc}
@@ -1054,11 +1059,21 @@ def perform_undo():
             for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
                 merged[k] = snap.get(k, '')
             payload["extra"] = merged
-        requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=payload)
-    # [ALEX FIX] Revert Smart Ejections
+        if not spoolman_api.update_spool(sid, payload):
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            state.add_log_entry(
+                f"❌ Undo: failed to restore Spool #{sid} → {loc or 'UNASSIGNED'}: {err}",
+                "ERROR", "ff4444")
+    # [ALEX FIX] Revert Smart Ejections — same canonical write surface so a
+    # rejection is surfaced rather than silently dropped (a location-only PATCH
+    # was always accepted, but consistency + failure-visibility matter here too).
     ejections = last.get('ejections', {})
     for ejected_sid, original_loc in ejections.items():
-        requests.patch(f"{sm_url}/api/v1/spool/{ejected_sid}", json={"location": original_loc})
+        if not spoolman_api.update_spool(ejected_sid, {"location": original_loc}):
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            state.add_log_entry(
+                f"❌ Undo: failed to restore ejected Spool #{ejected_sid} → "
+                f"{original_loc or 'UNASSIGNED'}: {err}", "ERROR", "ff4444")
             
             
     # [ALEX FIX] Restore to Buffer Memory
