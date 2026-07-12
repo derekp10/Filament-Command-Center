@@ -336,6 +336,236 @@ def api_manage_contents():
     # here; a defensive JSON error keeps Flask from returning None if it ever did.
     return jsonify({"success": False, "msg": f"Unknown action: {action}"})
 
+
+@app.route('/api/bulk_move', methods=['POST'])
+def api_bulk_move():
+    """L298 Bulk Moves — move EVERY movable spool from `source` to `dest` in ONE
+    logic.perform_smart_move call (ONE undo record), applying the pre-flights +
+    skip rules the single-move path lacks.
+
+    Body: {source, dest, confirm_active_print?}. On success returns an HONEST
+    per-spool tally: {success, source, dest, moved, moved_ids,
+    skipped:[{id,reason}], failed:[{id,err}]}. A blocking guard returns
+    {success:False, msg} (unknown/self/descendant dest · single-occupancy dest ·
+    capacity overflow) or {require_confirm, confirm_type:'active_print', ...}
+    when the SOURCE location is itself an actively-printing toolhead (single-
+    occupancy dests are rejected up front, so the dest is never a live toolhead;
+    auto_deploy is off so a bulk move never chain-deploys onto one either).
+
+    The move ENGINE is logic.perform_smart_move — this wrapper NEVER hand-rolls
+    spool writes (CLAUDE.md "Spool / Filament write surfaces"; the 2026-04-26/27
+    outage class). It only: resolves the source FAIL-CLOSED, decides who is
+    movable, guards topology/capacity/active-print, then delegates and tallies.
+    """
+    data = request.json or {}
+    source = str(data.get('source', '') or '').strip().upper()
+    dest = str(data.get('dest', '') or '').strip().upper()
+    confirm_active_print = bool(data.get('confirm_active_print', False))
+
+    if not source or not dest:
+        return jsonify({"success": False, "msg": "Both source and dest are required."})
+
+    loc_list = locations_db.load_locations_list()
+    loc_info_map = {str(r.get('LocationID', '')).upper(): r for r in loc_list}
+    printer_map = locations_db.get_active_printer_map(loc_list)
+    single_occ_types = locations_db.TOOLHEAD_TYPES | {'Printer'}
+
+    # --- Pre-flight 1: self / descendant (cheap topology reject) -------------
+    # Reject dest == source (a no-op) and dest a DESCENDANT of source (moving a
+    # location's contents into its own child — paradoxical, and on the flat
+    # enumeration would re-sweep the just-moved spools). Moving a child's
+    # contents UP to an ancestor is legitimate and allowed.
+    if dest == source:
+        return jsonify({"success": False, "msg": "Source and destination are the same location."})
+    if locations_db.is_descendant(dest, source, loc_list=loc_list):
+        return jsonify({"success": False,
+                        "msg": f"{dest} is inside {source} — can't bulk-move a location into its own descendant."})
+
+    # --- Pre-flight 2a: destination must be a KNOWN location ----------------
+    # Symmetric with the fail-closed source resolve: the source can't silently
+    # look empty, and the dest can't silently be nowhere. An unknown / stale /
+    # typo'd dest (e.g. a box deleted after the UI preselected it) would sail
+    # past every remaining guard (dest_row None → not single-occ, Max Spools 0 →
+    # no cap) and perform_smart_move's GENERIC branch would write location=<that
+    # string> verbatim to EVERY movable spool — orphaning a whole location's
+    # worth of spools into a LocationID that renders in no view, while the
+    # source-only readback tally masks it as success. Every legitimate
+    # non-single-occ dest is a row in locations.json, so this rejects nothing
+    # real. (A literal "UNASSIGNED" that IS a Virtual row is fine — update_spool
+    # coerces it to an empty location; bulk-unassign, not an orphan.)
+    dest_row = loc_info_map.get(dest)
+    if dest_row is None:
+        return jsonify({"success": False,
+                        "msg": f"{dest} is not a known location — nothing moved."})
+    dest_type = dest_row.get('Type')
+
+    # --- Pre-flight 2b: single-occupancy destination ------------------------
+    # A Tool Head / MMU Slot / No MMU Direct Load / Printer holds ONE spool; a
+    # bulk move onto it would chain-unseat every spool but the last (the
+    # auto-eject-resident branch in perform_smart_move). Reject up front.
+    if dest in printer_map or (dest_type in single_occ_types):
+        return jsonify({"success": False,
+                        "msg": f"{dest} is a single-spool location — bulk move needs a "
+                               f"Room / Shelf / Cart / Dryer Box destination."})
+
+    # --- Resolve source, FAIL-CLOSED ----------------------------------------
+    # A transient Spoolman outage must NOT make the source look empty (a silent
+    # no-op that "succeeds" moving nothing). The _strict reader RAISES; we bail.
+    try:
+        contents = spoolman_api.get_spools_at_location_detailed_strict(source)
+    except Exception as e:
+        state.logger.error(f"bulk_move: source resolve failed for {source}: {e}")
+        return jsonify({"success": False,
+                        "msg": f"Could not read {source} from Spoolman — nothing moved."})
+
+    # --- Skip rules (mirror clear_location; report each as "left in place") --
+    movable_ids = []
+    skipped = []
+    # Guard the coercion the same way the per-spool buffer check below is
+    # guarded: a poisoned buffer entry (a non-numeric id, reachable via the
+    # persisted-buffer restore) must not 500 the whole endpoint.
+    buffer_ids = set()
+    for b in (getattr(state, 'GLOBAL_BUFFER', None) or []):
+        if isinstance(b, dict):
+            try:
+                buffer_ids.add(int(b.get('id') or 0))
+            except (TypeError, ValueError):
+                pass
+    for sp in contents:
+        sid = sp.get('id')
+        if sp.get('is_ghost'):
+            skipped.append({"id": sid, "reason": "deployed to a live toolhead"})
+            continue
+        if sp.get('archived'):
+            skipped.append({"id": sid, "reason": "archived"})
+            continue
+        try:
+            if int(sid or 0) in buffer_ids:
+                skipped.append({"id": sid, "reason": "in the scan buffer"})
+                continue
+        except (TypeError, ValueError):
+            pass
+        # D2 flat-scope guard: a PRINTER source enumerates its toolhead spools as
+        # DIRECT matches (their first segment IS the printer). Those are live
+        # single-occupancy feeds — never yank them in a bulk sweep.
+        sp_loc = str(sp.get('location', '') or '').strip().upper()
+        sp_type = (loc_info_map.get(sp_loc) or {}).get('Type')
+        if sp_loc in printer_map or (sp_type in single_occ_types):
+            skipped.append({"id": sid, "reason": "loaded in a toolhead slot"})
+            continue
+        movable_ids.append(sid)
+
+    if not movable_ids:
+        return jsonify({"success": True, "source": source, "dest": dest,
+                        "moved": 0, "moved_ids": [], "skipped": skipped, "failed": [],
+                        "msg": f"Nothing to move from {source} ({len(skipped)} left in place)."})
+
+    # --- Pre-flight 3: capacity (D3) — HARD BLOCK before any confirm ---------
+    # Bounded destinations (Dryer Box, Max Spools > 0): BLOCK the whole batch if
+    # the movable count exceeds free capacity. Unbounded (Room / Shelf / Cart,
+    # Max Spools 0/blank) = no cap. Occupancy counts every current occupant
+    # (direct + ghost home) so a deployed spool still reserves its slot. The
+    # occupancy read is ALSO fail-closed: an unverifiable capacity blocks rather
+    # than risk an overflow. Ordered before the active-print confirm so we never
+    # prompt the user only to then refuse on capacity.
+    try:
+        max_spools = int(str((dest_row or {}).get('Max Spools', '0')).strip() or '0')
+    except (TypeError, ValueError):
+        max_spools = 0
+    if max_spools > 0:
+        try:
+            occupancy = len(spoolman_api.get_spools_at_location_detailed_strict(dest) or [])
+        except Exception as e:
+            state.logger.error(f"bulk_move: dest capacity read failed for {dest}: {e}")
+            return jsonify({"success": False,
+                            "msg": f"Could not verify {dest} capacity from Spoolman — nothing moved."})
+        free = max_spools - occupancy
+        if len(movable_ids) > free:
+            return jsonify({"success": False, "moved": 0, "source": source, "dest": dest,
+                            "skipped": skipped,
+                            "msg": f"{dest} has {max(free, 0)} free of {max_spools}; source has "
+                                   f"{len(movable_ids)} to move — nothing moved."})
+
+    # --- Pre-flight 4: source-side active print (confirm) -------------------
+    # The single-move path guards only the DEST. If the SOURCE location is itself
+    # an actively-printing toolhead, a bulk sweep would disrupt the print —
+    # require explicit confirmation (parity with the dest guard).
+    if not confirm_active_print:
+        ap = logic._active_print_info_for_location(source, printer_map)
+        if ap:
+            return jsonify({"success": False, "require_confirm": True,
+                            "confirm_type": "active_print", "active_print": ap,
+                            "msg": f"{ap['printer_name']} is {ap['state']} — bulk-moving from "
+                                   f"this location will disrupt the print."})
+
+    # --- The move: ONE delegated call, ONE undo record ----------------------
+    # auto_deploy=False: a bulk move RELOCATES/parks a set of spools; it must NOT
+    # chain-deploy a spool from a bound dryer-box slot onto a live toolhead the
+    # way a deliberate single scan does. Besides being surprising for a bulk op,
+    # the auto-deploy chain swallows the recursive toolhead's active-print
+    # requires_confirm and logs a false "⚡ Auto-deployed" line (a pre-existing
+    # perform_smart_move quirk) — opting out sidesteps it for this endpoint.
+    # Active-print protection for a bulk move is the SOURCE-side guard above
+    # (single-occupancy dests are already rejected, so the dest is never a live
+    # toolhead). [Decision 2026-07-11 — flag if bulk-into-box SHOULD deploy.]
+    move_result = logic.perform_smart_move(dest, list(movable_ids), origin='bulk_move',
+                                           auto_deploy=False,
+                                           confirm_active_print=confirm_active_print)
+    # Defensive backstop: surface any requires_confirm the engine returns (with
+    # auto_deploy off + single-occ dest rejected this is currently unreachable,
+    # but the contract is honored if perform_smart_move ever changes). No writes
+    # happened in that case — it bails before the per-spool loop.
+    if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
+        return jsonify({"success": False, "require_confirm": True,
+                        "confirm_type": move_result.get('confirm_type'),
+                        "active_print": move_result.get('active_print'),
+                        "msg": move_result.get('msg', 'Confirmation required.')})
+    if isinstance(move_result, dict) and move_result.get('status') == 'error':
+        return jsonify({"success": False, "source": source, "dest": dest,
+                        "msg": move_result.get('msg', 'Move failed.')})
+
+    # --- Honest tally via READBACK ------------------------------------------
+    # perform_smart_move returns a bare {status:success} even if some per-spool
+    # writes were rejected (it logs each ERROR but doesn't report which). Re-read
+    # the source: any movable id STILL present as a DIRECT (non-ghost) match
+    # never left — it failed. Best-effort: this readback is advisory; the
+    # Activity Log is authoritative for the per-spool outcome. (Per Derek 2026-07-11.)
+    moved_ids = list(movable_ids)
+    failed = []
+    try:
+        still = spoolman_api.get_spools_at_location_detailed(source) or []
+        still_direct = {str(s.get('id')) for s in still if not s.get('is_ghost')}
+        stuck = {str(m) for m in movable_ids} & still_direct
+        if stuck:
+            # The source readback matches by FLAT first-segment (location_prefix),
+            # but the descendant guard uses the parent_id TREE. When a dest's ID
+            # prefix collides with the source yet it's reparented elsewhere
+            # (Group-34 NO-FORCED-RELABELING), a correctly-moved spool now at dest
+            # still flat-matches the source and would be mis-counted as failed.
+            # Subtract anything that actually landed at dest before deciding.
+            at_dest = {str(s.get('id'))
+                       for s in (spoolman_api.get_spools_at_location_detailed(dest) or [])}
+            stuck -= at_dest
+        if stuck:
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "see Activity Log"
+            moved_ids = [m for m in movable_ids if str(m) not in stuck]
+            failed = [{"id": m, "err": err} for m in movable_ids if str(m) in stuck]
+    except Exception as e:
+        state.logger.warning(f"bulk_move: tally readback failed for {source}: {e}")
+
+    # --- Aggregate feedback -------------------------------------------------
+    # Per-spool INFO/ERROR lines already came from perform_smart_move; add one
+    # summary line. The typed toast is the frontend's job (Phase 3/4).
+    level, color = ("SUCCESS", "00ff00") if not failed else ("WARNING", "ffaa00")
+    state.add_log_entry(
+        f"🔀 Bulk move {source} → {dest}: moved {len(moved_ids)}, "
+        f"skipped {len(skipped)}, failed {len(failed)}", level, color)
+
+    return jsonify({"success": len(failed) == 0, "source": source, "dest": dest,
+                    "moved": len(moved_ids), "moved_ids": moved_ids,
+                    "skipped": skipped, "failed": failed})
+
+
 def _pm_norm(v):
     """Normalize a stored temp/URL value (a native number, or a possibly
     JSON-wrapped extra string) to a comparable trimmed string; '' if blank."""

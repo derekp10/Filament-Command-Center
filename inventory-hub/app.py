@@ -224,8 +224,8 @@ from routes_inventory import (  # noqa: E402,F401
 # cluster (incl. api_prusament_apply_weights) live in routes_scan.py.
 from routes_scan import (  # noqa: E402,F401
     api_prusament_apply_weights, _format_filament_edit_log, api_update_filament,
-    api_manage_contents, _pm_norm, _PM_TEMP_LABELS, _PM_WEIGHT_TOL, _pm_num,
-    _pm_first_pos, _compute_prusament_spool_weight_diff,
+    api_manage_contents, api_bulk_move, _pm_norm, _PM_TEMP_LABELS, _PM_WEIGHT_TOL,
+    _pm_num, _pm_first_pos, _compute_prusament_spool_weight_diff,
     _handle_prusament_url_scan, api_identify_scan, api_buffer_clear,
 )
 

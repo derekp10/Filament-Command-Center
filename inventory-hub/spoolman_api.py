@@ -1483,6 +1483,33 @@ def get_spools_at_location_strict(loc_name):
             ids.append(s['id'])
     return ids
 
+def get_spools_at_location_detailed_strict(loc_name):
+    """Like get_spools_at_location_detailed but RAISES on Spoolman transport/HTTP
+    failure instead of silently returning [] — the fail-closed source resolver for
+    the L298 bulk-move wrapper. A transient Spoolman outage must NOT make a source
+    look EMPTY: that would turn a bulk move into a silent no-op that "succeeds"
+    having moved nothing.
+
+    Marries the raising fetch of get_spools_at_location_strict
+    (`resp.raise_for_status()`) with the full match + ghost + display shaping of
+    get_spools_at_location_detailed (via `_build_location_match`), so the detailed
+    item dicts (id / slot / is_ghost / archived / location) are byte-identical to
+    the fail-OPEN reader — only the failure MODE differs. The bare `/api/v1/spool`
+    fetch (no `allow_archived=true`) mirrors get_spools_at_location_detailed's
+    `allow_archived=False`, so archived spools are omitted here too."""
+    sm_url, _ = config_loader.get_api_urls()
+    resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
+    resp.raise_for_status()  # raise on 4xx/5xx so the caller can fail closed
+    target_loc_upper = str(loc_name).upper()
+    check_unassigned = (target_loc_upper == 'UNASSIGNED')
+    found = []
+    for s in parse_inbound_data(resp.json()):
+        item = _build_location_match(s, target_loc_upper, check_unassigned)
+        if item is not None:
+            found.append(item)
+    return found
+
+
 def find_spools_by_legacy_id(legacy_id):
     """Return ALL spools attached to the filament with the given legacy
     (Spoolman `external_id`) value. Sorted: non-empty (>10g) first, then
