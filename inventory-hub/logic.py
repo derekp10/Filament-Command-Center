@@ -1,5 +1,6 @@
 import re
 import threading
+import time
 import typing
 import urllib.parse
 import requests
@@ -200,7 +201,14 @@ def resolve_scan(text):
         
         # AUDIT
         if "CMD:AUDIT" in upper_text: return {'type': 'command', 'cmd': 'audit'}
-        
+
+        # BULK MOVE (L298 Phase 2) — arms the scan-driven "move everything from
+        # A to B" session. Shares CMD:DONE (commit) / CMD:CANCEL (bail) with
+        # audit; those only mean something while a session is active. Safe
+        # anywhere in this substring-matched ladder: "CMD:BULKMOVE" contains
+        # none of the patterns above (notably not CMD:EJECT/CMD:DONE).
+        if "CMD:BULKMOVE" in upper_text: return {'type': 'command', 'cmd': 'bulkmove'}
+
         return {'type': 'error', 'msg': 'Malformed Command'}
 
     # 3. [ALEX FIX] STANDARD LOCATION SCAN (LOC: Prefix)
@@ -692,6 +700,488 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     if auto_deploy_result is not None and bound_toolhead:
         result["auto_deployed_to"] = str(bound_toolhead).upper()
     return result
+
+
+# ---------------------------------------------------------------------------
+# L298 Bulk Moves — the shared plan/execute core (Phase 1 endpoint + Phase 2
+# scan session both call these, so the two entries can never drift apart).
+# ---------------------------------------------------------------------------
+
+BULK_MOVE_SINGLE_OCC_MSG = ("{dest} is a single-spool location — bulk move needs a "
+                            "Room / Shelf / Cart / Dryer Box destination.")
+
+
+def can_start_bulk_move():
+    """(ok, msg) — may a NEW bulk-move session start right now?
+
+    Audit and bulk move are mutually exclusive scan modes sharing CMD:DONE /
+    CMD:CANCEL, and api_identify_scan checks the AUDIT gate FIRST. So a bulk
+    session armed during an audit is unreachable by any scan: every location
+    scan is swallowed by the audit while the bulk panel still says "scan the
+    SOURCE". Refuse up front instead of creating that stuck state.
+    """
+    if state.AUDIT_SESSION.get('active'):
+        return False, ("An audit is in progress — finish or cancel it before "
+                       "starting a bulk move.")
+    return True, ""
+
+
+def plan_bulk_move(source, dest, confirm_active_print=False):
+    """DRY-RUN a bulk move: resolve the source fail-closed, decide who is
+    movable, and run every pre-flight — WITHOUT writing anything.
+
+    Returns a plan dict:
+      {ok, msg, blocked_reason, require_confirm, confirm_type, active_print,
+       source, dest, movable_ids, skipped:[{id,reason}]}
+
+    `ok=False` means a guard blocked the whole batch (`blocked_reason` is the
+    machine-readable cause). `require_confirm=True` means an active print on the
+    SOURCE needs explicit opt-in. `ok=True` with an empty `movable_ids` is the
+    benign "nothing to move" case.
+
+    Shared by `/api/bulk_move` (Phase 1) and the CMD:BULKMOVE session preview
+    (Phase 2) so the preview a user confirms is computed by the SAME code that
+    guards the commit — a preview that can't disagree with the commit.
+    """
+    source = str(source or '').strip().upper()
+    dest = str(dest or '').strip().upper()
+    plan = {"ok": False, "msg": "", "blocked_reason": None, "require_confirm": False,
+            "confirm_type": None, "active_print": None, "source": source, "dest": dest,
+            "movable_ids": [], "skipped": []}
+
+    if not source or not dest:
+        plan["msg"] = "Both source and dest are required."
+        plan["blocked_reason"] = "missing_args"
+        return plan
+
+    loc_list = locations_db.load_locations_list()
+    loc_info_map = {str(r.get('LocationID', '')).upper(): r for r in loc_list}
+    printer_map = locations_db.get_active_printer_map(loc_list)
+    single_occ_types = locations_db.TOOLHEAD_TYPES | {'Printer'}
+
+    # --- Pre-flight 1: self / descendant (cheap topology reject) ------------
+    # Moving a child's contents UP to an ancestor is legitimate; moving a
+    # location into its own descendant is paradoxical (and on the flat
+    # enumeration would re-sweep the just-moved spools).
+    if dest == source:
+        plan["msg"] = "Source and destination are the same location."
+        plan["blocked_reason"] = "same"
+        return plan
+    if locations_db.is_descendant(dest, source, loc_list=loc_list):
+        plan["msg"] = f"{dest} is inside {source} — can't bulk-move a location into its own descendant."
+        plan["blocked_reason"] = "descendant"
+        return plan
+
+    # --- Pre-flight 2a: destination must be a KNOWN location ----------------
+    # Symmetric with the fail-closed source resolve: the source can't silently
+    # look empty, and the dest can't silently be nowhere. An unknown/stale/typo'd
+    # dest would sail past the remaining guards (no row → not single-occ, Max
+    # Spools 0 → no cap) and perform_smart_move's GENERIC branch would write that
+    # string as a location verbatim to EVERY movable spool, orphaning them.
+    dest_row = loc_info_map.get(dest)
+    if dest_row is None:
+        plan["msg"] = f"{dest} is not a known location — nothing moved."
+        plan["blocked_reason"] = "unknown_dest"
+        return plan
+    dest_type = dest_row.get('Type')
+
+    # --- Pre-flight 2b: single-occupancy destination ------------------------
+    # A Tool Head / MMU Slot / No MMU Direct Load / Printer holds ONE spool; a
+    # bulk move onto it would chain-unseat every spool but the last.
+    if dest in printer_map or (dest_type in single_occ_types):
+        plan["msg"] = BULK_MOVE_SINGLE_OCC_MSG.format(dest=dest)
+        plan["blocked_reason"] = "single_occupancy"
+        return plan
+
+    # --- Resolve source, FAIL-CLOSED ----------------------------------------
+    # A transient Spoolman outage must NOT make the source look empty (a silent
+    # no-op that "succeeds" moving nothing). The _strict reader RAISES; we bail.
+    try:
+        contents = spoolman_api.get_spools_at_location_detailed_strict(source)
+    except Exception as e:
+        state.logger.error(f"bulk_move: source resolve failed for {source}: {e}")
+        plan["msg"] = f"Could not read {source} from Spoolman — nothing moved."
+        plan["blocked_reason"] = "source_unreadable"
+        return plan
+
+    # --- Skip rules (mirror clear_location; report as "left in place") ------
+    buffer_ids = set()
+    for b in (getattr(state, 'GLOBAL_BUFFER', None) or []):
+        if isinstance(b, dict):
+            try:
+                buffer_ids.add(int(b.get('id') or 0))
+            except (TypeError, ValueError):
+                pass
+    movable_ids = []
+    skipped = []
+    for sp in contents:
+        sid = sp.get('id')
+        if sp.get('is_ghost'):
+            skipped.append({"id": sid, "reason": "deployed to a live toolhead"})
+            continue
+        if sp.get('archived'):
+            skipped.append({"id": sid, "reason": "archived"})
+            continue
+        try:
+            if int(sid or 0) in buffer_ids:
+                skipped.append({"id": sid, "reason": "in the scan buffer"})
+                continue
+        except (TypeError, ValueError):
+            pass
+        # D2 flat-scope guard: a PRINTER source enumerates its toolhead spools as
+        # DIRECT matches (their first segment IS the printer). Those are live
+        # single-occupancy feeds — never yank them in a bulk sweep.
+        sp_loc = str(sp.get('location', '') or '').strip().upper()
+        sp_type = (loc_info_map.get(sp_loc) or {}).get('Type')
+        if sp_loc in printer_map or (sp_type in single_occ_types):
+            skipped.append({"id": sid, "reason": "loaded in a toolhead slot"})
+            continue
+        movable_ids.append(sid)
+
+    plan["skipped"] = skipped
+    if not movable_ids:
+        plan["ok"] = True
+        plan["msg"] = f"Nothing to move from {source} ({len(skipped)} left in place)."
+        return plan
+
+    # --- Pre-flight 3: capacity (D3) — HARD BLOCK before any confirm --------
+    # Bounded destinations (Dryer Box, Max Spools > 0): BLOCK the whole batch if
+    # the movable count exceeds free capacity. Unbounded (Room/Shelf/Cart, Max
+    # Spools 0/blank) = no cap. Occupancy counts every current occupant (direct +
+    # ghost home) so a deployed spool still reserves its slot. Fail-closed too:
+    # an unverifiable capacity blocks rather than risking an overflow. Ordered
+    # before the active-print confirm so we never prompt only to then refuse.
+    try:
+        max_spools = int(str(dest_row.get('Max Spools', '0')).strip() or '0')
+    except (TypeError, ValueError):
+        max_spools = 0
+    if max_spools > 0:
+        try:
+            occupancy = len(spoolman_api.get_spools_at_location_detailed_strict(dest) or [])
+        except Exception as e:
+            state.logger.error(f"bulk_move: dest capacity read failed for {dest}: {e}")
+            plan["msg"] = f"Could not verify {dest} capacity from Spoolman — nothing moved."
+            plan["blocked_reason"] = "dest_unreadable"
+            return plan
+        free = max_spools - occupancy
+        if len(movable_ids) > free:
+            plan["msg"] = (f"{dest} has {max(free, 0)} free of {max_spools}; source has "
+                           f"{len(movable_ids)} to move — nothing moved.")
+            plan["blocked_reason"] = "capacity"
+            return plan
+
+    # --- Pre-flight 4: source-side active print (confirm) -------------------
+    # The single-move path guards only the DEST. If the SOURCE location is itself
+    # an actively-printing toolhead, a bulk sweep would disrupt the print.
+    if not confirm_active_print:
+        ap = _active_print_info_for_location(source, printer_map)
+        if ap:
+            plan["require_confirm"] = True
+            plan["confirm_type"] = "active_print"
+            plan["active_print"] = ap
+            plan["msg"] = (f"{ap['printer_name']} is {ap['state']} — bulk-moving from "
+                           f"this location will disrupt the print.")
+            return plan
+
+    plan["ok"] = True
+    plan["movable_ids"] = movable_ids
+    return plan
+
+
+def execute_bulk_move(plan, confirm_active_print=False):
+    """Commit an OK plan: ONE perform_smart_move + an honest per-spool tally.
+
+    Returns {success, source, dest, moved, moved_ids, skipped, failed} — or a
+    requires_confirm / error passthrough if the engine bails. NEVER hand-rolls a
+    spool write (CLAUDE.md "Spool / Filament write surfaces"); the engine owns
+    the read-merge-write + the single undo record.
+    """
+    source, dest = plan["source"], plan["dest"]
+    movable_ids = list(plan["movable_ids"])
+    skipped = plan["skipped"]
+
+    # auto_deploy=False: a bulk move RELOCATES/parks a set of spools; it must NOT
+    # chain-deploy a spool from a bound dryer-box slot onto a live toolhead the
+    # way a deliberate single scan does. Confirmed by Derek 2026-07-11 —
+    # auto-assigning filament to toolheads mid-bulk "would just make a mess",
+    # especially when the source holds more than the destination can take.
+    move_result = perform_smart_move(dest, movable_ids, origin='bulk_move',
+                                     auto_deploy=False,
+                                     confirm_active_print=confirm_active_print)
+    # Defensive backstop: surface any requires_confirm the engine returns (with
+    # auto_deploy off + single-occ dests rejected this is currently unreachable,
+    # but the contract is honored if perform_smart_move ever changes).
+    if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
+        return {"success": False, "require_confirm": True,
+                "confirm_type": move_result.get('confirm_type'),
+                "active_print": move_result.get('active_print'),
+                "msg": move_result.get('msg', 'Confirmation required.')}
+    if isinstance(move_result, dict) and move_result.get('status') == 'error':
+        return {"success": False, "source": source, "dest": dest,
+                "msg": move_result.get('msg', 'Move failed.')}
+
+    # --- Honest tally via READBACK ------------------------------------------
+    # perform_smart_move returns a bare {status:success} even if some per-spool
+    # writes were rejected (it logs each ERROR but doesn't report which). Re-read
+    # the source: any movable id STILL present as a DIRECT (non-ghost) match
+    # never left — it failed. Best-effort: advisory only; the Activity Log is
+    # authoritative for the per-spool outcome (per Derek 2026-07-11).
+    moved_ids = list(movable_ids)
+    failed = []
+    try:
+        still = spoolman_api.get_spools_at_location_detailed(source) or []
+        still_direct = {str(s.get('id')) for s in still if not s.get('is_ghost')}
+        stuck = {str(m) for m in movable_ids} & still_direct
+        if stuck:
+            # The source readback matches by FLAT first-segment (location_prefix),
+            # but the descendant guard uses the parent_id TREE. When a dest's ID
+            # prefix collides with the source yet it's reparented elsewhere
+            # (Group-34 NO-FORCED-RELABELING), a correctly-moved spool now at dest
+            # still flat-matches the source and would be mis-counted as failed.
+            # Subtract anything that actually landed at dest before deciding.
+            at_dest = {str(s.get('id'))
+                       for s in (spoolman_api.get_spools_at_location_detailed(dest) or [])}
+            stuck -= at_dest
+        if stuck:
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "see Activity Log"
+            moved_ids = [m for m in movable_ids if str(m) not in stuck]
+            failed = [{"id": m, "err": err} for m in movable_ids if str(m) in stuck]
+    except Exception as e:
+        state.logger.warning(f"bulk_move: tally readback failed for {source}: {e}")
+
+    # Per-spool INFO/ERROR lines already came from perform_smart_move; add one
+    # aggregate summary line.
+    level, color = ("SUCCESS", "00ff00") if not failed else ("WARNING", "ffaa00")
+    state.add_log_entry(
+        f"🔀 Bulk move {source} → {dest}: moved {len(moved_ids)}, "
+        f"skipped {len(skipped)}, failed {len(failed)}", level, color)
+
+    return {"success": len(failed) == 0, "source": source, "dest": dest,
+            "moved": len(moved_ids), "moved_ids": moved_ids,
+            "skipped": skipped, "failed": failed}
+
+
+def start_bulk_move_session(source_id=None):
+    """Arm a CMD:BULKMOVE session. With `source_id` (the Location-Manager
+    'Move all →' button) the source is pre-seeded and we jump straight to
+    awaiting_dest; without it (a CMD:BULKMOVE scan) we await a source scan.
+
+    Callers MUST refuse when a session (or an audit) is already running — see
+    can_start_bulk_move; this function unconditionally resets.
+    """
+    state.reset_bulk_move()
+    sess = state.BULK_MOVE_SESSION
+    sess['active'] = True
+    sess['last_activity_ts'] = time.time()
+    if source_id:
+        sess['source_id'] = str(source_id).strip().upper()
+        sess['stage'] = 'awaiting_dest'
+        state.add_log_entry(
+            f"🔀 <b>BULK MOVE ARMED</b> — source <b>{sess['source_id']}</b>. "
+            f"Scan the DESTINATION location.", "INFO", "00d4ff")
+    else:
+        sess['stage'] = 'awaiting_source'
+        state.add_log_entry("🔀 <b>BULK MOVE STARTED</b> — scan the SOURCE location.",
+                            "INFO", "00d4ff")
+    return sess
+
+
+def _refresh_bulk_move_preview(confirm_active_print=False):
+    """(Re)compute the dry-run preview for a session that has both locations."""
+    sess = state.BULK_MOVE_SESSION
+    plan = plan_bulk_move(sess.get('source_id'), sess.get('dest_id'),
+                          confirm_active_print=confirm_active_print)
+    sess['preview'] = plan
+    sess['stage'] = 'preview'
+    return plan
+
+
+def bulk_move_session_snapshot(sess=None):
+    """The JSON-safe view of the bulk-move session the frontend polls/renders.
+
+    Returns {active:False} when idle (cheap), else the stage + both locations +
+    a flattened preview (counts, the movable/skipped detail, and any block or
+    active-print confirm). Enriches each movable/skipped id with its display
+    label + color so the panel can render real spool tiles.
+    """
+    if sess is None:
+        sess = state.BULK_MOVE_SESSION
+    if not sess.get('active'):
+        return {"active": False, "stage": "idle"}
+
+    out = {
+        "active": True,
+        "stage": sess.get('stage') or 'idle',
+        "source_id": sess.get('source_id'),
+        "dest_id": sess.get('dest_id'),
+    }
+    plan = sess.get('preview') or None
+    if plan:
+        def _enrich(sid, reason=None):
+            row = {"id": sid, "display": f"#{sid}", "color": "888888",
+                   "color_direction": "longitudinal"}
+            try:
+                sd = spoolman_api.get_spool(sid)
+                if sd:
+                    info = spoolman_api.format_spool_display(sd) or {}
+                    row["display"] = info.get('text') or row["display"]
+                    row["color"] = info.get('color') or row["color"]
+                    row["color_direction"] = (info.get('color_direction')
+                                              or row["color_direction"])
+            except Exception:
+                pass
+            if reason:
+                row["reason"] = reason
+            return row
+
+        movable = [_enrich(sid) for sid in (plan.get('movable_ids') or [])]
+        skipped = [_enrich(s.get('id'), s.get('reason')) for s in (plan.get('skipped') or [])]
+        out["preview"] = {
+            "ok": bool(plan.get('ok')),
+            "msg": plan.get('msg') or "",
+            "blocked_reason": plan.get('blocked_reason'),
+            "require_confirm": bool(plan.get('require_confirm')),
+            "confirm_type": plan.get('confirm_type'),
+            "active_print": plan.get('active_print'),
+            "movable": movable,
+            "skipped": skipped,
+            "stats": {"movable": len(movable), "skipped": len(skipped)},
+        }
+    return out
+
+
+def process_bulk_move_scan(scan_result):
+    """Route a scan into the ACTIVE bulk-move session.
+
+    Contract mirrors process_audit_scan: returns a bare dict; only
+    {"status": "error"} is surfaced to the scanner UI, anything else answers
+    cmd:'clear'. Scanning a destination NEVER auto-commits — it computes the
+    preview and waits for an explicit CMD:DONE / button commit, because a bulk
+    move is far too destructive to fire on a stray scan.
+    """
+    sess = state.BULK_MOVE_SESSION
+
+    # 1. COMMANDS — commit / bail. (CMD:BULKMOVE while active is intercepted
+    #    upstream in api_identify_scan, so it never reaches here.)
+    if scan_result and scan_result.get('type') == 'command':
+        cmd = scan_result.get('cmd')
+        if cmd == 'cancel':
+            src = sess.get('source_id') or ''
+            state.reset_bulk_move()
+            state.add_log_entry(
+                "🔀 Bulk move cancelled" + (f" (was {src})" if src else "") + " — nothing moved.",
+                "INFO")
+            return {"status": "success", "msg": "Bulk move cancelled"}
+        if cmd == 'done':
+            if sess.get('stage') != 'preview':
+                state.add_log_entry(
+                    "⚠️ Bulk move: scan a SOURCE and a DESTINATION before committing.",
+                    "WARNING", "ffaa00")
+                return {"status": "error", "msg": "Scan a source and destination first."}
+            result = commit_bulk_move_session()
+            if result.get('require_confirm'):
+                # Leave the session standing so the UI can confirm + retry.
+                return {"status": "error", "msg": result.get('msg', 'Confirmation required.')}
+            if not result.get('success'):
+                # A PARTIAL failure returns success=False with a `failed` list and
+                # NO `msg` (execute_bulk_move's tally shape), so a `msg`-gated check
+                # let it fall through and told the scanner the move succeeded —
+                # exactly the "partial-failure reports success" class this feature
+                # is meant to avoid. Synthesize a message from the tally.
+                msg = result.get('msg')
+                if not msg:
+                    n_failed = len(result.get('failed') or [])
+                    msg = (f"{n_failed} spool(s) failed to move — see the Activity Log."
+                           if n_failed else "Bulk move failed.")
+                return {"status": "error", "msg": msg}
+            return {"status": "success", "msg": "Bulk move complete"}
+        return {"status": "error", "msg": "Command not allowed during a bulk move."}
+
+    # 2. LOCATION scans — capture source, then dest.
+    if scan_result and scan_result.get('type') == 'location':
+        loc_id = str(scan_result.get('id') or '').strip().upper()
+        if not loc_id:
+            return {"status": "error", "msg": "Empty location code."}
+        stage = sess.get('stage')
+        if stage == 'awaiting_source':
+            sess['source_id'] = loc_id
+            sess['stage'] = 'awaiting_dest'
+            state.add_log_entry(
+                f"🔀 Bulk move source: <b>{loc_id}</b>. Now scan the DESTINATION.",
+                "INFO", "00d4ff")
+            return {"status": "success"}
+        if stage in ('awaiting_dest', 'preview'):
+            # Re-scanning at the preview stage RE-TARGETS the destination rather
+            # than erroring — the user changed their mind before committing.
+            sess['dest_id'] = loc_id
+            plan = _refresh_bulk_move_preview()
+            if not plan.get('ok') and not plan.get('require_confirm'):
+                state.add_log_entry(f"⚠️ Bulk move blocked: {plan.get('msg')}", "WARNING", "ffaa00")
+                return {"status": "error", "msg": plan.get('msg')}
+            if plan.get('require_confirm'):
+                state.add_log_entry(f"⚠️ {plan.get('msg')}", "WARNING", "ffaa00")
+                return {"status": "success"}
+            n = len(plan.get('movable_ids') or [])
+            k = len(plan.get('skipped') or [])
+            state.add_log_entry(
+                f"🔀 Bulk move preview: <b>{n}</b> spool(s) {sess.get('source_id')} → "
+                f"<b>{loc_id}</b>" + (f", {k} left in place" if k else "") +
+                ". Scan CMD:DONE (or press Commit) to move.", "INFO", "00d4ff")
+            return {"status": "success"}
+        return {"status": "error", "msg": "Bulk move is not awaiting a location."}
+
+    # 3. Anything else (spool / filament / assignment) is not meaningful here.
+    return {"status": "error", "msg": "Scan a LOCATION during a bulk move (or CMD:CANCEL)."}
+
+
+# Serializes commit_bulk_move_session so a double-click / double-scan (or two
+# tabs) can't run perform_smart_move twice for the same armed session — the
+# second run would move an already-moved batch again AND bury the real undo
+# record under a no-op one. Non-blocking acquire: the loser is REFUSED, not
+# queued, because queuing would just replay the same batch a moment later.
+_BULK_MOVE_COMMIT_LOCK = threading.Lock()
+
+
+def commit_bulk_move_session(confirm_active_print=False):
+    """Execute the active session's plan, then clear the session on success.
+
+    Re-plans from the CURRENT world state rather than trusting the stored
+    preview: a spool may have moved / been archived / a print may have started
+    between the preview and the commit, and the commit must be guarded by
+    live facts, not a stale snapshot.
+    """
+    if not _BULK_MOVE_COMMIT_LOCK.acquire(False):
+        return {"success": False, "msg": "A bulk-move commit is already running."}
+    try:
+        sess = state.BULK_MOVE_SESSION
+        source, dest = sess.get('source_id'), sess.get('dest_id')
+        if not sess.get('active') or not source or not dest:
+            return {"success": False, "msg": "No bulk move is ready to commit."}
+
+        plan = plan_bulk_move(source, dest, confirm_active_print=confirm_active_print)
+        sess['preview'] = plan
+        if plan.get('require_confirm'):
+            return {"success": False, "require_confirm": True,
+                    "confirm_type": plan.get('confirm_type'),
+                    "active_print": plan.get('active_print'),
+                    "msg": plan.get('msg'), "source": source, "dest": dest}
+        if not plan.get('ok'):
+            return {"success": False, "msg": plan.get('msg'),
+                    "blocked_reason": plan.get('blocked_reason'),
+                    "source": source, "dest": dest}
+        if not plan.get('movable_ids'):
+            state.reset_bulk_move()
+            return {"success": True, "moved": 0, "moved_ids": [], "failed": [],
+                    "skipped": plan.get('skipped') or [], "msg": plan.get('msg'),
+                    "source": source, "dest": dest}
+
+        result = execute_bulk_move(plan, confirm_active_print=confirm_active_print)
+        if result.get('require_confirm'):
+            return result  # leave the session standing for the confirm+retry
+        state.reset_bulk_move()
+        return result
+    finally:
+        _BULK_MOVE_COMMIT_LOCK.release()
 
 
 def get_room_from_location(loc_id):
