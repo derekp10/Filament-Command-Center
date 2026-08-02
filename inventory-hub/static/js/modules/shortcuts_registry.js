@@ -200,6 +200,11 @@
         description: 'Enter audit mode — scan locations to reconcile their contents.'
     });
     window.registerShortcut({
+        id: 'scan-cmd-bulkmove', scope: 'Scan Commands',
+        keys: ['CMD:BULKMOVE'],
+        description: 'Bulk move — scan a SOURCE location, then a DESTINATION, then CMD:DONE to move everything.'
+    });
+    window.registerShortcut({
         id: 'scan-cmd-locations', scope: 'Scan Commands',
         keys: ['CMD:LOCATIONS'],
         description: 'Open the Locations manager modal.'

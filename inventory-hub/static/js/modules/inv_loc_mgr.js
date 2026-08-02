@@ -70,7 +70,23 @@ window.updateManageTitle = (loc, itemArray = null) => {
     
     const typeBadge = `<span class="badge ${badgeClass} ms-3 fs-6" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); padding-top: 5px; ${badgeStyle}">${loc.Type}</span>`;
 
-    document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${loc.LocationID} ${typeBadge} ${occHtml}</div>`;
+    // L298 Phase 2 — "Move all →" (the mouse entry to Bulk Moves; the scanner
+    // entry is the CMD:BULKMOVE deck QR). Lives in the TITLE so it renders for
+    // EVERY location type: the DANGER-ZONE Eject-All it parallels is built only
+    // by renderGrid, and renderList's `qr-eject-all-list` target doesn't exist
+    // in the live template — so a button placed there would be invisible on
+    // Rooms / Shelves / Carts, which are the most likely bulk-move sources.
+    // Suppressed on single-occupancy locations, where every spool would be
+    // skipped as "loaded in a toolhead slot" (a guaranteed no-op).
+    const SINGLE_OCC = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    const moveAllBtn = SINGLE_OCC.includes(t) ? '' : `
+        <button class="btn btn-sm btn-outline-info ms-auto" style="white-space:nowrap;"
+                title="Move everything from ${window.escAttr ? window.escAttr(loc.LocationID) : loc.LocationID} to another location"
+                onclick="window.triggerBulkMove && window.triggerBulkMove('${window.escAttr ? window.escAttr(loc.LocationID) : loc.LocationID}')">
+            🔀 Move all →
+        </button>`;
+
+    document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${loc.LocationID} ${typeBadge} ${occHtml}${moveAllBtn}</div>`;
 };
 
 // --- PRE-FLIGHT PROTOCOL ---
@@ -1473,6 +1489,42 @@ window.manualAddSpool = () => {
             else showToast(res.msg || "Invalid Code", 'warning');
         })
         .catch(() => setProcessing(false));
+};
+
+// L298 Phase 2 — the Location-Manager entry into Bulk Moves. ARMS a session
+// with this location as the SOURCE, then hands off: the user scans (or picks)
+// the DESTINATION, reviews the preview panel, and commits explicitly. Nothing
+// moves here — this only arms, so no promptSafety gate (unlike triggerEjectAll,
+// which mutates immediately); the destructive step is the panel's Commit.
+window.triggerBulkMove = (loc, replace = false) => {
+    if (!loc) { showToast("No location selected", "warning"); return; }
+    setProcessing(true);
+    window.fetchT('/api/bulk_move_session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start', source: loc, replace: !!replace }),
+    })
+        .then(r => r.json())
+        .then((res) => {
+            setProcessing(false);
+            // Another tab / an earlier click already armed a DIFFERENT source.
+            // Confirm before replacing it rather than silently re-arming under
+            // someone who still believes the first one is staged.
+            if (res && res.already_active) {
+                requestConfirmation(
+                    res.msg || `A bulk move is already armed. Replace it with ${loc}?`,
+                    () => window.triggerBulkMove(loc, true)
+                );
+                return;
+            }
+            if (!res || !res.success) {
+                showToast((res && res.msg) || "Couldn't arm the bulk move", "error", 7000);
+                return;
+            }
+            if (window.applyBulkMoveSession) window.applyBulkMoveSession(res.session);
+            if (window.openBulkMovePanel) window.openBulkMovePanel();
+            showToast(`Bulk move armed from ${loc} — scan the destination location.`, "info", 5000);
+        })
+        .catch(() => { setProcessing(false); showToast("Couldn't arm the bulk move", "error", 7000); });
 };
 
 window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, () => {

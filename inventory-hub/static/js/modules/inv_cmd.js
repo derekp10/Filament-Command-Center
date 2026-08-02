@@ -238,6 +238,285 @@ window.updateAuditVisuals = () => {
     auditShapeshift.set(state.auditActive ? 'active' : 'idle');
 };
 
+// --- L298 Phase 2 — BULK MOVE deck slot ------------------------------------
+// The 4-state shapeshift the helper's own comment was written for (arm ->
+// set-dest -> commit). The encoded QR is what the user should scan NEXT:
+//   idle           CMD:BULKMOVE  "BULK MOVE"  — arm a session
+//   awaiting_source(no cmd)      "SCAN SRC"   — scan the source LOC label
+//   awaiting_dest  (no cmd)      "SCAN DEST"  — scan the destination LOC label
+//   preview        CMD:DONE      "COMMIT"     — explicit commit; a dest scan
+//                                               NEVER auto-commits.
+// The two "scan a location label" states deliberately encode no cmd — the next
+// scan is a physical LOC: label, so re-rendering a QR there would be noise.
+// Like audit, bulk move is NOT wired into resetCommandModes: a session must
+// survive opening the Location Manager (that's how the LM button entry works).
+const bulkMoveShapeshift = window.registerShapeshiftQR({
+    slot: 'bulkmove',
+    size: 85,
+    default: 'idle',
+    states: {
+        idle:            { cmd: "CMD:BULKMOVE", label: "BULK MOVE", btnClass: '',                   labelClass: '',                      onEnter: () => { if (typeof window.closeBulkMovePanel === 'function') window.closeBulkMovePanel(); } },
+        awaiting_source: { cmd: "CMD:CANCEL",   label: "SCAN SRC",  btnClass: 'btn-bulkmove-active', labelClass: 'label-active-bulkmove', onEnter: () => { if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel(); } },
+        awaiting_dest:   { cmd: "CMD:CANCEL",   label: "SCAN DEST", btnClass: 'btn-bulkmove-active', labelClass: 'label-active-bulkmove', onEnter: () => { if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel(); } },
+        preview:         { cmd: "CMD:DONE",     label: "COMMIT",    btnClass: 'btn-bulkmove-ready',  labelClass: 'label-active-bulkmove', onEnter: () => { if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel(); } },
+    },
+});
+
+window.updateBulkMoveVisuals = () => {
+    const stage = state.bulkMoveActive ? (state.bulkMoveStage || 'awaiting_source') : 'idle';
+    bulkMoveShapeshift.set(stage);
+};
+
+// Deck-button toggle: arm when idle, SAFE-BAIL (cancel, nothing moved) when a
+// session is running — mirroring toggleAudit's "the button is never the
+// destructive path" rule. Committing is only ever the explicit panel button or
+// a CMD:DONE scan.
+const toggleBulkMove = () => {
+    if (state.bulkMoveActive) {
+        window.cancelBulkMove();
+        return;
+    }
+    window.fetchT('/api/bulk_move_session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+    }).then(r => r.json()).then((d) => {
+        window.applyBulkMoveSession(d && d.session);
+        if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel();
+    }).catch(() => showToast("Couldn't start bulk move", "error", 7000));
+};
+window.toggleBulkMove = toggleBulkMove;
+
+// Single place that maps a backend session snapshot onto local state + visuals,
+// so the poll, the toggle, the LM button, and the commit all converge.
+window.applyBulkMoveSession = (sess) => {
+    const active = !!(sess && sess.active);
+    state.bulkMoveActive = active;
+    state.lastBulkMoveState = active;
+    state.bulkMoveStage = active ? (sess.stage || 'awaiting_source') : 'idle';
+    window.updateBulkMoveVisuals();
+    return sess;
+};
+
+window.cancelBulkMove = () => {
+    window.fetchT('/api/bulk_move_session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'cancel' }),
+    }).then(r => r.json()).then((d) => {
+        window.applyBulkMoveSession(d && d.session);
+        if (typeof window.closeBulkMovePanel === 'function') window.closeBulkMovePanel();
+        showToast("Bulk move cancelled — nothing moved.", "info");
+    }).catch(() => showToast("Cancel failed", "error", 7000));
+};
+
+// Explicit commit — the panel button's path (the CMD:DONE scan reaches the same
+// backend commit). Handles the active-print require_confirm retry.
+window.commitBulkMove = (confirmActivePrint = false) => {
+    setProcessing(true);
+    window.fetchT('/api/bulk_move_session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'commit', confirm_active_print: !!confirmActivePrint }),
+    }).then(r => r.json()).then((res) => {
+        setProcessing(false);
+        if (res && res.require_confirm && res.confirm_type === 'active_print') {
+            const ap = res.active_print || {};
+            requestConfirmation(
+                res.msg || `${ap.printer_name || 'A printer'} is ${ap.state || 'ACTIVE'} — bulk-moving from here will disrupt the print. Continue anyway?`,
+                () => window.commitBulkMove(true)
+            );
+            return;
+        }
+        window.applyBulkMoveSession(res && res.session);
+        if (!res || !res.success) {
+            showToast((res && res.msg) || "Bulk move failed", "error", 7000);
+            return;
+        }
+        const moved = res.moved || 0;
+        const skipped = (res.skipped || []).length;
+        const failed = (res.failed || []).length;
+        let msg = `Moved ${moved} spool(s) → ${res.dest || ''}`;
+        if (skipped) msg += `, ${skipped} left in place`;
+        if (failed) msg += `, ${failed} FAILED`;
+        showToast(msg, failed ? "warning" : "success", failed ? 7000 : 4000);
+        if (typeof window.closeBulkMovePanel === 'function') window.closeBulkMovePanel();
+        if (window.fetchLocations) window.fetchLocations();
+        state.lastLocRenderHash = null;
+        document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+        if (typeof updateLogState === 'function') updateLogState(true);
+    }).catch(() => { setProcessing(false); showToast("Bulk move failed", "error", 7000); });
+};
+
+// --- L298 Phase 2 — BULK MOVE PANEL ----------------------------------------
+// Same shape as the audit panel: mountOverlay (tier 'standard') + a 2s poll of
+// /api/bulk_move_session + a render-hash flicker guard. Phase 2 keeps the body
+// deliberately lean (stage prompt + counts + the movable/skipped lists);
+// Phase 3 enriches it into the full preview/confirm surface.
+(function () {
+    let _handle = null;
+    let _pollTimer = null;
+    let _lastRenderHash = null;
+    // Escapes QUOTES too — these values land inside title="…" attributes, and a
+    // text-only escaper would let a spool name break out of the attribute.
+    const _esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    // A colour reaches a STYLE attribute, where escaping isn't enough — anything
+    // that isn't a bare hex (or a comma-separated multi-colour list) is dropped.
+    const _hexOnly = (c) => (/^[0-9a-fA-F,]{3,}$/.test(String(c || '')) ? String(c) : '333');
+
+    const _row = (r, dim) => {
+        // Reuse the shared swatch renderer so multi-colour spools show their real
+        // conic-gradient (a hand-rolled `background:#<hex>` renders blank for a
+        // comma-separated multi-colour value).
+        const swatch = (typeof window.makeSwatchHtml === 'function')
+            ? window.makeSwatchHtml(r.color, r.color_direction, { size: 22, borderColor: '#444' })
+            : `<span style="display:inline-block;width:22px;height:22px;background:#${_hexOnly(r.color)};
+                            border-radius:4px; border:1px solid #444;"></span>`;
+        return `
+        <div style="display:flex; align-items:center; gap:10px; padding:6px 8px;
+                    background:${dim ? '#241f10' : '#0a2a0a'};
+                    border:1px solid ${dim ? '#fc0' : '#0f0'}; border-radius:6px;">
+            ${swatch}
+            <div style="flex:1; min-width:0;">
+                <div class="text-truncate" style="color:#fff; font-size:0.88rem;"
+                     title="${_esc(r.display)}">#${_esc(r.id)} ${_esc(r.display)}</div>
+                ${r.reason ? `<div style="font-size:0.72rem; color:#fc0;">${_esc(r.reason)}</div>` : ''}
+            </div>
+        </div>`;
+    };
+
+    const _render = (d) => {
+        if (!_handle) return;
+        const body = _handle.element.querySelector('#fcc-bulkmove-body');
+        if (!body) return;
+        const hash = JSON.stringify(d);
+        if (hash === _lastRenderHash) return;
+        _lastRenderHash = hash;
+
+        const stage = d.stage || 'idle';
+        const src = d.source_id ? `<b style="color:#0ff;">${_esc(d.source_id)}</b>` : '<span style="color:#888;">—</span>';
+        const dst = d.dest_id ? `<b style="color:#0ff;">${_esc(d.dest_id)}</b>` : '<span style="color:#888;">—</span>';
+        const prompt = stage === 'awaiting_source'
+            ? 'Scan the <b>SOURCE</b> location label.'
+            : (stage === 'awaiting_dest'
+                ? 'Scan the <b>DESTINATION</b> location label.'
+                : 'Review below, then <b>Commit</b> (or scan CMD:DONE).');
+
+        const p = d.preview || null;
+        let previewHtml = `<div class="small" style="color:rgba(255,255,255,0.7);">${prompt}</div>`;
+        if (p) {
+            if (!p.ok && !p.require_confirm) {
+                previewHtml = `<div style="padding:10px; border:1px solid #f44; background:#2a0f0f;
+                                           border-radius:6px; color:#ffb3b3;">🚫 ${_esc(p.msg)}</div>`;
+            } else {
+                const warn = p.require_confirm
+                    ? `<div style="padding:8px; border:1px solid #fc0; background:#241f10; border-radius:6px;
+                                   color:#ffe08a; margin-bottom:8px;">⚠️ ${_esc(p.msg)}</div>` : '';
+                const st = p.stats || { movable: 0, skipped: 0 };
+                previewHtml = `
+                    ${warn}
+                    <div style="margin-bottom:8px;">
+                        <span style="color:#0f0; font-weight:bold;">${st.movable}</span> will move,
+                        <span style="color:#fc0; font-weight:bold;">${st.skipped}</span> left in place
+                    </div>
+                    ${(p.movable || []).length ? `
+                        <div style="font-weight:bold; color:#0f0; margin-bottom:6px;">Will move</div>
+                        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+                                    gap:6px; margin-bottom:10px;">${(p.movable || []).map(r => _row(r, false)).join('')}</div>` : ''}
+                    ${(p.skipped || []).length ? `
+                        <div style="font-weight:bold; color:#fc0; margin-bottom:6px;">Left in place</div>
+                        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+                                    gap:6px;">${(p.skipped || []).map(r => _row(r, true)).join('')}</div>` : ''}
+                    ${!(p.movable || []).length && p.ok ? `<div class="small" style="color:rgba(255,255,255,0.7);">${_esc(p.msg)}</div>` : ''}`;
+            }
+        }
+
+        const canCommit = stage === 'preview' && p && p.ok && (p.movable || []).length > 0;
+        body.innerHTML = `
+            <div style="margin-bottom:10px; font-size:0.95rem;">${src} → ${dst}</div>
+            ${previewHtml}
+            <div class="d-flex justify-content-between align-items-stretch gap-3 mt-3 pt-3 border-top border-secondary">
+                <div style="flex:1; text-align:center;">
+                    <button class="btn btn-success fw-bold w-100 mb-2" ${canCommit ? '' : 'disabled'}
+                            onclick="window.commitBulkMove && window.commitBulkMove()">🔀 Commit Move</button>
+                    <div id="fcc-bulkmove-qr-done" style="display:inline-block; background:#fff; padding:4px; border-radius:4px;"></div>
+                    <div class="small mt-1" style="color:rgba(255,255,255,0.75);">Moves everything listed above</div>
+                </div>
+                <div style="flex:1; text-align:center;">
+                    <button class="btn btn-outline-danger fw-bold w-100 mb-2"
+                            onclick="window.cancelBulkMove && window.cancelBulkMove()">❌ Cancel</button>
+                    <div id="fcc-bulkmove-qr-cancel" style="display:inline-block; background:#fff; padding:4px; border-radius:4px;"></div>
+                    <div class="small mt-1" style="color:rgba(255,255,255,0.75);">Bail without moving anything</div>
+                </div>
+            </div>`;
+        // generateSafeQR is a script-scope const in inv_core.js — call it by bare
+        // name, NOT window.generateSafeQR (that guard silently dropped the audit
+        // panel's QRs, Derek 2026-05-16).
+        if (typeof generateSafeQR === 'function') {
+            generateSafeQR('fcc-bulkmove-qr-done', 'CMD:DONE', 90);
+            generateSafeQR('fcc-bulkmove-qr-cancel', 'CMD:CANCEL', 90);
+        }
+    };
+
+    const _poll = async () => {
+        try {
+            const r = await fetch('/api/bulk_move_session');
+            const d = await r.json();
+            if (!d || !d.active) {
+                window.applyBulkMoveSession(d);
+                window.closeBulkMovePanel();
+                return;
+            }
+            // Keep the deck QR in step with the backend stage (idempotent set()).
+            if (d.stage && d.stage !== state.bulkMoveStage) {
+                state.bulkMoveStage = d.stage;
+                state.bulkMoveActive = true;
+                window.updateBulkMoveVisuals();
+            }
+            _render(d);
+        } catch (e) { /* network hiccup — retry next tick */ }
+    };
+
+    window.openBulkMovePanel = () => {
+        if (_handle) return;  // idempotent
+        if (typeof window.mountOverlay !== 'function') return;
+        _lastRenderHash = null;
+        const content = `
+            <div style="background:#1e1e1e; color:#fff; border:2px solid #00d4ff;
+                        border-radius:8px; padding:14px 16px;
+                        width:min(820px,94vw); max-height:80vh; display:flex; flex-direction:column;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div style="font-weight:bold; font-size:1.15em; color:#7fe8ff;">🔀 Bulk Move</div>
+                    <button id="fcc-bulkmove-close" class="btn btn-sm btn-outline-light"
+                            title="Hide the panel (the bulk move stays armed; reopen via the BULK MOVE deck button)">Hide</button>
+                </div>
+                <div id="fcc-bulkmove-body" style="overflow-y:auto; flex:1 1 auto;">
+                    <div class="small" style="color:rgba(255,255,255,0.7);">Loading…</div>
+                </div>
+            </div>`;
+        _handle = window.mountOverlay({
+            id: 'fcc-bulkmove-panel-overlay',
+            content,
+            tier: 'standard',
+            backdrop: true,
+            backdropDismiss: false,   // a move is armed; Hide is the explicit dismiss
+            onEscape: () => window.closeBulkMovePanel(),
+        });
+        const closeBtn = _handle.element.querySelector('#fcc-bulkmove-close');
+        if (closeBtn) closeBtn.onclick = () => window.closeBulkMovePanel();
+        _poll();
+        _pollTimer = setInterval(_poll, 2000);
+    };
+
+    window.closeBulkMovePanel = () => {
+        if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+        if (_handle) { try { _handle.cleanup(); } catch (_) { /* noop */ } _handle = null; }
+    };
+
+    // Poll once RIGHT NOW instead of waiting for the next 2s tick — called after
+    // a scan lands so the stage prompt + preview update immediately.
+    window.refreshBulkMoveSession = () => { _poll(); };
+})();
+
 // --- 18.2 Part B — VISUAL AUDIT PANEL --------------------------------------
 // Lives as a mountOverlay (tier 'standard') so it sits above any modal
 // stack. Polls /api/audit_session every 2s while audit is active so the
@@ -603,6 +882,11 @@ const processScan = (text, source = 'keyboard') => {
     if (window.routeConfirmScan && window.routeConfirmScan(text)) return;
 
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
+    // L298 Phase 2 — same client-side toggle shape as CMD:AUDIT: arm when idle,
+    // safe-bail when running. Location scans + CMD:DONE / CMD:CANCEL are NOT
+    // intercepted here; they fall through to the backend, whose active-session
+    // gate routes them into process_bulk_move_scan.
+    if (upper === 'CMD:BULKMOVE') { toggleBulkMove(); return; }
     if (upper === 'CMD:LOCATIONS') { openLocationsModal(); return; }
     if (upper === 'CMD:WEIGH') { window.openWeighOutModal(); return; }
     if (upper === 'CMD:DROP') { toggleDropMode(); return; }
@@ -625,6 +909,12 @@ const processScan = (text, source = 'keyboard') => {
         .then(res => {
             setProcessing(false);
             if (res.type === 'command') {
+                // L298 Phase 2 — a scan the backend routed into the bulk-move
+                // session answers cmd:'clear'. Refresh the panel immediately so
+                // the stage prompt / preview updates now, not on the next tick.
+                if (state.bulkMoveActive && typeof window.refreshBulkMoveSession === 'function') {
+                    window.refreshBulkMoveSession();
+                }
                 const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'done': closeManage };
                 if (cmds[res.cmd]) cmds[res.cmd]();
                 else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true);

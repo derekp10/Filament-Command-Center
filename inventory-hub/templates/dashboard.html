@@ -191,6 +191,15 @@
                 <div id="qr-weigh" class="deck-qr"></div>
                 <div id="lbl-weigh" class="deck-label text-success">WEIGH</div>
             </div>
+
+            <!-- L298 Phase 2 — Bulk Move. 4-state shapeshift slot (idle ->
+                 SCAN SRC -> SCAN DEST -> COMMIT); ids follow the
+                 qr-<slot>/lbl-<slot>/btn-deck-<slot> convention that
+                 registerShapeshiftQR expects. -->
+            <div id="btn-deck-bulkmove" class="deck-btn" onclick="window.toggleBulkMove && window.toggleBulkMove()">
+                <div id="qr-bulkmove" class="deck-qr"></div>
+                <div id="lbl-bulkmove" class="deck-label text-info">BULK MOVE</div>
+            </div>
         </div>
     </div>
 

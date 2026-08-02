@@ -19,6 +19,13 @@ let state = {
     lastScannedLoc: null,
     auditActive: false,
     lastAuditState: null,
+    // L298 Phase 2 — bulk-move scan session. `bulkMoveActive` mirrors the
+    // backend's session flag from the /api/logs heartbeat; `bulkMoveStage`
+    // (idle | awaiting_source | awaiting_dest | preview) drives the deck QR's
+    // shapeshift and is refreshed by the panel's own session poll.
+    bulkMoveActive: false,
+    lastBulkMoveState: null,
+    bulkMoveStage: 'idle',
 
     // Manager
     currentGrid: {},
@@ -1055,6 +1062,22 @@ const _renderLogsPayload = (d, force = false) => {
         state.lastAuditState = d.audit_active;
         state.auditActive = d.audit_active;
         if (window.updateAuditVisuals) window.updateAuditVisuals();
+    }
+
+    // L298 Phase 2 — sync the bulk-move session so a session started/ended
+    // ANYWHERE (another tab, a page reload, the idle watchdog) repaints this
+    // tab's deck QR. Keyed on active+stage together, not just `active`: an
+    // active-only edge left a reloaded tab painting 'idle' over a live session,
+    // turning the deck button into a disguised Cancel.
+    if (d.bulk_move_active !== undefined) {
+        const stage = d.bulk_move_active ? (d.bulk_move_stage || 'awaiting_source') : 'idle';
+        const sig = `${d.bulk_move_active}|${stage}`;
+        if (sig !== state.lastBulkMoveState) {
+            state.lastBulkMoveState = sig;
+            state.bulkMoveActive = d.bulk_move_active;
+            state.bulkMoveStage = stage;
+            if (window.updateBulkMoveVisuals) window.updateBulkMoveVisuals();
+        }
     }
 };
 window._renderLogsPayload = _renderLogsPayload;
