@@ -879,6 +879,11 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
             plan["require_confirm"] = True
             plan["confirm_type"] = "active_print"
             plan["active_print"] = ap
+            # Carry the movable set on the confirm return too. Without it the
+            # preview rendered "0 will move" and DISABLED Commit, so the
+            # active-print confirm was unreachable from the panel — the user
+            # could see the warning but had no way to act on it.
+            plan["movable_ids"] = movable_ids
             plan["msg"] = (f"{ap['printer_name']} is {ap['state']} — bulk-moving from "
                            f"this location will disrupt the print.")
             return plan
@@ -992,7 +997,13 @@ def _refresh_bulk_move_preview(confirm_active_print=False):
     plan = plan_bulk_move(sess.get('source_id'), sess.get('dest_id'),
                           confirm_active_print=confirm_active_print)
     sess['preview'] = plan
-    sess['stage'] = 'preview'
+    # Only a plan that could actually be committed advances to `preview`. A
+    # BLOCKED dest (single-occupancy / unknown / capacity / unreadable) used to
+    # advance anyway, and since the stage now rides the heartbeat the deck tile
+    # went GREEN "COMMIT" with a CMD:DONE QR for a move that can never run.
+    # Stay at awaiting_dest so the user is still prompted for a valid one.
+    # (require_confirm is committable — it just needs the active-print opt-in.)
+    sess['stage'] = 'preview' if (plan.get('ok') or plan.get('require_confirm')) else 'awaiting_dest'
     return plan
 
 

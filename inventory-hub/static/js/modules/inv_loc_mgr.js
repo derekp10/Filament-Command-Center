@@ -79,10 +79,19 @@ window.updateManageTitle = (loc, itemArray = null) => {
     // Suppressed on single-occupancy locations, where every spool would be
     // skipped as "loaded in a toolhead slot" (a guaranteed no-op).
     const SINGLE_OCC = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    // The LocationID rides in a data- attribute and the handler reads it back via
+    // dataset — it NEVER enters a JS string literal inside the onclick. escAttr
+    // escapes for an HTML ATTRIBUTE, not for JS source, so interpolating into
+    // `triggerBulkMove('…')` was doubly wrong: the HTML parser decodes the entity
+    // before JS parses, so an apostrophe in an id both breaks the call and opens
+    // a script-injection seam. (Same class as the escAttr stored-XSS fixed in
+    // Group 34.) The `|| escHtml` fallback mirrors inv_core.js's export guard.
+    const _attr = (v) => (window.escAttr || window.escHtml || String)(v);
     const moveAllBtn = SINGLE_OCC.includes(t) ? '' : `
         <button class="btn btn-sm btn-outline-info ms-auto" style="white-space:nowrap;"
-                title="Move everything from ${window.escAttr ? window.escAttr(loc.LocationID) : loc.LocationID} to another location"
-                onclick="window.triggerBulkMove && window.triggerBulkMove('${window.escAttr ? window.escAttr(loc.LocationID) : loc.LocationID}')">
+                data-bulk-src="${_attr(loc.LocationID)}"
+                title="Move everything from ${_attr(loc.LocationID)} to another location"
+                onclick="window.triggerBulkMove && window.triggerBulkMove(this.dataset.bulkSrc)">
             🔀 Move all →
         </button>`;
 

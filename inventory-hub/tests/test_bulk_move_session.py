@@ -231,6 +231,22 @@ def test_blocked_dest_surfaces_error_and_keeps_session(client):
     assert "single-spool" in body["msg"].lower()
     assert state.BULK_MOVE_SESSION["active"] is True
     mv.assert_not_called()
+    # REVIEW FIX: a BLOCKED plan must NOT advance to 'preview' — the stage rides
+    # the heartbeat, so that turned the deck tile green "COMMIT" (with a CMD:DONE
+    # QR) for a move that can never run. Stay prompting for a valid destination.
+    assert state.BULK_MOVE_SESSION["stage"] == "awaiting_dest"
+
+
+@pytest.mark.parametrize("dest,expect", [
+    ("XL-1", "awaiting_dest"),        # single-occupancy → blocked
+    ("NOPE-404", "awaiting_dest"),    # unknown dest → blocked
+    ("SHELF-B", "preview"),           # valid → advances
+])
+def test_stage_only_advances_for_a_committable_plan(client, dest, expect):
+    with _env(strict_map={"PM-DB-A": [_spool(1)]}):
+        client.post("/api/bulk_move_session", json={"action": "start", "source": "PM-DB-A"})
+        client.post("/api/bulk_move_session", json={"action": "set_dest", "dest": dest})
+    assert state.BULK_MOVE_SESSION["stage"] == expect
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +494,18 @@ def test_logs_exposes_stage_so_other_tabs_paint_correctly(client):
         d = client.get("/api/logs").get_json()
     assert d["bulk_move_active"] is True
     assert d["bulk_move_stage"] == "awaiting_dest"
+
+
+def test_require_confirm_plan_still_carries_the_movable_set(client):
+    """REVIEW FIX: the active-print confirm return dropped movable_ids, so the
+    panel rendered '0 will move' and DISABLED Commit — the user could see the
+    warning but had no way to act on it. The confirm path must stay reachable."""
+    ap = {"printer_name": "XL", "state": "PRINTING", "toolhead": "PM-DB-A"}
+    with _env(strict_map={"PM-DB-A": [_spool(1), _spool(2)]},
+              active_print_for={"PM-DB-A": ap}):
+        plan = logic.plan_bulk_move("PM-DB-A", "SHELF-B")
+    assert plan["require_confirm"] is True
+    assert plan["movable_ids"] == [1, 2]      # not dropped
 
 
 def test_snapshot_rows_carry_color_direction(client):

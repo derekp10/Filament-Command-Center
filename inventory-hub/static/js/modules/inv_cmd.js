@@ -326,7 +326,14 @@ window.commitBulkMove = (confirmActivePrint = false) => {
             return;
         }
         window.applyBulkMoveSession(res && res.session);
-        if (!res || !res.success) {
+        // A PARTIAL failure comes back success=false + a `failed` list + NO msg
+        // (execute_bulk_move's tally shape). Bailing on !success therefore toasted
+        // a flat "Bulk move failed" after e.g. 8 of 10 spools HAD moved, and
+        // skipped the location refresh — while the scan path (already fixed)
+        // reported it honestly. Only treat it as a hard failure when nothing was
+        // attempted; otherwise fall through to the real tally message below.
+        const isPartial = res && res.moved !== undefined && (res.failed || []).length > 0;
+        if (!res || (!res.success && !isPartial)) {
             showToast((res && res.msg) || "Bulk move failed", "error", 7000);
             return;
         }
@@ -430,7 +437,12 @@ window.commitBulkMove = (confirmActivePrint = false) => {
             }
         }
 
-        const canCommit = stage === 'preview' && p && p.ok && (p.movable || []).length > 0;
+        // require_confirm (active print on the source) is COMMITTABLE — it just
+        // needs the opt-in, which commitBulkMove collects via requestConfirmation
+        // and retries with confirm_active_print. Gating Commit on p.ok alone made
+        // that whole safety path unreachable from the panel.
+        const canCommit = stage === 'preview' && p && (p.ok || p.require_confirm)
+            && (p.movable || []).length > 0;
         body.innerHTML = `
             <div style="margin-bottom:10px; font-size:0.95rem;">${src} → ${dst}</div>
             ${previewHtml}
@@ -487,7 +499,7 @@ window.commitBulkMove = (confirmActivePrint = false) => {
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.15em; color:#7fe8ff;">🔀 Bulk Move</div>
                     <button id="fcc-bulkmove-close" class="btn btn-sm btn-outline-light"
-                            title="Hide the panel (the bulk move stays armed; reopen via the BULK MOVE deck button)">Hide</button>
+                            title="Hide the panel — the bulk move stays armed. NOTE: the BULK MOVE deck button CANCELS while a session is running; reopen by scanning a location or re-arming from the Location Manager.">Hide</button>
                 </div>
                 <div id="fcc-bulkmove-body" style="overflow-y:auto; flex:1 1 auto;">
                     <div class="small" style="color:rgba(255,255,255,0.7);">Loading…</div>
@@ -914,6 +926,16 @@ const processScan = (text, source = 'keyboard') => {
                 // the stage prompt / preview updates now, not on the next tick.
                 if (state.bulkMoveActive && typeof window.refreshBulkMoveSession === 'function') {
                     window.refreshBulkMoveSession();
+                    // DEADLOCK GUARD: every session-routed scan answers cmd:'clear',
+                    // but requestClearBuffer prompts "Clear entire Buffer?" when the
+                    // buffer is non-empty — and #confirmModal (z 1100) renders BEHIND
+                    // the bulk panel (z 20000), so the dialog is invisible while
+                    // state.activeModal='confirm' swallows every later scan, including
+                    // the destination and CMD:DONE. A non-empty buffer is EXPECTED
+                    // here (plan_bulk_move has a dedicated "in the scan buffer" skip
+                    // rule), so never clear the buffer mid-bulk-move: buffered spools
+                    // are deliberately left in place, nothing consumed them.
+                    if (res.cmd === 'clear') return;
                 }
                 const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'done': closeManage };
                 if (cmds[res.cmd]) cmds[res.cmd]();
