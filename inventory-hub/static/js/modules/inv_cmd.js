@@ -990,6 +990,11 @@ window.commitBulkMove = (confirmActivePrint = false) => {
                     ${expectedTiles}
                 </div>
             ` : `<div class="small" style="color:rgba(255,255,255,0.7);">Scan a location's QR to populate the expected list.</div>`}
+            ${data.idle_timeout_min ? `
+                <div class="small" style="color:rgba(255,255,255,0.55); margin-top:8px;">
+                    ⏳ This audit stays open for <b>${_escapeHtml(data.idle_timeout_min)} min</b> of
+                    inactivity, then clears itself. Nothing is moved either way.
+                </div>` : ''}
             ${data.rogue && data.rogue.length ? `
                 <div style="font-weight:bold; color:#fc0; margin-bottom:6px;">Rogue (scanned but expected elsewhere)</div>
                 <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:6px;">

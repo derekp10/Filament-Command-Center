@@ -840,7 +840,11 @@ def api_identify_scan():
         state.AUDIT_SESSION['active'] = True
         state.AUDIT_SESSION['last_activity_ts'] = time.time()
         state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
-        state.add_log_entry("Scan a Location label to begin checking.", "INFO")
+        # Set the expiry expectation here too, so the log and the panel agree
+        # (mirrors the bulk-move arm lines, L298 Phase 3).
+        state.add_log_entry(
+            f"Scan a Location label to begin checking. (Clears itself after "
+            f"{state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min idle.)", "INFO")
         return jsonify({"type": "command", "cmd": "clear"})
 
     if state.AUDIT_SESSION.get('active'):

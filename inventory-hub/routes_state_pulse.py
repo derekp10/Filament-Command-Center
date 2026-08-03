@@ -83,6 +83,11 @@ def api_audit_session():
     return jsonify({
         "active": True,
         "location_id": sess.get('location_id'),
+        # Same contract as the bulk-move snapshot (L298 Phase 3): tell the user
+        # the session expires, DERIVED from the constant so the UI text can't
+        # drift from the watchdog that enforces it. An audit that silently
+        # vanishes mid-shelf reads as a broken app, not as a timeout.
+        "idle_timeout_min": int(state.AUDIT_IDLE_TIMEOUT_SECONDS // 60),
         "expected": expected_rows,
         "rogue": rogue_rows,
         "stats": {
