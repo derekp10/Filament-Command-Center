@@ -426,13 +426,34 @@ def _find_location(loc_list, loc_id):
     return None, None
 
 
-def _bindings_from_row(row):
-    """Extract slot_targets dict from a location row's extra field (safe)."""
-    extra = row.get('extra') or {}
+def bindings_from_row(row):
+    """Extract the slot_targets dict from a location row's `extra` (safe).
+
+    THE canonical reader — `logic._slot_targets_for` delegates here rather than
+    re-implementing it (they had drifted: this one normalized values, that one
+    didn't, and only that one guarded a non-dict `extra`).
+
+    Defensive at BOTH levels, because `locations.json` is not guaranteed to hold
+    well-formed rows: it is hand-editable, an agent may edit it on request, and a
+    writer bug could emit the wrong shape. `row.get('extra') or {}` alone is not
+    enough — if `extra` is a STRING (or any non-dict), `.get` raises
+    AttributeError and takes down every caller, including the /api/locations
+    synthesizer that renders the whole Location Manager.
+    """
+    if not isinstance(row, dict):
+        return {}
+    extra = row.get('extra')
+    if not isinstance(extra, dict):
+        return {}
     targets = extra.get('slot_targets')
     if isinstance(targets, dict):
         return {str(k): (None if v in (None, '') else str(v)) for k, v in targets.items()}
     return {}
+
+
+# Back-compat alias: the helper was private until 2026-08-03, when logic.py
+# needed it too. Kept so any straggling internal reference keeps working.
+_bindings_from_row = bindings_from_row
 
 
 def migrate_feeder_map_if_needed(loc_list, feeder_map):
@@ -452,12 +473,17 @@ def migrate_feeder_map_if_needed(loc_list, feeder_map):
         loc_id = str(row.get('LocationID', '')).strip()
         if not loc_id or loc_id not in feeder_map:
             continue
-        if _bindings_from_row(row):
+        if bindings_from_row(row):
             continue  # already migrated / user-edited; don't clobber
         target = feeder_map[loc_id]
         if not target:
             continue
-        extra = dict(row.get('extra') or {})
+        # Same malformed-row hazard as bindings_from_row, one line later and
+        # with a DIFFERENT exception: `dict("some string")` raises ValueError,
+        # not AttributeError, so guarding only the reader above isn't enough.
+        # A non-dict extra carries no siblings worth preserving, so drop it.
+        _existing_extra = row.get('extra')
+        extra = dict(_existing_extra) if isinstance(_existing_extra, dict) else {}
         extra['slot_targets'] = {"1": str(target)}
         row['extra'] = extra
         state.logger.info(
@@ -1491,7 +1517,7 @@ def get_dryer_box_bindings(loc_id):
     _, row = _find_location(loc_list, loc_id)
     if not row or row.get('Type') != DRYER_BOX_TYPE:
         return None  # distinct from empty-dict to signal "not found"
-    return _bindings_from_row(row)
+    return bindings_from_row(row)
 
 
 def get_dryer_box_slot_order(loc_id):
@@ -1712,7 +1738,7 @@ def get_bindings_for_machine(printer_name, printer_map):
         if row.get('Type') != DRYER_BOX_TYPE:
             continue
         box_id = str(row.get('LocationID', '')).strip()
-        for slot, target in _bindings_from_row(row).items():
+        for slot, target in bindings_from_row(row).items():
             if not target:
                 continue
             target_up = target.strip().upper()

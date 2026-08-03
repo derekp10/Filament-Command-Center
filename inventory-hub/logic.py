@@ -954,13 +954,19 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
 
 
 def _slot_targets_for(loc_id, loc_info_map):
-    """extra.slot_targets for a location, defensively. {} when absent/malformed."""
+    """extra.slot_targets for a location, defensively. {} when absent/malformed.
+
+    Owns only the id->row LOOKUP; the extraction itself delegates to the
+    canonical `locations_db.bindings_from_row` so the two can't drift again.
+    (They already had: this one guarded a non-dict `extra` and the shared one
+    didn't, while the shared one normalized values and this one didn't. The
+    guard moved into the shared helper; the normalization is harmless here —
+    JSON object keys are always strings, and the sole consumer
+    `_bound_feeds_for_move` collapses '' and None identically via
+    `str(target or '')`.)
+    """
     row = loc_info_map.get(str(loc_id or '').strip().upper()) or {}
-    extra = row.get('extra')
-    if not isinstance(extra, dict):
-        return {}
-    targets = extra.get('slot_targets')
-    return targets if isinstance(targets, dict) else {}
+    return locations_db.bindings_from_row(row)
 
 
 def _bound_feeds_for_move(contents, movable_ids, loc_info_map):
