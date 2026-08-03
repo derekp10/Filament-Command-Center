@@ -229,6 +229,16 @@
         document.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
+            // A modifier combo is an APP SHORTCUT, never scanner output — a
+            // barcode scanner types plain characters. Without this, Ctrl+C to
+            // copy a location id off the dashboard leaves "c" in scanBuffer,
+            // and the next scan within the 2s window dispatches "cLOC:PM-DB-A",
+            // which fails the prefix match and reports "Unknown Code (Use LOC:
+            // prefix)" on a perfectly good printed label.
+            // ⚠️ Shift is DELIBERATELY not listed: scanners send Shift for every
+            // uppercase character, so guarding on it would break every scan.
+            if (e.ctrlKey || e.altKey || e.metaKey) return;
+
             if (e.key === 'Enter') {
                 e.preventDefault();
                 if (state.scanBuffer.length > 0) {

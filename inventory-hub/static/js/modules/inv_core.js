@@ -1413,11 +1413,44 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 3. When a modal finishes hiding
-    document.addEventListener('hidden.bs.modal', function () {
+    document.addEventListener('hidden.bs.modal', function (ev) {
         // Bootstrap aggressively strips '.modal-open' from body when *any* modal hides.
         // We must forcefully restore it if there are other modals still 'underneath' it.
         if (document.querySelectorAll('.modal.show').length > 0) {
             document.body.classList.add('modal-open');
+        }
+
+        // --- Scan-gate release (axis-(a) audit, 2026-08-03) ---
+        // `state.activeModal` gates processScan: while it is set, inv_cmd's
+        // router answers only CONFIRM/CANCEL and silently DROPS every spool and
+        // location scan — no toast, no Activity Log line, no request.
+        // It used to be cleared ONLY by closeModal(), i.e. only by the dialogs'
+        // own buttons. Escape and backdrop clicks bypass that (#confirmModal
+        // sets neither data-bs-keyboard="false" nor data-bs-backdrop="static",
+        // and the inv_loc_mgr Escape ladder calls inst.hide() directly), so
+        // cancelling any confirm that way left the flag latched and the scanner
+        // looked DEAD until a page reload.
+        // Releasing here covers every dismissal path at once.
+        const SCAN_GATING_MODALS = ['confirmModal', 'safetyModal', 'actionModal'];
+        const hiddenId = ev && ev.target && ev.target.id;
+        if (SCAN_GATING_MODALS.includes(hiddenId)) {
+            // Only release once no gating dialog remains up, so closing an inner
+            // one doesn't unlock the scanner while an outer one is still asking.
+            const stillOpen = SCAN_GATING_MODALS.some(id => {
+                const el = document.getElementById(id);
+                return el && el.classList.contains('show');
+            });
+            if (!stillOpen) {
+                state.activeModal = null;
+                // A dangling callback is its own hazard: confirmAction/
+                // confirmSafety only run (and null) it on the button path, so an
+                // Escape left it armed and a LATER scan containing the substring
+                // 'CONFIRM' could fire the action the user just declined.
+                // (The button path already nulled these before this event fires,
+                // so this is a no-op there.)
+                state.pendingConfirm = null;
+                state.pendingSafety = null;
+            }
         }
     });
 });

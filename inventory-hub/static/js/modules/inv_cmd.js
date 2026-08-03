@@ -1721,6 +1721,11 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
     // them; Escape always cancels (owned by mountOverlay's onEscape).
     const keyHandler = (e) => {
         if (e.key === 'Enter') {
+            // ⚠️ SAFETY (axis-(a) audit, 2026-08-03) — see inv_quickswap.js for the
+            // full rationale. A scan in flight owns this Enter: it terminates the
+            // scan, it is not a button press. YES is focused by initialFocus, so
+            // without this the "📷 Scan to Cancel" QR performed the CONFIRM.
+            if (typeof state !== 'undefined' && state.scanBuffer) return;
             const active = document.activeElement;
             if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
             else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }

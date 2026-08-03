@@ -576,11 +576,21 @@ window.wizardCollapseAllSections = () => {
         const tag = (document.activeElement?.tagName || '').toUpperCase();
         if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
         if (!e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+        // ⚠️ A barcode scanner sends Shift for EVERY uppercase character, so a
+        // scanned label containing 'E' or 'C' looks exactly like Shift+E /
+        // Shift+C. Without this guard, scanning while the wizard is open (focus
+        // on the modal rather than a field) fired expand/collapse once per such
+        // character AND left those characters in state.scanBuffer, corrupting
+        // the scan. Bail while a scan is in flight and let the accumulator have
+        // the keystroke.
+        if (typeof state !== 'undefined' && state.scanBuffer) return;
         if (e.key === 'E' || e.key === 'e') {
             e.preventDefault();
+            e.stopImmediatePropagation();
             window.wizardExpandAllSections();
         } else if (e.key === 'C' || e.key === 'c') {
             e.preventDefault();
+            e.stopImmediatePropagation();
             window.wizardCollapseAllSections();
         }
     });

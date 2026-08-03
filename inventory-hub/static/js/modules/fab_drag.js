@@ -101,7 +101,19 @@
             // '/' — the common "focus search" key. Skip while typing in a field
             // or while a scan stream is in flight (Prusament URL QRs contain '/').
             if (e.key === '/' && !inField && !scanInFlight()) {
-                e.preventDefault(); openSearch();
+                e.preventDefault();
+                // preventDefault alone does NOT stop the scan accumulator — that
+                // is a SEPARATE document-level listener registered later (the
+                // inline block in scripts.html), so '/' still landed in
+                // state.scanBuffer. The next scan within the 2s window then
+                // dispatched "/LOC:PM-DB-A", which fails the prefix match and
+                // reports "Unknown Code" on a perfectly good label — the exact
+                // L298 Shift+B incident, in a different module.
+                // stopImmediatePropagation reaches it because both listeners sit
+                // on `document` in the bubble phase, and ours runs first
+                // (fab_drag.js is loaded before that inline block).
+                e.stopImmediatePropagation();
+                openSearch();
             }
         });
 

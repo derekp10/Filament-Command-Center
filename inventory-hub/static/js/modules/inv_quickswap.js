@@ -421,6 +421,19 @@
         //     Manager modal behind and eventually the browser chrome).
         const keyHandler = (e) => {
             if (e.key === 'Enter') {
+                // ⚠️ SAFETY (axis-(a) audit, 2026-08-03): a scan in flight OWNS
+                // this Enter — it is the scan TERMINATOR, not a button press.
+                // This overlay renders a "📷 Scan to Cancel" QR while mountOverlay
+                // focuses YES (and its focus guard KEEPS it there), so without
+                // this check the CANCEL scan's own Enter matched `active === yes`
+                // and performed the CONFIRM — yanking a spool off a live toolhead,
+                // the exact outcome this dialog exists to prevent. The
+                // stopPropagation below then also suppressed the accumulator, so
+                // routeConfirmScan never ran at all.
+                // Bail out and let it bubble so the CMD:CONFIRM / CMD:CANCEL
+                // payload routes properly. Keyboard use is unaffected: pressing
+                // Enter by hand leaves scanBuffer empty.
+                if (typeof state !== 'undefined' && state.scanBuffer) return;
                 const active = document.activeElement;
                 if (active === yes) {
                     e.preventDefault(); e.stopPropagation();
@@ -1203,6 +1216,12 @@
             e.preventDefault();
             focusSlot(buttons[(currentIdx - 1 + buttons.length) % buttons.length]);
         } else if (e.key === 'Enter') {
+            // A scan in flight owns this Enter (same rule as the confirm
+            // overlays above). Press Q or an arrow to highlight a slot, then
+            // scan a spool label, and without this the scan's terminating Enter
+            // opened an unrequested "Load <box> slot N into <toolhead>?" confirm
+            // — which then inherited the confirm-overlay Enter bug on top.
+            if (typeof state !== 'undefined' && state.scanBuffer) return;
             if (currentIdx >= 0) {
                 e.preventDefault();
                 window.quickSwapTap(buttons[currentIdx]);
