@@ -73,6 +73,48 @@ class TestUpdateSpoolErrorSymmetry:
         assert spoolman_api.LAST_SPOOLMAN_ERROR is None
 
 
+class TestWritePatchTimeouts:
+    """Both write PATCHes must pass a timeout to requests.
+
+    `requests` has NO default timeout, so a bare call blocks its worker
+    thread until the OS gives up. update_spool shipped without one until
+    2026-08-03 — the hottest write in the app (every move, deduct,
+    weigh-out, and each spool of a bulk move) could hang a Flask thread
+    against an unreachable Spoolman.
+
+    This is the runtime companion to tests/test_requests_timeout_canary.py:
+    the canary reads source, this pins what actually reaches `requests`, so
+    wrapping the call in a helper that drops the kwarg still fails.
+    """
+
+    def setup_method(self):
+        spoolman_api.LAST_SPOOLMAN_ERROR = None
+
+    def test_update_spool_passes_a_timeout(self):
+        with patch.object(spoolman_api, "get_spool", return_value={"id": 1}), \
+             patch.object(spoolman_api, "_get_raw_extras", return_value={}), \
+             patch.object(spoolman_api.requests, "patch",
+                          return_value=_mock_response(ok=True, json_body={"id": 1})) as mock_patch:
+            spoolman_api.update_spool(1, {"used_weight": 5})
+
+        assert mock_patch.call_count == 1
+        timeout = mock_patch.call_args.kwargs.get("timeout")
+        assert timeout is not None, (
+            "update_spool PATCHed Spoolman with no timeout — this hangs a worker "
+            "thread indefinitely when Spoolman is unreachable."
+        )
+        assert timeout > 0
+
+    def test_update_filament_passes_a_timeout(self):
+        with patch.object(spoolman_api.requests, "patch",
+                          return_value=_mock_response(ok=True, json_body={"id": 9})) as mock_patch:
+            spoolman_api.update_filament(9, {"name": "Test"})
+
+        assert mock_patch.call_count == 1
+        timeout = mock_patch.call_args.kwargs.get("timeout")
+        assert timeout is not None and timeout > 0
+
+
 class TestUpdateFilamentErrorSymmetry:
     """update_filament has always populated LAST_SPOOLMAN_ERROR — pin it
     so a future refactor doesn't accidentally regress."""

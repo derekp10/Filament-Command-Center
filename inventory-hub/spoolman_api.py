@@ -357,7 +357,16 @@ def update_spool(sid, data):
             clean_data = data
         else:
             clean_data = sanitize_outbound_data(data)
-        r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data)
+        # A bare requests.patch has NO default timeout — it blocks the worker
+        # thread until the OS gives up, which on an unreachable/wedged Spoolman
+        # is effectively forever. This is the single highest-traffic write in the
+        # app (every move, deduct, weigh-out, and each spool of a bulk move), so a
+        # hang here starves request threads — the L28 frontend-lockup class.
+        # 5s (matching the create POSTs) rather than the 2s used by
+        # update_filament/update_vendor: this path is far hotter and a FALSE
+        # timeout on a slow-but-successful write is costlier here, since
+        # update_spool_or_raise turns it into a user-visible failure.
+        r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data, timeout=5)
         if r.ok:
             LAST_SPOOLMAN_ERROR = None
             return r.json()
