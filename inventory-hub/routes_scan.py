@@ -425,11 +425,13 @@ def api_bulk_move_session_action():
         return jsonify({"success": True, "session": logic.bulk_move_session_snapshot(sess)})
 
     if action == 'cancel':
-        was = state.BULK_MOVE_SESSION.get('source_id') or ''
-        state.reset_bulk_move()
-        if was:
-            state.add_log_entry(f"🔀 Bulk move cancelled (was {was}) — nothing moved.", "INFO")
-        return jsonify({"success": True, "session": logic.bulk_move_session_snapshot()})
+        # Shared primitive: refuses (rather than lying "nothing moved") when a
+        # commit already holds _BULK_MOVE_COMMIT_LOCK — the cancel cannot stop
+        # the in-flight perform_smart_move, so it must not claim to.
+        ok, msg = logic.cancel_bulk_move_session()
+        return jsonify({"success": ok, "msg": msg,
+                        "commit_in_flight": not ok,
+                        "session": logic.bulk_move_session_snapshot()})
 
     if not state.BULK_MOVE_SESSION.get('active'):
         return jsonify({"success": False, "msg": "No bulk move session is active."})
@@ -437,11 +439,13 @@ def api_bulk_move_session_action():
     state.BULK_MOVE_SESSION['last_activity_ts'] = time.time()
 
     if action == 'set_dest':
-        dest = str(data.get('dest', '') or '').strip().upper()
-        if not dest:
-            return jsonify({"success": False, "msg": "A destination is required."})
-        state.BULK_MOVE_SESSION['dest_id'] = dest
-        plan = logic._refresh_bulk_move_preview(confirm_active_print=confirm_active_print)
+        # Shared setter: refuses a re-target while a commit holds the lock, so a
+        # late destination change can't redirect a batch mid-flight.
+        ok, plan, msg = logic.set_bulk_move_dest(
+            data.get('dest'), confirm_active_print=confirm_active_print)
+        if not ok:
+            return jsonify({"success": False, "msg": msg,
+                            "session": logic.bulk_move_session_snapshot()})
         return jsonify({"success": bool(plan.get('ok')), "msg": plan.get('msg'),
                         "require_confirm": bool(plan.get('require_confirm')),
                         "confirm_type": plan.get('confirm_type'),

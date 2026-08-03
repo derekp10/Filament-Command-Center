@@ -87,13 +87,28 @@ window.updateManageTitle = (loc, itemArray = null) => {
     // a script-injection seam. (Same class as the escAttr stored-XSS fixed in
     // Group 34.) The `|| escHtml` fallback mirrors inv_core.js's export guard.
     const _attr = (v) => (window.escAttr || window.escHtml || String)(v);
-    const moveAllBtn = SINGLE_OCC.includes(t) ? '' : `
+    // While a bulk move is ARMED the button becomes "Show bulk move" instead.
+    // Without it, hiding the panel from inside the Location Manager stranded the
+    // user: the Hide latch stops the panel auto-reopening, and the BULK MOVE
+    // deck button that would reopen it sits behind the LM modal's backdrop. This
+    // is the in-modal way back to the armed session. (Arming a DIFFERENT source
+    // is still possible — triggerBulkMove's already_active confirm handles the
+    // replace — but "show me what's armed" is the far commoner intent here.)
+    // `state` is a script-scope let in inv_core.js, not a window property — the
+    // same reason generateSafeQR must be called by bare name (Derek 2026-05-16).
+    const bulkArmed = !!(typeof state !== 'undefined' && state.bulkMoveActive);
+    const moveAllBtn = SINGLE_OCC.includes(t) ? '' : (bulkArmed ? `
+        <button class="btn btn-sm btn-info ms-auto" style="white-space:nowrap;"
+                title="A bulk move is already armed — reopen its preview panel"
+                onclick="window.openBulkMovePanel && window.openBulkMovePanel({ user: true })">
+            🔀 Show bulk move
+        </button>` : `
         <button class="btn btn-sm btn-outline-info ms-auto" style="white-space:nowrap;"
                 data-bulk-src="${_attr(loc.LocationID)}"
                 title="Move everything from ${_attr(loc.LocationID)} to another location"
                 onclick="window.triggerBulkMove && window.triggerBulkMove(this.dataset.bulkSrc)">
             🔀 Move all →
-        </button>`;
+        </button>`);
 
     document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${loc.LocationID} ${typeBadge} ${occHtml}${moveAllBtn}</div>`;
 };
@@ -1530,7 +1545,9 @@ window.triggerBulkMove = (loc, replace = false) => {
                 return;
             }
             if (window.applyBulkMoveSession) window.applyBulkMoveSession(res.session);
-            if (window.openBulkMovePanel) window.openBulkMovePanel();
+            // user: true — clicking "Move all →" is an explicit request for the
+            // panel, so it overrides a Hide latch from an earlier session.
+            if (window.openBulkMovePanel) window.openBulkMovePanel({ user: true });
             showToast(`Bulk move armed from ${loc} — scan the destination location.`, "info", 5000);
         })
         .catch(() => { setProcessing(false); showToast("Couldn't arm the bulk move", "error", 7000); });

@@ -1064,22 +1064,31 @@ const _renderLogsPayload = (d, force = false) => {
         if (window.updateAuditVisuals) window.updateAuditVisuals();
     }
 
-    // L298 Phase 2 — sync the bulk-move session so a session started/ended
-    // ANYWHERE (another tab, a page reload, the idle watchdog) repaints this
-    // tab's deck QR. Keyed on active+stage together, not just `active`: an
-    // active-only edge left a reloaded tab painting 'idle' over a live session,
-    // turning the deck button into a disguised Cancel.
-    if (d.bulk_move_active !== undefined) {
-        const stage = d.bulk_move_active ? (d.bulk_move_stage || 'awaiting_source') : 'idle';
-        const sig = `${d.bulk_move_active}|${stage}`;
-        if (sig !== state.lastBulkMoveState) {
-            state.lastBulkMoveState = sig;
-            state.bulkMoveActive = d.bulk_move_active;
-            state.bulkMoveStage = stage;
-            if (window.updateBulkMoveVisuals) window.updateBulkMoveVisuals();
-        }
-    }
+    _syncBulkMoveSignal(d);
 };
+
+// L298 Phase 2/3 — sync the bulk-move session so a session started/ended
+// ANYWHERE (another tab, a page reload, the idle watchdog) repaints this tab's
+// deck QR. Keyed on active+stage together, not just `active`: an active-only
+// edge left a reloaded tab painting 'idle' over a live session, turning the deck
+// button into a disguised Cancel.
+//
+// Phase 3 factored this out of _renderLogsPayload because BOTH heartbeat shapes
+// must apply it. When the Activity Log is paused, _dashboardPulseTick drops the
+// 'logs' section and asks for 'status' instead — so the logs-only sync left a
+// paused tab with no bulk-move signal at all while the server-side idle watchdog
+// (which rides /api/logs) could still cancel the session underneath it.
+const _syncBulkMoveSignal = (src) => {
+    if (!src || src.bulk_move_active === undefined) return;
+    const stage = src.bulk_move_active ? (src.bulk_move_stage || 'awaiting_source') : 'idle';
+    const sig = `${src.bulk_move_active}|${stage}`;
+    if (sig === state.lastBulkMoveState) return;
+    state.lastBulkMoveState = sig;
+    state.bulkMoveActive = src.bulk_move_active;
+    state.bulkMoveStage = stage;
+    if (window.updateBulkMoveVisuals) window.updateBulkMoveVisuals();
+};
+window._syncBulkMoveSignal = _syncBulkMoveSignal;
 window._renderLogsPayload = _renderLogsPayload;
 
 let _updateLogStateInflight = false;
@@ -1285,6 +1294,10 @@ const _dashboardPulseTick = () => {
                     state.auditActive = payload.status.audit_active;
                     if (window.updateAuditVisuals) window.updateAuditVisuals();
                 }
+                // Same bulk-move sync the logs branch runs — this is the branch a
+                // PAUSED Activity Log takes, and it's the only bulk-move signal
+                // such a tab receives (updateLogState early-returns while paused).
+                _syncBulkMoveSignal(payload.status);
             }
             if (payload.locations) _renderLocationsPayload(payload.locations);
             if (payload.manage && payload.manage.contents && window._renderManagePayload) {

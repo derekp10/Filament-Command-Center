@@ -409,7 +409,8 @@ def test_partial_failure_reported_via_readback(client):
     the source afterward → it lands in `failed`, not `moved`."""
     with _bulk_env(strict_map={"PM-DB-A": [_spool(1), _spool(2), _spool(3)]},
                    readback={"PM-DB-A": [_spool(2)]},
-                   last_error="Spoolman 400: bad request") as mv:
+                   move_result={"status": "success",
+                                "failures": {"2": "Spoolman 400: bad request"}}) as mv:
         r = client.post("/api/bulk_move", json={"source": "PM-DB-A", "dest": "SHELF-B"})
     body = r.get_json()
     assert body["success"] is False           # a failure occurred
@@ -419,6 +420,40 @@ def test_partial_failure_reported_via_readback(client):
     assert body["failed"][0]["id"] == 2
     assert body["failed"][0]["err"] == "Spoolman 400: bad request"
     mv.assert_called_once()
+
+
+def test_failed_rows_carry_their_OWN_spoolman_error(client):
+    """PHASE 3 — per-spool error attribution.
+
+    Phase 2 read the LAST_SPOOLMAN_ERROR module global ONCE, after the whole
+    per-spool loop and one-to-two readbacks. That is wrong twice over: a later
+    SUCCESS resets the global to None (every failed row got the useless "see
+    Activity Log"), and a second failure overwrites the first (both rows blamed
+    on whichever failed last). perform_smart_move now captures each error
+    ADJACENT to its own failing write and returns the map.
+    """
+    with _bulk_env(strict_map={"PM-DB-A": [_spool(1), _spool(2), _spool(3)]},
+                   readback={"PM-DB-A": [_spool(1), _spool(3)]},
+                   last_error=None,       # a trailing success cleared the global
+                   move_result={"status": "success",
+                                "failures": {"1": "HTTP 400: bad location",
+                                             "3": "HTTP 409: conflict"}}):
+        r = client.post("/api/bulk_move", json={"source": "PM-DB-A", "dest": "SHELF-B"})
+    body = r.get_json()
+    assert body["moved"] == 1 and body["moved_ids"] == [2]
+    assert {f["id"]: f["err"] for f in body["failed"]} == {
+        1: "HTTP 400: bad location", 3: "HTTP 409: conflict"}
+
+
+def test_failed_row_without_a_captured_error_falls_back(client):
+    """No map entry (an older/odd engine return) must degrade to the Activity
+    Log pointer rather than KeyError or publish a wrong attribution."""
+    with _bulk_env(strict_map={"PM-DB-A": [_spool(1)]},
+                   readback={"PM-DB-A": [_spool(1)]},
+                   last_error="a stale global that must NOT be used",
+                   move_result={"status": "success"}):
+        r = client.post("/api/bulk_move", json={"source": "PM-DB-A", "dest": "SHELF-B"})
+    assert r.get_json()["failed"][0]["err"] == "see Activity Log"
 
 
 def test_ghost_at_source_after_move_is_not_a_failure(client):

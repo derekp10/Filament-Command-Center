@@ -46,9 +46,15 @@ def test_pulse_buffer_matches_legacy_endpoint(api_base_url, require_server):
 
 def test_pulse_status_section_has_expected_keys(api_base_url, require_server):
     """status section must always include the spoolman boolean plus
-    audit_active + undo_available so the frontend can repaint the nav-bar
-    dot from one payload. (The FilaBridge liveness dot was retired in the
-    FilaBridge Phase-2 cutover, Phase E Slice 4.)"""
+    audit_active + undo_available + the bulk-move signal, so the frontend can
+    repaint the nav-bar dot AND the deck tiles from one payload. (The FilaBridge
+    liveness dot was retired in the FilaBridge Phase-2 cutover, Phase E Slice 4.)
+
+    L298 Phase 3 added bulk_move_active/bulk_move_stage: a PAUSED Activity Log
+    swaps the 'logs' section out for 'status', so without them such a tab got no
+    bulk-move signal at all — the server-side idle watchdog could cancel the
+    session while the deck kept painting a live SCAN DEST / COMMIT tile.
+    """
     r = requests.get(
         f"{api_base_url}/api/dashboard_pulse?include=status", timeout=10
     )
@@ -57,11 +63,13 @@ def test_pulse_status_section_has_expected_keys(api_base_url, require_server):
     assert "status" in payload
     status = payload["status"]
     assert "filabridge" not in status  # retired in Phase E Slice 4
-    for key in ("spoolman", "audit_active", "undo_available"):
+    for key in ("spoolman", "audit_active", "undo_available", "bulk_move_active"):
         assert key in status, f"status section missing '{key}': {status}"
         assert isinstance(status[key], bool), (
             f"status.{key} should be bool, got {type(status[key]).__name__}"
         )
+    assert isinstance(status.get("bulk_move_stage"), str), (
+        f"status.bulk_move_stage should be a str stage name: {status}")
 
 
 def test_pulse_logs_section_matches_legacy_endpoint_shape(

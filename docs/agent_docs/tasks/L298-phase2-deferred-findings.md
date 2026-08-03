@@ -1,5 +1,23 @@
 # L298 Bulk Moves - Phase 2 review findings DEFERRED to Phase 3/4
 
+> ## ✅ CLOSED 2026-08-02 — every finding below was actioned in Phase 3.
+>
+> | Finding (deduped) | Outcome |
+> |---|---|
+> | N+1 Spoolman fan-out on the 2s poll (**4 copies**: the MED + 3 LOW dupes) | FIXED — `plan_bulk_move` caches the display fields it already read into `plan['rows']`; `bulk_move_session_snapshot` is now pure formatting. Live poll ticks measured **6–11 ms**. Pinned at the transport boundary by `test_snapshot_does_zero_spoolman_io`. |
+> | Cancel racing an in-flight commit reports "nothing moved" | FIXED — new `logic.cancel_bulk_move_session()`; BOTH cancel paths take `_BULK_MOVE_COMMIT_LOCK` non-blocking and refuse. |
+> | `commitBulkMove`'s 15s abort vs an O(N) write | FIXED — explicit 120 s timeout; the failure path now RECONCILES instead of asserting failure. |
+> | `/api/dashboard_pulse` `status` omits `bulk_move_active` (**4 copies**) | FIXED — both keys added; `_syncBulkMoveSignal` factored out and called from the `status` branch too. |
+> | No mixed-entry-path test (LM start → scanned dest → CMD:DONE) | FIXED — `test_lm_button_start_then_scanned_dest_then_cmd_done`. |
+> | No E2E for the 4-state bulkmove shapeshift slot + comment drift (**2 copies**) | FIXED — `test_bulkmove_slot_shapeshifts_between_states` + the comment now describes shipped behaviour; `set()` also clears a cmd-less QR (with the pending-rAF race closed). |
+> | `LAST_SPOOLMAN_ERROR` read far from the failing write | FIXED — `perform_smart_move` returns a per-spool `failures` map captured adjacent to each write. |
+> | Hide tooltip advertises a destructive reopen (**+ the "green COMMIT tile cancels" copy**) | FIXED — `toggleBulkMove` is three-way (reopen when hidden); tooltip + comment corrected to match what is actually reachable. |
+> | Hidden panel re-opens itself on the next stage change | FIXED — `_userHidPanel` latch, cleared only by an explicit user open or session end. |
+> | Blocked plan advanced to `preview` (**2 copies**) | **STALE** for `_refresh_bulk_move_preview` (already fixed in `b56149f`) — but the review found the SAME bug live in `commit_bulk_move_session`'s re-plan, which had no such guard. Both now share `_apply_plan_to_session`. |
+>
+> No bulk-move Playwright E2E → `tests/test_bulk_move_panel.py` (16 cases). The
+> remaining Phase-4 work is tracked in the plan doc, not here.
+
 Source: batched re-verification of ALL 55 Phase-2 review findings against the
 POST-FIX code (2026-08-02, workflow run wf_2d9c077c-aae). 31 were still live;
 11 were fixed immediately in Phase 2 (scan-buffer deadlock, onclick JS-string

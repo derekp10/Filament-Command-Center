@@ -180,6 +180,13 @@ def _check_bulk_move_idle_timeout():
     """
     if not state.BULK_MOVE_SESSION.get('active'):
         return
+    # Never wipe a session a commit is actively working on. The watchdog rides
+    # the ~5s /api/logs heartbeat, so a long O(N) commit can cross the idle
+    # deadline mid-flight; resetting there would log "auto-cancelled — no spools
+    # moved" over a move that IS moving spools — the same lie the Phase-3 cancel
+    # guard exists to prevent. The commit clears the session itself when it ends.
+    if logic._BULK_MOVE_COMMIT_LOCK.locked():
+        return
     last = float(state.BULK_MOVE_SESSION.get('last_activity_ts') or 0.0)
     if last <= 0:
         # No timestamp (a session predating this watchdog / hand-built in a
@@ -434,6 +441,14 @@ def api_dashboard_pulse():
                     'spoolman': logs_payload['status'].get('spoolman', False),
                     'audit_active': logs_payload.get('audit_active', False),
                     'undo_available': logs_payload.get('undo_available', False),
+                    # L298 Phase 3 — the bulk-move signal must ride the DERIVED
+                    # status section too. A paused Activity Log swaps 'logs' out
+                    # for 'status' (inv_core.js _dashboardPulseTick), so without
+                    # these two keys a paused tab got NO bulk-move signal at all:
+                    # the idle watchdog could cancel the session server-side
+                    # while the deck kept painting a live SCAN DEST / COMMIT tile.
+                    'bulk_move_active': logs_payload.get('bulk_move_active', False),
+                    'bulk_move_stage': logs_payload.get('bulk_move_stage', 'idle'),
                 }
 
     if 'locations' in include:

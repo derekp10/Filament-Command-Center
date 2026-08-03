@@ -511,9 +511,26 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     if ejected_data:
                         undo_record['ejections'][rid] = ejected_data.get('location', '')
 
+    # L298 Phase 3 — per-spool failure attribution. Each write branch below
+    # already reads spoolman_api.LAST_SPOOLMAN_ERROR ADJACENT to its own failing
+    # call (the CLAUDE.md rule); this just keeps what it read, keyed by spool, so
+    # a batch caller can say WHICH spool failed and WHY. Bulk move used to read
+    # the module global once, AFTER the whole loop and two readbacks — by then a
+    # later success had reset it to None (every failed row got the useless "see
+    # Activity Log") or a second failure had overwritten it (both rows blamed on
+    # the last error).
+    failures: typing.Dict[str, str] = {}
     for sid in spools:
         spool_data = spoolman_api.get_spool(sid)
-        if not spool_data: continue
+        if not spool_data:
+            # A FIXED string, deliberately: spoolman_api.get_spool swallows its
+            # exception and does NOT touch LAST_SPOOLMAN_ERROR, so reading the
+            # global here would attribute some OTHER spool's (or some other
+            # request's) stale error to this one — reintroducing exactly the
+            # mis-attribution this map exists to remove. The rule is "read it
+            # ADJACENT to the failing call"; this call has no error channel.
+            failures[str(sid)] = "could not read the spool from Spoolman"
+            continue
         current_loc = spool_data.get('location', '').strip().upper()
         undo_record['moves'][sid] = current_loc
         current_extra: dict = dict(spool_data.get('extra') or {})
@@ -613,6 +630,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 # with no user-visible signal — a class of bug behind the
                 # 2026-04-27 outage (Item 2 in Feature-Buglist).
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                failures[str(sid)] = err
                 state.add_log_entry(
                     f"❌ Failed to slot Spool #{sid} -> {target}: {err}", "ERROR", "ff4444"
                 )
@@ -628,6 +646,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 state.add_log_entry(f"📦 {info['text']} -> Dryer {target}{slot_txt}", "INFO", info['color'])
             else:
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                failures[str(sid)] = err
                 state.add_log_entry(
                     f"❌ Failed to move Spool #{sid} -> Dryer {target}: {err}", "ERROR", "ff4444"
                 )
@@ -652,6 +671,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
             else:
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                failures[str(sid)] = err
                 state.add_log_entry(
                     f"❌ Failed to move Spool #{sid} -> {target}: {err}", "ERROR", "ff4444"
                 )
@@ -696,6 +716,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
 
     result: typing.Dict[str, typing.Any] = {
         "status": "success",
+        # sid(str) -> the Spoolman error body captured NEXT TO the write that
+        # failed. Empty on a fully-clean move. Additive: existing callers read
+        # only `status` (a bare success even when some writes were rejected —
+        # this is what lets a batch caller do better).
+        "failures": failures,
     }
     if auto_deploy_result is not None and bound_toolhead:
         result["auto_deployed_to"] = str(bound_toolhead).upper()
@@ -747,7 +772,14 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
     dest = str(dest or '').strip().upper()
     plan = {"ok": False, "msg": "", "blocked_reason": None, "require_confirm": False,
             "confirm_type": None, "active_print": None, "source": source, "dest": dest,
-            "movable_ids": [], "skipped": []}
+            "movable_ids": [], "skipped": [],
+            # Phase 3 display-only fields (see the skip loop): `rows` is the
+            # id -> {display,color,color_direction,slot,remaining_weight} cache
+            # the panel renders from, `would_move_ids` the movable set even when
+            # a guard blocks the batch. Seeded here so an EARLY block (same /
+            # descendant / unknown dest / single-occupancy / unreadable source)
+            # still returns the full key set.
+            "rows": {}, "would_move_ids": []}
 
     if not source or not dest:
         plan["msg"] = "Both source and dest are required."
@@ -814,8 +846,23 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
                 pass
     movable_ids = []
     skipped = []
+    # L298 Phase 3 — carry the DISPLAY fields we already have. Every `contents`
+    # row from _build_location_match already holds display/color/color_direction/
+    # slot/remaining_weight; the plan used to discard all of it and keep only ids,
+    # forcing bulk_move_session_snapshot to re-issue one GET /api/v1/spool/<id>
+    # per row on EVERY 2s panel poll (an unbounded N+1 fan-out — the L3 slot-
+    # assign latency class). Stashing it here makes the snapshot pure formatting
+    # with zero Spoolman I/O. Display-only: nothing in the commit path reads it.
+    rows = {}
     for sp in contents:
         sid = sp.get('id')
+        rows[str(sid)] = {
+            "display": sp.get('display') or f"#{sid}",
+            "color": sp.get('color') or "888888",
+            "color_direction": sp.get('color_direction') or "longitudinal",
+            "slot": sp.get('slot'),
+            "remaining_weight": sp.get('remaining_weight'),
+        }
         if sp.get('is_ghost'):
             skipped.append({"id": sid, "reason": "deployed to a live toolhead"})
             continue
@@ -839,6 +886,13 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
         movable_ids.append(sid)
 
     plan["skipped"] = skipped
+    plan["rows"] = rows
+    # DISPLAY-ONLY twin of movable_ids. `movable_ids` stays empty on a BLOCKED
+    # plan so execute_bulk_move can never act on one; `would_move_ids` survives
+    # the block so the panel can still show the user WHICH spools the capacity
+    # guard refused ("2 free of 4, source has 5" is far more actionable next to
+    # the five tiles). Never read by the commit path.
+    plan["would_move_ids"] = list(movable_ids)
     if not movable_ids:
         plan["ok"] = True
         plan["msg"] = f"Nothing to move from {source} ({len(skipped)} left in place)."
@@ -948,9 +1002,15 @@ def execute_bulk_move(plan, confirm_active_print=False):
                        for s in (spoolman_api.get_spools_at_location_detailed(dest) or [])}
             stuck -= at_dest
         if stuck:
-            err = spoolman_api.LAST_SPOOLMAN_ERROR or "see Activity Log"
+            # Per-spool attribution from the map perform_smart_move captured
+            # ADJACENT to each failing write. Reading the LAST_SPOOLMAN_ERROR
+            # module global here instead (the Phase-2 behaviour) was wrong twice
+            # over: a later SUCCESS resets it to None, and a second failure
+            # overwrites the first — so a mixed batch mislabelled every row.
+            per_spool = (move_result or {}).get('failures') or {}
             moved_ids = [m for m in movable_ids if str(m) not in stuck]
-            failed = [{"id": m, "err": err} for m in movable_ids if str(m) in stuck]
+            failed = [{"id": m, "err": per_spool.get(str(m)) or "see Activity Log"}
+                      for m in movable_ids if str(m) in stuck]
     except Exception as e:
         state.logger.warning(f"bulk_move: tally readback failed for {source}: {e}")
 
@@ -991,20 +1051,60 @@ def start_bulk_move_session(source_id=None):
     return sess
 
 
+def _apply_plan_to_session(sess, plan):
+    """Store a freshly-computed plan on the session AND set the matching stage.
+
+    The ONE place that decides "does this plan deserve the committable stage?".
+    Only a plan that could actually be committed advances to `preview`; a BLOCKED
+    dest (single-occupancy / unknown / capacity / unreadable) stays at
+    awaiting_dest so the user is still prompted for a valid one. Without that,
+    the stage rides the heartbeat and the deck tile goes GREEN "COMMIT" with a
+    live CMD:DONE QR for a move that can never run. (require_confirm IS
+    committable — it just needs the active-print opt-in.)
+
+    Factored out because commit_bulk_move_session's re-plan wrote sess['preview']
+    WITHOUT the stage guard, so a commit that re-blocked (a spool landed in the
+    dest between preview and commit, or a transient Spoolman blip) left the tile
+    green and advertising a commit that every retry refused.
+    """
+    sess['preview'] = plan
+    sess['stage'] = 'preview' if (plan.get('ok') or plan.get('require_confirm')) else 'awaiting_dest'
+    return plan
+
+
 def _refresh_bulk_move_preview(confirm_active_print=False):
     """(Re)compute the dry-run preview for a session that has both locations."""
     sess = state.BULK_MOVE_SESSION
     plan = plan_bulk_move(sess.get('source_id'), sess.get('dest_id'),
                           confirm_active_print=confirm_active_print)
-    sess['preview'] = plan
-    # Only a plan that could actually be committed advances to `preview`. A
-    # BLOCKED dest (single-occupancy / unknown / capacity / unreadable) used to
-    # advance anyway, and since the stage now rides the heartbeat the deck tile
-    # went GREEN "COMMIT" with a CMD:DONE QR for a move that can never run.
-    # Stay at awaiting_dest so the user is still prompted for a valid one.
-    # (require_confirm is committable — it just needs the active-print opt-in.)
-    sess['stage'] = 'preview' if (plan.get('ok') or plan.get('require_confirm')) else 'awaiting_dest'
-    return plan
+    return _apply_plan_to_session(sess, plan)
+
+
+def set_bulk_move_dest(dest_id, confirm_active_print=False):
+    """Set/re-target the destination and recompute the preview. (ok, plan|None, msg).
+
+    Serialized against a running commit for the same reason cancel is: the
+    commit reads sess['dest_id'] INSIDE the lock, but the two dest writers (the
+    HTTP set_dest and a LOC scan) wrote it with none. So a stray destination
+    scan landing between the user's Commit click and the commit thread's read
+    RE-TARGETED the batch — spools moved to a location the user never previewed.
+    A destructive op must only ever commit the destination that was on screen.
+
+    Non-blocking: a re-target during a commit is REFUSED, not queued (queuing
+    would apply it to a session the commit is about to clear anyway).
+    """
+    dest_id = str(dest_id or '').strip().upper()
+    if not dest_id:
+        return False, None, "A destination is required."
+    if not _BULK_MOVE_COMMIT_LOCK.acquire(False):
+        return False, None, ("A bulk-move commit is in progress — the destination "
+                             "can't be changed until it finishes.")
+    try:
+        state.BULK_MOVE_SESSION['dest_id'] = dest_id
+        plan = _refresh_bulk_move_preview(confirm_active_print=confirm_active_print)
+        return True, plan, plan.get('msg') or ""
+    finally:
+        _BULK_MOVE_COMMIT_LOCK.release()
 
 
 def bulk_move_session_snapshot(sess=None):
@@ -1012,8 +1112,14 @@ def bulk_move_session_snapshot(sess=None):
 
     Returns {active:False} when idle (cheap), else the stage + both locations +
     a flattened preview (counts, the movable/skipped detail, and any block or
-    active-print confirm). Enriches each movable/skipped id with its display
-    label + color so the panel can render real spool tiles.
+    active-print confirm), with each row carrying the display label / colour /
+    slot / remaining weight the panel renders as a spool tile.
+
+    ⚡ ZERO Spoolman I/O — the panel polls this every 2s, so it formats the rows
+    `plan_bulk_move` already captured (`plan['rows']`) instead of re-issuing a
+    per-id GET. Phase 2 did the latter: an N+1 fan-out per tick, unbounded in the
+    source size and multiplied by every open tab. Keep it I/O-free; a live
+    re-read belongs in `_refresh_bulk_move_preview` (which re-plans anyway).
     """
     if sess is None:
         sess = state.BULK_MOVE_SESSION
@@ -1028,25 +1134,27 @@ def bulk_move_session_snapshot(sess=None):
     }
     plan = sess.get('preview') or None
     if plan:
-        def _enrich(sid, reason=None):
-            row = {"id": sid, "display": f"#{sid}", "color": "888888",
-                   "color_direction": "longitudinal"}
-            try:
-                sd = spoolman_api.get_spool(sid)
-                if sd:
-                    info = spoolman_api.format_spool_display(sd) or {}
-                    row["display"] = info.get('text') or row["display"]
-                    row["color"] = info.get('color') or row["color"]
-                    row["color_direction"] = (info.get('color_direction')
-                                              or row["color_direction"])
-            except Exception:
-                pass
+        rows = plan.get('rows') or {}
+
+        def _row(sid, reason=None):
+            cached = rows.get(str(sid)) or {}
+            row = {
+                "id": sid,
+                "display": cached.get('display') or f"#{sid}",
+                "color": cached.get('color') or "888888",
+                "color_direction": cached.get('color_direction') or "longitudinal",
+                "slot": cached.get('slot'),
+                "remaining_weight": cached.get('remaining_weight'),
+            }
             if reason:
                 row["reason"] = reason
             return row
 
-        movable = [_enrich(sid) for sid in (plan.get('movable_ids') or [])]
-        skipped = [_enrich(s.get('id'), s.get('reason')) for s in (plan.get('skipped') or [])]
+        # A blocked plan keeps an empty movable_ids (so the commit path can never
+        # act on it) but still reports what it REFUSED, via would_move_ids.
+        movable_src = plan.get('movable_ids') or plan.get('would_move_ids') or []
+        movable = [_row(sid) for sid in movable_src]
+        skipped = [_row(s.get('id'), s.get('reason')) for s in (plan.get('skipped') or [])]
         out["preview"] = {
             "ok": bool(plan.get('ok')),
             "msg": plan.get('msg') or "",
@@ -1077,12 +1185,11 @@ def process_bulk_move_scan(scan_result):
     if scan_result and scan_result.get('type') == 'command':
         cmd = scan_result.get('cmd')
         if cmd == 'cancel':
-            src = sess.get('source_id') or ''
-            state.reset_bulk_move()
-            state.add_log_entry(
-                "🔀 Bulk move cancelled" + (f" (was {src})" if src else "") + " — nothing moved.",
-                "INFO")
-            return {"status": "success", "msg": "Bulk move cancelled"}
+            # Routed through the shared primitive so a CMD:CANCEL scan racing an
+            # in-flight commit is refused exactly like the HTTP cancel, instead
+            # of reporting "nothing moved" over a move that is still running.
+            ok, msg = cancel_bulk_move_session()
+            return {"status": "success" if ok else "error", "msg": msg}
         if cmd == 'done':
             if sess.get('stage') != 'preview':
                 state.add_log_entry(
@@ -1124,8 +1231,12 @@ def process_bulk_move_scan(scan_result):
         if stage in ('awaiting_dest', 'preview'):
             # Re-scanning at the preview stage RE-TARGETS the destination rather
             # than erroring — the user changed their mind before committing.
-            sess['dest_id'] = loc_id
-            plan = _refresh_bulk_move_preview()
+            # Routed through the shared setter so a scan can't re-target a batch
+            # that is already being committed (see set_bulk_move_dest).
+            ok, plan, msg = set_bulk_move_dest(loc_id)
+            if not ok:
+                state.add_log_entry(f"⚠️ Bulk move: {msg}", "WARNING", "ffaa00")
+                return {"status": "error", "msg": msg}
             if not plan.get('ok') and not plan.get('require_confirm'):
                 state.add_log_entry(f"⚠️ Bulk move blocked: {plan.get('msg')}", "WARNING", "ffaa00")
                 return {"status": "error", "msg": plan.get('msg')}
@@ -1153,6 +1264,47 @@ def process_bulk_move_scan(scan_result):
 _BULK_MOVE_COMMIT_LOCK = threading.Lock()
 
 
+def cancel_bulk_move_session():
+    """Clear the session — UNLESS a commit is mid-flight. Returns (ok, msg).
+
+    The single cancel primitive for BOTH entries (the HTTP `action:'cancel'` and
+    the CMD:CANCEL scan), because a cancel that races a running commit is a LIE,
+    not a race we can win: `commit_bulk_move_session` captured source/dest into
+    locals before calling perform_smart_move, so wiping the session dict does not
+    stop a single spool write. The old unconditional reset answered "cancelled —
+    nothing moved" while every spool kept moving, then the commit logged its own
+    SUCCESS summary. Flask serves the two requests concurrently (threaded=True)
+    and the panel's ❌ Cancel stays clickable through the whole multi-second
+    commit (the processing overlay is z 9999, the panel z 20000), so this is
+    reachable from ONE tab — no second tab required.
+
+    Non-blocking acquire: a cancel that loses is REFUSED and says so, rather than
+    queueing to wipe a session the commit already cleared.
+    """
+    if not _BULK_MOVE_COMMIT_LOCK.acquire(False):
+        state.add_log_entry(
+            "⚠️ Bulk move cancel IGNORED — a commit is already in flight; "
+            "spools are being moved. Check the Activity Log for the outcome.",
+            "WARNING", "ffaa00")
+        return False, ("A bulk-move commit is in progress — it can no longer be "
+                       "cancelled. Watch the Activity Log for the result.")
+    try:
+        was_active = bool(state.BULK_MOVE_SESSION.get('active'))
+        was = state.BULK_MOVE_SESSION.get('source_id') or ''
+        state.reset_bulk_move()
+        # Only log a cancel that cancelled SOMETHING. A cancel against an idle
+        # session is a legitimate no-op (a stale tab, a double-click, a
+        # belt-and-braces client) and logging it would spam the Activity Log
+        # with "cancelled — nothing moved" lines for moves that never existed.
+        if was_active:
+            state.add_log_entry(
+                "🔀 Bulk move cancelled" + (f" (was {was})" if was else "") + " — nothing moved.",
+                "INFO")
+        return True, "Bulk move cancelled"
+    finally:
+        _BULK_MOVE_COMMIT_LOCK.release()
+
+
 def commit_bulk_move_session(confirm_active_print=False):
     """Execute the active session's plan, then clear the session on success.
 
@@ -1170,7 +1322,10 @@ def commit_bulk_move_session(confirm_active_print=False):
             return {"success": False, "msg": "No bulk move is ready to commit."}
 
         plan = plan_bulk_move(source, dest, confirm_active_print=confirm_active_print)
-        sess['preview'] = plan
+        # Same helper the preview path uses, so a commit that RE-BLOCKS demotes
+        # the stage instead of leaving the deck tile green + advertising a
+        # CMD:DONE for a plan every retry refuses.
+        _apply_plan_to_session(sess, plan)
         if plan.get('require_confirm'):
             return {"success": False, "require_confirm": True,
                     "confirm_type": plan.get('confirm_type'),
