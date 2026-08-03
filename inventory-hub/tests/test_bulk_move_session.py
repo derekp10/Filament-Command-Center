@@ -788,3 +788,17 @@ def test_plan_row_cache_matches_what_the_real_location_reader_emits(client):
     # These are exactly the keys plan_bulk_move copies into plan['rows'].
     for key in ("id", "display", "color", "color_direction", "slot", "remaining_weight"):
         assert key in row, f"_build_location_match no longer emits '{key}' — plan['rows'] would go blank"
+
+
+def test_snapshot_advertises_the_idle_window(client):
+    """Derek 2026-08-02: the 30-min idle watchdog must not be a SURPRISE — a user
+    who walks back to a cleared session should have been told it expires, not be
+    left reading it as a broken app. The value is derived from the constant, so
+    the UI notice can never drift from the watchdog that enforces it."""
+    logic.start_bulk_move_session("PM-DB-A")
+    snap = logic.bulk_move_session_snapshot()
+    assert snap["idle_timeout_min"] == state.BULK_MOVE_IDLE_TIMEOUT_SECONDS // 60
+    assert snap["idle_timeout_min"] > 0
+    # ...and the Activity Log line that ARMS it says so too.
+    assert any("idle" in (e.get("message") or e.get("msg") or "").lower()
+               for e in state.RECENT_LOGS), state.RECENT_LOGS

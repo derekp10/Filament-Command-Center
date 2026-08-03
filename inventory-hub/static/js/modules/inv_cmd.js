@@ -735,9 +735,21 @@ window.commitBulkMove = (confirmActivePrint = false) => {
         const canCommit = hasPlan && (!needAck || _apAck) && !_commitInflight;
         const commitLabel = _commitInflight
             ? '⏳ Committing…' : (needAck ? '⚠️ Commit Anyway' : '🔀 Commit Move');
+        // Tell the user the session expires. The idle watchdog silently clears an
+        // armed-but-idle session after N minutes; without this notice, walking
+        // back to a dead SCAN DEST tile reads as "the app broke" rather than
+        // "that timed out". Nothing is ever moved or un-moved by the expiry —
+        // say that too, so the notice doesn't read as a data-loss warning.
+        const idleMin = d.idle_timeout_min;
+        const expiryNote = idleMin ? `
+            <div class="small" style="color:rgba(255,255,255,0.55); margin-top:8px;">
+                ⏳ This bulk move stays armed for <b>${_esc(idleMin)} min</b> of inactivity,
+                then clears itself. Nothing moves either way — you'd just re-scan.
+            </div>` : '';
         body.innerHTML = `
             <div style="margin-bottom:10px; font-size:0.95rem;">${src} → ${dst}</div>
             ${previewHtml}
+            ${expiryNote}
             <div class="d-flex justify-content-between align-items-stretch gap-3 mt-3 pt-3 border-top border-secondary">
                 <div style="flex:1; text-align:center;">
                     <button id="fcc-bulkmove-commit" class="btn ${needAck ? 'btn-warning' : 'btn-success'} fw-bold w-100 mb-2"

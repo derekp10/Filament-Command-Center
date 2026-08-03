@@ -1038,16 +1038,21 @@ def start_bulk_move_session(source_id=None):
     sess = state.BULK_MOVE_SESSION
     sess['active'] = True
     sess['last_activity_ts'] = time.time()
+    # The armed session expires; say so in the log line that arms it, so the
+    # Activity Log carries the same expectation the panel sets.
+    idle_min = int(state.BULK_MOVE_IDLE_TIMEOUT_SECONDS // 60)
     if source_id:
         sess['source_id'] = str(source_id).strip().upper()
         sess['stage'] = 'awaiting_dest'
         state.add_log_entry(
             f"🔀 <b>BULK MOVE ARMED</b> — source <b>{sess['source_id']}</b>. "
-            f"Scan the DESTINATION location.", "INFO", "00d4ff")
+            f"Scan the DESTINATION location. (Clears itself after {idle_min} min idle.)",
+            "INFO", "00d4ff")
     else:
         sess['stage'] = 'awaiting_source'
-        state.add_log_entry("🔀 <b>BULK MOVE STARTED</b> — scan the SOURCE location.",
-                            "INFO", "00d4ff")
+        state.add_log_entry(
+            f"🔀 <b>BULK MOVE STARTED</b> — scan the SOURCE location. "
+            f"(Clears itself after {idle_min} min idle.)", "INFO", "00d4ff")
     return sess
 
 
@@ -1131,6 +1136,11 @@ def bulk_move_session_snapshot(sess=None):
         "stage": sess.get('stage') or 'idle',
         "source_id": sess.get('source_id'),
         "dest_id": sess.get('dest_id'),
+        # Surfaced so the panel can TELL the user the session expires, instead of
+        # them walking back to a dead armed move and reading it as a broken app.
+        # Derived from the constant, never hard-coded in the UI text, so the
+        # notice can't drift from the watchdog that enforces it.
+        "idle_timeout_min": int(state.BULK_MOVE_IDLE_TIMEOUT_SECONDS // 60),
     }
     plan = sess.get('preview') or None
     if plan:
