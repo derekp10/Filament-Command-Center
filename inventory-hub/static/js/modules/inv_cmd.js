@@ -502,17 +502,75 @@ window.commitBulkMove = (confirmActivePrint = false) => {
     document.addEventListener('keydown', (e) => {
         if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key !== 'B' && e.key !== 'b') return;
-        const tag = (e.target && e.target.tagName) || '';
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+        const tag = ((e.target && e.target.tagName) || '').toUpperCase();
+        // SELECT belongs here too — inv_wizard.js:577 sets the precedent. A bare
+        // letter is native <select> typeahead, and swallowing it breaks jumping
+        // to an option by first letter.
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+            || (e.target && e.target.isContentEditable)) return;
+        // Don't fire over someone else's overlay/modal. This panel mounts at
+        // tier 'standard', so opening it on top of another standard-tier overlay
+        // stacks two peers and Escape then closes whichever mountOverlay
+        // happens to answer first. (Carve-out idiom from inv_loc_mgr.js.)
+        if (document.querySelector('[data-overlay-mount="1"]')
+            && !(typeof window.isBulkMovePanelOpen === 'function' && window.isBulkMovePanelOpen())) return;
+        if (document.querySelector('.modal.show, .offcanvas.show')) return;
         if (_scanInFlight()) return;
         e.preventDefault();
+
+        // ⚠️ NEUTRALISE THE SCAN ACCUMULATOR. The handler in scripts.html is a
+        // SECOND bubble-phase keydown listener on `document` that appends any
+        // one-character key, so without this the 'B' lands in state.scanBuffer —
+        // and the very next scan of a printed source label arrives as
+        // "BLOC:PM-DB-A". CMD codes are substring-matched and slot codes use a
+        // regex, but the plain-location branch is PREFIX-matched
+        // (`upper_text.startswith("LOC:")`), so it falls through to "Unknown
+        // Code (Use LOC: prefix)" — on a perfectly valid label, for the exact
+        // scan the panel we just opened is asking for. It would also leave this
+        // shortcut's own scan-in-flight guard self-triggering, swallowing a
+        // second Shift+B for 500 ms.
+        //
+        // BOTH mechanisms, deliberately. stopImmediatePropagation works because
+        // this file is a plain <script src> (parse-time registration) while the
+        // accumulator registers inside DOMContentLoaded — but that ordering is
+        // an implicit dependency on scripts.html's layout. The deferred clear is
+        // order-independent: it runs after the accumulator whichever way the
+        // listeners end up sorted. A synchronous clear here would be useless —
+        // it would wipe an empty buffer and the 'B' would land afterwards.
+        e.stopImmediatePropagation();
         const st = (typeof state !== 'undefined') ? state : window.state;
+        const _clearScanBuffer = () => {
+            if (!st) return;
+            st.scanBuffer = '';
+            st.scanStartTime = 0;
+            try { clearTimeout(st.bufferTimeout); } catch (_) { /* noop */ }
+        };
+        _clearScanBuffer();
+        setTimeout(_clearScanBuffer, 0);
+
         if (st && st.bulkMoveActive) {
             // Already armed → SHOW, never cancel.
             if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel({ user: true });
             return;
         }
-        if (typeof window.toggleBulkMove === 'function') window.toggleBulkMove();
+        // Local state can be STALE-false (a freshly reloaded tab before the
+        // first heartbeat). Going straight to toggleBulkMove there would POST a
+        // `start`, get `already_active`, and raise the REPLACE confirm — whose
+        // Yes discards a plan built from two deliberate physical scans. That is
+        // precisely the footgun this shortcut is designed not to have, so
+        // resolve the truth from the server before acting.
+        fetch('/api/bulk_move_session').then(r => r.json()).then((d) => {
+            if (d && d.active) {
+                if (typeof window.applyBulkMoveSession === 'function') window.applyBulkMoveSession(d);
+                if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel({ user: true });
+                return;
+            }
+            if (typeof window.toggleBulkMove === 'function') window.toggleBulkMove();
+        }).catch(() => {
+            // Offline/error: fall back to the arm path, which surfaces its own
+            // already_active confirm rather than silently doing nothing.
+            if (typeof window.toggleBulkMove === 'function') window.toggleBulkMove();
+        });
     });
     // Register AFTER load, not at module eval. scripts.html loads inv_cmd.js
     // (line 41) BEFORE shortcuts_registry.js (line 50), so `window.registerShortcut`
@@ -762,8 +820,23 @@ window.commitBulkMove = (confirmActivePrint = false) => {
                             <span>I understand a print is active — move anyway</span>
                         </label>
                     </div>` : '';
+                // Heads-up when the SOURCE is a dryer box wired to toolheads.
+                // The bindings are deliberately left intact (they describe the
+                // plumbing, not the contents) — this only makes the consequence
+                // visible: you are about to empty a box that feeds a printer.
+                const feeds = (p.source_feeds || []);
+                const feedNote = feeds.length ? `
+                    <div style="padding:8px; border:1px solid #4a90d9; background:#0f1c2a;
+                                border-radius:6px; color:#bcd9f5; margin-bottom:10px; font-size:0.88rem;">
+                        🔗 This move empties ${feeds.length > 1 ? 'slots' : 'a slot'} wired to
+                        <b>${feeds.map(f => _esc(f)).join(', ')}</b>.
+                        The wiring stays — nothing is unwired — but
+                        ${feeds.length > 1 ? 'those slots' : 'that slot'} will be empty until you refill
+                        ${feeds.length > 1 ? 'them' : 'it'}.
+                    </div>` : '';
                 previewHtml = `
                     ${apStrip}
+                    ${feedNote}
                     <div style="margin-bottom:8px;">
                         <span style="color:#0f0; font-weight:bold;">${st.movable}</span> will move,
                         <span style="color:#fc0; font-weight:bold;">${st.skipped}</span> left in place

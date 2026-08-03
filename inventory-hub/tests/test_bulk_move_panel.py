@@ -39,14 +39,48 @@ def _stub_session(page: Page, payload: dict) -> None:
     Everything else (locations, logs, the pulse) still hits the live server, so
     the page around the panel behaves normally.
     """
+    posts = []
+
     def _handler(route):
         if route.request.method == "GET":
             route.fulfill(status=200, content_type="application/json",
                           body=json.dumps(payload))
         else:
+            # Record the BODY. Asserting on DOM state alone can't tell
+            # "toggleBulkMove POSTed a start" from "the panel just opened" —
+            # the GET stub answers active:true either way, so the panel renders
+            # regardless. Only the request discriminates.
+            posts.append(route.request.post_data or "")
             route.fulfill(status=200, content_type="application/json",
                           body=json.dumps({"success": True, "session": payload}))
     page.route("**/api/bulk_move_session", _handler)
+    return posts
+
+
+def _stub_session_stateful(page: Page, armed_payload: dict):
+    """A stub that starts IDLE and becomes armed once a start POST arrives.
+
+    Needed because Shift+B now RESOLVES THE TRUTH from the server before acting
+    (it GETs the session and only POSTs `start` when the server says idle) — a
+    fix for the stale-local-state hole where a freshly-reloaded tab would POST a
+    start, get `already_active`, and raise the REPLACE confirm whose Yes discards
+    an armed plan. A stub that always answers active:true can't model that.
+    """
+    posts = []
+    st = {"armed": False}
+
+    def _handler(route):
+        if route.request.method == "GET":
+            body = armed_payload if st["armed"] else {"active": False, "stage": "idle"}
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps(body))
+            return
+        posts.append(route.request.post_data or "")
+        st["armed"] = True
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"success": True, "session": armed_payload}))
+    page.route("**/api/bulk_move_session", _handler)
+    return posts
 
 
 @pytest.fixture(autouse=True)
@@ -495,7 +529,10 @@ def test_tile_renderer_escapes_hostile_spool_names_and_colours(
     overlay = _open(page, base_url, reset_dom_state_js, payload)
 
     assert page.evaluate("window.__pwned") is None
-    assert overlay.locator("img").count() == 0
+    # Scope to the INJECTED img. A bare `img` count is not a discriminator here:
+    # legitimate swatches render their own <img>, and whether they do depends on
+    # makeSwatchHtml having loaded — which made this assertion order-sensitive.
+    assert overlay.locator('img[src="x"]').count() == 0
     # The hostile text renders as literal characters, not markup.
     expect(overlay.locator('.fcc-bulk-tile[data-spool-id="702"]')).to_contain_text(
         "<img src=x onerror=window.__pwned=2>")
@@ -517,17 +554,26 @@ def _prep(page: Page, base_url: str, reset_dom_state_js: str, payload: dict):
     page.wait_for_function(
         "typeof window.toggleBulkMove === 'function'"
         " && typeof window.openBulkMovePanel === 'function'", timeout=10_000)
-    _stub_session(page, payload)
+    posts = _stub_session(page, payload)
     page.evaluate("() => { state.lastBulkMoveState = 'false|idle'; }")
+    return posts
 
 
 @pytest.mark.usefixtures("require_server")
 def test_shift_b_arms_a_bulk_move_from_idle(
         page: Page, base_url: str, reset_dom_state_js: str):
     _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    posts = _stub_session_stateful(page, _PREVIEW)   # overrides the flat stub
     page.evaluate("() => { state.bulkMoveActive = false; }")
     page.keyboard.press("Shift+B")
     expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible(timeout=5_000)
+    # The panel appearing proves nothing on its own — the GET stub answers
+    # active:true regardless, so openBulkMovePanel alone would look identical.
+    # Only the request discriminates.
+    page.wait_for_timeout(400)
+    starts = [b for b in posts if '"action": "start"' in b or '"action":"start"' in b]
+    assert len(starts) == 1, f"expected exactly one start POST, got {posts}"
+    assert "replace" not in starts[0]
 
 
 @pytest.mark.usefixtures("require_server")
@@ -536,7 +582,7 @@ def test_shift_b_reopens_an_armed_session_and_never_cancels(
     """THE design constraint: a keyboard shortcut must never be able to discard a
     plan the user built from two deliberate scans. Unlike the deck tile's
     three-way toggle, Shift+B only ever arms or SHOWS."""
-    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    posts = _prep(page, base_url, reset_dom_state_js, _PREVIEW)
     page.evaluate("""() => {
         state.bulkMoveActive = true;
         state.bulkMoveStage = 'preview';
@@ -549,9 +595,13 @@ def test_shift_b_reopens_an_armed_session_and_never_cancels(
     assert page.evaluate("window.__cancelled") == 0
     # ...and pressing it AGAIN with the panel open still doesn't cancel.
     page.keyboard.press("Shift+B")
-    page.wait_for_timeout(300)
+    page.wait_for_timeout(400)
     expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible()
     assert page.evaluate("window.__cancelled") == 0
+    # Assert at the WIRE too: a hand-rolled fetch would bypass the JS stub
+    # entirely, and the always-active GET stub would keep the panel painted
+    # while a real session was destroyed server-side.
+    assert not [b for b in posts if "cancel" in b or "replace" in b], posts
 
 
 @pytest.mark.usefixtures("require_server")
@@ -604,3 +654,203 @@ def test_bulk_move_shortcuts_are_listed_in_the_help_overlay(
     body = page.evaluate("document.body.innerText")
     assert "Bulk Move" in body, "the Bulk Move scope is missing from the ? overlay"
     assert "Shift" in body and "Arm a bulk move" in body
+
+
+@pytest.mark.usefixtures("require_server")
+def test_panel_warns_when_emptying_a_box_that_feeds_toolheads(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Phase 4: emptying a bound dryer box is legitimate and the bindings are
+    deliberately LEFT INTACT — so the panel's job is to make the consequence
+    visible (that feed will have no spool) rather than silently rewire anything."""
+    payload = json.loads(json.dumps(_PREVIEW))
+    payload["preview"]["source_feeds"] = ["XL-1", "XL-2"]
+    overlay = _open(page, base_url, reset_dom_state_js, payload)
+
+    expect(overlay).to_contain_text("XL-1, XL-2")
+    expect(overlay).to_contain_text("empties slots wired to")
+    expect(overlay).to_contain_text("The wiring stays")
+    expect(overlay).to_contain_text("nothing is unwired")
+    # ...and Commit is NOT gated on it: this is information, not a guard.
+    expect(overlay.locator("#fcc-bulkmove-commit")).to_be_enabled()
+
+
+@pytest.mark.usefixtures("require_server")
+def test_panel_shows_no_feed_warning_for_an_unbound_source(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    overlay = _open(page, base_url, reset_dom_state_js, _PREVIEW)
+    expect(overlay).not_to_contain_text("wired to")
+    expect(overlay).not_to_contain_text("unwired")
+
+
+# ---------------------------------------------------------------------------
+# Phase-4 review fixes (adversarial review, 2026-08-02)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usefixtures("require_server")
+def test_shift_b_does_not_poison_the_scan_buffer(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """THE bug this shortcut inflicted on itself.
+
+    The scan accumulator in scripts.html is a SECOND bubble-phase keydown
+    listener on `document` that appends any one-character key, so a bare
+    preventDefault left 'B' sitting in state.scanBuffer. The very next scan of a
+    printed source label then arrived as "BLOC:PM-DB-A" — and while CMD codes are
+    substring-matched and slot codes use a regex, the plain-location branch is
+    PREFIX-matched (`startswith("LOC:")`), so it fell through to "Unknown Code
+    (Use LOC: prefix)" on a perfectly valid label. Exactly the scan the panel we
+    just opened is asking for.
+    """
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    _stub_session_stateful(page, _PREVIEW)
+    page.evaluate("() => { state.bulkMoveActive = false; }")
+    page.keyboard.press("Shift+B")
+    page.wait_for_timeout(400)
+    assert page.evaluate("state.scanBuffer") == ""
+    assert page.evaluate("state.scanStartTime") == 0
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_real_typed_scan_stream_does_not_trigger_the_shortcut(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Drive the REAL accumulator instead of hand-seeding it: type a payload
+    whose characters include 'B' with no Enter, exactly as a scanner would."""
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.evaluate("() => { state.bulkMoveActive = false; }")
+    # 'B' appears mid-stream; the scanner sends it as an ordinary keydown.
+    page.keyboard.type("LOC:PM-DB-A", delay=10)
+    page.wait_for_timeout(300)
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_have_count(0)
+    assert "LOC:PM-DB-A" in page.evaluate("state.scanBuffer")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_two_shift_b_presses_in_quick_succession_both_land(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """The scan-in-flight guard used to be SELF-triggering: press one left 'B' in
+    the buffer, so a second press inside 500 ms was swallowed — making
+    "already armed -> SHOW the panel" unreachable exactly when a user reaches
+    for it twice."""
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    _stub_session_stateful(page, _PREVIEW)
+    page.evaluate("() => { state.bulkMoveActive = false; }")
+    page.keyboard.press("Shift+B")
+    page.wait_for_timeout(150)
+    page.evaluate("() => { window.closeBulkMovePanel(); }")
+    page.keyboard.press("Shift+B")          # well within the old 500 ms window
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible(timeout=5_000)
+
+
+@pytest.mark.parametrize("combo", ["Control+Shift+B", "Alt+Shift+B", "Meta+Shift+B", "b"])
+@pytest.mark.usefixtures("require_server")
+def test_shift_b_guard_ignores_other_key_combinations(
+        page: Page, base_url: str, reset_dom_state_js: str, combo: str):
+    """`if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;` is four
+    independent decisions and none was pinned. Ctrl+Shift+B in particular is
+    Chrome's bookmarks-bar toggle."""
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.evaluate("() => { state.bulkMoveActive = false; }")
+    page.keyboard.press(combo)
+    page.wait_for_timeout(400)
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_have_count(0)
+
+
+@pytest.mark.parametrize("tag", ["textarea", "select"])
+@pytest.mark.usefixtures("require_server")
+def test_shift_b_is_inert_in_other_typing_contexts(
+        page: Page, base_url: str, reset_dom_state_js: str, tag: str):
+    """INPUT was covered; TEXTAREA and SELECT were not. SELECT matters because a
+    bare letter is native typeahead — swallowing it breaks jumping to an option."""
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.evaluate("""(t) => {
+        const el = document.createElement(t);
+        el.id = '__ctx_probe';
+        if (t === 'select') { el.innerHTML = '<option>Alpha</option><option>Bravo</option>'; }
+        document.body.appendChild(el);
+        el.focus();
+    }""", tag)
+    page.keyboard.press("Shift+B")
+    page.wait_for_timeout(400)
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_shift_b_does_not_fire_over_another_overlay(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """The panel mounts at tier 'standard'; opening it on top of another
+    standard-tier overlay stacks two peers, and Escape then closes whichever
+    mountOverlay answers first."""
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.evaluate("""() => {
+        state.bulkMoveActive = false;
+        window.__other = window.mountOverlay({
+            id: 'fcc-test-other-overlay',
+            content: '<div style="padding:20px;background:#222;color:#fff;">Someone else</div>',
+            tier: 'standard', backdrop: true,
+        });
+    }""")
+    page.keyboard.press("Shift+B")
+    page.wait_for_timeout(500)
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_have_count(0)
+    page.evaluate("() => { window.__other && window.__other.cleanup(); }")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_shift_b_with_stale_local_state_does_not_replace_an_armed_session(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """THE one-keypress destructive hole. A freshly reloaded tab has
+    state.bulkMoveActive === false until the first heartbeat. Going straight to
+    toggleBulkMove there POSTs a `start`, the backend answers `already_active`,
+    and the client raises the REPLACE confirm — whose Yes discards a plan built
+    from two deliberate physical scans. Shift+B must resolve the truth first."""
+    posts = _prep(page, base_url, reset_dom_state_js, _PREVIEW)   # GET says ACTIVE
+    page.evaluate("() => { state.bulkMoveActive = false; }")      # ...but we don't know it
+    page.keyboard.press("Shift+B")
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible(timeout=5_000)
+    page.wait_for_timeout(300)
+    assert not [b for b in posts if "start" in b or "replace" in b], posts
+    # No Bootstrap replace-confirm was raised either.
+    expect(page.locator("#confirmModal.show")).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_escape_hides_the_panel_and_shift_b_brings_it_back(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """The round trip the registered Esc entry advertises. Escape routes through
+    mountOverlay's onEscape -> closeBulkMovePanel({hidden:true}), which LATCHES;
+    only openBulkMovePanel({user:true}) clears the latch. Drop the {user:true}
+    from the shortcut and Escape would permanently hide the panel."""
+    _open(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.keyboard.press("Escape")
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_have_count(0, timeout=3_000)
+    page.keyboard.press("Shift+B")
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible(timeout=5_000)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_feed_note_uses_singular_wording_for_one_feed(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Only the plural branch was rendered in CI, yet one feed per slot is the
+    common real case."""
+    payload = json.loads(json.dumps(_PREVIEW))
+    payload["preview"]["source_feeds"] = ["XL-1"]
+    overlay = _open(page, base_url, reset_dom_state_js, payload)
+    expect(overlay).to_contain_text("empties a slot wired to")
+    expect(overlay).to_contain_text("that slot will be empty")
+    expect(overlay).not_to_contain_text("empties slots wired to")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_feed_note_escapes_hostile_location_ids(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """source_feeds values are LocationIDs the user types in the Location
+    Manager — the same user-authored-location-name seam that shipped the Group 34
+    stored-XSS."""
+    payload = json.loads(json.dumps(_PREVIEW))
+    payload["preview"]["source_feeds"] = ['XL-1<img src=x onerror=window.__pwned=4>']
+    overlay = _open(page, base_url, reset_dom_state_js, payload)
+    page.wait_for_timeout(300)
+    assert page.evaluate("window.__pwned") is None
+    # Scope to the INJECTED img: legitimate swatches render their own <img>
+    # elements, so a bare img count is not the discriminator here.
+    assert overlay.locator('img[src="x"]').count() == 0
+    expect(overlay).to_contain_text("<img src=x onerror=window.__pwned=4>")

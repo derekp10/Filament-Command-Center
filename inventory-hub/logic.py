@@ -772,7 +772,7 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
     dest = str(dest or '').strip().upper()
     plan = {"ok": False, "msg": "", "blocked_reason": None, "require_confirm": False,
             "confirm_type": None, "active_print": None, "source": source, "dest": dest,
-            "movable_ids": [], "skipped": [],
+            "movable_ids": [], "skipped": [], "source_feeds": [],
             # Phase 3 display-only fields (see the skip loop): `rows` is the
             # id -> {display,color,color_direction,slot,remaining_weight} cache
             # the panel renders from, `would_move_ids` the movable set even when
@@ -938,13 +938,82 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
             # active-print confirm was unreachable from the panel — the user
             # could see the warning but had no way to act on it.
             plan["movable_ids"] = movable_ids
+            # require_confirm IS committable, so the feed warning belongs here too.
+            plan["source_feeds"] = _bound_feeds_for_move(contents, movable_ids, loc_info_map)
             plan["msg"] = (f"{ap['printer_name']} is {ap['state']} — bulk-moving from "
                            f"this location will disrupt the print.")
             return plan
 
     plan["ok"] = True
     plan["movable_ids"] = movable_ids
+    # Informational only — never blocks, never mutates the bindings. Set ONLY on
+    # the committable exits: a BLOCKED plan moves nothing, so advertising feeds
+    # it would have emptied is a warning about something that cannot happen.
+    plan["source_feeds"] = _bound_feeds_for_move(contents, movable_ids, loc_info_map)
     return plan
+
+
+def _slot_targets_for(loc_id, loc_info_map):
+    """extra.slot_targets for a location, defensively. {} when absent/malformed."""
+    row = loc_info_map.get(str(loc_id or '').strip().upper()) or {}
+    extra = row.get('extra')
+    if not isinstance(extra, dict):
+        return {}
+    targets = extra.get('slot_targets')
+    return targets if isinstance(targets, dict) else {}
+
+
+def _bound_feeds_for_move(contents, movable_ids, loc_info_map):
+    """Toolheads THIS MOVE would leave without a spool, via extra.slot_targets.
+
+    Emptying a bound Dryer Box is legitimate and the bindings are deliberately
+    LEFT ALONE — `slot_targets` describes the plumbing (slot 1 feeds XL-1), not
+    the contents, so a move that emptied the box does not invalidate it, and
+    silently clearing a user's slot→toolhead wiring as a side-effect of a move
+    would be exactly the kind of hidden mutation this feature must not do.
+    (The plan's original risk note said "flag/clear"; clearing is wrong.)
+    So: INFORM, never mutate.
+
+    Keyed off each moving spool's OWN location, NOT the source row. The source
+    resolve is flat/first-segment, so a Room source sweeps every bound box whose
+    id shares its prefix — reading only the source's own slot_targets meant a
+    Room-level move emptied real printer feeds with no warning at all.
+
+    Only reports a feed whose slot is actually occupied by a spool that WILL
+    move: a box with 4 bound slots and 1 spool must not claim four feeds are
+    about to run dry, and a slot whose spool is SKIPPED (a ghost already deployed
+    to that very toolhead, an archived spool) keeps its feed.
+    """
+    movable = {str(m) for m in (movable_ids or [])}
+    feeds = set()
+    for sp in (contents or []):
+        if str(sp.get('id')) not in movable:
+            continue
+        loc = str(sp.get('location', '') or '').strip().upper()
+        targets = _slot_targets_for(loc, loc_info_map)
+        if not targets:
+            continue
+        slot = str(sp.get('slot') or '').strip()
+        if not slot:
+            # A SINGLE-slot box records no container_slot (Group 20.2 auto-binds
+            # exactly this class), so treating blank as "no slot" made the
+            # warning permanently dead for the boxes most likely to feed a
+            # toolhead. One capacity => the spool IS in slot 1.
+            row = loc_info_map.get(loc) or {}
+            try:
+                max_spools = int(str(row.get('Max Spools', '0')).strip() or '0')
+            except (TypeError, ValueError):
+                max_spools = 0
+            if max_spools == 1:
+                slot = '1'
+        if not slot:
+            continue
+        target = targets.get(slot) or targets.get(str(slot))
+        t = str(target or '').strip().upper()
+        # PRINTER:<id> sentinels stage a pool for a printer; no toolhead implied.
+        if t and not locations_db.is_printer_sentinel(t):
+            feeds.add(t)
+    return sorted(feeds)
 
 
 def execute_bulk_move(plan, confirm_active_print=False):
@@ -1102,8 +1171,10 @@ def set_bulk_move_dest(dest_id, confirm_active_print=False):
     if not dest_id:
         return False, None, "A destination is required."
     if not _BULK_MOVE_COMMIT_LOCK.acquire(False):
-        return False, None, ("A bulk-move commit is in progress — the destination "
-                             "can't be changed until it finishes.")
+        # Same wording family as the cancel refusal: state that a commit is
+        # running, without claiming anything about how far along it is.
+        return False, None, ("A bulk-move commit is already running — the "
+                             "destination can't be changed until it finishes.")
     try:
         state.BULK_MOVE_SESSION['dest_id'] = dest_id
         plan = _refresh_bulk_move_preview(confirm_active_print=confirm_active_print)
@@ -1174,6 +1245,7 @@ def bulk_move_session_snapshot(sess=None):
             "active_print": plan.get('active_print'),
             "movable": movable,
             "skipped": skipped,
+            "source_feeds": plan.get('source_feeds') or [],
             "stats": {"movable": len(movable), "skipped": len(skipped)},
         }
     return out
@@ -1273,6 +1345,13 @@ def process_bulk_move_scan(scan_result):
 # queued, because queuing would just replay the same batch a moment later.
 _BULK_MOVE_COMMIT_LOCK = threading.Lock()
 
+# The lock is held by BOTH commit_bulk_move_session and set_bulk_move_dest (the
+# latter to stop a stray dest scan re-targeting a batch mid-commit), so "lock is
+# held" does NOT mean "a commit is running" — a cancel arriving during a
+# destination re-plan was told a commit was already running when none was.
+# This flag says what the lock cannot: writes are actually happening.
+_BULK_MOVE_WRITING = False
+
 
 def cancel_bulk_move_session():
     """Clear the session — UNLESS a commit is mid-flight. Returns (ok, msg).
@@ -1292,12 +1371,30 @@ def cancel_bulk_move_session():
     queueing to wipe a session the commit already cleared.
     """
     if not _BULK_MOVE_COMMIT_LOCK.acquire(False):
+        # The lock alone can't tell the user what's happening: it is ALSO held by
+        # set_bulk_move_dest's re-plan, and even inside a commit it covers a
+        # write-free pre-flight (a full Spoolman fetch, a capacity read, and a
+        # PrusaLink active-print probe — not the "fraction of a second" an
+        # earlier version of this comment claimed; on a slow Spoolman it can be
+        # seconds). _BULK_MOVE_WRITING is what distinguishes "spools are moving"
+        # from "something else holds the lock", so say only what is true.
+        #
+        # A cooperative pre-write abort (a cancel_requested flag the commit
+        # checks between planning and writing) is still NOT built: it would turn
+        # the most destructive path we have into a two-party protocol for a
+        # narrow win. Being accurate is the proportionate fix.
+        if _BULK_MOVE_WRITING:
+            state.add_log_entry(
+                "⚠️ Bulk move cancel IGNORED — spools are being moved right now. "
+                "Check the Activity Log for what it did.", "WARNING", "ffaa00")
+            return False, ("A bulk move is being written right now — it can no "
+                           "longer be cancelled. Watch the Activity Log for the result.")
         state.add_log_entry(
-            "⚠️ Bulk move cancel IGNORED — a commit is already in flight; "
-            "spools are being moved. Check the Activity Log for the outcome.",
+            "⚠️ Bulk move cancel IGNORED — the session is busy (planning or "
+            "re-targeting). Nothing has moved; try again in a moment.",
             "WARNING", "ffaa00")
-        return False, ("A bulk-move commit is in progress — it can no longer be "
-                       "cancelled. Watch the Activity Log for the result.")
+        return False, ("The bulk move is busy planning — nothing has moved. "
+                       "Try cancelling again in a moment.")
     try:
         was_active = bool(state.BULK_MOVE_SESSION.get('active'))
         was = state.BULK_MOVE_SESSION.get('source_id') or ''
@@ -1323,6 +1420,7 @@ def commit_bulk_move_session(confirm_active_print=False):
     between the preview and the commit, and the commit must be guarded by
     live facts, not a stale snapshot.
     """
+    global _BULK_MOVE_WRITING
     if not _BULK_MOVE_COMMIT_LOCK.acquire(False):
         return {"success": False, "msg": "A bulk-move commit is already running."}
     try:
@@ -1351,12 +1449,17 @@ def commit_bulk_move_session(confirm_active_print=False):
                     "skipped": plan.get('skipped') or [], "msg": plan.get('msg'),
                     "source": source, "dest": dest}
 
+        # From here on writes really are happening — everything above was
+        # read-only guard work, and a cancel arriving during THAT deserves an
+        # honest "nothing has moved" rather than "too late".
+        _BULK_MOVE_WRITING = True
         result = execute_bulk_move(plan, confirm_active_print=confirm_active_print)
         if result.get('require_confirm'):
             return result  # leave the session standing for the confirm+retry
         state.reset_bulk_move()
         return result
     finally:
+        _BULK_MOVE_WRITING = False
         _BULK_MOVE_COMMIT_LOCK.release()
 
 

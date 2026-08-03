@@ -101,10 +101,11 @@ def _spool(sid, location="PM-DB-A", is_ghost=False, archived=False,
 
 @contextlib.contextmanager
 def _env(*, strict_map=None, readback=None, active_print_for=None,
-         move_result=None, buffer=None):
+         move_result=None, buffer=None, locations=None):
     """Patch every collaborator the plan/execute core touches."""
     strict_map = strict_map or {}
     readback = readback or {}
+    locations = FAKE_LOCATIONS if locations is None else locations
 
     def _strict(loc):
         return list(strict_map.get(str(loc).upper(), []))
@@ -116,7 +117,7 @@ def _env(*, strict_map=None, readback=None, active_print_for=None,
         return (active_print_for or {}).get(str(loc).upper())
 
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch.object(locations_db, "load_locations_list", return_value=FAKE_LOCATIONS))
+        stack.enter_context(patch.object(locations_db, "load_locations_list", return_value=locations))
         stack.enter_context(patch.object(locations_db, "get_active_printer_map", return_value=FAKE_PRINTER_MAP))
         stack.enter_context(patch.object(spoolman_api, "get_spools_at_location_detailed_strict", side_effect=_strict))
         stack.enter_context(patch.object(spoolman_api, "get_spools_at_location_detailed", side_effect=_detailed))
@@ -650,26 +651,33 @@ def test_lm_button_start_then_scanned_dest_then_cmd_done(client):
     assert state.BULK_MOVE_SESSION["active"] is False
 
 
-def test_cancel_during_inflight_commit_is_refused(client):
-    """A cancel racing a running commit CANNOT stop it, so it must not claim to.
+def _log_text():
+    """The Activity Log is the surface Derek reads to reconstruct what happened —
+    assert on it, not just on the transient HTTP msg."""
+    return " ".join((e.get("message") or e.get("msg") or "") for e in state.RECENT_LOGS)
+
+
+def test_cancel_while_WRITING_is_refused_and_says_so(client):
+    """A cancel racing the WRITE phase cannot stop it, so it must not claim to.
 
     commit_bulk_move_session captures source/dest into locals before calling
     perform_smart_move, so resetting the session dict has zero effect on the
     in-flight move: every spool keeps being written and the aggregate SUCCESS
     line still fires — while the cancelling client was told "nothing moved".
-    Holding the commit lock here simulates that window.
     """
     logic.start_bulk_move_session("PM-DB-A")
-    assert logic._BULK_MOVE_COMMIT_LOCK.acquire(False)   # stand in for a commit
+    assert logic._BULK_MOVE_COMMIT_LOCK.acquire(False)
+    logic._BULK_MOVE_WRITING = True          # spools really are being written
     try:
-        r = client.post("/api/bulk_move_session", json={"action": "cancel"})
-        body = r.get_json()
+        body = client.post("/api/bulk_move_session", json={"action": "cancel"}).get_json()
         assert body["success"] is False
-        assert body["commit_in_flight"] is True
-        assert "in progress" in body["msg"]
-        # The session is NOT wiped — the commit still owns it.
-        assert state.BULK_MOVE_SESSION["active"] is True
+        assert body["commit_in_flight"] is True          # machine-readable contract
+        assert "no longer be cancelled" in body["msg"]   # discriminates THIS surface
+        # The Activity Log — the durable half of the change — must agree.
+        assert "being moved" in _log_text()
+        assert state.BULK_MOVE_SESSION["active"] is True  # commit still owns it
     finally:
+        logic._BULK_MOVE_WRITING = False
         logic._BULK_MOVE_COMMIT_LOCK.release()
 
     # With the lock free again, the same cancel succeeds.
@@ -678,15 +686,38 @@ def test_cancel_during_inflight_commit_is_refused(client):
     assert state.BULK_MOVE_SESSION["active"] is False
 
 
+def test_cancel_while_only_PLANNING_says_nothing_has_moved(client):
+    """REVIEW FIX: the lock is ALSO held by set_bulk_move_dest's re-plan, and even
+    inside a commit it covers a write-free pre-flight (a full spool fetch, a
+    capacity read, a PrusaLink probe — seconds on a slow Spoolman). Telling the
+    user "a commit is already running, it can no longer be cancelled" there was
+    false on both halves. _BULK_MOVE_WRITING is what the lock cannot say."""
+    logic.start_bulk_move_session("PM-DB-A")
+    assert logic._BULK_MOVE_COMMIT_LOCK.acquire(False)
+    assert logic._BULK_MOVE_WRITING is False      # planning / re-targeting only
+    try:
+        body = client.post("/api/bulk_move_session", json={"action": "cancel"}).get_json()
+        assert body["success"] is False
+        assert "nothing has moved" in body["msg"]
+        assert "no longer be cancelled" not in body["msg"]
+        log = _log_text()
+        assert "Nothing has moved" in log or "nothing has moved" in log
+        assert "spools are being moved" not in log
+    finally:
+        logic._BULK_MOVE_COMMIT_LOCK.release()
+
+
 def test_cmd_cancel_scan_during_inflight_commit_is_refused(client):
     """Same guard on the SCANNER path — CMD:CANCEL routes through the same
     primitive, so it can't bypass the lock the HTTP cancel respects."""
     logic.start_bulk_move_session("PM-DB-A")
     assert logic._BULK_MOVE_COMMIT_LOCK.acquire(False)
     try:
+        logic._BULK_MOVE_WRITING = True
         res = logic.process_bulk_move_scan({"type": "command", "cmd": "cancel"})
         assert res["status"] == "error"
-        assert "in progress" in res["msg"]
+        assert "no longer be cancelled" in res["msg"]
+        assert "spools are being moved" in _log_text()
         assert state.BULK_MOVE_SESSION["active"] is True
     finally:
         logic._BULK_MOVE_COMMIT_LOCK.release()
@@ -737,7 +768,7 @@ def test_dest_cannot_be_retargeted_while_a_commit_is_running(client):
                         json={"action": "set_dest", "dest": "SHELF-C"})
         body = r.get_json()
         assert body["success"] is False
-        assert "commit is in progress" in body["msg"]
+        assert "destination can't be changed" in body["msg"]     # THIS surface
         assert state.BULK_MOVE_SESSION["dest_id"] == "SHELF-B"   # unchanged
 
         # The SCAN path routes through the same setter, so it can't bypass it.
@@ -802,3 +833,179 @@ def test_snapshot_advertises_the_idle_window(client):
     # ...and the Activity Log line that ARMS it says so too.
     assert any("idle" in (e.get("message") or e.get("msg") or "").lower()
                for e in state.RECENT_LOGS), state.RECENT_LOGS
+
+
+# ---------------------------------------------------------------------------
+# L298 Phase 4 — emptying a bound dryer box (INFORM, never mutate)
+# ---------------------------------------------------------------------------
+
+_BOUND_LOCATIONS = [
+    {"LocationID": "PM-DB-A", "Type": "Dryer Box", "Max Spools": "4", "Name": "Box A",
+     "extra": {"slot_targets": {"1": "XL-1", "2": "XL-2", "3": "PRINTER:CORE1"}}},
+    {"LocationID": "SHELF-B", "Type": "Wall Shelf", "Max Spools": "0", "Name": "Shelf B"},
+    {"LocationID": "XL-1", "Type": "Tool Head", "Max Spools": "1", "Name": "XL-1"},
+    {"LocationID": "XL-2", "Type": "Tool Head", "Max Spools": "1", "Name": "XL-2"},
+]
+
+
+def test_plan_reports_the_toolheads_the_source_feeds(client):
+    """Emptying a bound Dryer Box is legitimate, but the user should SEE that
+    they're about to starve a printer feed."""
+    with _env(strict_map={"PM-DB-A": [_spool(1, slot="1"), _spool(2, slot="2"),
+                                      _spool(3, slot="3")]},
+              locations=_BOUND_LOCATIONS):
+        plan = logic.plan_bulk_move("PM-DB-A", "SHELF-B")
+    assert plan["ok"] is True
+    # Slot 3 is a PRINTER:<id> sentinel — it stages a pool for a printer, so no
+    # toolhead feed is implied and it must NOT be listed.
+    assert plan["source_feeds"] == ["XL-1", "XL-2"]
+
+
+def test_feed_warning_only_names_slots_this_move_actually_empties(client):
+    """A box with 3 bound slots and ONE moving spool must not claim all three
+    feeds are about to run dry — and a slot whose spool is SKIPPED keeps its
+    feed, so listing it would cry wolf on the exact case the skip rules protect."""
+    with _env(strict_map={"PM-DB-A": [
+                  _spool(1, slot="1"),                       # moves -> XL-1 empties
+                  _spool(2, slot="2", is_ghost=True),        # SKIPPED -> XL-2 keeps it
+              ]},
+              locations=_BOUND_LOCATIONS):
+        plan = logic.plan_bulk_move("PM-DB-A", "SHELF-B")
+    assert plan["movable_ids"] == [1]
+    assert plan["source_feeds"] == ["XL-1"]
+
+
+def test_feed_warning_is_silent_when_no_bound_slot_is_emptied(client):
+    """Spools sitting in UNBOUND slots of a bound box: the bindings are
+    untouched and no feed loses anything, so there is nothing to warn about."""
+    with _env(strict_map={"PM-DB-A": [_spool(9, slot="4")]},   # slot 4 unbound
+              locations=_BOUND_LOCATIONS):
+        plan = logic.plan_bulk_move("PM-DB-A", "SHELF-B")
+    assert plan["movable_ids"] == [9]
+    assert plan["source_feeds"] == []
+
+
+def test_bulk_move_orchestration_never_writes_locations_json(client):
+    """The ORCHESTRATION layer (plan -> commit -> snapshot) must not touch
+    locations.json at all — `slot_targets` describes the PLUMBING (slot 1 feeds
+    XL-1), not the contents, so emptying the box does not invalidate it, and
+    silently unwiring a user's slot->toolhead config as a side-effect of a move
+    would be the hidden mutation this feature must not do. (The original plan
+    risk note said "flag/clear"; clearing is wrong.)
+
+    SCOPE, stated honestly: perform_smart_move is MOCKED here, so this pins the
+    orchestration only — it cannot prove the mover leaves bindings alone. That
+    belongs to tests/test_smart_move_spoolman.py, which drives the real engine.
+    The load-bearing assertion is save_locations_list never being called."""
+    import copy
+    locs = copy.deepcopy(_BOUND_LOCATIONS)
+    before = copy.deepcopy(locs[0]["extra"]["slot_targets"])
+    with _env(strict_map={"PM-DB-A": [_spool(1, slot="1")]}, locations=locs) as mv:
+        with patch.object(locations_db, "save_locations_list") as save:
+            client.post("/api/bulk_move_session", json={"action": "start", "source": "PM-DB-A"})
+            client.post("/api/bulk_move_session", json={"action": "set_dest", "dest": "SHELF-B"})
+            client.post("/api/bulk_move_session", json={"action": "commit"})
+    mv.assert_called_once()                       # the move DID run
+    assert locs[0]["extra"]["slot_targets"] == before   # ...and the wiring survived
+    save.assert_not_called()                      # locations.json untouched entirely
+
+
+def test_unbound_source_reports_no_feeds(client):
+    """A plain shelf/cart source must not manufacture a warning."""
+    with _env(strict_map={"SHELF-B": [_spool(1, location="SHELF-B")]},
+              locations=_BOUND_LOCATIONS):
+        plan = logic.plan_bulk_move("SHELF-B", "PM-DB-A")
+    assert plan["source_feeds"] == []
+
+
+def test_snapshot_carries_source_feeds_to_the_panel(client):
+    with _env(strict_map={"PM-DB-A": [_spool(1, slot="1"), _spool(2, slot="2")]},
+              locations=_BOUND_LOCATIONS):
+        client.post("/api/bulk_move_session", json={"action": "start", "source": "PM-DB-A"})
+        client.post("/api/bulk_move_session", json={"action": "set_dest", "dest": "SHELF-B"})
+        body = client.get("/api/bulk_move_session").get_json()
+    assert body["preview"]["source_feeds"] == ["XL-1", "XL-2"]
+
+
+# ---------------------------------------------------------------------------
+# Phase-4 review fixes — the feed warning's real coverage
+# ---------------------------------------------------------------------------
+
+_NESTED_LOCATIONS = [
+    {"LocationID": "CR", "Type": "Room", "Max Spools": "0", "Name": "Computer Room"},
+    # A bound box NESTED under the room. The source resolve is flat/first-segment,
+    # so a CR-level bulk move sweeps this box's spools too.
+    {"LocationID": "CR-MDB-9", "Type": "Dryer Box", "Max Spools": "4", "Name": "Box 9",
+     "extra": {"slot_targets": {"1": "XL-1", "2": "XL-2"}}},
+    # A SINGLE-slot box: Group 20.2 auto-binds exactly this class, and such a box
+    # records NO container_slot on its spool.
+    {"LocationID": "CR-SDB-1", "Type": "Dryer Box", "Max Spools": "1", "Name": "Solo",
+     "extra": {"slot_targets": {"1": "XL-5"}}},
+    {"LocationID": "SHELF-B", "Type": "Wall Shelf", "Max Spools": "0", "Name": "Shelf B"},
+]
+
+
+def test_room_source_warns_about_nested_bound_boxes(client):
+    """REVIEW FIX: the feed lookup used to read only the SOURCE row's
+    slot_targets. But the source resolve is FLAT/first-segment, so a Room source
+    sweeps every bound box sharing its prefix — a Room-level move emptied real
+    printer feeds with no warning at all. The lookup is now keyed off each moving
+    spool's OWN location."""
+    with _env(strict_map={"CR": [
+                  _spool(1, location="CR-MDB-9", slot="1"),
+                  _spool(2, location="CR-MDB-9", slot="2"),
+                  _spool(3, location="CR", slot=""),      # loose in the room
+              ]},
+              locations=_NESTED_LOCATIONS):
+        plan = logic.plan_bulk_move("CR", "SHELF-B")
+    assert plan["ok"] is True
+    assert plan["source_feeds"] == ["XL-1", "XL-2"]
+
+
+def test_single_slot_box_with_no_container_slot_still_warns(client):
+    """REVIEW FIX: a single-slot dryer box records NO container_slot, so keying
+    the warning on a non-blank slot made it permanently dead for exactly the
+    class of box that most often feeds a toolhead (Group 20.2 auto-binds them)."""
+    with _env(strict_map={"CR-SDB-1": [_spool(7, location="CR-SDB-1", slot="")]},
+              locations=_NESTED_LOCATIONS):
+        plan = logic.plan_bulk_move("CR-SDB-1", "SHELF-B")
+    assert plan["movable_ids"] == [7]
+    assert plan["source_feeds"] == ["XL-5"]
+
+
+def test_multi_slot_box_with_no_container_slot_does_not_guess(client):
+    """The blank-slot inference is deliberately limited to Max Spools == 1. In a
+    4-slot box a slotless spool could be in any slot, so guessing '1' would name
+    a feed at random."""
+    with _env(strict_map={"CR-MDB-9": [_spool(8, location="CR-MDB-9", slot="")]},
+              locations=_NESTED_LOCATIONS):
+        plan = logic.plan_bulk_move("CR-MDB-9", "SHELF-B")
+    assert plan["movable_ids"] == [8]
+    assert plan["source_feeds"] == []
+
+
+def test_blocked_plan_reports_no_feeds(client):
+    """A blocked plan moves NOTHING, so advertising the feeds it would have
+    emptied warns about something that cannot happen."""
+    with _env(strict_map={"CR-MDB-9": [_spool(i, location="CR-MDB-9", slot=str(i))
+                                       for i in range(1, 6)],
+                          "CR-SDB-1": []},
+              locations=_NESTED_LOCATIONS):
+        plan = logic.plan_bulk_move("CR-MDB-9", "CR-SDB-1")   # 5 into a 1-slot box
+    assert plan["blocked_reason"] == "capacity"
+    assert plan["source_feeds"] == []
+
+
+def test_malformed_slot_targets_do_not_crash_the_plan(client):
+    """extra / slot_targets come from locations.json, which is hand-editable."""
+    bad = [
+        {"LocationID": "BAD-1", "Type": "Dryer Box", "Max Spools": "4", "extra": "not-a-dict"},
+        {"LocationID": "BAD-2", "Type": "Dryer Box", "Max Spools": "4",
+         "extra": {"slot_targets": "also-not-a-dict"}},
+        {"LocationID": "SHELF-B", "Type": "Wall Shelf", "Max Spools": "0"},
+    ]
+    for src in ("BAD-1", "BAD-2"):
+        with _env(strict_map={src: [_spool(1, location=src, slot="1")]}, locations=bad):
+            plan = logic.plan_bulk_move(src, "SHELF-B")
+        assert plan["ok"] is True
+        assert plan["source_feeds"] == []
