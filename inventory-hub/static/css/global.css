@@ -1782,6 +1782,47 @@ body:has(.cmd-deck) #fcc-log-pill {
 #fcc-log-pill:active { cursor: grabbing; }
 #fcc-log-pill.fcc-log-pill-dragging { animation: none !important; cursor: grabbing; }
 
+/* L298 follow-up — BULK MOVE armed pill. Same shape/engine as the 📡 log pill
+   above; cyan is taken, so this uses the deck's bulk-move cyan-blue with an
+   amber ready-state. It exists so a hidden preview panel is never lost: it is
+   shown for exactly as long as a session is armed. Default parks ABOVE the log
+   pill's lane so the two don't stack on first paint. */
+#fcc-bulkmove-pill {
+    display: none;
+    position: fixed;
+    right: 30px;
+    bottom: 170px;        /* one pill-height clear of the log pill's 110 */
+    z-index: 1080;        /* same tier as the log pill — our overlays still occlude */
+    background: #00d4ff;
+    color: #06222b;
+    font-weight: 900;
+    border: 2px solid #0088b0;
+    border-radius: 999px;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.95rem;
+    box-shadow: 0 0 12px rgba(0, 212, 255, 0.45);
+    cursor: grab;
+    user-select: none;
+    touch-action: none;   /* Pointer Events own the drag */
+    white-space: nowrap;
+}
+body:has(.cmd-deck) #fcc-bulkmove-pill {
+    bottom: 320px;        /* clear the cmd-deck band, above the log pill's 260 */
+}
+#fcc-bulkmove-pill:hover {
+    background: #33e0ff;
+    box-shadow: 0 0 18px rgba(0, 212, 255, 0.8);
+}
+/* Ready-to-commit gets the deck's green so the pill agrees with the tile. */
+#fcc-bulkmove-pill.fcc-bulkmove-pill-ready {
+    background: #00ff88;
+    color: #042415;
+    border-color: #00b761;
+    box-shadow: 0 0 14px rgba(0, 255, 136, 0.6);
+}
+#fcc-bulkmove-pill:active { cursor: grabbing; }
+#fcc-bulkmove-pill.fcc-bulkmove-pill-dragging { animation: none !important; cursor: grabbing; }
+
 /* L202 — Edit Filament > Import-from-External collapse panel.
    Bug: during the 350ms Bootstrap height transition, the Source <select>
    (top child of the panel) stays visible inside the animating height

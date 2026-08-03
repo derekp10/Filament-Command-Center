@@ -356,9 +356,17 @@ def test_hide_latches_so_a_stage_change_cannot_reopen_the_panel(
     expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible(timeout=3_000)
     assert page.evaluate("window.__cancelled") == 0
 
-    # ...and with the panel OPEN it is the safe bail again.
+    # ...and pressing it AGAIN with the panel open still does not cancel.
+    # (Contract CHANGED 2026-08-03: the tile used to be three-way with a
+    # "panel open -> safe bail" arm. That arm was unreachable by mouse anyway —
+    # the panel's backdrop covers the deck — and it made a tile whose LABEL is
+    # the stage into a destructive control, which read as "clicking things
+    # randomly resets it". The tile is now strictly arm-or-show; cancelling is
+    # the panel's ❌ button and CMD:CANCEL.)
     page.evaluate("window.toggleBulkMove()")
-    assert page.evaluate("window.__cancelled") == 1
+    page.wait_for_timeout(300)
+    assert page.evaluate("window.__cancelled") == 0
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible()
 
 
 @pytest.mark.usefixtures("require_server")
@@ -854,3 +862,100 @@ def test_feed_note_escapes_hostile_location_ids(
     # elements, so a bare img count is not the discriminator here.
     assert overlay.locator('img[src="x"]').count() == 0
     expect(overlay).to_contain_text("<img src=x onerror=window.__pwned=4>")
+
+
+# ---------------------------------------------------------------------------
+# L298 follow-up — the armed pill + a strictly non-destructive deck tile
+# (Derek 2026-08-03: "a hide button that makes it go somewhere, but I don't
+#  know where to bring it back up ... clicking scan src just hard resets it")
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usefixtures("require_server")
+def test_armed_pill_is_the_always_visible_way_back_to_the_panel(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """The deck tile cannot be the way back: its LABEL is the stage, so nothing
+    on it says "show panel". The pill is shown for exactly as long as a session
+    is armed, survives Hide, and reopens the panel on tap."""
+    overlay = _open(page, base_url, reset_dom_state_js, _PREVIEW)
+    pill = page.locator("#fcc-bulkmove-pill")
+
+    page.evaluate("""() => {
+        state.bulkMoveActive = true; state.bulkMoveStage = 'preview';
+        window.updateBulkMoveVisuals();
+    }""")
+    expect(pill).to_be_visible()
+    expect(pill).to_contain_text("ready to commit")
+    assert page.evaluate(
+        "document.getElementById('fcc-bulkmove-pill').classList.contains('fcc-bulkmove-pill-ready')") is True
+
+    # Hide the panel — the pill MUST survive, or the panel is lost.
+    page.locator("#fcc-bulkmove-close").click()
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_have_count(0, timeout=3_000)
+    expect(pill).to_be_visible()
+
+    pill.click()
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible(timeout=5_000)
+
+    # ...and it disappears with the session.
+    page.evaluate("""() => {
+        state.bulkMoveActive = false; state.bulkMoveStage = 'idle';
+        window.updateBulkMoveVisuals();
+    }""")
+    expect(pill).to_be_hidden()
+
+
+@pytest.mark.usefixtures("require_server")
+def test_pill_wording_tracks_the_stage(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """It says what to DO next, not the internal stage name — it is the only
+    thing on screen while the panel is hidden."""
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    # Keep the panel out of it: opening it starts a poll that re-applies the
+    # stub's own stage ('preview') over the stage under test. Arrow-function
+    # form — page.evaluate INVOKES a trailing function value.
+    page.evaluate("""() => { window.openBulkMovePanel = () => {}; }""")
+    pill = page.locator("#fcc-bulkmove-pill")
+    for stage, wording in (("awaiting_source", "scan source"),
+                           ("awaiting_dest", "scan dest"),
+                           ("preview", "ready to commit")):
+        page.evaluate("""(s) => {
+            state.bulkMoveActive = true; state.bulkMoveStage = s;
+            window.updateBulkMoveVisuals();
+        }""", stage)
+        expect(pill).to_contain_text(wording)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_deck_tile_never_replaces_an_armed_session_from_a_stale_tab(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """THE reset Derek hit. For the first seconds after a reload
+    state.bulkMoveActive is false, so the tile POSTed `start`, got
+    `already_active`, and raised a "Replace it?" confirm whose Yes discards a
+    plan built from two deliberate physical scans. The tile now resolves the
+    truth from the server and SHOWS the session instead."""
+    posts = _prep(page, base_url, reset_dom_state_js, _PREVIEW)   # server: ARMED
+    page.evaluate("() => { state.bulkMoveActive = false; }")      # tab: thinks idle
+
+    page.locator("#btn-deck-bulkmove").click()
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible(timeout=5_000)
+    page.wait_for_timeout(400)
+    # No start/replace was ever POSTed, and no confirm was raised.
+    assert not [b for b in posts if "start" in b or "replace" in b], posts
+    expect(page.locator("#confirmModal.show")).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_deck_tile_cannot_cancel(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Strictly non-destructive: cancelling is the panel's ❌ and CMD:CANCEL."""
+    posts = _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.evaluate("""() => {
+        state.bulkMoveActive = true; state.bulkMoveStage = 'preview';
+        window.__cancelled = 0;
+        window.cancelBulkMove = () => { window.__cancelled++; };
+    }""")
+    for _ in range(3):
+        page.locator("#btn-deck-bulkmove").click(force=True)
+        page.wait_for_timeout(250)
+    assert page.evaluate("window.__cancelled") == 0
+    assert not [b for b in posts if "cancel" in b], posts

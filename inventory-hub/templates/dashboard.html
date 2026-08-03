@@ -109,6 +109,19 @@
         <span class="ms-1" style="font-weight:600; font-size:0.8rem;">new</span>
     </button>
 
+    <!-- L298 follow-up — BULK MOVE armed pill (Derek 2026-08-03: "a hide button
+         that makes it go somewhere, but I don't know where to bring it back up").
+         Visible for as long as a bulk-move session is armed, so the preview panel
+         can never be lost: it names the stage and reopens the panel on tap. Same
+         draggable engine + storage contract as the 📡 log pill and the 🔍 FAB
+         (makeDraggablePill / localStorage 'fcc.bulkMovePill.pos'); z-index matches
+         the log pill so our overlay tier still occludes it. -->
+    <button type="button" id="fcc-bulkmove-pill" class="btn btn-sm shadow"
+        title="A bulk move is armed — tap to show its panel; drag to move">
+        <span id="fcc-bulkmove-pill-icon">🔀</span>
+        <span id="fcc-bulkmove-pill-text" class="ms-1">bulk move</span>
+    </button>
+
     <!-- Printer Status widget (Group 9.3) — at-a-glance row per printer with
          a stylized toolhead schematic. Hidden when no printers have bound
          toolheads; otherwise rendered by inv_printer_status.js. -->
