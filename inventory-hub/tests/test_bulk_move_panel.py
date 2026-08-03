@@ -503,3 +503,104 @@ def test_tile_renderer_escapes_hostile_spool_names_and_colours(
         'Evil" onmouseover="window.__pwned=1')
     page.wait_for_timeout(300)
     assert page.evaluate("window.__pwned") is None
+
+
+# ---------------------------------------------------------------------------
+# L298 Phase 4 — the Shift+B keyboard entry
+# ---------------------------------------------------------------------------
+
+def _prep(page: Page, base_url: str, reset_dom_state_js: str, payload: dict):
+    """Load the page and stub the session endpoint WITHOUT opening the panel."""
+    page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10_000)
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_function(
+        "typeof window.toggleBulkMove === 'function'"
+        " && typeof window.openBulkMovePanel === 'function'", timeout=10_000)
+    _stub_session(page, payload)
+    page.evaluate("() => { state.lastBulkMoveState = 'false|idle'; }")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_shift_b_arms_a_bulk_move_from_idle(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.evaluate("() => { state.bulkMoveActive = false; }")
+    page.keyboard.press("Shift+B")
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible(timeout=5_000)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_shift_b_reopens_an_armed_session_and_never_cancels(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """THE design constraint: a keyboard shortcut must never be able to discard a
+    plan the user built from two deliberate scans. Unlike the deck tile's
+    three-way toggle, Shift+B only ever arms or SHOWS."""
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.evaluate("""() => {
+        state.bulkMoveActive = true;
+        state.bulkMoveStage = 'preview';
+        window.__cancelled = 0;
+        window.cancelBulkMove = () => { window.__cancelled++; };
+    }""")
+    # Panel closed + session armed -> Shift+B shows it.
+    page.keyboard.press("Shift+B")
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible(timeout=5_000)
+    assert page.evaluate("window.__cancelled") == 0
+    # ...and pressing it AGAIN with the panel open still doesn't cancel.
+    page.keyboard.press("Shift+B")
+    page.wait_for_timeout(300)
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_be_visible()
+    assert page.evaluate("window.__cancelled") == 0
+
+
+@pytest.mark.usefixtures("require_server")
+def test_shift_b_is_inert_while_typing_in_a_field(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.evaluate("""() => {
+        const i = document.createElement('input');
+        i.id = '__typing_probe';
+        document.body.appendChild(i);
+        i.focus();
+    }""")
+    page.keyboard.press("Shift+B")
+    page.wait_for_timeout(500)
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_have_count(0)
+    # The keystroke reached the field instead of the shortcut.
+    assert page.evaluate("document.getElementById('__typing_probe').value") == "B"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_shift_b_is_inert_mid_scan(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """A barcode scanner types its payload as ordinary keydowns, so an unguarded
+    letter key would fire in the middle of somebody scanning a label."""
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.evaluate("""() => {
+        state.bulkMoveActive = false;
+        state.scanBuffer = 'LOC:CR-CT';      // a scan stream in flight...
+        state.scanStartTime = Date.now();    // ...that started just now
+    }""")
+    page.keyboard.press("Shift+B")
+    page.wait_for_timeout(500)
+    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_bulk_move_shortcuts_are_listed_in_the_help_overlay(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """CLAUDE.md: any new shortcut must call window.registerShortcut so the `?`
+    reference stays complete.
+
+    This caught a real load-order bug: scripts.html loads inv_cmd.js BEFORE
+    shortcuts_registry.js, so registering at module-eval time hit an undefined
+    window.registerShortcut and the `if (...)` guard silently skipped — the
+    shortcut worked, but was invisible in the reference it was written to satisfy.
+    """
+    _prep(page, base_url, reset_dom_state_js, _PREVIEW)
+    page.keyboard.press("?")
+    page.wait_for_timeout(600)
+    body = page.evaluate("document.body.innerText")
+    assert "Bulk Move" in body, "the Bulk Move scope is missing from the ? overlay"
+    assert "Shift" in body and "Arm a bulk move" in body

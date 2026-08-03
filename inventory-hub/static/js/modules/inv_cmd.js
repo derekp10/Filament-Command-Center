@@ -483,6 +483,61 @@ window.commitBulkMove = (confirmActivePrint = false) => {
     });
 };
 
+// --- L298 Phase 4 — keyboard entry (Shift+B) --------------------------------
+// Deliberately NON-DESTRUCTIVE, unlike the deck tile's three-way toggle: idle
+// arms a session, and an already-armed session just SHOWS its panel. A keyboard
+// shortcut that could discard a plan built from two deliberate scans is a
+// footgun — cancelling stays on the panel's explicit ❌ button and CMD:CANCEL.
+//
+// Shift+B rather than a bare letter: guarded against fields AND against a scan
+// stream in flight (the `/` global-search key's idiom in fab_drag.js — a barcode
+// scanner types its payload as ordinary keydowns, so an unguarded letter key
+// fires in the middle of somebody scanning a label).
+(function () {
+    const _scanInFlight = () => {
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.length > 0
+            && st.scanStartTime && (Date.now() - st.scanStartTime) < 500);
+    };
+    document.addEventListener('keydown', (e) => {
+        if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.key !== 'B' && e.key !== 'b') return;
+        const tag = (e.target && e.target.tagName) || '';
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+        if (_scanInFlight()) return;
+        e.preventDefault();
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        if (st && st.bulkMoveActive) {
+            // Already armed → SHOW, never cancel.
+            if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel({ user: true });
+            return;
+        }
+        if (typeof window.toggleBulkMove === 'function') window.toggleBulkMove();
+    });
+    // Register AFTER load, not at module eval. scripts.html loads inv_cmd.js
+    // (line 41) BEFORE shortcuts_registry.js (line 50), so `window.registerShortcut`
+    // is still undefined here at eval time and a bare `if (window.registerShortcut)`
+    // guard silently skips — the shortcut works but never appears in the `?`
+    // reference, quietly breaking the CLAUDE.md rule it exists to satisfy. This is
+    // fab_drag.js's idiom (it registers inside its DOMContentLoaded init).
+    const _registerBulkShortcuts = () => {
+        if (!window.registerShortcut) return;
+        window.registerShortcut({
+            id: 'bulk-move-open', scope: 'Bulk Move', keys: ['Shift', 'B'],
+            description: 'Arm a bulk move — or reopen its preview panel if one is already armed. Never cancels.',
+        });
+        window.registerShortcut({
+            id: 'bulk-move-escape', scope: 'Bulk Move', keys: ['Esc'],
+            description: 'Hide the preview panel. The bulk move stays armed; Shift+B brings it back.',
+        });
+    };
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _registerBulkShortcuts);
+    } else {
+        _registerBulkShortcuts();
+    }
+})();
+
 // --- L298 Phase 3 — BULK MOVE PREVIEW / CONFIRM PANEL ----------------------
 // Same skeleton as the audit panel: mountOverlay (tier 'standard') + a 2s poll
 // of /api/bulk_move_session + a render-hash flicker guard. Phase 2 kept the body
