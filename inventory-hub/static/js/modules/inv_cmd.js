@@ -292,71 +292,85 @@ const bulkMoveShapeshift = window.registerShapeshiftQR({
     },
 });
 
+// Stage → the armed pill's wording. Deliberately says what to DO next, not the
+// internal stage name, because this is the thing on screen when the panel is hidden.
+const _BULK_PILL_TEXT = {
+    awaiting_source: 'scan source',
+    awaiting_dest: 'scan dest',
+    preview: 'ready to commit',
+};
+
 window.updateBulkMoveVisuals = () => {
     const stage = state.bulkMoveActive ? (state.bulkMoveStage || 'awaiting_source') : 'idle';
     bulkMoveShapeshift.set(stage);
-};
 
-// Deck-button toggle — THREE-WAY (Phase 3). Committing is still only ever the
-// explicit panel button or a CMD:DONE scan; the tile is never the destructive
-// path (toggleAudit's rule). But "active → always cancel" made the tile lie
-// twice over: it reads a green "COMMIT" at the preview stage, and the Hide
-// button's tooltip promised the deck button as the way to REOPEN the panel —
-// following which silently discarded a plan built from two deliberate scans.
-//   idle                   → arm a session
-//   active + panel HIDDEN  → reopen the panel (the promised affordance)
-//   active + panel OPEN    → safe bail (cancel; nothing moved)
-// NOTE on that third arm: while the panel IS open its mountOverlay backdrop
-// covers the deck, so the arm is not reachable by mouse — in practice the tile
-// reads as "reopen the hidden panel". It is kept because the branch is correct
-// for any programmatic caller and for a future backdrop-less variant, but the
-// user-facing bail-outs are the panel's ❌ Cancel and a CMD:CANCEL scan. Say
-// that in the tooltip; do NOT advertise the tile as a cancel.
-const toggleBulkMove = () => {
-    if (state.bulkMoveActive) {
-        const isOpen = typeof window.isBulkMovePanelOpen === 'function'
-            && window.isBulkMovePanelOpen();
-        if (!isOpen) {
-            // `user: true` also clears the "I hid this" latch, so the panel is
-            // allowed to auto-follow stage changes again.
-            window.openBulkMovePanel({ user: true });
-            return;
-        }
-        window.cancelBulkMove();
+    // The armed pill (L298 follow-up, Derek 2026-08-03: "a hide button that makes
+    // it go somewhere, but I don't know where to bring it back up"). It is the
+    // ALWAYS-VISIBLE way back to the panel — the deck tile can't be that, because
+    // its label is the stage and its meaning changes with state. Shown for exactly
+    // as long as a session is armed; tapping it reopens the panel.
+    const pill = document.getElementById('fcc-bulkmove-pill');
+    if (!pill) return;
+    if (stage === 'idle') {
+        pill.style.display = 'none';
         return;
     }
-    window.fetchT('/api/bulk_move_session', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'start' }),
-    }).then(r => r.json()).then((d) => {
-        // Mirror inv_loc_mgr.js's triggerBulkMove: the backend REFUSES a start
-        // during an audit, and refuses to silently replace an already-armed
-        // session. Ignoring those flags flashed the panel open and shut with no
-        // explanation, because applyBulkMoveSession faithfully painted the
-        // unchanged (idle, or someone else's) session back.
-        if (d && d.already_active) {
-            requestConfirmation(
-                d.msg || 'A bulk move is already armed. Replace it?',
-                () => {
-                    window.fetchT('/api/bulk_move_session', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'start', replace: true }),
-                    }).then(r2 => r2.json()).then((d2) => {
-                        window.applyBulkMoveSession(d2 && d2.session);
-                        if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel({ user: true });
-                    }).catch(() => showToast("Couldn't start bulk move", "error", 7000));
-                }
-            );
+    const txt = pill.querySelector('#fcc-bulkmove-pill-text');
+    if (txt) txt.innerText = _BULK_PILL_TEXT[stage] || 'bulk move';
+    pill.classList.toggle('fcc-bulkmove-pill-ready', stage === 'preview');
+    // !important so a stale inline display:none (or CSS) can't keep it hidden —
+    // the log pill uses the same trick.
+    pill.style.setProperty('display', 'inline-flex', 'important');
+    pill.style.alignItems = 'center';
+};
+
+// Deck-button toggle — STRICTLY NON-DESTRUCTIVE (Derek 2026-08-03).
+//   idle    -> arm a session and show the panel
+//   armed   -> show the panel
+// It can NEVER cancel and NEVER replace. Cancelling is the panel's explicit
+// ❌ button or a CMD:CANCEL scan; both are labelled and deliberate.
+//
+// Why the earlier "armed + panel open -> cancel" arm is gone: it was
+// unreachable by mouse anyway (the panel's backdrop covers the deck), and it
+// made a tile whose LABEL is the stage ("SCAN SRC", green "COMMIT") also a
+// destructive control — so clicking around felt like it randomly reset things.
+//
+// The server GET is load-bearing, not defensive: local state is STALE-FALSE for
+// the first few seconds after a page reload, and going straight to `start` there
+// got `already_active` back and raised a "Replace it?" confirm whose Yes
+// DISCARDS a plan built from two deliberate physical scans. Resolve the truth,
+// then act.
+const _showBulkPanel = () => {
+    if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel({ user: true });
+};
+const toggleBulkMove = () => {
+    if (state.bulkMoveActive) { _showBulkPanel(); return; }
+    fetch('/api/bulk_move_session').then(r => r.json()).then((live) => {
+        if (live && live.active) {
+            window.applyBulkMoveSession(live);
+            _showBulkPanel();
             return;
         }
-        if (!d || !d.success) {
-            showToast((d && d.msg) || "Couldn't start bulk move", "error", 7000);
-            return;
-        }
-        window.applyBulkMoveSession(d && d.session);
-        // user: true — the deck button IS the user asking for the panel, so it
-        // must beat a Hide latch left over from an earlier session.
-        if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel({ user: true });
+        return window.fetchT('/api/bulk_move_session', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'start' }),
+        }).then(r => r.json()).then((d) => {
+            // Someone armed one between our GET and our POST (another tab, a
+            // scan). SHOW it rather than offering to replace it.
+            if (d && d.already_active) {
+                window.applyBulkMoveSession(d && d.session);
+                _showBulkPanel();
+                showToast("A bulk move is already armed — showing it.", "info");
+                return;
+            }
+            if (!d || !d.success) {
+                // e.g. an audit is running — the backend explains why.
+                showToast((d && d.msg) || "Couldn't start bulk move", "error", 7000);
+                return;
+            }
+            window.applyBulkMoveSession(d && d.session);
+            _showBulkPanel();
+        });
     }).catch(() => showToast("Couldn't start bulk move", "error", 7000));
 };
 window.toggleBulkMove = toggleBulkMove;
@@ -548,29 +562,10 @@ window.commitBulkMove = (confirmActivePrint = false) => {
         _clearScanBuffer();
         setTimeout(_clearScanBuffer, 0);
 
-        if (st && st.bulkMoveActive) {
-            // Already armed → SHOW, never cancel.
-            if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel({ user: true });
-            return;
-        }
-        // Local state can be STALE-false (a freshly reloaded tab before the
-        // first heartbeat). Going straight to toggleBulkMove there would POST a
-        // `start`, get `already_active`, and raise the REPLACE confirm — whose
-        // Yes discards a plan built from two deliberate physical scans. That is
-        // precisely the footgun this shortcut is designed not to have, so
-        // resolve the truth from the server before acting.
-        fetch('/api/bulk_move_session').then(r => r.json()).then((d) => {
-            if (d && d.active) {
-                if (typeof window.applyBulkMoveSession === 'function') window.applyBulkMoveSession(d);
-                if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel({ user: true });
-                return;
-            }
-            if (typeof window.toggleBulkMove === 'function') window.toggleBulkMove();
-        }).catch(() => {
-            // Offline/error: fall back to the arm path, which surfaces its own
-            // already_active confirm rather than silently doing nothing.
-            if (typeof window.toggleBulkMove === 'function') window.toggleBulkMove();
-        });
+        // Same semantics as the deck tile now that the tile is strictly
+        // non-destructive (arm-or-show, resolving server truth first), so just
+        // delegate — one behaviour, one place to keep correct.
+        if (typeof window.toggleBulkMove === 'function') window.toggleBulkMove();
     });
     // Register AFTER load, not at module eval. scripts.html loads inv_cmd.js
     // (line 41) BEFORE shortcuts_registry.js (line 50), so `window.registerShortcut`

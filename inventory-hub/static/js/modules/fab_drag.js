@@ -62,6 +62,28 @@
             });
         }
 
+        // --- Draggable 🔀 BULK MOVE armed pill (L298 follow-up) ---------------
+        // Shown for exactly as long as a session is armed, so a hidden preview
+        // panel can never be lost. Visibility + label are owned by
+        // updateBulkMoveVisuals (inv_cmd.js); this only makes it draggable and
+        // wires the tap. Parks one lane above the log pill by default.
+        const bulkPill = document.getElementById('fcc-bulkmove-pill');
+        if (bulkPill && mk) {
+            mk(bulkPill, {
+                key: 'fcc.bulkMovePill.pos',
+                defaultPos: () => {
+                    const w = bulkPill.offsetWidth || 150;
+                    const onDeck = !!document.querySelector('.cmd-deck');
+                    return { left: Math.max(30, window.innerWidth - w - 30), bottom: onDeck ? 320 : 170 };
+                },
+                fallbackW: 150,   // representative width while hidden (offsetWidth 0)
+                fallbackH: 44,
+                draggingClass: 'fcc-bulkmove-pill-dragging',
+                resetToast: '🔀 Bulk-move pill reset to default position',
+                onTap: () => { if (window.openBulkMovePanel) window.openBulkMovePanel({ user: true }); },
+            });
+        }
+
         // --- Keyboard: open search from anywhere (none existed before) --------
         const openSearch = () => { if (window.SearchEngine && window.SearchEngine.open) window.SearchEngine.open(); };
         const scanInFlight = () => {
