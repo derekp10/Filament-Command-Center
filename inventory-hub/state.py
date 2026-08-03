@@ -35,6 +35,34 @@ AUDIT_SESSION = {
 # the dashboard indefinitely.
 AUDIT_IDLE_TIMEOUT_SECONDS = 30 * 60
 
+# --- BULK MOVE STATE (L298 Phase 2) ---
+# The scan-driven "move everything from A to B" session. Mirrors AUDIT_SESSION
+# deliberately (same in-place-mutation discipline, same lazy idle watchdog) so
+# the two scan modes behave identically from the user's side.
+#
+# `stage` is the state machine the deck QR shapeshifts against:
+#   idle           - no session (active=False)
+#   awaiting_source- armed; the next location scan captures the SOURCE
+#   awaiting_dest  - source captured; the next location scan captures the DEST
+#   preview        - both captured + a dry-run tally computed; waits for an
+#                    EXPLICIT commit (CMD:DONE / button). Scanning a dest never
+#                    auto-commits — a bulk move is too destructive to fire on a
+#                    stray scan.
+BULK_MOVE_SESSION = {
+    "active": False,
+    "stage": "idle",
+    "source_id": None,
+    "dest_id": None,
+    # Dry-run tally rendered by the preview panel: {movable:[], skipped:[], blocked:str|None}
+    "preview": None,
+    "last_activity_ts": 0.0,
+}
+
+# Same 30-minute rationale as the audit watchdog: long enough to walk away and
+# physically gather spools, short enough that an abandoned session can't leave a
+# stale source armed for the next person's dest scan.
+BULK_MOVE_IDLE_TIMEOUT_SECONDS = 30 * 60
+
 # --- LOGGING SETUP ---
 logger = logging.getLogger("InventoryHub")
 logger.setLevel(logging.INFO)
@@ -113,5 +141,23 @@ def reset_audit():
         "expected_items": [],
         "scanned_items": [],
         "rogue_items": [],
+        "last_activity_ts": 0.0,
+    })
+
+
+def reset_bulk_move():
+    """Clears the current bulk-move session (L298 Phase 2).
+
+    Mutates IN PLACE (never rebinds) so every module holding a reference to
+    state.BULK_MOVE_SESSION observes the clear — the same discipline
+    reset_audit() follows. Do NOT whole-replace this dict.
+    """
+    global BULK_MOVE_SESSION
+    BULK_MOVE_SESSION.update({
+        "active": False,
+        "stage": "idle",
+        "source_id": None,
+        "dest_id": None,
+        "preview": None,
         "last_activity_ts": 0.0,
     })

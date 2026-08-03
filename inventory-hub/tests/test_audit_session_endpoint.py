@@ -93,3 +93,20 @@ def test_audit_session_handles_missing_spool_gracefully(client):
     assert body["expected"][0]["id"] == 101
     # Display falls back to bare "#101" so the tile renders SOMETHING.
     assert body["expected"][0]["display"].startswith("#101")
+
+
+def test_audit_session_advertises_the_idle_window(client):
+    """Parity with the bulk-move snapshot (Derek 2026-08-02): an audit that
+    silently vanishes after 30 min idle reads as a broken app rather than a
+    timeout, so the panel needs to be able to SAY it expires. Derived from the
+    constant so the UI text can't drift from the watchdog that enforces it."""
+    state.AUDIT_SESSION.update({
+        "active": True,
+        "location_id": "LR-MDB-1",
+        "expected_items": [],
+        "scanned_items": [],
+        "rogue_items": [],
+    })
+    body = client.get("/api/audit_session").get_json()
+    assert body["idle_timeout_min"] == state.AUDIT_IDLE_TIMEOUT_SECONDS // 60
+    assert body["idle_timeout_min"] > 0

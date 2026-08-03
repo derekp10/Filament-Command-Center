@@ -250,3 +250,138 @@ def test_eject_writes_spoolman_no_filabridge_post():
 
     assert update_calls, "eject should write Spoolman"
     assert post.call_count == 0, f"eject must make no FilaBridge POSTs: {post.call_args_list!r}"
+
+
+# ---------------------------------------------------------------------------
+# L298 Phase 3 — per-spool failure attribution
+# ---------------------------------------------------------------------------
+
+def test_move_result_carries_per_spool_failures():
+    """A partially-rejected batch must report WHICH spool failed and WHY.
+
+    perform_smart_move returns a bare {status:'success'} even when Spoolman
+    rejects some writes; a batch caller (L298 Bulk Moves) previously had to read
+    the LAST_SPOOLMAN_ERROR module global AFTER the loop, by which point a later
+    success had reset it or a later failure had overwritten it. The per-spool map
+    is captured next to each failing write, which is also what CLAUDE.md's
+    "LAST_SPOOLMAN_ERROR is always an attribute read, adjacent to the failing
+    call" rule requires.
+    """
+    loc_list = [{"LocationID": "SHELF-B", "Type": "Wall Shelf", "Max Spools": "0"}]
+    spools = {1: {"id": 1, "location": "PM-DB-A", "extra": {}},
+              2: {"id": 2, "location": "PM-DB-A", "extra": {}},
+              3: {"id": 3, "location": "PM-DB-A", "extra": {}}}
+
+    def fake_update(sid, data):
+        # #2 is rejected; #1 and #3 succeed. The SUCCESS after the failure is
+        # the case that used to wipe the global before anyone read it.
+        if sid == 2:
+            logic.spoolman_api.LAST_SPOOLMAN_ERROR = "HTTP 400: bad location"
+            return None
+        logic.spoolman_api.LAST_SPOOLMAN_ERROR = None
+        return {"id": sid, **data}
+
+    ctx = _move_ctx(
+        printer_map={},
+        loc_list=loc_list,
+        get_spool={"side_effect": lambda sid: spools.get(int(sid))},
+        update_spool={"side_effect": fake_update},
+    )
+    prior = logic.spoolman_api.LAST_SPOOLMAN_ERROR
+    for m in ctx:
+        m.start()
+    try:
+        result = logic.perform_smart_move("SHELF-B", [1, 2, 3], origin="test")
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+        logic.spoolman_api.LAST_SPOOLMAN_ERROR = prior
+
+    assert result["status"] == "success"          # unchanged bare-success contract
+    assert result["failures"] == {"2": "HTTP 400: bad location"}
+    # ...and the global is None by the end, which is exactly why reading it
+    # after the loop mislabelled the failure.
+    assert logic.spoolman_api.LAST_SPOOLMAN_ERROR is None
+
+
+def test_move_result_failures_is_present_and_empty_on_a_clean_move():
+    """`failures` is part of the result contract, not an occasional extra — it
+    reaches two public JSON responses, and a caller that has to test for the
+    key's existence will eventually forget to."""
+    loc_list = [{"LocationID": "SHELF-B", "Type": "Wall Shelf", "Max Spools": "0"}]
+    spool = {"id": 7, "location": "PM-DB-A", "extra": {}}
+    ctx = _move_ctx(
+        printer_map={},
+        loc_list=loc_list,
+        get_spool={"return_value": spool},
+        update_spool={"side_effect": lambda sid, data: {"id": sid, **data}},
+    )
+    for m in ctx:
+        m.start()
+    try:
+        result = logic.perform_smart_move("SHELF-B", [7], origin="test")
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+    assert set(result) >= {"status", "failures"}
+    assert result["failures"] == {}
+
+
+def test_dryer_branch_also_captures_per_spool_failures():
+    """A Dryer Box is THE canonical bulk-move destination, and it takes a
+    different write branch from the generic one — its failure capture needs its
+    own pin, or the branch could silently lose attribution."""
+    loc_list = [{"LocationID": "PM-DB-B", "Type": "Dryer Box", "Max Spools": "4"}]
+    spools = {11: {"id": 11, "location": "PM-DB-A", "extra": {}},
+              12: {"id": 12, "location": "PM-DB-A", "extra": {}}}
+
+    def fake_update(sid, data):
+        if sid == 11:
+            logic.spoolman_api.LAST_SPOOLMAN_ERROR = "HTTP 422: dryer full"
+            return None
+        logic.spoolman_api.LAST_SPOOLMAN_ERROR = None
+        return {"id": sid, **data}
+
+    ctx = _move_ctx(
+        printer_map={},
+        loc_list=loc_list,
+        get_spool={"side_effect": lambda sid: spools.get(int(sid))},
+        update_spool={"side_effect": fake_update},
+    )
+    prior = logic.spoolman_api.LAST_SPOOLMAN_ERROR
+    for m in ctx:
+        m.start()
+    try:
+        result = logic.perform_smart_move("PM-DB-B", [11, 12], origin="test")
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+        logic.spoolman_api.LAST_SPOOLMAN_ERROR = prior
+    assert result["failures"] == {"11": "HTTP 422: dryer full"}
+
+
+def test_unreadable_spool_is_not_blamed_for_a_stale_global_error():
+    """`get_spool` swallows its exception and never touches LAST_SPOOLMAN_ERROR,
+    so reading that global for an unreadable spool would attribute some OTHER
+    spool's (or some other request's) error to it — reintroducing exactly the
+    mis-attribution the per-spool map removes."""
+    loc_list = [{"LocationID": "SHELF-B", "Type": "Wall Shelf", "Max Spools": "0"}]
+
+    ctx = _move_ctx(
+        printer_map={},
+        loc_list=loc_list,
+        get_spool={"return_value": None},          # unreadable
+        update_spool={"side_effect": lambda sid, data: {"id": sid, **data}},
+    )
+    prior = logic.spoolman_api.LAST_SPOOLMAN_ERROR
+    for m in ctx:
+        m.start()
+    try:
+        logic.spoolman_api.LAST_SPOOLMAN_ERROR = "STALE: someone else's 400"
+        result = logic.perform_smart_move("SHELF-B", [55], origin="test")
+    finally:
+        for m in reversed(ctx):
+            m.stop()
+        logic.spoolman_api.LAST_SPOOLMAN_ERROR = prior
+    assert result["failures"] == {"55": "could not read the spool from Spoolman"}
+    assert "STALE" not in result["failures"]["55"]

@@ -336,6 +336,130 @@ def api_manage_contents():
     # here; a defensive JSON error keeps Flask from returning None if it ever did.
     return jsonify({"success": False, "msg": f"Unknown action: {action}"})
 
+
+@app.route('/api/bulk_move', methods=['POST'])
+def api_bulk_move():
+    """L298 Bulk Moves — move EVERY movable spool from `source` to `dest` in ONE
+    logic.perform_smart_move call (ONE undo record), applying the pre-flights +
+    skip rules the single-move path lacks.
+
+    Body: {source, dest, confirm_active_print?}. On success returns an HONEST
+    per-spool tally: {success, source, dest, moved, moved_ids,
+    skipped:[{id,reason}], failed:[{id,err}]}. A blocking guard returns
+    {success:False, msg} (unknown/self/descendant dest · single-occupancy dest ·
+    capacity overflow) or {require_confirm, confirm_type:'active_print', ...}
+    when the SOURCE location is itself an actively-printing toolhead (single-
+    occupancy dests are rejected up front, so the dest is never a live toolhead;
+    auto_deploy is off so a bulk move never chain-deploys onto one either).
+
+    Thin HTTP shell over logic.plan_bulk_move + logic.execute_bulk_move — the
+    SAME core the CMD:BULKMOVE scan session uses (L298 Phase 2), so the two
+    entries can never drift apart. The move ENGINE is logic.perform_smart_move;
+    nothing here hand-rolls a spool write (CLAUDE.md "Spool / Filament write
+    surfaces"; the 2026-04-26/27 outage class).
+    """
+    data = request.json or {}
+    source = str(data.get('source', '') or '').strip().upper()
+    dest = str(data.get('dest', '') or '').strip().upper()
+    confirm_active_print = bool(data.get('confirm_active_print', False))
+
+    if not source or not dest:
+        return jsonify({"success": False, "msg": "Both source and dest are required."})
+
+    plan = logic.plan_bulk_move(source, dest, confirm_active_print=confirm_active_print)
+
+    if plan.get('require_confirm'):
+        return jsonify({"success": False, "require_confirm": True,
+                        "confirm_type": plan.get('confirm_type'),
+                        "active_print": plan.get('active_print'),
+                        "msg": plan.get('msg')})
+    if not plan.get('ok'):
+        # Capacity is the one block that reports the batch context it refused.
+        if plan.get('blocked_reason') == 'capacity':
+            return jsonify({"success": False, "moved": 0, "source": source, "dest": dest,
+                            "skipped": plan.get('skipped') or [], "msg": plan.get('msg')})
+        return jsonify({"success": False, "msg": plan.get('msg')})
+    if not plan.get('movable_ids'):
+        return jsonify({"success": True, "source": source, "dest": dest,
+                        "moved": 0, "moved_ids": [], "skipped": plan.get('skipped') or [],
+                        "failed": [], "msg": plan.get('msg')})
+
+    return jsonify(logic.execute_bulk_move(plan, confirm_active_print=confirm_active_print))
+
+
+@app.route('/api/bulk_move_session', methods=['POST'])
+def api_bulk_move_session_action():
+    """L298 Phase 2 — mouse/keyboard control of the scan-driven bulk-move
+    session (the scanner drives the same session via CMD: codes).
+
+    Body: {action, source?, dest?, confirm_active_print?} where action is:
+      start   — arm a session; optional `source` pre-seeds it (the Location-
+                Manager "Move all →" button) and jumps to awaiting_dest.
+      set_dest— set/re-target the destination and recompute the preview.
+      commit  — execute (re-plans against live state first; never trusts the
+                stored preview).
+      cancel  — clear the session; nothing moved.
+    """
+    data = request.json or {}
+    action = str(data.get('action', '') or '').strip().lower()
+    confirm_active_print = bool(data.get('confirm_active_print', False))
+
+    if action == 'start':
+        # Mutual exclusion with audit (see logic.can_start_bulk_move).
+        ok, why = logic.can_start_bulk_move()
+        if not ok:
+            return jsonify({"success": False, "msg": why,
+                            "session": logic.bulk_move_session_snapshot()})
+        # Already-armed guard — the scan interceptor's 27.5-style no-op had no
+        # HTTP equivalent, so a second "Move all →" click (another tab, another
+        # person, or a stray double-click) silently re-armed a DIFFERENT source
+        # under a user who still believed the first one was staged. Refuse and
+        # let the caller confirm an explicit replace.
+        if state.BULK_MOVE_SESSION.get('active') and not data.get('replace'):
+            armed = state.BULK_MOVE_SESSION.get('source_id') or 'a location'
+            return jsonify({
+                "success": False, "already_active": True,
+                "msg": f"A bulk move from {armed} is already armed. Replace it?",
+                "session": logic.bulk_move_session_snapshot()})
+        sess = logic.start_bulk_move_session(data.get('source'))
+        return jsonify({"success": True, "session": logic.bulk_move_session_snapshot(sess)})
+
+    if action == 'cancel':
+        # Shared primitive: refuses (rather than lying "nothing moved") when a
+        # commit already holds _BULK_MOVE_COMMIT_LOCK — the cancel cannot stop
+        # the in-flight perform_smart_move, so it must not claim to.
+        ok, msg = logic.cancel_bulk_move_session()
+        return jsonify({"success": ok, "msg": msg,
+                        "commit_in_flight": not ok,
+                        "session": logic.bulk_move_session_snapshot()})
+
+    if not state.BULK_MOVE_SESSION.get('active'):
+        return jsonify({"success": False, "msg": "No bulk move session is active."})
+
+    state.BULK_MOVE_SESSION['last_activity_ts'] = time.time()
+
+    if action == 'set_dest':
+        # Shared setter: refuses a re-target while a commit holds the lock, so a
+        # late destination change can't redirect a batch mid-flight.
+        ok, plan, msg = logic.set_bulk_move_dest(
+            data.get('dest'), confirm_active_print=confirm_active_print)
+        if not ok:
+            return jsonify({"success": False, "msg": msg,
+                            "session": logic.bulk_move_session_snapshot()})
+        return jsonify({"success": bool(plan.get('ok')), "msg": plan.get('msg'),
+                        "require_confirm": bool(plan.get('require_confirm')),
+                        "confirm_type": plan.get('confirm_type'),
+                        "active_print": plan.get('active_print'),
+                        "session": logic.bulk_move_session_snapshot()})
+
+    if action == 'commit':
+        result = logic.commit_bulk_move_session(confirm_active_print=confirm_active_print)
+        result["session"] = logic.bulk_move_session_snapshot()
+        return jsonify(result)
+
+    return jsonify({"success": False, "msg": f"Unknown action: {action}"})
+
+
 def _pm_norm(v):
     """Normalize a stored temp/URL value (a native number, or a possibly
     JSON-wrapped extra string) to a comparable trimmed string; '' if blank."""
@@ -702,11 +826,25 @@ def api_identify_scan():
                 "🕵️‍♀️ Audit already in progress — scan a Location to continue, "
                 "or CMD:CANCEL to end.", "INFO", "ff00ff")
             return jsonify({"type": "command", "cmd": "clear"})
+        # L298 Phase 2 — audit and bulk move are mutually exclusive scan modes
+        # (they share CMD:DONE / CMD:CANCEL, and this audit gate runs FIRST, so
+        # an audit started over an armed bulk move would leave the bulk session
+        # unreachable — and on audit end it would silently swallow the next
+        # location scan as its DESTINATION). Refuse instead.
+        if state.BULK_MOVE_SESSION.get('active'):
+            _msg = ("A bulk move is armed — commit or cancel it before "
+                    "starting an audit.")
+            state.add_log_entry(f"⚠️ {_msg}", "WARNING", "ffaa00")
+            return jsonify({"type": "error", "msg": _msg})
         state.reset_audit()
         state.AUDIT_SESSION['active'] = True
         state.AUDIT_SESSION['last_activity_ts'] = time.time()
         state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
-        state.add_log_entry("Scan a Location label to begin checking.", "INFO")
+        # Set the expiry expectation here too, so the log and the panel agree
+        # (mirrors the bulk-move arm lines, L298 Phase 3).
+        state.add_log_entry(
+            f"Scan a Location label to begin checking. (Clears itself after "
+            f"{state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min idle.)", "INFO")
         return jsonify({"type": "command", "cmd": "clear"})
 
     if state.AUDIT_SESSION.get('active'):
@@ -724,6 +862,37 @@ def api_identify_scan():
             return jsonify({
                 "type": "error",
                 "msg": audit_res.get('msg') or "Scan not allowed during audit.",
+            })
+        return jsonify({"type": "command", "cmd": "clear"})
+
+    # --- L298 Phase 2: CMD:BULKMOVE start interceptor ----------------------
+    # Mirrors the audit pattern: the START command is handled BEFORE the
+    # active-session gate; CMD:DONE / CMD:CANCEL fall THROUGH the gate into
+    # process_bulk_move_scan. Re-scanning CMD:BULKMOVE mid-session must NOT
+    # reset an already-captured source (the audit 27.5 guard, cloned).
+    if res and res.get('type') == 'command' and res.get('cmd') == 'bulkmove':
+        if state.BULK_MOVE_SESSION.get('active'):
+            state.BULK_MOVE_SESSION['last_activity_ts'] = time.time()
+            state.add_log_entry(
+                "🔀 Bulk move already in progress — scan a location, "
+                "CMD:DONE to commit, or CMD:CANCEL to bail.", "INFO", "00d4ff")
+            return jsonify({"type": "command", "cmd": "clear"})
+        _ok, _why = logic.can_start_bulk_move()
+        if not _ok:
+            state.add_log_entry(f"⚠️ {_why}", "WARNING", "ffaa00")
+            return jsonify({"type": "error", "msg": _why})
+        logic.start_bulk_move_session()
+        return jsonify({"type": "command", "cmd": "clear"})
+
+    if state.BULK_MOVE_SESSION.get('active'):
+        # Refresh the watchdog BEFORE delegating so an explicit CMD:DONE /
+        # CMD:CANCEL can't race the idle timeout (same reasoning as audit).
+        state.BULK_MOVE_SESSION['last_activity_ts'] = time.time()
+        bulk_res = logic.process_bulk_move_scan(res)
+        if isinstance(bulk_res, dict) and bulk_res.get('status') == 'error':
+            return jsonify({
+                "type": "error",
+                "msg": bulk_res.get('msg') or "Scan not allowed during a bulk move.",
             })
         return jsonify({"type": "command", "cmd": "clear"})
 

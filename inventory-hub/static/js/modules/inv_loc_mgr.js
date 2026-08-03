@@ -70,7 +70,47 @@ window.updateManageTitle = (loc, itemArray = null) => {
     
     const typeBadge = `<span class="badge ${badgeClass} ms-3 fs-6" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); padding-top: 5px; ${badgeStyle}">${loc.Type}</span>`;
 
-    document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${loc.LocationID} ${typeBadge} ${occHtml}</div>`;
+    // L298 Phase 2 — "Move all →" (the mouse entry to Bulk Moves; the scanner
+    // entry is the CMD:BULKMOVE deck QR). Lives in the TITLE so it renders for
+    // EVERY location type: the DANGER-ZONE Eject-All it parallels is built only
+    // by renderGrid, and renderList's `qr-eject-all-list` target doesn't exist
+    // in the live template — so a button placed there would be invisible on
+    // Rooms / Shelves / Carts, which are the most likely bulk-move sources.
+    // Suppressed on single-occupancy locations, where every spool would be
+    // skipped as "loaded in a toolhead slot" (a guaranteed no-op).
+    const SINGLE_OCC = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    // The LocationID rides in a data- attribute and the handler reads it back via
+    // dataset — it NEVER enters a JS string literal inside the onclick. escAttr
+    // escapes for an HTML ATTRIBUTE, not for JS source, so interpolating into
+    // `triggerBulkMove('…')` was doubly wrong: the HTML parser decodes the entity
+    // before JS parses, so an apostrophe in an id both breaks the call and opens
+    // a script-injection seam. (Same class as the escAttr stored-XSS fixed in
+    // Group 34.) The `|| escHtml` fallback mirrors inv_core.js's export guard.
+    const _attr = (v) => (window.escAttr || window.escHtml || String)(v);
+    // While a bulk move is ARMED the button becomes "Show bulk move" instead.
+    // Without it, hiding the panel from inside the Location Manager stranded the
+    // user: the Hide latch stops the panel auto-reopening, and the BULK MOVE
+    // deck button that would reopen it sits behind the LM modal's backdrop. This
+    // is the in-modal way back to the armed session. (Arming a DIFFERENT source
+    // is still possible — triggerBulkMove's already_active confirm handles the
+    // replace — but "show me what's armed" is the far commoner intent here.)
+    // `state` is a script-scope let in inv_core.js, not a window property — the
+    // same reason generateSafeQR must be called by bare name (Derek 2026-05-16).
+    const bulkArmed = !!(typeof state !== 'undefined' && state.bulkMoveActive);
+    const moveAllBtn = SINGLE_OCC.includes(t) ? '' : (bulkArmed ? `
+        <button class="btn btn-sm btn-info ms-auto" style="white-space:nowrap;"
+                title="A bulk move is already armed — reopen its preview panel"
+                onclick="window.openBulkMovePanel && window.openBulkMovePanel({ user: true })">
+            🔀 Show bulk move
+        </button>` : `
+        <button class="btn btn-sm btn-outline-info ms-auto" style="white-space:nowrap;"
+                data-bulk-src="${_attr(loc.LocationID)}"
+                title="Move everything from ${_attr(loc.LocationID)} to another location"
+                onclick="window.triggerBulkMove && window.triggerBulkMove(this.dataset.bulkSrc)">
+            🔀 Move all →
+        </button>`);
+
+    document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${loc.LocationID} ${typeBadge} ${occHtml}${moveAllBtn}</div>`;
 };
 
 // --- PRE-FLIGHT PROTOCOL ---
@@ -1473,6 +1513,44 @@ window.manualAddSpool = () => {
             else showToast(res.msg || "Invalid Code", 'warning');
         })
         .catch(() => setProcessing(false));
+};
+
+// L298 Phase 2 — the Location-Manager entry into Bulk Moves. ARMS a session
+// with this location as the SOURCE, then hands off: the user scans (or picks)
+// the DESTINATION, reviews the preview panel, and commits explicitly. Nothing
+// moves here — this only arms, so no promptSafety gate (unlike triggerEjectAll,
+// which mutates immediately); the destructive step is the panel's Commit.
+window.triggerBulkMove = (loc, replace = false) => {
+    if (!loc) { showToast("No location selected", "warning"); return; }
+    setProcessing(true);
+    window.fetchT('/api/bulk_move_session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start', source: loc, replace: !!replace }),
+    })
+        .then(r => r.json())
+        .then((res) => {
+            setProcessing(false);
+            // Another tab / an earlier click already armed a DIFFERENT source.
+            // Confirm before replacing it rather than silently re-arming under
+            // someone who still believes the first one is staged.
+            if (res && res.already_active) {
+                requestConfirmation(
+                    res.msg || `A bulk move is already armed. Replace it with ${loc}?`,
+                    () => window.triggerBulkMove(loc, true)
+                );
+                return;
+            }
+            if (!res || !res.success) {
+                showToast((res && res.msg) || "Couldn't arm the bulk move", "error", 7000);
+                return;
+            }
+            if (window.applyBulkMoveSession) window.applyBulkMoveSession(res.session);
+            // user: true — clicking "Move all →" is an explicit request for the
+            // panel, so it overrides a Hide latch from an earlier session.
+            if (window.openBulkMovePanel) window.openBulkMovePanel({ user: true });
+            showToast(`Bulk move armed from ${loc} — scan the destination location.`, "info", 5000);
+        })
+        .catch(() => { setProcessing(false); showToast("Couldn't arm the bulk move", "error", 7000); });
 };
 
 window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, () => {

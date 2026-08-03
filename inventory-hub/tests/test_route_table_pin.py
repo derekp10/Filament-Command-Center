@@ -20,6 +20,9 @@ EXPECTED_ROUTES = [
     ("/api/audit_session", "GET", "api_audit_session"),
     ("/api/backfill_spool_weights/<int:fid>", "POST", "api_backfill_spool_weights"),
     ("/api/buffer/clear", "POST", "api_buffer_clear"),
+    ("/api/bulk_move", "POST", "api_bulk_move"),  # L298 Bulk Moves Phase 1
+    ("/api/bulk_move_session", "GET", "api_bulk_move_session"),  # L298 Phase 2 poll
+    ("/api/bulk_move_session", "POST", "api_bulk_move_session_action"),  # L298 Phase 2 control
     ("/api/cancel_deduct/confirm", "POST", "api_cancel_deduct_confirm"),
     ("/api/cancel_deduct/dismiss", "POST", "api_cancel_deduct_dismiss"),
     ("/api/cancel_deduct/pending", "GET", "api_cancel_deduct_pending"),

@@ -137,6 +137,23 @@ Until the Config system (Feature-Buglist.md L9) lands, a small number of user pr
 | `fcc.fab.pos` | JSON `{left,bottom}` | px distances from the viewport's left / bottom edges | `fab_drag.js` (shared `draggable_pill.js` engine) — the draggable global search FAB's parked position (buglist 21.1). Written on drag-end; long-press resets to the default. Loaded + viewport-clamped on page load; absent/invalid → bottom-left cmd-deck-band default (clear of buffer weights + the WEIGH QR). |
 | `fcc.logPill.pos` | JSON `{left,bottom}` | px distances from the viewport's left / bottom edges | `fab_drag.js` (shared `draggable_pill.js` engine) — the draggable Activity-Log "N new" pill's parked position (2026-06-15, `#fcc-log-pill`). Written on drag-end; long-press resets to default. Loaded + viewport-clamped on page load; absent/invalid → a bottom-right default lifted above the cmd-deck band (diagonally opposite the FAB). Position is independent of the pill's JS-toggled show/hide (the separate `fcc.logPill.lastSeenTime` "unseen" gate). |
 
+## Multi-agent Workflow budget
+
+**Before launching a multi-agent `Workflow`:** state the agent count + rough cost
+first. **Batch the verify stage** — never one agent per finding (that is what blew
+a usage window on 2026-08-02: 55 findings → 55 verifiers; re-running the same
+review at 14 findings/agent cost 710K tokens instead of 4.4M, with zero agent
+errors and *more* usable signal). If the fan-out is large and the current usage
+window is unknown, ask for quota / reset time / work-headroom before starting.
+
+This subscription is shared with Derek's **paid work** (a separate machine and
+workspace — everything in this repo is a hobby project), so an oversized burst
+here can block real work. Quality is NOT the thing to cut: keep the effort and
+the rigor, shape the fan-out better and defer optional depth to an idle window.
+Night/scheduled work must never sit on the critical path, and scheduled agents
+start with zero context so they need self-contained instructions. Pay-as-you-go
+credits exist but are a **last resort** — propose and discuss, never assume.
+
 ## Working Groups (Batched Tasks)
 
 Tasks from `Feature-Buglist.md` are organized into batched working groups for efficient execution. Each group bundles related items that share code surfaces.

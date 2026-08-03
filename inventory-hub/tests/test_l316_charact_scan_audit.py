@@ -72,7 +72,14 @@ def test_cmd_audit_activates_session_and_returns_clear(client):
     assert first_args[1] == "INFO"
     assert first_args[2] == "ff00ff"
     second_args = log.call_args_list[1][0]
-    assert second_args[0] == "Scan a Location label to begin checking."
+    # PIN UPDATED DELIBERATELY (L298 Phase 4, 2026-08-02): the line now states
+    # the idle window. An audit that silently vanishes after 30 min reads as a
+    # broken app rather than a timeout, so both the panel and the log say so —
+    # and the minutes are derived from AUDIT_IDLE_TIMEOUT_SECONDS, never
+    # hard-coded, so this assertion follows the constant.
+    assert second_args[0] == (
+        "Scan a Location label to begin checking. (Clears itself after "
+        f"{state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min idle.)")
 
 
 def test_cmd_audit_during_active_session_is_noop_preserves_state(client):

@@ -224,8 +224,9 @@ from routes_inventory import (  # noqa: E402,F401
 # cluster (incl. api_prusament_apply_weights) live in routes_scan.py.
 from routes_scan import (  # noqa: E402,F401
     api_prusament_apply_weights, _format_filament_edit_log, api_update_filament,
-    api_manage_contents, _pm_norm, _PM_TEMP_LABELS, _PM_WEIGHT_TOL, _pm_num,
-    _pm_first_pos, _compute_prusament_spool_weight_diff,
+    api_manage_contents, api_bulk_move, api_bulk_move_session_action, _pm_norm,
+    _PM_TEMP_LABELS, _PM_WEIGHT_TOL,
+    _pm_num, _pm_first_pos, _compute_prusament_spool_weight_diff,
     _handle_prusament_url_scan, api_identify_scan, api_buffer_clear,
 )
 
@@ -294,6 +295,7 @@ from routes_config_attrs import (  # noqa: E402,F401
 from routes_state_pulse import (  # noqa: E402,F401
     api_audit_session, api_state_buffer, api_state_queue, api_spools_refresh,
     api_log_event, _check_audit_idle_timeout, api_get_logs_route,
+    api_bulk_move_session, _check_bulk_move_idle_timeout,
     _VALID_PULSE_SECTIONS, _pulse_section_logs, _pulse_section_locations,
     _pulse_section_manage, _pulse_section_printer_status, api_dashboard_pulse,
 )

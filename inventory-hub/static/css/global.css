@@ -640,6 +640,25 @@ body {
     box-shadow: 0 0 15px rgba(214, 51, 255, 0.4) !important;
 }
 
+/* L298 Phase 2 — Bulk Move deck slot. Cyan while the session is armed and
+   waiting for a location scan; green once a preview is staged and the next
+   action is the (destructive) commit — so "ready to move" is unmistakable. */
+.btn-bulkmove-active {
+    border-color: #00d4ff !important;
+    background-color: rgba(0, 212, 255, 0.2) !important;
+    box-shadow: 0 0 15px rgba(0, 212, 255, 0.4) !important;
+}
+
+.btn-bulkmove-ready {
+    border-color: #00ff88 !important;
+    background-color: rgba(0, 255, 136, 0.2) !important;
+    box-shadow: 0 0 18px rgba(0, 255, 136, 0.5) !important;
+}
+
+.label-active-bulkmove {
+    color: #7fe8ff !important;
+}
+
 .wiz-active-card {
     border-color: #00d4ff !important;
     background-color: rgba(0, 212, 255, 0.1) !important;
