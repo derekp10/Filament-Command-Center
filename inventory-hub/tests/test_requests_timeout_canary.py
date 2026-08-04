@@ -20,6 +20,16 @@ Why this is worth a canary rather than a one-line fix:
   precisely because it looks like all its neighbours. That is the signature
   of a defect class that recurs, so it gets a test instead of a fix.
 
+Verified empirically against a real unresponsive server (2026-08-04, with
+Derek's OK to break things in dev):
+  - host unreachable (unroutable TEST-NET-1 address):  24.1s -> 8.0s
+  - server ACCEPTS the connection and never replies:   hung past a 45s
+    watchdog (i.e. forever) -> 5.0s ReadTimeout
+
+That second case is the one that matters and the reason a connect-timeout alone
+would not have been enough: the TCP connect SUCCEEDS against a wedged Spoolman,
+so only a read timeout can ever release the worker. Pre-fix there was neither.
+
 AST-based rather than regex: call sites in this repo span multiple lines
 (see `ensure_filament_attributes_cleaned`), and a regex either misses those
 or produces false positives on the surrounding kwargs.
