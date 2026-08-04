@@ -583,7 +583,7 @@ window.wizardCollapseAllSections = () => {
         // character AND left those characters in state.scanBuffer, corrupting
         // the scan. Bail while a scan is in flight and let the accumulator have
         // the keystroke.
-        if (typeof state !== 'undefined' && state.scanBuffer) return;
+        if (window.isScanInFlight && window.isScanInFlight()) return;
         if (e.key === 'E' || e.key === 'e') {
             e.preventDefault();
             e.stopImmediatePropagation();

@@ -131,6 +131,68 @@ window.openWeighOutModal = () => {
     }, 500);
 };
 
+// ---------------------------------------------------------------------------
+// Scan capture while a weight field has focus (2026-08-03 scan-path audit)
+//
+// This modal advertises live scanning TWICE — "…or scan them now while this
+// window is open!" and "Scan new items to add to this list." — and that really
+// works: a scan lands in state.heldSpools and the buffer-updated listener below
+// redraws the list. But openWeighOutModal auto-focuses the first weight input
+// (deliberately: typing weights is the primary action here), and the global
+// scan accumulator's first line is `if (e.target.tagName === 'INPUT') return;`.
+// So the advertised feature was dead, and worse, the barcode was typed INTO the
+// weight box — in 'additive' mode that box is type="text", so the terminating
+// Enter tried to save the barcode AS A WEIGHT.
+//
+// Rather than drop the auto-focus (Derek wants the cursor there), capture
+// scanner input from inside the field and hand it to the global scan path.
+//
+// Two conditions, BOTH required, so ordinary typing is never hijacked:
+//   1. Scanner SPEED — the whole payload arrives in under 150ms, the same
+//      threshold the global accumulator uses to classify barcode vs keyboard.
+//   2. Not weight-shaped — it contains a character that cannot occur in a
+//      weight (anything outside 0-9 . + -). Real payloads carry a prefix or a
+//      URL ("ID:123", "LOC:PM-DB-A", "https://prusament…"), so this holds,
+//      while even an improbably fast typist entering "1234" is left alone.
+// A purely numeric barcode is deliberately NOT captured: it is genuinely
+// ambiguous with a weight, and treating it as a weight is the safe default.
+(function () {
+    const WEIGHTISH = /^[0-9.+\-]$/;
+    let buf = '';
+    let startedAt = 0;
+    let lastAt = 0;
+
+    document.addEventListener('keydown', (e) => {
+        const el = e.target;
+        if (!el || !el.classList || !el.classList.contains('weigh-input')) return;
+
+        const now = Date.now();
+        if (e.key === 'Enter') {
+            const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
+            const nonWeight = [...buf].some(c => !WEIGHTISH.test(c));
+            if (fast && nonWeight) {
+                // It was a scan, not a weight. Keep it out of the field and out
+                // of the row-save handler, and route it where it was going.
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                el.value = '';
+                const payload = buf;
+                buf = ''; startedAt = 0;
+                if (window.processScan) window.processScan(payload, 'barcode');
+                return;
+            }
+            buf = ''; startedAt = 0;
+            return;   // a real weight entry — let the normal handler save it
+        }
+
+        if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
+        // A gap longer than the scanner threshold means a human — start over.
+        if (!buf || (now - lastAt) > 150) { buf = ''; startedAt = now; }
+        buf += e.key;
+        lastAt = now;
+    }, true);   // capture: must beat the row-level Enter-to-save handler
+})();
+
 // Also refresh the UI any time the buffer updates while the modal is open
 document.addEventListener('inventory:buffer-updated', () => {
     const weighModalEl = document.getElementById('weighOutModal');

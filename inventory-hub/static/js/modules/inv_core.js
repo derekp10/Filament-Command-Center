@@ -39,6 +39,28 @@ let state = {
     pendingSafety: null
 };
 
+// --- SCAN-IN-FLIGHT (the one canonical definition) ---
+// "Is a barcode scanner mid-payload right now?" A scanner types its payload as
+// ordinary keydowns, so ANY key handler that fires on a bare letter, or that
+// treats Enter as a button press, will steal characters out of a scan unless it
+// asks this first.
+//
+// This lived as THREE identical copy-pasted closures (fab_drag.js,
+// inv_cmd.js, shortcuts_registry.js) and the 2026-08-03 scan-path audit was
+// about to add several more. One definition, on `state` so every module can
+// reach it, is the fix — the audit's own recommendation.
+//
+// The 500ms window matters: `scanBuffer` alone is not enough. A buffer left by
+// an abandoned keystroke lingers until the 2s accumulator timeout, and during
+// that window a bare truthiness check would wrongly block real button presses.
+// A scanner delivers its whole payload in well under 500ms.
+const isScanInFlight = () => {
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.length > 0
+        && st.scanStartTime && (Date.now() - st.scanStartTime) < 500);
+};
+window.isScanInFlight = isScanInFlight;
+
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
     if ('wakeLock' in navigator) {

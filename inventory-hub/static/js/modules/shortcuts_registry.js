@@ -90,12 +90,9 @@
             // Mid-stream `?` (round-1 path): if we're clearly in a fast
             // scan, yield to the scan accumulator immediately without the
             // 120ms detour.
-            const st = (typeof state !== 'undefined') ? state : window.state;
-            const scanInFlight = st && typeof st.scanBuffer === 'string'
-                && st.scanBuffer.length > 0
-                && st.scanStartTime
-                && (Date.now() - st.scanStartTime) < 500;
-            if (scanInFlight) return;
+            // Canonical definition lives in inv_core.js — this was one of three
+            // identical copy-pasted variants (2026-08-03 scan-path audit).
+            if (window.isScanInFlight && window.isScanInFlight()) return;
             // Defer the help open — if more chars arrive within 120ms,
             // we'll cancel it above and let the scan accumulator handle
             // the `?`. The browser's default for `?` is no-op, so

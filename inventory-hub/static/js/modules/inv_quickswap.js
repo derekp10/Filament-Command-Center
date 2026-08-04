@@ -433,7 +433,7 @@
                 // Bail out and let it bubble so the CMD:CONFIRM / CMD:CANCEL
                 // payload routes properly. Keyboard use is unaffected: pressing
                 // Enter by hand leaves scanBuffer empty.
-                if (typeof state !== 'undefined' && state.scanBuffer) return;
+                if (window.isScanInFlight && window.isScanInFlight()) return;
                 const active = document.activeElement;
                 if (active === yes) {
                     e.preventDefault(); e.stopPropagation();
@@ -1221,7 +1221,7 @@
             // scan a spool label, and without this the scan's terminating Enter
             // opened an unrequested "Load <box> slot N into <toolhead>?" confirm
             // — which then inherited the confirm-overlay Enter bug on top.
-            if (typeof state !== 'undefined' && state.scanBuffer) return;
+            if (window.isScanInFlight && window.isScanInFlight()) return;
             if (currentIdx >= 0) {
                 e.preventDefault();
                 window.quickSwapTap(buttons[currentIdx]);

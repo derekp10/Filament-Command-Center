@@ -508,11 +508,9 @@ window.commitBulkMove = (confirmActivePrint = false) => {
 // scanner types its payload as ordinary keydowns, so an unguarded letter key
 // fires in the middle of somebody scanning a label).
 (function () {
-    const _scanInFlight = () => {
-        const st = (typeof state !== 'undefined') ? state : window.state;
-        return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.length > 0
-            && st.scanStartTime && (Date.now() - st.scanStartTime) < 500);
-    };
+    // Delegates to the canonical definition in inv_core.js — this was one of
+    // three identical copy-pasted closures (2026-08-03 scan-path audit).
+    const _scanInFlight = () => !!(window.isScanInFlight && window.isScanInFlight());
     document.addEventListener('keydown', (e) => {
         if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key !== 'B' && e.key !== 'b') return;
@@ -1725,7 +1723,7 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
             // full rationale. A scan in flight owns this Enter: it terminates the
             // scan, it is not a button press. YES is focused by initialFocus, so
             // without this the "📷 Scan to Cancel" QR performed the CONFIRM.
-            if (typeof state !== 'undefined' && state.scanBuffer) return;
+            if (window.isScanInFlight && window.isScanInFlight()) return;
             const active = document.activeElement;
             if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
             else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }

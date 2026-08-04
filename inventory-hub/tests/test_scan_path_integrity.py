@@ -58,8 +58,8 @@ def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str):
     toolhead.
     """
     src = _read(path)
-    assert "state.scanBuffer" in src, (
-        f"{path.name} ({label}) no longer consults state.scanBuffer — the "
+    assert "isScanInFlight" in src, (
+        f"{path.name} ({label}) no longer consults isScanInFlight — the "
         "scan-in-flight guard on its Enter handler is gone. Scanning the "
         "'Scan to Cancel' QR would perform the CONFIRM."
     )
@@ -72,9 +72,42 @@ def test_quickswap_guards_both_its_enter_handlers():
     unrequested swap confirm — which then inherits the overlay bug above.
     """
     src = _read(JS / "inv_quickswap.js")
-    assert src.count("state.scanBuffer") >= 2, (
+    assert src.count("isScanInFlight") >= 2, (
         "expected a scan-in-flight guard on BOTH the confirm overlay and the "
-        f"Quick-Swap slot grid; found {src.count('state.scanBuffer')}"
+        f"Quick-Swap slot grid; found {src.count('isScanInFlight')}"
+    )
+
+
+def test_scan_in_flight_has_exactly_one_definition():
+    """The 500ms scan-in-flight test must exist ONCE.
+
+    It was copy-pasted verbatim into three modules (fab_drag, inv_cmd,
+    shortcuts_registry) and the 2026-08-03 audit was about to add several more
+    variants — some using a bare `scanBuffer` truthiness check, which is subtly
+    WRONG: an abandoned keystroke lingers in the buffer until the 2s accumulator
+    timeout, and during that window a truthiness check blocks real button
+    presses. Divergent copies of a safety check are how this class of bug keeps
+    coming back, so pin the single definition.
+    """
+    canonical = _read(JS / "inv_core.js")
+    assert "const isScanInFlight" in canonical, (
+        "the canonical isScanInFlight definition has left inv_core.js"
+    )
+    assert "window.isScanInFlight = isScanInFlight" in canonical, (
+        "isScanInFlight is no longer exported for the other modules"
+    )
+
+    # The distinctive body of the check — nobody else may re-implement it.
+    fingerprint = "Date.now() - st.scanStartTime"
+    offenders = []
+    for path in sorted(JS.glob("*.js")):
+        if path.name == "inv_core.js":
+            continue
+        if fingerprint in _read(path):
+            offenders.append(path.name)
+    assert not offenders, (
+        "scan-in-flight logic was re-implemented instead of calling "
+        f"window.isScanInFlight(): {offenders}"
     )
 
 
@@ -161,7 +194,7 @@ def test_wizard_shortcuts_yield_to_an_in_flight_scan():
     """Shift+E / Shift+C are indistinguishable from a scanner sending the
     uppercase letters 'E' and 'C', which appear in ordinary labels."""
     src = _read(JS / "inv_wizard.js")
-    assert "state.scanBuffer" in src, (
+    assert "isScanInFlight" in src, (
         "inv_wizard.js lost its scan-in-flight guard; a scanned label "
         "containing E or C would fire expand/collapse and corrupt the scan"
     )
@@ -178,6 +211,79 @@ def test_hidden_bs_modal_releases_the_scan_gate_source():
         "confirm with Escape would again leave state.activeModal latched and "
         "silently swallow every scan until reload"
     )
+
+
+@pytest.mark.usefixtures("require_server")
+def test_weigh_out_captures_a_scan_from_a_focused_weight_field_e2e(page):
+    """The Weigh-Out modal advertises live scanning twice, but auto-focuses a
+    weight input — and the global accumulator bails on a focused INPUT, so the
+    feature was dead and the barcode was typed into the weight box instead.
+
+    Derek's call was to KEEP the auto-focus (typing weights is the primary
+    action there) and capture the scan from inside the field.
+
+    Driven against a synthetic .weigh-input rather than a real weigh-out
+    session: the capture listener is bound to `document` and keys only off the
+    element's class, so this exercises the real code path without needing spools
+    in the buffer — and without mutating dev inventory. processScan is stubbed
+    for the same reason.
+    """
+    page.goto("http://localhost:8000/", wait_until="domcontentloaded")
+    page.wait_for_function("typeof state !== 'undefined'", timeout=15000)
+
+    page.evaluate("""
+        window.__scanned = [];
+        window.processScan = (text, source) => window.__scanned.push([text, source]);
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.className = 'weigh-input';
+        inp.id = '__probe_weigh_input';
+        document.body.appendChild(inp);
+        inp.focus();
+    """)
+
+    # 1. SCANNER: a prefixed payload delivered at scanner speed.
+    #    dispatch directly so the timing is genuinely sub-150ms.
+    page.evaluate("""
+        const inp = document.getElementById('__probe_weigh_input');
+        for (const ch of 'ID:9') {
+            inp.dispatchEvent(new KeyboardEvent('keydown', {key: ch, bubbles: true}));
+            inp.value += ch;
+        }
+        inp.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+    """)
+    assert page.evaluate("window.__scanned.length") == 1, (
+        "a scanner payload typed into a focused weight field was not routed to "
+        "processScan — the modal's advertised 'scan them now while this window "
+        "is open' is dead"
+    )
+    assert page.evaluate("window.__scanned[0][0]") == "ID:9"
+    assert page.evaluate("document.getElementById('__probe_weigh_input').value") == "", (
+        "the scanned barcode was left sitting in the weight field — in "
+        "'additive' mode that field is type=text, so Enter would save the "
+        "barcode AS A WEIGHT"
+    )
+
+    # 2. HUMAN: a plain numeric weight must NOT be hijacked, even if typed fast.
+    page.evaluate("""
+        window.__scanned = [];
+        const inp = document.getElementById('__probe_weigh_input');
+        inp.value = '';
+        for (const ch of '1234') {
+            inp.dispatchEvent(new KeyboardEvent('keydown', {key: ch, bubbles: true}));
+            inp.value += ch;
+        }
+        inp.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+    """)
+    assert page.evaluate("window.__scanned.length") == 0, (
+        "a numeric weight was misrouted to processScan — weights must never be "
+        "treated as scans, however fast they are typed"
+    )
+    assert page.evaluate("document.getElementById('__probe_weigh_input').value") == "1234", (
+        "a typed weight was cleared out of the field"
+    )
+
+    page.evaluate("document.getElementById('__probe_weigh_input').remove()")
 
 
 @pytest.mark.usefixtures("require_server")
