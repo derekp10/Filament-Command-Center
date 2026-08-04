@@ -1,11 +1,11 @@
 ..............sss....................................................... [  3%]
 ..........................................F............................. [  6%]
 .............s.......................................................... [  9%]
-.................................................................s...... [ 12%]
-................s..........ss........................................... [ 15%]
+............................................................s........... [ 12%]
+...............Fs..........ss........................................... [ 15%]
 ..................................s..................................... [ 18%]
-...............s...................s..........................s......... [ 21%]
-................F....................................................... [ 24%]
+................s...................s..........................s........ [ 21%]
+.................F......................F............................... [ 24%]
 ........................................................................ [ 27%]
 ........................................................................ [ 30%]
 ........................................................................ [ 33%]
@@ -16,21 +16,21 @@
 ........................................................................ [ 48%]
 ........................................................................ [ 51%]
 ........................................................................ [ 54%]
-......................................................sssss............. [ 57%]
+.......................................................sssss............ [ 57%]
 ........................................................................ [ 60%]
-................................s...............s................sssssss [ 63%]
-........................................................................ [ 67%]
-........................................................................ [ 70%]
-........................................................................ [ 73%]
-........................................................................ [ 76%]
-........................................................................ [ 79%]
-..........................F............................................. [ 82%]
-........................................................................ [ 85%]
-........................................................................ [ 88%]
-........................................................................ [ 91%]
-......................s................................................. [ 94%]
-.................................ssssssssss............................. [ 97%]
-............................................................             [100%]
+.................................s...............s................ssssss [ 63%]
+s....................................................................... [ 66%]
+........................................................................ [ 69%]
+........................................................................ [ 72%]
+........................................................................ [ 75%]
+........................................................................ [ 78%]
+...........................F............................................ [ 81%]
+........................................................................ [ 84%]
+........................................................................ [ 87%]
+........................................................................ [ 90%]
+................................s....................................... [ 94%]
+...........................................ssssssssss................... [ 97%]
+......................................................................   [100%]
 ================================== FAILURES ===================================
 ______________________ test_clone_spool_button[chromium] ______________________
 
@@ -216,7 +216,7 @@ strict = True, trial = None, steps = None
 C:\Users\Derek\AppData\Roaming\Python\Python314\site-packages\playwright\_impl\_frame.py:566: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
-self = <playwright._impl._connection.Channel object at 0x00000271FE8E3750>
+self = <playwright._impl._connection.Channel object at 0x0000026A07DF9850>
 method = 'click'
 timeout_calculator = <bound method Frame._timeout of <Frame name= url='http://localhost:8000/'>>
 params = {'selector': '.backlog-row >> internal:has-text="SPOOL"i >> nth=0', 'strict': True, 'timeout': 30000}
@@ -239,8 +239,8 @@ is_internal = False, title = None
 C:\Users\Derek\AppData\Roaming\Python\Python314\site-packages\playwright\_impl\_connection.py:69: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
-self = <playwright._impl._connection.Connection object at 0x00000271FB800050>
-cb = <function Channel.send.<locals>.<lambda> at 0x00000271FE8B3D70>
+self = <playwright._impl._connection.Connection object at 0x0000026A04CD1A90>
+cb = <function Channel.send.<locals>.<lambda> at 0x0000026A07E009E0>
 is_internal = False, title = None
 
     async def wrap_api_call(
@@ -264,6 +264,39 @@ E           Call log:
 E             - waiting for locator(".backlog-row").filter(has_text="SPOOL").first
 
 C:\Users\Derek\AppData\Roaming\Python\Python314\site-packages\playwright\_impl\_connection.py:559: TimeoutError
+________________ test_feeds_section_save_round_trip[chromium] _________________
+
+page = <Page url='http://localhost:8000/'>
+open_manage_modal = <function open_manage_modal.<locals>._open at 0x0000026A0EC84A90>
+api_base_url = 'http://localhost:8000'
+
+    @pytest.mark.usefixtures("require_server", "restore_bindings")
+    def test_feeds_section_save_round_trip(page: Page, open_manage_modal, api_base_url):
+        open_manage_modal(TEST_BOX)
+        page.locator("#feeds-toggle-btn").click()
+        page.wait_for_timeout(300)
+        # The Feeds editor is now a searchable combobox — write directly to the
+        # hidden <select> the save logic reads, then submit. Emulates the
+        # end-user picking from the dropdown without relying on the combobox's
+        # visual list staying pixel-stable.
+        page.evaluate(
+            "() => { const s = document.querySelector('select.feeds-select[data-slot=\"1\"]'); "
+            "s.value = 'XL-2'; }"
+        )
+        page.locator("#feeds-body button:has-text('Save Feeds')").click()
+        expect(page.locator("#feeds-status")).to_contain_text("Saved", timeout=5000)
+    
+        # Verify via the API — state actually persisted.
+        r = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5)
+>       assert r.json()["slot_targets"].get("1") == "XL-2"
+E       AssertionError: assert 'XL-1' == 'XL-2'
+E         
+E         - XL-2
+E         ?    ^
+E         + XL-1
+E         ?    ^
+
+tests\test_loc_mgr_bindings_ui_e2e.py:77: AssertionError
 ___ test_location_combobox_highlights_current_selection_on_focus[chromium] ____
 
 page = <Page url='http://localhost:8000/'>
@@ -290,6 +323,28 @@ E        +  where 0 = count()
 E        +    where count = <Locator frame=<Frame name= url='http://localhost:8000/'> selector='#dropdown-location >> .autocomplete-option.active'>.count
 
 tests\test_wizard_group10_session_a.py:142: AssertionError
+_________ test_unsaved_changes_overlay_escape_keeps_editing[chromium] _________
+
+page = <Page url='http://localhost:8000/'>
+
+    def test_unsaved_changes_overlay_escape_keeps_editing(page: Page):
+        """Escape on the unsaved-changes overlay closes only the overlay, leaving
+        the wizard modal open (mountOverlay's stopImmediatePropagation contract)."""
+        _open_wizard_fresh(page)
+        page.evaluate("wizardState.isDirty = true")
+        page.evaluate("""
+            bootstrap.Modal.getInstance(document.getElementById('wizardModal')).hide();
+        """)
+        overlay = page.locator("#fcc-wiz-unsaved-changes")
+>       expect(overlay).to_be_visible(timeout=2_000)
+E       AssertionError: Locator expected to be visible
+E       Actual value: None
+E       Error: element(s) not found 
+E       Call log:
+E         - Expect "to_be_visible" with timeout 2000ms
+E         - waiting for locator("#fcc-wiz-unsaved-changes")
+
+tests\test_wizard_overlay_migration.py:74: AssertionError
 ______________ test_every_row_is_a_dict_with_LocationID_and_Type ______________
 
 locations_data = ('[\n    {\n        "LocationID": "",\n        "Name": "TestCart",\n        "Type": "Cart",\n        "Max Spools": "0"...m', ...}, {'Device Identifier': '', 'Device Type': '', 'Label Printed': 'Yes', 'Location': 'Computer Room', ...}, ...])
@@ -303,12 +358,14 @@ locations_data = ('[\n    {\n        "LocationID": "",\n        "Name": "TestCar
 >           assert row.get("LocationID"), f"row {i} missing LocationID: {row!r}"
 E           AssertionError: row 0 missing LocationID: {'LocationID': '', 'Name': 'TestCart', 'Type': 'Cart', 'Max Spools': '0', 'parent_id': 'CR'}
 E           assert ''
-E            +  where '' = <built-in method get of dict object at 0x0000027197805F80>('LocationID')
-E            +    where <built-in method get of dict object at 0x0000027197805F80> = {'LocationID': '', 'Max Spools': '0', 'Name': 'TestCart', 'Type': 'Cart', ...}.get
+E            +  where '' = <built-in method get of dict object at 0x0000026A20378A40>('LocationID')
+E            +    where <built-in method get of dict object at 0x0000026A20378A40> = {'LocationID': '', 'Max Spools': '0', 'Name': 'TestCart', 'Type': 'Cart', ...}.get
 
 tests\test_locations_json_integrity.py:87: AssertionError
 =========================== short test summary info ===========================
 FAILED tests\test_clone_e2e.py::test_clone_spool_button[chromium] - playwrigh...
+FAILED tests\test_loc_mgr_bindings_ui_e2e.py::test_feeds_section_save_round_trip[chromium]
 FAILED tests\test_wizard_group10_session_a.py::test_location_combobox_highlights_current_selection_on_focus[chromium]
+FAILED tests\test_wizard_overlay_migration.py::test_unsaved_changes_overlay_escape_keeps_editing[chromium]
 FAILED tests\test_locations_json_integrity.py::test_every_row_is_a_dict_with_LocationID_and_Type
-3 failed, 2324 passed, 37 skipped in 1640.12s (0:27:20)
+5 failed, 2332 passed, 37 skipped in 1708.47s (0:28:28)
