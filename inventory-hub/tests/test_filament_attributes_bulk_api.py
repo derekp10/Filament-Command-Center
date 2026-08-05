@@ -1,8 +1,26 @@
 """L58 — Filament Attributes manager endpoints.
 
-Integration tests against the running dev container. Each test
-snapshots the target filament's attribute list and restores it on
-teardown so the real Spoolman dev DB never drifts.
+Integration tests against the running dev container. Each test snapshots the
+target filament's attribute list and restores it on teardown, and (since
+2026-08-05) operates on a scratch filament this module creates and deletes
+itself rather than on whatever real record sorts first.
+
+⚠️ OPT-IN ONLY — this module is `pytest.mark.integration` (2026-08-05).
+Every test here exercises `remove_choice` / `sweep_unused`, and those endpoints
+perform a schema force_reset followed by a restore of EVERY attribute-bearing
+filament (150+ records). When one of those restores fails, that filament's
+attributes are **permanently lost**, and the failure is reported only as a
+count — the record id is never logged, so there is no way to tell what went.
+
+Observed live on 2026-08-05: across a handful of runs the attribute-bearing
+population fell 155 -> 153 -> 152 -> 151, and two real filaments ("Transition
+Spool", "Blue (Azure Blue)") were emptied. This module carried NO integration
+marker, so it ran on every routine sweep with the container up — meaning
+ordinary verification runs were quietly destroying real inventory.
+
+Gating it here stops the bleeding; the underlying endpoint bug is filed in
+Feature-Buglist.md and is the real fix. Do not remove this marker until that
+lands.
 """
 from __future__ import annotations
 
@@ -20,6 +38,11 @@ from requests.exceptions import (
 # Group 32.2 — transport-level errors that a bounded retry rides out. NOT HTTP
 # status errors (those are real responses and must never be retried away).
 _TRANSPORT_ERRORS = (ReadTimeout, ConnectTimeout, ReqConnectionError)
+
+# Opt-in only — see the module docstring. These endpoints can permanently
+# destroy attributes on unrelated filaments, so they must never run as part of
+# a routine sweep. Requires --run-integration / RUN_INTEGRATION=1.
+pytestmark = pytest.mark.integration
 
 
 def _req(method, url, *, attempts=4, backoff=0.75, **kwargs):
@@ -48,16 +71,82 @@ def _req(method, url, *, attempts=4, backoff=0.75, **kwargs):
     raise last
 
 
-def _pick_target(api_base_url: str):
-    """Pull a deterministic target filament from the report endpoint.
-    Picks the first non-archived filament so the test runs the same
-    against any seeded dev DB."""
+SCRATCH_FILAMENT_NAME = "__fcc_attr_test__"
+
+
+@pytest.fixture(scope="module")
+def scratch_filament(api_base_url):
+    """A filament this module OWNS, so it never mutates real inventory.
+
+    The old `_pick_target` grabbed "the first non-archived filament" from the
+    report — in practice a real one Derek uses (#55 "Green") — and rewrote its
+    `filament_attributes`. Combined with the silent-no-op `_restore` (see
+    below), that quietly accumulated every choice onto a record the user cares
+    about, over months.
+
+    Fixing `_restore` stops the accumulation, but targeting a stranger's data at
+    all is the deeper flaw: a crash between mutate and teardown still leaves
+    real inventory drifted. So the module now creates its own record through the
+    app's public API and hard-deletes it afterwards (module scope keeps that to
+    one create/delete for the whole file).
+
+    Reused rather than recreated if a previous run died before teardown — the
+    name is a fixed sentinel precisely so leftovers are recognisable and
+    self-healing instead of piling up.
+    """
+    existing = None
+    r = _req("get", f"{api_base_url}/api/filament_attributes/report", timeout=10)
+    if r.ok and r.json().get("success"):
+        existing = next(
+            (f for f in r.json()["filaments"]
+             if str(f.get("name", "")) == SCRATCH_FILAMENT_NAME),
+            None,
+        )
+
+    created_id = None
+    if existing is not None:
+        fid = existing["id"]
+    else:
+        c = _req(
+            "post",
+            f"{api_base_url}/api/create_filament",
+            json={"data": {
+                "name": SCRATCH_FILAMENT_NAME,
+                "material": "PLA",
+                "color_hex": "AABBCC",
+                "weight": 1000,
+                "spool_weight": 250,
+                "density": 1.24,
+                "diameter": 1.75,
+            }},
+            timeout=15,
+        )
+        if not (c.ok and (c.json() or {}).get("success")):
+            pytest.skip(f"could not create scratch filament: {c.status_code} {c.text[:200]}")
+        fid = ((c.json() or {}).get("filament") or {}).get("id")
+        assert fid is not None, f"create_filament returned no id: {c.text[:200]}"
+        created_id = fid
+
+    yield fid
+
+    if created_id is not None:
+        # Cascade-delete (it has no spools, but the endpoint handles both).
+        _req("delete", f"{api_base_url}/api/filament/{created_id}", timeout=15)
+
+
+def _pick_target(api_base_url: str, fid: int):
+    """Return (filament_row, choices) for the module's own scratch filament.
+
+    Kept as a helper with the same shape as before so the call sites read the
+    same; the difference is WHICH filament it hands back — ours, not the first
+    one that happens to sort to the top of the user's real inventory.
+    """
     r = _req("get", f"{api_base_url}/api/filament_attributes/report", timeout=10)
     assert r.ok, r.text
     body = r.json()
     assert body.get("success"), body
-    fil = next((f for f in body["filaments"] if not f["archived"]), None)
-    assert fil is not None, "expected at least one non-archived filament in dev DB"
+    fil = next((f for f in body["filaments"] if f["id"] == fid), None)
+    assert fil is not None, f"scratch filament #{fid} missing from the report"
     return fil, body.get("choices", [])
 
 
@@ -89,14 +178,44 @@ def _snapshot_attrs(api_base_url: str, fid: int):
 
 
 def _restore(api_base_url: str, fid: int, original):
-    """Restore the filament's attribute list to its original snapshot.
-    Used in test teardown so the dev DB is never left drifted."""
-    _req(
+    """Restore the filament's attribute list to its original snapshot, and
+    PROVE it happened.
+
+    ⚠️ This used to be a silent no-op, and it corrupted real dev inventory for
+    months. It POSTed `{"id":…, "field": "extra.filament_attributes", "value":…}`
+    — but /api/update_filament accepts exactly ONE contract, `{id, data}`, and
+    has no field/value branch at all. So `payload.get('data')` was empty and the
+    endpoint answered `{"success": false, "msg": "No fields to update."}`
+    WITHOUT EVER LOOKING AT THE VALUE. It failed identically for every value,
+    not just an empty list.
+
+    Nothing checked the response, so each run kept the one attribute it had
+    added. That is how filament #55 silently accumulated all 28 choices while
+    every other filament had <= 2 — a 14x outlier sitting exactly on this
+    module's target, which then wedged the suite permanently ("no candidate
+    choice available") with no way to recover on its own.
+
+    Two changes make that impossible to repeat: send the shape the endpoint
+    actually accepts, and ASSERT the record really came back to the snapshot.
+    A restore that silently does nothing is now a loud test failure.
+    """
+    r = _req(
         "post",
         f"{api_base_url}/api/update_filament",
-        json={"id": fid, "field": "extra.filament_attributes",
-              "value": json.dumps(original)},
+        json={"id": fid, "data": {"extra": {
+            "filament_attributes": json.dumps(original)}}},
         timeout=10,
+    )
+    assert r.ok, f"restore HTTP {r.status_code}: {r.text[:300]}"
+    body = r.json()
+    assert body.get("success"), (
+        f"restore of filament #{fid} was REJECTED: {body}. Left drifted — do not "
+        "ignore this, it is how dev inventory got corrupted before."
+    )
+    after = _snapshot_attrs(api_base_url, fid)
+    assert sorted(after) == sorted(original), (
+        f"restore of filament #{fid} reported success but did NOT take: "
+        f"{sorted(after)} != {sorted(original)}"
     )
 
 
@@ -121,10 +240,10 @@ def test_report_shape(api_base_url):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_bulk_set_add_then_remove(api_base_url):
+def test_bulk_set_add_then_remove(api_base_url, scratch_filament):
     """Bulk-add a choice, verify it lands, then bulk-remove and verify
     the list is back to the original."""
-    target, choices = _pick_target(api_base_url)
+    target, choices = _pick_target(api_base_url, scratch_filament)
     fid = target["id"]
     original = _snapshot_attrs(api_base_url, fid)
     # Pick a choice that the filament does NOT currently have so add is
@@ -178,7 +297,7 @@ def test_bulk_set_add_then_remove(api_base_url):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_bulk_set_validates_payload(api_base_url):
+def test_bulk_set_validates_payload(api_base_url, scratch_filament):
     """Empty filament_ids or empty add+remove → 400 with a useful message."""
     r1 = _req(
         "post",
@@ -189,7 +308,7 @@ def test_bulk_set_validates_payload(api_base_url):
     assert r1.status_code == 400
     assert "filament_ids" in r1.json().get("msg", "").lower()
 
-    target, _ = _pick_target(api_base_url)
+    target, _ = _pick_target(api_base_url, scratch_filament)
     r2 = _req(
         "post",
         f"{api_base_url}/api/filament_attributes/bulk_set",
@@ -253,12 +372,12 @@ def test_add_choice_then_remove_unused_round_trips(api_base_url):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_remove_choice_in_use_requires_force(api_base_url):
+def test_remove_choice_in_use_requires_force(api_base_url, scratch_filament):
     """Remove without `force` on an in-use choice → 200 with
     success=false, needs_confirm=true, usage_count>0. The schema is
     NOT modified — the next report still shows the choice."""
     test_choice = "L58_TEST_in_use_choice"
-    target, _ = _pick_target(api_base_url)
+    target, _ = _pick_target(api_base_url, scratch_filament)
     fid = target["id"]
     original = _snapshot_attrs(api_base_url, fid)
     # Add the choice + tag the target filament with it.
@@ -413,12 +532,12 @@ def test_sweep_unused_respects_choices_subset(api_base_url):
 
 
 @pytest.mark.usefixtures("require_server")
-def test_sweep_unused_preserves_in_use_choices(api_base_url):
+def test_sweep_unused_preserves_in_use_choices(api_base_url, scratch_filament):
     """A choice with usage > 0 must NOT appear in the unused preview,
     even alongside other zero-usage choices that are being swept. Catches
     a snapshot-vs-current-state bug in the usage computation."""
     test_choice = "L58_TEST_sweep_in_use"
-    target, _ = _pick_target(api_base_url)
+    target, _ = _pick_target(api_base_url, scratch_filament)
     fid = target["id"]
     original = _snapshot_attrs(api_base_url, fid)
     requests.post(
