@@ -242,6 +242,14 @@ window.logsStickyPaused = false;
 const pauseLogs = (isPaused) => {
     state.logsPaused = isPaused;
     window.logsStickyPaused = isPaused;
+    if (!isPaused) {
+        // Resuming: the paused ticks kept storing the content hash without
+        // rewriting the list, so an unchanged-hash payload would short-circuit
+        // and leave the frozen DOM on screen. Drop the hash and force one
+        // render so resume snaps straight to current state.
+        state.lastLogHash = null;
+        if (typeof updateLogState === 'function') updateLogState(true);
+    }
     const el = document.getElementById('log-status');
     if (el) {
         if (isPaused) { el.innerText = "PAUSED ⏸ (click to resume)"; el.style.color = "#fc0"; el.classList.remove('text-light'); }
@@ -1058,7 +1066,12 @@ const _renderLogsPayload = (d, force = false) => {
     state.lastLogHash = contentHash;
     // -----------------------
 
-    const logsEl = document.getElementById('live-logs');
+    // THE PAUSE. Everything below this — the pill, the Spoolman dot, the audit
+    // and bulk-move syncs — must keep running while paused; only the visible
+    // list is frozen, so text stays selectable mid-copy. (On resume, pauseLogs
+    // clears lastLogHash and forces a refresh, otherwise the hash check above
+    // would skip the catch-up render and leave the panel stale.)
+    const logsEl = state.logsPaused ? null : document.getElementById('live-logs');
     if (logsEl && d.logs) {
         logsEl.innerHTML = d.logs.map(l => {
             let extraHtml = '';
@@ -1115,7 +1128,15 @@ window._renderLogsPayload = _renderLogsPayload;
 
 let _updateLogStateInflight = false;
 const updateLogState = (force = false) => {
-    if (state.logsPaused && !force) return;
+    // PAUSE IS A RENDER-FREEZE, NOT A FETCH-FREEZE (2026-08-05).
+    // Pause exists so the displayed list stops moving while you copy an error
+    // out of it — not so the tab goes deaf. It used to early-return here, which
+    // stopped polling entirely, so: the "N new" pill never appeared (its only
+    // call site is inside the render path), and every flag riding this payload
+    // (audit_active, bulk_move_active/stage, undo_available) stopped arriving,
+    // leaving deck tiles stale against sessions the server had already ended.
+    // Keep fetching; _renderLogsPayload skips only the list rewrite.
+    // Load is unchanged — this is the rate an unpaused dashboard already polls.
     if (_updateLogStateInflight) return;
     _updateLogStateInflight = true;
     fetch('/api/logs').then(r => r.json()).then(d => _renderLogsPayload(d, force))
@@ -1280,11 +1301,10 @@ const _dashboardPulseTick = () => {
     _pulseInflight = true;
 
     const { sections, manageId } = _computePulseInclude();
-    // If logs are paused (user explicitly paused the activity log), still
-    // pull everything else but skip the logs section.
-    const include = state.logsPaused
-        ? sections.filter(s => s !== 'logs').concat('status')
-        : sections;
+    // Logs stay in the heartbeat even while paused (2026-08-05). Dropping the
+    // section used to starve the "N new" pill and every flag riding that
+    // payload; the freeze now happens at the render, not the fetch.
+    const include = sections;
     let url = `/api/dashboard_pulse?include=${encodeURIComponent(include.join(','))}`;
     if (manageId) url += `&manage_id=${encodeURIComponent(manageId)}`;
 

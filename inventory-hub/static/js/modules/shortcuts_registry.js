@@ -10,10 +10,11 @@
 
     window.registerShortcut = function (shortcut) {
         // Defensive: don't double-register.
-        if (shortcuts.some(s => s.id === shortcut.id)) return;
+        if (!shortcut || shortcuts.some(s => s.id === shortcut.id)) return;
         shortcuts.push(shortcut);
         renderList();
     };
+
 
     const _esc = (s) => String(s)
         .replace(/&/g, '&amp;')
@@ -266,4 +267,22 @@
         keys: ['CMD:SLOT:<n>'],
         description: 'Act on a specific slot inside the open location.'
     });
+
+    // Drain anything registered BEFORE this module loaded. Modules above this
+    // one in scripts.html (inv_cmd, inv_wizard, inv_details, inv_loc_mgr, …)
+    // register at eval time, and their `if (window.registerShortcut)` guard
+    // used to swallow the call entirely — the shortcut still worked, it was
+    // just invisible in the `?` overlay. The shim at the top of scripts.html
+    // queues them; this empties the queue, so nothing registers twice and
+    // load order stops mattering.
+    //
+    // MUST be last: registerShortcut calls renderList(), which is a `const`
+    // declared partway down this IIFE. Draining right after registerShortcut
+    // was defined threw a temporal-dead-zone ReferenceError and wiped out
+    // EVERY shortcut, including this module's own — caught by
+    // test_bulk_move_shortcuts_are_listed_in_the_help_overlay.
+    const _pending = window.__pendingShortcuts;
+    if (Array.isArray(_pending)) {
+        _pending.splice(0).forEach(s => window.registerShortcut(s));
+    }
 })();
