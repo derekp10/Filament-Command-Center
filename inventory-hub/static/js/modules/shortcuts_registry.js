@@ -10,10 +10,11 @@
 
     window.registerShortcut = function (shortcut) {
         // Defensive: don't double-register.
-        if (shortcuts.some(s => s.id === shortcut.id)) return;
+        if (!shortcut || shortcuts.some(s => s.id === shortcut.id)) return;
         shortcuts.push(shortcut);
         renderList();
     };
+
 
     const _esc = (s) => String(s)
         .replace(/&/g, '&amp;')
@@ -90,12 +91,9 @@
             // Mid-stream `?` (round-1 path): if we're clearly in a fast
             // scan, yield to the scan accumulator immediately without the
             // 120ms detour.
-            const st = (typeof state !== 'undefined') ? state : window.state;
-            const scanInFlight = st && typeof st.scanBuffer === 'string'
-                && st.scanBuffer.length > 0
-                && st.scanStartTime
-                && (Date.now() - st.scanStartTime) < 500;
-            if (scanInFlight) return;
+            // Canonical definition lives in inv_core.js — this was one of three
+            // identical copy-pasted variants (2026-08-03 scan-path audit).
+            if (window.isScanInFlight && window.isScanInFlight()) return;
             // Defer the help open — if more chars arrive within 120ms,
             // we'll cancel it above and let the scan accumulator handle
             // the `?`. The browser's default for `?` is no-op, so
@@ -269,4 +267,22 @@
         keys: ['CMD:SLOT:<n>'],
         description: 'Act on a specific slot inside the open location.'
     });
+
+    // Drain anything registered BEFORE this module loaded. Modules above this
+    // one in scripts.html (inv_cmd, inv_wizard, inv_details, inv_loc_mgr, …)
+    // register at eval time, and their `if (window.registerShortcut)` guard
+    // used to swallow the call entirely — the shortcut still worked, it was
+    // just invisible in the `?` overlay. The shim at the top of scripts.html
+    // queues them; this empties the queue, so nothing registers twice and
+    // load order stops mattering.
+    //
+    // MUST be last: registerShortcut calls renderList(), which is a `const`
+    // declared partway down this IIFE. Draining right after registerShortcut
+    // was defined threw a temporal-dead-zone ReferenceError and wiped out
+    // EVERY shortcut, including this module's own — caught by
+    // test_bulk_move_shortcuts_are_listed_in_the_help_overlay.
+    const _pending = window.__pendingShortcuts;
+    if (Array.isArray(_pending)) {
+        _pending.splice(0).forEach(s => window.registerShortcut(s));
+    }
 })();

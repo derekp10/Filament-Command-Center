@@ -39,6 +39,102 @@ let state = {
     pendingSafety: null
 };
 
+// --- SCAN-IN-FLIGHT (the one canonical definition) ---
+// "Is a barcode scanner mid-payload right now?" A scanner types its payload as
+// ordinary keydowns, so ANY key handler that fires on a bare letter, or that
+// treats Enter as a button press, will steal characters out of a scan unless it
+// asks this first.
+//
+// This lived as THREE identical copy-pasted closures (fab_drag.js,
+// inv_cmd.js, shortcuts_registry.js) and the 2026-08-03 scan-path audit was
+// about to add several more. One definition, on `state` so every module can
+// reach it, is the fix — the audit's own recommendation.
+//
+// The 500ms window matters: `scanBuffer` alone is not enough. A buffer left by
+// an abandoned keystroke lingers until the 2s accumulator timeout, and during
+// that window a bare truthiness check would wrongly block real button presses.
+// A scanner delivers its whole payload in well under 500ms.
+const isScanInFlight = () => {
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.length > 0
+        && st.scanStartTime && (Date.now() - st.scanStartTime) < 500);
+};
+window.isScanInFlight = isScanInFlight;
+
+// --- SCAN CAPTURE FROM A FOCUSED FIELD ---
+// The global accumulator bails on `e.target.tagName === 'INPUT'`, so any modal
+// that focuses a text field disarms the scanner. Sometimes dropping the
+// auto-focus is right; sometimes the field genuinely wants the cursor AND the
+// modal genuinely wants to accept scans (Weigh-Out says "scan them now while
+// this window is open" while focusing a weight box; Manage Contents re-focuses
+// its ID field after every add while its own CMD:DONE QR sits below).
+//
+// This lets such a field keep focus and still hand scanner input to the scan
+// path. Two conditions, BOTH required, so ordinary typing is never hijacked:
+//   1. scanner SPEED — the payload lands in under 150ms, the same threshold the
+//      global accumulator uses to classify barcode vs keyboard;
+//   2. the text does not look like something a human would type HERE — supplied
+//      per-caller, because "not a weight" and "not a spool id" differ.
+//
+// One implementation, not one per modal: the 2026-08-03 audit found the same
+// scan-path defect re-written in four separate places, so new copies of this
+// logic are exactly what to avoid.
+//
+//   match(el)          -> is this the field we care about?
+//   isScanPayload(txt) -> is this a scan rather than typing?
+//   onScan(txt, el)    -> what to do with it (default: window.processScan)
+const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
+    let buf = '';
+    let startedAt = 0;
+    let lastAt = 0;
+    let preScanValue = '';   // what the user had typed BEFORE the burst began
+    document.addEventListener('keydown', (e) => {
+        const el = e.target;
+        if (!el || !match(el)) return;
+        const now = Date.now();
+
+        if (e.key === 'Enter') {
+            const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
+            const looksScanned = fast && isScanPayload(buf);
+            const payload = buf;
+            const restore = preScanValue;
+            buf = ''; startedAt = 0; preScanValue = '';
+            if (!looksScanned) return;   // a real entry — let the field's own handler run
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            // RESTORE what the user had typed, don't blank the field. The
+            // scanner's characters were appended to their in-progress value
+            // (this handler doesn't preventDefault on character keys), so
+            // clearing outright silently destroyed an un-submitted weight —
+            // and the Group 31.3 preserve-text snapshot in renderWeighOutList
+            // then captured an already-empty field, so the buffer-updated
+            // redraw could not bring it back either.
+            el.value = restore;
+            if (onScan) onScan(payload, el);
+            else if (window.processScan) window.processScan(payload, 'barcode');
+            return;
+        }
+
+        if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
+        // A gap longer than the scanner threshold means a human — start over,
+        // and re-snapshot what is in the field at the moment a burst begins.
+        if (!buf || (now - lastAt) > 150) {
+            buf = '';
+            startedAt = now;
+            preScanValue = el.value || '';
+        }
+        buf += e.key;
+        lastAt = now;
+    }, true);   // capture: must beat the field's own Enter handler
+};
+window.installFieldScanCapture = installFieldScanCapture;
+
+// A scan payload always carries a prefix marker (`ID:`, `LOC:`, `CMD:`,
+// `FIL:`, `SPOOL:`) or is a URL (Prusament QRs). Nothing a user types into an
+// id/weight box looks like that, which is what makes the distinction safe.
+window.looksLikeScanPayload = (txt) =>
+    /[:/]/.test(txt) || /^https?/i.test(txt);
+
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
     if ('wakeLock' in navigator) {
@@ -220,6 +316,14 @@ window.logsStickyPaused = false;
 const pauseLogs = (isPaused) => {
     state.logsPaused = isPaused;
     window.logsStickyPaused = isPaused;
+    if (!isPaused) {
+        // Resuming: the paused ticks kept storing the content hash without
+        // rewriting the list, so an unchanged-hash payload would short-circuit
+        // and leave the frozen DOM on screen. Drop the hash and force one
+        // render so resume snaps straight to current state.
+        state.lastLogHash = null;
+        if (typeof updateLogState === 'function') updateLogState(true);
+    }
     const el = document.getElementById('log-status');
     if (el) {
         if (isPaused) { el.innerText = "PAUSED ⏸ (click to resume)"; el.style.color = "#fc0"; el.classList.remove('text-light'); }
@@ -1036,7 +1140,12 @@ const _renderLogsPayload = (d, force = false) => {
     state.lastLogHash = contentHash;
     // -----------------------
 
-    const logsEl = document.getElementById('live-logs');
+    // THE PAUSE. Everything below this — the pill, the Spoolman dot, the audit
+    // and bulk-move syncs — must keep running while paused; only the visible
+    // list is frozen, so text stays selectable mid-copy. (On resume, pauseLogs
+    // clears lastLogHash and forces a refresh, otherwise the hash check above
+    // would skip the catch-up render and leave the panel stale.)
+    const logsEl = state.logsPaused ? null : document.getElementById('live-logs');
     if (logsEl && d.logs) {
         logsEl.innerHTML = d.logs.map(l => {
             let extraHtml = '';
@@ -1093,7 +1202,15 @@ window._renderLogsPayload = _renderLogsPayload;
 
 let _updateLogStateInflight = false;
 const updateLogState = (force = false) => {
-    if (state.logsPaused && !force) return;
+    // PAUSE IS A RENDER-FREEZE, NOT A FETCH-FREEZE (2026-08-05).
+    // Pause exists so the displayed list stops moving while you copy an error
+    // out of it — not so the tab goes deaf. It used to early-return here, which
+    // stopped polling entirely, so: the "N new" pill never appeared (its only
+    // call site is inside the render path), and every flag riding this payload
+    // (audit_active, bulk_move_active/stage, undo_available) stopped arriving,
+    // leaving deck tiles stale against sessions the server had already ended.
+    // Keep fetching; _renderLogsPayload skips only the list rewrite.
+    // Load is unchanged — this is the rate an unpaused dashboard already polls.
     if (_updateLogStateInflight) return;
     _updateLogStateInflight = true;
     fetch('/api/logs').then(r => r.json()).then(d => _renderLogsPayload(d, force))
@@ -1102,10 +1219,14 @@ const updateLogState = (force = false) => {
 };
 
 // --- MODAL HELPERS ---
+// Bumped every time a gating dialog ARMS. The hidden.bs.modal scan-gate
+// release compares against it so a dialog re-shown from inside a previous
+// dialog's callback can't be torn down by the previous one's `hidden` event.
+let _confirmGeneration = 0;
 const closeModal = (id) => { if (modals[id]) modals[id].hide(); state.activeModal = null; };
-const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; modals.confirmModal.show(); state.activeModal = 'confirm'; };
+const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; _confirmGeneration++; modals.confirmModal.show(); state.activeModal = 'confirm'; };
 const confirmAction = (y) => { closeModal('confirmModal'); if (y && state.pendingConfirm) state.pendingConfirm(); state.pendingConfirm = null; };
-const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText = msg; state.pendingSafety = cb; modals.safetyModal.show(); state.activeModal = 'safety'; };
+const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText = msg; state.pendingSafety = cb; _confirmGeneration++; modals.safetyModal.show(); state.activeModal = 'safety'; };
 const confirmSafety = (y) => { closeModal('safetyModal'); if (y && state.pendingSafety) state.pendingSafety(); state.pendingSafety = null; };
 const promptAction = (t, m, btns) => {
     document.getElementById('action-title').innerText = t;
@@ -1258,11 +1379,10 @@ const _dashboardPulseTick = () => {
     _pulseInflight = true;
 
     const { sections, manageId } = _computePulseInclude();
-    // If logs are paused (user explicitly paused the activity log), still
-    // pull everything else but skip the logs section.
-    const include = state.logsPaused
-        ? sections.filter(s => s !== 'logs').concat('status')
-        : sections;
+    // Logs stay in the heartbeat even while paused (2026-08-05). Dropping the
+    // section used to starve the "N new" pill and every flag riding that
+    // payload; the freeze now happens at the render, not the fetch.
+    const include = sections;
     let url = `/api/dashboard_pulse?include=${encodeURIComponent(include.join(','))}`;
     if (manageId) url += `&manage_id=${encodeURIComponent(manageId)}`;
 
@@ -1413,11 +1533,52 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 3. When a modal finishes hiding
-    document.addEventListener('hidden.bs.modal', function () {
+    document.addEventListener('hidden.bs.modal', function (ev) {
         // Bootstrap aggressively strips '.modal-open' from body when *any* modal hides.
         // We must forcefully restore it if there are other modals still 'underneath' it.
         if (document.querySelectorAll('.modal.show').length > 0) {
             document.body.classList.add('modal-open');
+        }
+
+        // --- Scan-gate release (axis-(a) audit, 2026-08-03) ---
+        // `state.activeModal` gates processScan: while it is set, inv_cmd's
+        // router answers only CONFIRM/CANCEL and silently DROPS every spool and
+        // location scan — no toast, no Activity Log line, no request.
+        // It used to be cleared ONLY by closeModal(), i.e. only by the dialogs'
+        // own buttons. Escape and backdrop clicks bypass that (#confirmModal
+        // sets neither data-bs-keyboard="false" nor data-bs-backdrop="static",
+        // and the inv_loc_mgr Escape ladder calls inst.hide() directly), so
+        // cancelling any confirm that way left the flag latched and the scanner
+        // looked DEAD until a page reload.
+        // Releasing here covers every dismissal path at once.
+        const SCAN_GATING_MODALS = ['confirmModal', 'safetyModal', 'actionModal'];
+        const hiddenId = ev && ev.target && ev.target.id;
+        if (SCAN_GATING_MODALS.includes(hiddenId)) {
+            // ⚠️ Generation counter, NOT just a `.show` check. A confirm whose
+            // callback raises a SECOND confirm (eject -> "true unassign", or the
+            // active-print re-prompt) re-shows the same element, and Bootstrap
+            // re-adds `.show` ~155ms after show() while this `hidden` event
+            // fires ~310ms after hide(). A plain `.show` test therefore sees
+            // "nothing open" and tore down the dialog that had just re-armed —
+            // its YES button became silently dead. Compare the generation we
+            // captured when this modal was shown against the current one:
+            // if something re-armed since, that newer dialog owns the state.
+            const gen = _confirmGeneration;
+            setTimeout(() => {
+                if (_confirmGeneration !== gen) return;   // re-armed — leave it alone
+                const stillOpen = SCAN_GATING_MODALS.some(id => {
+                    const el = document.getElementById(id);
+                    return el && el.classList.contains('show');
+                });
+                if (stillOpen) return;
+                // Release the scan gate. Only activeModal — deliberately NOT
+                // pendingConfirm/pendingSafety: clearing those is what killed
+                // the chained re-prompt, and confirmAction/confirmSafety
+                // already null them on the button path. The stale-callback
+                // hazard is handled by the generation bump in
+                // requestConfirmation/promptSafety instead.
+                state.activeModal = null;
+            }, 400);
         }
     });
 });

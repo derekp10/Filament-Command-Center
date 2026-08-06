@@ -15,6 +15,26 @@
     }
 </script>
 
+<script>
+    // registerShortcut SHIM — must run before ANY module (2026-08-05).
+    //
+    // shortcuts_registry.js loads well down this list, but modules above it
+    // (inv_cmd, inv_wizard, inv_details, inv_loc_mgr, …) register shortcuts at
+    // module-eval time. They all guard with `if (window.registerShortcut)`, so
+    // the call was silently DROPPED — the shortcut still worked, it just never
+    // appeared in the `?` help overlay, quietly breaking the rule that the
+    // overlay stays complete. L298's Shift+B hit this exactly.
+    //
+    // Queue the calls instead of losing them; shortcuts_registry.js drains this
+    // the moment it loads. Order stops mattering, so the next person to add a
+    // shortcut cannot fall into it — which is better than re-ordering the
+    // script list and hoping it stays that way.
+    window.__pendingShortcuts = [];
+    window.registerShortcut = function (shortcut) {
+        window.__pendingShortcuts.push(shortcut);
+    };
+</script>
+
 <script src="{{ url_for('static', filename='js/NoSleep.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/overlay_mount.js') }}?v=1.0"></script>
 <script src="{{ url_for('static', filename='js/modules/choice_validation.js') }}?v=1.0"></script>
@@ -228,6 +248,16 @@
         state.scanStartTime = 0;
         document.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            // A modifier combo is an APP SHORTCUT, never scanner output — a
+            // barcode scanner types plain characters. Without this, Ctrl+C to
+            // copy a location id off the dashboard leaves "c" in scanBuffer,
+            // and the next scan within the 2s window dispatches "cLOC:PM-DB-A",
+            // which fails the prefix match and reports "Unknown Code (Use LOC:
+            // prefix)" on a perfectly good printed label.
+            // ⚠️ Shift is DELIBERATELY not listed: scanners send Shift for every
+            // uppercase character, so guarding on it would break every scan.
+            if (e.ctrlKey || e.altKey || e.metaKey) return;
 
             if (e.key === 'Enter') {
                 e.preventDefault();

@@ -78,6 +78,20 @@ def pytest_addoption(parser):
     # For a FULL sweep, `pytest --reset-dev` restores the committed seed
     # baseline first so cross-test contamination can't accumulate. See
     # setup-and-rebuild/reset_dev.py + docs/agent_docs/tasks/19-*.md.
+    # 2026-08-03 — a genuinely hermetic run. The plain `pytest` invocation was
+    # documented as "the offline sweep" but never was one: --run-integration
+    # gates only the dev-SPOOLMAN tests, while ~55 E2E files reach the local FCC
+    # container via `require_server` (which skips only when it is DOWN) and
+    # mutate real dev inventory on every routine verification. Use --offline
+    # when you want a fast check that provably cannot touch Derek's data.
+    parser.addoption(
+        "--offline",
+        action="store_true",
+        default=False,
+        help="Skip every test that touches the live FCC dev container, for a "
+             "hermetic run that cannot mutate dev inventory. Equivalent env: "
+             "FCC_OFFLINE=1.",
+    )
     parser.addoption(
         "--reset-dev",
         action="store_true",
@@ -96,6 +110,39 @@ def pytest_addoption(parser):
     )
 
 
+# Fixtures that imply "this test drives the live FCC dev container". Requesting
+# any of them means the test cannot run in --offline mode. `page` is the
+# important one: a Playwright test can take it WITHOUT require_server and still
+# launch a browser against localhost:8000.
+CONTAINER_FIXTURES = frozenset({
+    "page", "context", "browser", "browser_context_args",
+    "require_server", "api_base_url",
+    "clean_buffer", "with_held_spool", "seed_dryer_box", "seed_via_ui",
+    "snapshot", "scan",
+    "dev_spoolman_url", "throwaway_filament", "throwaway_spool",
+})
+
+
+def _offline_mode(config) -> bool:
+    """True when the caller asked for a genuinely hermetic run.
+
+    `--offline` (or FCC_OFFLINE=1) skips every test that touches the live FCC
+    dev container, so a verification run cannot write to Derek's real dev
+    inventory. This exists because the plain `pytest` run was widely believed to
+    be "the offline sweep" and never was: --run-integration gates only the tests
+    that hit the dev SPOOLMAN on the NAS, while ~55 E2E files reach the local
+    container through `require_server`, which skips only when that container is
+    DOWN. Default behaviour is deliberately unchanged — this is opt-in.
+    """
+    try:
+        flag = config.getoption("--offline")
+    except (ValueError, AttributeError):  # option not registered (sub-config)
+        flag = False
+    return bool(flag) or os.environ.get("FCC_OFFLINE", "").lower() in (
+        "1", "true", "yes",
+    )
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip @pytest.mark.integration tests unless explicitly opted in.
 
@@ -103,6 +150,20 @@ def pytest_collection_modifyitems(config, items):
     in the environment. If neither is set, every integration item gets a
     skip marker added so the rest of the suite still runs.
     """
+    # --offline first: deselect at COLLECTION time, not inside a fixture.
+    # Gating only `require_server` isn't enough — a test can take the Playwright
+    # `page` fixture without requesting require_server, and would still launch a
+    # browser and drive the live container. Skipping by fixture name here also
+    # keeps the run genuinely fast (no browser ever starts).
+    if _offline_mode(config):
+        offline_skip = pytest.mark.skip(
+            reason="offline mode (--offline / FCC_OFFLINE=1): touches the live dev container"
+        )
+        for item in items:
+            names = set(getattr(item, "fixturenames", ()))
+            if names & CONTAINER_FIXTURES:
+                item.add_marker(offline_skip)
+
     opted_in = config.getoption("--run-integration") or os.environ.get(
         "RUN_INTEGRATION", ""
     ).lower() in ("1", "true", "yes")
@@ -695,13 +756,29 @@ def _reset_dev_baseline(request):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session", autouse=False)
-def require_server(api_base_url: str):
+def require_server(api_base_url: str, pytestconfig):
     """Opt-in fixture for tests that need the live server.
 
     Kept autouse=False so unit tests don't hit the network. Request it
     explicitly from E2E tests if you want a friendly skip instead of a
     connection error.
+
+    ⚠️ This is NOT gated by --run-integration. That flag guards the real dev
+    SPOOLMAN on the NAS; this fixture guards the local FCC container, and the
+    two are different services. So whenever the container is UP, ~55 E2E files
+    requesting this fixture run — and mutate real dev inventory — even on a
+    plain `pytest` run. That surprised everyone (2026-08-03) because the build
+    cadence called the plain run "the offline sweep", which it never was.
+
+    `--offline` / FCC_OFFLINE=1 makes that promise real: it skips everything
+    that touches the container, giving a genuinely hermetic sweep that cannot
+    write to Derek's dev data. Default behaviour is unchanged.
     """
+    if _offline_mode(pytestconfig):
+        pytest.skip(
+            "offline mode (--offline / FCC_OFFLINE=1): skipping tests that "
+            "touch the live dev container"
+        )
     try:
         r = requests.get(api_base_url, timeout=3)
         if r.status_code >= 500:

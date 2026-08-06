@@ -536,7 +536,14 @@ def test_remove_choice_restore_failure_collected_and_continues(client, monkeypat
     """A failing per-filament restore PATCH is collected into
     restore_failures (with the HTTP status + body) but the loop CONTINUES —
     the remaining filaments are still restored, the overall response stays
-    success:true, and the summary log escalates to WARNING/ffaa00."""
+    success:true.
+
+    2026-08-05 — pin UPDATED with the fix it characterises. A failed restore is
+    DATA LOSS (the field was already wiped and nothing retries), so the summary
+    now escalates to ERROR/ff4444 and NAMES the casualties instead of reporting
+    a bare count. The count-only wording is what made 26 real filaments drain
+    silently in dev over months: the id appeared nowhere, so nobody could tell
+    what had been lost."""
     fields, filaments = _remove_fixture()
     calls = _install_wire(
         monkeypatch, fields=fields, filaments=filaments,
@@ -554,8 +561,10 @@ def test_remove_choice_restore_failure_collected_and_continues(client, monkeypat
     assert [u.rsplit("/", 1)[-1] for u in patch_urls] == ["1", "2"]
     assert len(logs) == 1
     msg, a, _k = logs[0]
-    assert "1 restore failure(s)" in msg
-    assert a == ("WARNING", "ffaa00")
+    # The casualty must be NAMED in the Activity-Log line, not just counted.
+    assert "LOST extras on filament(s) [1]" in msg
+    assert "hub.log" in msg, "the user needs pointing at the recovery payload"
+    assert a == ("ERROR", "ff4444")
 
 
 def test_remove_choice_restore_non_requestexception_collected(client, monkeypatch):
@@ -588,7 +597,8 @@ def test_remove_choice_restore_non_requestexception_collected(client, monkeypatc
     assert body["restore_failures"] == [{"id": 1, "msg": "non-request boom"}]
     # Both restores were ATTEMPTED — the raise did not abort the loop.
     assert [u.rsplit("/", 1)[-1] for u in patch_calls] == ["1", "2"]
-    assert logs[-1][1] == ("WARNING", "ffaa00")
+    assert logs[-1][1] == ("ERROR", "ff4444")   # data loss, not a warning
+    assert "LOST extras on filament(s) [1]" in logs[-1][0]
 
 
 def test_remove_choice_happy_path_order_and_payloads(client, monkeypatch):

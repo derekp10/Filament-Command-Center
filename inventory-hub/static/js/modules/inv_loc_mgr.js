@@ -1277,6 +1277,11 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     // across barcode-scanner setups.
     const keyHandler = (e) => {
         if (e.key === 'Enter') {
+            // ⚠️ SAFETY (axis-(a) audit, 2026-08-03) — see inv_quickswap.js for the
+            // full rationale. A scan in flight owns this Enter: it terminates the
+            // scan, it is not a button press. YES is focused by initialFocus, so
+            // without this the "📷 Scan to Cancel" QR performed the CONFIRM.
+            if (window.isScanInFlight && window.isScanInFlight()) return;
             const active = document.activeElement;
             if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
             else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
@@ -1490,6 +1495,22 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
         })
         .catch(() => setProcessing(false));
 };
+
+// The ID field below is re-focused after every add so several legacy ids can be
+// entered in a row — deliberate, and Derek wants it kept. But a focused <input>
+// disarms the global scan handler, so the Manage modal's OWN CMD:DONE QR (and
+// any location/slot label) came back as "Invalid Code": the text was posted to
+// /api/identify_scan as a manual entry, whose non-spool responses carry no
+// `msg` and fell through to the error branch.
+// Capture scanner-speed input from the field instead, so the cursor can stay
+// put AND scanning keeps working. Shared helper — see inv_core.js.
+(function () {
+    if (!window.installFieldScanCapture) return;
+    window.installFieldScanCapture({
+        match: (el) => el.id === 'manual-spool-id',
+        isScanPayload: (txt) => window.looksLikeScanPayload(txt),
+    });
+})();
 
 window.manualAddSpool = () => {
     const val = document.getElementById('manual-spool-id').value.trim();

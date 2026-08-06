@@ -1,0 +1,371 @@
+..............sss....................................................... [  3%]
+..........................................F............................. [  6%]
+.............s.......................................................... [  9%]
+............................................................s........... [ 12%]
+...............Fs..........ss........................................... [ 15%]
+..................................s..................................... [ 18%]
+................s...................s..........................s........ [ 21%]
+.................F......................F............................... [ 24%]
+........................................................................ [ 27%]
+........................................................................ [ 30%]
+........................................................................ [ 33%]
+........................................................................ [ 36%]
+........................................................................ [ 39%]
+........................................................................ [ 42%]
+........................................................................ [ 45%]
+........................................................................ [ 48%]
+........................................................................ [ 51%]
+........................................................................ [ 54%]
+.......................................................sssss............ [ 57%]
+........................................................................ [ 60%]
+.................................s...............s................ssssss [ 63%]
+s....................................................................... [ 66%]
+........................................................................ [ 69%]
+........................................................................ [ 72%]
+........................................................................ [ 75%]
+........................................................................ [ 78%]
+...........................F............................................ [ 81%]
+........................................................................ [ 84%]
+........................................................................ [ 87%]
+........................................................................ [ 90%]
+................................s....................................... [ 94%]
+...........................................ssssssssss................... [ 97%]
+......................................................................   [100%]
+================================== FAILURES ===================================
+______________________ test_clone_spool_button[chromium] ______________________
+
+page = <Page url='http://localhost:8000/'>
+
+    def test_clone_spool_button(page: Page):
+        """
+        E2E test verifying that clicking a Spool from the Backlog opens its details,
+        and clicking 'Clone Spool' immediately transports the user to an auto-filled New Inventory Wizard.
+        """
+        # 1. Hard Navigate / Refresh
+        page.goto("http://localhost:8000")
+    
+        # 2. Click the 'Backlog' button (by title or text)
+        page.get_by_role("button", name=re.compile("Backlog")).click()
+    
+        # 3. Wait for backlog rows to render
+        backlog_list = page.locator("#backlog-list")
+        expect(backlog_list).to_be_visible()
+    
+        # 4. Find the first SPOOL row and click it to open details.
+        # The SPOOL text is next to the icon.
+        first_spool = page.locator(".backlog-row").filter(has_text="SPOOL").first
+>       first_spool.click()
+
+tests\test_clone_e2e.py:22: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <Locator frame=<Frame name= url='http://localhost:8000/'> selector='.backlog-row >> internal:has-text="SPOOL"i >> nth=0'>
+
+    def click(
+        self,
+        *,
+        modifiers: typing.Optional[
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
+        ] = None,
+        position: typing.Optional[Position] = None,
+        delay: typing.Optional[float] = None,
+        button: typing.Optional[Literal["left", "middle", "right"]] = None,
+        click_count: typing.Optional[int] = None,
+        timeout: typing.Optional[float] = None,
+        force: typing.Optional[bool] = None,
+        no_wait_after: typing.Optional[bool] = None,
+        trial: typing.Optional[bool] = None,
+        steps: typing.Optional[int] = None,
+    ) -> None:
+        """Locator.click
+    
+        Click an element.
+    
+        **Details**
+    
+        This method clicks the element by performing the following steps:
+        1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
+        1. Scroll the element into view if needed.
+        1. Use `page.mouse` to click in the center of the element, or the specified `position`.
+        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
+    
+        If the element is detached from the DOM at any moment during the action, this method throws.
+    
+        When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
+        Passing zero timeout disables this.
+    
+        **Usage**
+    
+        Click a button:
+    
+        ```py
+        page.get_by_role(\"button\").click()
+        ```
+    
+        Shift-right-click at a specific position on a canvas:
+    
+        ```py
+        page.locator(\"canvas\").click(
+            button=\"right\", modifiers=[\"Shift\"], position={\"x\": 23, \"y\": 32}
+        )
+        ```
+    
+        Parameters
+        ----------
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
+            Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
+        position : Union[{x: float, y: float}, None]
+            A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
+            the element.
+        delay : Union[float, None]
+            Time to wait between `mousedown` and `mouseup` in milliseconds. Defaults to 0.
+        button : Union["left", "middle", "right", None]
+            Defaults to `left`.
+        click_count : Union[int, None]
+            defaults to 1. See [UIEvent.detail].
+        timeout : Union[float, None]
+            Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
+            be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
+        force : Union[bool, None]
+            Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
+        no_wait_after : Union[bool, None]
+            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
+            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
+            navigating to inaccessible pages. Defaults to `false`.
+            Deprecated: This option will default to `true` in the future.
+        trial : Union[bool, None]
+            When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
+        steps : Union[int, None]
+            Defaults to 1. Sends `n` interpolated `mousemove` events to represent travel between Playwright's current cursor
+            position and the provided destination. When set to 1, emits a single `mousemove` event at the destination location.
+        """
+    
+        return mapping.from_maybe_impl(
+>           self._sync(
+                self._impl_obj.click(
+                    modifiers=mapping.to_impl(modifiers),
+                    position=position,
+                    delay=delay,
+                    button=button,
+                    clickCount=click_count,
+                    timeout=timeout,
+                    force=force,
+                    noWaitAfter=no_wait_after,
+                    trial=trial,
+                    steps=steps,
+                )
+            )
+        )
+
+C:\Users\Derek\AppData\Roaming\Python\Python314\site-packages\playwright\sync_api\_generated.py:15631: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <Locator frame=<Frame name= url='http://localhost:8000/'> selector='.backlog-row >> internal:has-text="SPOOL"i >> nth=0'>
+modifiers = None, position = None, delay = None, button = None
+clickCount = None, timeout = None, force = None, noWaitAfter = None
+trial = None, steps = None
+
+    async def click(
+        self,
+        modifiers: Sequence[KeyboardModifier] = None,
+        position: Position = None,
+        delay: float = None,
+        button: MouseButton = None,
+        clickCount: int = None,
+        timeout: float = None,
+        force: bool = None,
+        noWaitAfter: bool = None,
+        trial: bool = None,
+        steps: int = None,
+    ) -> None:
+        params = locals_to_params(locals())
+>       return await self._frame._click(self._selector, strict=True, **params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+C:\Users\Derek\AppData\Roaming\Python\Python314\site-packages\playwright\_impl\_locator.py:162: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <Frame name= url='http://localhost:8000/'>
+selector = '.backlog-row >> internal:has-text="SPOOL"i >> nth=0'
+modifiers = None, position = None, delay = None, button = None
+clickCount = None, timeout = None, force = None, noWaitAfter = None
+strict = True, trial = None, steps = None
+
+    async def _click(
+        self,
+        selector: str,
+        modifiers: Sequence[KeyboardModifier] = None,
+        position: Position = None,
+        delay: float = None,
+        button: MouseButton = None,
+        clickCount: int = None,
+        timeout: float = None,
+        force: bool = None,
+        noWaitAfter: bool = None,
+        strict: bool = None,
+        trial: bool = None,
+        steps: int = None,
+    ) -> None:
+>       await self._channel.send("click", self._timeout, locals_to_params(locals()))
+
+C:\Users\Derek\AppData\Roaming\Python\Python314\site-packages\playwright\_impl\_frame.py:566: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <playwright._impl._connection.Channel object at 0x0000026A07DF9850>
+method = 'click'
+timeout_calculator = <bound method Frame._timeout of <Frame name= url='http://localhost:8000/'>>
+params = {'selector': '.backlog-row >> internal:has-text="SPOOL"i >> nth=0', 'strict': True, 'timeout': 30000}
+is_internal = False, title = None
+
+    async def send(
+        self,
+        method: str,
+        timeout_calculator: TimeoutCalculator,
+        params: Dict = None,
+        is_internal: bool = False,
+        title: str = None,
+    ) -> Any:
+>       return await self._connection.wrap_api_call(
+            lambda: self._inner_send(method, timeout_calculator, params, False),
+            is_internal,
+            title,
+        )
+
+C:\Users\Derek\AppData\Roaming\Python\Python314\site-packages\playwright\_impl\_connection.py:69: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <playwright._impl._connection.Connection object at 0x0000026A04CD1A90>
+cb = <function Channel.send.<locals>.<lambda> at 0x0000026A07E009E0>
+is_internal = False, title = None
+
+    async def wrap_api_call(
+        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None
+    ) -> Any:
+        if self._api_zone.get():
+            return await cb()
+        task = asyncio.current_task(self._loop)
+        st: List[inspect.FrameInfo] = getattr(
+            task, "__pw_stack__", None
+        ) or inspect.stack(0)
+    
+        parsed_st = _extract_stack_trace_information_from_stack(st, is_internal, title)
+        self._api_zone.set(parsed_st)
+        try:
+            return await cb()
+        except Exception as error:
+>           raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+E           playwright._impl._errors.TimeoutError: Locator.click: Timeout 30000ms exceeded.
+E           Call log:
+E             - waiting for locator(".backlog-row").filter(has_text="SPOOL").first
+
+C:\Users\Derek\AppData\Roaming\Python\Python314\site-packages\playwright\_impl\_connection.py:559: TimeoutError
+________________ test_feeds_section_save_round_trip[chromium] _________________
+
+page = <Page url='http://localhost:8000/'>
+open_manage_modal = <function open_manage_modal.<locals>._open at 0x0000026A0EC84A90>
+api_base_url = 'http://localhost:8000'
+
+    @pytest.mark.usefixtures("require_server", "restore_bindings")
+    def test_feeds_section_save_round_trip(page: Page, open_manage_modal, api_base_url):
+        open_manage_modal(TEST_BOX)
+        page.locator("#feeds-toggle-btn").click()
+        page.wait_for_timeout(300)
+        # The Feeds editor is now a searchable combobox — write directly to the
+        # hidden <select> the save logic reads, then submit. Emulates the
+        # end-user picking from the dropdown without relying on the combobox's
+        # visual list staying pixel-stable.
+        page.evaluate(
+            "() => { const s = document.querySelector('select.feeds-select[data-slot=\"1\"]'); "
+            "s.value = 'XL-2'; }"
+        )
+        page.locator("#feeds-body button:has-text('Save Feeds')").click()
+        expect(page.locator("#feeds-status")).to_contain_text("Saved", timeout=5000)
+    
+        # Verify via the API — state actually persisted.
+        r = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5)
+>       assert r.json()["slot_targets"].get("1") == "XL-2"
+E       AssertionError: assert 'XL-1' == 'XL-2'
+E         
+E         - XL-2
+E         ?    ^
+E         + XL-1
+E         ?    ^
+
+tests\test_loc_mgr_bindings_ui_e2e.py:77: AssertionError
+___ test_location_combobox_highlights_current_selection_on_focus[chromium] ____
+
+page = <Page url='http://localhost:8000/'>
+
+    def test_location_combobox_highlights_current_selection_on_focus(page: Page):
+        """The currently-selected option must render with the .active class on
+        focus so the user can hit Enter to re-confirm without re-picking."""
+        _open_wizard_fresh(page)
+        _pick_first_real_location(page)
+    
+        search = page.locator("#wiz-spool-location-search")
+        dropdown = page.locator("#dropdown-location")
+        hidden = page.locator("#wiz-spool-location")
+        selected_value = hidden.input_value()
+    
+        search.click()  # re-focus
+        expect(dropdown).to_be_visible()
+    
+        active = dropdown.locator(".autocomplete-option.active")
+>       assert active.count() == 1, "expected exactly one .active option"
+E       AssertionError: expected exactly one .active option
+E       assert 0 == 1
+E        +  where 0 = count()
+E        +    where count = <Locator frame=<Frame name= url='http://localhost:8000/'> selector='#dropdown-location >> .autocomplete-option.active'>.count
+
+tests\test_wizard_group10_session_a.py:142: AssertionError
+_________ test_unsaved_changes_overlay_escape_keeps_editing[chromium] _________
+
+page = <Page url='http://localhost:8000/'>
+
+    def test_unsaved_changes_overlay_escape_keeps_editing(page: Page):
+        """Escape on the unsaved-changes overlay closes only the overlay, leaving
+        the wizard modal open (mountOverlay's stopImmediatePropagation contract)."""
+        _open_wizard_fresh(page)
+        page.evaluate("wizardState.isDirty = true")
+        page.evaluate("""
+            bootstrap.Modal.getInstance(document.getElementById('wizardModal')).hide();
+        """)
+        overlay = page.locator("#fcc-wiz-unsaved-changes")
+>       expect(overlay).to_be_visible(timeout=2_000)
+E       AssertionError: Locator expected to be visible
+E       Actual value: None
+E       Error: element(s) not found 
+E       Call log:
+E         - Expect "to_be_visible" with timeout 2000ms
+E         - waiting for locator("#fcc-wiz-unsaved-changes")
+
+tests\test_wizard_overlay_migration.py:74: AssertionError
+______________ test_every_row_is_a_dict_with_LocationID_and_Type ______________
+
+locations_data = ('[\n    {\n        "LocationID": "",\n        "Name": "TestCart",\n        "Type": "Cart",\n        "Max Spools": "0"...m', ...}, {'Device Identifier': '', 'Device Type': '', 'Label Printed': 'Yes', 'Location': 'Computer Room', ...}, ...])
+
+    def test_every_row_is_a_dict_with_LocationID_and_Type(locations_data):
+        """Trim guard: tail truncation tends to leave a half-row with a
+        LocationID but missing Type, or vice-versa. Both are required."""
+        _, data = locations_data
+        for i, row in enumerate(data):
+            assert isinstance(row, dict), f"row {i} is not a dict: {row!r}"
+>           assert row.get("LocationID"), f"row {i} missing LocationID: {row!r}"
+E           AssertionError: row 0 missing LocationID: {'LocationID': '', 'Name': 'TestCart', 'Type': 'Cart', 'Max Spools': '0', 'parent_id': 'CR'}
+E           assert ''
+E            +  where '' = <built-in method get of dict object at 0x0000026A20378A40>('LocationID')
+E            +    where <built-in method get of dict object at 0x0000026A20378A40> = {'LocationID': '', 'Max Spools': '0', 'Name': 'TestCart', 'Type': 'Cart', ...}.get
+
+tests\test_locations_json_integrity.py:87: AssertionError
+=========================== short test summary info ===========================
+FAILED tests\test_clone_e2e.py::test_clone_spool_button[chromium] - playwrigh...
+FAILED tests\test_loc_mgr_bindings_ui_e2e.py::test_feeds_section_save_round_trip[chromium]
+FAILED tests\test_wizard_group10_session_a.py::test_location_combobox_highlights_current_selection_on_focus[chromium]
+FAILED tests\test_wizard_overlay_migration.py::test_unsaved_changes_overlay_escape_keeps_editing[chromium]
+FAILED tests\test_locations_json_integrity.py::test_every_row_is_a_dict_with_LocationID_and_Type
+5 failed, 2332 passed, 37 skipped in 1708.47s (0:28:28)

@@ -131,6 +131,45 @@ window.openWeighOutModal = () => {
     }, 500);
 };
 
+// ---------------------------------------------------------------------------
+// Scan capture while a weight field has focus (2026-08-03 scan-path audit)
+//
+// This modal advertises live scanning TWICE — "…or scan them now while this
+// window is open!" and "Scan new items to add to this list." — and that really
+// works: a scan lands in state.heldSpools and the buffer-updated listener below
+// redraws the list. But openWeighOutModal auto-focuses the first weight input
+// (deliberately: typing weights is the primary action here), and the global
+// scan accumulator's first line is `if (e.target.tagName === 'INPUT') return;`.
+// So the advertised feature was dead, and worse, the barcode was typed INTO the
+// weight box — in 'additive' mode that box is type="text", so the terminating
+// Enter tried to save the barcode AS A WEIGHT.
+//
+// Rather than drop the auto-focus (Derek wants the cursor there), capture
+// scanner input from inside the field and hand it to the global scan path.
+//
+// Two conditions, BOTH required, so ordinary typing is never hijacked:
+//   1. Scanner SPEED — the whole payload arrives in under 150ms, the same
+//      threshold the global accumulator uses to classify barcode vs keyboard.
+//   2. Not weight-shaped — it contains a character that cannot occur in a
+//      weight (anything outside 0-9 . + -). Real payloads carry a prefix or a
+//      URL ("ID:123", "LOC:PM-DB-A", "https://prusament…"), so this holds,
+//      while even an improbably fast typist entering "1234" is left alone.
+// A purely numeric barcode is deliberately NOT captured: it is genuinely
+// ambiguous with a weight, and treating it as a weight is the safe default.
+(function () {
+    if (!window.installFieldScanCapture) return;
+    const WEIGHTISH = /^[0-9.+\-]$/;
+    window.installFieldScanCapture({
+        match: (el) => el.classList && el.classList.contains('weigh-input'),
+        // Anything a weight box cannot legitimately contain. Broader than the
+        // shared `looksLikeScanPayload` on purpose: weights are strictly
+        // numeric here, so ANY other character proves it was scanned. A purely
+        // numeric barcode is deliberately NOT captured — genuinely ambiguous
+        // with a weight, and weight is the safe reading.
+        isScanPayload: (txt) => [...txt].some(c => !WEIGHTISH.test(c)),
+    });
+})();
+
 // Also refresh the UI any time the buffer updates while the modal is open
 document.addEventListener('inventory:buffer-updated', () => {
     const weighModalEl = document.getElementById('weighOutModal');

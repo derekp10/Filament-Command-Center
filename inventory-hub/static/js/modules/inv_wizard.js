@@ -576,6 +576,23 @@ window.wizardCollapseAllSections = () => {
         const tag = (document.activeElement?.tagName || '').toUpperCase();
         if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
         if (!e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+        // ⚠️ A barcode scanner sends Shift for EVERY uppercase character, so a
+        // scanned label containing 'E' or 'C' looks exactly like Shift+E /
+        // Shift+C. Without this guard, scanning while the wizard is open (focus
+        // on the modal rather than a field) fired expand/collapse once per such
+        // character AND left those characters in state.scanBuffer, corrupting
+        // the scan. Bail while a scan is in flight and let the accumulator have
+        // the keystroke.
+        if (window.isScanInFlight && window.isScanInFlight()) return;
+        // ⚠️ preventDefault ONLY — deliberately NOT stopImmediatePropagation.
+        // The guard above CANNOT fire on the FIRST character of a scan:
+        // scanBuffer is still empty because the accumulator hasn't seen that
+        // character yet. This listener sits on wizEl (inside document), so
+        // stopping propagation swallowed char #1 — every command QR scanned
+        // with the wizard open arrived mangled ('CMD:DONE' -> 'MD:DONE') and
+        // failed as an unknown code. Letting the character through costs at
+        // worst one spurious expand/collapse, which is harmless and
+        // idempotent; eating it breaks the scan outright.
         if (e.key === 'E' || e.key === 'e') {
             e.preventDefault();
             window.wizardExpandAllSections();

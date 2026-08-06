@@ -254,9 +254,22 @@
                         <div class="mt-3 pt-3 border-top border-secondary">
                             <label class="text-info fw-bold d-block mb-2" style="font-size:1rem;">🔁 Slot Render Order</label>
                             <div class="btn-group" role="group" aria-label="Slot render direction">
-                                <input type="radio" class="btn-check" name="feeds-slot-order" id="feeds-slot-order-ltr" value="ltr" autocomplete="off" checked>
+                                <!-- onchange blur is LOAD-BEARING: btn-check RENDERS as a
+                                     button but is an <input>, and the global scan handler
+                                     bails on `e.target.tagName === 'INPUT'`. Leaving one
+                                     focused silently disarms the scanner for the rest of
+                                     the Manage session, with no visual cue at all that a
+                                     text-entry-class element holds focus.
+                                     ON CLICK, NOT ON CHANGE: arrow keys move selection in a
+                                     radio group and fire `change` but NOT `click`, so
+                                     blurring on change made the group one-shot from the
+                                     keyboard — after one arrow press focus fell to <body>
+                                     and no further arrow reached the group. -->
+                                <input type="radio" class="btn-check" name="feeds-slot-order" id="feeds-slot-order-ltr" value="ltr" autocomplete="off" checked
+                                       onclick="this.blur();">
                                 <label class="btn btn-outline-info fw-bold" for="feeds-slot-order-ltr">Left → Right</label>
-                                <input type="radio" class="btn-check" name="feeds-slot-order" id="feeds-slot-order-rtl" value="rtl" autocomplete="off">
+                                <input type="radio" class="btn-check" name="feeds-slot-order" id="feeds-slot-order-rtl" value="rtl" autocomplete="off"
+                                       onclick="this.blur();">
                                 <label class="btn btn-outline-info fw-bold" for="feeds-slot-order-rtl">Right → Left</label>
                             </div>
                             <div class="text-muted mt-1" style="font-size:0.85rem;">

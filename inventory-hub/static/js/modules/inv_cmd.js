@@ -508,11 +508,9 @@ window.commitBulkMove = (confirmActivePrint = false) => {
 // scanner types its payload as ordinary keydowns, so an unguarded letter key
 // fires in the middle of somebody scanning a label).
 (function () {
-    const _scanInFlight = () => {
-        const st = (typeof state !== 'undefined') ? state : window.state;
-        return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.length > 0
-            && st.scanStartTime && (Date.now() - st.scanStartTime) < 500);
-    };
+    // Delegates to the canonical definition in inv_core.js — this was one of
+    // three identical copy-pasted closures (2026-08-03 scan-path audit).
+    const _scanInFlight = () => !!(window.isScanInFlight && window.isScanInFlight());
     document.addEventListener('keydown', (e) => {
         if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key !== 'B' && e.key !== 'b') return;
@@ -1521,6 +1519,74 @@ const processScan = (text, source = 'keyboard') => {
                     showToast(`❌ Slot ${res.slot} invalid for ${res.location}${limit}`, 'error', 5000);
                 } else if (res.action === 'assignment_bad_target') {
                     showToast(`❌ ${res.location} isn't a valid load target`, 'error', 5000);
+                } else if (res.action === 'assignment_requires_confirm') {
+                    // The printer is mid-print. The backend has ALWAYS answered
+                    // this (routes_scan.py), but the scan path had no branch for
+                    // it — so it fell through to the "Unknown assignment result"
+                    // toast below with no dialog and no way to proceed, forever,
+                    // however many times you rescanned. Every OTHER surface
+                    // already prompts; this one just couldn't.
+                    // Reuse the same overlay the buffer-assign path uses, then
+                    // replay the ORIGINAL scan with the confirm flag set.
+                    _confirmActivePrintScan({
+                        tid: res.location,
+                        slot: res.slot,
+                        stateInfo: res.active_print
+                            || { printer_name: res.location, state: 'PRINTING' },
+                        onConfirm: () => {
+                            setProcessing(true);
+                            window.fetchT('/api/identify_scan', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    text: text,
+                                    source: source,
+                                    confirm_active_print: true,
+                                }),
+                            })
+                                .then(r => r.json())
+                                .then(r2 => {
+                                    setProcessing(false);
+                                    // Mirror the normal assignment success path
+                                    // above. The slot-QR success payload has NO
+                                    // `msg` key, so toasting only on r2.msg gave
+                                    // a CONFIRMED load no toast at all, left the
+                                    // spool showing in the buffer strip, and
+                                    // fired 'inventory:changed' — an event name
+                                    // nothing listens to, so nothing refreshed.
+                                    // Blind-scanning, that reads as "it failed".
+                                    if (r2 && (r2.action === 'assignment_done'
+                                        || r2.action === 'assignment_partial')) {
+                                        const movedId = r2.moved;
+                                        if (movedId != null) {
+                                            state.heldSpools = state.heldSpools.filter(s => s.id !== movedId);
+                                            _markAssignedOut(movedId);
+                                            renderBuffer();
+                                        }
+                                        const extraMsg = r2.action === 'assignment_partial'
+                                            ? ` (${r2.remaining_buffer} still in buffer)` : '';
+                                        showToast(
+                                            `✅ Loaded #${movedId} into ${r2.location}:${r2.slot}${extraMsg}`,
+                                            r2.action === 'assignment_partial' ? 'info' : 'success',
+                                            r2.action === 'assignment_partial' ? 5000 : 4000);
+                                    } else if (r2 && r2.msg) {
+                                        showToast(r2.msg,
+                                            r2.type === 'error' ? 'error' : 'success',
+                                            r2.type === 'error' ? 7000 : 3000);
+                                    } else {
+                                        showToast('Assign confirmed but the result was unclear — check the Activity Log',
+                                            'warning', 7000);
+                                    }
+                                    document.dispatchEvent(
+                                        new CustomEvent('inventory:locations-changed'));
+                                })
+                                .catch(e => {
+                                    setProcessing(false);
+                                    console.error(e);
+                                    showToast('Assign failed after confirm', 'error', 7000);
+                                });
+                        },
+                    });
                 } else {
                     // Unknown action code — shouldn't happen, but surface it.
                     showToast(`Unknown assignment result: ${res.action || 'none'}`, 'warning', 4000);
@@ -1721,6 +1787,11 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
     // them; Escape always cancels (owned by mountOverlay's onEscape).
     const keyHandler = (e) => {
         if (e.key === 'Enter') {
+            // ⚠️ SAFETY (axis-(a) audit, 2026-08-03) — see inv_quickswap.js for the
+            // full rationale. A scan in flight owns this Enter: it terminates the
+            // scan, it is not a button press. YES is focused by initialFocus, so
+            // without this the "📷 Scan to Cancel" QR performed the CONFIRM.
+            if (window.isScanInFlight && window.isScanInFlight()) return;
             const active = document.activeElement;
             if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
             else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
