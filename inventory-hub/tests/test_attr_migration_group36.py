@@ -169,6 +169,37 @@ def test_a_transport_blip_is_retried_and_recovers(client, monkeypatch):
     assert logs[-1][1] == ("INFO", "00ccff"), "a recovered blip is not an error"
 
 
+def test_one_casualty_does_not_abandon_the_rest_of_the_library(monkeypatch):
+    """The restore loop must CONTINUE past a failure.
+
+    This pins `restore_extras` directly because the endpoint-level pin that used
+    to guard it lost its teeth: narrowing the restore set to attribute-bearing
+    records left that fixture with a single record, so an
+    abort-on-first-failure implementation would sail through the whole suite.
+    Abandoning the loop mid-restore is the worst outcome available here — every
+    remaining filament keeps the emptiness the DELETE left behind.
+    """
+    seen = []
+
+    def patch_fn(url, **kw):
+        fid = url.rsplit("/", 1)[-1]
+        seen.append(fid)
+        return _Resp(ok=False, status_code=500, text="nope") if fid == "1" else _Resp()
+
+    monkeypatch.setattr(requests_module, "patch", patch_fn)
+    monkeypatch.setattr(requests_module, "get",
+                        lambda url, **kw: _Resp(payload={"extra": {"nope": 1}}))
+
+    payloads = {1: {"filament_attributes": "[]"},
+                2: {"filament_attributes": "[]"},
+                3: {"filament_attributes": "[]"}}
+    restored, failures, _recovered = attr_migration.restore_extras(SM_URL, payloads)
+
+    assert seen == ["1", "2", "3"], "every record must be attempted"
+    assert restored == 2
+    assert [f["id"] for f in failures] == [1]
+
+
 def test_an_http_rejection_is_NOT_retried(client, monkeypatch):
     """A status code is a real answer from a healthy server.
 
@@ -512,6 +543,155 @@ def test_a_failed_purge_KEEPS_the_snapshot_for_recovery(client, monkeypatch):
         saved = json.load(fh)
     assert saved["payloads"]["1"] == {"filament_attributes": '["Basic"]',
                                       "product_url": '"http://x"'}
+
+
+def test_a_TIMED_OUT_schema_delete_KEEPS_the_snapshot(client, monkeypatch):
+    """The single most dangerous ambiguity in the whole flow.
+
+    A returned status means Spoolman answered and the field is intact, so
+    dropping the snapshot there is right. An EXCEPTION does not: a ReadTimeout
+    is exactly the case where Spoolman may have committed
+    `DELETE FROM filament_field WHERE key='filament_attributes'` and only the
+    response was lost. Every attribute-bearing record is then stripped — and
+    discarding the recovery payload at that moment reproduces the original bug
+    in full: silent, unattributable, unrecoverable.
+    """
+    fields, filaments = _fixture()
+    _wire(monkeypatch, fields=fields, filaments=filaments)
+
+    def timeout_delete(url, **kw):
+        raise requests_module.exceptions.ReadTimeout("stalled")
+
+    monkeypatch.setattr(requests_module, "delete", timeout_delete)
+    logs = _logs(monkeypatch)
+
+    body = client.post("/api/filament_attributes/remove_choice",
+                       json={"choice": "Doomed", "force": True,
+                             "purge": True}).get_json()
+
+    assert body["success"] is False
+    assert body["recovery_snapshot"], "the payload must survive an unknown outcome"
+    pending = attr_migration.pending_recovery_snapshots()
+    assert len(pending) == 1, "the snapshot must NOT be deleted on a timeout"
+    assert logs and logs[-1][1] == ("ERROR", "ff4444")
+    assert "UNKNOWN" in logs[-1][0]
+
+
+def test_a_REJECTED_schema_delete_clears_the_snapshot(client, monkeypatch):
+    """The counterpart: a real status code proves the field was never dropped,
+    so keeping the snapshot would cry wolf at every future boot."""
+    fields, filaments = _fixture()
+    _wire(monkeypatch, fields=fields, filaments=filaments,
+          delete_resp=_Resp(ok=False, status_code=500, text="boom"))
+    _logs(monkeypatch)
+
+    body = client.post("/api/filament_attributes/remove_choice",
+                       json={"choice": "Doomed", "force": True,
+                             "purge": True}).get_json()
+
+    assert body["success"] is False
+    assert attr_migration.pending_recovery_snapshots() == []
+
+
+def test_hidden_choices_are_stripped_from_the_tag_PICKER_feed(client, monkeypatch):
+    """`/api/external/fields` is what the wizard and the Edit Filament modal
+    actually read. Filtering only the Choices-Manager report left a "removed"
+    tag still offered everywhere it gets applied — so it kept coming back, and
+    the manager could no longer see or strip it."""
+    def fake_get(url, **kw):
+        if url.endswith("/api/v1/field/filament"):
+            return _Resp(payload=[_attr_field(["Basic", "Doomed"])])
+        if url.endswith("/api/v1/field/spool"):
+            return _Resp(payload=[])
+        raise AssertionError(f"unexpected GET {url}")
+
+    monkeypatch.setattr(requests_module, "get", fake_get)
+    monkeypatch.setattr(app_module.config_loader, "get_api_urls",
+                        lambda: (SM_URL, SM_URL))
+    attr_migration.save_hidden_choices(["Doomed"])
+
+    body = client.get("/api/external/fields").get_json()
+
+    fil = [f for f in body["fields"]["filament"] if f["key"] == "filament_attributes"]
+    assert fil and fil[0]["choices"] == ["Basic"], (
+        "a hidden tag must not be offered by the pickers"
+    )
+
+
+def test_re_adding_a_hidden_tag_brings_it_back(client, monkeypatch):
+    """Hiding leaves the choice in Spoolman's schema, so re-adding it by name
+    is a no-op union that returns success. Without un-hiding, the user gets a
+    green "added" toast for an action with no visible effect."""
+    _logs(monkeypatch)
+    attr_migration.save_hidden_choices(["Doomed"])
+    monkeypatch.setattr(app_module.spoolman_api, "update_extra_field_choices",
+                        lambda *a, **k: {"success": True})
+
+    body = client.post("/api/filament_attributes/add_choice",
+                       json={"choice": "Doomed"}).get_json()
+
+    assert body["success"] is True
+    assert body.get("unhidden") is True
+    assert attr_migration.load_hidden_choices() == []
+
+
+def test_a_purge_clears_the_now_meaningless_hidden_entry(client, monkeypatch):
+    """Purge is only reachable FROM the hidden strip, so without this every
+    purge leaves a hidden entry for a choice that no longer exists — which
+    would silently suppress the name if it were ever re-added."""
+    fields, filaments = _fixture()
+    _wire(monkeypatch, fields=fields, filaments=filaments)
+    _logs(monkeypatch)
+    attr_migration.save_hidden_choices(["Doomed"])
+
+    body = client.post("/api/filament_attributes/remove_choice",
+                       json={"choice": "Doomed", "force": True,
+                             "purge": True}).get_json()
+
+    assert body["success"] is True
+    assert attr_migration.load_hidden_choices() == []
+
+
+def test_the_report_drops_a_hidden_entry_that_left_the_schema(client, monkeypatch):
+    """A dead name in the Hidden strip would offer an "unhide" button that can
+    never bring anything back."""
+    _wire(monkeypatch, fields=[_attr_field(["Basic"])],
+          filaments=[{"id": 1, "extra": {"filament_attributes": '["Basic"]'}}])
+    attr_migration.save_hidden_choices(["GoneFromSchema"])
+
+    body = client.get("/api/filament_attributes/report").get_json()
+
+    assert body["hidden_choices"] == []
+
+
+def test_update_filament_REFUSES_when_the_pre_merge_read_fails(monkeypatch):
+    """`_get_raw_extras` used to return `{}` on a read failure, which is
+    indistinguishable from "this record has no extras". The merge then produced
+    the caller's PARTIAL dict, and Spoolman replaces the whole `extra`
+    sub-document on PATCH — so a read blip silently wiped every sibling. That
+    is the 2026-05-19 wipe class returning through the back door, and the hide
+    path made it the default route for removing a tag.
+
+    Refusing is strictly better: a failed write is recoverable, a silent wipe
+    is not.
+    """
+    monkeypatch.setattr(app_module.config_loader, "get_api_urls",
+                        lambda: (SM_URL, SM_URL))
+
+    def dead_get(url, **kw):
+        raise requests_module.exceptions.ConnectTimeout("nope")
+
+    patched = []
+    monkeypatch.setattr(requests_module, "get", dead_get)
+    monkeypatch.setattr(requests_module, "patch",
+                        lambda url, **kw: patched.append(url) or _Resp())
+
+    result = app_module.spoolman_api.update_filament(
+        7, {"extra": {"filament_attributes": '["Basic"]'}})
+
+    assert result is None, "a partial PATCH must not be sent blind"
+    assert patched == [], "no write may reach Spoolman"
+    assert "refusing to PATCH" in (app_module.spoolman_api.LAST_SPOOLMAN_ERROR or "")
 
 
 def test_an_unfinished_migration_is_announced_at_boot(monkeypatch):

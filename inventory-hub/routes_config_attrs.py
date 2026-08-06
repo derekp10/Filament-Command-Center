@@ -207,7 +207,13 @@ def api_filament_attributes_report():
     # "remove" hides it instead. A hidden choice must not appear in `choices`
     # (or the picker would still offer it) and must not be counted as rogue
     # (it is deliberately suppressed, not orphaned), so it gets its own bucket.
-    hidden_choices = attr_migration.load_hidden_choices()
+    # Intersect with the LIVE schema: a hidden entry for a choice that no
+    # longer exists in Spoolman (purged here, swept, or removed by hand) is
+    # stale, and reporting it would put a dead name in the Hidden strip with an
+    # "unhide" button that could never bring anything back.
+    schema_choices = set(choices)
+    hidden_choices = [c for c in attr_migration.load_hidden_choices()
+                      if c in schema_choices]
     hidden_set = set(hidden_choices)
     choices = [c for c in choices if c not in hidden_set]
 
@@ -356,8 +362,19 @@ def api_filament_attributes_add_choice():
         return jsonify({"success": False, "msg": "choice too long (max 80 chars)"}), 400
     res = spoolman_api.update_extra_field_choices('filament', 'filament_attributes', [choice])
     if res.get('success'):
+        # Adding a name is the unambiguous statement "I want that tag back", so
+        # un-hide it. Without this, re-adding a HIDDEN choice is a no-op union
+        # against Spoolman's schema (it was never removed) that reports success
+        # while the tag stays invisible — a success toast for an action with no
+        # effect, and the documented bulk re-tag recovery path stays unusable.
+        was_hidden = choice in attr_migration.load_hidden_choices()
+        if was_hidden:
+            res = dict(res)
+            res['hidden_choices'] = attr_migration.unhide_choice(choice)
+            res['unhidden'] = True
         state.add_log_entry(
-            f"🏷️ Filament Attributes: added choice {choice!r}", "INFO", "00ccff"
+            f"🏷️ Filament Attributes: {'un-hid' if was_hidden else 'added'} choice {choice!r}",
+            "INFO", "00ccff"
         )
     return jsonify(res)
 
@@ -628,8 +645,25 @@ def api_filament_attributes_remove_choice():
                     "msg": f"Schema DELETE failed ({d_resp.status_code}): {d_resp.text[:200]}",
                 })
         except Exception as e:
-            attr_migration.clear_recovery_snapshot(snap_path)
-            return jsonify({"success": False, "msg": f"Schema DELETE error: {e}"})
+            # KEEP the snapshot. A returned status code (the branch above) is a
+            # real answer meaning the field is intact, so clearing there is
+            # right — but an EXCEPTION is a ReadTimeout/ConnectionError, and
+            # that is precisely the case where Spoolman may have committed the
+            # DELETE and only the response was lost. Discarding the recovery
+            # payload here would re-create the exact failure this endpoint
+            # exists to prevent: every attribute-bearing record stripped, and
+            # the only durable copy of what to write back deleted with it.
+            state.add_log_entry(
+                f"⚠ Filament Attributes: schema DELETE outcome UNKNOWN ({e}) — the "
+                f"field may already be gone. Recovery data kept at {snap_path}. "
+                f"Check Spoolman before retrying.",
+                "ERROR", "ff4444",
+            )
+            return jsonify({
+                "success": False,
+                "msg": f"Schema DELETE error: {e}. Outcome unknown — recovery data kept at {snap_path}.",
+                "recovery_snapshot": snap_path,
+            })
 
         payload_out = _recreate_field_payload(attr_field, new_choices)
         try:
@@ -675,6 +709,11 @@ def api_filament_attributes_remove_choice():
         f"remove_choice({choice!r})", restore_failures, payloads)
     if not restore_failures:
         attr_migration.clear_recovery_snapshot(snap_path)
+    # The choice is gone from the schema now, so a hidden entry for it is
+    # meaningless — and worse, it would keep suppressing the name if the user
+    # ever re-added it. Purging from the Hidden strip is the ONLY route to this
+    # branch, so without this every purge leaves one behind.
+    attr_migration.unhide_choice(choice)
 
     level = "INFO" if not restore_failures else "ERROR"
     color = "00ccff" if not restore_failures else "ff4444"
@@ -871,8 +910,25 @@ def api_filament_attributes_sweep_unused():
                     "msg": f"Schema DELETE failed ({d_resp.status_code}): {d_resp.text[:200]}",
                 })
         except Exception as e:
-            attr_migration.clear_recovery_snapshot(snap_path)
-            return jsonify({"success": False, "msg": f"Schema DELETE error: {e}"})
+            # KEEP the snapshot. A returned status code (the branch above) is a
+            # real answer meaning the field is intact, so clearing there is
+            # right — but an EXCEPTION is a ReadTimeout/ConnectionError, and
+            # that is precisely the case where Spoolman may have committed the
+            # DELETE and only the response was lost. Discarding the recovery
+            # payload here would re-create the exact failure this endpoint
+            # exists to prevent: every attribute-bearing record stripped, and
+            # the only durable copy of what to write back deleted with it.
+            state.add_log_entry(
+                f"⚠ Filament Attributes: schema DELETE outcome UNKNOWN ({e}) — the "
+                f"field may already be gone. Recovery data kept at {snap_path}. "
+                f"Check Spoolman before retrying.",
+                "ERROR", "ff4444",
+            )
+            return jsonify({
+                "success": False,
+                "msg": f"Schema DELETE error: {e}. Outcome unknown — recovery data kept at {snap_path}.",
+                "recovery_snapshot": snap_path,
+            })
 
         payload_out = _recreate_field_payload(attr_field, new_choices)
         try:

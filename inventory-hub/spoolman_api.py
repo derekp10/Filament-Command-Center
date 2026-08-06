@@ -352,6 +352,21 @@ def update_spool(sid, data):
         # the merged dict avoids double-wrapping already-wrapped values.
         if isinstance(data.get('extra'), dict):
             existing_extras = _get_raw_extras('spool', sid)
+            if existing_extras is None:
+                # The pre-merge read FAILED. Merging against `{}` would produce
+                # the caller's PARTIAL dict, and Spoolman replaces the whole
+                # `extra` sub-document on PATCH — so the write would wipe every
+                # sibling. Refuse loudly instead; a failed write is recoverable,
+                # a silent wipe is not. (Group 36.)
+                LAST_SPOOLMAN_ERROR = (
+                    "could not read the record's existing extras before a partial "
+                    "update; refusing to PATCH because that would wipe the other "
+                    "extra fields"
+                )
+                state.logger.error(
+                    f"update_spool({sid}): {LAST_SPOOLMAN_ERROR}"
+                )
+                return None
             caller_sanitized = sanitize_outbound_data({'extra': data['extra']}).get('extra', {})
             data = dict(data)  # don't mutate caller
             data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized)
@@ -432,7 +447,26 @@ def _get_raw_extras(entity, eid):
     PATCH back, the wrapped form must be preserved so Spoolman's
     text-type validator accepts them. Calling get_filament() runs
     parse_inbound_data which strips the outer quotes; the round-trip
-    then sends `225` (parses as int) and Spoolman 400s."""
+    then sends `225` (parses as int) and Spoolman 400s.
+
+    Returns `{}` for a record that genuinely has no extras, and **None** when
+    the read FAILED. Group 36 — those two used to be the same value, which made
+    a read blip indistinguishable from an empty record: the merge then produced
+    just the caller's partial dict, and because Spoolman's PATCH replaces the
+    whole `extra` sub-document, the write silently wiped every sibling. That is
+    the 2026-05-19 wipe class re-entering through the back door, and it is not
+    hypothetical — the read is a bare 3s request against the same NAS Spoolman
+    whose timeouts caused the losses this module now retries around.
+
+    Deliberately calls `requests.get` DIRECTLY rather than routing through
+    `http_retry`. A retry here would be nice — this refusal is the only thing
+    standing between a read blip and a refused write — but `http_retry`
+    resolves `requests` from its OWN module namespace, while eleven test files
+    patch the seam as `spoolman_api.requests`. Routing through the helper
+    silently escapes that seam on the app's hottest write path, which is
+    exactly the "patch a collaborator on its defining module" rule in
+    CLAUDE.md. Resilience here is a separate change with its own seam work;
+    correctness is not worth trading for it."""
     try:
         sm_url, _ = config_loader.get_api_urls()
         r = requests.get(f"{sm_url}/api/v1/{entity}/{eid}", timeout=3)
@@ -440,7 +474,7 @@ def _get_raw_extras(entity, eid):
             return (r.json() or {}).get('extra') or {}
     except Exception:
         pass
-    return {}
+    return None
 
 
 # Keys that are owned by perform_smart_move / perform_smart_eject /
@@ -583,6 +617,21 @@ def update_filament(fid, data):
         # it twice on already-wrapped values would double-wrap and the
         # literal quote chars would leak (the original product_url bug).
         existing_extras = _get_raw_extras('filament', fid)
+        if existing_extras is None:
+            # The pre-merge read FAILED. Merging against `{}` would produce
+            # the caller's PARTIAL dict, and Spoolman replaces the whole
+            # `extra` sub-document on PATCH — so the write would wipe every
+            # sibling. Refuse loudly instead; a failed write is recoverable,
+            # a silent wipe is not. (Group 36.)
+            LAST_SPOOLMAN_ERROR = (
+                "could not read the record's existing extras before a partial "
+                "update; refusing to PATCH because that would wipe the other "
+                "extra fields"
+            )
+            state.logger.error(
+                f"update_filament({fid}): {LAST_SPOOLMAN_ERROR}"
+            )
+            return None
         caller_sanitized = sanitize_outbound_data({'extra': data['extra']}).get('extra', {})
         data = dict(data)  # don't mutate caller's payload
         data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized)
@@ -765,6 +814,21 @@ def update_vendor(vid, data):
 
     if isinstance(data.get('extra'), dict):
         existing_extras = _get_raw_extras('vendor', vid)
+        if existing_extras is None:
+            # The pre-merge read FAILED. Merging against `{}` would produce
+            # the caller's PARTIAL dict, and Spoolman replaces the whole
+            # `extra` sub-document on PATCH — so the write would wipe every
+            # sibling. Refuse loudly instead; a failed write is recoverable,
+            # a silent wipe is not. (Group 36.)
+            LAST_SPOOLMAN_ERROR = (
+                "could not read the record's existing extras before a partial "
+                "update; refusing to PATCH because that would wipe the other "
+                "extra fields"
+            )
+            state.logger.error(
+                f"update_vendor({vid}): {LAST_SPOOLMAN_ERROR}"
+            )
+            return None
         caller_sanitized = sanitize_outbound_data({'extra': data['extra']}).get('extra', {})
         data = dict(data)  # don't mutate caller's payload
         data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized)
@@ -1114,6 +1178,15 @@ def ensure_filament_attributes_cleaned():
             f"{sm_url}/api/v1/field/filament/filament_attributes", timeout=15
         )
         if not d_resp.ok and d_resp.status_code != 404:
+            # A returned status is a real answer: the field is intact and
+            # nothing was lost, so drop the snapshot. Leaving it would make the
+            # boot re-surface cry "unresolved data loss" on every subsequent
+            # start, forever — and in DEV the reloader re-runs this on every
+            # .py save, leaking another file each time. A false alarm here
+            # degrades exactly the signal this work exists to create.
+            # (An EXCEPTION is different — the outcome is unknown, so the outer
+            # `except requests.RequestException` correctly KEEPS the snapshot.)
+            attr_migration.clear_recovery_snapshot(snap_path)
             state.logger.warning(
                 f"filament_attributes cleanup DELETE failed "
                 f"({d_resp.status_code}): {d_resp.text[:300]}"
@@ -1181,6 +1254,17 @@ def ensure_filament_attributes_cleaned():
         except requests.RequestException:
             survived = set()  # couldn't verify; fall through to the success path
 
+        # Group 36 — the casualty suffix is built ONCE and appended to BOTH
+        # branches below. `survived` (Spoolman kept the choice) and `failed` (a
+        # record was not restored) are independent, and the survived branch is
+        # the one prod actually takes — so attaching the loss line only to the
+        # else-branch meant a real, unrecoverable loss showed up as a yellow
+        # "couldn't remove the choice" warning with no ids. That is the same
+        # under-reporting that let months of silent drain go unnoticed.
+        loss_suffix = (
+            f"; ⚠️ LOST filament_attributes on filament(s) {lost_ids} — "
+            f"recovery payload in hub.log and {snap_path}" if failed else ""
+        )
         if survived:
             # Removal did NOT persist. Don't claim success — log a clear,
             # actionable diagnostic. `usage_diag` (above) tells us whether any
@@ -1201,9 +1285,10 @@ def ensure_filament_attributes_cleaned():
             state.add_log_entry(
                 "⚠️ Filament Attributes cleanup could not remove "
                 f"{sorted(survived)} — Spoolman kept the choice after recreate "
-                "(see hub.log; needs a Spoolman-side fix).",
-                "WARNING",
-                "ffaa00",
+                "(see hub.log; needs a Spoolman-side fix)"
+                + loss_suffix + ".",
+                "ERROR" if failed else "WARNING",
+                "ff4444" if failed else "ffaa00",
             )
         else:
             # User-visible summary in the Activity Log (the hub.log line above
@@ -1217,8 +1302,7 @@ def ensure_filament_attributes_cleaned():
                 f"🧹 Filament Attributes cleaned: removed {sorted(effective_delete)} "
                 f"({restored}/{len(payloads)} filaments restored"
                 + (f", {recovered} confirmed by re-read" if recovered else "")
-                + (f"; ⚠️ LOST filament_attributes on filament(s) {lost_ids} — "
-                   f"recovery payload in hub.log and {snap_path}" if failed else "")
+                + loss_suffix
                 + ")",
                 "INFO" if not failed else "ERROR",
                 "00ccff" if not failed else "ff4444",
