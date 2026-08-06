@@ -287,6 +287,112 @@ def test_weigh_out_captures_a_scan_from_a_focused_weight_field_e2e(page):
 
 
 @pytest.mark.usefixtures("require_server")
+def test_manage_id_field_captures_a_scan_e2e(page):
+    """Manage Contents re-focuses #manual-spool-id after every add, so the
+    modal's OWN CMD:DONE QR came back as "Invalid Code".
+
+    Derek's call was to KEEP the re-focus (it's there so several legacy ids can
+    be typed in a row) and capture scanner input from the field instead — the
+    same resolution as Weigh-Out, through the shared helper.
+    """
+    page.goto("http://localhost:8000/", wait_until="domcontentloaded")
+    page.wait_for_function("typeof window.installFieldScanCapture === 'function'",
+                           timeout=15000)
+
+    page.evaluate("""
+        window.__scanned = [];
+        window.processScan = (t, s) => window.__scanned.push([t, s]);
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.id = 'manual-spool-id';
+        inp.setAttribute('data-probe', '1');
+        document.body.appendChild(inp);
+        inp.focus();
+    """)
+
+    def _type(text):
+        page.evaluate("""(txt) => {
+            const inp = document.querySelector('#manual-spool-id[data-probe]');
+            inp.value = '';
+            for (const ch of txt) {
+                inp.dispatchEvent(new KeyboardEvent('keydown', {key: ch, bubbles: true}));
+                inp.value += ch;
+            }
+            inp.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+        }""", text)
+
+    # A scanned command QR — the exact case that reported "Invalid Code".
+    _type("CMD:DONE")
+    assert page.evaluate("window.__scanned.length") == 1, (
+        "the modal's own CMD:DONE QR was not routed to the scan path"
+    )
+    assert page.evaluate("window.__scanned[0][0]") == "CMD:DONE"
+    assert page.evaluate("document.querySelector('#manual-spool-id[data-probe]').value") == ""
+
+    # A hand-typed legacy id must still reach the field's own handler.
+    page.evaluate("window.__scanned = []")
+    _type("12345")
+    assert page.evaluate("window.__scanned.length") == 0, (
+        "a typed legacy spool id was hijacked as a scan — that field exists to "
+        "accept exactly this"
+    )
+    assert page.evaluate("document.querySelector('#manual-spool-id[data-probe]').value") == "12345"
+
+    page.evaluate("document.querySelector('#manual-spool-id[data-probe]').remove()")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_slot_scan_during_an_active_print_offers_the_confirm_e2e(page):
+    """Scanning a slot QR while that printer is printing used to dead-end.
+
+    The backend has always answered `assignment_requires_confirm` with the
+    printer state attached, but the scan path had no branch for it — so it fell
+    through to a yellow "Unknown assignment result" toast with no dialog and no
+    way to proceed, however many times you rescanned. Every other surface
+    already prompts; this one couldn't.
+
+    The response is stubbed rather than driven off a real print: making this
+    happen for real means starting a print and yanking a spool off a live
+    toolhead.
+    """
+    page.goto("http://localhost:8000/", wait_until="domcontentloaded")
+    page.wait_for_function("typeof window.processScan === 'function'", timeout=15000)
+
+    page.evaluate("""
+        window.__toasts = [];
+        const realToast = window.showToast;
+        window.showToast = (m, t, d) => { window.__toasts.push(String(m)); };
+        // Stub the scan POST with exactly what routes_scan.py returns when
+        // perform_smart_move bails on the active-print guard.
+        window.fetchT = () => Promise.resolve({ json: () => Promise.resolve({
+            type: 'assignment',
+            action: 'assignment_requires_confirm',
+            location: 'XL-1',
+            slot: '1',
+            confirm_type: 'active_print',
+            active_print: {printer_name: 'XL', state: 'PRINTING'},
+            msg: 'XL is PRINTING',
+            moved: 42,
+        })});
+        window.processScan('LOC:XL-1:SLOT:1', 'barcode');
+    """)
+
+    # The confirm overlay must appear...
+    page.wait_for_selector("#fcc-aps-yes", timeout=8000)
+    body = page.inner_text("body")
+    assert "PRINTING" in body, "the confirm should name the printer state"
+
+    # ...and the dead-end toast must NOT.
+    toasts = page.evaluate("window.__toasts")
+    assert not any("Unknown assignment result" in t for t in toasts), (
+        f"the slot scan still dead-ends instead of prompting: {toasts}"
+    )
+
+    # Cancel out so the page is left clean for other tests.
+    page.click("#fcc-aps-no")
+
+
+@pytest.mark.usefixtures("require_server")
 def test_escape_on_a_confirm_releases_the_scan_gate_e2e(page):
     """THE regression that matters: cancel a confirm with Escape, and the
     scanner must still work.

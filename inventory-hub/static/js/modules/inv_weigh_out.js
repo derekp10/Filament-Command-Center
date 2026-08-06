@@ -157,40 +157,17 @@ window.openWeighOutModal = () => {
 // A purely numeric barcode is deliberately NOT captured: it is genuinely
 // ambiguous with a weight, and treating it as a weight is the safe default.
 (function () {
+    if (!window.installFieldScanCapture) return;
     const WEIGHTISH = /^[0-9.+\-]$/;
-    let buf = '';
-    let startedAt = 0;
-    let lastAt = 0;
-
-    document.addEventListener('keydown', (e) => {
-        const el = e.target;
-        if (!el || !el.classList || !el.classList.contains('weigh-input')) return;
-
-        const now = Date.now();
-        if (e.key === 'Enter') {
-            const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
-            const nonWeight = [...buf].some(c => !WEIGHTISH.test(c));
-            if (fast && nonWeight) {
-                // It was a scan, not a weight. Keep it out of the field and out
-                // of the row-save handler, and route it where it was going.
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                el.value = '';
-                const payload = buf;
-                buf = ''; startedAt = 0;
-                if (window.processScan) window.processScan(payload, 'barcode');
-                return;
-            }
-            buf = ''; startedAt = 0;
-            return;   // a real weight entry — let the normal handler save it
-        }
-
-        if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
-        // A gap longer than the scanner threshold means a human — start over.
-        if (!buf || (now - lastAt) > 150) { buf = ''; startedAt = now; }
-        buf += e.key;
-        lastAt = now;
-    }, true);   // capture: must beat the row-level Enter-to-save handler
+    window.installFieldScanCapture({
+        match: (el) => el.classList && el.classList.contains('weigh-input'),
+        // Anything a weight box cannot legitimately contain. Broader than the
+        // shared `looksLikeScanPayload` on purpose: weights are strictly
+        // numeric here, so ANY other character proves it was scanned. A purely
+        // numeric barcode is deliberately NOT captured — genuinely ambiguous
+        // with a weight, and weight is the safe reading.
+        isScanPayload: (txt) => [...txt].some(c => !WEIGHTISH.test(c)),
+    });
 })();
 
 // Also refresh the UI any time the buffer updates while the modal is open

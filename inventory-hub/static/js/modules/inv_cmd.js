@@ -1519,6 +1519,49 @@ const processScan = (text, source = 'keyboard') => {
                     showToast(`❌ Slot ${res.slot} invalid for ${res.location}${limit}`, 'error', 5000);
                 } else if (res.action === 'assignment_bad_target') {
                     showToast(`❌ ${res.location} isn't a valid load target`, 'error', 5000);
+                } else if (res.action === 'assignment_requires_confirm') {
+                    // The printer is mid-print. The backend has ALWAYS answered
+                    // this (routes_scan.py), but the scan path had no branch for
+                    // it — so it fell through to the "Unknown assignment result"
+                    // toast below with no dialog and no way to proceed, forever,
+                    // however many times you rescanned. Every OTHER surface
+                    // already prompts; this one just couldn't.
+                    // Reuse the same overlay the buffer-assign path uses, then
+                    // replay the ORIGINAL scan with the confirm flag set.
+                    _confirmActivePrintScan({
+                        tid: res.location,
+                        slot: res.slot,
+                        stateInfo: res.active_print
+                            || { printer_name: res.location, state: 'PRINTING' },
+                        onConfirm: () => {
+                            setProcessing(true);
+                            window.fetchT('/api/identify_scan', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    text: text,
+                                    source: source,
+                                    confirm_active_print: true,
+                                }),
+                            })
+                                .then(r => r.json())
+                                .then(r2 => {
+                                    setProcessing(false);
+                                    if (r2 && r2.msg) {
+                                        showToast(r2.msg,
+                                            r2.type === 'error' ? 'error' : 'success',
+                                            r2.type === 'error' ? 7000 : 3000);
+                                    }
+                                    document.dispatchEvent(
+                                        new CustomEvent('inventory:changed'));
+                                })
+                                .catch(e => {
+                                    setProcessing(false);
+                                    console.error(e);
+                                    showToast('Assign failed after confirm', 'error', 7000);
+                                });
+                        },
+                    });
                 } else {
                     // Unknown action code — shouldn't happen, but surface it.
                     showToast(`Unknown assignment result: ${res.action || 'none'}`, 'warning', 4000);

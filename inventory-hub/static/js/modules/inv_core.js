@@ -61,6 +61,66 @@ const isScanInFlight = () => {
 };
 window.isScanInFlight = isScanInFlight;
 
+// --- SCAN CAPTURE FROM A FOCUSED FIELD ---
+// The global accumulator bails on `e.target.tagName === 'INPUT'`, so any modal
+// that focuses a text field disarms the scanner. Sometimes dropping the
+// auto-focus is right; sometimes the field genuinely wants the cursor AND the
+// modal genuinely wants to accept scans (Weigh-Out says "scan them now while
+// this window is open" while focusing a weight box; Manage Contents re-focuses
+// its ID field after every add while its own CMD:DONE QR sits below).
+//
+// This lets such a field keep focus and still hand scanner input to the scan
+// path. Two conditions, BOTH required, so ordinary typing is never hijacked:
+//   1. scanner SPEED — the payload lands in under 150ms, the same threshold the
+//      global accumulator uses to classify barcode vs keyboard;
+//   2. the text does not look like something a human would type HERE — supplied
+//      per-caller, because "not a weight" and "not a spool id" differ.
+//
+// One implementation, not one per modal: the 2026-08-03 audit found the same
+// scan-path defect re-written in four separate places, so new copies of this
+// logic are exactly what to avoid.
+//
+//   match(el)          -> is this the field we care about?
+//   isScanPayload(txt) -> is this a scan rather than typing?
+//   onScan(txt, el)    -> what to do with it (default: window.processScan)
+const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
+    let buf = '';
+    let startedAt = 0;
+    let lastAt = 0;
+    document.addEventListener('keydown', (e) => {
+        const el = e.target;
+        if (!el || !match(el)) return;
+        const now = Date.now();
+
+        if (e.key === 'Enter') {
+            const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
+            const looksScanned = fast && isScanPayload(buf);
+            const payload = buf;
+            buf = ''; startedAt = 0;
+            if (!looksScanned) return;   // a real entry — let the field's own handler run
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            el.value = '';
+            if (onScan) onScan(payload, el);
+            else if (window.processScan) window.processScan(payload, 'barcode');
+            return;
+        }
+
+        if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
+        // A gap longer than the scanner threshold means a human — start over.
+        if (!buf || (now - lastAt) > 150) { buf = ''; startedAt = now; }
+        buf += e.key;
+        lastAt = now;
+    }, true);   // capture: must beat the field's own Enter handler
+};
+window.installFieldScanCapture = installFieldScanCapture;
+
+// A scan payload always carries a prefix marker (`ID:`, `LOC:`, `CMD:`,
+// `FIL:`, `SPOOL:`) or is a URL (Prusament QRs). Nothing a user types into an
+// id/weight box looks like that, which is what makes the distinction safe.
+window.looksLikeScanPayload = (txt) =>
+    /[:/]/.test(txt) || /^https?/i.test(txt);
+
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
     if ('wakeLock' in navigator) {
