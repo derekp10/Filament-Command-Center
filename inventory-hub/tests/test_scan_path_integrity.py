@@ -41,16 +41,22 @@ def _read(p: Path) -> str:
 # render a "Scan to Cancel" QR while focusing the YES button, so before the fix
 # the CANCEL scan's terminating Enter performed the CONFIRM instead.
 ENTER_OWNERSHIP_SITES = [
-    (JS / "inv_quickswap.js", "Quick-Swap active-print confirm overlay"),
-    (JS / "inv_cmd.js", "active-print scan confirm overlay"),
-    (JS / "inv_loc_mgr.js", "active-print assign confirm overlay"),
+    # (file, label, minimum expected guard count)
+    # The count matters: a bare "is the string present" check is VACUOUS for a
+    # file that uses isScanInFlight for something ELSE. inv_cmd.js has two
+    # independent uses — the Shift+B bulk-move closure AND the confirm-overlay
+    # Enter guard — so deleting the safety-critical one would still leave the
+    # string present and the test green.
+    (JS / "inv_quickswap.js", "Quick-Swap confirm overlay + slot grid", 2),
+    (JS / "inv_cmd.js", "Shift+B closure + active-print scan confirm overlay", 2),
+    (JS / "inv_loc_mgr.js", "active-print assign confirm overlay", 1),
 ]
 
 
-@pytest.mark.parametrize("path,label", ENTER_OWNERSHIP_SITES,
-                         ids=[p.name for p, _ in ENTER_OWNERSHIP_SITES])
-def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str):
-    """Each Enter handler must bail while state.scanBuffer is non-empty.
+@pytest.mark.parametrize("path,label,minimum", ENTER_OWNERSHIP_SITES,
+                         ids=[p.name for p, _, _ in ENTER_OWNERSHIP_SITES])
+def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str, minimum: int):
+    """Each Enter handler must bail while a scan is in flight.
 
     Without it, the Enter that terminates a scan is treated as a press of the
     focused button — and mountOverlay focuses YES — so scanning the overlay's
@@ -58,10 +64,12 @@ def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str):
     toolhead.
     """
     src = _read(path)
-    assert "isScanInFlight" in src, (
-        f"{path.name} ({label}) no longer consults isScanInFlight — the "
-        "scan-in-flight guard on its Enter handler is gone. Scanning the "
-        "'Scan to Cancel' QR would perform the CONFIRM."
+    found = src.count("isScanInFlight")
+    assert found >= minimum, (
+        f"{path.name} ({label}) has {found} isScanInFlight guard(s), expected "
+        f">= {minimum}. One of its scan-in-flight guards was removed — if that "
+        "is the confirm-overlay one, scanning 'Scan to Cancel' performs the "
+        "CONFIRM and yanks a spool off a live toolhead."
     )
 
 
@@ -447,7 +455,16 @@ def test_escape_on_a_confirm_releases_the_scan_gate_e2e(page):
         "state.activeModal survived a non-closeModal dismissal — every "
         "subsequent spool/location scan will be silently swallowed"
     )
-    assert page.evaluate("state.pendingConfirm") is None, (
-        "state.pendingConfirm survived a non-closeModal dismissal — a later "
-        "scan containing 'CONFIRM' could fire the action the user just declined"
+    # NOTE: `pendingConfirm` is deliberately NOT cleared here. An earlier
+    # version of this fix did clear it, which broke the chained re-prompt
+    # (eject -> "true unassign"): the first dialog's `hidden` event fired AFTER
+    # the second had re-armed, wiping the new callback and leaving a dead YES
+    # button. A generation counter guards the stale-callback case instead.
+    #
+    # Also worth recording: asserting on `pendingConfirm` from Playwright is a
+    # TRAP. Its serializer has no branch for functions, so a live callback comes
+    # back as Python None — identical to a real null. Any such assertion passes
+    # unconditionally. Use `typeof` if this ever needs checking again.
+    assert page.evaluate("typeof state.pendingConfirm") in ("function", "object"), (
+        "sanity: pendingConfirm should still be inspectable via typeof"
     )

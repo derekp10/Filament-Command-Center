@@ -25,6 +25,7 @@ lands.
 from __future__ import annotations
 
 import json
+import os
 import time
 
 import pytest
@@ -39,10 +40,38 @@ from requests.exceptions import (
 # status errors (those are real responses and must never be retried away).
 _TRANSPORT_ERRORS = (ReadTimeout, ConnectTimeout, ReqConnectionError)
 
-# Opt-in only — see the module docstring. These endpoints can permanently
-# destroy attributes on unrelated filaments, so they must never run as part of
-# a routine sweep. Requires --run-integration / RUN_INTEGRATION=1.
-pytestmark = pytest.mark.integration
+# DOUBLE opt-in — see the module docstring.
+#
+# `pytest.mark.integration` alone is NOT sufficient and it was a mistake to
+# claim it "stops the bleeding": Derek's pre-release sweep is exactly
+# `RUN_INTEGRATION=1`, and under that flag these tests run and drive
+# remove_choice/sweep_unused across the FULL real filament set — the same
+# force_reset that destroyed 26 filaments' attributes. `sweep_unused
+# {force:true}` with no subset also deletes every currently-untagged choice
+# from the real schema, including one Derek added but hasn't tagged yet.
+#
+# So until the endpoint is fixed, these need a second, deliberate switch that no
+# routine sweep sets. Run them with:
+#     FCC_ALLOW_DESTRUCTIVE_ATTR_TESTS=1 RUN_INTEGRATION=1 pytest tests/test_filament_attributes_bulk_api.py
+#
+# ⚠️ Also still outstanding (filed): two tests here
+# (`test_bulk_set_preserves_sibling_extras`, `test_sweep_preserves_sibling_extras`)
+# still pick a REAL filament rather than the module's scratch record — only 4 of
+# the 11 were converted. Fix those before relaxing this gate.
+_DESTRUCTIVE_OPT_IN = os.environ.get(
+    "FCC_ALLOW_DESTRUCTIVE_ATTR_TESTS", "").lower() in ("1", "true", "yes")
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _DESTRUCTIVE_OPT_IN,
+        reason=(
+            "destructive: exercises the remove_choice/sweep_unused force_reset "
+            "that can PERMANENTLY destroy real filaments' extras (26 lost in dev "
+            "before this was found). Set FCC_ALLOW_DESTRUCTIVE_ATTR_TESTS=1 to run."
+        ),
+    ),
+]
 
 
 def _req(method, url, *, attempts=4, backoff=0.75, **kwargs):

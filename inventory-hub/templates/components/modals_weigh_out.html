@@ -43,9 +43,12 @@
                              first line is `if (e.target.tagName === 'INPUT') return;`,
                              so a focused checkbox DISARMS the barcode scanner — in the
                              one modal whose own footer says "Scan new items to add to
-                             this list". Same defect as the L298 bulk-move ack box. -->
+                             this list". Same defect as the L298 bulk-move ack box.
+                             ON CLICK, NOT ON CHANGE: Space toggles a focused checkbox and
+                             fires `change` but not `click`, so blurring on change stopped
+                             the keyboard user from toggling it back. -->
                         <input class="form-check-input" type="checkbox" id="weigh-auto-archive" checked
-                               onchange="this.blur();">
+                               onclick="this.blur();">
                         <label class="form-check-label text-warning small" for="weigh-auto-archive">Auto-Archive 0g</label>
                     </div>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>

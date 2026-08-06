@@ -87,6 +87,7 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
     let buf = '';
     let startedAt = 0;
     let lastAt = 0;
+    let preScanValue = '';   // what the user had typed BEFORE the burst began
     document.addEventListener('keydown', (e) => {
         const el = e.target;
         if (!el || !match(el)) return;
@@ -96,19 +97,32 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
             const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
             const looksScanned = fast && isScanPayload(buf);
             const payload = buf;
-            buf = ''; startedAt = 0;
+            const restore = preScanValue;
+            buf = ''; startedAt = 0; preScanValue = '';
             if (!looksScanned) return;   // a real entry — let the field's own handler run
             e.preventDefault();
             e.stopImmediatePropagation();
-            el.value = '';
+            // RESTORE what the user had typed, don't blank the field. The
+            // scanner's characters were appended to their in-progress value
+            // (this handler doesn't preventDefault on character keys), so
+            // clearing outright silently destroyed an un-submitted weight —
+            // and the Group 31.3 preserve-text snapshot in renderWeighOutList
+            // then captured an already-empty field, so the buffer-updated
+            // redraw could not bring it back either.
+            el.value = restore;
             if (onScan) onScan(payload, el);
             else if (window.processScan) window.processScan(payload, 'barcode');
             return;
         }
 
         if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
-        // A gap longer than the scanner threshold means a human — start over.
-        if (!buf || (now - lastAt) > 150) { buf = ''; startedAt = now; }
+        // A gap longer than the scanner threshold means a human — start over,
+        // and re-snapshot what is in the field at the moment a burst begins.
+        if (!buf || (now - lastAt) > 150) {
+            buf = '';
+            startedAt = now;
+            preScanValue = el.value || '';
+        }
         buf += e.key;
         lastAt = now;
     }, true);   // capture: must beat the field's own Enter handler
@@ -1205,10 +1219,14 @@ const updateLogState = (force = false) => {
 };
 
 // --- MODAL HELPERS ---
+// Bumped every time a gating dialog ARMS. The hidden.bs.modal scan-gate
+// release compares against it so a dialog re-shown from inside a previous
+// dialog's callback can't be torn down by the previous one's `hidden` event.
+let _confirmGeneration = 0;
 const closeModal = (id) => { if (modals[id]) modals[id].hide(); state.activeModal = null; };
-const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; modals.confirmModal.show(); state.activeModal = 'confirm'; };
+const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; _confirmGeneration++; modals.confirmModal.show(); state.activeModal = 'confirm'; };
 const confirmAction = (y) => { closeModal('confirmModal'); if (y && state.pendingConfirm) state.pendingConfirm(); state.pendingConfirm = null; };
-const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText = msg; state.pendingSafety = cb; modals.safetyModal.show(); state.activeModal = 'safety'; };
+const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText = msg; state.pendingSafety = cb; _confirmGeneration++; modals.safetyModal.show(); state.activeModal = 'safety'; };
 const confirmSafety = (y) => { closeModal('safetyModal'); if (y && state.pendingSafety) state.pendingSafety(); state.pendingSafety = null; };
 const promptAction = (t, m, btns) => {
     document.getElementById('action-title').innerText = t;
@@ -1536,23 +1554,31 @@ document.addEventListener('DOMContentLoaded', () => {
         const SCAN_GATING_MODALS = ['confirmModal', 'safetyModal', 'actionModal'];
         const hiddenId = ev && ev.target && ev.target.id;
         if (SCAN_GATING_MODALS.includes(hiddenId)) {
-            // Only release once no gating dialog remains up, so closing an inner
-            // one doesn't unlock the scanner while an outer one is still asking.
-            const stillOpen = SCAN_GATING_MODALS.some(id => {
-                const el = document.getElementById(id);
-                return el && el.classList.contains('show');
-            });
-            if (!stillOpen) {
+            // ⚠️ Generation counter, NOT just a `.show` check. A confirm whose
+            // callback raises a SECOND confirm (eject -> "true unassign", or the
+            // active-print re-prompt) re-shows the same element, and Bootstrap
+            // re-adds `.show` ~155ms after show() while this `hidden` event
+            // fires ~310ms after hide(). A plain `.show` test therefore sees
+            // "nothing open" and tore down the dialog that had just re-armed —
+            // its YES button became silently dead. Compare the generation we
+            // captured when this modal was shown against the current one:
+            // if something re-armed since, that newer dialog owns the state.
+            const gen = _confirmGeneration;
+            setTimeout(() => {
+                if (_confirmGeneration !== gen) return;   // re-armed — leave it alone
+                const stillOpen = SCAN_GATING_MODALS.some(id => {
+                    const el = document.getElementById(id);
+                    return el && el.classList.contains('show');
+                });
+                if (stillOpen) return;
+                // Release the scan gate. Only activeModal — deliberately NOT
+                // pendingConfirm/pendingSafety: clearing those is what killed
+                // the chained re-prompt, and confirmAction/confirmSafety
+                // already null them on the button path. The stale-callback
+                // hazard is handled by the generation bump in
+                // requestConfirmation/promptSafety instead.
                 state.activeModal = null;
-                // A dangling callback is its own hazard: confirmAction/
-                // confirmSafety only run (and null) it on the button path, so an
-                // Escape left it armed and a LATER scan containing the substring
-                // 'CONFIRM' could fire the action the user just declined.
-                // (The button path already nulled these before this event fires,
-                // so this is a no-op there.)
-                state.pendingConfirm = null;
-                state.pendingSafety = null;
-            }
+            }, 400);
         }
     });
 });

@@ -50,6 +50,23 @@ def _boot(page):
 @pytest.mark.usefixtures("require_server")
 def test_pause_freezes_the_list_but_not_the_pill_or_flags(page):
     _boot(page)
+    # Force the pill HIDDEN before pausing. Without this the assertion at the
+    # end is vacuous: `_boot` sets lastSeenTime to '00:00:00', so every real dev
+    # log entry already counts as unseen and the heartbeat has shown the pill
+    # long before the pause — and pausing never hides it, so "pill is visible"
+    # would pass whether or not the paused tick ran _updateLogPill at all.
+    # '23:00:00' is later than any real dev log entry (so the pill hides now)
+    # but EARLIER than the probe's 23:59:58 (so the probe still counts as
+    # unseen and must make the pill reappear).
+    page.evaluate("""
+        localStorage.setItem('fcc.logPill.lastSeenTime', '23:00:00');
+        window._renderLogsPayload({logs: [], status: {spoolman: true}}, true);
+    """)
+    page.wait_for_function(
+        "getComputedStyle(document.getElementById('fcc-log-pill')).display === 'none'",
+        timeout=5000,
+    )
+
     page.evaluate("window.toggleLogsStickyPause()")
     assert page.evaluate("state.logsPaused") is True
 

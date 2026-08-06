@@ -1547,13 +1547,38 @@ const processScan = (text, source = 'keyboard') => {
                                 .then(r => r.json())
                                 .then(r2 => {
                                     setProcessing(false);
-                                    if (r2 && r2.msg) {
+                                    // Mirror the normal assignment success path
+                                    // above. The slot-QR success payload has NO
+                                    // `msg` key, so toasting only on r2.msg gave
+                                    // a CONFIRMED load no toast at all, left the
+                                    // spool showing in the buffer strip, and
+                                    // fired 'inventory:changed' — an event name
+                                    // nothing listens to, so nothing refreshed.
+                                    // Blind-scanning, that reads as "it failed".
+                                    if (r2 && (r2.action === 'assignment_done'
+                                        || r2.action === 'assignment_partial')) {
+                                        const movedId = r2.moved;
+                                        if (movedId != null) {
+                                            state.heldSpools = state.heldSpools.filter(s => s.id !== movedId);
+                                            _markAssignedOut(movedId);
+                                            renderBuffer();
+                                        }
+                                        const extraMsg = r2.action === 'assignment_partial'
+                                            ? ` (${r2.remaining_buffer} still in buffer)` : '';
+                                        showToast(
+                                            `✅ Loaded #${movedId} into ${r2.location}:${r2.slot}${extraMsg}`,
+                                            r2.action === 'assignment_partial' ? 'info' : 'success',
+                                            r2.action === 'assignment_partial' ? 5000 : 4000);
+                                    } else if (r2 && r2.msg) {
                                         showToast(r2.msg,
                                             r2.type === 'error' ? 'error' : 'success',
                                             r2.type === 'error' ? 7000 : 3000);
+                                    } else {
+                                        showToast('Assign confirmed but the result was unclear — check the Activity Log',
+                                            'warning', 7000);
                                     }
                                     document.dispatchEvent(
-                                        new CustomEvent('inventory:changed'));
+                                        new CustomEvent('inventory:locations-changed'));
                                 })
                                 .catch(e => {
                                     setProcessing(false);
