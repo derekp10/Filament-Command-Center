@@ -78,6 +78,25 @@ of dead-ending on "Unknown assignment result" forever.
 
 ---
 
+## Adversarial review of this session's own diff — DONE
+
+7 agents, 1.13M tokens, **26 raw → 22 confirmed → 4 refuted**. It was worth
+running: it caught regressions *I had introduced*, including one that broke
+scanning outright (a `stopImmediatePropagation` that swallowed the first
+character of every command QR scanned with the wizard open), a chained-confirm
+regression that left a silently dead YES button, and a timeout that opened a
+**double-deduct** window on the cancel-review retry.
+
+It also found that three tests I had described as solid were **vacuous** — one
+could never fail because Playwright serializes a function as `None`, one because
+the pill was already visible before the pause, one because it matched a
+substring that appears twice in the file. All fixed, and re-verified against the
+true pre-fix code (`git show dev:<path>`) rather than a stash — my earlier stash
+check only reverted uncommitted edits and proved nothing.
+
+Remaining findings are all LOW, none data-losing, and filed at the top of
+`Feature-Buglist.md`.
+
 ## Open items, in the order I'd take them
 
 1. **🔴 The force_reset redesign** (data loss above). Derek chose "log the
