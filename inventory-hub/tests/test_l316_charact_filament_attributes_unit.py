@@ -500,8 +500,8 @@ def test_remove_choice_delete_404_tolerated(client, monkeypatch):
     records that actually CARRY `filament_attributes`: the field DELETE drops
     rows for that key alone, so filament 2 (siblings only) loses nothing and
     needs no write. On live dev that cut the migration from 176 records to
-    ~112 — 64 fewer independent chances to fail, and 64 fewer lost-update
-    windows over extras edited since the list was read."""
+    158 (measured 2026-08-06) — 18 fewer independent chances to fail, and 18
+    fewer lost-update windows over extras edited since the list was read."""
     fields, filaments = _remove_fixture()
     calls = _install_wire(monkeypatch, fields=fields, filaments=filaments,
                           delete_resp=_Resp(ok=False, status_code=404,

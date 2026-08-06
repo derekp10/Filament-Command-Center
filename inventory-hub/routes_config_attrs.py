@@ -430,9 +430,12 @@ def _build_restore_payloads(raw_fils, drop):
 
     * **Only records that actually carry `filament_attributes`.** The DELETE
       drops rows for that key alone, so a filament without it loses nothing and
-      needs no write. That cuts the live dev migration from 176 records to ~112
-      — 64 fewer independent chances to fail, and 64 fewer lost-update windows
-      over extras the user may have edited since the list was read.
+      needs no write. Measured on live dev (2026-08-06): 176 records written
+      before, 158 after — 18 fewer independent chances to fail, and 18 fewer
+      lost-update windows over extras edited since the list was read.
+      (158 is the count carrying the KEY; only 112 carry a non-empty tag list,
+      but the DELETE drops the row either way, so key-presence is the correct
+      test.)
     * **The payload is POST-filter**, i.e. exactly what the PATCH sends. It is
       what gets snapshotted to disk and what gets logged on failure, so a
       hand-recovery can be replayed verbatim.
