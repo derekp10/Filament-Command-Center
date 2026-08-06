@@ -362,11 +362,22 @@ def update_spool(sid, data):
         # is effectively forever. This is the single highest-traffic write in the
         # app (every move, deduct, weigh-out, and each spool of a bulk move), so a
         # hang here starves request threads — the L28 frontend-lockup class.
-        # 5s (matching the create POSTs) rather than the 2s used by
-        # update_filament/update_vendor: this path is far hotter and a FALSE
-        # timeout on a slow-but-successful write is costlier here, since
-        # update_spool_or_raise turns it into a user-visible failure.
-        r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data, timeout=5)
+        # 15s, deliberately LONGER than the 2-5s used elsewhere in this module.
+        # `timeout` is a READ timeout, so a Spoolman that ACCEPTS and APPLIES the
+        # PATCH but answers slowly raises ReadTimeout — which this function
+        # cannot distinguish from a rejection, since both return None.
+        #
+        # That matters because at least one caller treats a reported failure as
+        # RETRYABLE and is NOT idempotent: the cancel-deduct confirm re-queues
+        # the spool as a fresh pending review, and the retry re-reads the CURRENT
+        # used_weight (already including the write that silently landed) and adds
+        # the review's grams on top — deducting twice for one cancelled print.
+        # 15s matches the floor tests/test_filament_attributes_bulk_api.py
+        # already adopted for the same reason ("the dev container + Spoolman can
+        # blow a tight read timeout even though the request itself is fine").
+        # Still bounded, so a wedged Spoolman cannot pin the worker forever —
+        # which was the original defect this fix exists for.
+        r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data, timeout=15)
         if r.ok:
             LAST_SPOOLMAN_ERROR = None
             return r.json()
