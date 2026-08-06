@@ -52,6 +52,9 @@ EXPECTED_ROUTES = [
     ("/api/filament_attributes/remove_choice", "POST", "api_filament_attributes_remove_choice"),
     ("/api/filament_attributes/report", "GET", "api_filament_attributes_report"),
     ("/api/filament_attributes/sweep_unused", "POST", "api_filament_attributes_sweep_unused"),
+    # Group 36 — the counterpart to remove_choice's new default (hide) mode.
+    # Hiding a choice has to be reversible or it is deletion with extra steps.
+    ("/api/filament_attributes/unhide_choice", "POST", "api_filament_attributes_unhide_choice"),
     ("/api/filament_details", "GET", "api_filament_details"),
     ("/api/filaments", "GET", "api_filaments"),
     ("/api/filaments/<int:filament_id>", "GET", "api_get_filament"),

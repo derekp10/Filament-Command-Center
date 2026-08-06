@@ -484,7 +484,7 @@ def test_remove_choice_schema_delete_failure_aborts(client, monkeypatch):
                           delete_resp=_Resp(ok=False, status_code=500,
                                             text="boom"))
     body = client.post("/api/filament_attributes/remove_choice",
-                       json={"choice": "A", "force": True}).get_json()
+                       json={"choice": "A", "force": True, "purge": True}).get_json()
     assert body == {"success": False,
                     "msg": "Schema DELETE failed (500): boom"}
     methods = _methods(calls)
@@ -494,16 +494,23 @@ def test_remove_choice_schema_delete_failure_aborts(client, monkeypatch):
 
 def test_remove_choice_delete_404_tolerated(client, monkeypatch):
     """A 404 on the schema DELETE (field already gone) is tolerated — the
-    migration proceeds to recreate + restore and succeeds."""
+    migration proceeds to recreate + restore and succeeds.
+
+    Group 36 — `restored` is now 1, not 2. The restore set was narrowed to the
+    records that actually CARRY `filament_attributes`: the field DELETE drops
+    rows for that key alone, so filament 2 (siblings only) loses nothing and
+    needs no write. On live dev that cut the migration from 176 records to
+    ~112 — 64 fewer independent chances to fail, and 64 fewer lost-update
+    windows over extras edited since the list was read."""
     fields, filaments = _remove_fixture()
     calls = _install_wire(monkeypatch, fields=fields, filaments=filaments,
                           delete_resp=_Resp(ok=False, status_code=404,
                                             text="not found"))
     body = client.post("/api/filament_attributes/remove_choice",
-                       json={"choice": "A", "force": True}).get_json()
+                       json={"choice": "A", "force": True, "purge": True}).get_json()
     assert body["success"] is True
-    assert body["restored"] == 2
-    assert _methods(calls) == ["GET", "GET", "DELETE", "POST", "PATCH", "PATCH"]
+    assert body["restored"] == 1
+    assert _methods(calls) == ["GET", "GET", "DELETE", "POST", "PATCH"]
 
 
 def test_remove_choice_recreate_failure_reports_missing_schema(client, monkeypatch):
@@ -518,12 +525,15 @@ def test_remove_choice_recreate_failure_reports_missing_schema(client, monkeypat
     logs = _capture_logs(monkeypatch)
 
     body = client.post("/api/filament_attributes/remove_choice",
-                       json={"choice": "A", "force": True}).get_json()
-    assert body == {
-        "success": False,
-        "msg": ("Schema POST failed: kaput. Schema is now MISSING — "
-                "re-run setup_fields.py."),
-    }
+                       json={"choice": "A", "force": True, "purge": True}).get_json()
+    assert body["success"] is False
+    assert "Schema POST failed: kaput" in body["msg"]
+    assert "re-run setup_fields.py" in body["msg"]
+    # Group 36 — the response now also points at the on-disk recovery snapshot.
+    # This is the worst branch there is (schema gone, restores never attempted),
+    # so the user must be told where the data to rebuild it actually lives.
+    assert body["recovery_snapshot"], "the caller needs the recovery file path"
+    assert body["recovery_snapshot"] in body["msg"]
     assert "PATCH" not in _methods(calls)
     assert len(logs) == 1
     msg, a, _k = logs[0]
@@ -534,16 +544,21 @@ def test_remove_choice_recreate_failure_reports_missing_schema(client, monkeypat
 
 def test_remove_choice_restore_failure_collected_and_continues(client, monkeypatch):
     """A failing per-filament restore PATCH is collected into
-    restore_failures (with the HTTP status + body) but the loop CONTINUES —
-    the remaining filaments are still restored, the overall response stays
-    success:true.
+    restore_failures (with the HTTP status + body) but the loop CONTINUES.
 
     2026-08-05 — pin UPDATED with the fix it characterises. A failed restore is
-    DATA LOSS (the field was already wiped and nothing retries), so the summary
-    now escalates to ERROR/ff4444 and NAMES the casualties instead of reporting
-    a bare count. The count-only wording is what made 26 real filaments drain
-    silently in dev over months: the id appeared nowhere, so nobody could tell
-    what had been lost."""
+    DATA LOSS (the field was already wiped), so the summary escalates to
+    ERROR/ff4444 and NAMES the casualties instead of reporting a bare count.
+    The count-only wording is what made 26 real filaments drain silently in dev
+    over months: the id appeared nowhere, so nobody could tell what was lost.
+
+    Group 36 — two further contract changes:
+      * `success` is now FALSE. Returning True over a confirmed loss is why the
+        frontend showed a GREEN toast every single time this happened.
+      * only filament 1 is restored at all (filament 2 has no
+        `filament_attributes`, so the DELETE took nothing from it).
+    A 422 is a real answer from a healthy server, so it is NOT retried — only
+    transport errors are."""
     fields, filaments = _remove_fixture()
     calls = _install_wire(
         monkeypatch, fields=fields, filaments=filaments,
@@ -551,18 +566,20 @@ def test_remove_choice_restore_failure_collected_and_continues(client, monkeypat
     logs = _capture_logs(monkeypatch)
 
     body = client.post("/api/filament_attributes/remove_choice",
-                       json={"choice": "A", "force": True}).get_json()
-    assert body["success"] is True
+                       json={"choice": "A", "force": True, "purge": True}).get_json()
+    assert body["success"] is False, "a lost record must never report success"
     assert body["stripped"] == 1
-    assert body["restored"] == 1
+    assert body["restored"] == 0
     assert body["restore_failures"] == [{"id": 1, "msg": "HTTP 422: bad value"}]
-    # Both restores were ATTEMPTED (failure did not abort the loop).
+    assert body["lost_ids"] == [1]
+    assert body["recovery_snapshot"], "the on-disk recovery file must be surfaced"
+    # Exactly one PATCH attempt: an HTTP status is not retried.
     patch_urls = [u for (m, u, _j) in calls if m == "PATCH"]
-    assert [u.rsplit("/", 1)[-1] for u in patch_urls] == ["1", "2"]
+    assert [u.rsplit("/", 1)[-1] for u in patch_urls] == ["1"]
     assert len(logs) == 1
     msg, a, _k = logs[0]
     # The casualty must be NAMED in the Activity-Log line, not just counted.
-    assert "LOST extras on filament(s) [1]" in msg
+    assert "LOST filament_attributes on filament(s) [1]" in msg
     assert "hub.log" in msg, "the user needs pointing at the recovery payload"
     assert a == ("ERROR", "ff4444")
 
@@ -590,15 +607,17 @@ def test_remove_choice_restore_non_requestexception_collected(client, monkeypatc
     logs = _capture_logs(monkeypatch)
 
     body = client.post("/api/filament_attributes/remove_choice",
-                       json={"choice": "A", "force": True}).get_json()
-    assert body["success"] is True
+                       json={"choice": "A", "force": True, "purge": True}).get_json()
+    # Group 36 — success is now False over a confirmed loss, and only the
+    # attribute-bearing record (1) is in the restore set at all.
+    assert body["success"] is False
     assert body["stripped"] == 1
-    assert body["restored"] == 1
+    assert body["restored"] == 0
     assert body["restore_failures"] == [{"id": 1, "msg": "non-request boom"}]
-    # Both restores were ATTEMPTED — the raise did not abort the loop.
-    assert [u.rsplit("/", 1)[-1] for u in patch_calls] == ["1", "2"]
+    # A ValueError is not a transport error, so it is raised once, not retried.
+    assert [u.rsplit("/", 1)[-1] for u in patch_calls] == ["1"]
     assert logs[-1][1] == ("ERROR", "ff4444")   # data loss, not a warning
-    assert "LOST extras on filament(s) [1]" in logs[-1][0]
+    assert "LOST filament_attributes on filament(s) [1]" in logs[-1][0]
 
 
 def test_remove_choice_happy_path_order_and_payloads(client, monkeypatch):
@@ -613,21 +632,28 @@ def test_remove_choice_happy_path_order_and_payloads(client, monkeypatch):
         field def and the sorted survivor choice list.
       - every restore body is the filament's FULL extras dict (siblings
         preserved) with the removed choice filtered out of
-        filament_attributes; filaments with no extras are never PATCHed —
-        but sibling-only filaments ARE (full restore cycle), so `restored`
-        counts snapshot entries, not just carriers.
+        filament_attributes.
+      - Group 36: ONLY records carrying `filament_attributes` are restored.
+        The field DELETE drops rows for that key alone, so a sibling-only
+        filament loses nothing and must not be rewritten — each pointless
+        PATCH was an independent chance to fail and a lost-update window.
       - INFO/00ccff summary log on the clean path."""
     fields, filaments = _remove_fixture()
     calls = _install_wire(monkeypatch, fields=fields, filaments=filaments)
     logs = _capture_logs(monkeypatch)
 
     r = client.post("/api/filament_attributes/remove_choice",
-                    json={"choice": "A", "force": True})
+                    json={"choice": "A", "force": True, "purge": True})
     assert r.status_code == 200
-    assert r.get_json() == {"success": True, "stripped": 1, "restored": 2,
-                            "restore_failures": []}
+    body = r.get_json()
+    assert body["success"] is True
+    assert body["mode"] == "purged"
+    assert body["stripped"] == 1
+    assert body["restored"] == 1
+    assert body["restore_failures"] == []
+    assert body["recovery_snapshot"] is None, "a clean run leaves no debris"
 
-    assert _methods(calls) == ["GET", "GET", "DELETE", "POST", "PATCH", "PATCH"]
+    assert _methods(calls) == ["GET", "GET", "DELETE", "POST", "PATCH"]
     assert calls[0][1].endswith("/api/v1/field/filament")
     assert calls[1][1].endswith("/api/v1/filament")
     assert calls[2][1].endswith("/api/v1/field/filament/filament_attributes")
@@ -640,11 +666,11 @@ def test_remove_choice_happy_path_order_and_payloads(client, monkeypatch):
     patches = {u.rsplit("/", 1)[-1]: j for (m, u, j) in calls if m == "PATCH"}
     assert patches["1"] == {"extra": {"filament_attributes": "[]",
                                       "product_url": '"http://x"'}}
-    assert patches["2"] == {"extra": {"product_url": '"y"'}}
-    assert "3" not in patches  # no extras -> never snapshotted
+    assert "2" not in patches  # siblings only -> the DELETE took nothing
+    assert "3" not in patches  # no extras at all
     assert len(logs) == 1
     msg, a, _k = logs[0]
-    assert "removed choice 'A'" in msg
+    assert "purged choice 'A'" in msg
     assert a == ("INFO", "00ccff")
 
 
@@ -694,14 +720,19 @@ def test_sweep_missing_field(client, monkeypatch):
 
 
 def test_sweep_preview_lists_unused(client, monkeypatch):
-    """No force -> preview shape {success, unused (sorted), total_choices}
-    and NOTHING destructive fires."""
+    """No force -> preview shape {success, unused (sorted), total_choices,
+    affected_records} and NOTHING destructive fires.
+
+    Group 36 — `affected_records` is new so the confirm dialog can state the
+    real cost up front. Committing rewrites every attribute-bearing filament;
+    the old dialog said nothing about that, so the most destructive action in
+    the app looked like a tidy-up."""
     fields, filaments = _sweep_fixture()
     calls = _install_wire(monkeypatch, fields=fields, filaments=filaments)
     body = client.post("/api/filament_attributes/sweep_unused",
                        json={}).get_json()
     assert body == {"success": True, "unused": ["B", "C"],
-                    "total_choices": 3}
+                    "total_choices": 3, "affected_records": 1}
     assert "DELETE" not in _methods(calls)
 
 
@@ -743,11 +774,12 @@ def test_sweep_recreate_failure_reports_missing_schema(client, monkeypatch):
 
     body = client.post("/api/filament_attributes/sweep_unused",
                        json={"force": True}).get_json()
-    assert body == {
-        "success": False,
-        "msg": ("Schema POST failed: kaput. Schema is now MISSING — "
-                "re-run setup_fields.py."),
-    }
+    assert body["success"] is False
+    assert "Schema POST failed: kaput" in body["msg"]
+    assert "re-run setup_fields.py" in body["msg"]
+    # Group 36 — point the user at the on-disk recovery snapshot.
+    assert body["recovery_snapshot"]
+    assert body["recovery_snapshot"] in body["msg"]
     assert "PATCH" not in _methods(calls)
     assert len(logs) == 1
     msg, a, _k = logs[0]
@@ -767,9 +799,12 @@ def test_sweep_commit_happy_path_selected_subset(client, monkeypatch):
 
     body = client.post("/api/filament_attributes/sweep_unused",
                        json={"force": True, "choices": ["B"]}).get_json()
-    assert body == {"success": True, "removed": ["B"], "restored": 2,
-                    "restore_failures": []}
-    assert _methods(calls) == ["GET", "GET", "DELETE", "POST", "PATCH", "PATCH"]
+    assert body["success"] is True
+    assert body["removed"] == ["B"]
+    assert body["restored"] == 1
+    assert body["restore_failures"] == []
+    assert body["recovery_snapshot"] is None
+    assert _methods(calls) == ["GET", "GET", "DELETE", "POST", "PATCH"]
     # Recreate keeps A (in use) and C (unused but not selected).
     assert calls[3][2] == {"name": "Filament Attributes",
                            "field_type": "choice",
@@ -779,7 +814,9 @@ def test_sweep_commit_happy_path_selected_subset(client, monkeypatch):
     # In-use attribute 'A' survives the wire round-trip; sibling preserved.
     assert patches["1"] == {"extra": {"filament_attributes": '["A"]',
                                       "product_url": '"px"'}}
-    assert patches["2"] == {"extra": {"nozzle_temp_max": '"240"'}}
+    # Group 36 — filament 2 carries only a sibling, so the field DELETE took
+    # nothing from it and it is no longer rewritten.
+    assert "2" not in patches
     assert len(logs) == 1
     assert logs[0][1] == ("INFO", "00ccff")
 
@@ -787,9 +824,12 @@ def test_sweep_commit_happy_path_selected_subset(client, monkeypatch):
 def test_sweep_restore_non_requestexception_collected(client, monkeypatch):
     """29.A4 FIX — the sweep_unused restore loop got the same broadened
     `except Exception`: a non-RequestException mid-restore lands in
-    restore_failures, the loop continues to the remaining filaments, and the
-    response stays success:true (rather than a bare 500 over a half-migrated
-    schema)."""
+    restore_failures rather than escaping as a bare 500 over a half-migrated
+    schema.
+
+    Group 36 — the response is now success:FALSE. A record left unrestored is
+    data loss; reporting it as a success is precisely why the frontend showed a
+    green toast over every one of these."""
     fields, filaments = _sweep_fixture()
     _install_wire(monkeypatch, fields=fields, filaments=filaments)
 
@@ -804,7 +844,9 @@ def test_sweep_restore_non_requestexception_collected(client, monkeypatch):
 
     body = client.post("/api/filament_attributes/sweep_unused",
                        json={"force": True, "choices": ["B"]}).get_json()
-    assert body["success"] is True
+    assert body["success"] is False
     assert body["removed"] == ["B"]
-    assert body["restored"] == 1
+    assert body["restored"] == 0
     assert body["restore_failures"] == [{"id": 1, "msg": "sweep boom"}]
+    assert body["lost_ids"] == [1]
+    assert body["recovery_snapshot"], "the loss must leave recovery data on disk"

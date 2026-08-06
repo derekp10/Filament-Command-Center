@@ -53,11 +53,39 @@ BACKEND_GLOB = "*.py"
 REQUEST_VERBS = {"get", "post", "patch", "put", "delete", "head", "options", "request"}
 
 
+def _requests_aliases(tree: ast.AST) -> set[str]:
+    """Every local name bound to the `requests` module in this file.
+
+    Group 36/38.9 — the original canary hard-coded the receiver name
+    `requests`, but `routes_config_attrs.py` does a function-local
+    `import requests as _req` and issues ALL fourteen of its HTTP calls as
+    `_req.<verb>(...)` — including the destructive PATCH loop that rewrites
+    every attribute-bearing filament after deleting the schema field. The single
+    most dangerous write loop in the app was therefore invisible to the one test
+    whose whole job is catching a missing timeout there.
+
+    `import requests` binds `requests`; `import requests as _req` binds `_req`.
+    Both forms are collected, at any nesting depth, so a function-local alias
+    counts exactly like a module-level one.
+    """
+    aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == "requests":
+                    aliases.add(a.asname or "requests")
+    return aliases
+
+
 def _timeoutless_calls(path: Path) -> list[tuple[int, str]]:
-    """Return [(lineno, 'requests.<verb>')] for calls missing a timeout kwarg."""
+    """Return [(lineno, '<alias>.<verb>')] for calls missing a timeout kwarg."""
     try:
         tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
     except SyntaxError:  # pragma: no cover - a broken module fails elsewhere, loudly
+        return []
+
+    aliases = _requests_aliases(tree)
+    if not aliases:
         return []
 
     found = []
@@ -67,15 +95,15 @@ def _timeoutless_calls(path: Path) -> list[tuple[int, str]]:
         func = node.func
         if not isinstance(func, ast.Attribute) or func.attr not in REQUEST_VERBS:
             continue
-        # Only `requests.<verb>(...)` — not `self.session.get(...)` or a
-        # local helper that already wraps a timeout.
-        if not (isinstance(func.value, ast.Name) and func.value.id == "requests"):
+        # Only a name bound to the `requests` module — not `self.session.get(...)`
+        # or a local helper that already wraps a timeout.
+        if not (isinstance(func.value, ast.Name) and func.value.id in aliases):
             continue
         # `**kwargs` splat could supply the timeout; don't flag those.
         if any(kw.arg is None for kw in node.keywords):
             continue
         if not any(kw.arg == "timeout" for kw in node.keywords):
-            found.append((node.lineno, f"requests.{func.attr}"))
+            found.append((node.lineno, f"{func.value.id}.{func.attr}"))
     return found
 
 
@@ -122,6 +150,54 @@ def test_canary_detects_a_timeoutless_call(tmp_path):
     calls = {call for _, call in hits}
     assert calls == {"requests.patch", "requests.delete"}, (
         f"expected the bare single-line and multi-line calls only, got {hits}"
+    )
+
+
+def test_canary_sees_through_an_import_alias(tmp_path):
+    """`import requests as _req` must not blind the canary.
+
+    This is the real-world shape: `routes_config_attrs.py` aliases the module
+    function-locally and makes every call — including the destructive PATCH
+    loop — as `_req.<verb>(...)`. Before Group 36 the canary matched only the
+    literal receiver `requests`, so that whole module scanned clean while being
+    entirely uncovered.
+    """
+    sample = tmp_path / "aliased_module.py"
+    sample.write_text(
+        "def handler():\n"
+        "    import requests as _req\n"
+        "    _req.patch('http://x', json={})\n"
+        "    _req.get('http://x', timeout=5)\n"
+        "    return _req.delete('http://x')\n",
+        encoding="utf-8",
+    )
+
+    calls = {call for _, call in _timeoutless_calls(sample)}
+    assert calls == {"_req.patch", "_req.delete"}, (
+        f"the aliased timeout-less calls were not detected, got {calls}"
+    )
+
+
+def test_canary_ignores_a_lookalike_receiver(tmp_path):
+    """Widening to aliases must not start flagging unrelated objects.
+
+    A `session.get(...)` or a home-grown `_req` that is NOT the requests module
+    manages its own timeouts; flagging it would be a false positive that
+    trains people to ignore this canary.
+    """
+    sample = tmp_path / "lookalike_module.py"
+    sample.write_text(
+        "import some_other_lib as _req\n"
+        "class C:\n"
+        "    def go(self):\n"
+        "        return self.session.get('http://x')\n"
+        "def other():\n"
+        "    return _req.patch('http://x')\n",
+        encoding="utf-8",
+    )
+
+    assert _timeoutless_calls(sample) == [], (
+        "a receiver that is not bound to the requests module must not be flagged"
     )
 
 

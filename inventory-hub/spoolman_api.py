@@ -2,6 +2,7 @@ import requests # type: ignore
 import state # type: ignore
 import config_loader # type: ignore
 import locations_db # type: ignore  # L271 Phase 2: single hierarchy resolver
+import attr_migration # type: ignore  # Group 36: shared force_reset safety layer
 import json
 
 def parse_inbound_data(data):
@@ -1043,6 +1044,42 @@ def ensure_filament_attributes_cleaned():
             return
 
         new_choices = sorted(existing - effective_delete)
+        # Group 36 — last-choice guard. Spoolman's ExtraFieldParameters requires
+        # `choices` to be a non-empty array (or null); [] matches neither, so the
+        # recreate POST would be rejected AFTER the DELETE had already landed —
+        # field missing, restore loop never reached, every filament permanently
+        # loses its attributes. Refuse before touching the schema.
+        if not new_choices:
+            state.logger.error(
+                "filament_attributes cleanup: refusing to run — removing "
+                f"{sorted(effective_delete)} would leave the choice list EMPTY, "
+                "which Spoolman cannot store. The field would be left missing."
+            )
+            return
+
+        # Group 36 — restore only the records that actually carry the key. The
+        # DELETE drops rows for `filament_attributes` alone, so a filament
+        # without it loses nothing and needs no write; skipping those removes
+        # dozens of pointless chances to fail. The payload is POST-filter, i.e.
+        # exactly what the PATCH will send, so it doubles as recovery data.
+        payloads = {}
+        for fid, extras_in in extras_snapshot.items():
+            if 'filament_attributes' not in extras_in:
+                continue
+            extras_out = dict(extras_in)
+            attrs = _parse_filament_attrs_value(extras_out['filament_attributes'])
+            extras_out['filament_attributes'] = json.dumps(
+                [a for a in attrs if a not in effective_delete]
+            )
+            payloads[fid] = extras_out
+
+        # The safety net hits DISK before anything destructive happens. This
+        # runs at BOOT, so a crash or a container restart mid-restore used to be
+        # unbounded, untraced loss with no id ever written anywhere.
+        snap_path = attr_migration.write_recovery_snapshot(
+            f"ensure_filament_attributes_cleaned({sorted(effective_delete)})",
+            payloads,
+        )
 
         # Per-choice usage diagnostic. The "removed ['Wood'] (180 restored)"
         # line re-firing on EVERY prod boot (Derek 2026-06-02 — "I thought we
@@ -1086,9 +1123,12 @@ def ensure_filament_attributes_cleaned():
         c_resp = requests.post(
             f"{sm_url}/api/v1/field/filament/filament_attributes",
             json={
-                "name": "Filament Attributes",
-                "field_type": "choice",
-                "multi_choice": True,
+                "name": field.get("name") or "Filament Attributes",
+                "field_type": field.get("field_type") or "choice",
+                # `is not False` rather than a dict-default: an explicit null
+                # from Spoolman would be forwarded verbatim and could bring the
+                # field back SINGLE-choice, invalidating every multi-tag record.
+                "multi_choice": field.get("multi_choice") is not False,
                 "choices": new_choices,
             },
             timeout=15,
@@ -1098,7 +1138,7 @@ def ensure_filament_attributes_cleaned():
                 f"filament_attributes cleanup POST failed "
                 f"({c_resp.status_code}): {c_resp.text[:300]} — "
                 "field is now MISSING from Spoolman. Re-run setup_fields.py "
-                "to restore."
+                f"to restore. Restore data: {snap_path}"
             )
             return
 
@@ -1106,25 +1146,21 @@ def ensure_filament_attributes_cleaned():
         # filtered out of filament_attributes). Sending the whole dict
         # back preserves siblings — partial PATCH on `extra` makes
         # Spoolman replace the whole sub-document.
-        restored, failed = 0, 0
-        for fid, extras_in in extras_snapshot.items():
-            extras_out = dict(extras_in)
-            if 'filament_attributes' in extras_out:
-                attrs = _parse_filament_attrs_value(extras_out['filament_attributes'])
-                cleaned = [a for a in attrs if a not in effective_delete]
-                extras_out['filament_attributes'] = json.dumps(cleaned)
-            try:
-                pr = requests.patch(
-                    f"{sm_url}/api/v1/filament/{fid}",
-                    json={"extra": extras_out},
-                    timeout=10,
-                )
-                if pr.ok:
-                    restored += 1
-                else:
-                    failed += 1
-            except requests.RequestException:
-                failed += 1
+        #
+        # Group 36 — this used to be a bare loop with no retry, a 10s timeout,
+        # a narrow `except requests.RequestException`, and a failure COUNT that
+        # named nobody. Of the three force_reset sites it was the worst for
+        # recoverability, and it is the one that runs unattended at boot. It now
+        # shares the same retrying, verifying restore as the two endpoints.
+        restored, restore_failures, recovered = attr_migration.restore_extras(
+            sm_url, payloads)
+        failed = len(restore_failures)
+        lost_ids = attr_migration.report_restore_failures(
+            f"ensure_filament_attributes_cleaned({sorted(effective_delete)})",
+            restore_failures, payloads,
+        )
+        if not restore_failures:
+            attr_migration.clear_recovery_snapshot(snap_path)
 
         # Post-cleanup verification: re-fetch the field and confirm the
         # targets are ACTUALLY gone from the choices. If they survived the
@@ -1172,13 +1208,20 @@ def ensure_filament_attributes_cleaned():
         else:
             # User-visible summary in the Activity Log (the hub.log line above
             # is for debugging; this one shows on the dashboard).
+            #
+            # Group 36 — a failed restore is DATA LOSS, not a footnote. This
+            # used to read "N filaments restored, 1 failed" at INFO/blue, which
+            # is how months of silent drain went unnoticed. Name the casualties
+            # and raise the level so the dashboard shows it in red.
             state.add_log_entry(
                 f"🧹 Filament Attributes cleaned: removed {sorted(effective_delete)} "
-                f"({restored} filaments restored"
-                + (f", {failed} failed" if failed else "")
+                f"({restored}/{len(payloads)} filaments restored"
+                + (f", {recovered} confirmed by re-read" if recovered else "")
+                + (f"; ⚠️ LOST filament_attributes on filament(s) {lost_ids} — "
+                   f"recovery payload in hub.log and {snap_path}" if failed else "")
                 + ")",
-                "INFO",
-                "00ccff",
+                "INFO" if not failed else "ERROR",
+                "00ccff" if not failed else "ff4444",
             )
     except requests.RequestException as e:
         state.logger.warning(f"ensure_filament_attributes_cleaned: network error: {e}")

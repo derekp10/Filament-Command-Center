@@ -1148,3 +1148,32 @@ def assert_contrast():
             raise AssertionError("\n".join(msg_lines))
 
     return _check
+
+
+@pytest.fixture(autouse=True)
+def _isolate_attr_migration_state(tmp_path, monkeypatch):
+    """Keep Group-36 recovery snapshots + the hidden-choice list out of `data/`.
+
+    `attr_migration` writes a recovery snapshot to `inventory-hub/data/` BEFORE
+    every destructive schema migration and only deletes it when the migration
+    fully succeeds. Unit tests that deliberately drive a restore FAILURE would
+    therefore leave a real `attr_recovery_*.json` behind in the repo — which the
+    boot re-surface then reports as unresolved data loss on every subsequent
+    container start. Same for the hidden-choice list: a test hiding a choice
+    must not hide it in Derek's actual dev UI.
+
+    Autouse and repo-wide on purpose: the failure mode is a test silently
+    mutating real state, which is exactly the class of problem the `--offline`
+    work exists to prevent. Redirecting both paths to `tmp_path` makes it
+    structurally impossible rather than a convention each test must remember.
+
+    Host-side only, so it has no effect on the E2E tests driving the container.
+    """
+    try:
+        import attr_migration  # type: ignore
+    except ImportError:  # pragma: no cover - backend not importable in this env
+        return
+    monkeypatch.setattr(attr_migration, "_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        attr_migration, "_HIDDEN_PATH", str(tmp_path / "attr_hidden_choices.json")
+    )
