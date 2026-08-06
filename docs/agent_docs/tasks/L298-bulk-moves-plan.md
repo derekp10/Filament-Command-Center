@@ -1,6 +1,10 @@
 # L298 — Bulk Moves: Phased Plan & Design Decisions
 
-> **Status:** 🚧 IN PROGRESS — **Phase 0 (undo-hardening) + Phase 1 (backend `POST /api/bulk_move`) DONE** on branch `feature/bulk-moves-l298-p1` (2026-07-11). Phases 2–4 remain. See the 🚀 HANDOFF block below for exactly where to pick up.
+> **Status: ✅ COMPLETE — ALL 5 PHASES SHIPPED AND MERGED TO `dev` (2026-08-03).** Phase 0 undo-hardening (`b4a26e8`) · Phase 1 `POST /api/bulk_move` (`96f87bc`, undo hotfix `f45afe9`) · Phase 2 `CMD:BULKMOVE` session + deck slot + LM "Move all →" (`4b0e0fe`+`7fa990b`+`b56149f`) · Phase 3 rich preview/confirm panel (`d706d43`) · Phase 4 `Shift+B` entry + edge hardening (`1d8e3f7`+`192eb96`) · armed-pill affordance fix (`43b3801`). Merged `7833550` + `d11f156`. Adversarially reviewed on this branch **twice** (Phase 3: 8 agents / 1.37M tokens / 40 raw findings; Phase 4: 4 agents / 590K / 23 raw, 0 refuted) plus Phases 0–2 earlier.
+>
+> ⚠️ **Deliberately NOT built: structure-preserving bulk move.** Derek's 2026-08-03 call — *"a feature I'm not 100% sure I'm going to use that often… might just make sense doing it using the existing bulk ability with the buffer and a location scan"* — and it must not be built before the location redesign settles the model. See [Group 37](37-location-system-redesign.md) / [location-system-redesign-scoping.md](location-system-redesign-scoping.md); the **D2 safety contract currently depends on NAMING, not structure**. The surviving interim recommendation is small: when a source has nested children, have the preview say `"N spools sit in 3 sub-locations and will NOT move"` instead of silently no-op'ing.
+>
+> _(historical)_ 🚧 IN PROGRESS — Phase 0 + Phase 1 DONE on `feature/bulk-moves-l298-p1` (2026-07-11); Phases 2–4 remained. The 🚀 HANDOFF block below is kept as the as-built record.
 > **Feature:** "Scan Box A (source) and Shelf B (destination), then *move EVERYTHING from Box A to Shelf B*." (Feature-Buglist.md "🔄 Bulk Moves"; working-groups L298, UNBLOCKED 2026-06-04 once the L271 data model shipped.)
 
 ## 🚀 HANDOFF — where the next chat picks up (2026-07-11, Phase 1 complete)
