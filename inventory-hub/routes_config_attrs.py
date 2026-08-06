@@ -331,6 +331,49 @@ def api_filament_attributes_add_choice():
     return jsonify(res)
 
 
+def _report_restore_failures(op, restore_failures, extras_snapshot):
+    """Make a partial schema migration RECOVERABLE by hand.
+
+    Both destructive endpoints below (remove_choice / sweep_unused) run the same
+    force_reset: snapshot every filament's full `extra`, DELETE the field,
+    recreate it, then PATCH all ~150 records back. A restore that fails leaves
+    that filament's extras GONE — the field was already wiped and nothing
+    retries.
+
+    Until 2026-08-05 the only trace was a COUNT ("restored 151/152 … 1 restore
+    failure(s)"). The filament id was never written anywhere, in the Activity
+    Log or hub.log, so a user had no way to learn WHAT they lost — recovering it
+    meant diffing against another environment. That is how 26 filaments in dev
+    silently lost their attributes over months before anyone noticed.
+
+    So: log every casualty at ERROR, WITH the snapshot payload we failed to
+    write back. That payload is the recovery data — with it in hub.log the
+    record can be restored by hand even though the write failed.
+
+    Returns a short id list for the caller's Activity-Log line.
+    """
+    import json as _json
+    if not restore_failures:
+        return []
+    ids = [f.get("id") for f in restore_failures]
+    for f in restore_failures:
+        fid = f.get("id")
+        try:
+            payload = _json.dumps(extras_snapshot.get(fid, {}))[:4000]
+        except Exception:
+            payload = repr(extras_snapshot.get(fid))[:4000]
+        # Deliberately ASCII-only: this is the line someone reads to RECOVER a
+        # lost record, so it must survive a cp1252 console handler. An emoji
+        # here raises UnicodeEncodeError on the Windows host and the message is
+        # dropped — losing exactly the data it exists to preserve.
+        state.logger.error(
+            f"DATA LOSS in {op}: filament #{fid} extras were NOT restored after "
+            f"the schema reset ({f.get('msg')}). Its `extra` dict is now missing "
+            f"from Spoolman. Recovery payload follows: {payload}"
+        )
+    return ids
+
+
 @app.route('/api/filament_attributes/remove_choice', methods=['POST'])
 def api_filament_attributes_remove_choice():
     """Remove a choice from the Spoolman filament_attributes field.
@@ -499,13 +542,19 @@ def api_filament_attributes_remove_choice():
             # surfacing as an opaque 500 over a half-migrated schema.
             restore_failures.append({"id": fid, "msg": str(e)[:200]})
 
-    level = "INFO" if not restore_failures else "WARNING"
-    color = "00ccff" if not restore_failures else "ffaa00"
+    lost_ids = _report_restore_failures(
+        f"remove_choice({choice!r})", restore_failures, extras_snapshot)
+    # A failed restore is DATA LOSS, not a warning — surface it as an error and
+    # NAME the casualties inline so the Activity Log alone tells the user which
+    # filaments to check.
+    level = "INFO" if not restore_failures else "ERROR"
+    color = "00ccff" if not restore_failures else "ff4444"
     state.add_log_entry(
         f"🏷️ Filament Attributes: removed choice {choice!r} "
         f"(stripped from {len(users)} filament(s); restored {restored}/{len(extras_snapshot)} "
         f"sibling-attr records"
-        + (f"; {len(restore_failures)} restore failure(s)" if restore_failures else "")
+        + (f"; ⚠️ LOST extras on filament(s) {lost_ids} — see hub.log for the "
+           f"recovery payload" if restore_failures else "")
         + ").",
         level, color,
     )
@@ -689,13 +738,16 @@ def api_filament_attributes_sweep_unused():
             # surfacing as an opaque 500 over a half-migrated schema.
             restore_failures.append({"id": fid, "msg": str(e)[:200]})
 
+    lost_ids = _report_restore_failures(
+        f"sweep_unused({unused})", restore_failures, extras_snapshot)
     state.add_log_entry(
         f"🧹 Filament Attributes: swept {len(unused)} unused choice(s): {unused} "
         f"(restored {restored}/{len(extras_snapshot)} sibling records"
-        + (f"; {len(restore_failures)} failure(s)" if restore_failures else "")
+        + (f"; ⚠️ LOST extras on filament(s) {lost_ids} — see hub.log for the "
+           f"recovery payload" if restore_failures else "")
         + ").",
-        "INFO" if not restore_failures else "WARNING",
-        "00ccff" if not restore_failures else "ffaa00",
+        "INFO" if not restore_failures else "ERROR",
+        "00ccff" if not restore_failures else "ff4444",
     )
     return jsonify({
         "success": True,
