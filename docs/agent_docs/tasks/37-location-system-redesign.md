@@ -1,7 +1,8 @@
 # Group 37: 🌳 Location System Redesign
 
 **Branch name (when started):** `feature/group-37-location-system-redesign`
-**Estimated effort:** LARGE / multi-session — **do not start building until §Open forks are decided**
+**Estimated effort:** LARGE / multi-session — **forks 2–4 are decided; do not start building until
+§Fork 1 (the LocationID model) is settled**
 **Risk:** **HIGH.** Touches the location model that `/api/get_contents`, the bulk-move source
 resolver, and the destructive clear/delete paths all read through. A `locations.json` backup is a
 prerequisite for any data-touching phase.
@@ -69,6 +70,12 @@ I move* / *what may I destroy*). **Only the third needs to stay flat.**
 | # | Item | Notes |
 |---|---|---|
 | **37.1** | **Blank LocationID is accepted, then "already exists" on re-edit** — with no value visible on the field or in the Location List | ⚠️ **Derek's repro row is LIVE in `data/locations.json`** — index 0, `{"LocationID": "", "Name": "TestCart", "Type": "Cart", "Max Spools": "0", "parent_id": "CR"}`. **Do NOT delete it without asking.** It costs **TWO reds on every full sweep** (see below). |
+| **37.2** | **Unassigned list overflow on a new location's Manage view** — the list pushes UI elements off the visible screen | Wants: scrollable within the available viewport + easily collapsible from anywhere in the list, so the user can always reach the lower UI elements. |
+| **37.3** | **Parent/child creation is still tedious** | The `+` on a parent doesn't autofill the child. Derek also wants **smart LocationID suggestions** and is openly questioning whether human-readable composite ids are still the right model (`CR-TC-R1` is hard to remember, set up, and track when each new row must be created from scratch). |
+| **37.4** | **Cart-display fix** (a cart shows a transitive Total but lists zero contents) | ✅ **Decision 2026-08-03: folded in here rather than shipped as a point fix** — the redesign changes those semantics anyway. |
+| _(x-ref)_ | Group 34 **auto-gen-id finickiness** — breadcrumb-id doesn't re-sync on parent change; numbering isn't topology-aware (always `R1`, never `R2`) | Owned by **Group 34**; land it after this group settles the model. |
+| _(x-ref)_ | Group 34 **S5** (add-redesign phase 4 — "create missing levels" + demote the shelf-grouping boot migration) | Owned by **Group 34**; ⏸️ deferred, and its plan **mandates a `locations.json` backup as step 1**. |
+| _(x-ref)_ | The older buglist item *"adding sub-locations is messy"* | Same surface as 37.3. |
 
 ### 🧪 The two sweep reds 37.1 currently causes
 
@@ -88,12 +95,6 @@ expect exactly these and nothing else:
 
 **Both should go green the moment 37.1 lands** — no separate test work needed. Worth
 re-checking after the fix rather than editing either test.
-| **37.2** | **Unassigned list overflow on a new location's Manage view** — the list pushes UI elements off the visible screen | Wants: scrollable within the available viewport + easily collapsible from anywhere in the list, so the user can always reach the lower UI elements. |
-| **37.3** | **Parent/child creation is still tedious** | The `+` on a parent doesn't autofill the child. Derek also wants **smart LocationID suggestions** and is openly questioning whether human-readable composite ids are still the right model (`CR-TC-R1` is hard to remember, set up, and track when each new row must be created from scratch). |
-| **37.4** | **Cart-display fix** (a cart shows a transitive Total but lists zero contents) | ✅ **Decision 2026-08-03: folded in here rather than shipped as a point fix** — the redesign changes those semantics anyway. |
-| _(x-ref)_ | Group 34 **auto-gen-id finickiness** — breadcrumb-id doesn't re-sync on parent change; numbering isn't topology-aware (always `R1`, never `R2`) | Owned by **Group 34**; land it after this group settles the model. |
-| _(x-ref)_ | Group 34 **S5** (add-redesign phase 4 — "create missing levels" + demote the shelf-grouping boot migration) | Owned by **Group 34**; ⏸️ deferred, and its plan **mandates a `locations.json` backup as step 1**. |
-| _(x-ref)_ | The older buglist item *"adding sub-locations is messy"* | Same surface as 37.3. |
 
 ---
 
@@ -102,7 +103,8 @@ re-checking after the fix rather than editing either test.
 Read-only inspection of `data/locations.json`, 56 rows:
 
 - **Per-row capacity is not tracked** — 27 rows have `Max Spools = ''`, including *every* cart and
-  cart-row. So L298's D3 capacity pre-flight **cannot fire on a cart→cart move**.
+  cart-row. So L298's D3 capacity pre-flight **cannot fire on a cart→cart move** — which
+  fork 4 below has since confirmed is **CORRECT behaviour, not a gap**: blank means unbounded, on purpose.
 - **No 1:1 row correspondence between carts** — `CR-CT-1` = `R1/R2/R3` vs `DR-CT-1` =
   `R1, R2-L, R2-R, R3-L, R3-R, R4-L, R4-R`.
 - **`Type` cannot identify a row** — 26 rows are Type `Cart`, including the `R1/R2/R3` children. Any
