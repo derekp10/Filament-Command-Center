@@ -60,6 +60,14 @@ def isolated_locations():
 
     def _save(rows):
         store["rows"] = copy.deepcopy(rows)
+        # Must mirror the real contract: save_locations_list returns True on a
+        # verified write, False on any failure path. This double returned None
+        # (i.e. falsy) because it was written when the real function returned
+        # None everywhere — which is exactly why nobody noticed that
+        # set_dryer_box_slot_order was discarding the result and reporting
+        # success regardless. Now that the caller honours it, the double has to
+        # be honest too.
+        return True
 
     with patch.object(locations_db, "load_locations_list", side_effect=_load), \
          patch.object(locations_db, "save_locations_list", side_effect=_save):

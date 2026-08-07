@@ -231,31 +231,37 @@ def api_put_printer_creds():
     api_key_in = payload.get('api_key', '')
     if not name:
         return jsonify({"ok": False, "error": "printer_name is required"}), 400
-    try:
-        rows = locations_db.load_locations_list()
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"could not read locations: {e}"}), 500
-    # Confirm the Printer row exists before any write (changed=False is ambiguous —
-    # it also means "value unchanged" — so we can't use it to detect a bad name).
-    if not any(isinstance(r, dict)
-               and str(r.get('Type', '')).strip().lower() == 'printer'
-               and str(r.get('Name', '')) == name
-               for r in (rows or [])):
-        return jsonify({"ok": False, "error": f"No Printer named {name!r}"}), 404
-    # Sentinel = keep the stored key; otherwise take the sent value (blank → None).
-    if api_key_in == config_schema.SECRET_SENTINEL:
-        existing = locations_db.get_printer_credentials(name, rows) or {}
-        api_key = existing.get('api_key')
-    else:
-        api_key = api_key_in if api_key_in else None
-    rows, changed = locations_db.set_printer_credentials(rows, name, ip, api_key)
-    if changed:
-        if not locations_db.save_locations_list(rows):
-            state.add_log_entry(f"🔐 Printer connection save FAILED for {name}", "ERROR", "ff4444")
-            return jsonify({"ok": False, "error": "could not persist printer connection"}), 500
-        # 29.B2 — only log the "updated" INFO line on an ACTUAL change; a no-op
-        # PUT with identical creds no longer emits a misleading "updated" entry.
-        state.add_log_entry(f"🔐 Printer connection updated for {name}", "INFO")
+    # Group 38 follow-up — the whole load→mutate→save cycle is serialized. Both
+    # reads and the write must sit inside one critical section; locking only the
+    # save would leave the interleave (a concurrent writer's snapshot reverting
+    # this one) wide open. Pure CPU in here — no Spoolman I/O — so the lock is
+    # held only for the file operations.
+    with locations_db.locations_write_lock():
+        try:
+            rows = locations_db.load_locations_list()
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"could not read locations: {e}"}), 500
+        # Confirm the Printer row exists before any write (changed=False is ambiguous —
+        # it also means "value unchanged" — so we can't use it to detect a bad name).
+        if not any(isinstance(r, dict)
+                   and str(r.get('Type', '')).strip().lower() == 'printer'
+                   and str(r.get('Name', '')) == name
+                   for r in (rows or [])):
+            return jsonify({"ok": False, "error": f"No Printer named {name!r}"}), 404
+        # Sentinel = keep the stored key; otherwise take the sent value (blank → None).
+        if api_key_in == config_schema.SECRET_SENTINEL:
+            existing = locations_db.get_printer_credentials(name, rows) or {}
+            api_key = existing.get('api_key')
+        else:
+            api_key = api_key_in if api_key_in else None
+        rows, changed = locations_db.set_printer_credentials(rows, name, ip, api_key)
+        if changed:
+            if not locations_db.save_locations_list(rows):
+                state.add_log_entry(f"🔐 Printer connection save FAILED for {name}", "ERROR", "ff4444")
+                return jsonify({"ok": False, "error": "could not persist printer connection"}), 500
+            # 29.B2 — only log the "updated" INFO line on an ACTUAL change; a no-op
+            # PUT with identical creds no longer emits a misleading "updated" entry.
+            state.add_log_entry(f"🔐 Printer connection updated for {name}", "INFO")
     return jsonify({"ok": True, "error": None})
 
 
@@ -386,32 +392,37 @@ def api_put_printer_map():
 
     # Persist the edit onto the Printer rows AUTHORITATIVELY — this is the only
     # write now, so a failure to persist is a server 500 (not best-effort).
+    # Group 38 follow-up — one critical section from the read to the write, so a
+    # concurrent writer's snapshot can't revert the printer rows written here.
+    # Pure CPU inside (the migrations are functions over `_locs`), so the lock
+    # is held only for the file I/O.
     try:
-        _locs = locations_db.load_locations_list()
-        # Create a Type:"Printer" row for any brand-new printer first…
-        _locs, _ = locations_db.migrate_printers_to_rows_if_needed(_locs, canonical)
-        # …then re-sync every Printer row's toolheads[] from the edited map (full
-        # re-sync — NOT prime_only — so an edit actually applies; positions kept
-        # verbatim, no auto-renumber).
-        _locs, _ = locations_db.migrate_printer_map_to_toolheads_if_needed(_locs, canonical)
-        # …and sync each Printer row's Name from the edited printer_name (the row
-        # Name is the single source of truth for the display name, so a rename in
-        # the editor must propagate — neither migration above touches Name).
-        _names_by_prefix = {}
-        for _k, _info in canonical.items():
-            _pfx = _k.split('-', 1)[0] if '-' in _k else _k
-            _names_by_prefix.setdefault(_pfx, _info.get('printer_name', ''))
-        for _row in _locs:
-            if not isinstance(_row, dict) or str(_row.get('Type', '')).strip().lower() != 'printer':
-                continue
-            _pid = str(_row.get('LocationID', '')).strip().upper()
-            _new_name = _names_by_prefix.get(_pid)
-            if _new_name and _row.get('Name') != _new_name:
-                _row['Name'] = _new_name
-        if not locations_db.save_locations_list(_locs):
-            reason = "could not persist the printer rows"
-            state.add_log_entry(f"⚙️ Printer-map save failed: {reason}", "ERROR", "ff4444")
-            return jsonify({"ok": False, "error": reason}), 500
+        with locations_db.locations_write_lock():
+            _locs = locations_db.load_locations_list()
+            # Create a Type:"Printer" row for any brand-new printer first…
+            _locs, _ = locations_db.migrate_printers_to_rows_if_needed(_locs, canonical)
+            # …then re-sync every Printer row's toolheads[] from the edited map (full
+            # re-sync — NOT prime_only — so an edit actually applies; positions kept
+            # verbatim, no auto-renumber).
+            _locs, _ = locations_db.migrate_printer_map_to_toolheads_if_needed(_locs, canonical)
+            # …and sync each Printer row's Name from the edited printer_name (the row
+            # Name is the single source of truth for the display name, so a rename in
+            # the editor must propagate — neither migration above touches Name).
+            _names_by_prefix = {}
+            for _k, _info in canonical.items():
+                _pfx = _k.split('-', 1)[0] if '-' in _k else _k
+                _names_by_prefix.setdefault(_pfx, _info.get('printer_name', ''))
+            for _row in _locs:
+                if not isinstance(_row, dict) or str(_row.get('Type', '')).strip().lower() != 'printer':
+                    continue
+                _pid = str(_row.get('LocationID', '')).strip().upper()
+                _new_name = _names_by_prefix.get(_pid)
+                if _new_name and _row.get('Name') != _new_name:
+                    _row['Name'] = _new_name
+            if not locations_db.save_locations_list(_locs):
+                reason = "could not persist the printer rows"
+                state.add_log_entry(f"⚙️ Printer-map save failed: {reason}", "ERROR", "ff4444")
+                return jsonify({"ok": False, "error": reason}), 500
     except Exception as _write_err:
         state.logger.error(f"printer_map row write failed: {_write_err}")
         state.add_log_entry(f"⚙️ Printer-map save failed: {_write_err}", "ERROR", "ff4444")
