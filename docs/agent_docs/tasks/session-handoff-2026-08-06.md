@@ -111,9 +111,11 @@ genuinely new signal.
    is exactly what the theory predicts. What it does establish is that one clean sweep proves
    nothing, and that 38.1's filed "fails ~2 of 3 sweeps" rate did not reproduce. Provoking them
    under deliberate contention is probably the first move.
-3. **[Group 37](37-location-system-redesign.md) — location redesign.** ⛔ **4 open forks must be
-   decided before ANY build** (biggest: is the human-readable composite LocationID still the right
-   model?). LARGE / multi-session / HIGH risk. Landing 37.1 alone would clear both sweep reds.
+3. **[Group 37](37-location-system-redesign.md) — location redesign.** ⛔ **ONE open fork now**
+   — the LocationID model. **Forks 2, 3 and 4 were decided 2026-08-07** and are written up in the
+   task file with Derek’s reasoning intact. Carry the reframing into fork 1: NO FORCED RELABELING
+   means 'opaque' cannot mean replacing `CR-CT-1`, only ceasing to derive structure from it.
+   LARGE / multi-session / HIGH risk. Landing 37.1 alone would clear both sweep reds.
 4. **Prod→dev sibling-extras restore** (new follow-up from Group 36) — ~4 filaments still drained
    by the old partial-PATCH bug. Prod (`:7912`) is the read-only reference. **Never guess-restore.**
 5. **Remaining audit axes** — (b) overlay/confirm reachability, (c) silent-failure, (d)

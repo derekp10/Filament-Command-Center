@@ -171,6 +171,18 @@ scope may never be worth its cost — so ship the visibility first and let real 
 LocationID **naming**, not structure. Widening bulk-move scope without first replacing it with an
 explicit active-print/type guard means a room-level operation can reach a live toolhead.
 
+⚠️ **Do not conflate this with the 2026-08-03 decision above.** They are separate:
+
+- **Subtree SCOPE** (this fork, ✅ in) = the move *collects* spools sitting in sub-locations, instead
+  of silently ignoring them. Everything lands at the single destination.
+- **STRUCTURE-PRESERVING move** (2026-08-03, ⏸️ still deferred/possibly dropped) = also *mapping*
+  each spool to the matching child at the destination, `R1`→`R1`, `R2`→`R2`.
+
+Derek's wall-storage remark — *"sometimes you can't fit the exact number in a destination section,
+just due to alignment"* — is precisely why structure-preservation stays deferred: there is often no
+correct 1:1 mapping to preserve. The topology confirms it (`CR-CT-1` has `R1/R2/R3`; `DR-CT-1` has
+`R1, R2-L, R2-R, R3-L, R3-R, R4-L, R4-R`).
+
 ### Fork 4 — `Max Spools`: blank/0 = unbounded; a real number is a real cap
 
 Derek: *"shouldn't be meaningful if 0 or null/blank, if there's an actual number there then that's
