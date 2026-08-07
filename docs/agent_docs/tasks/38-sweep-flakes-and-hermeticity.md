@@ -11,8 +11,15 @@
 > **2026-08-07 flake session — 4 of the 6 members closed at the root (`1756259`).**
 > **38.1, 38.5, 38.6a and 38.6b are FIXED.** 38.2 is reclassified as collateral (see below);
 > 38.3 and 38.4 did not fire and are documented, not speculatively patched.
-> ⚠️ **Two of the four turned out to be genuine PRODUCT bugs**, so this group's
-> "**Risk: LOW.** Test-infra only — no product code expected" header is now WRONG for it.
+> ⚠️ **Two of the four turned out to be genuine PRODUCT bugs** (38.1 and 38.6a — the latter a
+> silent data-loss path on *Save Feeds*), so this group's "**Risk: LOW.** Test-infra only — no
+> product code expected" header is now WRONG for it.
+>
+> ⚠️ **The group is NOT closed.** The confirming sweep came back **4 failed / 2415 passed**: none
+> of the four fixed members fired, but **two NEW reds appeared** — one of them
+> (`test_audit_visual_panel`) provably unrelated to this work and a genuine new member. The
+> acceptance bar (a full sweep at 0 failures) is not met. **Remaining: 38.3, 38.4, the new audit
+> -panel red, and a decision on `test_edit_full_bindings_auto_expands_feeds_section`.**
 > The fourth in the Group 26 → 32 → 33 lineage: make a red sweep mean something again.
 >
 > **Scope decision (Derek, 2026-08-06): fix all six flakes directly**, Group 32/33 style, with the
@@ -122,6 +129,22 @@ keeping:
 - **Only ONE of the six fired.** A sweep is a poor sampling instrument for this family: ~25 min
   per sample, one member per sample if you are lucky. That is precisely why the two 🆕 levers
   below matter more than another sweep.
+
+### Confirming sweep (#2, post-fix): 4 failed / 2415 passed / 27 skipped (25m01s)
+
+**None of the four fixed members fired** — 38.1, 38.5, 38.6a and 38.6b were all absent, and 38.1
+had fired in sweep #1, so that is a real (if single-sample) signal. **But two NEW reds appeared,
+and neither should be swept under the rug:**
+
+| New red | Assessment |
+|---|---|
+| `test_audit_visual_panel::test_audit_panel_opens_and_closes` | **Unrelated to any change here.** `#fcc-audit-panel-overlay` mounted *and* rendered its "Audit in Progress" title, but `#fcc-audit-panel-close` was never created — an element-never-created failure inside `mountOverlay`. A genuinely new, previously-unseen flake. **File it as a new member.** |
+| `test_edit_full_bindings_auto_expands_feeds_section` | On a surface this session touched, so it was investigated rather than dismissed. **Not reproduced: 5/5 green isolated.** It is a **known load flake** — fixed once as Group 33.6 with a 12 s readiness gate, and it failed *at* that 12 s gate. The guard also has no bail path in this flow (exactly two `openManage` calls, zero dismissals) and `refreshManageView` — the 5 s pulse re-render — **does not call `openManage`**, so the pulse cannot move the counter. **Verdict: most likely the 33.6 flake recurring, NOT a regression — but not proven, so the guard was hardened anyway (`ac93cb5`).** |
+
+⚠️ **Honest reading: this is a two-new-reds sweep, so the group is NOT closed.** The family is best
+understood as a *population* — the same fixed-timeout / element-never-created / shared-state
+classes keep producing new members. The four fixes are real and root-caused; the acceptance bar
+("a fresh full sweep with 0 failures") is **not** met.
 
 ## Items — the six flakes
 
