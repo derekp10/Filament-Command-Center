@@ -113,19 +113,33 @@ window.updateManageTitle = (loc, itemArray = null) => {
     document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${loc.LocationID} ${typeBadge} ${occHtml}${moveAllBtn}</div>`;
 };
 
-// Group 38.1 — generation counter for in-flight `openManage` fetches.
-// `openManage` only calls `modals.manageModal.show()` at the END of an async
-// fetch, so a response that landed after the user dismissed the modal used to
-// re-open it — leaving a modal on screen that nothing would ever close. Every
-// dismissal (and every newer open) bumps this; a stale `.then()` sees the
-// mismatch and bails instead of resurrecting the modal.
+// Group 38.1 — two SEPARATE generation counters for in-flight `openManage`
+// fetches. `openManage` only calls `modals.manageModal.show()` at the END of an
+// async fetch, so a response that landed after the user dismissed the modal
+// used to re-open it — leaving a modal on screen that nothing would ever close.
+//
+// They are deliberately separate, because the two conditions must have
+// DIFFERENT consequences and conflating them is a foot-gun:
+//   - `_fccManageOpenSeq` is bumped ONLY by `openManage`. A mismatch means a
+//     NEWER open superseded this one, so this `.then()` must not render — the
+//     newer call will. Skipping is safe precisely because a successor exists.
+//   - `_fccManageDismissSeq` is bumped ONLY by a dismissal. A mismatch means the
+//     user closed the modal mid-flight, so this `.then()` must not `show()` —
+//     but it is still free to render (harmlessly, into a hidden modal).
+//
+// Gating the RENDER on a dismissal would be the dangerous version: any
+// unanticipated dismiss during a legitimate open would silently leave the modal
+// blank, with no successor to fix it. Suppressing only the `show()` is all that
+// 38.1 ever required.
 window._fccManageOpenSeq = window._fccManageOpenSeq || 0;
+window._fccManageDismissSeq = window._fccManageDismissSeq || 0;
 
 // --- PRE-FLIGHT PROTOCOL ---
 window.openManage = (id) => {
     setProcessing(true);
 
     const seq = ++window._fccManageOpenSeq;
+    const dismissAtStart = window._fccManageDismissSeq;
 
     const loc = state.allLocations.find(l => l.LocationID == id);
     if (!loc) {
@@ -160,9 +174,8 @@ window.openManage = (id) => {
     fetch(`/api/get_contents?id=${id}`)
         .then(r => r.json())
         .then(d => {
-            // Group 38.1 — superseded by a newer open, or the modal was
-            // dismissed while this fetch was in flight. Render nothing and,
-            // critically, do NOT re-show a modal the user already closed.
+            // Group 38.1 — a NEWER openManage superseded this one; it will do
+            // the rendering. Rendering stale content here would clobber it.
             if (seq !== window._fccManageOpenSeq) {
                 setProcessing(false);
                 return;
@@ -192,6 +205,12 @@ window.openManage = (id) => {
             state.lastLocRenderHash = `${JSON.stringify(d)}|${bufHash}`;
 
             setProcessing(false);
+            // Group 38.1 — the modal was dismissed while this fetch was in
+            // flight. The render above still ran (harmless, and it leaves the
+            // content warm for the next open), but re-showing here would
+            // resurrect a modal the user already closed — and nothing would
+            // ever close it again. That was the flake.
+            if (window._fccManageDismissSeq !== dismissAtStart) return;
             modals.manageModal.show();
         })
         .catch(e => {
@@ -253,11 +272,11 @@ window.closeManage = () => {
     window.manageNavStack = [];
     const prev = document.getElementById('manage-loc-id');
     if (prev) prev.value = '';
-    // Group 38.1 — invalidate SYNCHRONOUSLY, here and not only in the
+    // Group 38.1 — record the dismissal SYNCHRONOUSLY, here and not only in the
     // `hidden.bs.modal` handler below: that event trails `hide()` by the
-    // ~460 ms fade, and a fetch resolving inside that window would still
-    // see a matching seq and re-show the modal mid-dismissal.
-    window._fccManageOpenSeq++;
+    // ~460 ms fade, and a fetch resolving inside that window would otherwise
+    // still see an unchanged counter and re-show the modal mid-dismissal.
+    window._fccManageDismissSeq++;
     modals.manageModal.hide();
     fetchLocations();
 };
@@ -346,12 +365,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // the previous view. Don't wipe state — the pop flow manages it.
         if (window._fccPoppingBreadcrumb) return;
 
-        // Group 38.1 — catch-all invalidation for every dismiss path that
-        // does NOT route through closeManage (the X button, backdrop click,
-        // a programmatic .hide() elsewhere, Bootstrap's own handler). Placed
-        // after the pop guard on purpose: a breadcrumb pop must leave its
-        // freshly-issued openManage fetch free to render.
-        window._fccManageOpenSeq++;
+        // Group 38.1 — catch-all for every dismiss path that does NOT route
+        // through closeManage (the X button, backdrop click, a programmatic
+        // .hide() elsewhere, Bootstrap's own handler). Placed after the pop
+        // guard on purpose: a breadcrumb pop is not a dismissal, and must
+        // leave its freshly-issued openManage free to show normally.
+        window._fccManageDismissSeq++;
 
         // Clear breadcrumb state so the next fresh open doesn't inherit
         // stale context.
