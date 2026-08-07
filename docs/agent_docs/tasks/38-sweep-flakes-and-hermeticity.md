@@ -6,10 +6,14 @@
 
 > **Status: `PARTIAL`** — filed 2026-08-06; **hermeticity residuals DONE 2026-08-07**
 > (`2d36a62`, branch `feature/group-38-hermeticity-residuals`, stacked on Group 36).
-> **38.7 / 38.8 / 38.9 / 38.10 / 38.11 are all closed** (38.9 by Group 36). **The six flakes
-> remain** — they need repeated full sweeps plus ≥5 isolated runs per member, so they were
-> deliberately left as a self-contained next session. The fourth in the
-> Group 26 → 32 → 33 lineage: make a red sweep mean something again.
+> **38.7 / 38.8 / 38.9 / 38.10 / 38.11 are all closed** (38.9 by Group 36).
+>
+> **2026-08-07 flake session — 4 of the 6 members closed at the root (`1756259`).**
+> **38.1, 38.5, 38.6a and 38.6b are FIXED.** 38.2 is reclassified as collateral (see below);
+> 38.3 and 38.4 did not fire and are documented, not speculatively patched.
+> ⚠️ **Two of the four turned out to be genuine PRODUCT bugs**, so this group's
+> "**Risk: LOW.** Test-infra only — no product code expected" header is now WRONG for it.
+> The fourth in the Group 26 → 32 → 33 lineage: make a red sweep mean something again.
 >
 > **Scope decision (Derek, 2026-08-06): fix all six flakes directly**, Group 32/33 style, with the
 > hermeticity work done **alongside** rather than as a gate. This group absorbs the two standalone
@@ -18,11 +22,51 @@
 
 ---
 
-## ⚠️ The evidence changed — read before diagnosing
+## 🔴 CORRECTED 2026-08-07 — the group's framing was wrong twice
+
+Both prior theories were wrong, and the second one was wrong in a way that made the work look
+harder and more expensive than it is. **Read this before the two sections below it**, which are
+kept for their evidence but whose *conclusions* are superseded.
+
+**1. The sweep is SERIAL and deterministically ordered.** There is no `pytest-xdist` and no
+`pytest-randomly` installed (`pip list` confirms only `pytest-base-url` + `pytest-playwright`),
+and `pytest.ini` adds no ordering plugin. `pytest_collection_modifyitems` in `conftest.py` only
+*adds skip markers* — it never reorders or deselects. So collection order is byte-identical on
+every run.
+
+**Therefore "a concurrent test had moved the spool it needed" is mechanically impossible.**
+Test-vs-test contention cannot occur. What actually remains is only:
+  - **(a)** state left behind by a test that ran EARLIER in the same serial run, or
+  - **(b)** a race against the **app's own** background activity — the 2 s buffer poll, the 5 s
+    dashboard pulse, the 30 s cancel-monitor daemon. This one IS genuine concurrency even under
+    serial pytest, and it is the archived Group 26.8 `test_doassign_buffer_safety` signature.
+
+**2. "Do not go hunting Bootstrap bugs that aren't there" was itself wrong.** 38.6b turned out to
+be exactly a Bootstrap bug — not the *focus* bug originally filed, but the `_isTransitioning`
+guard silently swallowing `.hide()`. The repo had already diagnosed and defended that same bug
+once (Group 26.7); 38.6b's file contained a stripped copy of the defended helper.
+
+**3. Run positions beat alphabetical file order.** pytest reorders to group the session-scoped
+parametrized `browser` fixture, so E2E tests do NOT run in plain alphabetical file order. Any
+analysis that assumes they do will produce confident, wrong polluter rankings — two such claims
+were refuted this session (`test_archive_unarchive_e2e` was said to precede `test_clone_e2e`; it
+actually runs at position **663** vs the victim's **115**, and `test_loc_mgr_bindings_api_e2e`
+runs at **1922**, long AFTER the UI file at **304**). Derive positions empirically:
+`pytest --collect-only -q --offline` — the line number IS the run position.
+
+**The practical payoff:** a victim at position *P* can only be polluted by the tests at positions
+1..*P*. Reproducing 38.2 took **96 seconds** instead of a 25-minute sweep. And where the cause is
+in-app rather than ordering, delaying the relevant fetch *in-page* reproduces it on demand — the
+38.1 pin does exactly that and runs in **~15 s**.
+
+---
+
+## ⚠️ Evidence from the 2026-08-03 capture (conclusions superseded — see above)
 
 The originally filed theory was **Bootstrap focus / overlay-dismiss timing under load**. A captured
-traceback on 2026-08-03 **refuted that for at least two members**, and the real cause is
-**shared-data contention**:
+traceback on 2026-08-03 refuted *that specific* theory for two members. It was then read as
+**shared-data contention**, which is right about the *symptom* for 38.6a but wrong about the
+*mechanism* (it is an in-app dual-write race, not another test):
 
 - **`test_clone_e2e::test_clone_spool_button`** — `TimeoutError: waiting for
   locator(".backlog-row").filter(has_text="SPOOL").first`. The backlog panel itself rendered
@@ -33,12 +77,16 @@ traceback on 2026-08-03 **refuted that for at least two members**, and the real 
   element but `assert 'XL-1' == 'XL-2'`: **a save that did not stick.** That is what a concurrent test
   rewriting the same `slot_targets` row looks like.
 
-**Three of the six members now point at shared-data contention rather than focus/dismiss races.**
-Do not go hunting Bootstrap focus bugs that aren't there.
-
 **Method for each member: capture its own traceback first.** Run the sweep with `--tb=long -rf` teed
 to a file — the failure detail has been lost to output truncation nearly every time, so most prior
 "diagnoses" (including in the buglist) are inference, not evidence.
+
+📌 **The 2026-08-03 capture was NOT lost — it is committed at
+[flake-traceback-2026-08-03.txt](flake-traceback-2026-08-03.txt).** The 2026-08-06 handoff implied
+otherwise, and that cost real time. It holds the real tracebacks for **38.4, 38.6a and 38.6b**
+(5 failures / 2332 passed / 28m28s). The 2026-08-07 sweep added the first-ever capture for **38.1**
+(`sweep_full_01`, 3 failed / 2415 passed / 25m19s). So four of the seven ids now have hard evidence;
+**38.2, 38.3 and 38.5 still have none.**
 
 ---
 
@@ -62,10 +110,39 @@ what the theory predicts. What it does establish:
 - **The expected red tail while Derek's repro row is live is exactly those two** — so any future
   sweep can treat a third red as genuinely new signal.
 
+**Update — the 2026-08-07 sweep produced exactly that third red, and it was 38.1.**
+`RUN_INTEGRATION=1` came back **3 failed / 2415 passed / 25 skipped** (25m19s):
+`test_escape_key_walks_out_of_three_level_stack` plus the two known Group 37.1 rows. So the
+"treat a third red as new signal" rule worked as designed on its first outing. Two lessons worth
+keeping:
+
+- **One quiet sweep proving nothing cuts both ways.** 38.1 fired on the very next sweep with no
+  deliberate contention at all — so "provoke them under load" was never a prerequisite, and the
+  session that planned to start there would have spent its budget on the wrong thing.
+- **Only ONE of the six fired.** A sweep is a poor sampling instrument for this family: ~25 min
+  per sample, one member per sample if you are lucky. That is precisely why the two 🆕 levers
+  below matter more than another sweep.
+
 ## Items — the six flakes
 
 All six share the signature: **fails in a full sweep, passes 3/3–8/8 in isolation, zero surface
 overlap with whatever diff ran alongside them.**
+
+### ✅ Status after the 2026-08-07 session (`1756259`)
+
+| # | Verdict | Root cause | Fix |
+|---|---|---|---|
+| **38.1** | ✅ **FIXED** | 🔴 **PRODUCT BUG.** `openManage` calls `modals.manageModal.show()` at the END of its `/api/get_contents` `.then()`. Escape 1 pops the breadcrumb and starts that fetch — its `#manage-loc-id` write is *synchronous*, which is precisely why Escape 1's assertions pass while the fetch is still outstanding. Escape 2 hides the modal; the late `.then()` re-opens it, and nothing closes it again. | Generation counter bumped by every dismissal + every newer open; stale `.then()` bails. Invalidated **synchronously** in `closeManage` (the `hidden.bs.modal` event trails `hide()` by the ~460 ms fade) plus a catch-all on `hidden.bs.modal`. Pinned by an in-page fetch-delay repro, **~15 s**, RED→GREEN proven. |
+| **38.2** | ⚪ **RECLASSIFIED — collateral, not a member** | Did **not** reproduce from its own prefix (positions 1..35 = its only possible polluters): **49 passed / 3 skipped / 96 s**. It also owns its state via the save-seed-restore `bound_slot` fixture, and nothing before it writes the one row it needs (`XL-1`, `Type: Tool Head`). Its filed evidence was only ever "failed alongside 38.1 once". | None needed. Expected to stop appearing now 38.1 is fixed. **If it ever fires alone, that is new signal** — capture the traceback and check whether the failure is the *click* at :198 (⇒ the XL-1 row itself is wrong) or the *assert* at :200 (⇒ latency). |
+| **38.3** | ⏳ **OPEN — did not fire** | Not reproduced this session; no traceback has ever been captured. Best hypothesis remains the **app's own 2 s buffer poll** overwriting locally-injected state once the test's step sequence outruns the hard-coded 3000 ms grace in `inv_cmd.js` (`localAge < 3000`). Note `processScan` does **not** return its fetch, so the two seeding scans really do launch independent chains. | Not patched — **deliberately**. Do not "fix" it without a captured traceback; the predicted failing line differs by mechanism and the wrong guess is unfalsifiable. ⚠️ Do **not** try to force it with `--slowmo`: that serialises the two scans and destroys the very divergence being tested. |
+| **38.4** | ⏳ **OPEN — did not fire** | Traceback captured 2026-08-03 (backlog panel rendered, no SPOOL row). The filed "a concurrent test archived it" story is **refuted**: pytest is serial, and the accused `test_archive_unarchive_e2e` runs at position **663**, well AFTER the victim at **115**. Remaining candidates: the victim is maximally non-hermetic (takes only `page`, seeds nothing, asserts no precondition), and `/api/print_queue/pending` collapses ANY exception — including its two `timeout=2` Spoolman queries — into `{success:false}`, which renders as an error div inside a *visible* `#backlog-list`, indistinguishable from "no flagged spools". | Not patched. The honest fix is a seeding fixture + a precondition assertion, so the test reports *why* it failed. |
+| **38.5** | ✅ **FIXED** | Wait budget **shorter than the product's own latency floor**. `showConfirmOverlay` awaits a ~3 s active-print probe before mounting (`inv_quickswap.js:340`/`:368`; `mountOverlay` not reached until `:468`), and the probe cache is request-scoped so every call re-pays it. Group 14.2 raised these waits to 8000 ms and **missed four sites still at 4000 ms** — two are 38.5, two were latent siblings. | All four raised to 8000 ms, matching the documented precedent at `test_quickswap_ui_e2e.py:77-79`. Plus a **hermetic source-level canary** (`test_overlay_wait_budgets.py`, runs in `--offline` in 0.5 s) so the budget cannot drift back under the floor — mutation-proven against both call spellings. |
+| **38.6a** | ✅ **FIXED** | 🔴 **PRODUCT BUG — silent data loss.** One *Save Feeds* click fired the `slot_order` PUT in the **same tick** as the `bindings` PUT. Both are whole-file read-modify-write on `locations.json`; `set_dryer_box_slot_order` copies the **entire** `extra` dict including `slot_targets` (`locations_db.py:1549-1551`); `locations_db.py` holds **no lock of any kind**; Flask runs threaded. So slot_order could snapshot the pre-edit row, bindings write the new targets and return 200, then slot_order write its stale copy back — reverting a save the UI had already reported as "✅ Saved". | Sequence `slot_order` **after** the bindings write settles, so it always reads a row that already holds the new `slot_targets`. |
+| **38.6b** | ✅ **FIXED** | Bootstrap swallowed `.hide()`. `to_be_visible()` returns at the **start** of the `.modal.fade` transition, so the immediately-following `.hide()` hit the `_isTransitioning` guard and returned **before** dispatching `hide.bs.modal` — the listener that mounts `#fcc-wiz-unsaved-changes` never ran. | Wait for the public `shown.bs.modal` event before hiding; restore the 3-attempt retry to `_force_close_wizard`, which was a stripped copy of the **defended** helper at `test_wizard_group10_session_a.py:33-56` (Group 26.7). |
+
+> ⚠️ **Row 38.6 must be SPLIT.** It bundles two demonstrably different root causes — 38.6a is a
+> backend lost-update race (a *value* failure), 38.6b is a Bootstrap transition swallow (an
+> *element-never-created* failure). They share nothing but a row number.
 
 | # | Test | Evidence so far |
 |---|---|---|
@@ -93,6 +170,26 @@ here because they are exactly the levers that make the flakes above reproducible
 
 ## Levers available (that Groups 26/32/33 did not have)
 
+- 🆕 **Ordered-prefix reproduction (2026-08-07).** Because the run order is deterministic, a victim
+  at position *P* can only be polluted by positions 1..*P*. Get positions with
+  `pytest --collect-only -q --offline` (line number = run position), then run just the files in
+  that prefix, in order. 38.2's entire prefix ran in **96 s** versus a 25-minute sweep. A pass
+  there is a real result: it **exhausts the ordering hypothesis** for that member.
+- 🆕 **In-page fetch delay (2026-08-07)** — the lever for the (b)-class races, where the enemy is
+  the app's own async behaviour rather than another test. Patch `window.fetch` inside the page to
+  delay one endpoint, instead of hoping sweep load reproduces the timing:
+
+  ```js
+  const orig = window.fetch;
+  window.fetch = (url, ...rest) => (String(url).includes('/api/get_contents')
+      ? new Promise((res, rej) => setTimeout(() => orig.call(window, url, ...rest).then(res, rej), 2000))
+      : orig.call(window, url, ...rest));
+  ```
+
+  This turned 38.1 from "fails ~2 of 3 sweeps, 25 min a throw" into a **~15 s deterministic pin**
+  that reproduces the captured traceback byte-for-byte. Prefer it to a Playwright `route` handler
+  with a blocking `sleep`, which stalls the sync dispatcher. Reference:
+  `test_return_and_breadcrumb.py::test_late_get_contents_cannot_reopen_a_dismissed_manage_modal`.
 - **`--offline` / `FCC_OFFLINE=1`** (shipped `4f10e35`) — a genuinely hermetic sweep, **~27 min → ~42 s**,
   cannot write to dev. Skips by **fixture name** at collection time. Use it for all iteration.
 - **`pytest --reset-dev`** — restores dev to the committed seed baseline before a sweep, so cross-test
@@ -101,6 +198,43 @@ here because they are exactly the levers that make the flakes above reproducible
   `data/locations.json` currently holds his live blank-LocationID repro row (Group 37.1).
 - **`atomic_store.replace_with_retry`** (Group 32) and the `mask=` snapshot support (Group 33) are
   already in place.
+
+## 📋 Follow-ups surfaced 2026-08-07 — for Derek to file STANDALONE
+
+Not filed into the buglist by me (it is Derek's), and deliberately **not nested under this group**
+— nesting a follow-up under an epic that later closes makes it vanish when the epic is archived
+([[feedback_standalone_followups_not_under_completed_epics]]).
+
+1. **🔴 `locations.json` writes have no concurrency control at all — the 38.6a fix only removed the
+   trigger, not the race.** `grep -c 'Lock\|RLock\|threading' inventory-hub/locations_db.py` returns
+   **0**, while `app.run()` is threaded. Every mutator is a whole-file read-modify-write. The
+   38.6a fix sequences the one client-side caller that reliably collided; **two browser tabs, or a
+   pulse-driven write racing a user save, can still lose an update.** Worth a deliberate decision:
+   a module-level lock around load→mutate→save, or compare-and-set.
+2. **🟠 `set_dryer_box_bindings` / `set_dryer_box_slot_order` discard `save_locations_list`'s return
+   value and report success unconditionally** (`locations_db.py:1553`, `:1694` — both are a bare
+   `save_locations_list(loc_list)` followed by `return True, ...`). That function's own docstring
+   says it "Returns True when the new list is durably persisted + verified, False on any failure
+   path". It can return False via the orphan write-guard, an atomic-write exception, or a failed
+   verify-after-write — and the user still gets HTTP 200 + "✅ Saved N binding(s)" with the disk
+   unchanged. **This is an independent second way to produce the exact 38.6a symptom**, and it
+   makes every snapshot/restore fixture in the suite unreliable.
+3. **🟡 A Playwright route stub that has never matched anything.**
+   `test_toolhead_scan_single_spool.py:43` does `page.route("**/api/buffer", ...)`, but the real
+   endpoints are `/api/state/buffer` and `/api/buffer/clear` — a URL glob must match the whole URL
+   and neither ends in `/api/buffer`. The stub's stated purpose ("so background polling can't
+   overwrite the test's synthetic spools") is therefore **not being served**; the test currently
+   survives on the `lastLocalBufferChange` grace instead.
+   ⚠️ **Scope note, checked:** the claim that this leaks synthetic spools 9991/9992 into the shared
+   buffer is **NOT confirmed** — the live buffer read `[]` immediately after a full sweep. Treat as
+   test-hygiene, not a data leak.
+4. **🟡 `test_archive_unarchive_e2e.py` carries no `@pytest.mark.integration`** yet archives a real
+   dev spool (it picks the first non-archived spool with a location, drains it to trigger
+   `_auto_archive_on_empty`, and restores inside a bare `except Exception: pass`). It runs on any
+   plain sweep where the container is up. It is **not** a 38.4 suspect (position 663 vs 115), but
+   it does mutate shared inventory for every test after it.
+
+---
 
 ## Verification
 
