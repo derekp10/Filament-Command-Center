@@ -16,7 +16,7 @@
 **The dev→main release is still held** pending Derek driving the Bulk Move panel on dev. That
 predates this session and nothing here changes it. The prod pull is also still pending.
 
-**Nothing was merged.** Both branches are built and verified, awaiting Derek's call.
+**Nothing was merged — but both branches ARE pushed.** `origin/feature/group-36-...` and `origin/feature/group-38-hermeticity-residuals` exist on GitHub and are in sync, so the work is backed up and recoverable from another machine. Merging is still Derek’s call; `dev` and `main` are untouched.
 
 ⚠️ **The Group 38 branch is STACKED on the Group 36 branch** (38.10 edits a file Group 36
 changed, so branching off `dev` would have conflicted). Merging 38 therefore brings 36 with it —
