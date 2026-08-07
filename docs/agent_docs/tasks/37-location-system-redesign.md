@@ -7,6 +7,7 @@ resolver, and the destructive clear/delete paths all read through. A `locations.
 prerequisite for any data-touching phase.
 
 > **Status: `TODO` — SCOPED, NOT STARTED.** Filed 2026-08-06 (`/refresh-groups`); scoped 2026-08-03.
+> **Forks 2, 3 and 4 were DECIDED 2026-08-07 (see below); only fork 1 remains open.**
 > Derek's framing: *"I think we might need a refactor on how this whole location system works and
 > displays… I feel like things need a re-design before we dig deep into developing a
 > preserve-row-structure path."*
@@ -116,17 +117,94 @@ Read-only inspection of `data/locations.json`, 56 rows:
    the buffer and a location scan."* Do **not** build it before the redesign settles the model.
 2. **The cart-display fix is folded into this redesign** (37.4) rather than shipped as a point fix.
 
-## ❓ Open forks — need a decision BEFORE any build
+## ✅ Forks 2–4 DECIDED (Derek, 2026-08-07)
 
-1. **Is the human-readable composite LocationID still the right model?** *(the biggest fork — nearly
-   every other pain point is downstream of it)* Alternatives: opaque id + display path; or keep
-   composite ids but generate/maintain them entirely automatically from the tree.
-2. **What should a subtree contents view show?** Derek's refinement: distinguish spools sitting
-   **directly on the cart** ("unassigned at row level") from those filed into `R1/R2/R3`, rather than
-   one undifferentiated list.
-3. **Does bulk move gain subtree scope?** If yes, the naming-dependent guard above must be replaced
-   with an explicit active-print/type check **first**.
-4. **Does `Max Spools` become meaningful for carts/rows,** or stay unbounded there?
+### Fork 2 — contents view: TRANSITIVE at every level, GROUPED by child
+
+Derek: *"Sub tree if target is for a specific row, should be that rows contents, if for the cart
+should be the full cart (all rows) if for a location (CR) Full cart (with rows) — similar to how it
+works currently when looking at a Room, where it's sub divided into Cart/box/wall locations, and
+then those items within."*
+
+So the rule is uniform, and **the existing Room view is the reference implementation** — not a new
+pattern to invent:
+
+| Query target | Returns |
+|---|---|
+| Row (`CR-CT-1-R1`) | that row's contents (it has no children) |
+| Cart (`CR-CT-1`) | the whole cart — **every row**, grouped per row |
+| Room (`CR`) | every cart/box/wall beneath it, each subdivided into its own rows/sections |
+
+**This is the answer to the original "distinguish direct-vs-filed" framing:** yes, but by *grouping*
+rather than by two separate lists. Spools sitting directly on the cart are simply the cart's own
+group, alongside a group per row.
+
+🔑 **It also dissolves the recorded contradiction.** The `/api/locations` occupancy rollup is ALREADY
+transitive over `parent_id`, which is why a cart shows a Total including its rows while opening it
+lists zero. Making contents transitive too means the number and the list finally describe the same
+thing — so this fork is a bug fix, not just a preference.
+
+### Fork 3 — bulk move DOES gain subtree scope, but it is the LAST thing to build
+
+Derek: *"should be included, but we need to visualize this somehow in the UI so the user is aware
+it's assigning across… This is such a rare instance… So very on the fence about this."*
+
+Captured honestly, because the ambivalence is the useful part:
+
+- **Include it** — but it is genuinely rare (cart→cart; section→section is likelier, e.g. wall
+  storage where the destination section can't hold the exact count due to alignment).
+- **It must be VISIBLE.** A move that silently reaches across sub-locations is not acceptable; the
+  preview has to show the user it is assigning across.
+- ⚠️ **Derek's own stated workflow probably supersedes it**: *"I'd probably just end up queueing
+  everything in a section into the buffer, and just moving it into the location at that point."*
+  The buffer already does this, today, with full visibility.
+
+**Consequence for sequencing — build the visibility, then re-ask.** The
+[🟢 interim recommendation](#-interim-recommendation-small-safe-survives-whatever-the-redesign-decides)
+above (make the preview say `"N spools sit in 3 sub-locations and will NOT move"`) delivers most of
+the value at a fraction of the risk. If the buffer flow is what actually gets used, full subtree
+scope may never be worth its cost — so ship the visibility first and let real usage decide.
+
+🚫 **HARD PREREQUISITE if it is built:** the L298 D2 safety contract currently depends on
+LocationID **naming**, not structure. Widening bulk-move scope without first replacing it with an
+explicit active-print/type guard means a room-level operation can reach a live toolhead.
+
+### Fork 4 — `Max Spools`: blank/0 = unbounded; a real number is a real cap
+
+Derek: *"shouldn't be meaningful if 0 or null/blank, if there's an actual number there then that's
+probably a found good number and should be taken into consideration."*
+
+**And its real purpose is slot integrity, not storage capacity.** Derek: *"Count is mostly there to
+ensure that no more than X is in a given spot, so mostly to prevent a dryerbox from having 3 in it's
+slot 1 (and to avoid conflicts with having 3 spools assigned to a slot that might be attached to a
+toolhead."*
+
+Why no pure-storage location sets it, in his words: capacity genuinely varies — *"it can vary on if
+the spool is still in the box, or if mixed spool/brands, the spools themselves might vary enough to
+cause a difference. (And if it's mixed 1kg & 250g, then that's a whole nother issue for counting.)"*
+
+🔑 **This retroactively VALIDATES a finding filed as a gap.** The constraint note above says 27 rows
+have `Max Spools = ''` — including every cart and cart-row — *"so L298's D3 capacity pre-flight
+**cannot fire** on a cart→cart move."* That is now **correct behaviour, not a gap**: blank means
+unbounded, and inventing a limit for storage rows would produce false blocks on exactly the
+mixed-size inventory Derek describes. Do not "fix" it.
+
+Treat `Max Spools` as: **absent / `''` / `0` → no cap enforced. Any positive integer → enforce it.**
+
+---
+
+## ❓ Fork 1 — STILL OPEN (the big one)
+
+**Is the human-readable composite LocationID still the right model?** Nearly every remaining pain
+point is downstream of it, and it deserves a worked comparison rather than a cold call.
+
+⚠️ **Reframing to carry into that discussion:** the cluster-wide **NO FORCED RELABELING** invariant
+constrains this far more than "opaque ids vs composite ids" suggests. Existing LocationIDs are
+immutable and scanning stays `LOC:`/legacy/bare-compatible — so "opaque" cannot mean *replacing*
+`CR-CT-1`. It can only mean **stop deriving structure from the string**: keep the composite as a
+display label and scan alias, and let `parent_id` become the sole source of hierarchy. That is a
+materially smaller and safer change than a model swap, and it is arguably what Group 34's Phase 0
+already started. Put that option on the table before choosing.
 
 ---
 
