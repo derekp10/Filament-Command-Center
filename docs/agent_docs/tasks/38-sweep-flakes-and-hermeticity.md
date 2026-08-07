@@ -4,7 +4,11 @@
 **Estimated effort:** ~4–7 hours (6 flakes + 5 test-infra residuals)
 **Risk:** **LOW.** Test-infra only — no product code expected.
 
-> **Status: `TODO`** — filed 2026-08-06 (`/refresh-groups`). The fourth in the
+> **Status: `PARTIAL`** — filed 2026-08-06; **hermeticity residuals DONE 2026-08-07**
+> (`2d36a62`, branch `feature/group-38-hermeticity-residuals`, stacked on Group 36).
+> **38.7 / 38.8 / 38.9 / 38.10 / 38.11 are all closed** (38.9 by Group 36). **The six flakes
+> remain** — they need repeated full sweeps plus ≥5 isolated runs per member, so they were
+> deliberately left as a self-contained next session. The fourth in the
 > Group 26 → 32 → 33 lineage: make a red sweep mean something again.
 >
 > **Scope decision (Derek, 2026-08-06): fix all six flakes directly**, Group 32/33 style, with the
@@ -79,11 +83,11 @@ here because they are exactly the levers that make the flakes above reproducible
 
 | # | Item |
 |---|---|
-| **38.7** | **`--offline` leaks via hardcoded URLs.** The gating is fixture-name-based, so two in-tree tests that hit `http://localhost:8000` with a literal URL and no gated fixture still run in an "offline" sweep. Either add a socket-level guard under `--offline`, or a lint forbidding literal `localhost:8000` outside the gated fixtures. |
-| **38.8** | **The `--offline` collection hook itself is untested.** `test_offline_mode.py` pins the constant and the env parser, not the hook. _(Refuted as stated — the hook is exercised implicitly every offline run — but a direct test is cheap.)_ |
+| **38.7** | ✅ **DONE 2026-08-07** (`2d36a62`). `--offline` is now ENFORCED, not merely intended: a session-scoped autouse socket guard refuses any TCP connect to port **8000 / 7913 / 7912** (matching on port covers localhost / 127.0.0.1 / ::1 / the NAS uniformly). Chose the socket guard over the lint because a lint cannot see an f-string, an env-derived URL, or a helper. `OfflineNetworkAccess` subclasses `requests.exceptions.ConnectionError` so the many existing `except requests.RequestException: pytest.skip("Container not responding")` guards do the right thing untouched — under `--offline` the container IS unreachable, by policy. **It immediately found FOUR leaks, not two**: `test_printer_state_api`, `test_search_deployed_filter` and `test_locations_json_integrity`'s printer_map probe now skip gracefully; the fourth was a real defect — `test_wizard::test_edit_spool_wizard`, a Flask-test-client "unit" test that mocked `update_spool`/`update_filament` but never the pre-edit `get_spool` added by 27.1, so it was reaching the NAS and passing only because dev Spoolman happened to hold spool 100. Now mocked. |
+| **38.8** | ✅ **DONE 2026-08-07** (`2d36a62`). Four direct tests of `pytest_collection_modifyitems`: a container-fixture item skips, a hermetic item does NOT (over-skipping would hollow out the fast sweep), a normal run skips nothing for offline reasons, and **every** name in `CONTAINER_FIXTURES` actually triggers the hook — the set and the hook must agree for all of them, not just `page`. |
 | **38.9** | ✅ **DONE 2026-08-06 by [Group 36](36-attribute-force-reset-data-loss.md)** (`43389c6`). The canary now collects every name bound to `requests` via `ast.Import` (module-level *or* function-local) and matches on that set, with two new pins: an aliased `_req.patch`/`_req.delete` sample is caught, and a look-alike receiver (`import some_other_lib as _req`, `self.session.get`) is NOT flagged. Group 36 also widened the **sibling** canary `test_no_direct_extra_patch.py` to see the restore PATCH through `http_retry.request_with_retry("patch", ...)` — that call had moved behind the helper, taking its `# noqa: spoolman-extra-patch` marker out of scope and silently dropping the same loop from *that* canary too. _Original: matched only `requests.<verb>(...)`, so all 14 `_req.*` calls in `routes_config_attrs.py` — including the destructive migration PATCH loop — were invisible._ |
-| **38.10** | **`scratch_filament` never deletes a REUSED record.** It only deletes what it created, so an interrupted run leaves `__fcc_attr_test__` in dev Spoolman permanently (the next run adopts it and never cleans up). Delete on adoption too, or clean up by name at session end. |
-| **38.11** | **The shortcut-queue drain has no real test.** `test_shortcut_registration_order.py`'s "end-to-end" case re-implements the shim inside `page.evaluate` rather than exercising the shipped one, so it **passes against pre-fix code**. The drain line — whose placement caused a TDZ crash that wiped every shortcut — is only covered indirectly by `test_bulk_move_shortcuts_are_listed_in_the_help_overlay`. Pin it directly. |
+| **38.10** | ✅ **DONE 2026-08-07** (`2d36a62`). `created_id` is now set on the ADOPT branch too, so the fixture owns a reused record and deletes it. Previously self-healing by name but never self-CLEANING: an interrupted run leaked `__fcc_attr_test__` permanently, and every later run adopted-then-re-leaked it. Teardown is best-effort so it cannot mask the test's own result. |
+| **38.11** | ✅ **DONE 2026-08-07** (`2d36a62`). The real hazard was ORDERING and the old test could not see it: the drain must be **last** in the IIFE because `registerShortcut` calls `renderList`, a `const` declared partway down — draining earlier throws a TDZ `ReferenceError` that wipes EVERY shortcut. Added a hermetic source-level pin for that ordering, one for `splice(0)`-consumes-the-queue, and a live test that the **shipped** drain emptied the queue after a real page load. The old `page.evaluate` test is kept but labelled non-load-bearing. |
 
 ---
 

@@ -92,7 +92,12 @@ genuinely new signal.
 ## Open items, in the order I'd take them
 
 1. **Merge Group 36 to `dev`** — Derek's call. Built, reviewed, swept.
-2. **[Group 38](38-sweep-flakes-and-hermeticity.md) — flakes & hermeticity.** ⚠️ **New evidence:
+2. **[Group 38](38-sweep-flakes-and-hermeticity.md) — SIX FLAKES ONLY; the residuals are DONE.**
+   All five hermeticity residuals shipped (`2d36a62`, branch
+   `feature/group-38-hermeticity-residuals`, stacked on Group 36). `--offline` now blocks at the
+   socket layer and is enforced rather than intended — it exposed **four** leaking tests, not the
+   two filed, one of which was a real defect (a Flask-test-client "unit" test reaching the NAS).
+   **What remains is the six flakes.** ⚠️ **New evidence:
    the 2026-08-06 clean sweep fired ZERO of the seven filed flake ids.** Do not read that as
    "fixed" — the premise is load sensitivity and that sweep ran quiet. It does mean one clean
    sweep proves nothing, and 38.1's filed "fails ~2 of 3 sweeps" rate did not reproduce.
