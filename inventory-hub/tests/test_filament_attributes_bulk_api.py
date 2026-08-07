@@ -132,9 +132,16 @@ def scratch_filament(api_base_url):
             None,
         )
 
+    # Group 38.10 — ADOPT means own it. `created_id` used to be set only on the
+    # create branch, so an interrupted run left `__fcc_attr_test__` in dev
+    # Spoolman permanently: the next run adopted it, skipped teardown for the
+    # same reason, and re-leaked it forever. The fixture is self-healing by name
+    # but was never self-CLEANING. Deleting an adopted record is safe — the name
+    # is namespaced to this module and nothing else may create it.
     created_id = None
     if existing is not None:
         fid = existing["id"]
+        created_id = fid
     else:
         c = _req(
             "post",
@@ -160,7 +167,13 @@ def scratch_filament(api_base_url):
 
     if created_id is not None:
         # Cascade-delete (it has no spools, but the endpoint handles both).
-        _req("delete", f"{api_base_url}/api/filament/{created_id}", timeout=15)
+        # Best-effort: a teardown that raises would mask the test's own result,
+        # and a leftover scratch record is now recoverable by the next run's
+        # adopt-then-delete path above.
+        try:
+            _req("delete", f"{api_base_url}/api/filament/{created_id}", timeout=15)
+        except Exception:
+            pass
 
 
 def _pick_target(api_base_url: str, fid: int):

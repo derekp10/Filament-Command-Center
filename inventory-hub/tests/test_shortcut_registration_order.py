@@ -51,13 +51,101 @@ def test_shim_is_defined_before_any_module_loads():
     )
 
 
+class TestShippedDrain:
+    """Group 38.11 — pin the SHIPPED drain, not a re-implementation of it.
+
+    `test_a_pre_registry_registration_reaches_the_overlay` below rebuilds the
+    shim AND the drain inside `page.evaluate` and then asserts its own inline
+    copy worked. That passes against pre-fix code: it never executes the drain
+    line in shortcuts_registry.js at all. The real hazard is an ORDERING one,
+    and it is invisible to that test.
+
+    The drain must be the LAST statement in the IIFE. `registerShortcut` calls
+    `renderList()`, which is a `const` declared partway down the same IIFE, so
+    draining any earlier throws a temporal-dead-zone ReferenceError — which
+    wiped out EVERY shortcut, including the module's own. That regression was
+    caught only indirectly, by a Bulk-Moves overlay test that has nothing to do
+    with load order.
+
+    Source-level and hermetic on purpose: this is a static ordering property,
+    so it needs no browser and runs in the offline sweep.
+    """
+
+    def _registry_src(self):
+        from pathlib import Path
+        p = (Path(__file__).resolve().parent.parent
+             / "static" / "js" / "modules" / "shortcuts_registry.js")
+        return p.read_text(encoding="utf-8", errors="replace")
+
+    def test_the_drain_exists_in_the_shipped_registry(self):
+        src = self._registry_src()
+        assert "window.__pendingShortcuts" in src, (
+            "shortcuts_registry.js no longer drains the pre-registry queue — "
+            "every shortcut registered by a module loaded before it is lost "
+            "from the `?` overlay"
+        )
+
+    def test_the_drain_runs_AFTER_renderList_is_declared(self):
+        """The TDZ trap. Draining before `renderList` exists throws and wipes
+        every shortcut."""
+        src = self._registry_src()
+        decl = src.index("const renderList")
+        drain = src.index("_pending.splice(")
+        assert drain > decl, (
+            "the queue drain runs BEFORE `const renderList` is initialised. "
+            "registerShortcut() calls renderList(), so this throws a "
+            "temporal-dead-zone ReferenceError and silently wipes EVERY "
+            "shortcut from the help overlay. Keep the drain last in the IIFE."
+        )
+
+    def test_the_drain_CONSUMES_the_queue(self):
+        """`splice(0)` empties as it reads. A plain forEach would leave the
+        queue populated, so anything re-running the drain double-registers."""
+        src = self._registry_src()
+        assert "_pending.splice(0)" in src, (
+            "the drain must consume the queue (splice), not just iterate it"
+        )
+
+
+@pytest.mark.usefixtures("require_server")
+def test_the_shipped_drain_actually_emptied_the_queue(page):
+    """Live counterpart: after a real page load the queue must be EMPTY.
+
+    Nothing is re-implemented here — this observes the shipped shim and the
+    shipped drain having run. A non-empty queue means the drain threw (the TDZ
+    crash) or never executed, and every early-module shortcut is missing from
+    the overlay.
+    """
+    page.goto(DASH, wait_until="domcontentloaded")
+    page.wait_for_function("typeof window.registerShortcut === 'function'", timeout=15000)
+    page.wait_for_function(
+        "Array.isArray(window.__pendingShortcuts) === false || "
+        "window.__pendingShortcuts.length === 0",
+        timeout=15000,
+    )
+
+    pending = page.evaluate("(window.__pendingShortcuts || []).length")
+    assert pending == 0, (
+        f"{pending} shortcut(s) are still queued after load — the shipped drain "
+        f"in shortcuts_registry.js did not run to completion"
+    )
+    # And the registry is populated, so "empty queue" isn't just "nothing ever
+    # registered".
+    listed = page.evaluate(
+        "document.getElementById('fcc-shortcuts-list')?.innerHTML || ''"
+    )
+    assert len(listed) > 0, "the `?` overlay list is empty — nothing registered at all"
+
+
 @pytest.mark.usefixtures("require_server")
 def test_a_pre_registry_registration_reaches_the_overlay(page):
     """End-to-end: register before the registry exists, and still be listed.
 
-    This is the exact sequence that used to lose the entry. We re-create it by
-    restoring the shim and registering through it, then draining as the registry
-    does on load — proving the queue path, not just the live function.
+    ⚠️ Group 38.11 — this re-creates the shim and the drain INSIDE the page, so
+    it exercises its own inline copy rather than the shipped one and would pass
+    against pre-fix code. Kept because it still documents the sequence
+    end-to-end, but the load-bearing pins are in `TestShippedDrain` above and
+    in `test_the_shipped_drain_actually_emptied_the_queue`.
     """
     page.goto(DASH, wait_until="domcontentloaded")
     page.wait_for_function("typeof window.registerShortcut === 'function'", timeout=15000)
