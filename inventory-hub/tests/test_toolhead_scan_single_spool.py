@@ -36,11 +36,24 @@ def test_toolhead_scan_with_multi_spool_buffer_sends_only_topmost(page: Page, ba
     )
     assert toolhead_id, "no toolhead in dev environment"
 
-    # Stub /api/buffer so background polling can't overwrite the test's
-    # synthetic spools with real Spoolman state. Then seed two fakes and
-    # mark a recent local change so the race-protection guard skips the
-    # next loadBuffer overwrite (covers any in-flight poll).
-    page.route("**/api/buffer", lambda route: route.fulfill(
+    # Stub the buffer endpoint so background polling can't overwrite the test's
+    # synthetic spools with real Spoolman state. Then seed two fakes and mark a
+    # recent local change so the race-protection guard skips the next
+    # loadBuffer overwrite (covers any in-flight poll).
+    #
+    # Group 38 — the glob used to be `**/api/buffer`, which HAS NEVER MATCHED
+    # ANYTHING: the real endpoints are `/api/state/buffer` (GET+POST) and
+    # `/api/buffer/clear`, and a Playwright URL glob must match the whole URL —
+    # neither ends in `/api/buffer`. So this stub's stated protection was never
+    # actually in force; the test survived on the `lastLocalBufferChange` grace
+    # below, which is exactly what its sibling further down this file relies on
+    # with no stub at all (Group 33.3).
+    #
+    # Fixing the glob rather than deleting the stub, because intercepting
+    # `/api/state/buffer` also swallows `persistBuffer`'s POST — so the
+    # synthetic spools 9991/9992 can no longer be written to the SHARED dev
+    # buffer at all. That is a hermeticity gain the grace alone never provided.
+    page.route("**/api/state/buffer", lambda route: route.fulfill(
         status=200, content_type='application/json',
         body=json.dumps([
             { "id": 9991, "display": "TOP", "color": "#ff0000", "remaining_weight": 500 },

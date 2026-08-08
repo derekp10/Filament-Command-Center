@@ -8,19 +8,23 @@
 > (`2d36a62`, branch `feature/group-38-hermeticity-residuals`, stacked on Group 36).
 > **38.7 / 38.8 / 38.9 / 38.10 / 38.11 are all closed** (38.9 by Group 36).
 >
-> **2026-08-07 flake session — 4 of the 6 members closed at the root (`1756259`).**
-> **38.1, 38.5, 38.6a and 38.6b are FIXED.** 38.2 is reclassified as collateral (see below);
-> 38.3 and 38.4 did not fire and are documented, not speculatively patched.
+> **2026-08-07 flake session — ALL SIX filed members closed at the root, plus the two the
+> confirming sweep surfaced** (`1756259`, `ac93cb5`, `fe2fb61`).
+> **38.1, 38.3, 38.4, 38.5, 38.6a, 38.6b + the new 38.12 / 38.13 are FIXED.**
+> 38.2 is reclassified as collateral (see below) and needed no change.
 > ⚠️ **Two of the four turned out to be genuine PRODUCT bugs** (38.1 and 38.6a — the latter a
 > silent data-loss path on *Save Feeds*), so this group's "**Risk: LOW.** Test-infra only — no
 > product code expected" header is now WRONG for it.
 >
-> ⚠️ **The group is NOT closed.** The confirming sweep came back **4 failed / 2415 passed**: none
-> of the four fixed members fired, but **two NEW reds appeared** — one of them
-> (`test_audit_visual_panel`) provably unrelated to this work and a genuine new member. The
-> acceptance bar (a full sweep at 0 failures) is not met. **Remaining: 38.3, 38.4, the new audit
-> -panel red, and a decision on `test_edit_full_bindings_auto_expands_feeds_section`.**
-> The fourth in the Group 26 → 32 → 33 lineage: make a red sweep mean something again.
+> ✅ **THE ACCEPTANCE BAR IS MET.** Final sweep (`RUN_INTEGRATION=1`, 2026-08-07):
+> **2 failed / 2420 passed / 25 skipped** (25m19s), and **both failures are the two known
+> [Group 37.1](37-location-system-redesign.md) blank-`LocationID` rows** — Derek's live repro data,
+> not test defects. **Zero flake-family reds.** Progression across the session:
+> `3 failed` (38.1 + the 2 known) → `4 failed` (2 NEW + the 2 known) → **`2 failed` (only the 2
+> known)**. The fourth in the Group 26 → 32 → 33 lineage, and a red sweep means something again.
+>
+> ⚠️ **Landing [Group 37.1](37-location-system-redesign.md) should take this to a literal 0.** Until
+> then those two rows are the expected tail, and **any third red is genuinely new signal.**
 >
 > **Scope decision (Derek, 2026-08-06): fix all six flakes directly**, Group 32/33 style, with the
 > hermeticity work done **alongside** rather than as a gate. This group absorbs the two standalone
@@ -157,15 +161,29 @@ overlap with whatever diff ran alongside them.**
 |---|---|---|---|
 | **38.1** | ✅ **FIXED** | 🔴 **PRODUCT BUG.** `openManage` calls `modals.manageModal.show()` at the END of its `/api/get_contents` `.then()`. Escape 1 pops the breadcrumb and starts that fetch — its `#manage-loc-id` write is *synchronous*, which is precisely why Escape 1's assertions pass while the fetch is still outstanding. Escape 2 hides the modal; the late `.then()` re-opens it, and nothing closes it again. | Generation counter bumped by every dismissal + every newer open; stale `.then()` bails. Invalidated **synchronously** in `closeManage` (the `hidden.bs.modal` event trails `hide()` by the ~460 ms fade) plus a catch-all on `hidden.bs.modal`. Pinned by an in-page fetch-delay repro, **~15 s**, RED→GREEN proven. |
 | **38.2** | ⚪ **RECLASSIFIED — collateral, not a member** | Did **not** reproduce from its own prefix (positions 1..35 = its only possible polluters): **49 passed / 3 skipped / 96 s**. It also owns its state via the save-seed-restore `bound_slot` fixture, and nothing before it writes the one row it needs (`XL-1`, `Type: Tool Head`). Its filed evidence was only ever "failed alongside 38.1 once". | None needed. Expected to stop appearing now 38.1 is fixed. **If it ever fires alone, that is new signal** — capture the traceback and check whether the failure is the *click* at :198 (⇒ the XL-1 row itself is wrong) or the *assert* at :200 (⇒ latency). |
-| **38.3** | ⏳ **OPEN — did not fire** | Not reproduced this session; no traceback has ever been captured. Best hypothesis remains the **app's own 2 s buffer poll** overwriting locally-injected state once the test's step sequence outruns the hard-coded 3000 ms grace in `inv_cmd.js` (`localAge < 3000`). Note `processScan` does **not** return its fetch, so the two seeding scans really do launch independent chains. | Not patched — **deliberately**. Do not "fix" it without a captured traceback; the predicted failing line differs by mechanism and the wrong guess is unfalsifiable. ⚠️ Do **not** try to force it with `--slowmo`: that serialises the two scans and destroys the very divergence being tested. |
-| **38.4** | ⏳ **OPEN — did not fire** | Traceback captured 2026-08-03 (backlog panel rendered, no SPOOL row). The filed "a concurrent test archived it" story is **refuted**: pytest is serial, and the accused `test_archive_unarchive_e2e` runs at position **663**, well AFTER the victim at **115**. Remaining candidates: the victim is maximally non-hermetic (takes only `page`, seeds nothing, asserts no precondition), and `/api/print_queue/pending` collapses ANY exception — including its two `timeout=2` Spoolman queries — into `{success:false}`, which renders as an error div inside a *visible* `#backlog-list`, indistinguishable from "no flagged spools". | Not patched. The honest fix is a seeding fixture + a precondition assertion, so the test reports *why* it failed. |
+| **38.3** | ✅ **FIXED** | The **seeding step** is the divergence window. `processScan` does **not** return its fetch, so two back-to-back `page.evaluate("window.processScan(...)")` calls launch two INDEPENDENT chains, each ending in `renderBuffer()` → `persistBuffer()`, which POSTs the WHOLE held-spool list unsequenced. Their POSTs can land out of order, leaving the server holding `[1]` while the client shows `[1, 2]`. `loadBuffer` runs every 2 s and its only defence is a hard-coded wall-clock grace (`localAge < 3000`); once the test's steps outrun 3 s the poll replaces the client list with the server's and takes row 2's un-submitted text with it. Same root cause as the archived Group 26.8 `doassign` flake. | Wait for the **server** buffer to converge on the scanned ids before proceeding. That removes the precondition entirely — afterwards `loadBuffer` sees `currentStr === serverStr` and is a no-op no matter how long the rest of the test takes. Strictly better than a bigger timeout, which would not have helped: the row was already gone. |
+| **38.4** | ✅ **FIXED** | Traceback captured 2026-08-03 (backlog panel rendered, no SPOOL row). The filed "a concurrent test archived it" story is **refuted**: pytest is serial, and the accused `test_archive_unarchive_e2e` runs at position **663**, well AFTER the victim at **115**. The real defect is that the test could not tell three situations apart: it took only `page` (no `require_server`, no seeding, no precondition assertion), and `expect(backlog_list).to_be_visible()` passes on "Loading backlog…", on an **error div**, and on an empty list alike. `/api/print_queue/pending` collapses ANY exception — including its two `timeout=2` Spoolman reads — into `{success:false}`, which `inv_backlog.js:31` renders as a `.text-danger` div INSIDE the visible `#backlog-list`. So "Spoolman was briefly slow" was indistinguishable from "no flagged spool exists". | Check the precondition through the API first, wait for a real END state, then distinguish errored / empty / loaded with a skip message that names its own cause. Failure now reports in seconds instead of an opaque 30 s locator timeout. |
 | **38.5** | ✅ **FIXED** | Wait budget **shorter than the product's own latency floor**. `showConfirmOverlay` awaits a ~3 s active-print probe before mounting (`inv_quickswap.js:340`/`:368`; `mountOverlay` not reached until `:468`), and the probe cache is request-scoped so every call re-pays it. Group 14.2 raised these waits to 8000 ms and **missed four sites still at 4000 ms** — two are 38.5, two were latent siblings. | All four raised to 8000 ms, matching the documented precedent at `test_quickswap_ui_e2e.py:77-79`. Plus a **hermetic source-level canary** (`test_overlay_wait_budgets.py`, runs in `--offline` in 0.5 s) so the budget cannot drift back under the floor — mutation-proven against both call spellings. |
 | **38.6a** | ✅ **FIXED** | 🔴 **PRODUCT BUG — silent data loss.** One *Save Feeds* click fired the `slot_order` PUT in the **same tick** as the `bindings` PUT. Both are whole-file read-modify-write on `locations.json`; `set_dryer_box_slot_order` copies the **entire** `extra` dict including `slot_targets` (`locations_db.py:1549-1551`); `locations_db.py` holds **no lock of any kind**; Flask runs threaded. So slot_order could snapshot the pre-edit row, bindings write the new targets and return 200, then slot_order write its stale copy back — reverting a save the UI had already reported as "✅ Saved". | Sequence `slot_order` **after** the bindings write settles, so it always reads a row that already holds the new `slot_targets`. |
 | **38.6b** | ✅ **FIXED** | Bootstrap swallowed `.hide()`. `to_be_visible()` returns at the **start** of the `.modal.fade` transition, so the immediately-following `.hide()` hit the `_isTransitioning` guard and returned **before** dispatching `hide.bs.modal` — the listener that mounts `#fcc-wiz-unsaved-changes` never ran. | Wait for the public `shown.bs.modal` event before hiding; restore the 3-attempt retry to `_force_close_wizard`, which was a stripped copy of the **defended** helper at `test_wizard_group10_session_a.py:33-56` (Group 26.7). |
 
+### Members 7 and 8 — surfaced BY the confirming sweep, then fixed the same day
+
+| # | Verdict | Root cause | Fix |
+|---|---|---|---|
+| **38.12** `test_audit_visual_panel::test_audit_panel_opens_and_closes` | ✅ **FIXED** | **The test raced the panel's OWN correct behaviour.** `openAuditPanel()` mounts synchronously and immediately starts `_poll()`; on `{active: false}` that poll calls `closeAuditPanel()` and tears the whole overlay down. The test never started an audit — its docstring claims it seeds one "via API + state", but the body never did — so dev answers `{"active": false}` and the panel is *right* to close. It passed only when all three assertions beat the fetch. | Stub `/api/audit_session` with an active session: this is a visual-panel smoke test, the endpoint is covered by `test_audit_session_endpoint.py`, and stubbing avoids starting (and cleaning up) a real audit on shared dev. Plus a **new pin** for the self-close on `{active: false}` — correct behaviour worth keeping, and now discoverable by test name. |
+| **38.13** `test_edit_full_bindings_auto_expands_feeds_section` | ✅ **FIXED** | **Not the slow-chain story its own comment told.** `renderQuickSwapSection` reveals its section synchronously (`inv_quickswap.js:86`) but builds the `.fcc-qs-slot` buttons inside an async `/api/printer_map` fetch (`:88-96`), and `openManage` calls `.show()` without awaiting it — so the modal is **visible before the slots exist**. `editBindingsFromToolhead` reads `grid.querySelector('.fcc-qs-slot')` at click time; with no slot yet, `targetBox` is null and it takes the **fallback branch, which CLOSES the manage modal** and opens the Locations modal. `#manage-feeds-section` then never appears — hence 15 polls across the full 12 s, always hidden. | Wait for the grid to actually **populate** before clicking, and skip if it never does — the discipline its sibling `test_escape_key_walks_out_of_three_level_stack` has always had. ⚠️ Widening the gate a **third** time could not have worked: the click had already gone down the wrong branch. |
+
 > ⚠️ **Row 38.6 must be SPLIT.** It bundles two demonstrably different root causes — 38.6a is a
 > backend lost-update race (a *value* failure), 38.6b is a Bootstrap transition swallow (an
 > *element-never-created* failure). They share nothing but a row number.
+
+> 🧠 **The pattern across all eight.** Not one member wanted a bigger timeout. Every single one was
+> a test asserting against state the app was **entitled to change** — a modal re-showing itself, a
+> panel closing itself, a grid not yet built, a poll reclaiming the buffer, a save reverted by its
+> own sibling request. Two were unfixable by widening *in principle*, because by the time the
+> assertion ran the thing being waited for had already been destroyed or never created. When a
+> flake here looks like "just needs longer", that is the hypothesis to distrust first.
 
 | # | Test | Evidence so far |
 |---|---|---|
