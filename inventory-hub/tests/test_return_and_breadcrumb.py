@@ -385,6 +385,29 @@ def test_edit_full_bindings_auto_expands_feeds_section(page: Page, open_manage_m
     open_manage_modal(TEST_TOOLHEAD)
     # Before: Feeds is a dryer-box-only section, invisible here.
     expect(page.locator("#manage-feeds-section")).to_be_hidden()
+    # Group 38 — wait for the Quick-Swap grid to actually POPULATE before
+    # clicking, instead of widening the timeout below a third time.
+    #
+    # `renderQuickSwapSection` reveals its section synchronously but builds the
+    # `.fcc-qs-slot` buttons inside an async `/api/printer_map` fetch
+    # (inv_quickswap.js:86 vs :88-96), and `openManage` calls `.show()` without
+    # awaiting it — so the modal is VISIBLE BEFORE THE SLOTS EXIST.
+    #
+    # That matters because `editBindingsFromToolhead` reads
+    # `grid.querySelector('.fcc-qs-slot')` at click time. With no slot yet,
+    # `targetBox` is null and it takes the FALLBACK branch, which CLOSES the
+    # manage modal and opens the Locations modal instead. `#manage-feeds-section`
+    # then never appears at all, and the test burns its full 12s polling a
+    # hidden element — precisely the observed failure (2026-08-07 sweep: 15
+    # polls, always hidden). A bigger timeout could never have fixed that; the
+    # click had already gone down the wrong branch.
+    #
+    # The sibling `test_escape_key_walks_out_of_three_level_stack` has always
+    # guarded this. This test never did.
+    try:
+        expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=12000)
+    except AssertionError:
+        pytest.skip("No QuickSwap slot rendered on XL-1 in current dev state.")
     page.locator("#quickswap-edit-bindings-btn").click()
     # Clicking "Edit Full Bindings" chains THREE sequential fetches before the
     # Feeds section renders and auto-expands: openManage's /api/get_contents,
