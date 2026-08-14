@@ -39,8 +39,8 @@ the `derive_parent_id_from_prefix` alias retired (`2b16869`), per-row ➕ Add-ch
 ## 🔬 Root cause — PROVEN by source trace 2026-08-03
 
 `locations_db.location_prefix` splits a LocationID on the **first dash only**
-(`locations_db.py:487-492`), and that is the only non-exact match in
-`spoolman_api._build_location_match` (`spoolman_api.py:1320`).
+(`locations_db.py:543-548`), and that is the only non-exact match in
+`spoolman_api._build_location_match` (`spoolman_api.py:1467`).
 
 Since every descendant of room `CR` — `CR-CT-1`, `CR-CT-1-R1`, `CR-WLN-R1-SC1` — has first segment
 `CR`, the granularity is **binary, not one-level**: a ROOM query reaches its whole subtree at any
