@@ -298,6 +298,17 @@ def api_save_location():
     data = request.json
     old_id = data.get('old_id')
     new_entry = data.get('new_data')
+    # Group 38 follow-up — serialize the whole load→mutate→save cycle. Split into
+    # a private helper purely so the long body keeps its indentation and the diff
+    # stays reviewable; the route and its endpoint name are unchanged, so
+    # test_route_table_pin.py is unaffected. No Spoolman I/O inside, so the lock
+    # is held only for the file operations.
+    with locations_db.locations_write_lock():
+        return _api_save_location_locked(old_id, new_entry)
+
+
+def _api_save_location_locked(old_id, new_entry):
+    """Body of `api_save_location`. Caller MUST hold locations_write_lock()."""
     current_list = locations_db.load_locations_list()
     old_row = None
     if old_id:
@@ -402,11 +413,22 @@ def api_delete_location():
         # toolhead pruned from its Printer row's toolheads[]. The cascade mutates
         # `current` for the locations.json-side cleanup; we then remove the row +
         # save ONCE. An active print on the toolhead blocks with requires_confirm.
-        result = logic.perform_toolhead_delete_cascade(target, current, confirm_active_print=confirm_active)
-        if isinstance(result, dict) and result.get("status") == "requires_confirm":
-            return jsonify({"success": False, **result}), 409
-        new_list = [row for row in current if str(row.get('LocationID', '')).strip() != target]
-        locations_db.save_locations_list(new_list)
+        #
+        # Group 38 follow-up — this branch holds the write lock across the
+        # cascade's Spoolman calls, DELIBERATELY. The cascade's locations.json
+        # edits (slot_targets cleared, toolheads[] pruned) live in `current`, so
+        # they can't be re-read afterwards the way the non-toolhead branch below
+        # does. A location delete is rare and user-initiated, and interleaving a
+        # binding save with a half-applied delete cascade would be wrong anyway.
+        # Re-read inside the lock so the cascade starts from a snapshot nobody
+        # could have mutated between the pre-flight read and here.
+        with locations_db.locations_write_lock():
+            current = locations_db.load_locations_list()
+            result = logic.perform_toolhead_delete_cascade(target, current, confirm_active_print=confirm_active)
+            if isinstance(result, dict) and result.get("status") == "requires_confirm":
+                return jsonify({"success": False, **result}), 409
+            new_list = [row for row in current if str(row.get('LocationID', '')).strip() != target]
+            locations_db.save_locations_list(new_list)
         bits = []
         if result["unassigned"]:
             bits.append(f"{len(result['unassigned'])} spool(s) → UNASSIGNED")
@@ -441,8 +463,16 @@ def api_delete_location():
     except Exception as e:
         state.logger.warning(f"location delete: cascade unassign failed: {e}")
 
-    new_list = [row for row in current if str(row.get('LocationID', '')).strip() != target]
-    locations_db.save_locations_list(new_list)
+    # Group 38 follow-up — the Spoolman cascade above is N NAS round-trips, so it
+    # runs OUTSIDE the lock; only the file cycle is serialized. Re-read here
+    # rather than reusing `current`, which was read BEFORE that cascade: writing
+    # the stale snapshot would revert anything persisted while the cascade ran.
+    # That is a latent bug independent of the locking work — the longer the
+    # cascade, the wider the window.
+    with locations_db.locations_write_lock():
+        current = locations_db.load_locations_list()
+        new_list = [row for row in current if str(row.get('LocationID', '')).strip() != target]
+        locations_db.save_locations_list(new_list)
     state.add_log_entry(f"🗑️ Deleted: {target}", "WARNING")
     return jsonify({"success": True})
 

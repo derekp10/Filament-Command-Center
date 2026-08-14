@@ -1,9 +1,56 @@
 import os
 import json
 import csv
+import contextlib
 import shutil
 import tempfile
+import threading
 import state  # type: ignore
+
+# ---------------------------------------------------------------------------
+# Write serialization
+# ---------------------------------------------------------------------------
+#
+# EVERY mutator of locations.json is a whole-file READ-MODIFY-WRITE:
+#
+#     loc_list = load_locations_list()   →   mutate   →   save_locations_list(loc_list)
+#
+# There was no lock anywhere in this module, and Flask runs threaded
+# (app.py: `app.run(...)`, whose default is threaded=True). Two overlapping
+# writers therefore LOSE UPDATES: the second one's save carries a `loc_list`
+# snapshot taken before the first one's write, so it silently reverts it — and
+# both callers get a success response.
+#
+# That is not theoretical. It was the Group 38.6a flake: one "Save Feeds" click
+# fired the slot_order PUT and the bindings PUT in the same tick, and
+# `set_dryer_box_slot_order` copies the ENTIRE `extra` dict (slot_targets
+# included), so whichever landed second reverted the other — while the UI
+# displayed "✅ Saved". The captured traceback is `assert 'XL-1' == 'XL-2'`.
+# Sequencing those two PUTs removed that particular trigger; this lock removes
+# the race, which two browser tabs or a pulse-driven write could still hit.
+#
+# Scope + rules:
+#   - READERS ARE NOT LOCKED. `save_locations_list` publishes via `os.replace`,
+#     which is atomic, so a reader never observes a torn file. Locking reads
+#     would serialize the dashboard pulse for no benefit.
+#   - Hold it around the WHOLE load→mutate→save cycle. Locking `load` and
+#     `save` individually is useless — the interleave happens BETWEEN them.
+#   - ⚠️ Do NOT hold it across network I/O. The Spoolman cascade in a location
+#     delete is N NAS round-trips; run that OUTSIDE the lock and then re-read
+#     inside it. `api_delete_location` is the worked example.
+#   - Re-entrant (RLock) so a locked mutator may call another one.
+#   - Boot-time callers (startup_migrations, print_monitor's creds seed) run at
+#     import, before the server accepts a request, so they are deliberately not
+#     wrapped.
+
+_WRITE_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def locations_write_lock():
+    """Serialize one whole load→mutate→save cycle against locations.json."""
+    with _WRITE_LOCK:
+        yield
 
 # Runtime state lives under `data/` so a broad .gitignore rule keeps it
 # out of source control. See data/README.md for the rationale — in short:
@@ -1540,17 +1587,25 @@ def set_dryer_box_slot_order(loc_id, order):
     order = str(order or '').strip().lower()
     if order not in ('ltr', 'rtl'):
         return False, f"invalid order '{order}' (expected 'ltr' or 'rtl')"
-    loc_list = load_locations_list()
-    idx, row = _find_location(loc_list, loc_id)
-    if idx is None:
-        return False, "location not found"
-    if row.get('Type') != DRYER_BOX_TYPE:
-        return False, f"type '{row.get('Type')}' is not a Dryer Box"
-    extra = dict(row.get('extra') or {})
-    extra['slot_order'] = order
-    row['extra'] = extra
-    loc_list[idx] = row
-    save_locations_list(loc_list)
+    with locations_write_lock():
+        loc_list = load_locations_list()
+        idx, row = _find_location(loc_list, loc_id)
+        if idx is None:
+            return False, "location not found"
+        if row.get('Type') != DRYER_BOX_TYPE:
+            return False, f"type '{row.get('Type')}' is not a Dryer Box"
+        extra = dict(row.get('extra') or {})
+        extra['slot_order'] = order
+        row['extra'] = extra
+        loc_list[idx] = row
+        # Group 38 follow-up — propagate the save result instead of discarding
+        # it. `save_locations_list` returns False on the write-time orphan
+        # guard, an atomic-write exception, or a verify-after-write that never
+        # recovers. Returning True regardless is exactly how "✅ Saved N
+        # binding(s)" came to be shown over an unchanged file.
+        if not save_locations_list(loc_list):
+            return False, ("save failed — locations.json was not written; see the "
+                           "Activity Log / hub.log for the refusal reason")
     return True, None
 
 
@@ -1585,20 +1640,21 @@ def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
     th_up = str(toolhead_id or '').strip().upper()
     if not box_up or not th_up:
         return False, "missing box or toolhead"
-    loc_list = load_locations_list()
-    idx, row = _find_location(loc_list, box_up)
-    if idx is None or not _is_single_slot_dryer_box(row):
-        return False, "not a single-slot dryer box"
-    extra = dict(row.get('extra') or {})
-    targets = dict(extra.get('slot_targets') or {})
-    if str(targets.get('1', '')).strip().upper() == th_up:
-        return True, "already attached"  # idempotent — skip the write
-    targets['1'] = th_up
-    extra['slot_targets'] = targets
-    row['extra'] = extra
-    loc_list[idx] = row
-    if not save_locations_list(loc_list):
-        return False, "persist failed"
+    with locations_write_lock():
+        loc_list = load_locations_list()
+        idx, row = _find_location(loc_list, box_up)
+        if idx is None or not _is_single_slot_dryer_box(row):
+            return False, "not a single-slot dryer box"
+        extra = dict(row.get('extra') or {})
+        targets = dict(extra.get('slot_targets') or {})
+        if str(targets.get('1', '')).strip().upper() == th_up:
+            return True, "already attached"  # idempotent — skip the write
+        targets['1'] = th_up
+        extra['slot_targets'] = targets
+        row['extra'] = extra
+        loc_list[idx] = row
+        if not save_locations_list(loc_list):
+            return False, "persist failed"
     return True, f"{box_up} slot 1 -> {th_up}"
 
 
@@ -1610,21 +1666,22 @@ def detach_single_slot_boxes_from_toolhead(toolhead_id):
     th_up = str(toolhead_id or '').strip().upper()
     if not th_up:
         return []
-    loc_list = load_locations_list()
-    detached = []
-    for row in loc_list:
-        if not _is_single_slot_dryer_box(row):
-            continue
-        targets = (row.get('extra') or {}).get('slot_targets')
-        if not isinstance(targets, dict):
-            continue
-        if str(targets.get('1', '')).strip().upper() == th_up:
-            extra = dict(row.get('extra') or {})
-            extra['slot_targets'] = {k: v for k, v in targets.items() if str(k) != '1'}
-            row['extra'] = extra
-            detached.append(row.get('LocationID'))
-    if detached and not save_locations_list(loc_list):
-        return []
+    with locations_write_lock():
+        loc_list = load_locations_list()
+        detached = []
+        for row in loc_list:
+            if not _is_single_slot_dryer_box(row):
+                continue
+            targets = (row.get('extra') or {}).get('slot_targets')
+            if not isinstance(targets, dict):
+                continue
+            if str(targets.get('1', '')).strip().upper() == th_up:
+                extra = dict(row.get('extra') or {})
+                extra['slot_targets'] = {k: v for k, v in targets.items() if str(k) != '1'}
+                row['extra'] = extra
+                detached.append(row.get('LocationID'))
+        if detached and not save_locations_list(loc_list):
+            return []
     return detached
 
 
@@ -1638,6 +1695,16 @@ def set_dryer_box_bindings(loc_id, slot_targets, printer_map):
 
     On success, errors_list is empty and extra.slot_targets is written.
     """
+    # Group 38 follow-up — the whole load→validate→mutate→save cycle runs under
+    # the write lock. Split into a private helper purely so the long body keeps
+    # its indentation and the diff stays reviewable; the public name and
+    # signature are unchanged.
+    with locations_write_lock():
+        return _set_dryer_box_bindings_locked(loc_id, slot_targets, printer_map)
+
+
+def _set_dryer_box_bindings_locked(loc_id, slot_targets, printer_map):
+    """Body of `set_dryer_box_bindings`. Caller MUST hold locations_write_lock()."""
     loc_list = load_locations_list()
     idx, row = _find_location(loc_list, loc_id)
     if idx is None:
@@ -1691,7 +1758,13 @@ def set_dryer_box_bindings(loc_id, slot_targets, printer_map):
     extra['slot_targets'] = clean
     row['extra'] = extra
     loc_list[idx] = row
-    save_locations_list(loc_list)
+    # Group 38 follow-up — propagate the save result. This call used to be bare,
+    # so a refused or unverified write still returned success and the UI happily
+    # rendered "✅ Saved N binding(s)" over an unchanged file.
+    if not save_locations_list(loc_list):
+        return False, [("*", loc_id,
+                        "save failed — locations.json was not written; see the "
+                        "Activity Log / hub.log for the refusal reason")], warnings
     return True, [], warnings
 
 
