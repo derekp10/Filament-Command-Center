@@ -154,6 +154,7 @@ import startup_migrations  # noqa: E402
 from startup_migrations import MAX_LOCATIONS_BACKUPS, _prune_locations_backups  # noqa: E402
 startup_migrations.run_startup_migrations()
 startup_migrations.resurface_pending_cancel_reviews()
+startup_migrations.resurface_pending_attr_migrations()
 
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
 log = logging.getLogger('werkzeug')
@@ -287,7 +288,7 @@ from routes_config_attrs import (  # noqa: E402,F401
     api_get_config, api_put_config, api_config_export, api_config_import,
     api_filament_attributes_report, api_filament_attributes_bulk_set,
     api_filament_attributes_add_choice, api_filament_attributes_remove_choice,
-    api_filament_attributes_sweep_unused,
+    api_filament_attributes_sweep_unused, api_filament_attributes_unhide_choice,
 )
 
 # L316 step 11: audit_session + the state/persistence routes + the audit

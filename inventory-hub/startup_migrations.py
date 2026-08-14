@@ -17,6 +17,7 @@ import state  # type: ignore
 import config_loader  # type: ignore
 import locations_db  # type: ignore
 import cancel_review_store  # type: ignore
+import attr_migration  # type: ignore  # Group 36: unfinished force_reset recovery
 
 
 # L347 follow-up — prune old locations.json.pre-*.bak migration backups.
@@ -278,3 +279,23 @@ def resurface_pending_cancel_reviews():
             state.logger.info(f"🛑 Re-surfaced {len(_pending_reviews)} pending cancel review(s) from disk.")
     except Exception as _cr_err:
         state.logger.warning(f"pending cancel-review re-surface skipped: {_cr_err}")
+
+
+def resurface_pending_attr_migrations():
+    """Announce any filament-attribute schema migration that never finished.
+
+    Same "never silently lost" contract as the cancel reviews above. A
+    recovery snapshot only survives on disk when its migration failed or died
+    partway, so a leftover file means some filaments are still missing their
+    `filament_attributes` — and before Group 36 that outcome left no durable
+    trace at all beyond a count in a log that rotates within days.
+
+    Deliberately announce rather than auto-replay: a snapshot can be
+    arbitrarily stale, and the restore PATCH writes each record's WHOLE extras
+    dict, so a blind replay would revert every edit made to those filaments
+    since the crash. The file is the recovery data; a human decides.
+    """
+    try:
+        attr_migration.surface_pending_recovery_snapshots()
+    except Exception as _am_err:
+        state.logger.warning(f"pending attr-migration re-surface skipped: {_am_err}")

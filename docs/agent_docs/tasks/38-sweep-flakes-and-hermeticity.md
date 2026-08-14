@@ -38,6 +38,26 @@ to a file — the failure detail has been lost to output truncation nearly every
 
 ---
 
+## 📊 Baseline: a clean full sweep on 2026-08-06 fired NONE of them
+
+The Group 36 verification sweep (`RUN_INTEGRATION=1`) came back
+**2406 passed / 2 failed / 25 skipped** in 23m35s, and **zero of the seven test ids below
+appeared.** Both failures were [Group 37.1](37-location-system-redesign.md)'s blank-`LocationID`
+repro row (`test_locations_json_integrity` + the newly-attributed
+`test_location_combobox_highlights_current_selection_on_focus`).
+
+⚠️ **Do NOT read this as "they're fixed."** The whole premise of this group is
+**load sensitivity**, and that sweep ran quiet — no concurrent agents, no parallel
+verification, nothing else touching the container. A clean run under low contention is exactly
+what the theory predicts. What it does establish:
+
+- **One clean sweep is not evidence of a fix** — the acceptance bar needs repeated sweeps, and
+  ideally one under deliberate contention.
+- **38.1's filed rate ("fails ~2 of 3 FULL sweeps") did not reproduce here**, so that figure is
+  stale or was measured under heavier load than a normal sweep.
+- **The expected red tail while Derek's repro row is live is exactly those two** — so any future
+  sweep can treat a third red as genuinely new signal.
+
 ## Items — the six flakes
 
 All six share the signature: **fails in a full sweep, passes 3/3–8/8 in isolation, zero surface
@@ -61,7 +81,7 @@ here because they are exactly the levers that make the flakes above reproducible
 |---|---|
 | **38.7** | **`--offline` leaks via hardcoded URLs.** The gating is fixture-name-based, so two in-tree tests that hit `http://localhost:8000` with a literal URL and no gated fixture still run in an "offline" sweep. Either add a socket-level guard under `--offline`, or a lint forbidding literal `localhost:8000` outside the gated fixtures. |
 | **38.8** | **The `--offline` collection hook itself is untested.** `test_offline_mode.py` pins the constant and the env parser, not the hook. _(Refuted as stated — the hook is exercised implicitly every offline run — but a direct test is cheap.)_ |
-| **38.9** | **The timeout canary is blind to aliased calls.** `tests/test_requests_timeout_canary.py` matches only `requests.<verb>(...)`, but `routes_config_attrs.py` does `import requests as _req` and issues its destructive migration PATCH loop as `_req.patch(...)` — **the single most dangerous write loop in the app is NOT covered.** Widen the AST match to any alias bound to the `requests` module. _(Cross-ref [Group 36](36-attribute-force-reset-data-loss.md) — that is the same loop.)_ |
+| **38.9** | ✅ **DONE 2026-08-06 by [Group 36](36-attribute-force-reset-data-loss.md)** (`43389c6`). The canary now collects every name bound to `requests` via `ast.Import` (module-level *or* function-local) and matches on that set, with two new pins: an aliased `_req.patch`/`_req.delete` sample is caught, and a look-alike receiver (`import some_other_lib as _req`, `self.session.get`) is NOT flagged. Group 36 also widened the **sibling** canary `test_no_direct_extra_patch.py` to see the restore PATCH through `http_retry.request_with_retry("patch", ...)` — that call had moved behind the helper, taking its `# noqa: spoolman-extra-patch` marker out of scope and silently dropping the same loop from *that* canary too. _Original: matched only `requests.<verb>(...)`, so all 14 `_req.*` calls in `routes_config_attrs.py` — including the destructive migration PATCH loop — were invisible._ |
 | **38.10** | **`scratch_filament` never deletes a REUSED record.** It only deletes what it created, so an interrupted run leaves `__fcc_attr_test__` in dev Spoolman permanently (the next run adopts it and never cleans up). Delete on adoption too, or clean up by name at session end. |
 | **38.11** | **The shortcut-queue drain has no real test.** `test_shortcut_registration_order.py`'s "end-to-end" case re-implements the shim inside `page.evaluate` rather than exercising the shipped one, so it **passes against pre-fix code**. The drain line — whose placement caused a TDZ crash that wiped every shortcut — is only covered indirectly by `test_bulk_move_shortcuts_are_listed_in_the_help_overlay`. Pin it directly. |
 

@@ -359,7 +359,7 @@ def test_add_choice_then_remove_unused_round_trips(api_base_url):
     if test_choice in r0.get("choices", []):
         requests.post(
             f"{api_base_url}/api/filament_attributes/remove_choice",
-            json={"choice": test_choice, "force": True}, timeout=120,
+            json={"choice": test_choice, "force": True, "purge": True}, timeout=120,
         )
     try:
         r_add = requests.post(
@@ -374,7 +374,7 @@ def test_add_choice_then_remove_unused_round_trips(api_base_url):
         # Unused choice → remove should succeed without needing force.
         r_rm = requests.post(
             f"{api_base_url}/api/filament_attributes/remove_choice",
-            json={"choice": test_choice}, timeout=120,
+            json={"choice": test_choice, "purge": True}, timeout=120,
         )
         body = r_rm.json()
         assert body.get("success") is True, body
@@ -393,10 +393,10 @@ def test_add_choice_then_remove_unused_round_trips(api_base_url):
     finally:
         # Make absolutely sure the test choice is gone even on failure.
         rr = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
-        if test_choice in rr.get("choices", []):
+        if test_choice in rr.get("choices", []) + rr.get("hidden_choices", []):
             requests.post(
                 f"{api_base_url}/api/filament_attributes/remove_choice",
-                json={"choice": test_choice, "force": True}, timeout=120,
+                json={"choice": test_choice, "force": True, "purge": True}, timeout=120,
             )
 
 
@@ -421,7 +421,7 @@ def test_remove_choice_in_use_requires_force(api_base_url, scratch_filament):
     try:
         r = requests.post(
             f"{api_base_url}/api/filament_attributes/remove_choice",
-            json={"choice": test_choice}, timeout=120,
+            json={"choice": test_choice, "purge": True}, timeout=120,
         )
         body = r.json()
         assert body.get("success") is False
@@ -435,7 +435,7 @@ def test_remove_choice_in_use_requires_force(api_base_url, scratch_filament):
         # Re-send with force → succeeds, strips the tag, removes the choice.
         r2 = requests.post(
             f"{api_base_url}/api/filament_attributes/remove_choice",
-            json={"choice": test_choice, "force": True}, timeout=120,
+            json={"choice": test_choice, "force": True, "purge": True}, timeout=120,
         )
         body2 = r2.json()
         assert body2.get("success") is True
@@ -446,10 +446,10 @@ def test_remove_choice_in_use_requires_force(api_base_url, scratch_filament):
     finally:
         _restore(api_base_url, fid, original)
         rr = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
-        if test_choice in rr.get("choices", []):
+        if test_choice in rr.get("choices", []) + rr.get("hidden_choices", []):
             requests.post(
                 f"{api_base_url}/api/filament_attributes/remove_choice",
-                json={"choice": test_choice, "force": True}, timeout=120,
+                json={"choice": test_choice, "force": True, "purge": True}, timeout=120,
             )
 
 
@@ -508,10 +508,10 @@ def test_sweep_unused_preview_then_commit(api_base_url):
     finally:
         # If somehow it's still around, clean up.
         rr = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
-        if test_choice in rr.get("choices", []):
+        if test_choice in rr.get("choices", []) + rr.get("hidden_choices", []):
             requests.post(
                 f"{api_base_url}/api/filament_attributes/remove_choice",
-                json={"choice": test_choice, "force": True}, timeout=120,
+                json={"choice": test_choice, "force": True, "purge": True}, timeout=120,
             )
 
 
@@ -555,9 +555,9 @@ def test_sweep_unused_respects_choices_subset(api_base_url):
         for c in (keep, nuke):
             rr = requests.get(f"{api_base_url}/api/filament_attributes/report",
                               timeout=10).json()
-            if c in rr.get("choices", []):
+            if c in rr.get("choices", []) + rr.get("hidden_choices", []):
                 requests.post(f"{api_base_url}/api/filament_attributes/remove_choice",
-                              json={"choice": c, "force": True}, timeout=120)
+                              json={"choice": c, "force": True, "purge": True}, timeout=120)
 
 
 @pytest.mark.usefixtures("require_server")
@@ -590,10 +590,10 @@ def test_sweep_unused_preserves_in_use_choices(api_base_url, scratch_filament):
     finally:
         _restore(api_base_url, fid, original)
         rr = requests.get(f"{api_base_url}/api/filament_attributes/report", timeout=10).json()
-        if test_choice in rr.get("choices", []):
+        if test_choice in rr.get("choices", []) + rr.get("hidden_choices", []):
             requests.post(
                 f"{api_base_url}/api/filament_attributes/remove_choice",
-                json={"choice": test_choice, "force": True}, timeout=120,
+                json={"choice": test_choice, "force": True, "purge": True}, timeout=120,
             )
 
 
@@ -690,9 +690,9 @@ def test_sweep_preserves_sibling_extras(api_base_url):
         for c in (probe_tag, filler_tag):
             rr = requests.get(f"{api_base_url}/api/filament_attributes/report",
                               timeout=10).json()
-            if c in rr.get("choices", []):
+            if c in rr.get("choices", []) + rr.get("hidden_choices", []):
                 requests.post(f"{api_base_url}/api/filament_attributes/remove_choice",
-                              json={"choice": c, "force": True}, timeout=60)
+                              json={"choice": c, "force": True, "purge": True}, timeout=60)
 
 
 @pytest.mark.usefixtures("require_server")

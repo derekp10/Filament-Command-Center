@@ -67,7 +67,26 @@ I move* / *what may I destroy*). **Only the third needs to stay flat.**
 
 | # | Item | Notes |
 |---|---|---|
-| **37.1** | **Blank LocationID is accepted, then "already exists" on re-edit** — with no value visible on the field or in the Location List | ⚠️ **Derek's repro row is LIVE in `data/locations.json`** — index 0, `{"LocationID": "", "Name": "TestCart", "Type": "Cart", "Max Spools": "0", "parent_id": "CR"}`. **Do NOT delete it without asking.** It fails `test_locations_json_integrity` on every sweep and breaks the wizard's location combobox (it sorts to dropdown index 1). |
+| **37.1** | **Blank LocationID is accepted, then "already exists" on re-edit** — with no value visible on the field or in the Location List | ⚠️ **Derek's repro row is LIVE in `data/locations.json`** — index 0, `{"LocationID": "", "Name": "TestCart", "Type": "Cart", "Max Spools": "0", "parent_id": "CR"}`. **Do NOT delete it without asking.** It costs **TWO reds on every full sweep** (see below). |
+
+### 🧪 The two sweep reds 37.1 currently causes
+
+Measured on the `RUN_INTEGRATION=1` sweep of 2026-08-06 (`2406 passed / 2 failed`) — **these
+two ARE the entire red tail.** Both A/B-proven pre-existing (they fail identically with
+`inventory-hub/` reverted to `70132aa`), so any sweep run while the repro row is live should
+expect exactly these and nothing else:
+
+1. `test_locations_json_integrity::test_every_row_is_a_dict_with_LocationID_and_Type` — the
+   direct assertion (`row 0 missing LocationID`).
+2. `test_wizard_group10_session_a::test_location_combobox_highlights_current_selection_on_focus`
+   — **newly attributed 2026-08-06.** Deterministic, 5/5 in isolation. Chain: the blank row is
+   served in `/api/locations` (verified live: 1 of 60 rows) → the helper
+   `_pick_first_real_location` selects **dropdown index 1**, which is where the blank row sorts
+   → its `data-value` is `""` → nothing matches the hidden input on re-focus, so
+   `.autocomplete-option.active` counts **0**, not 1.
+
+**Both should go green the moment 37.1 lands** — no separate test work needed. Worth
+re-checking after the fix rather than editing either test.
 | **37.2** | **Unassigned list overflow on a new location's Manage view** — the list pushes UI elements off the visible screen | Wants: scrollable within the available viewport + easily collapsible from anywhere in the list, so the user can always reach the lower UI elements. |
 | **37.3** | **Parent/child creation is still tedious** | The `+` on a parent doesn't autofill the child. Derek also wants **smart LocationID suggestions** and is openly questioning whether human-readable composite ids are still the right model (`CR-TC-R1` is hard to remember, set up, and track when each new row must be created from scratch). |
 | **37.4** | **Cart-display fix** (a cart shows a transitive Total but lists zero contents) | ✅ **Decision 2026-08-03: folded in here rather than shipped as a point fix** — the redesign changes those semantics anyway. |

@@ -73,6 +73,8 @@ console.log("🚀 Loaded Module: CONFIG");
         const host = document.getElementById('config-attrs-results');
         if (!host || !_attrs.report) return;
         const { choices, filaments, counts } = _attrs.report;
+        const hiddenChoices = _attrs.report.hidden_choices || [];
+        const affectedRecords = _attrs.report.affected_records || 0;
         const total = filaments.length;
         const needle = (_attrs.filter || '').toLowerCase();
         const filteredFilaments = needle
@@ -80,10 +82,18 @@ console.log("🚀 Loaded Module: CONFIG");
             : filaments;
         const visibleCount = filteredFilaments.length;
         // Choices manager — schema-level. Each chip carries a visible
-        // red ✕ button so the "click to delete this tag from the system"
-        // affordance is obvious. Background tone of the chip itself
-        // scales with usage so unused (safe-to-remove) choices look
-        // muted vs in-use (warn-on-remove) choices.
+        // red ✕ button so the "click to remove this tag" affordance is
+        // obvious. Background tone of the chip itself scales with usage so
+        // unused (safe-to-remove) choices look muted vs in-use choices.
+        //
+        // Group 36 — ✕ now HIDES rather than purging. Spoolman cannot drop one
+        // option from a choice field, so a real removal means deleting and
+        // recreating the whole field and rewriting every attribute-bearing
+        // record. That migration was firing on one click of this 18px button,
+        // and a single transport blip during it was permanent data loss.
+        // Hiding strips the tag from its carriers and suppresses the choice
+        // locally — reversible, and it touches only the records that have it.
+        // Purging is still available, from the Hidden strip below.
         const choiceChips = choices.map(c => {
             const n = counts[c] || 0;
             const usageTitle = n
@@ -97,10 +107,28 @@ console.log("🚀 Loaded Module: CONFIG");
                 <span class="ms-2" style="opacity:0.85;">${n}</span>
                 <button type="button" class="btn btn-sm config-attrs-rm-choice ms-2 p-0 d-inline-flex align-items-center justify-content-center"
                         data-choice="${_esc(c)}" data-usage="${n}"
-                        title="Remove this tag from the system"
+                        title="Remove this tag (strips it from every filament and hides it — reversible)"
                         style="width:18px; height:18px; line-height:1; background:#dc3545; color:#fff; border:none; border-radius:3px; font-weight:bold;">✕</button>
             </span>`;
         }).join('');
+        // Hidden strip — the escape hatch back out of a hide, and the ONLY
+        // route to the destructive purge. Reaching purge through hide is a
+        // deliberate safety property: by the time it is offered, the tag has
+        // already been stripped from every carrier, so the migration has
+        // nothing left to lose on those records.
+        const hiddenChips = hiddenChoices.map(c => `
+            <span class="config-attrs-hidden-chip d-inline-flex align-items-center me-2 mb-2"
+                  title="Hidden from FCC. Still present in Spoolman's schema."
+                  style="background:#2b2b2b; color:#999; border:1px dashed #666; padding:0.25rem 0.5rem; border-radius:4px; font-size:0.85rem;">
+                <span class="fw-bold" style="text-decoration:line-through;">${_esc(c)}</span>
+                <button type="button" class="btn btn-sm config-attrs-unhide-choice ms-2 py-0 px-1"
+                        data-choice="${_esc(c)}" title="Show this tag again"
+                        style="font-size:0.75rem; line-height:1.4; background:#198754; color:#fff; border:none; border-radius:3px;">↩ unhide</button>
+                <button type="button" class="btn btn-sm config-attrs-purge-choice ms-1 py-0 px-1"
+                        data-choice="${_esc(c)}"
+                        title="Permanently delete from Spoolman's schema — rewrites every filament that has attributes"
+                        style="font-size:0.75rem; line-height:1.4; background:#6c757d; color:#fff; border:none; border-radius:3px;">🗑 purge</button>
+            </span>`).join('');
         const choiceOpts = choices.map(c => `<option value="${_esc(c)}">${_esc(c)}</option>`).join('');
         const selVisible = filteredFilaments.filter(f => _attrs.selected.has(f.id)).length;
         const allVisibleSelectedCls = selVisible === visibleCount && visibleCount > 0 ? 'checked' : '';
@@ -130,6 +158,14 @@ console.log("🚀 Loaded Module: CONFIG");
                     <span class="small" style="color:rgba(255,255,255,0.7);">add a new tag or remove an existing one — propagates to every filament that carries it</span>
                 </div>
                 <div class="mb-2">${choiceChips || '<i class="small" style="color:rgba(255,255,255,0.6);">(no choices defined yet — add one below)</i>'}</div>
+                ${hiddenChoices.length ? `
+                <div class="mb-2 pt-2" style="border-top:1px dashed #444;">
+                    <div class="small mb-1" style="color:rgba(255,255,255,0.6);">
+                        Hidden <span class="badge bg-secondary">${hiddenChoices.length}</span>
+                        — removed from FCC but still in Spoolman's schema.
+                    </div>
+                    ${hiddenChips}
+                </div>` : ''}
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <input type="text" id="config-attrs-add-input" class="form-control form-control-sm bg-dark text-white border-secondary"
                            placeholder="Type a new tag name…" autocomplete="off" style="max-width: 280px;">
@@ -264,15 +300,48 @@ console.log("🚀 Loaded Module: CONFIG");
                 const c = btn.dataset.choice;
                 const usage = parseInt(btn.dataset.usage || '0', 10);
                 if (!c) return;
-                if (usage > 0) {
-                    const ok = confirm(
-                        `Remove choice "${c}" from the schema?\n\n` +
-                        `${usage} filament(s) currently have this tag — they will lose it.\n` +
-                        `This cannot be undone (besides re-adding the choice and re-tagging each filament).`
-                    );
-                    if (!ok) return;
-                }
-                window.configAttrsRemoveChoice(c, usage > 0);
+                // Group 36 — the confirm now describes what actually happens.
+                // It used to warn only when usage > 0, so removing an unused
+                // tag fired a ~150-record schema migration with NO confirmation
+                // at all. Hiding is cheap and reversible, but the user should
+                // still know the tag leaves every record that carries it.
+                const ok = confirm(
+                    `Remove tag "${c}"?\n\n` +
+                    (usage > 0
+                        ? `It will be stripped from ${usage} filament(s) and hidden from FCC.\n`
+                        : `No filament currently uses it. It will be hidden from FCC.\n`) +
+                    `Spoolman's schema is NOT modified, and you can unhide it at any time.`
+                );
+                if (!ok) return;
+                window.configAttrsRemoveChoice(c, true);
+            });
+        });
+
+        host.querySelectorAll('.config-attrs-unhide-choice').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (btn.dataset.choice) window.configAttrsUnhideChoice(btn.dataset.choice);
+            });
+        });
+
+        host.querySelectorAll('.config-attrs-purge-choice').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const c = btn.dataset.choice;
+                if (!c) return;
+                // State the real cost. This is the one path that still runs the
+                // destructive DELETE + recreate + restore-every-record cycle.
+                const ok = confirm(
+                    `Permanently delete "${c}" from Spoolman's schema?\n\n` +
+                    `Spoolman cannot remove a single option from a choice field, so FCC has to ` +
+                    `delete and recreate the whole field, then rewrite all ${affectedRecords} ` +
+                    `filament(s) that carry attributes.\n\n` +
+                    `A recovery snapshot is written to disk first, and failed writes are retried ` +
+                    `and reported by filament id — but this is still the heaviest operation in the app.\n\n` +
+                    `Hiding it (already done) costs nothing. Purge only if you need it gone from Spoolman itself.`
+                );
+                if (!ok) return;
+                window.configAttrsPurgeChoice(c);
             });
         });
     };
@@ -504,6 +573,7 @@ console.log("🚀 Loaded Module: CONFIG");
     // every other inline overlay in the app gets.
     window.configAttrsSweepUnused = async () => {
         let unused = [];
+        let affected = 0;
         try {
             const r = await fetch('/api/filament_attributes/sweep_unused', {
                 method: 'POST',
@@ -516,6 +586,7 @@ console.log("🚀 Loaded Module: CONFIG");
                 return;
             }
             unused = d.unused || [];
+            affected = d.affected_records || 0;
         } catch (e) {
             window.showToast && window.showToast(`Sweep preview error: ${e.message || e}`, 'error', 7000);
             return;
@@ -548,6 +619,11 @@ console.log("🚀 Loaded Module: CONFIG");
                 <div class="px-3 py-2 small" style="color:rgba(255,255,255,0.78); border-bottom:1px solid #333;">
                     Each tag below has <b>zero filaments</b> using it right now. Uncheck any you want
                     to keep — removal is irreversible (you'd have to re-add by name).
+                    <div class="mt-1" style="color:#ffc107;">
+                        ⚠️ Spoolman can't drop one option from a choice field, so this deletes and
+                        recreates the whole field and rewrites <b>${affected}</b> filament record(s).
+                        A recovery snapshot is saved first.
+                    </div>
                 </div>
                 <div class="d-flex align-items-center px-3 py-2" style="background:#1f1f1f;">
                     <button type="button" class="btn btn-sm btn-outline-info" id="sweep-overlay-all">Select all</button>
@@ -615,6 +691,22 @@ console.log("🚀 Loaded Module: CONFIG");
                     body: JSON.stringify({ force: true, choices: chosen }),
                 });
                 const d2 = await r2.json();
+                // A partial restore is DATA LOSS and the server reports it as
+                // success:false. Surface the casualty ids rather than a generic
+                // "failed" — the whole point of Group 36 is that the user can
+                // tell WHICH filaments to go and check.
+                const lost = d2.lost_ids || [];
+                if (lost.length) {
+                    handle.cleanup();
+                    window.showToast && window.showToast(
+                        `⚠️ Sweep completed but ${lost.length} filament(s) LOST their attributes: ` +
+                        lost.map(id => `#${id}`).join(', ') +
+                        `. Recovery data saved — see the Activity Log.`,
+                        'error', 12000,
+                    );
+                    window.configAttrsScan();
+                    return;
+                }
                 if (!d2.success) {
                     window.showToast && window.showToast(`Sweep failed: ${d2.msg || 'unknown'}`, 'error', 7000);
                     commit.disabled = false;
@@ -623,8 +715,10 @@ console.log("🚀 Loaded Module: CONFIG");
                 }
                 const removed = d2.removed || [];
                 handle.cleanup();
+                const recovered = d2.recovered
+                    ? ` (${d2.recovered} write(s) recovered after a timeout)` : '';
                 window.showToast && window.showToast(
-                    `Swept ${removed.length} tag(s): ${removed.join(', ')}`,
+                    `Swept ${removed.length} tag(s): ${removed.join(', ')}${recovered}`,
                     'success', 5000,
                 );
                 window.configAttrsScan();
@@ -636,16 +730,18 @@ console.log("🚀 Loaded Module: CONFIG");
         });
     };
 
-    // `force` mirrors the server-side flag — true on the second call after
-    // the user confirms a destructive remove (usage > 0). For unused
-    // choices we still send `force: true` so the server doesn't need to
-    // round-trip the "are you sure?" check.
+    // `force` mirrors the server-side usage gate — the caller has already
+    // confirmed, so it is passed through rather than round-tripping the
+    // server's "are you sure?" check.
+    //
+    // Group 36 — this HIDES by default (no `purge` flag). See
+    // configAttrsPurgeChoice for the destructive path.
     window.configAttrsRemoveChoice = async (choice, force) => {
         try {
             const r = await fetch('/api/filament_attributes/remove_choice', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ choice, force: true }),
+                body: JSON.stringify({ choice, force: !!force }),
             });
             const d = await r.json();
             if (!d.success) {
@@ -654,12 +750,76 @@ console.log("🚀 Loaded Module: CONFIG");
             }
             const stripped = d.stripped || 0;
             const msg = stripped
-                ? `Removed choice "${choice}" — stripped from ${stripped} filament(s).`
-                : `Removed unused choice "${choice}".`;
-            window.showToast && window.showToast(msg, 'success', 4000);
+                ? `Removed "${choice}" — stripped from ${stripped} filament(s) and hidden.`
+                : `Hid unused tag "${choice}".`;
+            const errs = d.errors || [];
+            if (errs.length) {
+                window.showToast && window.showToast(
+                    `${msg} ⚠️ ${errs.length} filament(s) could not be updated: ` +
+                    errs.map(x => `#${x.id}`).join(', '), 'warning', 7000);
+            } else {
+                window.showToast && window.showToast(msg, 'success', 4000);
+            }
             window.configAttrsScan();
         } catch (e) {
             window.showToast && window.showToast(`Remove error: ${e.message || e}`, 'error', 7000);
+        }
+    };
+
+    window.configAttrsUnhideChoice = async (choice) => {
+        try {
+            const r = await fetch('/api/filament_attributes/unhide_choice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ choice }),
+            });
+            const d = await r.json();
+            if (!d.success) {
+                window.showToast && window.showToast(`Unhide failed: ${d.msg || 'unknown'}`, 'error', 7000);
+                return;
+            }
+            window.showToast && window.showToast(`"${choice}" is visible again.`, 'success', 4000);
+            window.configAttrsScan();
+        } catch (e) {
+            window.showToast && window.showToast(`Unhide error: ${e.message || e}`, 'error', 7000);
+        }
+    };
+
+    // The destructive path: DELETE + recreate the schema field, then restore
+    // every attribute-bearing record. A partial restore is DATA LOSS, and the
+    // server now reports it as success:false with the casualty ids — so this
+    // must NOT collapse into a generic "failed" toast that hides which
+    // filaments to go and check.
+    window.configAttrsPurgeChoice = async (choice) => {
+        try {
+            const r = await fetch('/api/filament_attributes/remove_choice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ choice, force: true, purge: true }),
+            });
+            const d = await r.json();
+            const lost = d.lost_ids || [];
+            if (lost.length) {
+                window.showToast && window.showToast(
+                    `⚠️ Purged "${choice}" but ${lost.length} filament(s) LOST their attributes: ` +
+                    lost.map(id => `#${id}`).join(', ') +
+                    `. Recovery data saved — see the Activity Log.`,
+                    'error', 12000);
+                window.configAttrsScan();
+                return;
+            }
+            if (!d.success) {
+                window.showToast && window.showToast(`Purge failed: ${d.msg || 'unknown'}`, 'error', 7000);
+                return;
+            }
+            const recovered = d.recovered
+                ? ` (${d.recovered} write(s) recovered after a timeout)` : '';
+            window.showToast && window.showToast(
+                `Purged "${choice}" from Spoolman — ${d.restored} record(s) restored${recovered}.`,
+                'success', 5000);
+            window.configAttrsScan();
+        } catch (e) {
+            window.showToast && window.showToast(`Purge error: ${e.message || e}`, 'error', 7000);
         }
     };
 })();

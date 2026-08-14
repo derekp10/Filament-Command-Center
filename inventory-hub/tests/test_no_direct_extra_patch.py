@@ -39,16 +39,32 @@ SCAN_GLOBS = ["*.py", "static/js/**/*.js", "templates/**/*.html"]
 # and look forward through the next ~6 lines for the `extra` token.
 PATCH_CALL = re.compile(r"\b(?:requests|_req)\.patch\s*\(", re.MULTILINE)
 
+# Group 36 — the restore PATCH moved behind the shared transport-retry helper,
+# where it reads `http_retry.request_with_retry("patch", ...)`. That form is
+# invisible to PATCH_CALL, so without this second pattern the single most
+# dangerous write loop in the app — the one that rewrites every
+# attribute-bearing filament after deleting the schema field — would have
+# silently dropped out of this canary's coverage, taking its `noqa` marker with
+# it. The verb is a positional ARGUMENT here rather than the attribute name, so
+# it is matched from the forward block like the `extra` token already is.
+RETRY_CALL = re.compile(r"\brequest_with_retry\s*\(", re.MULTILINE)
+_VERB_IS_PATCH = re.compile(r"""["']patch["']""")
+
 
 def _violations_in_file(path: Path) -> list[tuple[int, str]]:
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
     hits = []
-    for m in PATCH_CALL.finditer(text):
+    candidates = [(m, False) for m in PATCH_CALL.finditer(text)]
+    candidates += [(m, True) for m in RETRY_CALL.finditer(text)]
+    candidates.sort(key=lambda pair: pair[0].start())
+    for m, needs_verb_check in candidates:
         start_idx = text[: m.start()].count("\n")
         # Inspect the call block — up to 6 lines forward, which covers
         # every existing call shape in the repo.
         block = "\n".join(lines[start_idx : start_idx + 6])
+        if needs_verb_check and not _VERB_IS_PATCH.search(block):
+            continue  # a GET/POST through the retry helper is not our concern
         if "/api/v1/filament" not in block and "/api/v1/spool" not in block and "/api/v1/vendor" not in block:
             continue
         if "noqa: spoolman-extra-patch" in block:
