@@ -141,6 +141,21 @@ pattern to invent:
 rather than by two separate lists. Spools sitting directly on the cart are simply the cart's own
 group, alongside a group per row.
 
+> 📌 **Why cart-level spools exist at all (Derek, 2026-08-13) — LEGACY, not corruption.** The cart
+> labels were created *before* the rows existed, so spools filed then were assigned at the cart
+> level and never moved down. Live dev today: `CR-CT-1` = 3 direct, `CR-CT-3` = 9, `CR-CT-4` = 2,
+> while `CR-CT-2` = 0 direct with all 8 of its spools in `-R1/-R2/-R3`.
+>
+> Two consequences for whoever builds this:
+> - **Do NOT "clean it up" as part of 37.4.** The grouped design above already renders it correctly
+>   — it becomes the cart's own group. No migration is required for the view to be right.
+> - **It is why the symptom looks inconsistent.** `CR-CT-2` scans as visibly *blank* (0 of 8), while
+>   `CR-CT-1` returns 3 of 19 and reads as "worked" — the same defect wearing a less obvious face.
+>   Use `CR-CT-2` when testing this, not `CR-CT-1`.
+>
+> Pushing those legacy spools down into real rows is a **separate, optional data-hygiene task** —
+> Derek's call, and deliberately NOT a prerequisite for 37.4.
+
 🔑 **It also dissolves the recorded contradiction.** The `/api/locations` occupancy rollup is ALREADY
 transitive over `parent_id`, which is why a cart shows a Total including its rows while opening it
 lists zero. Making contents transitive too means the number and the list finally describe the same
