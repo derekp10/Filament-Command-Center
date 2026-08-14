@@ -1,4 +1,4 @@
-# 🔁 Session Handoff — 2026-08-06 (Group 36)
+# 🔁 Session Handoff — 2026-08-06/07 (Group 36 + Group 38 residuals)
 
 > For a fresh context window. Read this, then the group task files it points at.
 > Supersedes [session-handoff-2026-08-05.md](session-handoff-2026-08-05.md), whose open
@@ -8,14 +8,19 @@
 
 | Branch | Contents |
 |---|---|
-| `feature/group-36-attribute-force-reset-data-loss` | **4 commits — this session. NOT merged.** |
+| `feature/group-38-hermeticity-residuals` | **2 commits — Group 38's residuals. STACKED on the branch below. NOT merged.** |
+| `feature/group-36-attribute-force-reset-data-loss` | **5 commits — the data-loss fix. NOT merged.** |
 | `dev` | `70132aa` — unchanged this session |
 | `main` | `b49158b` — **51 commits behind `dev`; release still HELD** |
 
 **The dev→main release is still held** pending Derek driving the Bulk Move panel on dev. That
 predates this session and nothing here changes it. The prod pull is also still pending.
 
-**Nothing was merged.** Group 36 is built and verified on its branch, awaiting Derek's call.
+**Nothing was merged — but both branches ARE pushed.** `origin/feature/group-36-...` and `origin/feature/group-38-hermeticity-residuals` exist on GitHub and are in sync, so the work is backed up and recoverable from another machine. Merging is still Derek’s call; `dev` and `main` are untouched.
+
+⚠️ **The Group 38 branch is STACKED on the Group 36 branch** (38.10 edits a file Group 36
+changed, so branching off `dev` would have conflicted). Merging 38 therefore brings 36 with it —
+same deliberate stacking pattern as L298. Merge 36 first if you want them separable.
 
 ---
 
@@ -92,17 +97,25 @@ genuinely new signal.
 ## Open items, in the order I'd take them
 
 1. **Merge Group 36 to `dev`** — Derek's call. Built, reviewed, swept.
-2. **[Group 38](38-sweep-flakes-and-hermeticity.md) — flakes & hermeticity.** ⚠️ **New evidence:
-   the 2026-08-06 clean sweep fired ZERO of the seven filed flake ids.** Do not read that as
-   "fixed" — the premise is load sensitivity and that sweep ran quiet. It does mean one clean
-   sweep proves nothing, and 38.1's filed "fails ~2 of 3 sweeps" rate did not reproduce.
-   **38.9 is already DONE** (Group 36). The four remaining hermeticity residuals (38.7, 38.8,
-   38.10, 38.11) are small, offline-testable, and independent of the flake hunt — a good
-   self-contained slice. The six flakes need repeated full sweeps (~24 min each) plus ≥5 isolated
-   runs per member, so budget a session for them alone.
-3. **[Group 37](37-location-system-redesign.md) — location redesign.** ⛔ **4 open forks must be
-   decided before ANY build** (biggest: is the human-readable composite LocationID still the right
-   model?). LARGE / multi-session / HIGH risk. Landing 37.1 alone would clear both sweep reds.
+2. **[Group 38](38-sweep-flakes-and-hermeticity.md) — SIX FLAKES ONLY; the residuals are DONE.**
+   All five hermeticity residuals shipped (`2d36a62`, branch
+   `feature/group-38-hermeticity-residuals`, stacked on Group 36). `--offline` now blocks at the
+   socket layer and is enforced rather than intended — it exposed **four** leaking tests, not the
+   two filed, one of which was a real defect (a Flask-test-client "unit" test reaching the NAS).
+   **What remains is the six flakes**, and they want a session to themselves: the group's own
+   method is to capture each member's traceback from a full sweep (`--tb=long -rf` teed to a
+   file, ~24 min a run) and then ≥5 isolated runs per member before accepting any verdict.
+
+   ⚠️ **Start from this evidence: the 2026-08-06 clean sweep fired ZERO of the seven flake ids.**
+   Do NOT read that as "fixed" — the premise is load sensitivity and that sweep ran quiet, which
+   is exactly what the theory predicts. What it does establish is that one clean sweep proves
+   nothing, and that 38.1's filed "fails ~2 of 3 sweeps" rate did not reproduce. Provoking them
+   under deliberate contention is probably the first move.
+3. **[Group 37](37-location-system-redesign.md) — location redesign.** ⛔ **ONE open fork now**
+   — the LocationID model. **Forks 2, 3 and 4 were decided 2026-08-07** and are written up in the
+   task file with Derek’s reasoning intact. Carry the reframing into fork 1: NO FORCED RELABELING
+   means 'opaque' cannot mean replacing `CR-CT-1`, only ceasing to derive structure from it.
+   LARGE / multi-session / HIGH risk. Landing 37.1 alone would clear both sweep reds.
 4. **Prod→dev sibling-extras restore** (new follow-up from Group 36) — ~4 filaments still drained
    by the old partial-PATCH bug. Prod (`:7912`) is the read-only reference. **Never guess-restore.**
 5. **Remaining audit axes** — (b) overlay/confirm reachability, (c) silent-failure, (d)

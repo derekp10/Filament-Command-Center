@@ -1177,3 +1177,80 @@ def _isolate_attr_migration_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         attr_migration, "_HIDDEN_PATH", str(tmp_path / "attr_hidden_choices.json")
     )
+
+
+# --- Group 38.7 — make `--offline` structurally airtight ---------------------
+#
+# The collection-time gate skips by FIXTURE NAME, which is the right primary
+# mechanism (it stops a browser ever launching, which is where the ~27min ->
+# ~42s win comes from). But it is only as complete as CONTAINER_FIXTURES: a
+# test that reaches the container with a literal URL and takes none of those
+# fixtures still runs, and still writes to Derek's real dev inventory. That is
+# the whole failure mode `--offline` exists to prevent, so "offline" needs to
+# be enforced, not merely intended.
+#
+# A lint on the string "localhost:8000" was the other option and is strictly
+# weaker — it cannot see an f-string, a value read from an env var, or a URL
+# built in a helper. Blocking at the socket layer catches every spelling.
+#
+# Ports, not hosts: 8000 is the FCC dev container, 7913 dev Spoolman, 7912 PROD
+# Spoolman. Matching on port covers localhost / 127.0.0.1 / ::1 / the NAS IP
+# uniformly (verified: an IPv6 `('::1', 8000, 0, 0)` tuple still exposes the
+# port at index 1).
+_OFFLINE_BLOCKED_PORTS = frozenset({8000, 7912, 7913})
+
+
+class OfflineNetworkAccess(requests.exceptions.ConnectionError):
+    """Raised when an --offline test tries to reach the container or Spoolman.
+
+    Subclasses `requests.exceptions.ConnectionError` deliberately. Several
+    tests already wrap a container call in
+    `except requests.RequestException: pytest.skip("Container not responding")`
+    — and under `--offline` the container IS unreachable, by policy rather than
+    by accident. Inheriting makes those guards do the right thing untouched,
+    instead of every one of them needing to learn about a new exception type.
+
+    A test with NO such guard still fails loudly with the message below, which
+    is the outcome we want: the leak stays visible rather than being silently
+    swallowed.
+    """
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _offline_socket_guard(request):
+    """Under --offline, refuse any TCP connect to the container / Spoolman.
+
+    Session-scoped and autouse so there is nothing for a test author to
+    remember. Outside offline mode this is a no-op, so normal and
+    RUN_INTEGRATION runs are completely unaffected.
+    """
+    if not _offline_mode(request.config):
+        yield
+        return
+
+    import socket as _socket
+
+    real_connect = _socket.socket.connect
+
+    def _guarded_connect(self, address, *args, **kwargs):
+        try:
+            port = address[1]
+        except (TypeError, IndexError, KeyError):
+            # A UNIX socket or anything not (host, port) — not our concern.
+            return real_connect(self, address, *args, **kwargs)
+        if port in _OFFLINE_BLOCKED_PORTS:
+            raise OfflineNetworkAccess(
+                f"offline mode blocked a connection to {address!r}. This test "
+                f"reaches the live dev container or Spoolman without requesting "
+                f"any of CONTAINER_FIXTURES, so the collection-time gate could "
+                f"not see it. Either request a gated fixture (e.g. "
+                f"`require_server`/`api_base_url`) so it skips offline, or mock "
+                f"the call."
+            )
+        return real_connect(self, address, *args, **kwargs)
+
+    _socket.socket.connect = _guarded_connect
+    try:
+        yield
+    finally:
+        _socket.socket.connect = real_connect

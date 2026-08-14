@@ -45,7 +45,13 @@ def test_return_overlay_shows_concrete_box_and_slot(page: Page, open_manage_moda
 
     open_manage_modal(loaded_th)
     page.locator("#quickswap-return-btn").click()
-    expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=4000)
+    # Group 38.5: showConfirmOverlay awaits a ~3s active-print probe before it
+    # mounts (inv_quickswap.js:340 `_probeWithTimeout(..., timeoutMs = 3000)`,
+    # awaited at :368; mountOverlay not reached until :468 — offline dev
+    # printers hit the full timeout). A 4000ms budget left ~1s of headroom over
+    # a 3s floor; the sibling assertions on this same overlay were already
+    # raised to 8000 for exactly this reason (test_quickswap_ui_e2e.py:77-79).
+    expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=8000)
     body = page.locator("#fcc-quickswap-confirm-body")
     body_text = body.inner_text()
     # Jargon has no place in a user-facing overlay.
@@ -87,7 +93,13 @@ def test_return_overlay_flags_missing_origin_explicitly(page: Page, open_manage_
 
     open_manage_modal(empty_toolhead)
     page.locator("#quickswap-return-btn").click()
-    expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=4000)
+    # Group 38.5: showConfirmOverlay awaits a ~3s active-print probe before it
+    # mounts (inv_quickswap.js:340 `_probeWithTimeout(..., timeoutMs = 3000)`,
+    # awaited at :368; mountOverlay not reached until :468 — offline dev
+    # printers hit the full timeout). A 4000ms budget left ~1s of headroom over
+    # a 3s floor; the sibling assertions on this same overlay were already
+    # raised to 8000 for exactly this reason (test_quickswap_ui_e2e.py:77-79).
+    expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=8000)
     body = page.locator("#fcc-quickswap-confirm-body")
     text = body.inner_text()
     # Either "nothing to return to" (no spool case) or a specific

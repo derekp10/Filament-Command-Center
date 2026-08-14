@@ -86,3 +86,126 @@ class _NoFlagConfig:
 
     def getoption(self, name):
         return False
+
+
+class TestCollectionHookItself:
+    """Group 38.8 — the hook was never tested, only the constant and the parser.
+
+    `test_page_is_treated_as_container_touching` proves `page` is in the SET;
+    it proves nothing about whether the hook consults that set correctly. The
+    hook is the part that actually stops a browser launching against Derek's
+    live container, so it gets pinned directly. (It is exercised implicitly on
+    every offline run — but an implicit exercise reports nothing when it breaks.)
+    """
+
+    class _Cfg:
+        def __init__(self, offline):
+            self._offline = offline
+
+        def getoption(self, name):
+            if name == "--offline":
+                return self._offline
+            if name == "--run-integration":
+                return False
+            return False
+
+    class _Item:
+        def __init__(self, name, fixturenames, keywords=()):
+            self.name = name
+            self.fixturenames = tuple(fixturenames)
+            self.own_markers = []
+            self.keywords = set(keywords)
+
+        def add_marker(self, marker):
+            self.own_markers.append(marker)
+
+        def get_closest_marker(self, name):
+            return None
+
+        @property
+        def skipped(self):
+            return any(getattr(m, "name", "") == "skip" for m in self.own_markers)
+
+    def _run(self, monkeypatch, offline, items):
+        monkeypatch.delenv("FCC_OFFLINE", raising=False)
+        monkeypatch.delenv("RUN_INTEGRATION", raising=False)
+        conftest.pytest_collection_modifyitems(self._Cfg(offline), items)
+        return items
+
+    def test_offline_skips_an_item_requesting_a_container_fixture(self, monkeypatch):
+        item = self._Item("t_e2e", ["page"])
+        self._run(monkeypatch, True, [item])
+        assert item.skipped, "an item taking `page` must be skipped offline"
+        reason = getattr(item.own_markers[0], "kwargs", {}).get("reason", "")
+        assert "offline" in reason.lower()
+
+    def test_offline_leaves_a_hermetic_item_alone(self, monkeypatch):
+        item = self._Item("t_unit", ["monkeypatch", "tmp_path"])
+        self._run(monkeypatch, True, [item])
+        assert not item.skipped, (
+            "a test requesting no container fixture must still RUN offline — "
+            "over-skipping would quietly hollow out the fast sweep"
+        )
+
+    def test_a_normal_run_skips_nothing_for_offline_reasons(self, monkeypatch):
+        item = self._Item("t_e2e", ["page"])
+        self._run(monkeypatch, False, [item])
+        assert not item.skipped, "--offline is opt-in; a normal run must be unchanged"
+
+    def test_every_gated_fixture_name_actually_triggers_the_hook(self, monkeypatch):
+        """The set and the hook must agree for EVERY name, not just `page`."""
+        for name in sorted(conftest.CONTAINER_FIXTURES):
+            item = self._Item(f"t_{name}", [name])
+            self._run(monkeypatch, True, [item])
+            assert item.skipped, f"{name} is in CONTAINER_FIXTURES but did not skip"
+
+
+class TestOfflineSocketGuard:
+    """Group 38.7 — fixture-name gating is only as complete as the set.
+
+    A test that reaches the container with a literal URL while requesting none
+    of CONTAINER_FIXTURES is invisible to the collection gate and still writes
+    to real dev inventory. The socket guard makes offline structurally airtight
+    rather than merely intended.
+    """
+
+    def test_the_container_and_spoolman_ports_are_blocked(self):
+        for port in (8000, 7912, 7913):
+            assert port in conftest._OFFLINE_BLOCKED_PORTS, (
+                f"port {port} reaches the dev container or Spoolman and must be "
+                f"blocked under --offline"
+            )
+
+    def test_an_offline_run_cannot_reach_the_container(self, pytestconfig):
+        """The guard is live in THIS process whenever the suite runs offline.
+
+        Self-verifying: if the run is offline the connect must be refused; if
+        it is not offline the test states so rather than silently passing.
+
+        `offline` comes from `conftest._offline_mode(pytestconfig)`, not from
+        the env var — the `--offline` CLI flag and FCC_OFFLINE are two
+        independent switches, and reading only one made this test disagree with
+        the guard it is checking.
+        """
+        import socket
+
+        offline = conftest._offline_mode(pytestconfig)
+        s = socket.socket()
+        s.settimeout(2)
+        try:
+            s.connect(("127.0.0.1", 8000))
+            s.close()
+            assert not offline, (
+                "offline mode allowed a TCP connection to the dev container on "
+                "port 8000 — the socket guard is not installed"
+            )
+        except conftest.OfflineNetworkAccess:
+            assert offline, "the guard fired outside offline mode"
+        except OSError:
+            # Container simply not listening — says nothing either way.
+            pass
+        finally:
+            try:
+                s.close()
+            except OSError:
+                pass

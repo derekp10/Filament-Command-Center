@@ -113,9 +113,33 @@ window.updateManageTitle = (loc, itemArray = null) => {
     document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${loc.LocationID} ${typeBadge} ${occHtml}${moveAllBtn}</div>`;
 };
 
+// Group 38.1 — two SEPARATE generation counters for in-flight `openManage`
+// fetches. `openManage` only calls `modals.manageModal.show()` at the END of an
+// async fetch, so a response that landed after the user dismissed the modal
+// used to re-open it — leaving a modal on screen that nothing would ever close.
+//
+// They are deliberately separate, because the two conditions must have
+// DIFFERENT consequences and conflating them is a foot-gun:
+//   - `_fccManageOpenSeq` is bumped ONLY by `openManage`. A mismatch means a
+//     NEWER open superseded this one, so this `.then()` must not render — the
+//     newer call will. Skipping is safe precisely because a successor exists.
+//   - `_fccManageDismissSeq` is bumped ONLY by a dismissal. A mismatch means the
+//     user closed the modal mid-flight, so this `.then()` must not `show()` —
+//     but it is still free to render (harmlessly, into a hidden modal).
+//
+// Gating the RENDER on a dismissal would be the dangerous version: any
+// unanticipated dismiss during a legitimate open would silently leave the modal
+// blank, with no successor to fix it. Suppressing only the `show()` is all that
+// 38.1 ever required.
+window._fccManageOpenSeq = window._fccManageOpenSeq || 0;
+window._fccManageDismissSeq = window._fccManageDismissSeq || 0;
+
 // --- PRE-FLIGHT PROTOCOL ---
 window.openManage = (id) => {
     setProcessing(true);
+
+    const seq = ++window._fccManageOpenSeq;
+    const dismissAtStart = window._fccManageDismissSeq;
 
     const loc = state.allLocations.find(l => l.LocationID == id);
     if (!loc) {
@@ -150,6 +174,12 @@ window.openManage = (id) => {
     fetch(`/api/get_contents?id=${id}`)
         .then(r => r.json())
         .then(d => {
+            // Group 38.1 — a NEWER openManage superseded this one; it will do
+            // the rendering. Rendering stale content here would clobber it.
+            if (seq !== window._fccManageOpenSeq) {
+                setProcessing(false);
+                return;
+            }
             if (isGrid) {
                 document.getElementById('manage-grid-view').style.display = 'block';
                 document.getElementById('manage-list-view').style.display = 'none';
@@ -175,6 +205,12 @@ window.openManage = (id) => {
             state.lastLocRenderHash = `${JSON.stringify(d)}|${bufHash}`;
 
             setProcessing(false);
+            // Group 38.1 — the modal was dismissed while this fetch was in
+            // flight. The render above still ran (harmless, and it leaves the
+            // content warm for the next open), but re-showing here would
+            // resurrect a modal the user already closed — and nothing would
+            // ever close it again. That was the flake.
+            if (window._fccManageDismissSeq !== dismissAtStart) return;
             modals.manageModal.show();
         })
         .catch(e => {
@@ -236,6 +272,11 @@ window.closeManage = () => {
     window.manageNavStack = [];
     const prev = document.getElementById('manage-loc-id');
     if (prev) prev.value = '';
+    // Group 38.1 — record the dismissal SYNCHRONOUSLY, here and not only in the
+    // `hidden.bs.modal` handler below: that event trails `hide()` by the
+    // ~460 ms fade, and a fetch resolving inside that window would otherwise
+    // still see an unchanged counter and re-show the modal mid-dismissal.
+    window._fccManageDismissSeq++;
     modals.manageModal.hide();
     fetchLocations();
 };
@@ -323,6 +364,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // If we're mid-breadcrumb-pop, openManage is about to re-render
         // the previous view. Don't wipe state — the pop flow manages it.
         if (window._fccPoppingBreadcrumb) return;
+
+        // Group 38.1 — catch-all for every dismiss path that does NOT route
+        // through closeManage (the X button, backdrop click, a programmatic
+        // .hide() elsewhere, Bootstrap's own handler). Placed after the pop
+        // guard on purpose: a breadcrumb pop is not a dismissal, and must
+        // leave its freshly-issued openManage free to show normally.
+        window._fccManageDismissSeq++;
 
         // Clear breadcrumb state so the next fresh open doesn't inherit
         // stale context.
@@ -649,10 +697,25 @@ window.saveFeedsSection = () => {
     const orderRadio = document.querySelector('input[name="feeds-slot-order"]:checked');
     const order = orderRadio ? orderRadio.value : 'ltr';
 
-    // Fire-and-log the slot-order PUT alongside the bindings PUT. Ignore
-    // its result here — user sees bindings outcome in the toast; the
-    // order update only affects UI render direction.
-    fetch(`/api/dryer_box/${encodeURIComponent(locId)}/slot_order`, {
+    // Group 38.6a — this slot_order PUT used to fire in the SAME tick as the
+    // bindings PUT below, and the two silently raced.
+    //
+    // Both endpoints are whole-file read-modify-write on locations.json, and
+    // `set_dryer_box_slot_order` copies the ENTIRE extra dict — slot_targets
+    // included (locations_db.py:1549-1551). locations_db.py holds no lock of
+    // any kind, and Flask runs threaded. So the interleave was: slot_order
+    // reads the pre-edit row → bindings writes the new targets and returns
+    // 200 → slot_order writes its stale snapshot back, reverting the binding
+    // the user just saved. The UI reported "✅ Saved" the whole time.
+    //
+    // That is the captured 38.6a failure verbatim: `#feeds-status` contained
+    // "Saved" and the API read back the OLD target
+    // (flake-traceback-2026-08-03.txt — `assert 'XL-1' == 'XL-2'`).
+    //
+    // Sequencing slot_order AFTER the bindings write settles removes the
+    // interleave: it now always reads a row that already contains the new
+    // slot_targets, so writing the whole extra back is a no-op for them.
+    const putSlotOrder = () => fetch(`/api/dryer_box/${encodeURIComponent(locId)}/slot_order`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order }),
@@ -708,7 +771,12 @@ window.saveFeedsSection = () => {
                 `❌ Feeds save network error for ${locId}: ${e && e.message ? e.message : 'connection failed'}`,
                 'ERROR'
             );
-        });
+        })
+        // Group 38.6a — only now, with the bindings write already landed, is
+        // it safe to run slot_order's whole-file read-modify-write. Runs on
+        // the failure path too: slot order is an independent user preference,
+        // not part of the binding payload.
+        .finally(() => { putSlotOrder(); });
 };
 
 window.renderFeedsSection = renderFeedsSection;

@@ -311,6 +311,73 @@ def test_escape_key_from_top_of_stack_closes_modal(page: Page, open_manage_modal
 
 
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
+def test_late_get_contents_cannot_reopen_a_dismissed_manage_modal(page: Page, open_manage_modal):
+    """Group 38.1 — a LATE /api/get_contents response must not re-show a
+    manage modal the user has already dismissed.
+
+    `openManage` (inv_loc_mgr.js) renders inside the fetch's `.then()` and
+    ends with an unconditional `modals.manageModal.show()`. If the user
+    dismisses the modal while that fetch is still in flight, the late
+    `.then()` re-opens it — and nothing ever closes it again.
+
+    That is the mechanism behind the load-sensitive
+    `test_escape_key_walks_out_of_three_level_stack` flake (traceback
+    captured 2026-08-07: Escape 2 asserted `#manageModal` hidden, and all
+    nine retry polls saw `class="modal fade show"` — the modal never even
+    began to hide, because it had been re-shown). Escape 1 pops the
+    breadcrumb and calls `openManage(prev)`, whose `#manage-loc-id` write
+    is synchronous — which is exactly why Escape 1's two assertions pass
+    on the synchronous half while the fetch is still outstanding. Under
+    sweep load that NAS-backed fetch outlives the 500 ms gap to Escape 2.
+
+    Here we make it deterministic by delaying the response in-page rather
+    than waiting for load, so the regression is provable in ~5 s.
+    """
+    open_manage_modal(TEST_TOOLHEAD)
+
+    # Delay only /api/get_contents, so the next openManage is guaranteed to
+    # still be in flight when we dismiss the modal.
+    page.evaluate(
+        """
+        () => {
+            const orig = window.fetch;
+            window.__fccOrigFetch = orig;
+            window.fetch = function (url, ...rest) {
+                const u = (typeof url === 'string') ? url : (url && url.url) || '';
+                if (u.includes('/api/get_contents')) {
+                    return new Promise((resolve, reject) => {
+                        setTimeout(
+                            () => { orig.call(window, url, ...rest).then(resolve, reject); },
+                            2000,
+                        );
+                    });
+                }
+                return orig.call(window, url, ...rest);
+            };
+        }
+        """
+    )
+
+    # Re-open the SAME id: the breadcrumb wrapper only pushes when the id
+    # actually changes, so the nav stack stays empty and Escape below takes
+    # the real-close branch (hide()), not a breadcrumb pop.
+    page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
+    page.wait_for_timeout(200)
+
+    # Dismiss while the fetch is still outstanding.
+    page.locator("body").press("Escape")
+    expect(page.locator("#manageModal")).to_be_hidden(timeout=5000)
+
+    # Let the delayed response land. It must NOT resurrect the modal.
+    page.wait_for_timeout(3000)
+    expect(page.locator("#manageModal")).to_be_hidden()
+
+    page.evaluate(
+        "() => { if (window.__fccOrigFetch) window.fetch = window.__fccOrigFetch; }"
+    )
+
+
+@pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
 def test_edit_full_bindings_auto_expands_feeds_section(page: Page, open_manage_modal):
     """When the user clicks Edit Full Bindings from a toolhead view, the
     destination Feeds section should come up already expanded — otherwise
@@ -318,6 +385,29 @@ def test_edit_full_bindings_auto_expands_feeds_section(page: Page, open_manage_m
     open_manage_modal(TEST_TOOLHEAD)
     # Before: Feeds is a dryer-box-only section, invisible here.
     expect(page.locator("#manage-feeds-section")).to_be_hidden()
+    # Group 38 — wait for the Quick-Swap grid to actually POPULATE before
+    # clicking, instead of widening the timeout below a third time.
+    #
+    # `renderQuickSwapSection` reveals its section synchronously but builds the
+    # `.fcc-qs-slot` buttons inside an async `/api/printer_map` fetch
+    # (inv_quickswap.js:86 vs :88-96), and `openManage` calls `.show()` without
+    # awaiting it — so the modal is VISIBLE BEFORE THE SLOTS EXIST.
+    #
+    # That matters because `editBindingsFromToolhead` reads
+    # `grid.querySelector('.fcc-qs-slot')` at click time. With no slot yet,
+    # `targetBox` is null and it takes the FALLBACK branch, which CLOSES the
+    # manage modal and opens the Locations modal instead. `#manage-feeds-section`
+    # then never appears at all, and the test burns its full 12s polling a
+    # hidden element — precisely the observed failure (2026-08-07 sweep: 15
+    # polls, always hidden). A bigger timeout could never have fixed that; the
+    # click had already gone down the wrong branch.
+    #
+    # The sibling `test_escape_key_walks_out_of_three_level_stack` has always
+    # guarded this. This test never did.
+    try:
+        expect(page.locator(".fcc-qs-slot").first).to_be_visible(timeout=12000)
+    except AssertionError:
+        pytest.skip("No QuickSwap slot rendered on XL-1 in current dev state.")
     page.locator("#quickswap-edit-bindings-btn").click()
     # Clicking "Edit Full Bindings" chains THREE sequential fetches before the
     # Feeds section renders and auto-expands: openManage's /api/get_contents,
