@@ -3,13 +3,21 @@
 > For a fresh context window. Supersedes [session-handoff-2026-08-06.md](session-handoff-2026-08-06.md) —
 > everything it listed as open is now either merged to `dev` or re-filed below.
 
-## ⚠️ First thing: Derek's newest buglist item was NOT saved
+## ⚠️ First thing: the active-print testing report (triaged 2026-09-12)
 
-On 2026-09-12 Derek added a new bug/test/input to `Feature-Buglist.md`, but it never reached disk
-(the file was last written at 14:06:05, 44 s before commit `a6e5d21`, and no other copy exists).
-**Ask him to save it, then triage it** — `git diff Feature-Buglist.md` shows it. Commit his line(s)
-separately and attribute them to him; refine it in the context of the Bulk Move checks below if it
-relates.
+Derek's newest buglist item — a report from testing Bulk Move during an active print — is saved
+verbatim (`4c9e085`) and triaged into two entries at the top of `Feature-Buglist.md`:
+
+- **🔴 Auto-deploy skips the toolhead during an active print, but logs success.** Code-confirmed
+  (`logic.py:692-726`): the dryer-box bound-slot chain doesn't forward `confirm_active_print`, and
+  both the ⚡ log and `auto_deployed_to` ignore the chained result. The most concrete fix in the
+  queue — pin it with a hermetic test first.
+- **🔀 Remaining findings.** Slot-card eject dead after a bulk-move timeout, and a two-spools-on-one-
+  toolhead eject that silently no-opped — both need repro, suspected shared cause a Bootstrap
+  confirm rendering behind a still-mounted overlay — plus bulk-move discoverability polish.
+
+**Check 4 (active print) below is still untested** — the print finished first — and on a bound box
+it will hit the auto-deploy bug, so fix or account for that before judging it.
 
 ## Git state (2026-09-12)
 
