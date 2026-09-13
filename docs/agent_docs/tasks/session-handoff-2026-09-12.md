@@ -13,8 +13,11 @@ verbatim (`4c9e085`) and triaged into two entries at the top of `Feature-Buglist
   both the ⚡ log and `auto_deployed_to` ignore the chained result. The most concrete fix in the
   queue — pin it with a hermetic test first.
 - **🔀 Remaining findings.** Slot-card eject dead after a bulk-move timeout, and a two-spools-on-one-
-  toolhead eject that silently no-opped — both need repro, suspected shared cause a Bootstrap
-  confirm rendering behind a still-mounted overlay — plus bulk-move discoverability polish.
+  toolhead eject that silently no-opped until Derek left and came back. **Neither root cause is
+  established.** Derek doubts either is a Bootstrap issue, so investigate properly rather than
+  assume — the buglist entry lists candidates (a confirm behind an overlay is only one; a hung
+  manage-view refresh guard and stale client state are others) plus repro steps. Also:
+  bulk-move discoverability polish.
 
 **Check 4 (active print) below is still untested** — the print finished first — and on a bound box
 it will hit the auto-deploy bug, so fix or account for that before judging it.
