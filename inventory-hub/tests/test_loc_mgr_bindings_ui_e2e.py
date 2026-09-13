@@ -16,16 +16,11 @@ NON_DRYER_LOC = "XL-1"  # a toolhead — Feeds section should be hidden
 
 
 @pytest.fixture
-def restore_bindings(api_base_url):
-    """Snapshot + restore PM-DB-1 bindings across a test run."""
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+def restore_bindings(borrow_box_bindings):
+    """PM-DB-1 must start at its fixed binding baseline, and whatever the test
+    saves through the Feeds editor goes back to that baseline afterwards
+    (conftest `borrow_box_bindings`)."""
+    borrow_box_bindings(TEST_BOX)
 
 
 @pytest.mark.usefixtures("require_server")

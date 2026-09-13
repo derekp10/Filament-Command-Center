@@ -400,33 +400,17 @@ TEST_TOOLHEAD = "XL-1"
 
 
 @pytest.fixture
-def bound_and_live(api_base_url):
+def bound_and_live(api_base_url, borrow_box_bindings):
     """Bind PM-DB-1 slot 1 → XL-1, skip the test if PM-DB-1 is empty so
-    we can assert on the rendered spool info."""
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": {"1": TEST_TOOLHEAD}},
-        timeout=5,
-    )
+    we can assert on the rendered spool info. The contents are checked BEFORE
+    binding, so a skip writes nothing; the binding goes back to PM-DB-1's fixed
+    baseline at teardown (conftest `borrow_box_bindings`)."""
     contents = requests.get(f"{api_base_url}/api/get_contents?id={TEST_BOX}", timeout=5).json()
     has_slot_1 = any(str(it.get("slot", "")).replace('"', '').strip() == "1"
                      for it in contents or [])
     if not has_slot_1:
-        # Put the binding back the way it was and skip.
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-            json={"slot_targets": original},
-            timeout=5,
-        )
         pytest.skip(f"{TEST_BOX} slot 1 is empty; can't exercise spool-info rendering.")
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+    borrow_box_bindings(TEST_BOX, {"1": TEST_TOOLHEAD})
 
 
 @pytest.mark.usefixtures("require_server", "bound_and_live")
@@ -448,7 +432,8 @@ def test_quickswap_button_shows_spool_info_when_slot_loaded(page: Page, base_url
 
 
 @pytest.mark.usefixtures("require_server", "clean_buffer")
-def test_quickswap_button_disabled_when_slot_empty(page: Page, base_url: str, api_base_url):
+def test_quickswap_button_disabled_when_slot_empty(
+        page: Page, base_url: str, api_base_url, borrow_box_bindings):
     # Bind a slot that's known to be empty, verify the rendered button is
     # disabled and no-ops on click. Note: the button is only disabled when
     # BOTH the slot AND the user's buffer are empty — a buffered spool
@@ -459,29 +444,17 @@ def test_quickswap_button_disabled_when_slot_empty(page: Page, base_url: str, ap
                     for it in contents or [])
     if has_spool:
         pytest.skip(f"{victim_box} slot {victim_slot} has a spool; can't test empty-slot rendering.")
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{victim_box}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{victim_box}/bindings",
-        json={"slot_targets": {victim_slot: TEST_TOOLHEAD}},
-        timeout=5,
-    )
-    try:
-        page.goto(base_url)
-        page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-        page.wait_for_timeout(500)
-        page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
-        expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
-        # Force an empty buffer before asserting disabled — otherwise a
-        # buffered spool would enable the same button as a Deposit target.
-        page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")
-        page.wait_for_timeout(1200)
-        btn = page.locator(f".fcc-qs-slot[data-box='{victim_box}'][data-slot='{victim_slot}']").first
-        expect(btn).to_be_visible(timeout=3000)
-        expect(btn).to_be_disabled()
-    finally:
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{victim_box}/bindings",
-            json={"slot_targets": original},
-            timeout=5,
-        )
+    # Back to PM-DB-2's fixed baseline at teardown.
+    borrow_box_bindings(victim_box, {victim_slot: TEST_TOOLHEAD})
+    page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    page.wait_for_timeout(500)
+    page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
+    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+    # Force an empty buffer before asserting disabled — otherwise a
+    # buffered spool would enable the same button as a Deposit target.
+    page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")
+    page.wait_for_timeout(1200)
+    btn = page.locator(f".fcc-qs-slot[data-box='{victim_box}'][data-slot='{victim_slot}']").first
+    expect(btn).to_be_visible(timeout=3000)
+    expect(btn).to_be_disabled()

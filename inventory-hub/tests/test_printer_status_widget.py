@@ -18,24 +18,11 @@ TEST_TOOLHEAD = "XL-1"
 
 
 @pytest.fixture
-def bound_xl1(api_base_url):
+def bound_xl1(borrow_box_bindings):
     """Ensure XL-1 has at least one bound source slot so the widget shows
-    a row for the XL printer. Restore the original bindings on teardown."""
-    snap = requests.get(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5
-    ).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": {"1": TEST_TOOLHEAD}},
-        timeout=5,
-    )
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+    a row for the XL printer. PM-DB-1 goes back to its fixed baseline on
+    teardown (conftest `borrow_box_bindings`)."""
+    borrow_box_bindings(TEST_BOX, {"1": TEST_TOOLHEAD})
 
 
 @pytest.mark.usefixtures("require_server", "bound_xl1")

@@ -41,7 +41,7 @@ class TestContainerFixtureCoverage:
     def test_data_mutating_fixtures_are_covered(self):
         """These write to real dev inventory; offline must never select them."""
         for name in ("clean_buffer", "with_held_spool", "seed_dryer_box",
-                     "seed_via_ui", "scan"):
+                     "seed_via_ui", "scan", "borrow_box_bindings"):
             assert name in conftest.CONTAINER_FIXTURES, (
                 f"{name} mutates dev data but is not gated by --offline"
             )
@@ -158,6 +158,46 @@ class TestCollectionHookItself:
             item = self._Item(f"t_{name}", [name])
             self._run(monkeypatch, True, [item])
             assert item.skipped, f"{name} is in CONTAINER_FIXTURES but did not skip"
+
+    def test_offline_keeps_an_isolated_browser_test(self, monkeypatch):
+        """A hermetic browser test (the contrast-guard compositing proof) takes
+        `isolated_page` and must still RUN offline — that is its whole point."""
+        item = self._Item("t_isolated", ["isolated_page", "_isolated_chromium", "playwright",
+                                         "assert_contrast", "request"])
+        self._run(monkeypatch, True, [item])
+        assert not item.skipped
+
+
+class TestIsolatedBrowser:
+    """2026-09-13 — a browser may run under --offline, but only one that cannot
+    reach anything. The socket guard below only sees Python sockets, not the
+    browser process, so the isolation lives in `isolated_page`'s context."""
+
+    def test_isolated_browser_fixtures_are_not_gated(self):
+        for name in ("isolated_page", "_isolated_chromium", "playwright", "assert_contrast"):
+            assert name not in conftest.CONTAINER_FIXTURES, name
+
+    def test_isolated_page_aborts_every_request_before_it_leaves_the_browser(self, isolated_page):
+        """`.invalid` never resolves, so an unrouted navigation fails with
+        ERR_NAME_NOT_RESOLVED. ERR_FAILED proves the context's route aborted it
+        before any lookup or connection, which is what keeps localhost:8000 safe."""
+        from playwright.sync_api import Error as PlaywrightError
+
+        # Script-initiated requests first (a failed navigation below leaves the
+        # page on a browser error page, which destroys the execution context).
+        isolated_page.set_content("<p>isolated</p>")
+        outcome = isolated_page.evaluate(
+            "() => fetch('http://fcc-offline-probe.invalid/api/locations', {mode: 'no-cors'})"
+            ".then(() => 'reached', () => 'blocked')")
+        assert outcome == "blocked"
+
+        try:
+            isolated_page.goto("http://fcc-offline-probe.invalid/", timeout=10000)
+        except PlaywrightError as exc:
+            text = str(exc)
+        else:  # pragma: no cover - the navigation must never succeed
+            text = "navigation succeeded"
+        assert "net::ERR_FAILED" in text, text
 
 
 class TestOfflineSocketGuard:

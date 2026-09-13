@@ -10,7 +10,6 @@ import sys
 from unittest.mock import patch
 
 import pytest
-import requests
 from playwright.sync_api import Page, expect
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -148,20 +147,10 @@ def test_return_from_virtual_printer_uses_first_loaded_toolhead_then_source(clie
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def bindings_for_breadcrumb(api_base_url):
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": {"1": TEST_TOOLHEAD}},
-        timeout=5,
-    )
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+def bindings_for_breadcrumb(borrow_box_bindings):
+    """PM-DB-1 slot 1 -> XL-1, from and back to PM-DB-1's fixed baseline
+    (conftest `borrow_box_bindings`)."""
+    borrow_box_bindings(TEST_BOX, {"1": TEST_TOOLHEAD})
 
 
 @pytest.mark.usefixtures("require_server", "bindings_for_breadcrumb")
