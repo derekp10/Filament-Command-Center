@@ -233,8 +233,11 @@ def test_return_physical_source_pointing_at_non_dryer_box_falls_back_to_binding(
     assert body["source"] == "first_binding"   # NOT physical_source
     assert body["box"] == "LR-MDB-1"
     assert body["slot"] == "2"                 # the bound slot, not the source slot
+    # auto_deploy=False (2026-09-12): the bound slot would otherwise chain the
+    # spool straight back onto XL-1 and Return would be a silent round trip.
     mv.assert_called_once_with("LR-MDB-1", [77], target_slot="2",
-                               origin="quickswap_return", confirm_active_print=True)
+                               origin="quickswap_return", auto_deploy=False,
+                               confirm_active_print=True)
     # Success log flags the fallback provenance.
     success_msgs = [c.args[0] for c in log.call_args_list if c.args[1] == "SUCCESS"]
     assert success_msgs and "(first bound slot)" in success_msgs[0]

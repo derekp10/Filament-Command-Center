@@ -334,6 +334,104 @@ def resolve_scan(text):
         
     return {'type': 'error', 'msg': 'Unknown Code'}
 
+def smart_move_failure(move_result, spool_id):
+    """Why perform_smart_move did not move `spool_id`, or '' when it did.
+
+    A rejected per-spool write leaves `status` at "success" and puts the reason
+    in `failures` (L298 Phase 3). A caller that checks `status` alone therefore
+    reports a move that never happened; the slot-QR assign, Quick-Swap and
+    Return all did (2026-09-12). Callers handle "requires_confirm" before this.
+    """
+    if not isinstance(move_result, dict):
+        return "the move returned no result"
+    per_spool = (move_result.get('failures') or {}).get(str(spool_id))
+    if per_spool:
+        return str(per_spool)
+    status = move_result.get('status')
+    if status and status != 'success':
+        return str(move_result.get('msg') or f"move {status}")
+    return ""
+
+
+def _is_single_occupancy(loc_id, printer_map, loc_info_map):
+    """True for a location that holds one spool: a printer_map toolhead, or a
+    row whose Type is a toolhead type or the dual-role "Printer"."""
+    lid = str(loc_id or '').strip().strip('"').upper()
+    if not lid:
+        return False
+    if lid in printer_map:
+        return True
+    row = loc_info_map.get(lid) or {}
+    return row.get('Type') in (locations_db.TOOLHEAD_TYPES | {'Printer'})
+
+
+def _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map):
+    """(physical_source, physical_source_slot) for a spool arriving on a toolhead
+    from `current_loc`.
+
+    The trail names where the spool lives when it is not feeding (a box, shelf
+    or room); Return, eject and the ghost matcher all send it back there. A
+    toolhead is never that place. A head -> head move used to record the OLD
+    head, and that stale trail later made Smart Load "eject" a spool from
+    another head back onto the one being loaded, sent ejects onto occupied
+    heads, and charged one spool for two heads' print usage (2026-09-12
+    investigation). Such a move now starts with no trail; the 13.6
+    reverse-binding in the PRINTER MOVE branch fills in the new head's bound
+    box when it has one, which is where Return should take it.
+    """
+    if _is_single_occupancy(current_loc, printer_map, loc_info_map):
+        return "", ""
+    return current_loc, current_extra.get('container_slot')
+
+
+def _known_room_of(loc_id, loc_list):
+    """The Room `loc_id` really sits in according to the location tree, or ''.
+
+    Where Smart Load sends a resident that has no saved home (Derek,
+    2026-09-12: "if we have no history and the current location is accurate
+    then ... the room it's located in. Otherwise unassigned is fine").
+    resolve_room returns the TOP-LEVEL ancestor, which for a printer that is not
+    nested in a room is the printer itself (XL-1 -> XL), and for an id with no
+    row is a prefix guess, so only an actual Type "Room" row counts.
+    """
+    lid = str(loc_id or '').strip().upper()
+    if not lid:
+        return ""
+    room = locations_db.resolve_room(lid, loc_list=loc_list) or ""
+    if not room or room == lid or room in locations_db.PSEUDO_ROOM_PREFIXES:
+        return ""
+    row = next((r for r in (loc_list or [])
+                if str(r.get('LocationID', '')).strip().upper() == room), None)
+    return room if row and row.get('Type') == 'Room' else ""
+
+
+def _eject_refusal_reason(result):
+    """Why perform_smart_eject did not return True, in words for a log line.
+
+    A False carries no reason of its own. The eject logs its Spoolman error
+    right next to the failing write, so point there rather than read the
+    module-global LAST_SPOOLMAN_ERROR, which may belong to an earlier call.
+    """
+    if isinstance(result, dict):
+        return result.get('msg') or "it needs a confirm"
+    if result == "REQUIRE_CONFIRM":
+        return "it needs an unassign confirm"
+    return "its eject failed (see the Activity Log)"
+
+
+# The auto-deploy chain collects the undo record(s) its chained move pushes, so
+# it can fold exactly those into the parent record (see the chain).
+_chain_undo_sink = threading.local()
+
+
+def _push_undo(record):
+    """Push a move's undo record, and hand it to an enclosing auto-deploy chain."""
+    state.UNDO_STACK.append(record)
+    sink = getattr(_chain_undo_sink, 'records', None)
+    if sink is not None:
+        sink.append(record)
+
+
 # Thread-local re-entry depth for perform_smart_move. The auto-deploy chain
 # re-enters the wrapper synchronously on the same thread; depth 0 is the
 # outermost move, which owns the per-move printer-state probe cache (L3 fix A).
@@ -441,6 +539,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 "msg": f"{ap['printer_name']} is {ap['state']} — moving a spool here will disrupt the print.",
             }
 
+    # Whether the CALLER named the slot, before auto-slot fills one in. The
+    # pre-flight above probed only an explicit slot's bound toolhead, so only
+    # then does the caller's confirm also cover the auto-deploy chain below.
+    explicit_slot = bool(target_slot)
+
     # Auto-slot-pick: if the caller didn't specify a slot and the target is a
     # slotted container (Max Spools > 1) with at least one free slot, fill the
     # lowest-numbered free slot. Only fires for single-spool moves — in a bulk
@@ -493,23 +596,86 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # restore them — not just `location` — making an undo a TRUE rollback (the
     # spool returns to its exact slot + ghost state). Benefits single moves too;
     # a prerequisite for a trustworthy bulk-move undo.
-    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "extras": {}, "labels": {}, "ejections": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
+    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "extras": {}, "labels": {}, "ejections": {}, "ejection_extras": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
+
+    # sid(str) -> why that spool did not move. Declared before Smart Load, which
+    # can refuse the whole move; see the L298 Phase 3 note at the write loop.
+    failures: typing.Dict[str, str] = {}
 
     if is_printer or is_toolhead:
-        # Check if anyone is already home
-        residents = spoolman_api.get_spools_at_location(target)
-        for rid in residents:
-            # Don't eject the spool we are currently trying to move (if it's already there)
-            if str(rid) not in [str(s) for s in spools]:
-                state.add_log_entry(f"⚠️ <b>Smart Load:</b> Ejecting #{rid} from {target}...", "WARNING")
-                # No suppress_fb_unmap: filabridge must see the target
-                # toolhead cleared before we map the incoming spool to
-                # it (filabridge invariant: one spool, one toolhead).
-                if perform_smart_eject(rid):
-                    # Find out where it actually got sent to so we can bring it back!
-                    ejected_data = spoolman_api.get_spool(rid)
-                    if ejected_data:
-                        undo_record['ejections'][rid] = ejected_data.get('location', '')
+        # 2026-09-12: the head must really be empty before the incoming spool is
+        # written, or it holds two (Derek's bulk-move active-print testing). The
+        # old `if perform_smart_eject(rid):` read the eject's refusals as
+        # success: the active-print dict and the "REQUIRE_CONFIRM" string are
+        # both truthy, so the resident stayed and the incoming spool landed on
+        # top of it.
+        #  - A resident is a spool whose OWN record says it is on this head. The
+        #    location matcher also returns ghosts (a stale physical_source naming
+        #    this head) and, for a Printer row, every toolhead's spool by prefix;
+        #    "ejecting" those pulled spools off other heads.
+        #  - The eject carries the caller's confirm (the pre-flight above probed
+        #    this head) and a decided home for a resident with none: the Room
+        #    its printer sits in, else Unassigned (Derek, 2026-09-12).
+        #  - Only True counts. A resident that cannot be moved, or read, refuses
+        #    the whole move.
+        #  - Known gap (filed 2026-09-12): the resident LIST read below is
+        #    fail-open, so a Spoolman blip there makes an occupied head look
+        #    empty. The strict reader would close it, but every move test's
+        #    mocks would need reworking first.
+        incoming = {str(s) for s in spools}
+        homeless_dest = None
+        stuck: typing.Dict[typing.Any, str] = {}
+        matched = None  # the matcher's own view, fetched only when a read fails
+        for rid in spoolman_api.get_spools_at_location(target):
+            if str(rid) in incoming:
+                continue
+            before = spoolman_api.get_spool(rid)
+            if not before:
+                # Unreadable. Refuse unless the matcher places it somewhere else:
+                # an unreadable ghost or Printer-row prefix hit must not block a
+                # load onto an empty head (2026-09-12 review).
+                if matched is None:
+                    matched = {str(m.get('id')): m for m in
+                               (spoolman_api.get_spools_at_location_detailed(target) or [])}
+                hit = matched.get(str(rid))
+                if hit is None or (not hit.get('is_ghost')
+                                   and str(hit.get('location') or '').strip().upper() == target):
+                    stuck[rid] = "it could not be read from Spoolman"
+                continue
+            if str(before.get('location') or '').strip().upper() != target:
+                continue
+            if homeless_dest is None:
+                homeless_dest = _known_room_of(target, loc_list)
+            before_extra = dict(before.get('extra') or {})
+            ejected = perform_smart_eject(
+                rid, confirm_active_print=confirm_active_print,
+                homeless_destination=homeless_dest,
+            )
+            if ejected is not True:
+                stuck[rid] = _eject_refusal_reason(ejected)
+                continue
+            # Undo puts the resident back on this head, ghost trail included.
+            undo_record['ejections'][rid] = target
+            undo_record['ejection_extras'][rid] = {
+                k: before_extra.get(k, '') for k in spoolman_api.SYSTEM_MANAGED_EXTRAS
+            }
+            # perform_smart_eject has already logged where it went.
+            state.add_log_entry(f"⚠️ <b>Smart Load:</b> unloaded #{rid} from {target}", "WARNING")
+        if stuck:
+            held = ", ".join(f"#{rid} ({why})" for rid, why in stuck.items())
+            for sid in spools:
+                failures[str(sid)] = f"{target} still holds {held}"
+                state.add_log_entry(
+                    f"❌ <b>Smart Load:</b> not loading Spool #{sid} onto {target} — it still holds {held}",
+                    "ERROR", "ff4444")
+            if undo_record['ejections']:
+                # Nothing was loaded, but some residents were unloaded: keep that
+                # undoable, under a summary that says what undo puts back.
+                undo_record['summary'] = (
+                    f"Unloaded {', '.join('#' + str(r) for r in undo_record['ejections'])} from {target}")
+                _push_undo(undo_record)
+            return {"status": "error", "msg": f"Not loaded: {target} still holds {held}.",
+                    "failures": failures}
 
     # L298 Phase 3 — per-spool failure attribution. Each write branch below
     # already reads spoolman_api.LAST_SPOOLMAN_ERROR ADJACENT to its own failing
@@ -519,7 +685,6 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # later success had reset it to None (every failed row got the useless "see
     # Activity Log") or a second failure had overwritten it (both rows blamed on
     # the last error).
-    failures: typing.Dict[str, str] = {}
     for sid in spools:
         spool_data = spoolman_api.get_spool(sid)
         if not spool_data:
@@ -588,8 +753,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 new_extra['physical_source'] = existing_source
                 new_extra['physical_source_slot'] = current_extra.get('physical_source_slot')
             else:
-                new_extra['physical_source'] = current_loc
-                new_extra['physical_source_slot'] = current_extra.get('container_slot')
+                new_extra['physical_source'], new_extra['physical_source_slot'] = \
+                    _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map)
 
             # 13.6 Part A — if the destination toolhead is the value of some
             # dryer-box slot's `extra.slot_targets`, treat the spool as if
@@ -604,12 +769,27 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             )
             if not current_source_meaningful:
                 bound_box, bound_slot = _find_box_slot_feeding_toolhead(target, loc_list)
+                # Never claim a slot another spool already holds, directly or as
+                # its own ghost: the double claim made a later Return unseat that
+                # spool (2026-09-12 review). No trail beats a false one.
+                claimed_by = None
                 if bound_box and bound_slot:
+                    claimed_by = next((
+                        o.get('id') for o in
+                        (spoolman_api.get_spools_at_location_detailed(bound_box) or [])
+                        if str(o.get('id')) != str(sid)
+                        and str(o.get('slot', '')).strip('"') == str(bound_slot)), None)
+                if bound_box and bound_slot and claimed_by is None:
                     new_extra['physical_source'] = bound_box
                     new_extra['physical_source_slot'] = bound_slot
                     state.logger.info(
                         f"🔗 Reverse-binding: toolhead {target} is fed by "
                         f"{bound_box} slot {bound_slot} — synthesizing ghost source."
+                    )
+                elif claimed_by is not None:
+                    state.logger.info(
+                        f"🔗 Reverse-binding skipped: {bound_box} slot {bound_slot} "
+                        f"already holds Spool #{claimed_by}."
                     )
 
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
@@ -637,9 +817,13 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
 
         # DRYER MOVE
         elif target in loc_info_map and loc_info_map[target].get('Type') == 'Dryer Box':
-            new_extra.pop('physical_source', None)
+            # Written as "", never pop()ed: update_spool read-merge-writes extras,
+            # so an OMITTED key keeps its old value and the stale trail survived
+            # (2026-09-12). The delete sentinel can't help either: the merge
+            # refuses it for SYSTEM_MANAGED_EXTRAS.
+            new_extra['physical_source'] = ""
             # [ALEX FIX] Clean up the source slot memory too, since we are home now.
-            new_extra.pop('physical_source_slot', None)
+            new_extra['physical_source_slot'] = ""
 
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 slot_txt = f" [Slot {target_slot}]" if target_slot else ""
@@ -655,17 +839,18 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         else:
             # [Universal Fallback Ghost Logic]
             if is_toolhead:
-                 new_extra['physical_source'] = current_loc
-                 new_extra['physical_source_slot'] = current_extra.get('container_slot')
+                new_extra['physical_source'], new_extra['physical_source_slot'] = \
+                    _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map)
             else:
                 # L130 fix: when forcing a spool to a Room/Cart/Shelf
                 # (the typical Force-Location destinations), clear any
                 # stale ghost trail so the "deployed" indicator computed
                 # from physical_source (spoolman_api.search_inventory)
                 # doesn't keep flagging the spool as still on a toolhead.
-                # Mirrors the DRYER MOVE branch's pop() above.
-                new_extra.pop('physical_source', None)
-                new_extra.pop('physical_source_slot', None)
+                # Mirrors the DRYER MOVE branch above: written as "", since a
+                # pop()ed key is kept by update_spool's merge.
+                new_extra['physical_source'] = ""
+                new_extra['physical_source_slot'] = ""
 
             if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
@@ -676,7 +861,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     f"❌ Failed to move Spool #{sid} -> {target}: {err}", "ERROR", "ff4444"
                 )
 
-    state.UNDO_STACK.append(undo_record)
+    _push_undo(undo_record)
 
     # --- AUTO-DEPLOY CHAIN ---
     # If this move placed spool(s) into a Dryer Box slot that's bound to a
@@ -689,7 +874,16 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     #
     # auto_deploy=False on the chained call prevents infinite recursion
     # (the toolhead move would try to auto-deploy onto its own printer).
-    auto_deploy_result = None
+    #
+    # 2026-09-12: the chain is judged by what it actually did. It used to drop
+    # the caller's confirm_active_print, so a confirmed move into a printing
+    # head's bound slot bounced off the guard, and then it logged
+    # "Auto-deployed" and reported auto_deployed_to for every spool whenever it
+    # returned anything at all. Only spools whose box write landed are deployed;
+    # anything not deployed is logged as a warning and reported in
+    # auto_deploy_skipped.
+    auto_deployed: typing.List[typing.Any] = []
+    auto_deploy_skipped: typing.Dict[str, str] = {}
     bound_toolhead = None
     if auto_deploy and target_slot and tgt_info and tgt_info.get('Type') == 'Dryer Box':
         bindings = (tgt_info.get('extra') or {}).get('slot_targets') or {}
@@ -698,21 +892,64 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # printer's pool" — no toolhead is implied, so auto-deploy is a no-op.
         if bound_toolhead and locations_db.is_printer_sentinel(bound_toolhead):
             bound_toolhead = None
-        if bound_toolhead:
+    if bound_toolhead:
+        th = str(bound_toolhead).upper()
+        placed = [sid for sid in spools if str(sid) not in failures]
+        # One slot feeds one toolhead. Several spools sent to the same slot each
+        # unseated the one before, so only the last is still in it.
+        for sid in placed[:-1]:
+            auto_deploy_skipped[str(sid)] = f"only the last spool placed in slot {target_slot} feeds {th}"
+        to_deploy = placed[-1:]
+        if to_deploy:
+            chain_origin = f'auto_deploy_from_{origin or "smart_move"}'
+            outer_sink = getattr(_chain_undo_sink, 'records', None)
+            _chain_undo_sink.records = []
             try:
-                auto_deploy_result = perform_smart_move(
-                    bound_toolhead, list(spools),
-                    target_slot=None, origin=f'auto_deploy_from_{origin or "smart_move"}',
+                chained = perform_smart_move(
+                    th, to_deploy,
+                    target_slot=None, origin=chain_origin,
                     auto_deploy=False,
+                    confirm_active_print=confirm_active_print and explicit_slot,
                 )
-                for sid in spools:
+            except Exception as _ad_err:
+                state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")
+                chained = {"status": "error", "msg": f"auto-deploy crashed: {_ad_err}"}
+            finally:
+                chained_undos = _chain_undo_sink.records or []
+                _chain_undo_sink.records = outer_sink
+            if not isinstance(chained, dict):
+                chained = {"status": "error", "msg": "auto-deploy returned nothing"}
+            # One user action, one undo: fold the record(s) the chained move
+            # pushed (and any resident its Smart Load unloaded) into this move's
+            # record, which already restores the spool to where it started.
+            # Matched by identity, never by stack position: another request can
+            # push a record with the same origin meanwhile (2026-09-12 review).
+            for chained_undo in chained_undos:
+                idx = next((i for i in range(len(state.UNDO_STACK) - 1, -1, -1)
+                            if state.UNDO_STACK[i] is chained_undo), None)
+                if idx is None:
+                    continue  # already undone
+                del state.UNDO_STACK[idx]
+                undo_record['ejections'].update(chained_undo.get('ejections') or {})
+                undo_record['ejection_extras'].update(chained_undo.get('ejection_extras') or {})
+            chained_failures = chained.get('failures') or {}
+            for sid in to_deploy:
+                if chained.get('status') == 'success' and str(sid) not in chained_failures:
+                    auto_deployed.append(sid)
                     state.add_log_entry(
-                        f"⚡ Auto-deployed Spool #{sid}{_spool_brand_color_suffix(sid)} → <b>{str(bound_toolhead).upper()}</b> "
+                        f"⚡ Auto-deployed Spool #{sid}{_spool_brand_color_suffix(sid)} → <b>{th}</b> "
                         f"(source: {target}:SLOT:{target_slot})",
                         "SUCCESS", "00ff00"
                     )
-            except Exception as _ad_err:
-                state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")
+                else:
+                    auto_deploy_skipped[str(sid)] = (
+                        chained_failures.get(str(sid)) or chained.get('msg') or "not deployed")
+        for sid, why in auto_deploy_skipped.items():
+            state.add_log_entry(
+                f"⚠️ Spool #{sid} is in <b>{target}:SLOT:{target_slot}</b> but was NOT "
+                f"deployed → <b>{th}</b>: {why}",
+                "WARNING", "ffaa00"
+            )
 
     result: typing.Dict[str, typing.Any] = {
         "status": "success",
@@ -722,8 +959,12 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # this is what lets a batch caller do better).
         "failures": failures,
     }
-    if auto_deploy_result is not None and bound_toolhead:
+    if auto_deployed:
         result["auto_deployed_to"] = str(bound_toolhead).upper()
+    if auto_deploy_skipped:
+        # sid(str) -> why it stayed in the box. The box placement itself stands.
+        result["auto_deploy_skipped"] = auto_deploy_skipped
+        result["auto_deploy_target"] = str(bound_toolhead).upper()
     return result
 
 
@@ -1493,8 +1734,14 @@ def get_room_from_location(loc_id):
 
     return room
 
-def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print=False):
+def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print=False,
+                        homeless_destination=None):
     """Remove `spool_id` from its current location.
+
+    `homeless_destination`: where to send a spool with no saved home to return
+    to ('' = Unassigned), for a caller that has already decided (Smart Load).
+    It skips the protected-unassign prompt. None keeps the interactive
+    behaviour: room fallback, else "REQUIRE_CONFIRM".
 
     Returns:
       - True on successful eject
@@ -1503,6 +1750,7 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
       - {"status": "requires_confirm", "confirm_type": "active_print", ...}
         when the spool is currently on an actively-printing toolhead and the
         caller hasn't explicitly opted in via confirm_active_print=True.
+    Every refusal is truthy, so callers must test `is True`, never truthiness.
     """
     spool_data = spoolman_api.get_spool(spool_id)
     if not spool_data: return False
@@ -1525,10 +1773,15 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
                 "msg": f"{ap['printer_name']} is {ap['state']} — ejecting from this toolhead will disrupt the print.",
             }
 
-    # Group 20.2: ejecting off a toolhead detaches any single-slot dryer box that
-    # was following its spool onto this toolhead (the lifecycle pair of the
-    # auto-attach in perform_smart_move). Best-effort — never fail the eject.
-    if current_location in printer_map:
+    def _detach_single_slot_boxes():
+        # Group 20.2: ejecting off a toolhead detaches any single-slot dryer box
+        # that was following its spool onto this toolhead (the lifecycle pair of
+        # the auto-attach in perform_smart_move). Best-effort — never fail the
+        # eject. Called only once the spool's own write has landed: it used to
+        # run first, so a refused ("REQUIRE_CONFIRM") or rejected eject left the
+        # spool on the head with its box already unbound (2026-09-12).
+        if current_location not in printer_map:
+            return
         try:
             _detached = locations_db.detach_single_slot_boxes_from_toolhead(current_location)
             if _detached:
@@ -1569,6 +1822,18 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
     if current_location and saved_source:
         if locations_db.is_descendant(saved_source.strip('"'), current_location):
             state.logger.info(f"🛑 Bypassing Saved Source: {saved_source} is inside {current_location}. Ejecting to Unassigned.")
+            saved_source = None
+
+    # A toolhead is never a home. A trail naming one is stale (a head -> head
+    # move used to record the old head), and "returning" there put the spool
+    # onto whatever is loaded on that head now (2026-09-12).
+    if saved_source:
+        _src = str(saved_source).strip().strip('"').upper()
+        if _src in printer_map or _is_single_occupancy(_src, printer_map, {
+                str(r.get('LocationID', '')).strip().upper(): r
+                for r in (locations_db.load_locations_list() or [])}):
+            state.logger.info(
+                f"🛑 Stale ghost trail: #{spool_id}'s saved source {_src} is a toolhead — not returning there.")
             saved_source = None
 
     if saved_source:
@@ -1616,22 +1881,26 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         
         if spoolman_api.update_spool(spool_id, {"location": saved_source, "extra": extra}):
             state.add_log_entry(f"↩️ Returned #{spool_id} -> {saved_source}", "WARNING")
+            _detach_single_slot_boxes()
             return True
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
         state.add_log_entry(
             f"❌ Failed to return Spool #{spool_id} -> {saved_source}: {err}", "ERROR", "ff4444"
         )
     else:
+        if homeless_destination is not None:
+            # The caller already decided where a spool with no home goes.
+            target_loc = str(homeless_destination or '').strip().upper()
         # Normal unslotted eject with Room Fallback
         # [Universal Fallback fix] A printer is not a Room. If ejecting from a printer and missing physical_source, default to Unassigned.
-        if current_location in printer_map:
+        elif current_location in printer_map:
             target_loc = ""
         else:
             room_fallback = get_room_from_location(current_location)
             target_loc = room_fallback if room_fallback else ""
 
-        # Protected Unassign
-        if target_loc == "" and current_location != "":
+        # Protected Unassign (a caller-decided destination needs no prompt)
+        if target_loc == "" and current_location != "" and homeless_destination is None:
             if not confirmed_unassign:
                 return "REQUIRE_CONFIRM"
 
@@ -1643,6 +1912,7 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         if spoolman_api.update_spool(spool_id, {"location": target_loc, "extra": extra}):
             dest_msg = f" to Room {target_loc}" if target_loc else " (Unassigned)"
             state.add_log_entry(f"⏏️ Ejected #{spool_id}{dest_msg}", "WARNING")
+            _detach_single_slot_boxes()
             return True
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
         state.add_log_entry(
@@ -1842,9 +2112,52 @@ def perform_undo():
     # [ALEX FIX] Revert Smart Ejections — same canonical write surface so a
     # rejection is surfaced rather than silently dropped (a location-only PATCH
     # was always accepted, but consistency + failure-visibility matter here too).
+    # Smart Load records each resident's PRE-eject location and system-managed
+    # extras. It used to record where the eject SENT the resident, so this
+    # replay wrote the spool to where it already was and the head stayed empty
+    # (2026-09-12). A record without 'ejection_extras' restores location only.
     ejections = last.get('ejections', {})
+    ejection_extras = last.get('ejection_extras', {})
+    blocked_restores: typing.List[str] = []
+    undo_printer_map = None
+    undo_rows: typing.Dict[str, typing.Any] = {}
     for ejected_sid, original_loc in ejections.items():
-        if not spoolman_api.update_spool(ejected_sid, {"location": original_loc}):
+        # Back onto a single-occupancy head only if that head is really free.
+        # The incoming spool's restore above may have been rejected, or
+        # something may have been loaded there since; restoring blind stacked
+        # two spools on one head (2026-09-12 review).
+        if original_loc:
+            if undo_printer_map is None:
+                undo_printer_map = locations_db.get_active_printer_map()
+                undo_rows = {str(r.get('LocationID', '')).strip().upper(): r
+                             for r in (locations_db.load_locations_list() or [])}
+            if _is_single_occupancy(original_loc, undo_printer_map, undo_rows):
+                head = str(original_loc).strip().upper()
+                try:
+                    occupants = [
+                        o.get('id') for o in spoolman_api.get_spools_at_location_detailed_strict(head)
+                        if not o.get('is_ghost') and str(o.get('id')) != str(ejected_sid)
+                        and str(o.get('location') or '').strip().upper() == head]
+                    why = ("it holds " + ", ".join(f"#{o}" for o in occupants)) if occupants else ""
+                except Exception as _occ_err:
+                    why = f"it could not be read from Spoolman ({_occ_err})"
+                if why:
+                    state.add_log_entry(
+                        f"❌ Undo: not putting Spool #{ejected_sid} back on {head} — {why}",
+                        "ERROR", "ff4444")
+                    blocked_restores.append(f"#{ejected_sid} ({why})")
+                    continue
+        eject_payload: typing.Dict[str, typing.Any] = {"location": original_loc}
+        snap = ejection_extras.get(ejected_sid)
+        if snap is None:
+            snap = ejection_extras.get(str(ejected_sid))
+        if snap is not None:
+            cur = spoolman_api.get_spool(ejected_sid) or {}
+            merged = dict(cur.get('extra') or {})
+            for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
+                merged[k] = snap.get(k, '')
+            eject_payload["extra"] = merged
+        if not spoolman_api.update_spool(ejected_sid, eject_payload):
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
             state.add_log_entry(
                 f"❌ Undo: failed to restore ejected Spool #{ejected_sid} → "
@@ -1885,6 +2198,9 @@ def perform_undo():
         # so don't prepend a second "moved".
         detail = last.get('summary', f"moved -> {target}")
     state.add_log_entry(f"↩️ Undid: {detail}", "WARNING")
+    if blocked_restores:
+        return {"success": False,
+                "msg": f"Undo could not put back {', '.join(blocked_restores)}."}
     return {"success": True}
 
 def process_audit_scan(scan_result):

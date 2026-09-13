@@ -44,6 +44,8 @@ def _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured):
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        # The 13.6 reverse-binding checks the bound slot is free (2026-09-12).
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
         patch.object(logic.spoolman_api, "format_spool_display",
                      return_value={"text": "Test Spool", "color": "ff0000"}),
         patch.object(logic.spoolman_api, "update_spool", side_effect=_fake_update),
@@ -199,11 +201,19 @@ def test_perform_smart_move_sets_physical_source_on_first_deploy():
     assert patch_data["extra"]["physical_source_slot"] == "1"
 
 
-def test_perform_smart_move_overwrites_source_when_moving_to_a_different_toolhead():
+def test_perform_smart_move_head_to_head_move_never_records_a_toolhead_as_source():
     """Spool deployed to XL-3 (physical_source=LR-MDB-1:1). User moves it to
-    XL-1. physical_source should update to XL-3 (the spool's current location
-    before this move), not stay at LR-MDB-1. Otherwise Return-to-Slot would
-    send it to the wrong box."""
+    XL-1. The trail must not stay at LR-MDB-1, or Return-to-Slot from XL-1
+    sends it to a box that feeds XL-3 (why this test exists, 5fe1524). It must
+    not become XL-3 either.
+
+    2026-09-12: this test used to assert physical_source == "XL-3". That
+    toolhead-valued trail made the matcher count the spool as a ghost resident
+    of XL-3, so a later Smart Load onto XL-3 "ejected" it from XL-1 back onto
+    XL-3 (two spools on one head); an eject could return it onto an occupied
+    head; and a print on XL-3 was charged to it. A head -> head move now starts
+    with no trail. The 13.6 reverse-binding fills in XL-1's bound box when it
+    has one (none in this fixture), which is where Return then takes it."""
     printer_map = {
         "XL-1": {"printer_name": "🦝 XL", "position": 0},
         "XL-3": {"printer_name": "🦝 XL", "position": 2},
@@ -229,9 +239,11 @@ def test_perform_smart_move_overwrites_source_when_moving_to_a_different_toolhea
         for m in reversed(ctx): m.stop()
 
     _, patch_data = captured['update']
-    # Moving from XL-3 → XL-1 is a fresh move, not a re-deploy to same place.
-    # physical_source tracks where-from, which is now XL-3.
-    assert patch_data["extra"]["physical_source"] == "XL-3"
+    # Moving from XL-3 → XL-1 is a fresh move, not a re-deploy to same place,
+    # and a toolhead is never a home.
+    assert patch_data["extra"]["physical_source"] not in ("XL-3", "LR-MDB-1")
+    assert patch_data["extra"]["physical_source"] == ""
+    assert patch_data["extra"]["physical_source_slot"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -343,10 +355,12 @@ def test_force_move_to_room_clears_ghost_trail():
     extras = patch_data["extra"]
     # THE regression: the prior ghost trail must be gone now that the user
     # explicitly relocated the spool to a non-toolhead.
-    assert "physical_source" not in extras or extras.get("physical_source") in (None, ""), \
-        f"physical_source should be cleared on force-move to non-toolhead, got {extras.get('physical_source')!r}"
-    assert "physical_source_slot" not in extras or extras.get("physical_source_slot") in (None, ""), \
-        f"physical_source_slot should be cleared, got {extras.get('physical_source_slot')!r}"
+    # Present AND empty, not merely absent: update_spool's merge KEEPS an
+    # omitted key, so the old pop() never cleared anything (2026-09-12).
+    assert extras.get("physical_source", "MISSING") == "", \
+        f"physical_source must be written empty on force-move to non-toolhead, got {extras.get('physical_source', 'MISSING')!r}"
+    assert extras.get("physical_source_slot", "MISSING") == "", \
+        f"physical_source_slot must be written empty, got {extras.get('physical_source_slot', 'MISSING')!r}"
     # Sanity: the destination was actually written.
     assert patch_data["location"] == "LR"
 

@@ -1448,8 +1448,16 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
                 });
                 return;
             }
-            if (res.status === 'success') {
+            // A rejected write still answers status 'success' and names the
+            // spool in res.failures; it used to toast "Assigned" and drop the
+            // spool from the buffer anyway (2026-09-12).
+            const failedWhy = res.status === 'success' ? (res.failures || {})[spoolIdStr] : null;
+            if (res.status === 'success' && !failedWhy) {
                 showToast("Assigned");
+                const notDeployed = (res.auto_deploy_skipped || {})[spoolIdStr];
+                if (notDeployed) {
+                    showToast(`⚠️ #${spoolIdStr} is in ${loc} but was NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
+                }
 
                 // --- Buffer mutation only on success ---
                 // Remove the assigned spool. handleSlotInteraction no longer
@@ -1473,7 +1481,9 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
                 if (window.fetchLocations) window.fetchLocations();
                 refreshManageView(loc);
             }
-            else showToast(res.msg, 'error');
+            else showToast(failedWhy
+                ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
+                : (res.msg || 'Assign failed'), 'error', 7000);
         })
         .catch(() => setProcessing(false));
 };
@@ -1558,7 +1568,14 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
                 // Ejecting a spool that's also held in the buffer used to leave
                 // the card's location/weight stale until the next 5s pulse.
                 document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
-                refreshManageView(loc);
+                // Refresh the view that is actually OPEN, not `loc`: a Quick-Swap
+                // card passes its source BOX as loc (ui_builder.js), so
+                // refreshManageView(loc) painted the box's grid + title into the
+                // toolhead's view until the next pulse. The sync-pulse re-renders
+                // the Quick-Swap grid now rather than up to one heartbeat later.
+                const openLocId = (document.getElementById('manage-loc-id') || {}).value || loc;
+                refreshManageView(openLocId);
+                document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'eject' } }));
             }
         })
         .catch(() => setProcessing(false));

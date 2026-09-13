@@ -1140,10 +1140,29 @@ def api_identify_scan():
                 "msg": move_result.get('msg'),
                 "moved": spool_id,
             }), 200
+        # 2026-09-12: a rejected write used to fall through to the success path
+        # below, which logged "✅", dropped the spool from the buffer and
+        # answered assignment_done although the spool never moved.
+        move_failed = logic.smart_move_failure(move_result, spool_id)
+        if move_failed:
+            state.add_log_entry(
+                f"❌ Spool #{spool_id} was NOT loaded into <b>{target}:SLOT:{slot}</b> — {move_failed}",
+                "ERROR", "ff4444"
+            )
+            return jsonify({
+                "type": "assignment",
+                "action": "assignment_failed",
+                "location": target, "slot": slot,
+                "spool": spool_id,
+                "msg": move_failed,
+                "smart_move": move_result,
+            }), 200
         # perform_smart_move now handles auto-deploy internally when the
         # target slot is bound to a toolhead. Pick up the deployed-to
-        # hint from its response so we can surface it in the toast.
+        # hint from its response so we can surface it in the toast, and the
+        # reason when the spool stayed in the box instead.
         auto_deployed_to = (move_result or {}).get('auto_deployed_to')
+        not_deployed = ((move_result or {}).get('auto_deploy_skipped') or {}).get(str(spool_id))
 
         # Remove the spool from the backend's buffer replica.
         state.GLOBAL_BUFFER = [
@@ -1168,6 +1187,9 @@ def api_identify_scan():
             "location": target, "slot": slot,
             "moved": spool_id,
             "auto_deployed_to": auto_deployed_to,
+            # Why the spool stayed in the box instead of deploying, when it did.
+            "not_deployed": not_deployed,
+            "not_deployed_target": (move_result or {}).get('auto_deploy_target') if not_deployed else None,
             "remaining_buffer": remaining,
             "smart_move": move_result,
         }), 200

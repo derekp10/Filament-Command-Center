@@ -1087,6 +1087,17 @@ body {
     z-index: 1100 !important;
 }
 
+/* A gating dialog that is fading OUT still paints and still takes clicks, and FCC
+   re-arms it with the NEXT prompt's text before it has gone, so a double-click on
+   YES confirmed that next prompt (e.g. the active-print override) unseen.
+   Bootstrap removes .show synchronously in hide() and adds it back on show, so
+   only the fade-out goes inert (2026-09-12 review). */
+#actionModal:not(.show) .modal-content,
+#safetyModal:not(.show) .modal-content,
+#confirmModal:not(.show) .modal-content {
+    pointer-events: none;
+}
+
 /* --- RED ZONE: NAV DECK --- */
 #loc-mgr-nav-deck {
     display: flex;
