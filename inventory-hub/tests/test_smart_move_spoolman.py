@@ -208,7 +208,9 @@ def test_dryer_move_writes_spoolman_and_clears_ghost_trail():
     # Spoolman moved to the box; ghost trail (physical_source) cleared.
     box_writes = [data for sid, data in update_calls if data.get("location") == "PM-DB-1"]
     assert box_writes, f"expected a Spoolman write to PM-DB-1: {update_calls!r}"
-    assert box_writes[-1].get("extra", {}).get("physical_source", "") == ""
+    # Present AND empty, not merely absent: update_spool's merge KEEPS an
+    # omitted key, so the old pop() never cleared anything (2026-09-12).
+    assert box_writes[-1].get("extra", {}).get("physical_source", "MISSING") == ""
     assert post.call_count == 0, f"a move must make no FilaBridge POSTs: {post.call_args_list!r}"
 
 

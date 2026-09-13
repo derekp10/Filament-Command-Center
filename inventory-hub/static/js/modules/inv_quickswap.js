@@ -365,7 +365,9 @@
         // (the async-append pattern we tried first lost that race). 1s cap
         // keeps the delay bounded when the printer is offline. The probe
         // fails open — null means "unknown, show overlay normally."
-        const stateInfo = await _probeWithTimeout(opts.toolhead);
+        // opts.knownState: the backend has just said the printer is active, so
+        // show that banner without re-probing (the probe is what missed it).
+        const stateInfo = opts.knownState || await _probeWithTimeout(opts.toolhead);
         const warningBanner = stateInfo
             ? `<div class="alert alert-warning py-2 px-3 mb-2" style="font-size:0.95em;">`
                 + `⚠️ <b>${_escapeHtml(stateInfo.printer_name)} is ${_escapeHtml(stateInfo.state)}</b> — loading a new spool now will disrupt the print.`
@@ -411,6 +413,12 @@
             try { handle.cleanup(); } catch (_) { /* noop */ }
             if (_activeConfirmClose === close) _activeConfirmClose = null;
         };
+        // ONE confirm path for Enter, the Yes button and the QR. onConfirm gets
+        // the probe result, so a caller can tell the backend the user confirmed
+        // an active-print warning (null = no banner was shown). Enter used to
+        // call onConfirm() bare, so a keyboard deposit during a print never
+        // carried the confirm (2026-09-12 review).
+        const doConfirm = () => { opts.onConfirm && opts.onConfirm(stateInfo); close(); };
 
         // Keyboard contract:
         //   - Escape cancels (owned by mountOverlay's onEscape).
@@ -437,8 +445,7 @@
                 const active = document.activeElement;
                 if (active === yes) {
                     e.preventDefault(); e.stopPropagation();
-                    opts.onConfirm && opts.onConfirm();
-                    close();
+                    doConfirm();
                 } else if (active === no) {
                     e.preventDefault(); e.stopPropagation();
                     close();
@@ -487,13 +494,13 @@
         if (stateInfo && warningBanner && window.attachConfirmQRs) {
             qrSession = window.attachConfirmQRs({
                 host: body,
-                onConfirm: () => { opts.onConfirm && opts.onConfirm(); close(); },
+                onConfirm: doConfirm,
                 onCancel: () => { close(); },
                 theme: 'warning',
             });
         }
 
-        yes.onclick = () => { opts.onConfirm && opts.onConfirm(); close(); };
+        yes.onclick = doConfirm;
         no.onclick = close;
         document.addEventListener('keydown', keyHandler, true);
         _activeConfirmClose = close;
@@ -544,14 +551,16 @@
                 } else if (body.action === 'quickswap_empty_slot') {
                     showToast(`⚠️ ${opts.box} slot ${opts.slot} is empty — nothing to swap`, 'warning', 4000);
                 } else if (body.action === 'quickswap_not_bound') {
-                    showToast(`❌ Binding is stale — refresh and try again`, 'error', 5000);
+                    showToast(`❌ Binding is stale — refresh and try again`, 'error', 7000);
                 } else {
-                    showToast(`❌ Quick-swap failed: ${body.error || body.action || 'unknown'}`, 'error', 5000);
+                    // Includes quickswap_failed: a rejected write, or a loaded
+                    // spool Smart Load could not unload (body.error says which).
+                    showToast(`❌ Quick-swap failed: ${body.error || body.action || 'unknown'}`, 'error', 7000);
                 }
             })
             .catch(e => {
                 console.error(e);
-                showToast('Quick-swap — network error', 'error', 5000);
+                showToast('Quick-swap — network error', 'error', 7000);
                 if (window.logClientEvent) window.logClientEvent(
                     `❌ Quick-swap network error: ${e && e.message ? e.message : 'connection failed'}`,
                     'ERROR'
@@ -575,12 +584,14 @@
                 } else if (body.action === 'return_no_binding') {
                     showToast(`⚠️ ${opts.toolhead} has no bound slot to return to`, 'warning', 4000);
                 } else {
-                    showToast(`❌ Return failed: ${body.error || body.action || 'unknown'}`, 'error', 5000);
+                    // Includes return_failed (the box write was rejected) and
+                    // return_ambiguous (two spools on the head; eject one first).
+                    showToast(`❌ Return failed: ${body.error || body.action || 'unknown'}`, 'error', 7000);
                 }
             })
             .catch(e => {
                 console.error(e);
-                showToast('Return — network error', 'error', 5000);
+                showToast('Return — network error', 'error', 7000);
                 if (window.logClientEvent) window.logClientEvent(
                     `❌ Return network error: ${e && e.message ? e.message : 'connection failed'}`,
                     'ERROR'
@@ -605,21 +616,32 @@
         const slot = btn.dataset.slot;
         const toolhead = btn.dataset.toolhead;
         const bsDisplay = buffered.display || `#${buffered.id}`;
+        // Set when the backend asked for an active-print confirm that the
+        // overlay's own probe missed (assignment_requires_confirm below).
+        let knownState = null;
+        try { knownState = btn.dataset.knownActivePrint ? JSON.parse(btn.dataset.knownActivePrint) : null; } catch (_) { knownState = null; }
+        delete btn.dataset.knownActivePrint;
         showConfirmOverlay({
-            toolhead, box, slot,
+            toolhead, box, slot, knownState,
             title: `Deposit ${bsDisplay} into ${box} slot ${slot}?`,
             body: `<div class="text-warning fw-bold mb-2" style="font-size:1rem;">Spool: ${bsDisplay}</div>` +
                 `<div class="text-light" style="font-size:1.05rem;">` +
                 `Drops it into <b>${box}:SLOT:${slot}</b>. Because this slot is bound to ` +
                 `<b>${toolhead}</b>, it auto-deploys to the toolhead once placed. ` +
-                `If ${toolhead} currently has another spool, that one returns to its own origin box first.</div>`,
-            onConfirm: () => {
+                `If ${toolhead} currently has another spool, that one goes back to its recorded source box first (or the printer’s room / Unassigned if it has none).</div>`,
+            onConfirm: (stateInfo) => {
                 fetch('/api/identify_scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         text: `LOC:${box}:SLOT:${slot}`,
                         source: 'quickswap_deposit',
+                        // The overlay showed the "is PRINTING" banner and the user
+                        // confirmed it. Without this flag the backend asked again,
+                        // this handler had no branch for that and toasted "Deposit
+                        // failed", so a deposit during a print never worked
+                        // (2026-09-12).
+                        confirm_active_print: !!stateInfo,
                     }),
                 })
                     .then(async r => ({ ok: r.ok, body: await r.json() }))
@@ -628,7 +650,12 @@
                             const destNote = body.auto_deployed_to
                                 ? ` → ${body.auto_deployed_to}`
                                 : '';
-                            showToast(`⬇️ ${bsDisplay} → ${box}:SLOT:${slot}${destNote}`, 'success', 2500);
+                            if (body.not_deployed) {
+                                // In the box, but the chain did not deploy it.
+                                showToast(`⚠️ ${bsDisplay} → ${box}:SLOT:${slot}, but NOT deployed to ${body.not_deployed_target || toolhead}: ${body.not_deployed}`, 'warning', 7000);
+                            } else {
+                                showToast(`⬇️ ${bsDisplay} → ${box}:SLOT:${slot}${destNote}`, 'success', 2500);
+                            }
                             // Mirror backend's buffer mutation on the frontend
                             // so the user doesn't briefly see the old spool.
                             if (body.moved != null) {
@@ -638,13 +665,26 @@
                             _refreshAfterMove();
                         } else if (body.action === 'assignment_no_buffer') {
                             showToast('Buffer is empty — scan a spool first', 'warning', 3500);
+                        } else if (body.action === 'assignment_requires_confirm') {
+                            // The overlay's probe didn't see the print (slow or
+                            // unreachable printer), so no warning was shown and
+                            // nothing was confirmed. Re-open the confirm with the
+                            // backend's own answer as the banner; the spool is
+                            // still first in the buffer.
+                            if (window.logClientEvent) window.logClientEvent(
+                                `⚠️ Deposit into ${box}:SLOT:${slot} needs an active-print confirm: ${body.msg || 'the printer is printing'}`,
+                                'WARNING');
+                            btn.dataset.knownActivePrint = JSON.stringify(
+                                body.active_print || { printer_name: toolhead, state: 'PRINTING' });
+                            window.quickSwapDeposit(btn);
                         } else {
-                            showToast(`❌ Deposit failed: ${body.action || body.error || 'unknown'}`, 'error', 5000);
+                            // Includes assignment_failed: the spool stays in the buffer.
+                            showToast(`❌ Deposit failed: ${body.msg || body.error || body.action || 'unknown'}`, 'error', 7000);
                         }
                     })
                     .catch(e => {
                         console.error(e);
-                        showToast('Deposit — network error', 'error', 5000);
+                        showToast('Deposit — network error', 'error', 7000);
                         if (window.logClientEvent) window.logClientEvent(
                             `❌ Deposit network error: ${e && e.message ? e.message : 'connection failed'}`,
                             'ERROR'
@@ -686,8 +726,8 @@
                     ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
                     : '')
                 + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
-                + 'Any spool currently on the toolhead gets auto-returned to <em>its own</em> origin box — '
-                + 'never re-routed into a different dryer box.',
+                + 'Any spool currently on the toolhead goes back to <em>its own</em> recorded source box — '
+                + 'or, if it has none, to the printer’s room (else Unassigned).',
             onConfirm: () => performSwap(opts),
         });
     };
@@ -719,7 +759,8 @@
             if (i >= candidates.length) return null;
             return fetch(`/api/get_contents?id=${encodeURIComponent(candidates[i])}`)
                 .then(r => r.ok ? r.json() : [])
-                .then(items => (items && items.length) ? candidates[i] : check(i + 1))
+                // Only a spool really ON the head counts; a ghost is loaded elsewhere.
+                .then(items => (items || []).some(it => !it.is_ghost) ? candidates[i] : check(i + 1))
                 .catch(() => check(i + 1));
         };
         return Promise.resolve(check(0));
@@ -735,36 +776,49 @@
         return fetch(`/api/get_contents?id=${encodeURIComponent(th)}`)
             .then(r => r.ok ? r.json() : [])
             .then(items => {
-                const resident = (items || [])[0] || null;
-                // Preferred: the spool's own recorded source.
-                const preferred = resident && resident.location
-                    ? {
-                        box: String(resident.location).toUpperCase(),
-                        slot: String(resident.slot || '').replace(/"/g, '').trim() || null,
-                        source: 'physical_source',
-                        spoolId: resident.id,
-                        display: resident.display,
-                    }
-                    : null;
-                if (preferred && preferred.box && preferred.box !== th) {
-                    // location on a ghost entry points back at its source
-                    // box; that's what we want here.
-                    return preferred;
-                }
-                // Fallback: first bound slot of this toolhead.
-                return fetch('/api/dryer_boxes/slots').then(r => r.json()).then(body => {
+                // Only a spool really ON the head is what the backend acts on; a
+                // ghost entry (a stale physical_source naming this head) is loaded
+                // on some other head. Return refuses 0 or 2+ (2026-09-12).
+                const direct = (items || []).filter(it => !it.is_ghost);
+                if (direct.length !== 1) return { unusable: true, directCount: direct.length };
+                const resident = direct[0];
+                const firstBinding = () => fetch('/api/dryer_boxes/slots').then(r => r.json()).then(body => {
                     for (const s of body.slots || []) {
                         if (s.target && String(s.target).toUpperCase() === th) {
                             return {
                                 box: s.box, slot: s.slot,
                                 source: 'first_binding',
-                                spoolId: resident && resident.id,
-                                display: resident && resident.display,
+                                spoolId: resident.id,
+                                display: resident.display,
                             };
                         }
                     }
                     return null;
                 });
+                // Preferred: the spool's own recorded source, read from the spool.
+                // get_contents reports a DIRECT item's location as the head itself,
+                // so it can't say where Return will really send it; the preview
+                // used to show the first bound slot every time (2026-09-12 review).
+                return fetch(`/api/spools/${encodeURIComponent(resident.id)}`)
+                    .then(r => r.ok ? r.json() : null)
+                    .then(res => {
+                        const extra = ((res && res.data) || {}).extra || {};
+                        const unq = (v) => String(v == null ? '' : v).replace(/"/g, '').trim();
+                        const srcBox = unq(extra.physical_source).toUpperCase();
+                        const srcRow = (state.allLocations || []).find(l => String(l.LocationID).toUpperCase() === srcBox);
+                        if (srcRow && srcRow.Type === 'Dryer Box') {
+                            return {
+                                box: srcRow.LocationID,
+                                slot: unq(extra.physical_source_slot) || null,
+                                source: 'physical_source',
+                                spoolId: resident.id,
+                                display: resident.display,
+                            };
+                        }
+                        return null;
+                    })
+                    .catch(() => null)
+                    .then(preferred => preferred || firstBinding());
             })
             .catch(() => null);
     };
@@ -790,6 +844,21 @@
             }
 
             _resolveReturnDestination(th).then(dest => {
+                if (dest && dest.unusable) {
+                    // Nothing the backend would act on: no spool really on the
+                    // head, or two of them (Return refuses a doubled head).
+                    const n = dest.directCount;
+                    showConfirmOverlay({
+                        toolhead: th,
+                        title: n ? `${th} holds ${n} spools` : `Nothing to return on ${th}`,
+                        body: `<div class="text-warning fw-bold" style="font-size:1.05rem;">`
+                            + (n ? `<b>${th}</b> holds ${n} spools — eject the wrong one first, then Return.`
+                                 : `No spool is loaded on <b>${th}</b> — nothing to return.`)
+                            + `</div>`,
+                        onConfirm: () => { /* no-op */ },
+                    });
+                    return;
+                }
                 const resolvedNote = (isVirtual && resolvedTh)
                     ? `<div class="text-warning small mb-2" style="font-size:0.95rem;">`
                       + `(Resolved from the <b>${vth}</b> virtual printer — first toolhead with a loaded spool.)</div>`

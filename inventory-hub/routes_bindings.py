@@ -563,14 +563,50 @@ def api_quickswap_return():
         )
         return jsonify({"action": "return_bad_toolhead", "toolhead": toolhead}), 404
 
-    # 1) Find the first candidate toolhead that has a loaded spool.
-    active_toolhead, spool_id = None, None
+    # 1) Find the first candidate toolhead that has a loaded spool. Only a spool
+    #    whose OWN record says it is on the toolhead counts: the location matcher
+    #    also returns ghosts (a stale physical_source naming the head), and
+    #    Return used to grab one of those off a different head (2026-09-12).
+    active_toolhead, spool_id, spool_data = None, None, {}
+    unreadable_at = {}  # toolhead -> ids Spoolman couldn't return a record for
     for th in candidate_toolheads:
-        residents = spoolman_api.get_spools_at_location(th)
-        if residents:
+        loaded = []
+        for rid in spoolman_api.get_spools_at_location(th):
+            rec = spoolman_api.get_spool(rid)
+            if not rec:
+                unreadable_at.setdefault(th, []).append(int(rid))
+            elif str(rec.get('location') or '').strip().upper() == th:
+                loaded.append((int(rid), rec))
+        if len(loaded) > 1:
+            ids = ", ".join(f"#{sid}" for sid, _ in loaded)
+            msg = f"{th} holds {len(loaded)} spools ({ids}) — eject the wrong one first"
+            state.add_log_entry(f"⚠️ Return: {msg}", "WARNING", "ffaa00")
+            return jsonify({
+                "action": "return_ambiguous",
+                "toolhead": toolhead,
+                "active_toolhead": th,
+                "requested": toolhead,
+                "spools": [sid for sid, _ in loaded],
+                "error": msg,
+            }), 409
+        if loaded:
             active_toolhead = th
-            spool_id = int(residents[0])
+            spool_id, spool_data = loaded[0]
             break
+    if not active_toolhead and unreadable_at:
+        # A spool Spoolman couldn't read is not an empty toolhead (2026-09-12
+        # review): say the read failed rather than "nothing to return".
+        th, ids = next(iter(unreadable_at.items()))
+        msg = (f"could not read {', '.join(f'#{sid}' for sid in ids)} from Spoolman — "
+               f"{th} may still be loaded")
+        state.add_log_entry(f"❌ Return: {msg}", "ERROR", "ff4444")
+        return jsonify({
+            "action": "return_failed",
+            "toolhead": toolhead,
+            "active_toolhead": th,
+            "requested": toolhead,
+            "error": msg,
+        }), 502
     if not active_toolhead:
         names = ", ".join(candidate_toolheads) if len(candidate_toolheads) > 1 else candidate_toolheads[0]
         state.add_log_entry(
@@ -589,7 +625,6 @@ def api_quickswap_return():
     #    user's mental model of "return" maps to, and it handles the
     #    multi-box-per-toolhead case correctly.
     #    Fallback: the first dryer-box slot bound to this toolhead.
-    spool_data = spoolman_api.get_spool(spool_id) or {}
     extra = spool_data.get('extra') or {}
     src_loc = str(extra.get('physical_source', '') or '').strip().strip('"').upper()
     src_slot = str(extra.get('physical_source_slot', '') or '').strip().strip('"')
@@ -645,7 +680,22 @@ def api_quickswap_return():
             "requested": toolhead,
         }), 404
     # Re-tag toolhead in the response to the actual one we acted on.
+    requested = toolhead
     toolhead = active_toolhead
+
+    # Never unseat a spool already staged in that slot: perform_smart_move's
+    # slot assignment would silently clear its container_slot (2026-09-12
+    # review). Let the engine pick a free slot instead, and say so.
+    if found_slot:
+        taken_by = next((
+            o.get('id') for o in (spoolman_api.get_spools_at_location_detailed(found_box) or [])
+            if str(o.get('id')) != str(spool_id)
+            and str(o.get('slot', '')).strip('"') == str(found_slot)), None)
+        if taken_by is not None:
+            state.add_log_entry(
+                f"⚠️ Return: {found_box} slot {found_slot} already holds #{taken_by} — "
+                f"returning #{spool_id} to a free slot instead", "WARNING", "ffaa00")
+            found_slot = None
 
     # 3) Send the spool back. perform_smart_move handles Filabridge + extras.
     # The destination is a dryer box (not a toolhead), so the destination
@@ -653,10 +703,38 @@ def api_quickswap_return():
     # surfaced by the Quick-Swap confirm overlay's banner before this
     # endpoint was called — backend just passes confirm_active_print=True
     # unconditionally here because the user already saw the warning.
+    # auto_deploy=False (2026-09-12): the slot is normally bound to this same
+    # toolhead, so the auto-deploy chain put the spool straight back onto it
+    # while this route still answered return_done. Every Return was a silent
+    # round trip, and it would have become one mid-print too once the chain
+    # honoured the caller's confirm.
     move_result = logic.perform_smart_move(
         found_box, [spool_id], target_slot=found_slot, origin='quickswap_return',
-        confirm_active_print=True,
+        auto_deploy=False, confirm_active_print=True,
     )
+    move_failed = logic.smart_move_failure(move_result, spool_id)
+    if move_failed:
+        state.add_log_entry(
+            f"❌ Return: Spool #{spool_id} was NOT returned to <b>{found_box}</b> — {move_failed}",
+            "ERROR", "ff4444"
+        )
+        return jsonify({
+            "action": "return_failed",
+            "spool": spool_id,
+            # 29.B3: `toolhead` is the REQUESTED value in every error branch.
+            "toolhead": requested,
+            "active_toolhead": toolhead,
+            "requested": requested,
+            "box": found_box,
+            "slot": found_slot,
+            "error": move_failed,
+            "smart_move": move_result,
+        }), 502
+    if not found_slot:
+        # The engine picked the slot (none was recorded, or the recorded one was
+        # taken): report where the spool actually landed.
+        landed_extra = (spoolman_api.get_spool(spool_id) or {}).get('extra') or {}
+        found_slot = str(landed_extra.get('container_slot') or '').strip().strip('"') or None
     src_note = " (original source)" if found_source == 'physical_source' else " (first bound slot)"
     slot_part = f":SLOT:{found_slot}" if found_slot else ""
     state.add_log_entry(
@@ -744,6 +822,21 @@ def api_quickswap():
         toolhead, [spool_id], target_slot=None, origin='quickswap',
         confirm_active_print=True,
     )
+    # 2026-09-12: a rejected write, or a resident Smart Load could not unload,
+    # used to be logged and answered as quickswap_done.
+    move_failed = logic.smart_move_failure(move_result, spool_id)
+    if move_failed:
+        state.add_log_entry(
+            f"❌ Quick-swap: Spool #{spool_id} was NOT loaded onto <b>{toolhead}</b> — {move_failed}",
+            "ERROR", "ff4444"
+        )
+        return jsonify({
+            "action": "quickswap_failed",
+            "spool": spool_id,
+            "toolhead": toolhead, "box": box, "slot": slot,
+            "error": move_failed,
+            "smart_move": move_result,
+        }), 502
     state.add_log_entry(
         f"⚡ Quick-swap: Spool #{spool_id} from <b>{box}:SLOT:{slot}</b> → <b>{toolhead}</b>",
         "SUCCESS", "00ff00"

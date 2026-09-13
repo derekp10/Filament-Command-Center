@@ -131,18 +131,31 @@ def test_smart_move_ejects_resident_before_remap():
     # Target spool we are loading (Spool 8)
     mock_spool_8 = {"id": 8, "location": "BUFFER", "extra": {}}
 
-    # Resident spool we are ejecting (Spool 9)
+    # Resident spool we are ejecting (Spool 9). Its own record puts it on the
+    # head, which Smart Load now checks before unloading it (a matcher hit can
+    # be a ghost); this mock used to return Spool 8's record for every id.
+    mock_spool_9 = {"id": 9, "location": "PRINTER-4", "extra": {}}
+
     with patch('spoolman_api.get_spools_at_location', return_value=[9]):
-        with patch('spoolman_api.get_spool', return_value=mock_spool_8):
+        with patch('spoolman_api.get_spool',
+                   side_effect=lambda sid: mock_spool_9 if int(sid) == 9 else mock_spool_8):
             with patch('config_loader.load_config', return_value={"printer_map": mock_printer_map}):
                 with patch('locations_db.load_locations_list', return_value=[]):
                     with patch('spoolman_api.format_spool_display', return_value={"text": "", "color": "000"}):
                         with patch('spoolman_api.update_spool', return_value=True):
-                            with patch('logic.perform_smart_eject') as mock_eject:
+                            # return_value=True, explicitly: a bare MagicMock is
+                            # merely truthy, and Smart Load now only places the
+                            # incoming spool when the eject really returned True
+                            # (2026-09-12 — its refusals are truthy too; see
+                            # tests/test_active_print_chain_confirm.py).
+                            with patch('logic.perform_smart_eject', return_value=True) as mock_eject:
                                 res = logic.perform_smart_move("PRINTER-4", [8])
 
                                 # The resident (#9) is ejected exactly once,
                                 # before the incoming spool is remapped onto the
-                                # toolhead.
-                                mock_eject.assert_called_once_with(9)
+                                # toolhead. Keyword args (the forwarded
+                                # active-print confirm, the no-home fallback)
+                                # are pinned by the chain-confirm tests.
+                                mock_eject.assert_called_once()
+                                assert mock_eject.call_args.args[0] == 9
                                 assert res['status'] == 'success'

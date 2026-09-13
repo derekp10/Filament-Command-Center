@@ -1223,11 +1223,122 @@ const updateLogState = (force = false) => {
 // release compares against it so a dialog re-shown from inside a previous
 // dialog's callback can't be torn down by the previous one's `hidden` event.
 let _confirmGeneration = 0;
-const closeModal = (id) => { if (modals[id]) modals[id].hide(); state.activeModal = null; };
-const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; _confirmGeneration++; modals.confirmModal.show(); state.activeModal = 'confirm'; };
-const confirmAction = (y) => { closeModal('confirmModal'); if (y && state.pendingConfirm) state.pendingConfirm(); state.pendingConfirm = null; };
-const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText = msg; state.pendingSafety = cb; _confirmGeneration++; modals.safetyModal.show(); state.activeModal = 'safety'; };
-const confirmSafety = (y) => { closeModal('safetyModal'); if (y && state.pendingSafety) state.pendingSafety(); state.pendingSafety = null; };
+
+// --- GATING-DIALOG LIFECYCLE (eject re-prompt drop, 2026-09-12) ---
+// #confirmModal / #safetyModal / #actionModal are single Bootstrap instances
+// that FCC re-shows from inside their OWN callbacks (eject -> active-print
+// re-prompt -> "true unassign"). Bootstrap 5.3 silently IGNORES show() while a
+// modal is still fading out, and hide() while it is still fading in — by
+// design, no event, no error. confirmAction runs its callback in the same tick
+// as hide(), so a backend that answered require_confirm inside the fade had its
+// re-prompt DROPPED: no dialog, no toast, no request, and a still-armed
+// pendingConfirm that a later CMD:CONFIRM scan fired with nothing on screen.
+// The defect is FCC's call order, so respect the lifecycle: track each gating
+// modal's phase from Bootstrap's PUBLIC events (never the private
+// _isTransitioning) and queue the one call Bootstrap would have dropped.
+const SCAN_GATING_MODALS = ['confirmModal', 'safetyModal', 'actionModal'];
+const _gatingPhase = {};    // id -> 'showing' | 'shown' | 'hiding' | 'hidden'
+const _deferredShow = {};   // id -> token of the ONE show queued for hidden.bs.modal
+const _deferredHide = {};   // id -> token of the ONE hide queued for shown.bs.modal
+[['show.bs.modal', 'showing'], ['shown.bs.modal', 'shown'],
+ ['hide.bs.modal', 'hiding'], ['hidden.bs.modal', 'hidden']].forEach(([evt, phase]) => {
+    // Capture phase: the phase is current before ANY element- or document-level
+    // listener (including the queued show/hide below) runs for this event.
+    document.addEventListener(evt, (ev) => {
+        const id = ev.target && ev.target.id;
+        if (!SCAN_GATING_MODALS.includes(id)) return;
+        // A `hidden` from an OLD hide can land after a newer show() already
+        // started (Bootstrap accepts show() during the backdrop-fade tail).
+        if (phase === 'hidden' && _gatingPhase[id] !== 'hiding') return;
+        const prev = _gatingPhase[id];
+        _gatingPhase[id] = phase;
+        // show/hide are cancelable and capture runs first, so re-check after the
+        // dispatch: a later preventDefault() means the transition never started.
+        if (phase === 'showing' || phase === 'hiding') {
+            queueMicrotask(() => { if (ev.defaultPrevented && _gatingPhase[id] === phase) _gatingPhase[id] = prev; });
+        }
+    }, true);
+});
+// Genuinely ON SCREEN: fully faded in and not yet dismissed. The scan router
+// (inv_cmd.js) requires this before a CONFIRM scan may fire a callback.
+const isGatingModalOnScreen = (id) => {
+    const el = document.getElementById(id);
+    if (_gatingPhase[id] !== 'shown' || !el || !el.classList.contains('show')) return false;
+    // Shown is not visible: a mountOverlay panel (z 20000) can sit on top of a
+    // Bootstrap modal (z 1100), e.g. "Clear entire Buffer?" behind the bulk-move
+    // panel. Hit-test the dialog's centre so a CONFIRM scan never fires a dialog
+    // nobody can see (2026-09-12 review).
+    const content = el.querySelector('.modal-content');
+    if (!content) return true;
+    const r = content.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && el.contains(hit);
+};
+window.isGatingModalOnScreen = isGatingModalOnScreen;
+// Showing, shown, or queued to show — lets the scan router tell "not on screen
+// YET" apart from "dismissed".
+window.isGatingModalPending = (id) => _gatingModalPending(id);
+// Still owns the scan gate: showing, shown, or queued to show.
+const _gatingModalPending = (id) => {
+    const el = document.getElementById(id);
+    return !!_deferredShow[id] || _gatingPhase[id] === 'showing' || _gatingPhase[id] === 'shown'
+        || (!!el && el.classList.contains('show'));
+};
+const _showGatingModal = (id) => {
+    const inst = modals[id];
+    const el = document.getElementById(id);
+    if (!inst || !el) return;
+    // A fresh prompt supersedes a hide closeModal queued during the fade-in: the
+    // dialog is already on its way up, so it stays up showing the new text.
+    _deferredHide[id] = null;
+    // `.show` is removed synchronously once a hide really starts, so a stale
+    // 'hiding' (hide prevented) never parks a prompt forever.
+    if (_gatingPhase[id] !== 'hiding' || el.classList.contains('show')) { inst.show(); return; }
+    // Mid-hide: show() would be dropped. Queue exactly ONE show for hidden.bs.modal.
+    // The caller has already re-armed msg + callback synchronously, so if another
+    // prompt arrives before then, the newest text and callback win.
+    if (_deferredShow[id]) return;
+    const token = {};
+    _deferredShow[id] = token;
+    // Element-level, so it runs BEFORE the document-level scan-gate release below
+    // (pinned by tests/test_confirm_chain_reshow_e2e.py).
+    el.addEventListener('hidden.bs.modal', () => {
+        if (_deferredShow[id] !== token) return;   // cancelled by closeModal / superseded
+        _deferredShow[id] = null;
+        inst.show();
+    }, { once: true });
+};
+const closeModal = (id) => {
+    const inst = modals[id];
+    if (inst) {
+        // A queued re-show must not resurrect a prompt that was just closed.
+        _deferredShow[id] = null;
+        const el = document.getElementById(id);
+        if (_gatingPhase[id] === 'showing' && el) {
+            // Mid-fade-in: hide() would be dropped, leaving a dialog on screen
+            // whose callback already ran. Queue ONE hide for shown.bs.modal.
+            if (!_deferredHide[id]) {
+                const token = {};
+                _deferredHide[id] = token;
+                el.addEventListener('shown.bs.modal', () => {
+                    if (_deferredHide[id] !== token) return;   // a new prompt re-armed it
+                    _deferredHide[id] = null;
+                    inst.hide();
+                }, { once: true });
+            }
+        } else {
+            inst.hide();
+        }
+    }
+    state.activeModal = null;
+};
+const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; _confirmGeneration++; _showGatingModal('confirmModal'); state.activeModal = 'confirm'; };
+// Take the callback and null it BEFORE running it: a callback that re-prompts
+// synchronously arms a NEW pendingConfirm, which a trailing null would wipe.
+const confirmAction = (y) => { const cb = state.pendingConfirm; state.pendingConfirm = null; closeModal('confirmModal'); if (y && cb) cb(); };
+const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText = msg; state.pendingSafety = cb; _confirmGeneration++; _showGatingModal('safetyModal'); state.activeModal = 'safety'; };
+const confirmSafety = (y) => { const cb = state.pendingSafety; state.pendingSafety = null; closeModal('safetyModal'); if (y && cb) cb(); };
 const promptAction = (t, m, btns) => {
     document.getElementById('action-title').innerText = t;
     document.getElementById('action-msg').innerHTML = m;
@@ -1237,7 +1348,7 @@ const promptAction = (t, m, btns) => {
         return `<div class="modal-action-card" onclick="closeModal('actionModal');state.modalCallbacks[${i}]()"><div id="qr-act-${i}" class="bg-white p-1 rounded mb-2"></div><button class="btn btn-primary modal-action-btn">${b.label}</button></div>`;
     }).join('');
     btns.forEach((_, i) => generateSafeQR(`qr-act-${i}`, `CMD:MODAL:${i}`, 100));
-    modals.actionModal.show(); state.activeModal = 'action';
+    _confirmGeneration++; _showGatingModal('actionModal'); state.activeModal = 'action';
 };
 
 // --- SMART SYNC PROTOCOL (Heartbeat) ---
@@ -1551,7 +1662,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // cancelling any confirm that way left the flag latched and the scanner
         // looked DEAD until a page reload.
         // Releasing here covers every dismissal path at once.
-        const SCAN_GATING_MODALS = ['confirmModal', 'safetyModal', 'actionModal'];
+        // (SCAN_GATING_MODALS + the phase tracker live with the modal helpers.)
         const hiddenId = ev && ev.target && ev.target.id;
         if (SCAN_GATING_MODALS.includes(hiddenId)) {
             // ⚠️ Generation counter, NOT just a `.show` check. A confirm whose
@@ -1566,11 +1677,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const gen = _confirmGeneration;
             setTimeout(() => {
                 if (_confirmGeneration !== gen) return;   // re-armed — leave it alone
-                const stillOpen = SCAN_GATING_MODALS.some(id => {
-                    const el = document.getElementById(id);
-                    return el && el.classList.contains('show');
-                });
-                if (stillOpen) return;
+                // "Still open" also covers a prompt that is fading in or queued
+                // behind this very hide (_showGatingModal re-arms BEFORE hidden,
+                // so the generation above can't see it). `.show` alone lags:
+                // Bootstrap adds it only after the backdrop fade.
+                if (SCAN_GATING_MODALS.some(_gatingModalPending)) return;
                 // Release the scan gate. Only activeModal — deliberately NOT
                 // pendingConfirm/pendingSafety: clearing those is what killed
                 // the chained re-prompt, and confirmAction/confirmSafety

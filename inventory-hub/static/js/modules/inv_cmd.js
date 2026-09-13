@@ -1406,6 +1406,16 @@ const processScan = (text, source = 'keyboard') => {
     // generic CMD-routes below. Returns true on a matched session — fall
     // through to the rest of the dispatch otherwise.
     if (window.routeConfirmScan && window.routeConfirmScan(text)) return;
+    // A session-scoped CMD:CONFIRM:<sid> that routeConfirmScan didn't claim
+    // belongs to a dialog that has already closed. Never let it fall through to
+    // the substring-matching routes below and answer whatever unrelated dialog
+    // is up now (2026-09-12 review). A stale CMD:CANCEL:<sid> still falls
+    // through: cancelling is always safe.
+    if (/^CMD:CONFIRM:.+/.test(upper)) {
+        showToast('That confirm QR belongs to a dialog that has closed — ignored', 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent('⚠️ Stale confirm QR scanned (its dialog had closed) — ignored', 'WARNING');
+        return;
+    }
 
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
     // L298 Phase 2 — same client-side toggle shape as CMD:AUDIT: arm when idle,
@@ -1419,15 +1429,41 @@ const processScan = (text, source = 'keyboard') => {
     if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
     if (upper === 'CMD:EJECTALL') { triggerEjectAll(document.getElementById('manage-loc-id').value); return; }
     if (upper === 'CMD:UNDO') { triggerUndo(); return; }
-    if (upper === 'CMD:CLEAR') { requestClearBuffer(); return; }
+    // Never mid-bulk-move: "Clear entire Buffer?" would open BEHIND the bulk panel
+    // and swallow every later scan — the same deadlock the backend-answered
+    // 'clear' guard below prevents (2026-09-12 review).
+    if (upper === 'CMD:CLEAR') {
+        if (state.bulkMoveActive) { showToast('The buffer is kept during a bulk move — finish or cancel the move first', 'info', 4000); return; }
+        requestClearBuffer(); return;
+    }
     if (upper === 'CMD:PREV') { prevBuffer(); return; }
     if (upper === 'CMD:NEXT') { nextBuffer(); return; }
     if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if (parts[2]) window.printLabel(parts[2]); return; }
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if (parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
-    if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? confirmSafety(true) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
-    if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? confirmAction(true) : (upper.includes('CANCEL') ? confirmAction(false) : null);
-    if (state.activeModal === 'action') { if (upper.includes('CANCEL')) { closeModal('actionModal'); return; } if (upper.startsWith('CMD:MODAL:')) { closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
+    // A CONFIRM scan may fire a dialog's callback ONLY while that dialog is
+    // genuinely on screen (fully shown, not dismissed). activeModal/pendingConfirm
+    // can't say that: a backdrop/Escape dismissal deliberately leaves
+    // pendingConfirm armed (the chained re-prompt needs it — see the
+    // hidden.bs.modal release in inv_core.js), and a re-prompt queued behind a
+    // fade-out is armed before it is visible, so a scanner double-read of the YES
+    // QR would confirm a warning (e.g. the active-print override) nobody has read.
+    // CANCEL stays unguarded: bailing out is always safe.
+    // Say why a CONFIRM scan did nothing, but only when something was armed. A
+    // double-read right after a successful confirm, or a stray label, stays quiet
+    // as it always was (2026-09-12 review).
+    const ignoredConfirm = (id, armed) => {
+        const pending = !!(window.isGatingModalPending && window.isGatingModalPending(id));
+        if (!armed && !pending) return;
+        const why = pending ? "the dialog isn't on screen yet — scan again once it is visible"
+                            : 'that confirmation was dismissed';
+        showToast(`Confirm scan ignored: ${why}`, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ Confirm scan ignored: ${why}`, 'WARNING');
+    };
+    const onScreen = (id) => !!(window.isGatingModalOnScreen && window.isGatingModalOnScreen(id));
+    if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? (onScreen('safetyModal') ? confirmSafety(true) : ignoredConfirm('safetyModal', !!state.pendingSafety)) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
+    if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? (onScreen('confirmModal') ? confirmAction(true) : ignoredConfirm('confirmModal', !!state.pendingConfirm)) : (upper.includes('CANCEL') ? confirmAction(false) : null);
+    if (state.activeModal === 'action') { if (upper.includes('CANCEL')) { closeModal('actionModal'); return; } if (upper.startsWith('CMD:MODAL:')) { if (!onScreen('actionModal')) { ignoredConfirm('actionModal', true); return; } closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
 
     setProcessing(true);
     window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source }) })
@@ -1453,7 +1489,11 @@ const processScan = (text, source = 'keyboard') => {
                 }
                 const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'done': closeManage };
                 if (cmds[res.cmd]) cmds[res.cmd]();
-                else if (res.cmd === 'confirm' && state.pendingConfirm) confirmAction(true);
+                // Same on-screen rule as the activeModal routes above. This is the
+                // route a dismissed-but-armed pendingConfirm and a stale
+                // CMD:CONFIRM:<sid> (routeConfirmScan miss -> backend substring
+                // match) both reach.
+                else if (res.cmd === 'confirm') { if (state.pendingConfirm && onScreen('confirmModal')) confirmAction(true); else ignoredConfirm('confirmModal', !!state.pendingConfirm); }
                 else if (res.cmd === 'slot') handleSlotInteraction(res.value);
                 else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
             } else if (res.type === 'assignment') {
@@ -1479,7 +1519,15 @@ const processScan = (text, source = 'keyboard') => {
                         res.action === 'assignment_partial' ? 'info' : 'success',
                         res.action === 'assignment_partial' ? 5000 : 4000
                     );
+                    if (res.not_deployed) {
+                        // In the box, but the bound toolhead did not get it.
+                        showToast(`⚠️ #${movedId} is in ${res.location}:${res.slot} but was NOT deployed to ${res.not_deployed_target || 'its toolhead'}: ${res.not_deployed}`, 'warning', 7000);
+                    }
                     document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+                } else if (res.action === 'assignment_failed') {
+                    // The write was rejected (2026-09-12: this used to come back as
+                    // assignment_done). The spool is still in the buffer.
+                    showToast(`❌ #${res.spool} was NOT loaded into ${res.location}:${res.slot}: ${res.msg}`, 'error', 7000);
                 } else if (res.action === 'assignment_no_buffer') {
                     // Buffer Empty → treat as pickup: read slot contents and
                     // put the spool in the buffer. Log explicitly on success
@@ -1569,6 +1617,12 @@ const processScan = (text, source = 'keyboard') => {
                                             `✅ Loaded #${movedId} into ${r2.location}:${r2.slot}${extraMsg}`,
                                             r2.action === 'assignment_partial' ? 'info' : 'success',
                                             r2.action === 'assignment_partial' ? 5000 : 4000);
+                                        if (r2.not_deployed) {
+                                            showToast(`⚠️ #${movedId} is in ${r2.location}:${r2.slot} but was NOT deployed to ${r2.not_deployed_target || 'its toolhead'}: ${r2.not_deployed}`, 'warning', 7000);
+                                        }
+                                    } else if (r2 && r2.action === 'assignment_failed') {
+                                        // Rejected write; the spool is still in the buffer.
+                                        showToast(`❌ #${r2.spool} was NOT loaded into ${r2.location}:${r2.slot}: ${r2.msg}`, 'error', 7000);
                                     } else if (r2 && r2.msg) {
                                         showToast(r2.msg,
                                             r2.type === 'error' ? 'error' : 'success',
@@ -1868,10 +1922,19 @@ const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoo
                 return;
             }
             if (res.status === 'success') {
-                const movedCount = spoolIds.length;
-                showToast("Assigned " + movedCount + " item" + (movedCount === 1 ? '' : 's') + "!", "success");
+                // A rejected write still answers status 'success' and names the
+                // spool in res.failures. Every spool used to leave the buffer
+                // under "Assigned N items!" regardless (2026-09-12).
+                const failures = res.failures || {};
+                const movedIds = spoolIds.filter(id => !failures[String(id)]);
+                const movedCount = movedIds.length;
+                if (movedCount) showToast("Assigned " + movedCount + " item" + (movedCount === 1 ? '' : 's') + "!", "success");
+                spoolIds.filter(id => failures[String(id)]).forEach(id =>
+                    showToast(`❌ #${id} was NOT assigned to ${tid}: ${failures[String(id)]}`, 'error', 7000));
+                Object.entries(res.auto_deploy_skipped || {}).forEach(([id, why]) =>
+                    showToast(`⚠️ #${id} is in ${tid} but was NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${why}`, 'warning', 7000));
                 // Drop only the spools we actually moved; preserve the rest.
-                const movedSet = new Set(spoolIds.map(String));
+                const movedSet = new Set(movedIds.map(String));
                 state.heldSpools = state.heldSpools.filter(s => !movedSet.has(String(s.id)));
                 movedSet.forEach(id => _markAssignedOut(id)); // 21.6
                 renderBuffer();
@@ -1882,7 +1945,7 @@ const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoo
                 // the buffer cards' data immediately (no 5s pulse wait). Mirrors
                 // the scan-assignment path above.
                 document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
-            } else showToast(res.msg, 'error');
+            } else showToast(res.msg || 'Assign failed', 'error', 7000);
         })
         .catch(() => setProcessing(false));
 };
