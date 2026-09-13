@@ -1,5 +1,8 @@
 # 🔁 Session Handoff — 2026-08-06/07 (Group 36 + Group 38 residuals)
 
+> ⚠️ **SUPERSEDED 2026-09-12** by [session-handoff-2026-09-12.md](session-handoff-2026-09-12.md).
+> Groups 36 + 38 and the `locations.json` write lock are all merged to `dev`. Kept as history.
+
 > For a fresh context window. Read this, then the group task files it points at.
 > Supersedes [session-handoff-2026-08-05.md](session-handoff-2026-08-05.md), whose open
 > items are now filed as Groups 36 / 37 / 38.
