@@ -48,12 +48,18 @@ BLANK_REQUESTS = [
 
 @pytest.mark.parametrize("fields", BLANK_REQUESTS)
 def test_clear_location_refuses_a_blank_location_before_any_read(client, fields):
-    """FAILS on the old route: empty / whitespace / missing / empty-confirmed
-    read the Spoolman contents for "" and answered success; null raised
-    AttributeError on None.strip()."""
+    """FAILS on the old route. For empty / whitespace / missing / empty-confirmed
+    it read the Spoolman contents for "", found nothing to eject in the mocked
+    read, and answered {"success": True}, so the `success is False` assertion
+    fails. For null it raised AttributeError on None.strip().
+
+    The probe answers None (no active print), a real value. A bare MagicMock is
+    truthy: the old route then built a require_confirm response Flask could not
+    serialise, and those cases failed on a TypeError instead of on the
+    assertions below."""
     with patch.object(spoolman_api, "get_spools_at_location_detailed") as contents, \
          patch.object(spoolman_api, "get_all_spools") as all_spools, \
-         patch.object(logic, "_active_print_info_for_location") as probe, \
+         patch.object(logic, "_active_print_info_for_location", return_value=None) as probe, \
          patch.object(logic, "perform_smart_eject") as eject, \
          patch.object(state, "add_log_entry") as log:
         r = client.post("/api/manage_contents", json={"action": "clear_location", **fields})

@@ -560,10 +560,11 @@ def api_quickswap_return():
 
     # 29.N1 — the vestigial `cfg = config_loader.load_config()` (unused
     # FilaBridge residue) was removed here; printer_map is the sole source.
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
-    # Read once: the Printer-row lookup here and the destination search in
-    # step 2 both need it.
+    # Read locations.json once and hand it to every consumer: the printer_map
+    # build (which would otherwise reload the file itself), the Printer-row
+    # lookup below, and the destination search in step 2.
     loc_list = locations_db.load_locations_list()
+    printer_map = locations_db.get_active_printer_map(loc_list)  # L271 P4 step 2: Printer-row toolheads[]
 
     # Build the list of toolhead IDs we should check:
     #   * a registered toolhead -> just that ID (the Core One's single head

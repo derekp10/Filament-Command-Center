@@ -785,8 +785,9 @@
         }
         const candidates = printerToolheadIds(loc, state.printerMap || {});
         if (!candidates.length) return Promise.resolve(null);
-        // Check each candidate in printer_map order; first one with
-        // contents wins.
+        // Check each candidate in the order printerToolheadIds returns them
+        // (toolhead position order; printer_map order only on the legacy
+        // prefix fallback); first one with contents wins.
         const check = (i) => {
             if (i >= candidates.length) return null;
             return fetch(`/api/get_contents?id=${encodeURIComponent(candidates[i])}`)

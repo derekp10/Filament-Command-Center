@@ -21,20 +21,35 @@ fetch answers from a per-scenario responder, mountOverlay records the overlay
 HTML, and nothing renders. These tests pin the modules' own decisions; what a
 real browser shows is covered by test_core1_return_ejectall_e2e.py (deferred).
 
-Skips when node is not on PATH.
+Needs node (Node.js) on PATH, see CLAUDE.md "Testing". These are the only
+hermetic proofs of the frontend fixes above, so a missing node is not silent:
+  - by default the module skips AND emits a PytestWarning, which shows in the
+    run's warnings summary;
+  - with FCC_REQUIRE_NODE=1 a missing node is a collection error instead.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import warnings
 from pathlib import Path
 
 import pytest
 
 NODE = shutil.which("node")
-pytestmark = pytest.mark.skipif(NODE is None, reason="node is not on PATH")
+NODE_MISSING_MSG = (
+    "node is not on PATH: the hermetic checks of the CORE1 Return and Eject All "
+    "frontend fixes (test_core1_return_ejectall_js.py) did NOT run. Install "
+    "Node.js (see CLAUDE.md Testing), or set FCC_REQUIRE_NODE=1 to fail instead of skipping."
+)
+if NODE is None:
+    if os.environ.get("FCC_REQUIRE_NODE", "").strip() not in ("", "0"):
+        pytest.fail(NODE_MISSING_MSG, pytrace=False)
+    warnings.warn(NODE_MISSING_MSG, pytest.PytestWarning)
+pytestmark = pytest.mark.skipif(NODE is None, reason=NODE_MISSING_MSG)
 
 MODULES = Path(__file__).resolve().parent.parent / "static" / "js" / "modules"
 RESULT_MARK = "__FCC_RESULT__"

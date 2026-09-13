@@ -164,6 +164,38 @@ def test_xl_printer_row_fan_out_keeps_the_natural_order(client):
     assert h.probed == ["XL-1", "XL-2", "XL-10"]
 
 
+def test_return_reads_locations_json_once(client):
+    """The route loads the locations list once and passes it to
+    get_active_printer_map. get_active_printer_map is NOT patched here, so its
+    real build runs. Called with no list, it reloads locations.json itself.
+    FAILS on the first cut of the fix: load_locations_list ran twice, once for
+    the printer_map build and once for the route's own read."""
+    core1 = _printer_row("CORE1", "Core One Upgraded", ["CORE1"])
+    locs = [core1, _box("CR-DB-1", {"2": "CORE1"})]
+    loads = []
+
+    def _load():
+        loads.append(1)
+        return locs
+
+    def _spool(sid):
+        return {"id": int(sid), "location": "CORE1", "extra": {}} if int(sid) == 42 else None
+
+    with patch.object(locations_db, "load_locations_list", side_effect=_load), \
+         patch.object(spoolman_api, "get_spools_at_location",
+                      side_effect=lambda loc: [42] if str(loc).upper() == "CORE1" else []), \
+         patch.object(spoolman_api, "get_spool", side_effect=_spool), \
+         patch.object(spoolman_api, "get_spools_at_location_detailed", return_value=[]), \
+         patch.object(logic, "perform_smart_move", return_value={"status": "success"}) as move, \
+         patch.object(state, "add_log_entry"):
+        r = client.post("/api/quickswap/return", json={"toolhead": "CORE1"})
+
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["action"] == "return_done"
+    assert move.call_count == 1
+    assert len(loads) == 1, f"locations.json was read {len(loads)} times"
+
+
 def test_prefix_fan_out_still_works_when_no_printer_row_exists(client):
     """Legacy fallback, PASSES on the old route too: no Printer row for XL (a
     printer_map with no row behind it), so the "XL-" prefix still fans out."""
