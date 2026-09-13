@@ -225,7 +225,7 @@
     window.registerShortcut({
         id: 'scan-cmd-ejectall', scope: 'Scan Commands',
         keys: ['CMD:EJECTALL'],
-        description: 'Eject everything currently in the open location.'
+        description: 'Eject everything unslotted in the location open in the Location Manager (ignored when none is open).'
     });
     window.registerShortcut({
         id: 'scan-cmd-undo', scope: 'Scan Commands',

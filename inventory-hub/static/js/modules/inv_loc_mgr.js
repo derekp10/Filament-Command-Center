@@ -1659,14 +1659,32 @@ window.triggerBulkMove = (loc, replace = false) => {
         .catch(() => { setProcessing(false); showToast("Couldn't arm the bulk move", "error", 7000); });
 };
 
-window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, () => {
+window.triggerEjectAll = (loc) => {
+    const target = String(loc == null ? '' : loc).trim();
+    // Never prompt, let alone send, an Eject All with no location: the backend
+    // matcher reads "" as every Unassigned spool (2026-09-13). The scan route
+    // refuses first (ejectAllFromScan in inv_cmd.js); this backstops any other
+    // caller.
+    if (!target) {
+        showToast('Eject All needs a location: open one in the Location Manager first', 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent('⚠️ Eject All ignored: no location was given', 'WARNING');
+        return;
+    }
+    promptSafety(`Nuke all unslotted in ${target}?`, () => {
     setProcessing(true);
-    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: loc }) })
+    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: target }) })
         .then(r => r.json())
         .then((res) => {
             setProcessing(false);
+            // A plain refusal (e.g. the backend's no-location guard) is not
+            // "Cleared!". A require_confirm answer is left to the planned
+            // eject-all results work.
+            if (res && res.success === false && !res.require_confirm) {
+                showToast(res.msg || 'Eject All was refused', 'warning', 7000);
+                return;
+            }
             if(window.fetchLocations) window.fetchLocations();
-            refreshManageView(loc);
+            refreshManageView(target);
             // 27.6 — a bulk clear leaves SLOTTED spools (toolhead/MMU-loaded) in
             // place on purpose. Be honest about it rather than always saying
             // "Cleared!": warn when survivors remain so the user knows the
@@ -1678,7 +1696,8 @@ window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, 
             }
         })
         .catch(() => { setProcessing(false); showToast("Eject-all failed", "error", 7000); });
-});
+    });
+};
 
 window.printCurrentLocationLabel = () => {
     const locId = document.getElementById('manage-loc-id').value;
