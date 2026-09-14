@@ -122,9 +122,10 @@ CONTAINER_FIXTURES = frozenset({
     "dev_spoolman_url", "throwaway_filament", "throwaway_spool",
 })
 # NOT in the set, deliberately: `playwright` and `isolated_page`. A test may run
-# a browser under --offline only through `isolated_page`, whose context aborts
-# every request before it leaves the browser, so it can render set_content
-# markup but can never reach the container (pinned by test_offline_mode.py).
+# a browser under --offline only through `isolated_page`, whose browser has no
+# route to any network (HTTP, WebSockets, frames and workers included), so it
+# can render set_content markup but can never reach the container (pinned by
+# test_offline_mode.py::TestIsolatedBrowser).
 
 
 def _offline_mode(config) -> bool:
@@ -1371,16 +1372,31 @@ def assert_contrast():
 # A browser that cannot reach anything (for hermetic, --offline browser tests)
 # ---------------------------------------------------------------------------
 
+# The browser-wide network block behind `isolated_page`. `context.route` sees
+# HTTP(S) only: a WebSocket skips it, whether a page, a frame or a worker opens
+# it (review 2026-09-13; a scratch probe had all three reach a local listener).
+# `context.route_web_socket` does not close the hole: it mocks page and frame
+# sockets, but a worker's still connects, and a handler that calls `ws.close()`
+# deadlocks the sync API. So the browser itself is given nowhere to connect:
+# every connection must go through a proxy whose hostname can never resolve,
+# and the resolver rule fails every hostname inside chromium, so not even a DNS
+# query leaves the machine. Loopback goes through the proxy too, which is what
+# covers 127.0.0.1:8000 (TestIsolatedBrowser probes a 127.0.0.1 listener).
+ISOLATED_PROXY = {"server": "http://fcc-offline-proxy.invalid:9"}
+ISOLATED_BROWSER_ARGS = ("--host-resolver-rules=MAP * ~NOTFOUND",)
+
+
 @pytest.fixture(scope="session")
 def _isolated_chromium(playwright):
-    """One private headless chromium for the whole session.
+    """One private headless chromium for the whole session, with no network.
 
     Reuses pytest-playwright's session `playwright` instance: starting a second
     sync_playwright() while the E2E `page` fixture's instance is running fails.
     Skips (does not fail) when chromium isn't installed on this machine.
     """
     try:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(
+            headless=True, proxy=ISOLATED_PROXY, args=list(ISOLATED_BROWSER_ARGS))
     except Exception as exc:  # noqa: BLE001 - playwright raises its own Error type
         pytest.skip(
             f"isolated_page: chromium could not launch ({exc}). Install it with "
@@ -1392,13 +1408,18 @@ def _isolated_chromium(playwright):
 
 @pytest.fixture
 def isolated_page(_isolated_chromium):
-    """A fresh page in a context that aborts EVERY request before it leaves the
-    browser. Build the page with `page.set_content(...)`; nothing it references
-    (and no `goto`) can reach the FCC container, Spoolman or anything else.
+    """A fresh page that cannot reach any network. Build it with
+    `page.set_content(...)`; nothing it references, no `goto`, and no fetch,
+    WebSocket, frame or worker it starts can reach the FCC container, Spoolman
+    or anything else.
+
+    Two layers: the context aborts every HTTP(S) request (an immediate
+    net::ERR_FAILED), and `_isolated_chromium`'s dead proxy stops every other
+    kind of connection, WebSockets included, and would stop HTTP on its own.
 
     This is the only sanctioned way to use a browser under --offline: the
     socket guard below polices Python sockets only, not the browser process, so
-    the isolation has to live in the browser context itself.
+    the isolation has to live in the browser itself.
     """
     context = _isolated_chromium.new_context(viewport=BASELINE_VIEWPORT)
     context.route("**/*", lambda route: route.abort())

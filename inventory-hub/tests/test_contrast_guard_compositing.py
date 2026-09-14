@@ -9,7 +9,7 @@ real print. PAUSED, ATTENTION and IDLE were false reds the same way; OFFLINE
 was the only state that passed.
 
 Hermetic, and it RUNS under --offline: `isolated_page` is a private chromium
-whose context aborts every request, the markup comes from set_content, and the
+with no route to any network, the markup comes from set_content, and the
 real static/css/global.css is read from disk. Nothing reaches the container.
 
 On the pre-fix guard: the chip test reports four chips (PRINTING 1.46, PAUSED

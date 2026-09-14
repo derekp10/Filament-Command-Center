@@ -246,20 +246,91 @@ def test_borrow_box_bindings_is_gated_offline():
     assert "borrow_box_bindings" in conftest.CONTAINER_FIXTURES
 
 
-_OBSERVED_SNAPSHOT_IDIOM = re.compile(r"""snap\.get\(\s*["']slot_targets["']""")
+# The snapshot-and-restore idiom all ten converted files used, in its two halves:
+#     original = snap.get("slot_targets", {})                  # read what is there
+#     requests.put(..., json={"slot_targets": original})       # put it back later
+# The write half does the damage, and it does not care what the snapshot
+# variable is called, so it matches ANY value that is not a dict literal.
+_OBSERVED_SNAPSHOT_READ = re.compile(r"""snap\.get\(\s*["']slot_targets["']""")
+_NON_LITERAL_BINDINGS_PUT = re.compile(r"""json\s*=\s*\{\s*["']slot_targets["']\s*:\s*(?![\s{])""")
+
+# Test files that still restore an observed binding on a baseline box, each with
+# why it has not been converted. An entry that stops matching fails the canary,
+# so converting a file forces its entry out of this list.
+_OBSERVED_RESTORE_ALLOWED = {
+    "test_printer_status_widget.py": (
+        "test_widget_shows_unbound_printers_with_placeholder clears EVERY dryer box "
+        "in dev, real multi-slot setups included, and PUTs what it observed back. A "
+        "fixed baseline for the whole fleet needs Derek's decision; standalone follow-up."
+    ),
+}
+
+
+def _observed_restore_idioms(src):
+    """The halves of the snapshot-and-restore idiom present in `src` ([] if none)."""
+    found = []
+    if _OBSERVED_SNAPSHOT_READ.search(src):
+        found.append('reads snap.get("slot_targets")')
+    if _NON_LITERAL_BINDINGS_PUT.search(src):
+        found.append('PUTs json={"slot_targets": <non-literal>}')
+    return found
+
+
+@pytest.mark.parametrize("src", [
+    'original = snap.get("slot_targets", {})',
+    'requests.put(url, json={"slot_targets": original}, timeout=5)',
+    "requests.put(url, json={'slot_targets': box_originals[b]}, timeout=5)",
+    'requests.put(\n    url,\n    json={\n        "slot_targets": saved_before_test,\n    },\n)',
+])
+def test_the_canary_recognises_the_observed_restore_idiom_in_its_variants(src):
+    """Review 2026-09-13: the canary matched only the literal `snap.get(...)` read,
+    so test_printer_status_widget.py's `box_originals[b]` restore walked past it."""
+    assert _observed_restore_idioms(src), src
+
+
+@pytest.mark.parametrize("src", [
+    'requests.put(url, json={"slot_targets": {}}, timeout=5)',
+    'requests.put(url, json={"slot_targets": {"1": "XL-1"}})',
+    'requests.put(url, json={ "slot_targets" :\n    {"1": TEST_TOOLHEAD}})',
+    'last = requests.get(url, timeout=5).json().get("slot_targets", {})',
+    'rows = [{"LocationID": "PM-DB-1", "extra": {"slot_targets": slot_targets}}]',
+])
+def test_the_canary_leaves_literal_payloads_and_plain_reads_alone(src):
+    """A literal payload writes a known state, a poll only reads, and a fake
+    locations row is not a PUT; none of them restores an observed binding."""
+    assert _observed_restore_idioms(src) == [], src
 
 
 def test_no_test_file_restores_an_observed_snapshot_of_a_baseline_box():
-    """Source canary: a test module that names a baseline box must borrow it
-    through the fixture, not snapshot-and-restore it again."""
-    offenders = []
+    """Source canary: a test module that names a baseline box must not put an
+    observed binding back on it; borrow the box through `borrow_box_bindings`.
+
+    What is actually enforced is the idiom above, in either half: a
+    `snap.get("slot_targets", ...)` read, or a `json={"slot_targets": ...}` PUT
+    payload whose value is not a dict literal. A restore spelled another way
+    (say, a payload dict built in a variable first) is not caught.
+    """
+    offenders, allowed_matches = [], set()
+    this_file = os.path.basename(__file__)
     for path in sorted(glob.glob(os.path.join(TESTS_DIR, "test_*.py"))):
+        name = os.path.basename(path)
+        if name == this_file:  # the detector's own samples above spell the idiom out
+            continue
         with open(path, encoding="utf-8") as fh:
             src = fh.read()
         if not any(f'"{box}"' in src for box in conftest.DEV_BOX_BINDING_BASELINES):
             continue
-        if _OBSERVED_SNAPSHOT_IDIOM.search(src):
-            offenders.append(os.path.basename(path))
+        idioms = _observed_restore_idioms(src)
+        if not idioms:
+            continue
+        if name in _OBSERVED_RESTORE_ALLOWED:
+            allowed_matches.add(name)
+        else:
+            offenders.append(f"{name} ({'; '.join(idioms)})")
     assert offenders == [], (
         f"these files snapshot a baseline box's slot_targets and put the snapshot back; "
         f"use the borrow_box_bindings fixture instead: {offenders}")
+    stale = sorted(set(_OBSERVED_RESTORE_ALLOWED) - allowed_matches)
+    assert stale == [], (
+        f"_OBSERVED_RESTORE_ALLOWED lists files that no longer restore an observed "
+        f"binding on a baseline box; drop them from the list: {stale}")
