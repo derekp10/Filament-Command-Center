@@ -114,6 +114,9 @@
      - **A cancelled print's review silently drops an uncharged head.** Its rows and total include only heads where it found a spool, and confirming records the ledger with no shortfall check. A head emptied mid-print therefore loses its grams with no warning. The completion path at least logs "wasn't deducted — weigh that spool".
      - **A `no_spool` Review card never names a spool.** Its Apply charges whatever is on the head at that moment, which can be a spool loaded after the print.
      - Related: Group 22.
+     - **Plan review (2026-09-13):** treat this as an **unblocked Group 22.5**, built alongside Group 39.4 (decision D6) instead of waiting behind 22.3(b).
+       - **Why it can't wait:** a D6-confirmed move while PRINTING records no swap event, because swap snapshots are taken only on a resume (`print_monitor.py`).
+       - **Result today:** at cancel, the emptied head's grams are dropped with no warning; completion at least logs a shortfall.
   7. **🟡 Return's display.** The overlay preview doesn't model the auto-picked slot: it names no slot, or the taken one. The success toast reads `SLOT:null` when a spool lands unslotted. Fix together with the "Return with no recorded slot" decision.
   8. **🟡 `LOC:XL` with an empty buffer Quick-Picks one of the XL heads' spools.** The empty-buffer location scan treats `Max Spools ≤ 1` as single-occupancy, and that includes the Printer row's `0`. The flat prefix match also lists every XL-n spool as "at XL". Fix together with the Printer-row placement decision / L271 Phase 5 prefix retirement.
   9. **🟡 A move off a toolhead that isn't an eject never releases a single-slot box.** The Group 20.2 detach runs only inside `perform_smart_eject`. Moving a PolyDryer's spool off its head by a buffer scan to another location, Force Location, or a Location Manager assign (`perform_smart_move`) leaves the box bound. **Decided 2026-09-13 (Derek):** a single-slot box stays bound until ITS OWN spool leaves that head, by any path (eject, Return, Quick-Swap, any move). Ejecting a different spool from the head no longer unbinds it. One rule covers this item, item 5, and the toolhead-keyed detach in "Only Smart Load enforces one spool per toolhead" item 5. Derek's principle: a toolhead only ever shows ONE loaded spool, though loaded vs feeding may be shown as separate statuses.
@@ -134,6 +137,27 @@
      - **Problem:** each snapshots PM-DB-1's `slot_targets` at the start and restores that snapshot. If a run is ever interrupted before teardown, the binding survives, and every later run faithfully restores it. The same thing happens if a spool deployed from PM-DB-1 leaves XL-1 by a move that isn't an eject (see the decision-briefing findings, item 9).
      - **Evidence:** on 2026-09-13 Derek saw dev XL-1 with an empty PM-DB-1 bound to it; live has none.
      - **Fix:** use a test-only single-slot box, or restore to a fixed baseline instead of the observed state, and fail loudly when the pre-state isn't the expected baseline.
+     - **Built 2026-09-13 on local branch `test/sweep-reds-hermetic`** (`d785444`, `657ed95`; unmerged; E2E not yet run). A new `borrow_box_bindings` fixture uses fixed baselines for PM-DB-1/2/4/5 across ten files (the triage had undercounted), and a canary rejects the snapshot-and-restore idiom.
+  4. **Three more dev-data borrowers still restore what they observed.** Each needs Derek's call before it can get a fixed baseline. _(Left unconverted on `test/sweep-reds-hermetic`.)_
+     - **`test_quickswap_printer_pool.py` `pool_binding`** borrows TST-MDB-1. Its comment says "baseline-empty", but both the reset-dev seed and dev hold `{"1": "PRINTER:XL"}`. **Decide:** is that pool binding deliberate?
+     - **`conftest.bound_loaded_slot`** picks its box at runtime and restores what it found.
+     - **`test_printer_status_widget::test_widget_shows_unbound_printers_with_placeholder`** clears EVERY dryer box (real multi-slot setups included), then restores the observed bindings. It is an explicit allowlist entry in the branch's snapshot-restore canary. **Decide:** a fixed fleet-wide baseline, or rewrite the test to stub its data.
+  **Standalone.**
+
+* **🟠 More destructive doors found while building and planning the 2026-09-13 follow-ups: code-traced, not yet reproduced.** _(From the builder of `fix/core1-return-ejectall-guard` and the plan agents for Groups 39–42.)_
+  1. **Deleting a Dryer Box or a Room unassigns spools that are loaded on toolheads, with no active-print check.**
+     - **Mechanism:** the DELETE `/api/locations` cascade (`routes_locations.py`) matches ghost trails as well (`spoolman_api._build_location_match`), then writes a location-only PATCH.
+     - **Example:** deleting `LR-MDB-1` would take XL-1…3's spools off their heads.
+     - **Planned:** Group 41.3, which also asks Derek whether deleting a Room should reach its sub-locations.
+  2. **Deleting the Printer row `XL` would unassign every XL head's spool.**
+     - **Mechanism:** `Printer` is not in `locations_db.TOOLHEAD_TYPES`, so the delete takes the non-toolhead branch.
+     - **Planned:** Group 41.3.
+  3. **`/api/smart_move` accepts a blank location item.**
+     - **Mechanism:** `perform_smart_move` treats a non-digit item as a location, so a `""` item expands to everything the matcher returns for `""`: every Unassigned spool directly, plus located spools with no trail as ghosts.
+     - **Why it matters:** the route is unvalidated and mutating.
+     - **Fix:** reject blank items at the route.
+  4. **`clear_location` still accepts `UNASSIGNED`.** Its `check_unassigned` path targets every spool with no location, and the blank-location guard on `fix/core1-return-ejectall-guard` doesn't cover it. Refuse it the same way, or decide what clearing Unassigned should mean.
+  5. **`/api/get_contents?id=` with a blank id returns that same everything-set.** Read-only, low risk.
   **Standalone.**
 
 * **🟡 Show when FCC is waiting on a printer.** _(Derek, 2026-09-13, while deciding R2-06: "We should probably notify the user when we are waiting on a server response, so the dead time doesn't seem like a lock up or that nothing happened… I know it will happen when the printers are offline.")_
