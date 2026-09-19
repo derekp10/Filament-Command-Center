@@ -5,12 +5,14 @@ showing spool info on each button.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from unittest.mock import patch, MagicMock
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
-import requests
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -398,23 +400,58 @@ def test_smart_move_to_unbound_toolhead_no_ghost_synthesis():
 TEST_BOX = "PM-DB-1"
 TEST_TOOLHEAD = "XL-1"
 
+# The one spool the loaded-slot render test is allowed to see in TEST_BOX. Same
+# shape `renderQuickSwapSection` consumes in the hermetic visual captures
+# (test_quickswap_visual._spool).
+PINNED_SPOOL = {
+    "id": 990611, "type": "spool",
+    "display": "#990611 FCC Test PLA Fixture Teal",
+    "color": "1b9aaa", "remaining_weight": 640,
+    "location": TEST_BOX, "slot": "1",
+    "details": {"brand": "FCC Test", "material": "PLA", "color_name": "Fixture Teal"},
+}
+
+
+def _pin_box_contents(page: Page, box: str, items: list) -> None:
+    """Pin ONE dryer box's /api/get_contents payload for this page.
+
+    Both render tests below used to read whatever dev happened to hold and
+    `pytest.skip()` when it was the wrong shape, which made them silent
+    no-ops: the loaded-slot case skipped whenever PM-DB-1 was empty (it is, at
+    the fixed baseline this branch pins), and the empty-slot case skipped
+    whenever an earlier test in the same run had left a spool in PM-DB-2 slot
+    1 — so the pair's outcome depended on dev contents AND on run order. What
+    is under test is the grid's RENDER of a slot's occupancy, not the fetch
+    that discovers it, so the occupancy is supplied here instead. Every other
+    request, this box's binding write included, still goes to the real app.
+    """
+    def _handler(route):
+        try:
+            if parse_qs(urlsplit(route.request.url).query).get("id", [""])[0] == box:
+                route.fulfill(status=200, content_type="application/json",
+                              body=json.dumps(items))
+            else:
+                route.continue_()
+        except PlaywrightError as e:
+            # A request still in flight when the context closes.
+            if "closed" not in str(e).lower():
+                raise
+
+    page.route("**/api/get_contents*", _handler)
+
 
 @pytest.fixture
-def bound_and_live(api_base_url, borrow_box_bindings):
-    """Bind PM-DB-1 slot 1 → XL-1, skip the test if PM-DB-1 is empty so
-    we can assert on the rendered spool info. The contents are checked BEFORE
-    binding, so a skip writes nothing; the binding goes back to PM-DB-1's fixed
-    baseline at teardown (conftest `borrow_box_bindings`)."""
-    contents = requests.get(f"{api_base_url}/api/get_contents?id={TEST_BOX}", timeout=5).json()
-    has_slot_1 = any(str(it.get("slot", "")).replace('"', '').strip() == "1"
-                     for it in contents or [])
-    if not has_slot_1:
-        pytest.skip(f"{TEST_BOX} slot 1 is empty; can't exercise spool-info rendering.")
+def bound_and_live(borrow_box_bindings):
+    """Bind PM-DB-1 slot 1 → XL-1. The slot's occupancy is pinned by
+    `_pin_box_contents` in the test body, so no dev contents are read; the
+    binding goes back to PM-DB-1's fixed baseline at teardown (conftest
+    `borrow_box_bindings`)."""
     borrow_box_bindings(TEST_BOX, {"1": TEST_TOOLHEAD})
 
 
 @pytest.mark.usefixtures("require_server", "bound_and_live")
 def test_quickswap_button_shows_spool_info_when_slot_loaded(page: Page, base_url: str):
+    _pin_box_contents(page, TEST_BOX, [PINNED_SPOOL])
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
     page.wait_for_timeout(500)
@@ -429,21 +466,22 @@ def test_quickswap_button_shows_spool_info_when_slot_loaded(page: Page, base_url
     assert "empty slot" not in text.lower(), (
         f"Button text didn't surface spool info: {text!r}"
     )
+    # Now that the occupancy is pinned, assert it is THIS spool that surfaced,
+    # not merely that the button avoided the empty-slot wording.
+    assert str(PINNED_SPOOL["id"]) in text, (
+        f"Button text didn't surface the loaded spool's id: {text!r}"
+    )
 
 
 @pytest.mark.usefixtures("require_server", "clean_buffer")
 def test_quickswap_button_disabled_when_slot_empty(
-        page: Page, base_url: str, api_base_url, borrow_box_bindings):
-    # Bind a slot that's known to be empty, verify the rendered button is
+        page: Page, base_url: str, borrow_box_bindings):
+    # Bind a slot that's pinned empty, verify the rendered button is
     # disabled and no-ops on click. Note: the button is only disabled when
     # BOTH the slot AND the user's buffer are empty — a buffered spool
     # flips the same button into a Deposit target.
     victim_box, victim_slot = "PM-DB-2", "1"
-    contents = requests.get(f"{api_base_url}/api/get_contents?id={victim_box}", timeout=5).json()
-    has_spool = any(str(it.get("slot", "")).replace('"', '').strip() == victim_slot
-                    for it in contents or [])
-    if has_spool:
-        pytest.skip(f"{victim_box} slot {victim_slot} has a spool; can't test empty-slot rendering.")
+    _pin_box_contents(page, victim_box, [])
     # Back to PM-DB-2's fixed baseline at teardown.
     borrow_box_bindings(victim_box, {victim_slot: TEST_TOOLHEAD})
     page.goto(base_url)
