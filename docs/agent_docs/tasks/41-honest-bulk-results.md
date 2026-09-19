@@ -493,7 +493,9 @@ Full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.md).
 
 ## Open questions for Derek
 
-### Q1 — Where should a spool with no saved home go when it's ejected from a box, cart, drawer or shelf?
+### Q1 — Where should a spool with no saved home go when it's ejected from a box, cart, drawer or shelf? — ✅ ANSWERED 2026-09-18: option B
+
+**Derek chose B: Unassigned, after one "unassign?" prompt**, with Eject All asking once for the whole batch. The follow-up is confirmed too: Smart Load's homeless resident keeps the 2026-09-12 rule (the printer's Room). 39.6's wording and 42.3c's redirect follow from this. The background below is kept for the record.
 
 **Background.**
 - When FCC ejects a spool, it sends it back to the place it came from, if it recorded one.

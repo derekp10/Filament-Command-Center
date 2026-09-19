@@ -555,7 +555,12 @@ Dev container. Dev spools are virtual test constructs (your standing rule), but 
 
 ## Open questions for Derek
 
-### Q-A — When a PolyDryer spool moves from one head to another, does the PolyDryer follow it?
+### Q-A — When a PolyDryer spool moves from one head to another, does the PolyDryer follow it? — ✅ ANSWERED 2026-09-18: option (a), with a caveat
+
+**Derek chose (a): the box follows.** His caveat, which needs a design answer BEFORE this is built: "we shouldn't overwrite the spool location before the box load. (Say it was on a cart or something, so that if we unload it from the box, we know where it was before and move it back to that location.)"
+- Today `physical_source` holds one level only, so a spool that came from a cart into a PolyDryer and then onto a head has lost the cart.
+- Options to put to him: a home chain (the box in `physical_source`, plus a separate "before the box" field), or a general "last non-container location" recorded on every move.
+- Coordinate with Group 40's "record it as coming from" prompt, which is where a second level would be captured or shown.
 
 **Background.** Your rule says a single-slot box lets go when its own spool leaves the head, so PM-DB-2 releases XL-2 either way. The open part is what happens at the NEW head. Today a head-to-head move deliberately forgets where the spool came from, because remembering "it came from XL-2" once caused spools to be sent back onto the wrong head. That also forgets the PolyDryer.
 
@@ -567,7 +572,9 @@ Dev container. Dev spools are virtual test constructs (your standing rule), but 
 
 **Default if unanswered:** (b), because it is only the part you already decided.
 
-### Q-B — What should scanning a LOCATION do while eject mode is on?
+### Q-B — What should scanning a LOCATION do while eject mode is on? — ✅ ANSWERED 2026-09-18: option (a)
+
+**Derek chose (a): eject that head's one loaded spool**, with the same confirms as the eject button, and warn-and-do-nothing on a box, shelf or room, or on a head holding 0 or 2 spools. Build 42.5b that way; the background below is kept for the record.
 
 **Background.** `CMD:EJECT` turns on eject mode, but today only spool labels honour it. Scanning a toolhead label in eject mode either *assigns* whatever is in your buffer to that head (eject mode stays on), or, with an empty buffer, picks the head's spool up into the buffer. So the "scan eject, then scan the Core One label" you tried on 2026-09-12 most likely did not eject by itself. Whatever eject happened after that is what detached the PolyDryer.
 

@@ -122,5 +122,22 @@
 - The Printer-row Eject All door is closed by D4's block.
 - Tests must drive the real move engine ([[mocked engine hides chain bugs]]).
 
+## Group-level questions — Derek's answers (2026-09-18)
+
+Asked once the plan docs existed; each had background and a worked example.
+
+| Q | Answer |
+|---|---|
+| **41 Q1** — where an ejected spool with no saved home goes | **Unassigned, after one "unassign?" prompt** (the prompt a PolyDryer spool already gets). Eject All asks once for the whole batch. This stops new Room-only spools. Smart Load's homeless resident keeps the 2026-09-12 rule (the printer's Room). |
+| **39 Q1** — how deliberate a mid-print Quick-Swap confirm must be | **Keep today's overlay:** Yes stays focused, and Enter, a click or the CONFIRM QR all confirm. Only the consequence wording is new. |
+| **42 Q-B** — what a LOCATION scan means in eject mode | **Eject that head's one loaded spool**, with the eject button's confirms. On a box, shelf or room, or a head holding 0 or 2 spools, warn and do nothing. |
+| **42 Q-A** — does a single-slot box follow its spool head→head | **Yes, it follows** — with a caveat (below). |
+
+**⚠️ Derek's caveat on Q-A, which needs a design answer before 42.6 is built.** In his words: "we shouldn't overwrite the spool location before the box load. (Say it was on a cart or something, so that if we unload it from the box, we know where it was before and move it back to that location.)"
+- Today `physical_source` holds ONE level: the box (and slot) a spool was deployed from. A spool that came from a cart into a PolyDryer and then onto a head has no record of the cart.
+- He wants that pre-box location kept, so that unloading the spool from the box can send it back to the cart.
+- **Options to put to him:** a home chain (`physical_source` for the box, plus a separate "before the box" field), or a general "last non-container location" recorded on every move.
+- **Where it lands:** Group 42 (release/attach rules) and Group 40 (the "record it as coming from" prompt, which is where a second level would be captured or shown).
+
 ## Housekeeping done after the decisions
 - Dev PM-DB-1 slot 1 → XL-1 binding cleared with Derek's OK (`PUT /api/dryer_box/PM-DB-1/bindings/1 {"target": null}`). The test-fixture fix is filed under the sweep-triage follow-ups, item 3.
