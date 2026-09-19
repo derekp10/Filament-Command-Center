@@ -212,9 +212,19 @@ def _drop_routes_in_flight(page: Page):
         pass
 
 
+# Headless chromium denies the Wake Lock permission, and FCC's wake-lock helper
+# surfaces that denial as an unhandled rejection. It is environment noise with a
+# documented fallback (test_frontend_source_presence::test_request_wakelock_fallback),
+# not anything these tests are about.
+_IGNORED_PAGE_ERRORS = ("Wake Lock",)
+
+
 def _boot(page: Page, base_url: str, reset_dom_state_js: str) -> list[str]:
     errors: list[str] = []
-    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on(
+        "pageerror",
+        lambda e: None if any(s in str(e) for s in _IGNORED_PAGE_ERRORS) else errors.append(str(e)),
+    )
     page.add_init_script(TOAST_RECORDER_JS)
     page.goto(base_url.rstrip("/") + "/", wait_until="domcontentloaded")
     page.wait_for_function(
