@@ -1725,6 +1725,14 @@ window.openEdit = (id) => {
         document.getElementById('edit-original-id').value = id;
         document.getElementById('edit-id').value = id;
         document.getElementById('edit-name').value = i.Name;
+        // Hotfix 2026-09-29 — a printer's or toolhead's ID is fixed here: its
+        // toolheads are grouped by the printer's ID prefix and spools sit at
+        // the toolhead's ID (the server refuses the change too). The Name —
+        // what the printer status shows — stays editable.
+        const idInput = document.getElementById('edit-id');
+        const idLocked = ['Printer', 'Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(i.Type);
+        idInput.readOnly = idLocked;
+        idInput.title = idLocked ? "A printer's or toolhead's ID can't be changed — edit the Name instead" : '';
         // L271 Phase 5 — data-driven Type dropdown (built-ins + custom) so a
         // custom-typed row keeps its Type on edit.
         _populateTypeSelect(i.Type);
@@ -1736,6 +1744,13 @@ window.openEdit = (id) => {
         // edited; matches vendorEditModal pattern). Select-all so the
         // user can immediately overtype.
         const locModalEl = document.getElementById('locModal');
+        if (locModalEl && idLocked) {
+            // Unlock again for the next Add / Edit that reuses this modal.
+            locModalEl.addEventListener('hidden.bs.modal', () => {
+                idInput.readOnly = false;
+                idInput.title = '';
+            }, { once: true });
+        }
         if (locModalEl) {
             locModalEl.addEventListener('shown.bs.modal', () => {
                 const n = document.getElementById('edit-name');
@@ -1779,6 +1794,9 @@ window.saveLocation = () => {
                 if (typeof showToast === 'function') showToast(msg, 'error', 7000); else alert(msg);
                 return;
             }
+            // Saved, but e.g. a new toolhead couldn't join its printer's
+            // toolhead list on its own — say what to do next.
+            if (body.warning && typeof showToast === 'function') showToast(body.warning, 'warning', 9000);
             modals.locModal.hide(); modals.locMgrModal.show(); fetchLocations();
         })
         .catch(e => {
@@ -1811,5 +1829,19 @@ window.openAddModal = () => {
     }
 };
 
-window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, { method: 'DELETE' }).then(fetchLocations));
+// Hotfix 2026-09-29 — surface a refused delete (e.g. a printer that still has
+// toolheads) instead of silently re-listing as if it had worked.
+window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    .then(async (r) => {
+        let body = {};
+        try { body = await r.json(); } catch (_) { /* non-JSON */ }
+        if (!r.ok || body.success === false) {
+            const msg = body.error || body.msg || `Delete failed (HTTP ${r.status})`;
+            if (typeof showToast === 'function') showToast(msg, 'error', 8000);
+        }
+    })
+    .catch((e) => {
+        if (typeof showToast === 'function') showToast('Delete failed: ' + (e && e.message ? e.message : e), 'error', 7000);
+    })
+    .then(fetchLocations));
 

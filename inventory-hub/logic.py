@@ -477,7 +477,12 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # in printer_map to be caught by is_printer — skipped the resident auto-eject
     # and left two spools on one head. Sourced from locations_db.TOOLHEAD_TYPES
     # so this can't drift out of sync with the rest of the codebase again.
-    is_toolhead = bool(tgt_info) and tgt_info.get('Type') in (locations_db.TOOLHEAD_TYPES | {'Printer'})
+    # Hotfix 2026-09-29: a Printer row is single-occupancy only while it is its
+    # own toolhead (the dual-role Core One, which is_printer already covers).
+    # A multi-head printer (the INDX: RCOI owns RCOI-1..8) is not a deploy slot,
+    # and the resident lookup prefix-matches its heads — loading onto the printer
+    # row used to eject every spool on all of them.
+    is_toolhead = bool(tgt_info) and tgt_info.get('Type') in locations_db.TOOLHEAD_TYPES
 
     undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "labels": {}, "ejections": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
 
