@@ -1725,6 +1725,19 @@ window.openEdit = (id) => {
         document.getElementById('edit-original-id').value = id;
         document.getElementById('edit-id').value = id;
         document.getElementById('edit-name').value = i.Name;
+        // Hotfix 2026-09-29 — lock the ID exactly where the server refuses to
+        // change it: a printer that owns toolheads (they're grouped by its ID
+        // prefix) and a toolhead on a printer's toolhead list (spools sit at its
+        // ID). A mistyped, not-yet-registered toolhead stays fixable here. The
+        // Name — what the printer status shows — is always editable.
+        const idInput = document.getElementById('edit-id');
+        const idUp = String(id).toUpperCase();
+        const ownsHeads = i.Type === 'Printer' && (i.toolheads || []).some((t) => t && typeof t === 'object');
+        const onPrinter = (state.allLocations || []).some((p) => p && p.Type === 'Printer'
+            && (p.toolheads || []).some((t) => t && String(t.location_id || '').toUpperCase() === idUp));
+        const idLocked = ownsHeads || onPrinter;
+        idInput.readOnly = idLocked;
+        idInput.title = idLocked ? "This ID is fixed: toolheads and loaded spools are keyed by it — edit the Name instead" : '';
         // L271 Phase 5 — data-driven Type dropdown (built-ins + custom) so a
         // custom-typed row keeps its Type on edit.
         _populateTypeSelect(i.Type);
@@ -1736,6 +1749,13 @@ window.openEdit = (id) => {
         // edited; matches vendorEditModal pattern). Select-all so the
         // user can immediately overtype.
         const locModalEl = document.getElementById('locModal');
+        if (locModalEl && idLocked) {
+            // Unlock again for the next Add / Edit that reuses this modal.
+            locModalEl.addEventListener('hidden.bs.modal', () => {
+                idInput.readOnly = false;
+                idInput.title = '';
+            }, { once: true });
+        }
         if (locModalEl) {
             locModalEl.addEventListener('shown.bs.modal', () => {
                 const n = document.getElementById('edit-name');
@@ -1779,7 +1799,14 @@ window.saveLocation = () => {
                 if (typeof showToast === 'function') showToast(msg, 'error', 7000); else alert(msg);
                 return;
             }
+            // Saved, but e.g. a new toolhead couldn't join its printer's
+            // toolhead list on its own — say what to do next.
+            if (body.warning && typeof showToast === 'function') showToast(body.warning, 'warning', 9000);
             modals.locModal.hide(); modals.locMgrModal.show(); fetchLocations();
+            // A printer rename or a toolhead joining a printer changes the
+            // printer map that Quick-Swap / Feeds cache for the page's life.
+            const _oldRow = (state.allLocations || []).find((l) => l.LocationID == document.getElementById('edit-original-id').value);
+            if (_isPrinterTopologyType(new_data.Type) || (_oldRow && _isPrinterTopologyType(_oldRow.Type))) _announcePrinterMapChange();
         })
         .catch(e => {
             const msg = 'Save failed: ' + (e && e.message ? e.message : e);
@@ -1811,5 +1838,33 @@ window.openAddModal = () => {
     }
 };
 
-window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${id}`, { method: 'DELETE' }).then(fetchLocations));
+// Hotfix 2026-09-29 — printer-topology rows (a Printer or a toolhead) feed the
+// printer map other views cache for the page's life (Quick-Swap, Feeds); after
+// changing one, drop the cache and tell them to refresh.
+function _isPrinterTopologyType(t) {
+    return ['Printer', 'Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(t);
+}
+function _announcePrinterMapChange() {
+    state.printerMap = null;
+    document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+}
+
+// Hotfix 2026-09-29 — surface a refused delete (e.g. a printer that still has
+// toolheads) instead of silently re-listing as if it had worked.
+window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    .then(async (r) => {
+        let body = {};
+        try { body = await r.json(); } catch (_) { /* non-JSON */ }
+        if (!r.ok || body.success === false) {
+            const msg = body.error || body.msg || `Delete failed (HTTP ${r.status})`;
+            if (typeof showToast === 'function') showToast(msg, 'error', 8000);
+            return;
+        }
+        const _row = (state.allLocations || []).find((l) => l.LocationID == id);
+        if (_row && _isPrinterTopologyType(_row.Type)) _announcePrinterMapChange();
+    })
+    .catch((e) => {
+        if (typeof showToast === 'function') showToast('Delete failed: ' + (e && e.message ? e.message : e), 'error', 7000);
+    })
+    .then(fetchLocations));
 

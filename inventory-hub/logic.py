@@ -477,7 +477,21 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # in printer_map to be caught by is_printer — skipped the resident auto-eject
     # and left two spools on one head. Sourced from locations_db.TOOLHEAD_TYPES
     # so this can't drift out of sync with the rest of the codebase again.
-    is_toolhead = bool(tgt_info) and tgt_info.get('Type') in (locations_db.TOOLHEAD_TYPES | {'Printer'})
+    # Hotfix 2026-09-29: a Printer row stays single-occupancy only while it owns
+    # no toolhead other than itself — the dual-role Core One, or a one-slot
+    # printer not yet set up in Settings. A multi-head printer (the INDX: RCOI
+    # owns RCOI-1..8) is not a deploy slot, and the resident lookup prefix-
+    # matches its heads — loading onto the printer row used to eject every
+    # spool on all of them.
+    is_toolhead = bool(tgt_info) and tgt_info.get('Type') in locations_db.TOOLHEAD_TYPES
+    if bool(tgt_info) and str(tgt_info.get('Type', '')).strip() == 'Printer':
+        _own_heads = [str(t.get('location_id', '')).strip().upper()
+                      for t in (tgt_info.get('toolheads') or []) if isinstance(t, dict)]
+        try:
+            _one_slot = int(str(tgt_info.get('Max Spools', '0')).strip() or '0') <= 1
+        except (TypeError, ValueError):
+            _one_slot = True
+        is_toolhead = _one_slot and not any(h and h != target for h in _own_heads)
 
     undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "labels": {}, "ejections": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
 

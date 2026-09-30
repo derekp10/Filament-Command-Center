@@ -390,7 +390,7 @@
                         ${downBtn}
                     </div>
                     <div class="fcc-ps-name-stack d-flex flex-column ms-2">
-                        <div class="fcc-ps-name text-info fw-bold">${name}</div>
+                        <div class="fcc-ps-name text-info fw-bold">${(window.escHtml || String)(name)}</div>
                         ${stateBadge}
                     </div>
                 </div>
