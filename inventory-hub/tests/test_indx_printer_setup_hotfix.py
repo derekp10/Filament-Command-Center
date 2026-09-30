@@ -749,7 +749,7 @@ def _smart_load(rows, target, residents):
          patch.object(spoolman_api, "update_spool", return_value=True), \
          patch.object(spoolman_api, "format_spool_display", return_value={"text": "", "color": "000"}), \
          patch.object(prusalink_api, "get_printer_state", return_value=None), \
-         patch.object(logic, "perform_smart_eject") as eject:
+         patch.object(logic, "perform_smart_eject", return_value=True) as eject:
         logic.perform_smart_move(target, [8])
     return eject
 
@@ -757,7 +757,9 @@ def _smart_load(rows, target, residents):
 def test_loading_onto_a_one_slot_printer_not_yet_set_up_still_ejects_its_resident():
     rows = _prod_like_rows() + [{"LocationID": "MK4", "Name": "🦝 MK4", "Type": "Printer",
                                  "Max Spools": "1", "parent_id": None}]
-    _smart_load(rows, "MK4", {101: "MK4"}).assert_called_once_with(101)
+    eject = _smart_load(rows, "MK4", {101: "MK4"})
+    # dev forwards extra keywords (confirm_active_print, homeless_destination)
+    assert eject.call_count == 1 and eject.call_args[0][0] == 101
 
 
 def test_stale_native_hide_is_skipped_when_the_spool_list_read_fails(client):
