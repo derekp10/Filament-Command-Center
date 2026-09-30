@@ -198,20 +198,38 @@ def api_printer_map():
     # (never the plaintext) — the PUT keeps the stored key when it gets the
     # sentinel back. Keyed by printer Name (the same key the rest of this view
     # uses), so a printer with no creds yet still shows an empty editable row.
+    #
+    # Hotfix 2026-09-29: `printer_rows` is the same view per Printer ROW, keyed by
+    # LocationID — what the editor renders and saves against, so a rename or a
+    # shared Name can no longer point the grid at one row and the save at
+    # another. `printer_creds` (by Name) stays for older callers; on a shared
+    # Name it now shows the row that holds an ip, matching the runtime lookup.
     creds_view = {}
+    printer_rows = []
     for _row in (loc_rows or []):
         if not isinstance(_row, dict) or str(_row.get('Type', '')).strip().lower() != 'printer':
             continue
         _nm = str(_row.get('Name', ''))
-        if not _nm:
-            continue
         _c = _row.get(locations_db.PRINTER_CREDS_KEY)
         _c = _c if isinstance(_c, dict) else {}
-        creds_view[_nm] = {
+        _view = {
             "ip_address": (_c.get("ip_address") or ""),
             "api_key": config_schema.SECRET_SENTINEL if _c.get("api_key") else "",
         }
-    return jsonify({"printers": grouped, "entries": flat, "printer_creds": creds_view})
+        printer_rows.append({
+            "location_id": str(_row.get('LocationID', '')).strip().upper(),
+            "name": _nm,
+            **_view,
+            "toolhead_count": sum(1 for _t in (_row.get('toolheads') or []) if isinstance(_t, dict)),
+        })
+        if not _nm:
+            continue
+        if _nm in creds_view and creds_view[_nm]["ip_address"] and not _view["ip_address"]:
+            continue
+        creds_view[_nm] = _view
+    printer_rows.sort(key=lambda p: (p["name"].lower(), p["location_id"]))
+    return jsonify({"printers": grouped, "entries": flat, "printer_creds": creds_view,
+                    "printer_rows": printer_rows})
 
 
 @app.route('/api/printer_creds', methods=['PUT'])
@@ -223,14 +241,24 @@ def api_put_printer_creds():
     SECRET_SENTINEL contract for api_key (mirrors the Config editor): receiving
     the sentinel means "unchanged" → keep the stored key; any other value
     replaces it (empty string → no key). A blank ip_address CLEARS the whole
-    creds object. Body: {printer_name, ip_address, api_key}. 404 if no Printer
-    row carries that Name."""
+    creds object. Body: {location_id | printer_name, ip_address, api_key}.
+
+    Hotfix 2026-09-29: `location_id` (the Printer row's LocationID) is the
+    editor's address and wins when sent — 404 unless it names a Printer row.
+    `printer_name` remains for older callers — 404 if no Printer row carries it."""
     payload = request.get_json(silent=True) or {}
     name = str(payload.get('printer_name', '')).strip()
+    loc_id = str(payload.get('location_id', '') or '').strip().upper()
     ip = str(payload.get('ip_address', '') or '').strip()
     api_key_in = payload.get('api_key', '')
-    if not name:
+    if not name and not loc_id:
         return jsonify({"ok": False, "error": "printer_name is required"}), 400
+    # Hotfix 2026-09-29: a blank IP clears the whole connection, so a NEW key sent
+    # with a blank IP used to delete the saved connection while the editor toasted
+    # success — refuse it instead (blank IP + blank/sentinel key still clears).
+    if not ip and api_key_in not in (None, '', config_schema.SECRET_SENTINEL):
+        return jsonify({"ok": False,
+                        "error": "Enter the printer's IP address too — an API key can't be saved without it."}), 400
     # Group 38 follow-up — the whole load→mutate→save cycle is serialized. Both
     # reads and the write must sit inside one critical section; locking only the
     # save would leave the interleave (a concurrent writer's snapshot reverting
@@ -241,6 +269,8 @@ def api_put_printer_creds():
             rows = locations_db.load_locations_list()
         except Exception as e:
             return jsonify({"ok": False, "error": f"could not read locations: {e}"}), 500
+        if loc_id:
+            return _put_printer_creds_by_id(rows, loc_id, ip, api_key_in)
         # Confirm the Printer row exists before any write (changed=False is ambiguous —
         # it also means "value unchanged" — so we can't use it to detect a bad name).
         if not any(isinstance(r, dict)
@@ -262,6 +292,29 @@ def api_put_printer_creds():
             # 29.B2 — only log the "updated" INFO line on an ACTUAL change; a no-op
             # PUT with identical creds no longer emits a misleading "updated" entry.
             state.add_log_entry(f"🔐 Printer connection updated for {name}", "INFO")
+    return jsonify({"ok": True, "error": None})
+
+
+def _put_printer_creds_by_id(rows, loc_id, ip, api_key_in):
+    """Hotfix 2026-09-29 — the `location_id` branch of PUT /api/printer_creds.
+    Same sentinel, persist-failure and changed-guard contract as the Name branch
+    above, addressed by the Printer row's LocationID. Caller MUST hold
+    locations_write_lock() (it read `rows` inside it and this writes them back)."""
+    row = locations_db.find_printer_row(rows, loc_id)
+    if row is None:
+        return jsonify({"ok": False, "error": f"No Printer with LocationID {loc_id!r}"}), 404
+    label = str(row.get('Name', '') or loc_id)
+    if api_key_in == config_schema.SECRET_SENTINEL:
+        stored = row.get(locations_db.PRINTER_CREDS_KEY)
+        api_key = stored.get('api_key') if isinstance(stored, dict) else None
+    else:
+        api_key = api_key_in if api_key_in else None
+    rows, changed = locations_db.set_printer_credentials_by_id(rows, loc_id, ip, api_key)
+    if changed:
+        if not locations_db.save_locations_list(rows):
+            state.add_log_entry(f"🔐 Printer connection save FAILED for {label}", "ERROR", "ff4444")
+            return jsonify({"ok": False, "error": "could not persist printer connection"}), 500
+        state.add_log_entry(f"🔐 Printer connection updated for {label}", "INFO")
     return jsonify({"ok": True, "error": None})
 
 
@@ -419,6 +472,29 @@ def api_put_printer_map():
                 _new_name = _names_by_prefix.get(_pid)
                 if _new_name and _row.get('Name') != _new_name:
                     _row['Name'] = _new_name
+            # Hotfix 2026-09-29: refuse a save that leaves two printers sharing a
+            # Name this edit sets — creds, status and deducts resolve a printer by
+            # Name. Toolheads of ONE printer share its LocationID prefix, so a second
+            # prefix under the same name is a second printer.
+            _shared = locations_db.shared_printer_names(_locs, set(_names_by_prefix.values()))
+            if _shared:
+                reason = "; ".join(
+                    f"printer name {nm!r} would be shared by {' and '.join(ids)}"
+                    for nm, ids in sorted(_shared.items()))
+                reason += (" — give each printer its own name (all toolheads of one printer "
+                           "share its ID prefix, e.g. RCOI-1…RCOI-8)")
+                state.add_log_entry(f"⚙️ Printer-map save blocked — {reason}", "ERROR", "ff4444")
+                return jsonify({"ok": False, "error": reason}), 400
+            # …and keep the Location Manager in step: a new toolhead gets its Tool
+            # Head row (spools can only be put on a real location), and a toolhead
+            # the guard just cleared for removal loses its now-empty row.
+            _locs, _created_heads = locations_db.ensure_toolhead_rows(_locs, canonical)
+            # "Removed" = what the re-sync actually took off the Printer rows, not
+            # old-minus-submitted: the re-sync is a no-op for an empty map, and
+            # dropping rows on that basis would orphan heads the printers still list.
+            _still_listed = set(locations_db.build_printer_map_from_rows(_locs))
+            _removed_keys = {str(k).strip().upper() for k in old_map} - _still_listed
+            _locs, _dropped_heads = locations_db.remove_unused_toolhead_rows(_locs, _removed_keys)
             if not locations_db.save_locations_list(_locs):
                 reason = "could not persist the printer rows"
                 state.add_log_entry(f"⚙️ Printer-map save failed: {reason}", "ERROR", "ff4444")
@@ -429,7 +505,15 @@ def api_put_printer_map():
         return jsonify({"ok": False, "error": str(_write_err)}), 500
 
     state.add_log_entry(f"⚙️ Printer map updated ({len(canonical)} toolheads)", "INFO")
-    return jsonify({"ok": True, "error": None, "printer_map": canonical})
+    if _created_heads:
+        state.add_log_entry(
+            f"🧩 Toolhead location(s) created: {', '.join(_created_heads)}", "INFO")
+    if _dropped_heads:
+        state.add_log_entry(
+            f"🧹 Removed toolhead location(s): {', '.join(_dropped_heads)}", "INFO")
+    return jsonify({"ok": True, "error": None, "printer_map": canonical,
+                    "created_toolhead_rows": _created_heads,
+                    "removed_toolhead_rows": _dropped_heads})
 
 
 @app.route('/api/dryer_boxes/slots', methods=['GET'])

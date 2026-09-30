@@ -142,6 +142,11 @@ def run_startup_migrations():
         _p3_cfg = config_loader.load_config()
         _p3_pm = _p3_cfg.get('printer_map', {}) or {}
         _p3_locs = locations_db.load_locations_list()
+        # Hotfix 2026-09-29: once the rows are authoritative the seed is retired —
+        # it still names printers the user has since deleted (prod: CORE1), and
+        # re-creating them on every restart left a creds-less ghost printer.
+        if locations_db.printer_rows_are_authoritative(_p3_locs):
+            _p3_pm = {}
         _p3_migrated, _p3_changed = locations_db.migrate_printers_to_rows_if_needed(_p3_locs, _p3_pm)
         if _p3_changed:
             try:
@@ -230,6 +235,11 @@ def run_startup_migrations():
         _p4_cfg = config_loader.load_config()
         _p4_pm = _p4_cfg.get('printer_map', {}) or {}
         _p4_locs = locations_db.load_locations_list()
+        # Hotfix 2026-09-29: same retirement as Phase 3 — once the rows are
+        # authoritative, a Printer row made in the Location Manager must not be
+        # primed with a deleted printer's toolheads from the stale seed.
+        if locations_db.printer_rows_are_authoritative(_p4_locs):
+            _p4_pm = {}
         _p4_migrated, _p4_changed = locations_db.migrate_printer_map_to_toolheads_if_needed(
             _p4_locs, _p4_pm, prime_only=True)
         if _p4_changed:

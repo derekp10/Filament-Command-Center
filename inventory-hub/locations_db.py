@@ -1041,6 +1041,11 @@ def get_printer_credentials(printer_name, loc_list=None):
     caller change. ``api_key`` may be ``None`` (some PrusaLink installs have no
     key — callers already treat it as optional); only a missing ``ip_address``
     yields ``None``.
+
+    When two Printer rows share the Name (the state a mid-rename left on prod,
+    2026-09-29), the one that actually holds an ip wins instead of whichever
+    comes first — new shared Names are refused on write, so this only matters
+    for data saved before that check existed.
     """
     name = str(printer_name or '')
     if not name:
@@ -1056,10 +1061,10 @@ def get_printer_credentials(printer_name, loc_list=None):
             continue
         creds = row.get(PRINTER_CREDS_KEY)
         if not isinstance(creds, dict):
-            return None
+            continue
         ip = str(creds.get('ip_address', '') or '').strip()
         if not ip:
-            return None
+            continue
         return {'ip_address': ip, 'api_key': creds.get('api_key')}
     return None
 
@@ -1128,6 +1133,225 @@ def set_printer_credentials(loc_list, printer_name, ip_address, api_key):
             changed = True
         return loc_list, changed
     return loc_list, changed
+
+
+# --- Hotfix 2026-09-29: printer setup (Core One → Core One+ INDX) ------------
+# Derek's INDX setup on prod ended with a creds-less Printer row although he had
+# saved the connection more than once. The helpers below back the fixes: the
+# Settings editor addresses a connection by the row's LocationID, Names stay
+# unique, the boot stops re-seeding printers from the vestigial
+# config.json:printer_map, and toolheads stay in step between the Settings
+# editor (toolheads[]) and the Location Manager (Tool Head rows).
+
+def _is_printer_row(row):
+    return isinstance(row, dict) and str(row.get('Type', '')).strip().lower() == 'printer'
+
+
+def find_printer_row(loc_list, location_id):
+    """The Type:"Printer" row whose LocationID matches (case-insensitive), or None."""
+    want = str(location_id or '').strip().upper()
+    if not want:
+        return None
+    for row in (loc_list or []):
+        if _is_printer_row(row) and str(row.get('LocationID', '')).strip().upper() == want:
+            return row
+    return None
+
+
+def set_printer_credentials_by_id(loc_list, location_id, ip_address, api_key):
+    """Set/clear ``printer_creds`` on the Printer row with this LocationID — the
+    Settings editor's write path. The id is stable across renames and can't be
+    shared the way a display Name can, so the save lands on the row the grid
+    shows. Same set/clear semantics as ``set_printer_credentials``. Returns
+    ``(loc_list, changed)``; does not persist.
+    """
+    row = find_printer_row(loc_list, location_id)
+    if row is None:
+        return loc_list, False
+    ip = str(ip_address or '').strip()
+    if not ip:
+        if PRINTER_CREDS_KEY in row:
+            row.pop(PRINTER_CREDS_KEY, None)
+            return loc_list, True
+        return loc_list, False
+    new_creds = {'ip_address': ip, 'api_key': (api_key if api_key else None)}
+    if row.get(PRINTER_CREDS_KEY) != new_creds:
+        row[PRINTER_CREDS_KEY] = new_creds
+        return loc_list, True
+    return loc_list, False
+
+
+def shared_printer_names(loc_list, names=None):
+    """``{name: [LocationID, ...]}`` for every display Name that more than one
+    Printer row carries, restricted to ``names`` when given. Creds, the status
+    widget and the deduct engine all look a printer up by Name, so a shared Name
+    makes them resolve an arbitrary one of the rows."""
+    wanted = None if names is None else {str(n).strip() for n in names}
+    by_name = {}
+    for row in (loc_list or []):
+        if not _is_printer_row(row):
+            continue
+        nm = str(row.get('Name', '')).strip()
+        if not nm or (wanted is not None and nm not in wanted):
+            continue
+        by_name.setdefault(nm, []).append(str(row.get('LocationID', '')).strip())
+    return {nm: ids for nm, ids in by_name.items() if len(ids) > 1}
+
+
+def printer_rows_are_authoritative(loc_list):
+    """True once any Printer row carries a ``toolheads`` key — the L271 fold has
+    run, and the rows (edited through Settings and the Location Manager) are the
+    source of truth. From then on the boot must not create printers or prime
+    toolheads from the vestigial config.json:printer_map seed: prod still lists
+    the deleted CORE1 there, so every restart re-created it creds-less."""
+    return any(_is_printer_row(r) and 'toolheads' in r for r in (loc_list or []))
+
+
+def ensure_toolhead_rows(loc_list, printer_map):
+    """Give every toolhead in ``printer_map`` a Location row, so a head added in
+    the Settings editor can hold spools (scan, Force Location, deposit) and
+    shows in the Location Manager. A new row copies the XL convention ("🦝 XL
+    Tool Head 1": printer name + position + 1, Type "Tool Head", one spool,
+    Order = tool number, Location = the printer's room) with the legacy columns
+    every Tool Head row carries, and is parented to its printer (the LocationID
+    prefix, the same grouping the PUT uses). "Label Printed" starts at "No" —
+    the head has no QR label yet. An id that already has a row is never touched
+    — that includes a dual-role printer's own id, whose Printer row is its
+    deploy location. Returns ``(loc_list, created_ids)``; does not persist.
+    """
+    if not isinstance(loc_list, list) or not printer_map:
+        return loc_list, []
+    existing = {str(r.get('LocationID', '')).strip().upper()
+                for r in loc_list if isinstance(r, dict)}
+    printer_ids = {str(r.get('LocationID', '')).strip().upper()
+                   for r in loc_list if _is_printer_row(r)}
+    room_names = {str(r.get('LocationID', '')).strip().upper(): str(r.get('Name', '') or '')
+                  for r in loc_list
+                  if isinstance(r, dict) and str(r.get('Type', '')).strip().lower() == 'room'}
+    printer_room = {str(r.get('LocationID', '')).strip().upper():
+                    room_names.get(str(r.get('parent_id') or '').strip().upper(), '')
+                    for r in loc_list if _is_printer_row(r)}
+    ordered = sorted(printer_map.items(),
+                     key=lambda kv: (_pm_position((kv[1] or {}).get('position', 0)),
+                                     str(kv[0]).strip().upper()))
+    created = []
+    for loc_id, info in ordered:
+        key = str(loc_id).strip().upper()
+        if not key or key in existing:
+            continue
+        prefix = key.split('-', 1)[0] if '-' in key else key
+        if prefix not in printer_ids:
+            continue
+        name = str((info or {}).get('printer_name', '') or '').strip()
+        pos = _pm_position((info or {}).get('position', 0))
+        loc_list.append({
+            'LocationID': key,
+            'Location': printer_room.get(prefix, ''),
+            'Device Identifier': '',
+            'Device Type': '',
+            'Type': 'Tool Head',
+            'Order': str(pos + 1),
+            'Row': '',
+            'Max Spools': '1',
+            'Name': f"{name} Tool Head {pos + 1}" if name else key,
+            'Label Printed': 'No',
+            'parent_id': prefix,
+        })
+        existing.add(key)
+        created.append(key)
+    return loc_list, created
+
+
+def remove_unused_toolhead_rows(loc_list, removed_ids):
+    """Drop the Location row of each toolhead the Settings editor just removed,
+    so the Location Manager stays in step. Callers pass only ids the referential
+    guard cleared (no spools, no dryer-box binding). A row is kept when it isn't
+    a plain toolhead row, when it is a Printer row, or when another row is
+    parented under it (a single-slot box, a sub-location). Returns
+    ``(loc_list, removed_row_ids)``; does not persist.
+    """
+    if not isinstance(loc_list, list) or not removed_ids:
+        return loc_list, []
+    targets = {str(i).strip().upper() for i in removed_ids if str(i).strip()}
+    parents = {str(r.get('parent_id') or '').strip().upper()
+               for r in loc_list if isinstance(r, dict)}
+    dropped = []
+    kept = []
+    for row in loc_list:
+        lid = str(row.get('LocationID', '')).strip().upper() if isinstance(row, dict) else ''
+        if (lid in targets
+                and str(row.get('Type', '')).strip() in TOOLHEAD_TYPES
+                and lid not in parents):
+            dropped.append(lid)
+            continue
+        kept.append(row)
+    if dropped:
+        loc_list[:] = kept
+    return loc_list, dropped
+
+
+def printer_owning_toolhead(loc_list, toolhead_id):
+    """LocationID of the Printer row whose toolheads[] lists ``toolhead_id``
+    (case-insensitive), or None."""
+    want = str(toolhead_id or '').strip().upper()
+    if not want:
+        return None
+    for row in (loc_list or []):
+        if not _is_printer_row(row):
+            continue
+        for entry in (row.get('toolheads') or []):
+            if isinstance(entry, dict) and str(entry.get('location_id', '')).strip().upper() == want:
+                return str(row.get('LocationID', '')).strip().upper()
+    return None
+
+
+def register_toolhead_on_printer(loc_list, toolhead_row):
+    """The Location-Manager half of the toolhead sync: a toolhead-type row whose
+    parent is a Printer row joins that printer's ``toolheads[]`` — but only when
+    its slicer tool number is unambiguous, because a head's ``position`` is the
+    tool index the print deduct bills by (a wrong one charges the wrong spool).
+    Unambiguous means the id is ``<printer id>-<n>`` (n ≥ 1; the Settings editor
+    groups toolheads by that prefix), the printer's existing ``<id>-<m>`` heads
+    all sit at position m-1, and position n-1 is free. Anything else is left to
+    the Settings editor, with a warning for the user.
+
+    Returns ``(printer_id, warning)``: the printer's LocationID when the head was
+    added, else None, plus a user-facing warning when it could not be. A row
+    that isn't a toolhead under a Printer, or is already listed, is (None, None).
+    Does not persist.
+    """
+    if not isinstance(toolhead_row, dict):
+        return None, None
+    if str(toolhead_row.get('Type', '')).strip() not in TOOLHEAD_TYPES:
+        return None, None
+    th = str(toolhead_row.get('LocationID', '')).strip().upper()
+    printer = find_printer_row(loc_list, toolhead_row.get('parent_id'))
+    if not th or printer is None or printer_owning_toolhead(loc_list, th):
+        return None, None
+    pid = str(printer.get('LocationID', '')).strip().upper()
+    heads = list(printer.get('toolheads') or [])
+    manual = (f"{th} isn't on printer {pid}'s toolhead list yet, so printer status, "
+              f"feeds and print deducts won't see it — add it in ⚙️ Settings → Toolheads "
+              f"with its tool number.")
+    suffix = th[len(pid) + 1:] if th.startswith(pid + '-') else ''
+    if not suffix.isdigit() or int(suffix) < 1:
+        return None, manual + f" (Automatic only for ids like {pid}-1, {pid}-2, …)"
+    position = int(suffix) - 1
+    used = set()
+    for entry in heads:
+        if not isinstance(entry, dict):
+            continue
+        eid = str(entry.get('location_id', '')).strip().upper()
+        epos = _pm_position(entry.get('position', 0))
+        esuffix = eid[len(pid) + 1:] if eid.startswith(pid + '-') else ''
+        if esuffix.isdigit() and epos != int(esuffix) - 1:
+            return None, manual
+        used.add(epos)
+    if position in used:
+        return None, manual
+    heads.append({'location_id': th, 'position': position})
+    printer['toolheads'] = heads
+    return pid, None
 
 
 # Recorded printer→room mapping (L271 plan, Derek 2026-06-03). Used ONLY as a
