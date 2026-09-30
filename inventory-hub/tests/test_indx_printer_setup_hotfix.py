@@ -662,3 +662,121 @@ def test_location_manager_printer_name_is_trimmed(client):
         "LocationID": "RCOI", "Name": f"  {INDX_NAME}  ", "Type": "Printer", "Max Spools": "0"})
     assert res.status_code == 200, res.get_json()
     assert store.row("RCOI")["Name"] == INDX_NAME
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial-review follow-ups (2026-09-29)                                    #
+# --------------------------------------------------------------------------- #
+
+def test_settings_empty_map_save_orphans_no_toolhead_rows(client):
+    # The re-sync is a no-op for an empty map (toolheads[] stay), so nothing may
+    # be dropped on the "old minus submitted" basis.
+    store = _Store(_prod_like_rows())
+    with patch("routes_bindings._printer_map_blocked_removals", return_value=[]):
+        res = _put_map(client, store, {})
+    assert res.status_code == 200
+    assert res.get_json()["removed_toolhead_rows"] == []
+    assert store.row("RCOI-1") is not None and store.row("XL-5") is not None
+    assert store.row("RCOI")["toolheads"] == _heads("RCOI", 8)
+
+
+def test_retyping_a_dryer_box_drops_its_feeds(client):
+    store = _Store(_prod_like_rows())
+    res = _post_edit(client, store, "PM-DB-1", {
+        "LocationID": "PM-DB-1", "Name": "PolyDryer 1", "Type": "Storage", "Max Spools": "4"})
+    assert res.status_code == 200, res.get_json()
+    assert "slot_targets" not in (store.row("PM-DB-1").get("extra") or {})
+
+
+def test_shrinking_a_dryer_box_drops_the_feeds_of_lost_slots(client):
+    store = _Store(_prod_like_rows())
+    res = _post_edit(client, store, "PM-DB-1", {
+        "LocationID": "PM-DB-1", "Name": "PolyDryer 1", "Type": "Dryer Box", "Max Spools": "1"})
+    assert res.status_code == 200, res.get_json()
+    assert store.row("PM-DB-1")["extra"]["slot_targets"] == {"1": "XL-1"}
+
+
+def test_retyping_a_printer_that_owns_toolheads_is_refused(client):
+    store = _Store(_prod_like_rows())
+    res = _post_edit(client, store, "RCOI", {
+        "LocationID": "RCOI", "Name": INDX_NAME, "Type": "Room", "Max Spools": "0"})
+    assert res.status_code == 400
+    assert store.saves == 0
+
+
+def test_name_edit_of_an_unlisted_toolhead_does_not_register_it(client):
+    # e.g. a head removed in Settings whose row was kept: a plain edit must not
+    # quietly put it back on the printer.
+    rows = _prod_like_rows()
+    printer = next(r for r in rows if r["LocationID"] == "RCOI")
+    printer["toolheads"] = _heads("RCOI", 7)
+    store = _Store(rows)
+    res = _post_edit(client, store, "RCOI-8", {
+        "LocationID": "RCOI-8", "Name": "spare head", "Type": "Tool Head", "Max Spools": "1"})
+    assert res.status_code == 200, res.get_json()
+    assert store.row("RCOI")["toolheads"] == _heads("RCOI", 7)
+
+
+def test_retyping_a_row_into_a_toolhead_under_a_printer_registers_it(client):
+    rows = _prod_like_rows()
+    printer = next(r for r in rows if r["LocationID"] == "RCOI")
+    printer["toolheads"] = _heads("RCOI", 7)
+    next(r for r in rows if r["LocationID"] == "RCOI-8")["Type"] = "Storage"
+    store = _Store(rows)
+    res = _post_edit(client, store, "RCOI-8", {
+        "LocationID": "RCOI-8", "Name": "head 8", "Type": "Tool Head", "Max Spools": "1"})
+    assert res.status_code == 200, res.get_json()
+    assert store.row("RCOI")["toolheads"] == _heads("RCOI", 8)
+
+
+def test_deleting_a_printer_by_a_lowercase_id_is_still_guarded(client):
+    import spoolman_api
+    store = _Store(_prod_like_rows())
+    with ExitStack() as stack:
+        _patch_store(stack, store)
+        unassign = stack.enter_context(patch.object(spoolman_api, "update_spool", return_value=True))
+        stack.enter_context(patch.object(spoolman_api, "get_spools_at_location", return_value=[101]))
+        res = client.delete("/api/locations?id=rcoi")
+    assert res.status_code == 409
+    unassign.assert_not_called()
+
+
+def _smart_load(rows, target, residents):
+    import logic
+    import prusalink_api
+    import spoolman_api
+    incoming = {"id": 8, "location": "", "extra": {}}
+    with patch.object(locations_db, "load_locations_list", return_value=copy.deepcopy(rows)), \
+         patch.object(spoolman_api, "get_spools_at_location", return_value=residents), \
+         patch.object(spoolman_api, "get_spool", return_value=incoming), \
+         patch.object(spoolman_api, "update_spool", return_value=True), \
+         patch.object(spoolman_api, "format_spool_display", return_value={"text": "", "color": "000"}), \
+         patch.object(prusalink_api, "get_printer_state", return_value=None), \
+         patch.object(logic, "perform_smart_eject") as eject:
+        logic.perform_smart_move(target, [8])
+    return eject
+
+
+def test_loading_onto_a_one_slot_printer_not_yet_set_up_still_ejects_its_resident():
+    rows = _prod_like_rows() + [{"LocationID": "MK4", "Name": "🦝 MK4", "Type": "Printer",
+                                 "Max Spools": "1", "parent_id": None}]
+    _smart_load(rows, "MK4", [101]).assert_called_once_with(101)
+
+
+def test_stale_native_hide_is_skipped_when_the_spool_list_read_fails(client):
+    import app
+
+    class _Down:
+        ok = False
+
+        def json(self):
+            return []
+
+    with patch.object(app.locations_db, "load_locations_list", return_value=copy.deepcopy(_prod_like_rows())), \
+         patch.object(app.spoolman_api, "get_all_locations", return_value=["Garage"]), \
+         patch.object(app.config_loader, "get_api_urls", return_value=("http://spool", "http://fb/api")), \
+         patch.object(app.requests, "get", return_value=_Down()):
+        res = client.get("/api/locations")
+    rows = {r["LocationID"]: r for r in res.get_json()}
+    assert "Garage" in rows, "a failed spool read must not hide live native locations"
+    assert all("_synth_native" not in r for r in rows.values())

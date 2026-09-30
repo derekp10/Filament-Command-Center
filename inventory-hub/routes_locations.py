@@ -83,6 +83,7 @@ def api_get_locations():
     unknown_count: int = 0  # 18.1 — spools sitting at the virtual UNKNOWN bucket
 
     sm_url, _ = config_loader.get_api_urls()
+    spools_read_ok = False  # hotfix 2026-09-29 — gates the stale-native hide below
     try:
         resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
         if resp.ok:
@@ -119,6 +120,7 @@ def api_get_locations():
                     loc if (loc and loc != 'UNKNOWN') else '',
                     p_source,
                 ))
+            spools_read_ok = True
 
     except: pass
 
@@ -271,8 +273,9 @@ def api_get_locations():
         # location removed in Spoolman lingered here forever — and its Delete
         # "succeeded" without removing anything. Hide a synthesized native row
         # once no live spool (or deployed ghost) sits at it and nothing nests
-        # under it.
-        if row.pop('_synth_native', False) and direct_cnt == 0 and not is_parent:
+        # under it — but only when the spool list was actually read: a failed
+        # read leaves every count at 0 and would hide live locations too.
+        if row.pop('_synth_native', False) and spools_read_ok and direct_cnt == 0 and not is_parent:
             continue
         final_list.append(row)
 
@@ -345,6 +348,17 @@ def api_save_location():
                                 "error": f"{_old_u} is a toolhead of printer {_owner}, so its ID can't be "
                                          f"changed here. Change its Name instead, or remove it in Settings → "
                                          f"Toolheads and add the new ID."}), 400
+        # Re-typing a printer that owns other toolheads drops them all from the
+        # printer map — and the new-Type row would then slip past the Printer
+        # delete guard. Same rule as that guard: remove the heads first.
+        _new_type = str(new_entry.get('Type') or old_row.get('Type') or '').strip().lower()
+        if str(old_row.get('Type', '')).strip().lower() == 'printer' and _new_type != 'printer':
+            _heads = [str(t.get('location_id', '')).strip().upper()
+                      for t in (old_row.get('toolheads') or []) if isinstance(t, dict)]
+            if any(h and h != _old_u for h in _heads):
+                return jsonify({"success": False,
+                                "error": f"Printer {_old_u} still has toolheads — remove them in ⚙️ Settings → "
+                                         f"Toolheads before changing its Type."}), 400
 
     # Hotfix 2026-09-29: a Printer is found by its display Name (creds, the status
     # widget, deducts), so trim it and refuse one another Printer row carries.
@@ -423,16 +437,44 @@ def api_save_location():
     # extra.slot_targets (renaming the box wiped its feeds). A key the caller
     # does send still wins, so an explicit creds object replaces the stored one.
     if isinstance(new_entry, dict) and old_row is not None:
+        _sent_extra = 'extra' in new_entry
         for _k, _v in old_row.items():
             if _k in ('LocationID', 'parent_id') or _k in new_entry:
                 continue
             new_entry[_k] = _v
-    # Hotfix 2026-09-29: a toolhead created (or re-typed/re-parented) under a
-    # Printer joins that printer's toolheads[] when its tool number is
-    # unambiguous, so the printer status, bindings and deducts see it; otherwise
-    # the user is told to add it in Settings. The Settings-editor half lives in
-    # PUT /api/printer_map.
-    _registered_on, _reg_warning = locations_db.register_toolhead_on_printer(current_list, new_entry)
+        # Carried slot bindings must still fit the row: a box re-typed away from
+        # Dryer Box keeps no feeds (every binding reader filters on the Type, so
+        # they'd be invisible yet still block toolhead removals), and a box
+        # shrunk to fewer slots drops the bindings of the slots it lost (they'd
+        # otherwise surface as phantom Quick-Swap slots).
+        _ex = new_entry.get('extra')
+        if not _sent_extra and isinstance(_ex, dict) and 'slot_targets' in _ex:
+            _ex = dict(_ex)
+            if str(new_entry.get('Type', '')).strip() != locations_db.DRYER_BOX_TYPE:
+                _ex.pop('slot_targets', None)
+                _ex.pop('slot_order', None)
+            elif isinstance(_ex.get('slot_targets'), dict):
+                try:
+                    _max_slots = int(str(new_entry.get('Max Spools', '')).strip())
+                except (TypeError, ValueError):
+                    _max_slots = None
+                if _max_slots is not None:
+                    _ex['slot_targets'] = {k: v for k, v in _ex['slot_targets'].items()
+                                           if not (str(k).strip().isdigit() and int(str(k).strip()) > _max_slots)}
+            new_entry['extra'] = _ex
+    # Hotfix 2026-09-29: a toolhead that is new here, or newly a toolhead under
+    # this Printer (re-typed / re-parented), joins that printer's toolheads[]
+    # when its tool number is unambiguous, so the printer status, bindings and
+    # deducts see it; otherwise the user is told to add it in Settings. A plain
+    # edit of an existing row never re-registers it (that would undo a removal
+    # made in Settings). The Settings-editor half lives in PUT /api/printer_map.
+    _registered_on, _reg_warning = None, None
+    if isinstance(new_entry, dict) and (
+            old_row is None
+            or str(old_row.get('Type', '')).strip() != str(new_entry.get('Type', '')).strip()
+            or str(old_row.get('parent_id') or '').strip().upper()
+            != str(new_entry.get('parent_id') or '').strip().upper()):
+        _registered_on, _reg_warning = locations_db.register_toolhead_on_printer(current_list, new_entry)
     if _registered_on:
         state.add_log_entry(f"🧩 {new_entry.get('LocationID')} added to printer {_registered_on}'s toolheads")
     current_list.append(new_entry)
@@ -462,10 +504,13 @@ def api_delete_location():
     # the head rows orphaned. Deleting it was also the only way to rename it
     # before the edit fix. Refuse until its heads are gone; a dual-role printer
     # that is only its own toolhead (the old Core One) keeps the existing path.
-    if target_row is not None and str(target_row.get('Type', '')).strip().lower() == 'printer':
-        _t_u = target.upper()
+    _t_u = target.upper()
+    _guard_row = target_row or next(
+        (r for r in current if isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == _t_u),
+        None)  # an API caller's lowercase id must not slip past the guard
+    if _guard_row is not None and str(_guard_row.get('Type', '')).strip().lower() == 'printer':
         _heads = [str(h.get('location_id', '')).strip().upper()
-                  for h in (target_row.get('toolheads') or []) if isinstance(h, dict)]
+                  for h in (_guard_row.get('toolheads') or []) if isinstance(h, dict)]
         _other_heads = [h for h in _heads if h and h != _t_u]
         if _other_heads:
             _msg = (f"Printer {target} still has {len(_other_heads)} toolhead(s) "

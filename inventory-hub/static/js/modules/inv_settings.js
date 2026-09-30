@@ -258,30 +258,52 @@
     // shows it on every toolhead row and the save keeps the first row's value, so
     // renaming meant editing all eight INDX rows alike. Typing a name now mirrors
     // it to that printer's other rows; a new row typed under an existing prefix
-    // takes that printer's name and the next position.
+    // takes that printer's name and its tool position.
     function pmOnInput(ev) {
         const t = ev.target;
         const host = document.getElementById(PM_HOST_ID);
         const row = t && t.closest ? t.closest('.pm-row') : null;
         if (!host || !row) return;
         const pfx = pmPrefixOf(row);
-        if (!pfx) return;
-        const siblings = Array.from(host.querySelectorAll('.pm-row'))
-            .filter((o) => o !== row && pmPrefixOf(o) === pfx);
+        const siblings = pfx ? Array.from(host.querySelectorAll('.pm-row'))
+            .filter((o) => o !== row && pmPrefixOf(o) === pfx) : [];
         if (t.classList.contains('pm-name')) {
             siblings.forEach((o) => {
                 const inp = o.querySelector('.pm-name');
                 if (inp && inp.value !== t.value) inp.value = t.value;
             });
         } else if (t.classList.contains('pm-loc')) {
+            // Fill only once the prefix is complete (a '-' typed): "XL" on the way
+            // to "XL2-1" must not claim the XL's name and position. What gets
+            // filled is remembered, so a changed prefix takes it back and a
+            // later digit re-derives the position.
             const nameEl = row.querySelector('.pm-name');
-            const donor = siblings.find((o) => (o.querySelector('.pm-name').value || '').trim());
-            if (nameEl && !nameEl.value.trim() && donor) nameEl.value = donor.querySelector('.pm-name').value;
             const posEl = row.querySelector('.pm-pos');
-            const used = siblings.map((o) => Math.trunc(Number(o.querySelector('.pm-pos').value)) || 0);
-            if (posEl && used.length && (posEl.value === '' || posEl.value === '0')) {
-                posEl.value = String(Math.max.apply(null, used) + 1);
+            const raw = (t.value || '').trim().toUpperCase();
+            const complete = raw.indexOf('-') >= 0;
+            const d = row.dataset;
+            if (d.autoPfx && (!complete || d.autoPfx !== pfx)) {
+                if (nameEl && nameEl.value === d.autoName) nameEl.value = '';
+                if (posEl && posEl.value === d.autoPos) posEl.value = '0';
+                delete d.autoPfx; delete d.autoName; delete d.autoPos;
             }
+            if (!complete || !siblings.length) return;
+            const donor = siblings.find((o) => (o.querySelector('.pm-name').value || '').trim());
+            if (nameEl && donor && (!nameEl.value.trim() || nameEl.value === d.autoName)) {
+                nameEl.value = donor.querySelector('.pm-name').value;
+                d.autoName = nameEl.value;
+            }
+            // Position = the slicer tool index the deduct bills by: RCOI-9 → 8
+            // when the id carries a tool number, else the next free one.
+            if (posEl && (posEl.value === '' || posEl.value === '0' || posEl.value === d.autoPos)) {
+                const suffix = raw.slice(pfx.length + 1);
+                const used = siblings.map((o) => Math.trunc(Number(o.querySelector('.pm-pos').value)) || 0);
+                posEl.value = /^[1-9][0-9]*$/.test(suffix)
+                    ? String(Number(suffix) - 1)
+                    : String(Math.max.apply(null, used) + 1);
+                d.autoPos = posEl.value;
+            }
+            d.autoPfx = pfx;
         }
     }
 
@@ -434,7 +456,8 @@
         });
         let d = {};
         try { d = await r.json(); } catch (_) { /* non-JSON error page */ }
-        return { ok: !!(r.ok && d.ok), msg: (d && d.error) ? d.error : `Save failed (HTTP ${r.status})` };
+        return { ok: !!(r.ok && d.ok), msg: (d && d.error) ? d.error : `Save failed (HTTP ${r.status})`,
+                 sent: { ip, key: keyRaw } };
     }
 
     // Other views cache the printer map for the page's lifetime (Feeds dropdown,
@@ -449,16 +472,20 @@
     // Reflect a successful save in place. The server contract makes the result
     // predictable: a blank IP clears the connection, a typed key replaces the
     // stored one, a blank key keeps it. No re-render, so unsaved edits elsewhere
-    // in the editor survive (the full re-render used to wipe them).
-    function pcMarkSaved(row) {
+    // in the editor survive (the full re-render used to wipe them). Works from
+    // what was SENT: anything typed while the request was in flight stays on
+    // screen as an unsaved edit instead of being shown as saved.
+    function pcMarkSaved(row, sent) {
         const ipEl = row.querySelector('.pc-ip');
         const keyEl = row.querySelector('.pc-key');
-        const ip = (ipEl.value || '').trim();
-        const keySet = ip ? (keyEl.value !== '' || row.getAttribute('data-key-set') === '1') : false;
-        ipEl.value = ip;
+        const ip = sent.ip;
+        const keySet = ip ? (sent.key !== '' || row.getAttribute('data-key-set') === '1') : false;
         ipEl.setAttribute('data-initial', ip);
-        ipEl.classList.remove('border-warning');
-        keyEl.value = '';
+        if ((ipEl.value || '').trim() === ip) {
+            ipEl.value = ip;
+            ipEl.classList.remove('border-warning');
+        }
+        if (keyEl.value === sent.key) keyEl.value = '';
         keyEl.placeholder = keySet ? '•••••• blank keeps it' : 'API key';
         row.setAttribute('data-key-set', keySet ? '1' : '0');
         const badge = row.querySelector('.pc-key-badge');
@@ -475,7 +502,7 @@
         try {
             const res = await pcPut(row);
             if (res.ok) {
-                pcMarkSaved(row);
+                pcMarkSaved(row, res.sent);
                 if (statusEl) { statusEl.style.color = '#7CFC00'; statusEl.textContent = '✓ Saved'; }
                 if (window.showToast) window.showToast(`Connection saved for ${name}`, 'success', 4000);
                 pmAnnounceChange();
@@ -506,8 +533,9 @@
             const posRaw = row.querySelector('.pm-pos').value;
             if (!loc) {
                 // A fully-blank row is fine to skip; a row with a name/position
-                // but no LocationID is a mistake — don't silently drop it.
-                if (name || (posRaw !== '' && posRaw != null)) incomplete = true;
+                // but no LocationID is a mistake — don't silently drop it. A new
+                // row starts at position 0, so 0 counts as blank.
+                if (name || (posRaw !== '' && posRaw != null && posRaw !== '0')) incomplete = true;
                 continue;
             }
             const key = loc.toUpperCase();
@@ -525,22 +553,37 @@
             if (window.showToast) window.showToast(`Duplicate LocationID: ${dupe}`, 'error', 7000);
             return;
         }
+        // Hotfix 2026-09-29: an edited connection with a key but no IP can't be
+        // saved — say so before writing anything, so what was typed stays put.
+        const credRows = Array.from(host.querySelectorAll('.pc-row')).filter(pcIsDirty);
+        const keyNoIp = credRows.find((row) => !(row.querySelector('.pc-ip').value || '').trim()
+            && row.querySelector('.pc-key').value !== '');
+        if (keyNoIp) {
+            const who = keyNoIp.getAttribute('data-printer') || keyNoIp.getAttribute('data-location-id');
+            if (window.showToast) window.showToast(`Enter the IP address for ${who} too — an API key can't be saved without it.`, 'error', 8000);
+            return;
+        }
         if (btn) btn.disabled = true;
         if (statusEl) { statusEl.style.color = 'rgba(255,255,255,0.6)'; statusEl.textContent = 'Saving…'; }
         try {
             // Hotfix 2026-09-29: save any connection typed into the grid below
             // first. Its per-row Save was easy to miss, and the reload after this
             // save threw the typed IP + key away — how the INDX ended up on prod
-            // with no connection at all.
+            // with no connection at all. If one fails, stop before the toolhead
+            // save: its reload would wipe what the user typed.
             let credSaved = 0;
             const credFailures = [];
-            for (const row of Array.from(host.querySelectorAll('.pc-row')).filter(pcIsDirty)) {
+            for (const row of credRows) {
                 const res = await pcPut(row);
-                if (res.ok) { credSaved += 1; pcMarkSaved(row); }
+                if (res.ok) { credSaved += 1; pcMarkSaved(row, res.sent); }
                 else credFailures.push(`${row.getAttribute('data-printer') || row.getAttribute('data-location-id')}: ${res.msg}`);
             }
-            if (credFailures.length && window.showToast) {
-                window.showToast(`Connection not saved — ${credFailures.join('; ')}`, 'error', 8000);
+            if (credFailures.length) {
+                if (credSaved) pmAnnounceChange();
+                const msg = `Connection not saved — ${credFailures.join('; ')}. Toolheads not saved either; fix the connection and save again.`;
+                if (statusEl) { statusEl.style.color = '#ff6b6b'; statusEl.textContent = 'Not saved'; }
+                if (window.showToast) window.showToast(msg, 'error', 9000);
+                return;
             }
             const r = await fetch('/api/printer_map', {
                 method: 'PUT',
@@ -561,6 +604,7 @@
                 const msg = (d && d.error) ? d.error : 'Save failed';
                 if (statusEl) { statusEl.style.color = '#ff6b6b'; statusEl.textContent = msg; }
                 if (window.showToast) window.showToast(msg, 'error', 8000);  // long: block messages matter
+                if (credSaved) pmAnnounceChange();  // the connections above did save
             }
         } catch (e) {
             const msg = 'Save error: ' + (e && e.message ? e.message : e);

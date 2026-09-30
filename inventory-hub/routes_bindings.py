@@ -477,8 +477,11 @@ def api_put_printer_map():
         # Head row (spools can only be put on a real location), and a toolhead
         # the guard just cleared for removal loses its now-empty row.
         _locs, _created_heads = locations_db.ensure_toolhead_rows(_locs, canonical)
-        _removed_keys = ({str(k).strip().upper() for k in old_map}
-                         - {str(k).strip().upper() for k in canonical})
+        # "Removed" = what the re-sync actually took off the Printer rows, not
+        # old-minus-submitted: the re-sync is a no-op for an empty map, and
+        # dropping rows on that basis would orphan heads the printers still list.
+        _still_listed = set(locations_db.build_printer_map_from_rows(_locs))
+        _removed_keys = {str(k).strip().upper() for k in old_map} - _still_listed
         _locs, _dropped_heads = locations_db.remove_unused_toolhead_rows(_locs, _removed_keys)
         if not locations_db.save_locations_list(_locs):
             reason = "could not persist the printer rows"

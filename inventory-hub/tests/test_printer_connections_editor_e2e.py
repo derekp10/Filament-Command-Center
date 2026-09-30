@@ -36,6 +36,7 @@ class _FakePrinterApi:
 
     def __init__(self):
         self.calls = []   # (method, path, body) in arrival order
+        self.fail_creds = False
         self.rows = [
             {"location_id": "RCOI", "name": INDX, "ip_address": "", "api_key": "", "toolhead_count": 2},
             {"location_id": "XL", "name": "🦝 XL", "ip_address": "192.168.1.121",
@@ -70,6 +71,8 @@ class _FakePrinterApi:
     def printer_creds(self, route, request):
         body = request.post_data_json or {}
         self.calls.append(("PUT", "/api/printer_creds", body))
+        if self.fail_creds:
+            return self._reply(route, {"ok": False, "error": "could not persist printer connection"}, status=500)
         row = next((r for r in self.rows if r["location_id"] == body.get("location_id")), None)
         if row is None:
             return self._reply(route, {"ok": False, "error": "No Printer"}, status=404)
@@ -162,3 +165,102 @@ def test_new_toolhead_row_inherits_printer_name_and_next_position(page: Page, ba
     new_row.locator(".pm-loc").fill("RCOI-3")
     expect(new_row.locator(".pm-name")).to_have_value(INDX)
     expect(new_row.locator(".pm-pos")).to_have_value("2")
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial-review follow-ups (2026-09-29)                                    #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.usefixtures("require_server")
+def test_key_without_ip_is_refused_before_anything_is_written(page: Page, base_url: str,
+                                                             reset_dom_state_js: str):
+    api = _open_editor(page, base_url, reset_dom_state_js)
+    _conn(page, "RCOI", ".pc-key").fill("INDXKEY")
+    page.locator("#pm-save").click()
+    page.wait_for_timeout(500)
+    assert api.calls == []
+    expect(_conn(page, "RCOI", ".pc-key")).to_have_value("INDXKEY")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_failed_connection_save_stops_before_the_toolhead_save(page: Page, base_url: str,
+                                                              reset_dom_state_js: str):
+    # The toolhead save re-renders the editor; running it after a failed
+    # connection save would throw away what the user typed.
+    api = _open_editor(page, base_url, reset_dom_state_js)
+    api.fail_creds = True
+    _conn(page, "RCOI", ".pc-ip").fill("192.168.1.120")
+    _conn(page, "RCOI", ".pc-key").fill("INDXKEY")
+    page.locator("#pm-save").click()
+    expect(page.locator("#pm-status")).to_have_text("Not saved", timeout=10000)
+    assert [c[1] for c in api.calls] == ["/api/printer_creds"]
+    expect(_conn(page, "RCOI", ".pc-ip")).to_have_value("192.168.1.120")
+    expect(_conn(page, "RCOI", ".pc-key")).to_have_value("INDXKEY")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_untouched_new_toolhead_row_does_not_block_the_save(page: Page, base_url: str,
+                                                           reset_dom_state_js: str):
+    api = _open_editor(page, base_url, reset_dom_state_js)
+    page.locator("#pm-add").click()
+    _conn(page, "RCOI", ".pc-ip").fill("192.168.1.120")
+    page.locator("#pm-save").click()
+    page.wait_for_function(
+        f"""() => {{ const el = document.querySelector('{HOST} .pc-row[data-location-id="RCOI"] .pc-ip');
+                    return el && el.getAttribute('data-initial') === '192.168.1.120'; }}""",
+        timeout=10000)
+    assert [c[1] for c in api.calls] == ["/api/printer_creds", "/api/printer_map"]
+
+
+@pytest.mark.usefixtures("require_server")
+def test_typing_an_id_does_not_borrow_a_shorter_printer_prefix(page: Page, base_url: str,
+                                                              reset_dom_state_js: str):
+    # Typed one key at a time, "XL2-1" passes through "XL" — which must not hand
+    # the new row the XL's name and next position (a wrong position bills the
+    # wrong spool). A real prefix still fills in, with the tool number's position.
+    _open_editor(page, base_url, reset_dom_state_js)
+    page.locator("#pm-add").click()
+    new_row = page.locator(f"{HOST} .pm-row").last
+    new_row.locator(".pm-loc").press_sequentially("XL2-1")
+    expect(new_row.locator(".pm-name")).to_have_value("")
+    expect(new_row.locator(".pm-pos")).to_have_value("0")
+    new_row.locator(".pm-loc").fill("")
+    new_row.locator(".pm-loc").press_sequentially("RCOI-12")
+    expect(new_row.locator(".pm-name")).to_have_value(INDX)
+    expect(new_row.locator(".pm-pos")).to_have_value("11")
+
+
+_TEST_ROWS_JS = """() => {
+    const want = [
+        {LocationID: 'ZZP', Name: 'Test printer', Type: 'Printer', 'Max Spools': '0',
+         toolheads: [{location_id: 'ZZP-1', position: 0}]},
+        {LocationID: 'ZZP-1', Name: 'Test head 1', Type: 'Tool Head', 'Max Spools': '1', parent_id: 'ZZP'},
+        {LocationID: 'ZZP-9', Name: 'Unlisted head', Type: 'Tool Head', 'Max Spools': '1', parent_id: 'ZZP'},
+        {LocationID: 'ZZB', Name: 'Test box', Type: 'Dryer Box', 'Max Spools': '4'},
+    ];
+    for (const r of want) {
+        if (!state.allLocations.find((l) => l.LocationID === r.LocationID)) state.allLocations.push(r);
+    }
+}"""
+
+
+@pytest.mark.usefixtures("require_server")
+def test_location_manager_id_lock_matches_what_the_server_refuses(page: Page, base_url: str,
+                                                                 reset_dom_state_js: str):
+    # Client-side only (rows injected into state.allLocations, nothing saved):
+    # the ID is read-only for a printer that owns toolheads and for a toolhead
+    # on a printer's list — and editable for an unlisted head or anything else.
+    page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_function(
+        "() => typeof state === 'object' && Array.isArray(state.allLocations) && state.allLocations.length > 0",
+        timeout=10000)
+    for loc_id, locked in (("ZZP", True), ("ZZP-1", True), ("ZZP-9", False), ("ZZB", False)):
+        page.evaluate(_TEST_ROWS_JS)
+        page.evaluate(f"() => window.openEdit({loc_id!r})")
+        expect(page.locator("#locModal.show")).to_have_count(1)
+        assert page.evaluate("() => document.getElementById('edit-id').readOnly") is locked, loc_id
+        page.evaluate("() => window.closeEdit()")
+        expect(page.locator("#locModal.show")).to_have_count(0)
+        page.wait_for_function("() => !document.getElementById('edit-id').readOnly", timeout=5000)
