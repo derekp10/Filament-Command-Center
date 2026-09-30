@@ -244,23 +244,40 @@ _TEST_ROWS_JS = """() => {
 }"""
 
 
-@pytest.mark.usefixtures("require_server")
-def test_location_manager_id_lock_matches_what_the_server_refuses(page: Page, base_url: str,
-                                                                 reset_dom_state_js: str):
-    # Client-side only (rows injected into state.allLocations, nothing saved):
-    # the ID is read-only for a printer that owns toolheads and for a toolhead
-    # on a printer's list — and editable for an unlisted head or anything else.
+def _open_edit_and_read_id_lock(page: Page, base_url: str, reset_dom_state_js: str, loc_id: str) -> bool:
+    # Client-side only: rows injected into state.allLocations, nothing saved.
+    # A fresh page per case — chaining open/close would race Bootstrap 5.3's
+    # fade transitions (it ignores hide() mid fade-in and show() mid fade-out).
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
     page.evaluate(reset_dom_state_js)
     page.wait_for_function(
         "() => typeof state === 'object' && Array.isArray(state.allLocations) && state.allLocations.length > 0",
         timeout=10000)
-    for loc_id, locked in (("ZZP", True), ("ZZP-1", True), ("ZZP-9", False), ("ZZB", False)):
-        page.evaluate(_TEST_ROWS_JS)
-        page.evaluate(f"() => window.openEdit({loc_id!r})")
-        expect(page.locator("#locModal.show")).to_have_count(1)
-        assert page.evaluate("() => document.getElementById('edit-id').readOnly") is locked, loc_id
-        page.evaluate("() => window.closeEdit()")
-        expect(page.locator("#locModal.show")).to_have_count(0)
-        page.wait_for_function("() => !document.getElementById('edit-id').readOnly", timeout=5000)
+    page.evaluate(_TEST_ROWS_JS)
+    page.evaluate(f"() => window.openEdit({loc_id!r})")
+    expect(page.locator("#locModal.show")).to_have_count(1)
+    return page.evaluate("() => document.getElementById('edit-id').readOnly")
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("loc_id, locked", [
+    ("ZZP", True),      # a printer that owns toolheads
+    ("ZZP-1", True),    # a toolhead on a printer's list
+    ("ZZP-9", False),   # a toolhead no printer lists yet — still fixable
+    ("ZZB", False),     # anything else
+])
+def test_location_manager_id_lock_matches_what_the_server_refuses(page: Page, base_url: str,
+                                                                 reset_dom_state_js: str, loc_id, locked):
+    assert _open_edit_and_read_id_lock(page, base_url, reset_dom_state_js, loc_id) is locked
+
+
+@pytest.mark.usefixtures("require_server")
+def test_location_manager_id_lock_is_released_when_the_modal_closes(page: Page, base_url: str,
+                                                                   reset_dom_state_js: str):
+    # The edit modal is shared with Add: a locked ID must not outlive the edit.
+    assert _open_edit_and_read_id_lock(page, base_url, reset_dom_state_js, "ZZP") is True
+    page.wait_for_function("() => document.activeElement && document.activeElement.id === 'edit-name'",
+                           timeout=5000)  # fully shown — a hide() mid fade-in is ignored
+    page.evaluate("() => window.closeEdit()")
+    page.wait_for_function("() => !document.getElementById('edit-id').readOnly", timeout=5000)
