@@ -429,20 +429,7 @@ def test_deleting_a_dual_role_printer_keeps_the_existing_path(client):
 def test_loading_onto_a_multi_head_printer_row_does_not_eject_its_heads():
     # The resident lookup prefix-matches child ids, so treating the INDX's
     # Printer row as a single-occupancy slot ejected the spool on every head.
-    import logic
-    import prusalink_api
-    import spoolman_api
-    rows = _prod_like_rows()
-    incoming = {"id": 8, "location": "", "extra": {}}
-    with patch.object(locations_db, "load_locations_list", return_value=copy.deepcopy(rows)), \
-         patch.object(spoolman_api, "get_spools_at_location", return_value=[101, 102]), \
-         patch.object(spoolman_api, "get_spool", return_value=incoming), \
-         patch.object(spoolman_api, "update_spool", return_value=True), \
-         patch.object(spoolman_api, "format_spool_display", return_value={"text": "", "color": "000"}), \
-         patch.object(prusalink_api, "get_printer_state", return_value=None), \
-         patch.object(logic, "perform_smart_eject") as eject:
-        logic.perform_smart_move("RCOI", [8])
-    eject.assert_not_called()
+    _smart_load(_prod_like_rows(), "RCOI", {101: "RCOI-1", 102: "RCOI-5"}).assert_not_called()
 
 
 # --------------------------------------------------------------------------- #
@@ -742,13 +729,23 @@ def test_deleting_a_printer_by_a_lowercase_id_is_still_guarded(client):
 
 
 def _smart_load(rows, target, residents):
+    """Load incoming spool #8 onto `target` through the real perform_smart_move.
+    `residents` maps each spool the location lookup returns to where its own
+    record says it sits — dev's resident filter only ejects a spool that is
+    really on the target, so the records must be realistic."""
     import logic
     import prusalink_api
     import spoolman_api
-    incoming = {"id": 8, "location": "", "extra": {}}
+
+    def _spool(sid):
+        sid = int(sid)
+        if sid == 8:
+            return {"id": 8, "location": "", "extra": {}}
+        return {"id": sid, "location": residents.get(sid, ""), "extra": {}}
+
     with patch.object(locations_db, "load_locations_list", return_value=copy.deepcopy(rows)), \
-         patch.object(spoolman_api, "get_spools_at_location", return_value=residents), \
-         patch.object(spoolman_api, "get_spool", return_value=incoming), \
+         patch.object(spoolman_api, "get_spools_at_location", return_value=list(residents)), \
+         patch.object(spoolman_api, "get_spool", side_effect=_spool), \
          patch.object(spoolman_api, "update_spool", return_value=True), \
          patch.object(spoolman_api, "format_spool_display", return_value={"text": "", "color": "000"}), \
          patch.object(prusalink_api, "get_printer_state", return_value=None), \
@@ -760,7 +757,7 @@ def _smart_load(rows, target, residents):
 def test_loading_onto_a_one_slot_printer_not_yet_set_up_still_ejects_its_resident():
     rows = _prod_like_rows() + [{"LocationID": "MK4", "Name": "🦝 MK4", "Type": "Printer",
                                  "Max Spools": "1", "parent_id": None}]
-    _smart_load(rows, "MK4", [101]).assert_called_once_with(101)
+    _smart_load(rows, "MK4", {101: "MK4"}).assert_called_once_with(101)
 
 
 def test_stale_native_hide_is_skipped_when_the_spool_list_read_fails(client):
