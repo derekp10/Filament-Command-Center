@@ -8,6 +8,7 @@ Prod: Hosted on a TrueNAS server. Keep deployment, storage, and networking sugge
 ## Testing
 
 - **pytest + Playwright run on the host**, not inside the Docker image. Install once: `pip install -r requirements-dev.txt && playwright install chromium`. All E2E tests then hit `http://localhost:8000` of the running container.
+- **Node.js (`node` on PATH) is also a test prerequisite** (since 2026-09-13). `tests/test_core1_return_ejectall_js.py` runs the real frontend modules under node's `vm` module, with no browser and no container, so it runs under `--offline`. It is the only hermetic proof of the CORE1 Quick-Swap Return and CMD:EJECTALL guard fixes. Without node the module skips and raises a `PytestWarning` in the warnings summary. Set `FCC_REQUIRE_NODE=1` to make a missing node a collection error.
 - **⚠️ A plain `pytest tests/` run is NOT offline — it writes to real dev inventory.** This was mis-documented until 2026-08-03 and is worth internalising, because it silently shaped the whole verify cadence. The two opt-in flags guard **different services**:
   - `RUN_INTEGRATION=1` / `--run-integration` gates `@pytest.mark.integration` — tests that hit the real dev **Spoolman** on the NAS.
   - The `require_server` fixture gates tests that hit the local **FCC container** — and it skips *only when that container is DOWN*. So whenever the container is up, ~55 E2E files run on a plain `pytest`, drive a real browser, and mutate Derek's live dev data.

@@ -325,6 +325,27 @@ def _pm_prefix(k):
     return k.split('-', 1)[0] if '-' in k else k
 
 
+def _printer_row_toolheads(loc_list, loc_id):
+    """L271 — the toolhead LocationIDs a Printer row owns (its toolheads[]),
+    uppercased, in stored order; [] when `loc_id` is not a Printer row.
+
+    The row, not the spelling of its id, says which heads belong to a printer: a
+    toolhead id need not start with "<printer id>-" (a Core One+ row can own
+    CORE1-T1/CORE1-T2), and a head can share the printer's own id (CORE1)."""
+    want = str(loc_id or '').strip().upper()
+    for row in (loc_list or []):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        if str(row.get('LocationID', '')).strip().upper() != want:
+            continue
+        return [str(th.get('location_id', '')).strip().upper()
+                for th in (row.get('toolheads') or [])
+                if isinstance(th, dict) and str(th.get('location_id', '')).strip()]
+    return []
+
+
 def _natural_key(s):
     """29.B1 — natural/numeric sort key so "XL-2" orders before "XL-10"
     (lexicographic sort put "XL-10" first, which the 10+-toolhead indxx
@@ -608,9 +629,9 @@ def api_quickswap_return():
     and send it back to the first dryer-box slot bound to that toolhead.
 
     Accepts either a specific toolhead location ID (e.g. "XL-1") or a
-    virtual-printer prefix (e.g. "XL") — in the latter case we fan out
-    across every toolhead of that printer and return the first one that
-    has a spool loaded.
+    Printer row / virtual-printer prefix (e.g. "XL") — in the latter case we
+    fan out across every toolhead of that printer and return the first one
+    that has a spool loaded.
     """
     data = request.get_json(silent=True) or {}
     toolhead = str(data.get('toolhead', '')).strip().upper()
@@ -623,22 +644,35 @@ def api_quickswap_return():
 
     # 29.N1 — the vestigial `cfg = config_loader.load_config()` (unused
     # FilaBridge residue) was removed here; printer_map is the sole source.
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
+    # Read locations.json once and hand it to every consumer: the printer_map
+    # build (which would otherwise reload the file itself), the Printer-row
+    # lookup below, and the destination search in step 2.
+    loc_list = locations_db.load_locations_list()
+    printer_map = locations_db.get_active_printer_map(loc_list)  # L271 P4 step 2: Printer-row toolheads[]
 
-    # Build the list of toolhead IDs we should check. For a virtual
-    # printer prefix, this is every toolhead in printer_map that starts
-    # with "<prefix>-". For a specific toolhead, it's just that ID.
+    # Build the list of toolhead IDs we should check:
+    #   * a registered toolhead -> just that ID (the Core One's single head
+    #     shares its Printer row's id, CORE1, and lands here);
+    #   * a Printer row -> the toolheads[] on that row (L271: the row, not a
+    #     "<id>-" spelling, says which heads are its own);
+    #   * anything else -> the legacy "<prefix>-" fan-out, kept until L271
+    #     Phase 5 retires prefix matching.
+    # 29.B1 — natural sort (XL-2 before XL-10), not lexicographic. This order
+    # determines both the probe order and which loaded toolhead the return
+    # acts on when a printer fans out.
     pm_keys_up = {k.upper() for k in printer_map.keys()}
     candidate_toolheads = []
     if toolhead in pm_keys_up:
         candidate_toolheads = [toolhead]
     else:
-        prefix = toolhead + '-'
-        # 29.B1 — natural sort (XL-2 before XL-10), not lexicographic. This
-        # order determines both the probe order and which loaded toolhead the
-        # return acts on when a virtual-printer prefix fans out.
-        candidate_toolheads = sorted(
-            (k for k in pm_keys_up if k.startswith(prefix)), key=_natural_key)
+        row_heads = _printer_row_toolheads(loc_list, toolhead)
+        if row_heads:
+            candidate_toolheads = sorted(
+                {t for t in row_heads if t in pm_keys_up}, key=_natural_key)
+        else:
+            prefix = toolhead + '-'
+            candidate_toolheads = sorted(
+                (k for k in pm_keys_up if k.startswith(prefix)), key=_natural_key)
 
     if not candidate_toolheads:
         state.add_log_entry(
@@ -713,7 +747,6 @@ def api_quickswap_return():
     src_loc = str(extra.get('physical_source', '') or '').strip().strip('"').upper()
     src_slot = str(extra.get('physical_source_slot', '') or '').strip().strip('"')
 
-    loc_list = locations_db.load_locations_list()
     found_box, found_slot, found_source = None, None, None
 
     # Preferred path: physical_source points at a Dryer Box and that slot
