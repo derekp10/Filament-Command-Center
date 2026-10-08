@@ -8,31 +8,26 @@ as the rest of the suite (chromium-1600x1300).
 from __future__ import annotations
 
 import pytest
-import requests
 from playwright.sync_api import Page
 
 TEST_BOX = "PM-DB-1"
 
 
 @pytest.fixture
-def restore_bindings(api_base_url):
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+def box_at_baseline(borrow_box_bindings):
+    """PM-DB-1 at its fixed binding baseline for the capture, so the Feeds rows
+    can't bake in a binding some earlier run left behind; put back to that
+    baseline afterwards (conftest `borrow_box_bindings`)."""
+    borrow_box_bindings(TEST_BOX)
 
 
-@pytest.mark.usefixtures("require_server", "restore_bindings")
+@pytest.mark.usefixtures("require_server", "box_at_baseline")
 def test_visual_feeds_section_collapsed(page: Page, open_manage_modal, snapshot):
     open_manage_modal(TEST_BOX)
     snapshot(page.locator("#manage-feeds-section"), "feeds-section-collapsed")
 
 
-@pytest.mark.usefixtures("require_server", "restore_bindings")
+@pytest.mark.usefixtures("require_server", "box_at_baseline")
 def test_visual_feeds_section_expanded(page: Page, open_manage_modal, snapshot):
     open_manage_modal(TEST_BOX)
     page.locator("#feeds-toggle-btn").click()

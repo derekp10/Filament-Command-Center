@@ -9,7 +9,6 @@ reference, and the grid is hidden for non-toolhead locations.
 from __future__ import annotations
 
 import pytest
-import requests
 from playwright.sync_api import Page, expect
 
 TEST_BOX = "PM-DB-1"
@@ -19,21 +18,10 @@ NON_TOOLHEAD_LOC = DRYER_BOX_LOC  # Dryer Box isn't a toolhead
 
 
 @pytest.fixture
-def bound_slot(api_base_url):
-    """Ensure PM-DB-1 slot 1 is bound to XL-1 for the duration of the test."""
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": {"1": TEST_TOOLHEAD}},
-        timeout=5,
-    )
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+def bound_slot(borrow_box_bindings):
+    """Ensure PM-DB-1 slot 1 is bound to XL-1 for the duration of the test,
+    from and back to PM-DB-1's fixed baseline (conftest `borrow_box_bindings`)."""
+    borrow_box_bindings(TEST_BOX, {"1": TEST_TOOLHEAD})
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")

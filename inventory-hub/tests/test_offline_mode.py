@@ -41,7 +41,7 @@ class TestContainerFixtureCoverage:
     def test_data_mutating_fixtures_are_covered(self):
         """These write to real dev inventory; offline must never select them."""
         for name in ("clean_buffer", "with_held_spool", "seed_dryer_box",
-                     "seed_via_ui", "scan"):
+                     "seed_via_ui", "scan", "borrow_box_bindings"):
             assert name in conftest.CONTAINER_FIXTURES, (
                 f"{name} mutates dev data but is not gated by --offline"
             )
@@ -158,6 +158,170 @@ class TestCollectionHookItself:
             item = self._Item(f"t_{name}", [name])
             self._run(monkeypatch, True, [item])
             assert item.skipped, f"{name} is in CONTAINER_FIXTURES but did not skip"
+
+    def test_offline_keeps_an_isolated_browser_test(self, monkeypatch):
+        """A hermetic browser test (the contrast-guard compositing proof) takes
+        `isolated_page` and must still RUN offline — that is its whole point."""
+        item = self._Item("t_isolated", ["isolated_page", "_isolated_chromium", "playwright",
+                                         "assert_contrast", "request"])
+        self._run(monkeypatch, True, [item])
+        assert not item.skipped
+
+
+class _LocalListener:
+    """A TCP listener on 127.0.0.1 with a random port. Records the first line of
+    every connection that arrives, then hangs up, so a WebSocket handshake fails
+    fast instead of waiting out a timeout."""
+
+    def __enter__(self):
+        import socket
+        import threading
+
+        self._sock = socket.socket()
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(8)
+        self._sock.settimeout(0.1)
+        self.base = f"127.0.0.1:{self._sock.getsockname()[1]}"
+        self.arrived = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+        return self
+
+    def _serve(self):
+        import socket
+
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            with conn:
+                conn.settimeout(1.0)
+                try:
+                    first = conn.recv(256).split(b"\r\n", 1)[0]
+                except OSError:
+                    first = b""
+            self.arrived.append(first.decode("latin-1") or "<connected, sent nothing>")
+
+    def connections_after_settling(self, settle=0.3):
+        import time
+
+        time.sleep(settle)  # let a late connection land before anyone says "none"
+        return list(self.arrived)
+
+    def __exit__(self, *exc_info):
+        self._stop.set()
+        self._thread.join(2)
+        self._sock.close()
+
+
+def _in_worker(body):
+    """A page-side probe that runs `body` inside a dedicated (blob) worker."""
+    return (
+        "(base) => new Promise((done) => {"
+        " const src = `" + body + "`;"
+        " const worker = new Worker(URL.createObjectURL(new Blob([src], {type: 'text/javascript'})));"
+        " worker.onmessage = (m) => done(m.data);"
+        " worker.onerror = (e) => done('worker did not start: ' + e.message);"
+        " setTimeout(() => done('timeout'), 5000); })"
+    )
+
+
+# Each probe takes the listener's host:port and resolves 'reached' if the
+# connection opened (or the fetch got an answer) and 'blocked' if it failed.
+_ESCAPE_PROBES = {
+    "page-fetch": (
+        "(base) => fetch(`http://${base}/api/locations`, {mode: 'no-cors'})"
+        ".then(() => 'reached', () => 'blocked')"),
+    "page-websocket": (
+        "(base) => new Promise((done) => {"
+        " const ws = new WebSocket(`ws://${base}/api/ws`);"
+        " ws.onopen = () => done('reached');"
+        " ws.onerror = ws.onclose = () => done('blocked');"
+        " setTimeout(() => done('timeout'), 5000); })"),
+    "frame-websocket": (
+        "(base) => new Promise((done) => {"
+        " addEventListener('message', (m) => done(m.data), {once: true});"
+        " const frame = document.createElement('iframe');"
+        " frame.srcdoc = `<script>const ws = new WebSocket('ws://${base}/api/ws');"
+        " ws.onopen = () => parent.postMessage('reached', '*');"
+        " ws.onerror = ws.onclose = () => parent.postMessage('blocked', '*');</script>`;"
+        " document.body.appendChild(frame);"
+        " setTimeout(() => done('timeout'), 5000); })"),
+    "worker-fetch": _in_worker(
+        "fetch('http://${base}/api/locations', {mode: 'no-cors'})"
+        ".then(() => postMessage('reached'), () => postMessage('blocked'));"),
+    "worker-websocket": _in_worker(
+        "const ws = new WebSocket('ws://${base}/api/ws');"
+        " ws.onopen = () => postMessage('reached');"
+        " ws.onerror = ws.onclose = () => postMessage('blocked');"),
+}
+
+
+def _probe_every_channel(page):
+    """{channel: (what the page saw, connections that reached a fresh listener)}.
+    Navigation goes last: a failed goto leaves the page on an error page."""
+    from playwright.sync_api import Error as PlaywrightError
+
+    results = {}
+    for channel, probe in _ESCAPE_PROBES.items():
+        with _LocalListener() as listener:
+            page.set_content("<p>isolated</p>")
+            outcome = page.evaluate(probe, listener.base)
+            results[channel] = (outcome, listener.connections_after_settling())
+    with _LocalListener() as listener:
+        try:
+            page.goto(f"http://{listener.base}/api/locations", timeout=10000)
+            outcome = "reached"
+        except PlaywrightError as exc:
+            outcome = str(exc).splitlines()[0]
+        results["navigation"] = (outcome, listener.connections_after_settling())
+    return results
+
+
+def _assert_nothing_escaped(results):
+    leaked = {channel: arrived for channel, (_, arrived) in results.items() if arrived}
+    assert leaked == {}, f"these channels reached a local listener: {leaked}"
+    unblocked = {channel: outcome for channel, (outcome, _) in results.items()
+                 if channel != "navigation" and outcome != "blocked"}
+    assert unblocked == {}, f"these probes did not fail cleanly: {unblocked}"
+    assert results["navigation"][0] != "reached", results["navigation"]
+
+
+class TestIsolatedBrowser:
+    """2026-09-13 — a browser may run under --offline, but only one that cannot
+    reach anything. The socket guard below only sees Python sockets, not the
+    browser process, so the isolation has to live in the browser.
+
+    Every probe aims at a Python listener on 127.0.0.1 with a random port: a
+    real, reachable target that WOULD accept the connection if the isolation
+    leaked, so a pass cannot come from a hostname that merely fails to resolve
+    (which is all the old `.invalid` fetch check proved). Never the container.
+    """
+
+    def test_isolated_browser_fixtures_are_not_gated(self):
+        for name in ("isolated_page", "_isolated_chromium", "playwright", "assert_contrast"):
+            assert name not in conftest.CONTAINER_FIXTURES, name
+
+    def test_isolated_page_reaches_nothing_on_any_channel(self, isolated_page):
+        """Review 2026-09-13: the context route saw HTTP only, so a WebSocket
+        from the page, a frame or a worker reached the listener. The route still
+        answers HTTP first, which is what the ERR_FAILED on navigation shows."""
+        results = _probe_every_channel(isolated_page)
+        _assert_nothing_escaped(results)
+        assert "net::ERR_FAILED" in results["navigation"][0], results["navigation"]
+
+    def test_the_isolated_browser_blocks_every_channel_even_without_routes(self, _isolated_chromium):
+        """The dead proxy is the layer that stops WebSockets. Prove it holds on
+        its own, so losing the context route could not open a hole either."""
+        context = _isolated_chromium.new_context()
+        try:
+            _assert_nothing_escaped(_probe_every_channel(context.new_page()))
+        finally:
+            context.close()
 
 
 class TestOfflineSocketGuard:
