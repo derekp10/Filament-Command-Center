@@ -97,7 +97,12 @@ window.updateManageTitle = (loc, itemArray = null) => {
     // `state` is a script-scope let in inv_core.js, not a window property — the
     // same reason generateSafeQR must be called by bare name (Derek 2026-05-16).
     const bulkArmed = !!(typeof state !== 'undefined' && state.bulkMoveActive);
-    const moveAllBtn = SINGLE_OCC.includes(t) ? '' : (bulkArmed ? `
+    // Feature gate (2026-10-08): Bulk Moves ships OFF and prod stays dark until
+    // it has had a hands-on pass. An ARMED session still shows its reopen
+    // button even when the flag is off, so a session armed before the flag was
+    // turned off can still be found and cancelled rather than stranded.
+    const bulkEnabled = (window.FCC_BULK_MOVE_ENABLED !== false);
+    const moveAllBtn = (SINGLE_OCC.includes(t) || (!bulkEnabled && !bulkArmed)) ? '' : (bulkArmed ? `
         <button class="btn btn-sm btn-info ms-auto" style="white-space:nowrap;"
                 title="A bulk move is already armed — reopen its preview panel"
                 onclick="window.openBulkMovePanel && window.openBulkMovePanel({ user: true })">
@@ -1627,6 +1632,15 @@ window.manualAddSpool = () => {
 // moves here — this only arms, so no promptSafety gate (unlike triggerEjectAll,
 // which mutates immediately); the destructive step is the panel's Commit.
 window.triggerBulkMove = (loc, replace = false) => {
+    // Defence in depth behind the render gate above: a stale tab rendered
+    // before the flag was turned off still has a live button. The backend
+    // refuses independently, so this is purely to give a clear message
+    // instead of a 403 toast.
+    if (window.FCC_BULK_MOVE_ENABLED === false) {
+        showToast('Bulk Moves is turned off. Enable it in ⚙️ Settings → Behavior.',
+                  'warning', 7000);
+        return;
+    }
     if (!loc) { showToast("No location selected", "warning"); return; }
     setProcessing(true);
     window.fetchT('/api/bulk_move_session', {

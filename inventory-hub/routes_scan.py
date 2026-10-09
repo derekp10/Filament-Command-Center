@@ -27,6 +27,7 @@ from flask import request, jsonify  # type: ignore
 import time
 
 import state  # type: ignore
+import config_loader  # type: ignore
 import locations_db  # type: ignore
 import spoolman_api  # type: ignore
 import logic  # type: ignore
@@ -402,6 +403,22 @@ def api_bulk_move():
     return jsonify(logic.execute_bulk_move(plan, confirm_active_print=confirm_active_print))
 
 
+def _bulk_moves_enabled():
+    """Is the Bulk Moves feature turned on for THIS install?
+
+    Reads `fcc.bulkMove.enabled` from the active config.json, which is per-install
+    and git-ignored — so dev can run it ON while prod stays dark off the schema
+    default of False. Fails CLOSED: an unreadable config means off, because the
+    feature is destructive and multi-spool, and a missing key on prod is exactly
+    the state that must stay dark.
+    """
+    try:
+        cfg = config_loader.load_config() or {}
+    except Exception:
+        return False
+    return bool(cfg.get('fcc.bulkMove.enabled', False))
+
+
 @app.route('/api/bulk_move_session', methods=['POST'])
 def api_bulk_move_session_action():
     """L298 Phase 2 — mouse/keyboard control of the scan-driven bulk-move
@@ -415,8 +432,19 @@ def api_bulk_move_session_action():
                 stored preview).
       cancel  — clear the session; nothing moved.
     """
+    # Feature gate (2026-10-08). Bulk Moves ships OFF so prod stays dark until
+    # Derek has given it a hands-on pass; dev runs it ON via its own
+    # config.json. Enforced HERE and not only in the UI, so a stale tab, a
+    # queued scan or a direct POST can't drive a bulk move on an install where
+    # the feature is off. 'cancel' is always allowed: if the flag is turned off
+    # while a session is armed, the user must still be able to clear it.
     data = request.json or {}
     action = str(data.get('action', '') or '').strip().lower()
+    if not _bulk_moves_enabled() and action != 'cancel':
+        return jsonify({
+            "success": False,
+            "msg": "Bulk Moves is turned off. Enable it in ⚙️ Settings → Behavior.",
+        }), 403
     confirm_active_print = bool(data.get('confirm_active_print', False))
 
     if action == 'start':

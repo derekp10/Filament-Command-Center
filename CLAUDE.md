@@ -172,3 +172,13 @@ Tasks from `Feature-Buglist.md` are organized into batched working groups for ef
 - **Index:** `docs/agent_docs/working-groups.md` — status table, recommended order, usage instructions.
 - **Task files:** `docs/agent_docs/tasks/01-*.md` through `11-*.md` — self-contained specs per group.
 - **Commands:** `/project:work-group <N>` to start a group, `/project:finish-group` to wrap up, `/project:refresh-groups` to re-analyze the buglist after adding new items.
+
+### ⏸️ The PENDING DEREK section — always surface it
+
+`Feature-Buglist.md` opens with a **`## ⏸️ PENDING DEREK`** section: work that is blocked only on Derek doing something by hand (a hands-on test pass, capturing an artefact, a cleanup decision), never on code. It was carved out on 2026-10-08 so manual testing could stop gating releases — ~100 commits of fixes, several of them data-loss fixes, had been held behind one feature Derek didn't want to test.
+
+**Whenever you read `Feature-Buglist.md` for pending work, what to do next, or what's outstanding, list these items too** — even when the question was about something else. Derek's standing ask (2026-10-08): *"I'd still like to have them come up anytime I have you look at the Feature-Buglist.md for any pending work or what not. I'll eventually get around to doing it. Just don't know when."* `grep "PENDING DEREK" Feature-Buglist.md` finds them.
+
+Two rules that keep the carve-out honest:
+- **Nothing in that section may block a release.** If something there turns out to gate shipping, that is a bug in the plan — decouple it (a feature flag is the established move; see `fcc.bulkMove.enabled`) rather than re-blocking the release on Derek.
+- **Don't nag.** Surface them as a short list with current state, not a to-do lecture. He knows; he'll get to it.

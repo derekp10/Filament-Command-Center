@@ -94,6 +94,17 @@ CONFIG_SCHEMA = [
           section="client", scope="client",
           choices=["gross", "net", "additive", "set_used"],
           help="Which input mode the weight-entry overlay opens in."),
+    Field("fcc.bulkMove.enabled", "Enable Bulk Moves", "bool", False,
+          section="behavior", scope="server",
+          help="Show the 🔀 Bulk Move affordances and accept bulk-move scans. "
+               "Bulk Moves (L298) is built and covered by the automated suite but "
+               "has not had a hands-on pass yet, so it ships OFF and stays dark "
+               "until you turn it on. Turning it off mid-session also refuses the "
+               "API, so an armed session can't be driven from a stale tab. Server "
+               "scope deliberately: this lives in each install's own config.json, "
+               "so dev can run it ON while prod stays dark, and it is NOT a "
+               "browser preference that a cleared localStorage could silently "
+               "flip on."),
 ]
 
 # Derived lookups

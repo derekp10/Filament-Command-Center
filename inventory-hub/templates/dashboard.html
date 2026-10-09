@@ -241,6 +241,10 @@
         // Inject the Spoolman URL from Python
         const SPOOLMAN_URL = "{{ spoolman_url }}";
         const BUY_MORE_URL_TEMPLATE = "{{ buy_more_template }}";
+        // Feature gate: Bulk Moves (L298) ships OFF; each install turns it on
+        // in its own config.json. The backend refuses the API independently,
+        // so this only decides whether the affordances render.
+        window.FCC_BULK_MOVE_ENABLED = {{ 'true' if bulk_move_enabled else 'false' }};
 
         // [Code Guardian] Request Screen Wake Lock on Load
         document.addEventListener('DOMContentLoaded', () => {
