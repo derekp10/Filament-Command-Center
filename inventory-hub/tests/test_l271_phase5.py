@@ -448,8 +448,11 @@ def test_savelocation_sends_parent_contract():
     js = _read("static", "js", "modules", "inv_loc_mgr.js")
     assert "_populateParentSelect" in js and "_LOC_PARENT_NONE" in js
     assert "new_data.parent_id = null" in js, "Top level must send explicit null"
-    # openAddModal must reset the Type select to a default (the old non-reset bug)
-    assert "_populateTypeSelect('Storage')" in js
+    # openAddModal must reset the Type select to a default (the old non-reset bug).
+    # Group-34: openAddModal now delegates to _openLocModalForCreate, which calls
+    # _populateTypeSelect(type) with the passed default; global Add passes 'Storage'.
+    assert "_populateTypeSelect(type)" in js
+    assert "type: 'Storage'" in js, "global Add must default the Type to Storage"
 
 
 def test_wall_shelf_row_section_badges_and_exclusion():

@@ -1,9 +1,56 @@
 import os
 import json
 import csv
+import contextlib
 import shutil
 import tempfile
+import threading
 import state  # type: ignore
+
+# ---------------------------------------------------------------------------
+# Write serialization
+# ---------------------------------------------------------------------------
+#
+# EVERY mutator of locations.json is a whole-file READ-MODIFY-WRITE:
+#
+#     loc_list = load_locations_list()   →   mutate   →   save_locations_list(loc_list)
+#
+# There was no lock anywhere in this module, and Flask runs threaded
+# (app.py: `app.run(...)`, whose default is threaded=True). Two overlapping
+# writers therefore LOSE UPDATES: the second one's save carries a `loc_list`
+# snapshot taken before the first one's write, so it silently reverts it — and
+# both callers get a success response.
+#
+# That is not theoretical. It was the Group 38.6a flake: one "Save Feeds" click
+# fired the slot_order PUT and the bindings PUT in the same tick, and
+# `set_dryer_box_slot_order` copies the ENTIRE `extra` dict (slot_targets
+# included), so whichever landed second reverted the other — while the UI
+# displayed "✅ Saved". The captured traceback is `assert 'XL-1' == 'XL-2'`.
+# Sequencing those two PUTs removed that particular trigger; this lock removes
+# the race, which two browser tabs or a pulse-driven write could still hit.
+#
+# Scope + rules:
+#   - READERS ARE NOT LOCKED. `save_locations_list` publishes via `os.replace`,
+#     which is atomic, so a reader never observes a torn file. Locking reads
+#     would serialize the dashboard pulse for no benefit.
+#   - Hold it around the WHOLE load→mutate→save cycle. Locking `load` and
+#     `save` individually is useless — the interleave happens BETWEEN them.
+#   - ⚠️ Do NOT hold it across network I/O. The Spoolman cascade in a location
+#     delete is N NAS round-trips; run that OUTSIDE the lock and then re-read
+#     inside it. `api_delete_location` is the worked example.
+#   - Re-entrant (RLock) so a locked mutator may call another one.
+#   - Boot-time callers (startup_migrations, print_monitor's creds seed) run at
+#     import, before the server accepts a request, so they are deliberately not
+#     wrapped.
+
+_WRITE_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def locations_write_lock():
+    """Serialize one whole load→mutate→save cycle against locations.json."""
+    with _WRITE_LOCK:
+        yield
 
 # Runtime state lives under `data/` so a broad .gitignore rule keeps it
 # out of source control. See data/README.md for the rationale — in short:
@@ -235,6 +282,106 @@ def _verify_locations_file(expected_list):
         return False, f"{e!r} — file prefix: {snippet!r}"
 
 
+def _read_prior_locations_raw():
+    """Raw on-disk locations list WITHOUT load_locations_list's migration hooks
+    — used by the write-time orphan guard to diff an incoming save against the
+    current file. Returns [] on any read/parse problem.
+
+    An empty prior makes the guard fall back to "grandfather nothing": every
+    NORMAL save (one that doesn't itself introduce a genuine orphan) still
+    proceeds untouched, so it's fail-open for the common case. The only save it
+    could then block is one whose new_list ITSELF carries a genuine orphan —
+    which is exactly the guard's intended target — so a lost prior never blocks
+    a legitimate save, it just loses the ability to grandfather a pre-existing
+    orphan. (A truly corrupt file is caught earlier by load_locations_list,
+    which raises before any save is attempted.)"""
+    try:
+        if not os.path.exists(JSON_FILE):
+            return []
+        with open(JSON_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _canonical_parent_id(row):
+    """The stored parent_id for a row, canonicalized to None or an uppercased
+    id — mirrors how every write path persists it. A row with no `parent_id`
+    key resolves via the first-segment fallback (matches resolve_parent) so the
+    prior-vs-new diff in _find_new_orphans compares like against like."""
+    if not isinstance(row, dict):
+        return None
+    if 'parent_id' in row:
+        pid = row.get('parent_id')
+        if pid in (None, ''):
+            return None
+        s = str(pid).strip()
+        return s.upper() if s else None
+    return location_prefix(row.get('LocationID'))
+
+
+def _find_new_orphans(new_list, prior_list):
+    """Rows in `new_list` carrying an EXPLICIT parent_id that is a
+    NEWLY-INTRODUCED orphan: the parent references no row in new_list, is not a
+    PSEUDO_ROOM_PREFIXES member, and is not the row's own first segment — AND
+    the row is new or its parent_id changed vs `prior_list`. Returns a list of
+    (LocationID, parent_id) tuples (empty = clean).
+
+    The "own first segment is always acceptable" clause is the migration-safety
+    keystone: it lets Phase-1A's `XL-1 → parent XL` (and every other boot
+    migration mid-state) persist even before the XL row exists, while still
+    catching a UI-created deep row whose explicit parent points at a genuinely
+    bogus id. Rows with no `parent_id` key (the Auto-derive path) are always
+    safe and skipped. The strong per-edit validation lives at the API layer
+    (api_save_location → 400); this is the store-level backstop.
+
+    NOTE (Derek 2026-07-08): the one real-world trigger is creating a child
+    under a brand-new parent id that hasn't been created yet — that is correctly
+    refused here. The check is intentionally lenient elsewhere (an own-prefix
+    orphan floats to root harmlessly at render time) so it can never brick the
+    boot-migration convergence chain.
+    """
+    if not isinstance(new_list, list):
+        return []
+    existing_ids = {
+        str(r.get('LocationID', '')).strip().upper()
+        for r in new_list
+        if isinstance(r, dict) and str(r.get('LocationID', '')).strip()
+    }
+    prior = {}
+    for r in (prior_list or []):
+        if not isinstance(r, dict):
+            continue
+        lid = str(r.get('LocationID', '')).strip().upper()
+        if lid:
+            prior[lid] = _canonical_parent_id(r)
+    orphans = []
+    for r in new_list:
+        if not isinstance(r, dict) or 'parent_id' not in r:
+            continue  # Auto-derive path (no explicit parent_id) is always safe.
+        lid = str(r.get('LocationID', '')).strip().upper()
+        if not lid:
+            continue  # a blank-LocationID row is malformed elsewhere; don't guess.
+        pid = r.get('parent_id')
+        # Canonicalize via the SAME helper the prior map uses so the diff compares
+        # like against like — incl. whitespace-only parent_id → None (a hand-edited
+        # '  ' must read as top-level, not as an '' orphan that false-rejects the save).
+        pid_norm = _canonical_parent_id(r)
+        if pid_norm is None:
+            continue  # explicit top-level
+        if pid_norm in PSEUDO_ROOM_PREFIXES:
+            continue  # virtual room (PM/PJ/TST) — no real row by design
+        if pid_norm in existing_ids:
+            continue  # references a real row
+        if pid_norm == location_prefix(lid):
+            continue  # own first segment — legacy flat default, migration-safe
+        # A genuine orphan — flag only if newly introduced (new row OR parent changed).
+        if lid not in prior or prior.get(lid) != pid_norm:
+            orphans.append((r.get('LocationID'), pid))
+    return orphans
+
+
 def save_locations_list(new_list):
     """Saves location configurations to the JSON file via atomic write
     with a verify-after-write tripwire.
@@ -254,6 +401,27 @@ def save_locations_list(new_list):
     # instead of claiming success after a silent save failure.
     if not new_list:
         return False
+
+    # Group-34 Phase 0 — write-time orphan guard. Refuse to persist a row that
+    # was NEWLY given an explicit parent_id pointing at no real row (and not a
+    # pseudo-room prefix, and not the row's own first segment). Diffed against
+    # the prior on-disk file so pre-existing orphans + every boot-migration
+    # mid-state are grandfathered. Fail-OPEN on an internal validation error;
+    # only a positively-detected new orphan blocks. See _find_new_orphans.
+    try:
+        _orphans = _find_new_orphans(new_list, _read_prior_locations_raw())
+    except Exception as _orphan_err:
+        state.logger.warning(f"parent_id write-validation skipped (internal error): {_orphan_err}")
+        _orphans = []
+    if _orphans:
+        _detail = ", ".join(f"{lid!r}→parent {pid!r}" for lid, pid in _orphans[:10])
+        state.logger.critical(
+            f"🚫 locations.json save REFUSED — {len(_orphans)} row(s) would be newly "
+            f"orphaned (parent_id points at no existing row / pseudo-room / first "
+            f"segment): {_detail}. No changes written."
+        )
+        return False
+
     try:
         _write_locations_atomic(new_list)
     except Exception as e:
@@ -305,13 +473,34 @@ def _find_location(loc_list, loc_id):
     return None, None
 
 
-def _bindings_from_row(row):
-    """Extract slot_targets dict from a location row's extra field (safe)."""
-    extra = row.get('extra') or {}
+def bindings_from_row(row):
+    """Extract the slot_targets dict from a location row's `extra` (safe).
+
+    THE canonical reader — `logic._slot_targets_for` delegates here rather than
+    re-implementing it (they had drifted: this one normalized values, that one
+    didn't, and only that one guarded a non-dict `extra`).
+
+    Defensive at BOTH levels, because `locations.json` is not guaranteed to hold
+    well-formed rows: it is hand-editable, an agent may edit it on request, and a
+    writer bug could emit the wrong shape. `row.get('extra') or {}` alone is not
+    enough — if `extra` is a STRING (or any non-dict), `.get` raises
+    AttributeError and takes down every caller, including the /api/locations
+    synthesizer that renders the whole Location Manager.
+    """
+    if not isinstance(row, dict):
+        return {}
+    extra = row.get('extra')
+    if not isinstance(extra, dict):
+        return {}
     targets = extra.get('slot_targets')
     if isinstance(targets, dict):
         return {str(k): (None if v in (None, '') else str(v)) for k, v in targets.items()}
     return {}
+
+
+# Back-compat alias: the helper was private until 2026-08-03, when logic.py
+# needed it too. Kept so any straggling internal reference keeps working.
+_bindings_from_row = bindings_from_row
 
 
 def migrate_feeder_map_if_needed(loc_list, feeder_map):
@@ -331,12 +520,17 @@ def migrate_feeder_map_if_needed(loc_list, feeder_map):
         loc_id = str(row.get('LocationID', '')).strip()
         if not loc_id or loc_id not in feeder_map:
             continue
-        if _bindings_from_row(row):
+        if bindings_from_row(row):
             continue  # already migrated / user-edited; don't clobber
         target = feeder_map[loc_id]
         if not target:
             continue
-        extra = dict(row.get('extra') or {})
+        # Same malformed-row hazard as bindings_from_row, one line later and
+        # with a DIFFERENT exception: `dict("some string")` raises ValueError,
+        # not AttributeError, so guarding only the reader above isn't enough.
+        # A non-dict extra carries no siblings worth preserving, so drop it.
+        _existing_extra = row.get('extra')
+        extra = dict(_existing_extra) if isinstance(_existing_extra, dict) else {}
         extra['slot_targets'] = {"1": str(target)}
         row['extra'] = extra
         state.logger.info(
@@ -346,13 +540,22 @@ def migrate_feeder_map_if_needed(loc_list, feeder_map):
     return loc_list, changed
 
 
-def derive_parent_id_from_prefix(loc_id):
-    """Compute the legacy prefix-based parent for a LocationID.
+def location_prefix(loc_id):
+    """Return the first '-'-delimited segment of a LocationID, uppercased —
+    or None if the id is not a string or has no '-'.
 
-    Returns the uppercased substring before the first '-', or None if the
-    LocationID has no '-' (top-level rows like rooms have no parent). Used
-    by the Phase-1A migration and by resolve_parent() as a fallback when a
-    row has no explicit parent_id yet.
+    Group-34 Phase 0: the sanctioned FIRST-SEGMENT helper. This is a pure
+    STRING operation on the id itself — deliberately NOT a `parent_id` tree
+    walk. It stays load-bearing for ROWLESS ids that have no `parent_id` to
+    trust: the flat spool-location matchers (spoolman_api), the /api/locations
+    synthesizer's virtual-row parent stamp, the boot-migration idempotency
+    guards, `immediate_parent_for`'s Auto fallback, and the room-resolution
+    fallback in `_parent_of`. Keeping it FLAT is a locked safety contract — a
+    room-level clear must reach cart-rows but NOT a nested printer's live
+    toolhead (see `_build_location_match`).
+
+    MUST return None on a no-dash id (the synthesizer stamp depends on it — a
+    dash-free Spoolman-native location must not self-parent).
     """
     if not isinstance(loc_id, str):
         return None
@@ -362,11 +565,18 @@ def derive_parent_id_from_prefix(loc_id):
     return s.split('-', 1)[0].upper()
 
 
+# Group-34 Phase-5: the historical prefix-deriver name (which conflated
+# first-segment string-matching — now location_prefix() — with hierarchy
+# derivation, the footgun this cluster removed) is RETIRED. Every caller reads
+# location_prefix(); the retirement is pinned by test_prefix_derivation_is_retired
+# (which greps every backend module for the retired name + inline prefix shortcuts).
+
+
 def resolve_parent(row_or_id, loc_list=None):
     """Return the parent LocationID for a row dict or a LocationID string.
 
     Prefers an explicit `parent_id` on the row when present (Phase-1A and
-    later schema). Falls back to derive_parent_id_from_prefix() for rows
+    later schema). Falls back to location_prefix() for rows
     that haven't been migrated yet — keeps callers safe during the gradual
     consumer-migration phases. `loc_list` is accepted for forward-compat
     (Phase 3 will validate the FK against it) and ignored in Phase 1A.
@@ -378,8 +588,8 @@ def resolve_parent(row_or_id, loc_list=None):
                 return None
             s = str(explicit).strip()
             return s.upper() if s else None
-        return derive_parent_id_from_prefix(row_or_id.get('LocationID'))
-    return derive_parent_id_from_prefix(row_or_id)
+        return location_prefix(row_or_id.get('LocationID'))
+    return location_prefix(row_or_id)
 
 
 # Prefixes that are NOT real rooms — the prefix-derivation can produce them, but
@@ -424,7 +634,7 @@ def _parent_of(loc_upper, parent_map, strict=False):
         return parent_map[loc_upper]
     if strict:
         return None
-    return derive_parent_id_from_prefix(loc_upper)
+    return location_prefix(loc_upper)
 
 
 def is_descendant(child, ancestor, parent_map=None, loc_list=None, strict=False):
@@ -526,7 +736,7 @@ def migrate_parent_ids_if_needed(loc_list):
         if 'parent_id' in row:
             continue  # already migrated; respect operator-set value
         loc_id = row.get('LocationID')
-        parent = derive_parent_id_from_prefix(loc_id)
+        parent = location_prefix(loc_id)
         row['parent_id'] = parent  # may be None for top-level rows
         state.logger.info(
             f"🔄 Backfilled parent_id: {loc_id} → {parent!r}"
@@ -1185,7 +1395,7 @@ def immediate_parent_for(loc_id, loc_list=None):
         for r in loc_list
         if isinstance(r, dict) and str(r.get('LocationID', '')).strip()
     }
-    return _immediate_parent_from_rows(loc_id, existing_upper) or derive_parent_id_from_prefix(loc_id)
+    return _immediate_parent_from_rows(loc_id, existing_upper) or location_prefix(loc_id)
 
 
 def _derive_printer_room(printer_row, loc_list, room_by_name):
@@ -1229,7 +1439,7 @@ def migrate_immediate_parent_ids_if_needed(loc_list):
       A resolved room with no on-disk Room row is rejected (warn, leave as-is).
     - **Idempotent + respects operator overrides:** a row is re-parented ONLY
       when its current `parent_id` still equals its OLD default
-      (`derive_parent_id_from_prefix`, i.e. the flat value the earlier
+      (`location_prefix`, i.e. the flat value the earlier
       migrations wrote) AND the new target differs. A row already at its
       immediate target, or carrying a deliberate value that differs from both,
       is left untouched. So the 2nd boot is a no-op (changed=False), and a hand
@@ -1277,9 +1487,9 @@ def migrate_immediate_parent_ids_if_needed(loc_list):
                 )
                 continue
         else:
-            target = _immediate_parent_from_rows(lid, existing_upper) or derive_parent_id_from_prefix(lid)
+            target = _immediate_parent_from_rows(lid, existing_upper) or location_prefix(lid)
 
-        old_default = derive_parent_id_from_prefix(lid)  # the flat value Phase 1A/2.5 wrote
+        old_default = location_prefix(lid)  # the flat value Phase 1A/2.5 wrote
 
         if 'parent_id' not in row:
             # Pre-1A row that never got backfilled — set the immediate target now.
@@ -1505,7 +1715,7 @@ def migrate_shelf_grouping_rows_if_needed(loc_list):
         lid = str(sh.get('LocationID', '')).strip()
         cur = sh.get('parent_id')
         cur_norm = None if cur in (None, '') else str(cur).strip().upper()
-        old_default = derive_parent_id_from_prefix(lid)
+        old_default = location_prefix(lid)
         if cur_norm in (None, old_default) and cur_norm != row_id:
             sh['parent_id'] = row_id
             changed = True
@@ -1578,7 +1788,7 @@ def get_dryer_box_bindings(loc_id):
     _, row = _find_location(loc_list, loc_id)
     if not row or row.get('Type') != DRYER_BOX_TYPE:
         return None  # distinct from empty-dict to signal "not found"
-    return _bindings_from_row(row)
+    return bindings_from_row(row)
 
 
 def get_dryer_box_slot_order(loc_id):
@@ -1601,17 +1811,25 @@ def set_dryer_box_slot_order(loc_id, order):
     order = str(order or '').strip().lower()
     if order not in ('ltr', 'rtl'):
         return False, f"invalid order '{order}' (expected 'ltr' or 'rtl')"
-    loc_list = load_locations_list()
-    idx, row = _find_location(loc_list, loc_id)
-    if idx is None:
-        return False, "location not found"
-    if row.get('Type') != DRYER_BOX_TYPE:
-        return False, f"type '{row.get('Type')}' is not a Dryer Box"
-    extra = dict(row.get('extra') or {})
-    extra['slot_order'] = order
-    row['extra'] = extra
-    loc_list[idx] = row
-    save_locations_list(loc_list)
+    with locations_write_lock():
+        loc_list = load_locations_list()
+        idx, row = _find_location(loc_list, loc_id)
+        if idx is None:
+            return False, "location not found"
+        if row.get('Type') != DRYER_BOX_TYPE:
+            return False, f"type '{row.get('Type')}' is not a Dryer Box"
+        extra = dict(row.get('extra') or {})
+        extra['slot_order'] = order
+        row['extra'] = extra
+        loc_list[idx] = row
+        # Group 38 follow-up — propagate the save result instead of discarding
+        # it. `save_locations_list` returns False on the write-time orphan
+        # guard, an atomic-write exception, or a verify-after-write that never
+        # recovers. Returning True regardless is exactly how "✅ Saved N
+        # binding(s)" came to be shown over an unchanged file.
+        if not save_locations_list(loc_list):
+            return False, ("save failed — locations.json was not written; see the "
+                           "Activity Log / hub.log for the refusal reason")
     return True, None
 
 
@@ -1646,20 +1864,21 @@ def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
     th_up = str(toolhead_id or '').strip().upper()
     if not box_up or not th_up:
         return False, "missing box or toolhead"
-    loc_list = load_locations_list()
-    idx, row = _find_location(loc_list, box_up)
-    if idx is None or not _is_single_slot_dryer_box(row):
-        return False, "not a single-slot dryer box"
-    extra = dict(row.get('extra') or {})
-    targets = dict(extra.get('slot_targets') or {})
-    if str(targets.get('1', '')).strip().upper() == th_up:
-        return True, "already attached"  # idempotent — skip the write
-    targets['1'] = th_up
-    extra['slot_targets'] = targets
-    row['extra'] = extra
-    loc_list[idx] = row
-    if not save_locations_list(loc_list):
-        return False, "persist failed"
+    with locations_write_lock():
+        loc_list = load_locations_list()
+        idx, row = _find_location(loc_list, box_up)
+        if idx is None or not _is_single_slot_dryer_box(row):
+            return False, "not a single-slot dryer box"
+        extra = dict(row.get('extra') or {})
+        targets = dict(extra.get('slot_targets') or {})
+        if str(targets.get('1', '')).strip().upper() == th_up:
+            return True, "already attached"  # idempotent — skip the write
+        targets['1'] = th_up
+        extra['slot_targets'] = targets
+        row['extra'] = extra
+        loc_list[idx] = row
+        if not save_locations_list(loc_list):
+            return False, "persist failed"
     return True, f"{box_up} slot 1 -> {th_up}"
 
 
@@ -1671,21 +1890,22 @@ def detach_single_slot_boxes_from_toolhead(toolhead_id):
     th_up = str(toolhead_id or '').strip().upper()
     if not th_up:
         return []
-    loc_list = load_locations_list()
-    detached = []
-    for row in loc_list:
-        if not _is_single_slot_dryer_box(row):
-            continue
-        targets = (row.get('extra') or {}).get('slot_targets')
-        if not isinstance(targets, dict):
-            continue
-        if str(targets.get('1', '')).strip().upper() == th_up:
-            extra = dict(row.get('extra') or {})
-            extra['slot_targets'] = {k: v for k, v in targets.items() if str(k) != '1'}
-            row['extra'] = extra
-            detached.append(row.get('LocationID'))
-    if detached and not save_locations_list(loc_list):
-        return []
+    with locations_write_lock():
+        loc_list = load_locations_list()
+        detached = []
+        for row in loc_list:
+            if not _is_single_slot_dryer_box(row):
+                continue
+            targets = (row.get('extra') or {}).get('slot_targets')
+            if not isinstance(targets, dict):
+                continue
+            if str(targets.get('1', '')).strip().upper() == th_up:
+                extra = dict(row.get('extra') or {})
+                extra['slot_targets'] = {k: v for k, v in targets.items() if str(k) != '1'}
+                row['extra'] = extra
+                detached.append(row.get('LocationID'))
+        if detached and not save_locations_list(loc_list):
+            return []
     return detached
 
 
@@ -1699,6 +1919,16 @@ def set_dryer_box_bindings(loc_id, slot_targets, printer_map):
 
     On success, errors_list is empty and extra.slot_targets is written.
     """
+    # Group 38 follow-up — the whole load→validate→mutate→save cycle runs under
+    # the write lock. Split into a private helper purely so the long body keeps
+    # its indentation and the diff stays reviewable; the public name and
+    # signature are unchanged.
+    with locations_write_lock():
+        return _set_dryer_box_bindings_locked(loc_id, slot_targets, printer_map)
+
+
+def _set_dryer_box_bindings_locked(loc_id, slot_targets, printer_map):
+    """Body of `set_dryer_box_bindings`. Caller MUST hold locations_write_lock()."""
     loc_list = load_locations_list()
     idx, row = _find_location(loc_list, loc_id)
     if idx is None:
@@ -1752,7 +1982,13 @@ def set_dryer_box_bindings(loc_id, slot_targets, printer_map):
     extra['slot_targets'] = clean
     row['extra'] = extra
     loc_list[idx] = row
-    save_locations_list(loc_list)
+    # Group 38 follow-up — propagate the save result. This call used to be bare,
+    # so a refused or unverified write still returned success and the UI happily
+    # rendered "✅ Saved N binding(s)" over an unchanged file.
+    if not save_locations_list(loc_list):
+        return False, [("*", loc_id,
+                        "save failed — locations.json was not written; see the "
+                        "Activity Log / hub.log for the refusal reason")], warnings
     return True, [], warnings
 
 
@@ -1799,7 +2035,7 @@ def get_bindings_for_machine(printer_name, printer_map):
         if row.get('Type') != DRYER_BOX_TYPE:
             continue
         box_id = str(row.get('LocationID', '')).strip()
-        for slot, target in _bindings_from_row(row).items():
+        for slot, target in bindings_from_row(row).items():
             if not target:
                 continue
             target_up = target.strip().upper()

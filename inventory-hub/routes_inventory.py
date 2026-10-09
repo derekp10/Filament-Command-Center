@@ -25,6 +25,7 @@ import requests  # type: ignore
 import state  # type: ignore
 import config_loader  # type: ignore
 import spoolman_api  # type: ignore
+import attr_migration  # type: ignore  # Group 36: hidden filament-attribute choices
 
 from app_core import app
 
@@ -274,14 +275,37 @@ def _enrich_field_order(entity_type, fields):
     return fields
 
 
+def _hide_suppressed_attr_choices(fields):
+    """Strip FCC-hidden choices from the filament_attributes field definition.
+
+    Hiding a choice deliberately does NOT touch Spoolman's schema (that would
+    mean the destructive DELETE + recreate migration), so the raw proxy payload
+    still carries it. Every consumer of this endpoint treats `choices` as "what
+    the user may pick", which is exactly what the hidden list overrides.
+    """
+    for f in fields or []:
+        if f.get("key") == "filament_attributes":
+            f["choices"] = attr_migration.visible_choices(f.get("choices") or [])
+    return fields
+
+
 @app.route('/api/external/fields', methods=['GET'])
 def api_external_fields():
-    """Proxy route to fetch Spoolman custom Extra fields configuration (e.g. Filament Attributes, Spool Types)."""
+    """Proxy route to fetch Spoolman custom Extra fields configuration (e.g. Filament Attributes, Spool Types).
+
+    Group 36 — hidden filament-attribute choices are stripped here. This proxy
+    is the SINGLE source every tag picker reads (the wizard's
+    `_knownFilamentAttributes`, the Edit Filament modal's chip picker, and
+    `splitMaterialAndAttributes`'s auto-assign), so filtering only in
+    `/api/filament_attributes/report` left a "removed" tag still offered
+    everywhere it actually gets applied — and re-applying it produced a tag the
+    Choices Manager could no longer see or strip.
+    """
     sm_url, _ = config_loader.get_api_urls()
     out = {"filament": [], "spool": []}
     try:
         rf = requests.get(f"{sm_url}/api/v1/field/filament", timeout=5)
-        if rf.ok: out["filament"] = _enrich_field_order("filament", rf.json())
+        if rf.ok: out["filament"] = _hide_suppressed_attr_choices(_enrich_field_order("filament", rf.json()))
 
         rs = requests.get(f"{sm_url}/api/v1/field/spool", timeout=5)
         if rs.ok: out["spool"] = _enrich_field_order("spool", rs.json())

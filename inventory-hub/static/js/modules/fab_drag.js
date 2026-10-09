@@ -62,13 +62,33 @@
             });
         }
 
+        // --- Draggable 🔀 BULK MOVE armed pill (L298 follow-up) ---------------
+        // Shown for exactly as long as a session is armed, so a hidden preview
+        // panel can never be lost. Visibility + label are owned by
+        // updateBulkMoveVisuals (inv_cmd.js); this only makes it draggable and
+        // wires the tap. Parks one lane above the log pill by default.
+        const bulkPill = document.getElementById('fcc-bulkmove-pill');
+        if (bulkPill && mk) {
+            mk(bulkPill, {
+                key: 'fcc.bulkMovePill.pos',
+                defaultPos: () => {
+                    const w = bulkPill.offsetWidth || 150;
+                    const onDeck = !!document.querySelector('.cmd-deck');
+                    return { left: Math.max(30, window.innerWidth - w - 30), bottom: onDeck ? 320 : 170 };
+                },
+                fallbackW: 150,   // representative width while hidden (offsetWidth 0)
+                fallbackH: 44,
+                draggingClass: 'fcc-bulkmove-pill-dragging',
+                resetToast: '🔀 Bulk-move pill reset to default position',
+                onTap: () => { if (window.openBulkMovePanel) window.openBulkMovePanel({ user: true }); },
+            });
+        }
+
         // --- Keyboard: open search from anywhere (none existed before) --------
         const openSearch = () => { if (window.SearchEngine && window.SearchEngine.open) window.SearchEngine.open(); };
-        const scanInFlight = () => {
-            const st = (typeof state !== 'undefined') ? state : window.state;
-            return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.length > 0
-                && st.scanStartTime && (Date.now() - st.scanStartTime) < 500);
-        };
+        // Delegates to the canonical definition in inv_core.js — this was one of
+        // three identical copy-pasted closures (2026-08-03 scan-path audit).
+        const scanInFlight = () => !!(window.isScanInFlight && window.isScanInFlight());
         document.addEventListener('keydown', (e) => {
             const tag = (e.target && e.target.tagName) || '';
             const inField = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable);
@@ -79,7 +99,19 @@
             // '/' — the common "focus search" key. Skip while typing in a field
             // or while a scan stream is in flight (Prusament URL QRs contain '/').
             if (e.key === '/' && !inField && !scanInFlight()) {
-                e.preventDefault(); openSearch();
+                e.preventDefault();
+                // preventDefault alone does NOT stop the scan accumulator — that
+                // is a SEPARATE document-level listener registered later (the
+                // inline block in scripts.html), so '/' still landed in
+                // state.scanBuffer. The next scan within the 2s window then
+                // dispatched "/LOC:PM-DB-A", which fails the prefix match and
+                // reports "Unknown Code" on a perfectly good label — the exact
+                // L298 Shift+B incident, in a different module.
+                // stopImmediatePropagation reaches it because both listeners sit
+                // on `document` in the bubble phase, and ours runs first
+                // (fab_drag.js is loaded before that inline block).
+                e.stopImmediatePropagation();
+                openSearch();
             }
         });
 

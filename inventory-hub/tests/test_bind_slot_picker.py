@@ -176,20 +176,10 @@ TEST_TOOLHEAD = "XL-1"
 
 
 @pytest.fixture
-def bound_slot(api_base_url):
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": {"1": TEST_TOOLHEAD}},
-        timeout=5,
-    )
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+def bound_slot(borrow_box_bindings):
+    """PM-DB-1 slot 1 -> XL-1, from and back to PM-DB-1's fixed baseline
+    (conftest `borrow_box_bindings`)."""
+    borrow_box_bindings(TEST_BOX, {"1": TEST_TOOLHEAD})
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
@@ -232,100 +222,71 @@ def test_bind_picker_escape_closes(page: Page, open_manage_modal):
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_bind_picker_unbind_button_clears_binding_and_keeps_picker_open(page: Page, open_manage_modal, api_base_url):
+def test_bind_picker_unbind_button_clears_binding_and_keeps_picker_open(
+        page: Page, open_manage_modal, api_base_url, borrow_box_bindings):
     """Inline Unbind button on a bound row should clear the slot and
     refresh the listing in place — no trip to the full Feeds editor
     required, no closing the picker."""
     victim = "PM-DB-4"
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{victim}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    # Seed a binding on a box we won't conflict with the main fixture.
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{victim}/bindings",
-        json={"slot_targets": {"1": TEST_TOOLHEAD}},
-        timeout=5,
-    )
-    try:
-        open_manage_modal(TEST_TOOLHEAD)
-        page.locator("#quickswap-bind-slot-btn").click()
-        expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
-        page.locator("#fcc-bind-picker-search").fill(victim)
-        page.wait_for_timeout(200)
-        unbind_btn = page.locator(f".fcc-bind-picker-item:has-text('{victim}') .fcc-bind-picker-unbind").first
-        expect(unbind_btn).to_be_visible(timeout=2000)
-        unbind_btn.click()
-        # Picker stays open, listing refreshes — slot is now unbound on
-        # the server. Poll (don't fixed-sleep) for the async PUT to land.
-        expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible()
-        targets = _poll_slot_targets(api_base_url, victim, lambda t: t == {})
-        assert targets == {}, f"Unbind didn't clear slot (got {targets})"
-    finally:
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{victim}/bindings",
-            json={"slot_targets": original},
-            timeout=5,
-        )
+    # Seed a binding on a box we won't conflict with the main fixture; it goes
+    # back to PM-DB-4's fixed baseline at teardown.
+    borrow_box_bindings(victim, {"1": TEST_TOOLHEAD})
+    open_manage_modal(TEST_TOOLHEAD)
+    page.locator("#quickswap-bind-slot-btn").click()
+    expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
+    page.locator("#fcc-bind-picker-search").fill(victim)
+    page.wait_for_timeout(200)
+    unbind_btn = page.locator(f".fcc-bind-picker-item:has-text('{victim}') .fcc-bind-picker-unbind").first
+    expect(unbind_btn).to_be_visible(timeout=2000)
+    unbind_btn.click()
+    # Picker stays open, listing refreshes — slot is now unbound on
+    # the server. Poll (don't fixed-sleep) for the async PUT to land.
+    expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible()
+    targets = _poll_slot_targets(api_base_url, victim, lambda t: t == {})
+    assert targets == {}, f"Unbind didn't clear slot (got {targets})"
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_bind_picker_rebind_overwrites_existing_target(page: Page, open_manage_modal, api_base_url):
+def test_bind_picker_rebind_overwrites_existing_target(
+        page: Page, open_manage_modal, api_base_url, borrow_box_bindings):
     """Clicking a slot already bound to a DIFFERENT toolhead should rewrite
     the binding to the current target — no manual unbind-first required."""
     victim = "PM-DB-5"
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{victim}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
     # Pre-bind slot 1 to a DIFFERENT toolhead than TEST_TOOLHEAD.
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{victim}/bindings",
-        json={"slot_targets": {"1": "XL-2"}},
-        timeout=5,
-    )
-    try:
-        open_manage_modal(TEST_TOOLHEAD)
-        page.locator("#quickswap-bind-slot-btn").click()
-        expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
-        page.locator("#fcc-bind-picker-search").fill(victim)
-        page.wait_for_timeout(200)
-        row = page.locator(f".fcc-bind-picker-item:has-text('{victim}')").first
-        expect(row).to_contain_text("XL-2")
-        # Click the left-side label (box name span). Avoids the Unbind
-        # button on the right side of the row.
-        row.locator("span.fw-bold").first.click()
-        # Poll for the async rebind PUT to land (no fixed sleep).
-        targets = _poll_slot_targets(api_base_url, victim, lambda t: t.get("1") == TEST_TOOLHEAD)
-        assert targets.get("1") == TEST_TOOLHEAD
-    finally:
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{victim}/bindings",
-            json={"slot_targets": original},
-            timeout=5,
-        )
+    borrow_box_bindings(victim, {"1": "XL-2"})
+    open_manage_modal(TEST_TOOLHEAD)
+    page.locator("#quickswap-bind-slot-btn").click()
+    expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
+    page.locator("#fcc-bind-picker-search").fill(victim)
+    page.wait_for_timeout(200)
+    row = page.locator(f".fcc-bind-picker-item:has-text('{victim}')").first
+    expect(row).to_contain_text("XL-2")
+    # Click the left-side label (box name span). Avoids the Unbind
+    # button on the right side of the row.
+    row.locator("span.fw-bold").first.click()
+    # Poll for the async rebind PUT to land (no fixed sleep).
+    targets = _poll_slot_targets(api_base_url, victim, lambda t: t.get("1") == TEST_TOOLHEAD)
+    assert targets.get("1") == TEST_TOOLHEAD
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
-def test_bind_picker_enter_commits_new_binding(page: Page, open_manage_modal, api_base_url):
+def test_bind_picker_enter_commits_new_binding(
+        page: Page, open_manage_modal, api_base_url, borrow_box_bindings):
     """Search for an unbound PM-DB slot, hit Enter, verify the binding
     persisted server-side and the Quick-Swap grid picks it up."""
-    # Snapshot bindings for a slot we're going to mutate, restore after.
     victim = "PM-DB-5"
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{victim}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    try:
-        open_manage_modal(TEST_TOOLHEAD)
-        page.locator("#quickswap-bind-slot-btn").click()
-        expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
-        page.locator("#fcc-bind-picker-search").fill(victim)
-        page.wait_for_timeout(200)
-        page.locator("#fcc-bind-picker-search").press("Enter")
-        # Picker closes on success.
-        expect(page.locator("#fcc-bind-picker-overlay")).to_be_hidden(timeout=3000)
+    # Check-only borrow: PM-DB-5 must start unbound (its baseline), and the
+    # binding this test commits is put back to that baseline at teardown.
+    borrow_box_bindings(victim)
+    open_manage_modal(TEST_TOOLHEAD)
+    page.locator("#quickswap-bind-slot-btn").click()
+    expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
+    page.locator("#fcc-bind-picker-search").fill(victim)
+    page.wait_for_timeout(200)
+    page.locator("#fcc-bind-picker-search").press("Enter")
+    # Picker closes on success.
+    expect(page.locator("#fcc-bind-picker-overlay")).to_be_hidden(timeout=3000)
 
-        # Server-side persisted? Poll for the async commit to land.
-        targets = _poll_slot_targets(api_base_url, victim, lambda t: t.get("1") == TEST_TOOLHEAD)
-        assert targets.get("1") == TEST_TOOLHEAD
-    finally:
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{victim}/bindings",
-            json={"slot_targets": original},
-            timeout=5,
-        )
+    # Server-side persisted? Poll for the async commit to land.
+    targets = _poll_slot_targets(api_base_url, victim, lambda t: t.get("1") == TEST_TOOLHEAD)
+    assert targets.get("1") == TEST_TOOLHEAD

@@ -15,7 +15,6 @@ Uses the `assert_contrast` fixture from conftest.py.
 from __future__ import annotations
 
 import pytest
-import requests
 from playwright.sync_api import Page, expect
 
 
@@ -24,22 +23,11 @@ TEST_TOOLHEAD = "XL-1"
 
 
 @pytest.fixture
-def bound_slot(api_base_url):
-    """Ensure at least one binding exists so the Quick-Swap grid and
-    Bind picker render populated rows."""
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": {"1": TEST_TOOLHEAD}},
-        timeout=5,
-    )
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+def bound_slot(borrow_box_bindings):
+    """Bind PM-DB-1 slot 1 -> XL-1 so the Quick-Swap grid and Bind picker
+    render populated rows. PM-DB-1 must be at its fixed baseline first and is
+    put back to that baseline afterwards (conftest `borrow_box_bindings`)."""
+    borrow_box_bindings(TEST_BOX, {"1": TEST_TOOLHEAD})
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,9 @@ EXPECTED_ROUTES = [
     ("/api/audit_session", "GET", "api_audit_session"),
     ("/api/backfill_spool_weights/<int:fid>", "POST", "api_backfill_spool_weights"),
     ("/api/buffer/clear", "POST", "api_buffer_clear"),
+    ("/api/bulk_move", "POST", "api_bulk_move"),  # L298 Bulk Moves Phase 1
+    ("/api/bulk_move_session", "GET", "api_bulk_move_session"),  # L298 Phase 2 poll
+    ("/api/bulk_move_session", "POST", "api_bulk_move_session_action"),  # L298 Phase 2 control
     ("/api/cancel_deduct/confirm", "POST", "api_cancel_deduct_confirm"),
     ("/api/cancel_deduct/dismiss", "POST", "api_cancel_deduct_dismiss"),
     ("/api/cancel_deduct/pending", "GET", "api_cancel_deduct_pending"),
@@ -49,6 +52,9 @@ EXPECTED_ROUTES = [
     ("/api/filament_attributes/remove_choice", "POST", "api_filament_attributes_remove_choice"),
     ("/api/filament_attributes/report", "GET", "api_filament_attributes_report"),
     ("/api/filament_attributes/sweep_unused", "POST", "api_filament_attributes_sweep_unused"),
+    # Group 36 — the counterpart to remove_choice's new default (hide) mode.
+    # Hiding a choice has to be reversible or it is deletion with extra steps.
+    ("/api/filament_attributes/unhide_choice", "POST", "api_filament_attributes_unhide_choice"),
     ("/api/filament_details", "GET", "api_filament_details"),
     ("/api/filaments", "GET", "api_filaments"),
     ("/api/filaments/<int:filament_id>", "GET", "api_get_filament"),

@@ -70,12 +70,81 @@ window.updateManageTitle = (loc, itemArray = null) => {
     
     const typeBadge = `<span class="badge ${badgeClass} ms-3 fs-6" style="box-shadow: 1px 1px 3px rgba(0,0,0,0.5); padding-top: 5px; ${badgeStyle}">${loc.Type}</span>`;
 
-    document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${loc.LocationID} ${typeBadge} ${occHtml}</div>`;
+    // L298 Phase 2 — "Move all →" (the mouse entry to Bulk Moves; the scanner
+    // entry is the CMD:BULKMOVE deck QR). Lives in the TITLE so it renders for
+    // EVERY location type: the DANGER-ZONE Eject-All it parallels is built only
+    // by renderGrid, and renderList's `qr-eject-all-list` target doesn't exist
+    // in the live template — so a button placed there would be invisible on
+    // Rooms / Shelves / Carts, which are the most likely bulk-move sources.
+    // Suppressed on single-occupancy locations, where every spool would be
+    // skipped as "loaded in a toolhead slot" (a guaranteed no-op).
+    const SINGLE_OCC = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    // The LocationID rides in a data- attribute and the handler reads it back via
+    // dataset — it NEVER enters a JS string literal inside the onclick. escAttr
+    // escapes for an HTML ATTRIBUTE, not for JS source, so interpolating into
+    // `triggerBulkMove('…')` was doubly wrong: the HTML parser decodes the entity
+    // before JS parses, so an apostrophe in an id both breaks the call and opens
+    // a script-injection seam. (Same class as the escAttr stored-XSS fixed in
+    // Group 34.) The `|| escHtml` fallback mirrors inv_core.js's export guard.
+    const _attr = (v) => (window.escAttr || window.escHtml || String)(v);
+    // While a bulk move is ARMED the button becomes "Show bulk move" instead.
+    // Without it, hiding the panel from inside the Location Manager stranded the
+    // user: the Hide latch stops the panel auto-reopening, and the BULK MOVE
+    // deck button that would reopen it sits behind the LM modal's backdrop. This
+    // is the in-modal way back to the armed session. (Arming a DIFFERENT source
+    // is still possible — triggerBulkMove's already_active confirm handles the
+    // replace — but "show me what's armed" is the far commoner intent here.)
+    // `state` is a script-scope let in inv_core.js, not a window property — the
+    // same reason generateSafeQR must be called by bare name (Derek 2026-05-16).
+    const bulkArmed = !!(typeof state !== 'undefined' && state.bulkMoveActive);
+    // Feature gate (2026-10-08): Bulk Moves ships OFF and prod stays dark until
+    // it has had a hands-on pass. An ARMED session still shows its reopen
+    // button even when the flag is off, so a session armed before the flag was
+    // turned off can still be found and cancelled rather than stranded.
+    const bulkEnabled = (window.FCC_BULK_MOVE_ENABLED !== false);
+    const moveAllBtn = (SINGLE_OCC.includes(t) || (!bulkEnabled && !bulkArmed)) ? '' : (bulkArmed ? `
+        <button class="btn btn-sm btn-info ms-auto" style="white-space:nowrap;"
+                title="A bulk move is already armed — reopen its preview panel"
+                onclick="window.openBulkMovePanel && window.openBulkMovePanel({ user: true })">
+            🔀 Show bulk move
+        </button>` : `
+        <button class="btn btn-sm btn-outline-info ms-auto" style="white-space:nowrap;"
+                data-bulk-src="${_attr(loc.LocationID)}"
+                title="Move everything from ${_attr(loc.LocationID)} to another location"
+                onclick="window.triggerBulkMove && window.triggerBulkMove(this.dataset.bulkSrc)">
+            🔀 Move all →
+        </button>`);
+
+    document.getElementById('manageTitle').innerHTML = `<div class="d-flex align-items-center">📍 ${loc.LocationID} ${typeBadge} ${occHtml}${moveAllBtn}</div>`;
 };
+
+// Group 38.1 — two SEPARATE generation counters for in-flight `openManage`
+// fetches. `openManage` only calls `modals.manageModal.show()` at the END of an
+// async fetch, so a response that landed after the user dismissed the modal
+// used to re-open it — leaving a modal on screen that nothing would ever close.
+//
+// They are deliberately separate, because the two conditions must have
+// DIFFERENT consequences and conflating them is a foot-gun:
+//   - `_fccManageOpenSeq` is bumped ONLY by `openManage`. A mismatch means a
+//     NEWER open superseded this one, so this `.then()` must not render — the
+//     newer call will. Skipping is safe precisely because a successor exists.
+//   - `_fccManageDismissSeq` is bumped ONLY by a dismissal. A mismatch means the
+//     user closed the modal mid-flight, so this `.then()` must not `show()` —
+//     but it is still free to render (harmlessly, into a hidden modal).
+//
+// Gating the RENDER on a dismissal would be the dangerous version: any
+// unanticipated dismiss during a legitimate open would silently leave the modal
+// blank, with no successor to fix it. Suppressing only the `show()` is all that
+// 38.1 ever required.
+window._fccManageOpenSeq = window._fccManageOpenSeq || 0;
+window._fccManageDismissSeq = window._fccManageDismissSeq || 0;
 
 // --- PRE-FLIGHT PROTOCOL ---
 window.openManage = (id) => {
     setProcessing(true);
+
+    const seq = ++window._fccManageOpenSeq;
+    const dismissAtStart = window._fccManageDismissSeq;
 
     const loc = state.allLocations.find(l => l.LocationID == id);
     if (!loc) {
@@ -110,6 +179,12 @@ window.openManage = (id) => {
     fetch(`/api/get_contents?id=${id}`)
         .then(r => r.json())
         .then(d => {
+            // Group 38.1 — a NEWER openManage superseded this one; it will do
+            // the rendering. Rendering stale content here would clobber it.
+            if (seq !== window._fccManageOpenSeq) {
+                setProcessing(false);
+                return;
+            }
             if (isGrid) {
                 document.getElementById('manage-grid-view').style.display = 'block';
                 document.getElementById('manage-list-view').style.display = 'none';
@@ -135,6 +210,12 @@ window.openManage = (id) => {
             state.lastLocRenderHash = `${JSON.stringify(d)}|${bufHash}`;
 
             setProcessing(false);
+            // Group 38.1 — the modal was dismissed while this fetch was in
+            // flight. The render above still ran (harmless, and it leaves the
+            // content warm for the next open), but re-showing here would
+            // resurrect a modal the user already closed — and nothing would
+            // ever close it again. That was the flake.
+            if (window._fccManageDismissSeq !== dismissAtStart) return;
             modals.manageModal.show();
         })
         .catch(e => {
@@ -196,6 +277,11 @@ window.closeManage = () => {
     window.manageNavStack = [];
     const prev = document.getElementById('manage-loc-id');
     if (prev) prev.value = '';
+    // Group 38.1 — record the dismissal SYNCHRONOUSLY, here and not only in the
+    // `hidden.bs.modal` handler below: that event trails `hide()` by the
+    // ~460 ms fade, and a fetch resolving inside that window would otherwise
+    // still see an unchanged counter and re-show the modal mid-dismissal.
+    window._fccManageDismissSeq++;
     modals.manageModal.hide();
     fetchLocations();
 };
@@ -283,6 +369,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // If we're mid-breadcrumb-pop, openManage is about to re-render
         // the previous view. Don't wipe state — the pop flow manages it.
         if (window._fccPoppingBreadcrumb) return;
+
+        // Group 38.1 — catch-all for every dismiss path that does NOT route
+        // through closeManage (the X button, backdrop click, a programmatic
+        // .hide() elsewhere, Bootstrap's own handler). Placed after the pop
+        // guard on purpose: a breadcrumb pop is not a dismissal, and must
+        // leave its freshly-issued openManage free to show normally.
+        window._fccManageDismissSeq++;
 
         // Clear breadcrumb state so the next fresh open doesn't inherit
         // stale context.
@@ -609,10 +702,25 @@ window.saveFeedsSection = () => {
     const orderRadio = document.querySelector('input[name="feeds-slot-order"]:checked');
     const order = orderRadio ? orderRadio.value : 'ltr';
 
-    // Fire-and-log the slot-order PUT alongside the bindings PUT. Ignore
-    // its result here — user sees bindings outcome in the toast; the
-    // order update only affects UI render direction.
-    fetch(`/api/dryer_box/${encodeURIComponent(locId)}/slot_order`, {
+    // Group 38.6a — this slot_order PUT used to fire in the SAME tick as the
+    // bindings PUT below, and the two silently raced.
+    //
+    // Both endpoints are whole-file read-modify-write on locations.json, and
+    // `set_dryer_box_slot_order` copies the ENTIRE extra dict — slot_targets
+    // included (locations_db.py:1549-1551). locations_db.py holds no lock of
+    // any kind, and Flask runs threaded. So the interleave was: slot_order
+    // reads the pre-edit row → bindings writes the new targets and returns
+    // 200 → slot_order writes its stale snapshot back, reverting the binding
+    // the user just saved. The UI reported "✅ Saved" the whole time.
+    //
+    // That is the captured 38.6a failure verbatim: `#feeds-status` contained
+    // "Saved" and the API read back the OLD target
+    // (flake-traceback-2026-08-03.txt — `assert 'XL-1' == 'XL-2'`).
+    //
+    // Sequencing slot_order AFTER the bindings write settles removes the
+    // interleave: it now always reads a row that already contains the new
+    // slot_targets, so writing the whole extra back is a no-op for them.
+    const putSlotOrder = () => fetch(`/api/dryer_box/${encodeURIComponent(locId)}/slot_order`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order }),
@@ -668,7 +776,12 @@ window.saveFeedsSection = () => {
                 `❌ Feeds save network error for ${locId}: ${e && e.message ? e.message : 'connection failed'}`,
                 'ERROR'
             );
-        });
+        })
+        // Group 38.6a — only now, with the bindings write already landed, is
+        // it safe to run slot_order's whole-file read-modify-write. Runs on
+        // the failure path too: slot order is an independent user preference,
+        // not part of the binding payload.
+        .finally(() => { putSlotOrder(); });
 };
 
 window.renderFeedsSection = renderFeedsSection;
@@ -1237,6 +1350,11 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     // across barcode-scanner setups.
     const keyHandler = (e) => {
         if (e.key === 'Enter') {
+            // ⚠️ SAFETY (axis-(a) audit, 2026-08-03) — see inv_quickswap.js for the
+            // full rationale. A scan in flight owns this Enter: it terminates the
+            // scan, it is not a button press. YES is focused by initialFocus, so
+            // without this the "📷 Scan to Cancel" QR performed the CONFIRM.
+            if (window.isScanInFlight && window.isScanInFlight()) return;
             const active = document.activeElement;
             if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
             else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
@@ -1335,8 +1453,16 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
                 });
                 return;
             }
-            if (res.status === 'success') {
+            // A rejected write still answers status 'success' and names the
+            // spool in res.failures; it used to toast "Assigned" and drop the
+            // spool from the buffer anyway (2026-09-12).
+            const failedWhy = res.status === 'success' ? (res.failures || {})[spoolIdStr] : null;
+            if (res.status === 'success' && !failedWhy) {
                 showToast("Assigned");
+                const notDeployed = (res.auto_deploy_skipped || {})[spoolIdStr];
+                if (notDeployed) {
+                    showToast(`⚠️ #${spoolIdStr} is in ${loc} but was NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
+                }
 
                 // --- Buffer mutation only on success ---
                 // Remove the assigned spool. handleSlotInteraction no longer
@@ -1360,7 +1486,9 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
                 if (window.fetchLocations) window.fetchLocations();
                 refreshManageView(loc);
             }
-            else showToast(res.msg, 'error');
+            else showToast(failedWhy
+                ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
+                : (res.msg || 'Assign failed'), 'error', 7000);
         })
         .catch(() => setProcessing(false));
 };
@@ -1445,11 +1573,34 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
                 // Ejecting a spool that's also held in the buffer used to leave
                 // the card's location/weight stale until the next 5s pulse.
                 document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
-                refreshManageView(loc);
+                // Refresh the view that is actually OPEN, not `loc`: a Quick-Swap
+                // card passes its source BOX as loc (ui_builder.js), so
+                // refreshManageView(loc) painted the box's grid + title into the
+                // toolhead's view until the next pulse. The sync-pulse re-renders
+                // the Quick-Swap grid now rather than up to one heartbeat later.
+                const openLocId = (document.getElementById('manage-loc-id') || {}).value || loc;
+                refreshManageView(openLocId);
+                document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'eject' } }));
             }
         })
         .catch(() => setProcessing(false));
 };
+
+// The ID field below is re-focused after every add so several legacy ids can be
+// entered in a row — deliberate, and Derek wants it kept. But a focused <input>
+// disarms the global scan handler, so the Manage modal's OWN CMD:DONE QR (and
+// any location/slot label) came back as "Invalid Code": the text was posted to
+// /api/identify_scan as a manual entry, whose non-spool responses carry no
+// `msg` and fell through to the error branch.
+// Capture scanner-speed input from the field instead, so the cursor can stay
+// put AND scanning keeps working. Shared helper — see inv_core.js.
+(function () {
+    if (!window.installFieldScanCapture) return;
+    window.installFieldScanCapture({
+        match: (el) => el.id === 'manual-spool-id',
+        isScanPayload: (txt) => window.looksLikeScanPayload(txt),
+    });
+})();
 
 window.manualAddSpool = () => {
     const val = document.getElementById('manual-spool-id').value.trim();
@@ -1475,14 +1626,79 @@ window.manualAddSpool = () => {
         .catch(() => setProcessing(false));
 };
 
-window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, () => {
+// L298 Phase 2 — the Location-Manager entry into Bulk Moves. ARMS a session
+// with this location as the SOURCE, then hands off: the user scans (or picks)
+// the DESTINATION, reviews the preview panel, and commits explicitly. Nothing
+// moves here — this only arms, so no promptSafety gate (unlike triggerEjectAll,
+// which mutates immediately); the destructive step is the panel's Commit.
+window.triggerBulkMove = (loc, replace = false) => {
+    // Defence in depth behind the render gate above: a stale tab rendered
+    // before the flag was turned off still has a live button. The backend
+    // refuses independently, so this is purely to give a clear message
+    // instead of a 403 toast.
+    if (window.FCC_BULK_MOVE_ENABLED === false) {
+        showToast('Bulk Moves is turned off. Enable it in ⚙️ Settings → Behavior.',
+                  'warning', 7000);
+        return;
+    }
+    if (!loc) { showToast("No location selected", "warning"); return; }
     setProcessing(true);
-    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: loc }) })
+    window.fetchT('/api/bulk_move_session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start', source: loc, replace: !!replace }),
+    })
         .then(r => r.json())
         .then((res) => {
             setProcessing(false);
+            // Another tab / an earlier click already armed a DIFFERENT source.
+            // Confirm before replacing it rather than silently re-arming under
+            // someone who still believes the first one is staged.
+            if (res && res.already_active) {
+                requestConfirmation(
+                    res.msg || `A bulk move is already armed. Replace it with ${loc}?`,
+                    () => window.triggerBulkMove(loc, true)
+                );
+                return;
+            }
+            if (!res || !res.success) {
+                showToast((res && res.msg) || "Couldn't arm the bulk move", "error", 7000);
+                return;
+            }
+            if (window.applyBulkMoveSession) window.applyBulkMoveSession(res.session);
+            // user: true — clicking "Move all →" is an explicit request for the
+            // panel, so it overrides a Hide latch from an earlier session.
+            if (window.openBulkMovePanel) window.openBulkMovePanel({ user: true });
+            showToast(`Bulk move armed from ${loc} — scan the destination location.`, "info", 5000);
+        })
+        .catch(() => { setProcessing(false); showToast("Couldn't arm the bulk move", "error", 7000); });
+};
+
+window.triggerEjectAll = (loc) => {
+    const target = String(loc == null ? '' : loc).trim();
+    // Never prompt, let alone send, an Eject All with no location: the backend
+    // matcher reads "" as every Unassigned spool (2026-09-13). The scan route
+    // refuses first (ejectAllFromScan in inv_cmd.js); this backstops any other
+    // caller.
+    if (!target) {
+        showToast('Eject All needs a location: open one in the Location Manager first', 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent('⚠️ Eject All ignored: no location was given', 'WARNING');
+        return;
+    }
+    promptSafety(`Nuke all unslotted in ${target}?`, () => {
+    setProcessing(true);
+    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: target }) })
+        .then(r => r.json())
+        .then((res) => {
+            setProcessing(false);
+            // A plain refusal (e.g. the backend's no-location guard) is not
+            // "Cleared!". A require_confirm answer is left to the planned
+            // eject-all results work.
+            if (res && res.success === false && !res.require_confirm) {
+                showToast(res.msg || 'Eject All was refused', 'warning', 7000);
+                return;
+            }
             if(window.fetchLocations) window.fetchLocations();
-            refreshManageView(loc);
+            refreshManageView(target);
             // 27.6 — a bulk clear leaves SLOTTED spools (toolhead/MMU-loaded) in
             // place on purpose. Be honest about it rather than always saying
             // "Cleared!": warn when survivors remain so the user knows the
@@ -1494,7 +1710,8 @@ window.triggerEjectAll = (loc) => promptSafety(`Nuke all unslotted in ${loc}?`, 
             }
         })
         .catch(() => { setProcessing(false); showToast("Eject-all failed", "error", 7000); });
-});
+    });
+};
 
 window.printCurrentLocationLabel = () => {
     const locId = document.getElementById('manage-loc-id').value;
@@ -1516,20 +1733,18 @@ const _locUC = (v) => String(v == null ? '' : v).toUpperCase();
 // Every descendant id of a row (excludes self). Cycle-guarded. Used to keep the
 // Parent <select> from offering a row's own subtree (which would make a cycle).
 const _locDescendants = (idUpper) => {
-    const childrenOf = new Map();
-    (state.allLocations || []).forEach(r => {
-        const pid = r.parent_id != null ? _locUC(r.parent_id) : null;
-        if (!pid) return;
-        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
-        childrenOf.get(pid).push(_locUC(r.LocationID));
-    });
+    // Group-34 Phase 0: walk the shared window.buildLocationTree child-map
+    // (childrenOf stores rows → map to UC ids here). Byte-identical to the old
+    // inline map for descendants of a real node.
+    const { childrenOf } = window.buildLocationTree(state.allLocations || [], { uc: _locUC });
+    const kidsOf = (id) => (childrenOf.get(id) || []).map(r => _locUC(r.LocationID));
     const out = new Set();
-    const stack = [...(childrenOf.get(idUpper) || [])];
+    const stack = [...kidsOf(idUpper)];
     while (stack.length) {
         const c = stack.pop();
         if (out.has(c)) continue;
         out.add(c);
-        (childrenOf.get(c) || []).forEach(g => { if (!out.has(g)) stack.push(g); });
+        kidsOf(c).forEach(g => { if (!out.has(g)) stack.push(g); });
     }
     return out;
 };
@@ -1551,16 +1766,17 @@ const _locAutoDeriveParent = (lid) => {
 // Root→parent friendly chain for the breadcrumb readout. Cycle-guarded.
 const _locBreadcrumbChain = (parentIdUpper) => {
     if (!parentIdUpper) return null;
-    const byId = new Map();
-    (state.allLocations || []).forEach(r => byId.set(_locUC(r.LocationID), r));
+    // Group-34 Phase 0: walk UP via the shared tree's parentOf map. parentOf
+    // returns null at the first non-real parent, so the chain terminates
+    // exactly where the old byId.has() guard did.
+    const { byId, parentOf } = window.buildLocationTree(state.allLocations || [], { uc: _locUC });
     const rows = [];
     const seen = new Set();
     let cur = parentIdUpper;
     while (cur && byId.has(cur) && !seen.has(cur)) {
         rows.push(byId.get(cur));
         seen.add(cur);
-        const r = byId.get(cur);
-        cur = r.parent_id != null ? _locUC(r.parent_id) : null;
+        cur = parentOf.get(cur) || null;
     }
     rows.reverse();
     if (!rows.length) return null;
@@ -1814,28 +2030,267 @@ window.saveLocation = () => {
         });
 };
 
-window.openAddModal = () => {
+// Group-34 add-redesign (S2/S4): infer a child's Type + Max Spools from the
+// parent's kind, and auto-generate an editable LocationID from parent + type +
+// next sibling index. Both are NON-BINDING pre-fills the user always sees and
+// can override. Shelf hierarchy: Room → Wall Shelf → Row → Section (all
+// unbounded, Max 0 = no cap); only slotted Dryer Boxes get a real Max. An
+// UNKNOWN/custom parent kind falls back to Storage/1 — never structural/0 — so
+// a child is always loadable (add-redesign correction #2).
+const _inferChildDefaults = (parentType) => {
+    switch (String(parentType || '').trim().toLowerCase()) {
+        case 'room':       return { type: 'Wall Shelf', max: '0' };
+        case 'wall shelf': return { type: 'Row',        max: '0' };
+        case 'row':        return { type: 'Section',    max: '0' };
+        case 'cart':       return { type: 'Storage',    max: '0' };
+        default:           return { type: 'Storage',    max: '1' };
+    }
+};
+
+// Short segment code per type for the auto-generated id (readable + never
+// all-numeric, satisfying the NO-relabel invariant's LOC:-label contract).
+const _TYPE_ABBR = {
+    'wall shelf': 'WL', 'row': 'R', 'section': 'SC', 'cart': 'CT',
+    'dryer box': 'DB', 'storage': 'ST', 'shelf': 'SH', 'sliding drawer': 'SD',
+    'room': 'RM',
+};
+const _typeSegmentAbbr = (type) => {
+    const t = String(type || '').trim().toLowerCase();
+    if (_TYPE_ABBR[t]) return _TYPE_ABBR[t];
+    const letters = t.replace(/[^a-z]/g, '').toUpperCase();
+    return letters.slice(0, 2) || 'X';
+};
+
+// Suggest `PARENT-<ABBR><next>` — the next unused index among the parent's
+// existing children whose id starts with that segment. New-rows-only; never
+// renames an existing id.
+const _suggestChildId = (parentId, type) => {
+    const p = String(parentId || '').trim();
+    if (!p) return '';
+    const abbr = _typeSegmentAbbr(type);
+    const prefix = `${p}-${abbr}`;
+    const re = new RegExp('^' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)$', 'i');
+    let maxN = 0;
+    (state.allLocations || []).forEach(r => {
+        const m = re.exec(String(r.LocationID || '').trim());
+        if (m) maxN = Math.max(maxN, parseInt(m[1], 10) || 0);
+    });
+    return `${prefix}${maxN + 1}`;
+};
+
+// The parent LocationID for the current CREATE flow ('' = top-level / global
+// Add). Drives the auto-id regeneration when the user changes the Type.
+let _locCreateParentId = '';
+
+// Shared modal-open for CREATE (global Add + per-row Add-child). parentId
+// undefined → global blank Add (Parent = Auto); a LocationID → Add-child
+// pre-seeded under that row with inferred Type/Max + a suggested editable id.
+const _openLocModalForCreate = ({ parentId, type, max, suggestId }) => {
     modals.locMgrModal.hide();
+    _locCreateParentId = parentId ? String(parentId) : '';
     document.getElementById('edit-original-id').value = "";
-    document.getElementById('edit-id').value = "";
+    const idInput = document.getElementById('edit-id');
+    const sid = suggestId ? _suggestChildId(parentId, type) : '';
+    idInput.value = sid;
+    idInput.dataset.fccAutogen = sid;   // remember the untouched suggestion
     document.getElementById('edit-name').value = "";
-    document.getElementById('edit-max').value = "1";
-    // L271 Phase 5 — default Type to Storage (the <select> was never reset on
-    // Add, so it used to inherit the last-edited row's Type) and default the
-    // Parent selector to Auto so a fresh id derives its parent from the prefix.
-    _populateTypeSelect('Storage');
-    _populateParentSelect('', undefined);
+    document.getElementById('edit-max').value = max;
+    _populateTypeSelect(type);
+    _populateParentSelect('', parentId);   // undefined → Auto; a LocationID → pre-selected
+
+    // Regenerate the suggested id when the Type changes — but ONLY in Add-child
+    // mode with an untouched autogen id (never clobber a hand-typed id or an
+    // edit). Bound once on the persistent <select> element.
+    const typeSel = document.getElementById('edit-type');
+    if (typeSel && !typeSel._fccAutoIdBound) {
+        typeSel.addEventListener('change', () => {
+            const ii = document.getElementById('edit-id');
+            const orig = document.getElementById('edit-original-id');
+            if (!ii || !orig || orig.value) return;                       // ADD mode only
+            if (!_locCreateParentId) return;                             // Add-child only
+            if (ii.value && ii.value !== ii.dataset.fccAutogen) return;  // user edited — respect it
+            const ns = _suggestChildId(_locCreateParentId, typeSel.value);
+            ii.value = ns; ii.dataset.fccAutogen = ns;
+        });
+        typeSel._fccAutoIdBound = true;
+    }
+
     modals.locModal.show();
-    // 8.1 — auto-focus the Location ID field on Add (this is the
-    // first field the user fills in; Edit focuses Friendly Name
-    // instead since ID is rarely changed).
+    // 8.1 — auto-focus the Location ID field on Add (the first field filled;
+    // Edit focuses Friendly Name instead since ID is rarely changed).
     const locModalEl = document.getElementById('locModal');
     if (locModalEl) {
         locModalEl.addEventListener('shown.bs.modal', () => {
             const n = document.getElementById('edit-id');
-            if (n) n.focus();
+            if (n) { n.focus(); if (n.select) n.select(); }
         }, { once: true });
     }
+};
+
+window.openAddModal = () => {
+    // Global "Add Location": blank, Type Storage, Parent Auto (fresh id derives
+    // its parent from the prefix).
+    _openLocModalForCreate({ parentId: undefined, type: 'Storage', max: '1', suggestId: false });
+};
+
+// Group-34 (S1): per-row "➕ Add child" — keeps tree context; pre-seeds Parent =
+// this row + inferred Type/Max + a suggested editable id. Suppressed on
+// Printer/toolhead rows in the render (canAddChild), so this only fires on a
+// shelf/leaf parent.
+window.openAddChild = (parentId) => {
+    const parent = (state.allLocations || []).find(l => String(l.LocationID) === String(parentId));
+    if (!parent) {
+        if (typeof showToast === 'function') showToast('Parent location not found — reload and try again.', 'error', 7000);
+        return;
+    }
+    const inf = _inferChildDefaults(parent.Type);
+    _openLocModalForCreate({ parentId: parent.LocationID, type: inf.type, max: inf.max, suggestId: true });
+};
+
+// Group-34 (S3): a mountOverlay expand/collapse tree picker for the Parent
+// field, reachable via the "🌳 Browse…" button. Built over the shared
+// window.buildLocationTree helper (the same structure the LM table renders
+// from). It writes back into #edit-parent and emits the SAME save contract as
+// the <select> — picking a node sets that LocationID; "Auto"/"Top level" map to
+// the sentinels. Self + descendants + synthetic/excluded kinds are filtered out
+// (no cycles), mirroring _populateParentSelect. The overlay never FORCES a
+// concrete node onto a row whose parent isn't selectable (PM/PJ pseudo-prefix,
+// Virtual parent) — it just pre-highlights whatever the <select> already holds
+// (Auto in that case), per add-redesign correction #4.
+window.openParentTreePicker = () => {
+    const sel = document.getElementById('edit-parent');
+    if (!sel) return;
+    const locModalEl = document.getElementById('locModal');
+    const selfIdUpper = _locUC(document.getElementById('edit-original-id').value || '');
+    // Own the fetch — state.allLocations is only warm as a side-effect of the LM
+    // render; fall back to it if the fetch fails.
+    const build = (rows) => _renderParentTreePicker(
+        Array.isArray(rows) && rows.length ? rows : (state.allLocations || []),
+        selfIdUpper, sel, locModalEl);
+    fetch('/api/locations')
+        .then(r => (r.ok ? r.json() : Promise.reject()))
+        .then(build)
+        .catch(() => build(state.allLocations || []));
+};
+
+const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
+    const esc = window.escHtml || ((s) => s);
+    // escAttr === escHtml (both escape quotes); fall back to escHtml, never to
+    // identity — a raw LocationID in data-tp-val is a stored-XSS vector.
+    const escA = window.escAttr || window.escHtml || ((s) => s);
+    // Exclude self + its descendants + synthetic/excluded kinds — mirrors
+    // _populateParentSelect's option set so the picker can't offer an invalid
+    // parent. Compute descendants from the SAME rows the picker renders (NOT
+    // state.allLocations) so the cycle guard can't miss a descendant a fresh
+    // fetch surfaced but the last LM render didn't (divergent-source race).
+    const { childrenOf: _allKids } = window.buildLocationTree(rows || [], { uc: _locUC });
+    const _kidIds = (id) => (_allKids.get(id) || []).map(r => _locUC(r.LocationID));
+    const exclude = new Set();
+    if (selfIdUpper) {
+        exclude.add(selfIdUpper);
+        const stack = [..._kidIds(selfIdUpper)];
+        while (stack.length) {
+            const c = stack.pop();
+            if (exclude.has(c)) continue;
+            exclude.add(c);
+            _kidIds(c).forEach(g => { if (!exclude.has(g)) stack.push(g); });
+        }
+    }
+    const pickable = (rows || []).filter(r => {
+        const idU = _locUC(r.LocationID);
+        if (!idU || exclude.has(idU)) return false;
+        const t = String(r.Type || '');
+        if (idU === 'UNASSIGNED' || t === 'Virtual' || t === 'Virtual Room' || t === 'Unknown' || !t) return false;
+        return true;
+    });
+    // buildLocationTree over the pickable set gives childrenOf + roots (a pickable
+    // row whose parent isn't itself pickable floats to root — exactly right).
+    const { childrenOf, roots } = window.buildLocationTree(pickable, { uc: _locUC });
+
+    const cmp = (a, b) => (String(a.Name || a.LocationID).toLowerCase() < String(b.Name || b.LocationID).toLowerCase() ? -1 : 1);
+    const flat = [];
+    const visit = (row, depth) => {
+        flat.push({ row, depth });
+        (childrenOf.get(_locUC(row.LocationID)) || []).slice().sort(cmp).forEach(k => visit(k, depth + 1));
+    };
+    roots.slice().sort(cmp).forEach(r => visit(r, 0));
+
+    const panel = document.createElement('div');
+    panel.className = 'card bg-dark text-light shadow-lg';
+    panel.style.cssText = 'width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;border:1px solid #0dcaf0;';
+    let html = `
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span class="fw-bold text-info">🌳 Pick a parent location</span>
+        <button type="button" class="btn-close btn-close-white" data-tp="cancel" title="Cancel"></button>
+      </div>
+      <div class="card-body p-0" style="overflow:auto;">
+        <div class="list-group list-group-flush">
+          <button type="button" class="list-group-item list-group-item-action bg-dark text-light fcc-tp-node" data-tp-val="${escA(_LOC_PARENT_NONE)}">— Top level (no parent) —</button>
+          <button type="button" class="list-group-item list-group-item-action bg-dark text-light fcc-tp-node" data-tp-val="${escA(_LOC_PARENT_AUTO)}">— Auto (derive from ID) —</button>`;
+    flat.forEach(({ row, depth }) => {
+        const pad = 12 + depth * 20;
+        const label = row.Name ? `${row.Name} (${row.LocationID})` : row.LocationID;
+        html += `<button type="button" class="list-group-item list-group-item-action bg-dark text-light fcc-tp-node" data-tp-val="${escA(row.LocationID)}" style="padding-left:${pad}px;">`
+            + `<span class="text-muted small me-1">${depth ? '↳' : '📍'}</span>${esc(label)} `
+            + `<span class="badge bg-secondary ms-1">${esc(row.Type || '')}</span></button>`;
+    });
+    html += `</div></div>`;
+    panel.innerHTML = html;
+
+    let handle;
+    const nodes = () => Array.from(panel.querySelectorAll('.fcc-tp-node'));
+    const setActive = (idx) => {
+        const ns = nodes();
+        if (!ns.length) return;
+        idx = (idx + ns.length) % ns.length;
+        ns.forEach(n => { n.classList.remove('kb-active'); n.classList.remove('active'); });
+        ns[idx].classList.add('kb-active'); ns[idx].classList.add('active');
+        ns[idx].scrollIntoView({ block: 'nearest' });
+        try { ns[idx].focus(); } catch (_) { /* noop */ }
+    };
+    const pick = (val) => {
+        if (val === _LOC_PARENT_NONE || val === _LOC_PARENT_AUTO) {
+            sel.value = val;
+        } else {
+            const curU = _locUC(val);
+            let opt = Array.from(sel.options).find(o => o.value.toUpperCase() === curU);
+            if (!opt) { opt = document.createElement('option'); opt.value = val; opt.textContent = val; sel.appendChild(opt); }
+            sel.value = opt.value;
+        }
+        sel.dispatchEvent(new Event('change'));   // sync breadcrumb (bound in _populateParentSelect)
+        if (handle) handle.cleanup();
+    };
+
+    panel.addEventListener('click', (e) => {
+        if (e.target.closest('[data-tp="cancel"]')) { if (handle) handle.cleanup(); return; }
+        const node = e.target.closest('.fcc-tp-node');
+        if (node) pick(node.dataset.tpVal);
+    });
+    panel.addEventListener('keydown', (e) => {
+        const ns = nodes();
+        const cur = ns.findIndex(n => n.classList.contains('kb-active'));
+        if (e.key === 'ArrowDown') { e.preventDefault(); setActive(cur + 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(cur - 1); }
+        else if (e.key === 'Enter') { e.preventDefault(); const n = ns[cur] || ns[0]; if (n) pick(n.dataset.tpVal); }
+    });
+
+    handle = window.mountOverlay({
+        id: 'fcc-parent-tree-picker',
+        content: panel,
+        tier: 'standard',
+        host: locModalEl,           // auto-clean if the edit modal closes underneath
+        backdrop: true,
+        backdropDismiss: true,
+        occlude: ['#edit-parent', '#edit-type', '#edit-type-custom'],
+    });
+    // Pre-highlight the currently-selected parent (or the first node) without
+    // forcing a concrete node onto an Auto/unselectable-parent row.
+    setTimeout(() => {
+        const ns = nodes();
+        const curVal = sel.value;
+        let idx = ns.findIndex(n => n.dataset.tpVal === curVal || _locUC(n.dataset.tpVal) === _locUC(curVal));
+        setActive(idx >= 0 ? idx : 0);
+    }, 0);
 };
 
 // Hotfix 2026-09-29 — printer-topology rows (a Printer or a toolhead) feed the

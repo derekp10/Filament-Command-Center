@@ -434,8 +434,35 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 with _PRINT_TRACKER_LOCK:
                     e = _PRINT_TRACKER.get(printer_name)
                     if e is not None and str(e.get('job_id')) == str(swap_jid):
-                        print_deduct._record_swap_events(e, snap, swap_progress,
-                                                         runout=swap_runout)
+                        _before = dict(e.get('start_spools') or {})
+                        for _ev in (e.get('swap_log') or []):
+                            _before[str(_ev.get('position'))] = _ev.get('to_sid')
+                        _added = print_deduct._record_swap_events(
+                            e, snap, swap_progress, runout=swap_runout)
+                        # Say what the diff actually found. A zero here is the
+                        # interesting case: FCC looked and the Spoolman mapping
+                        # was unchanged, which is what a purely physical roll
+                        # swap — or a printer-side SpoolJoin that re-routes to
+                        # another slot without any FCC eject/load — looks like.
+                        # Previously the count was discarded and nothing was
+                        # logged either way.
+                        if _added:
+                            _d = ", ".join(
+                                f"pos {ev.get('position')}: #{ev.get('from_sid')}"
+                                f"->#{ev.get('to_sid')}"
+                                for ev in (e.get('swap_log') or [])[-_added:])
+                            state.add_log_entry(
+                                f"🔁 {printer_name}: resumed job {swap_jid} — recorded "
+                                f"{_added} spool swap(s) at ~{(swap_progress or 0.0) * 100:.1f}% "
+                                f"({_d}){' [runout]' if swap_runout else ''}.",
+                                "INFO", "6cb2eb")
+                        else:
+                            state.add_log_entry(
+                                f"🔁 {printer_name}: resumed job {swap_jid} — no spool "
+                                f"mapping change at any toolhead "
+                                f"(before={_before or '{}'}, after={snap}), so no swap "
+                                f"was recorded and the full footer will be billed as-is.",
+                                "INFO", "6cb2eb")
                         # Consume the pause markers so a SUBSEQUENT pause/swap in the
                         # same job starts from a clean slate (next runout re-samples).
                         e.pop('pause_progress', None)
@@ -574,6 +601,19 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 # frozen pause progress + that an ATTENTION was seen (so a swap on the
                 # resume is treated as a RUNOUT). Keep the MAX across re-polls.
                 if cur == 'ATTENTION' and entry.get('filename'):
+                    # Log the FIRST park only — this re-polls every 10s. Without
+                    # this line, "the printer parked and we looked" and "the
+                    # printer never left PRINTING" are indistinguishable after
+                    # the fact in every log and every file, which is why the
+                    # 2026-10-08 spool-join incident couldn't be diagnosed from
+                    # prod's record. A multi-slot SpoolJoin runout may never
+                    # park at all; this is how we find out.
+                    if not entry.get('saw_attention'):
+                        state.add_log_entry(
+                            f"⏸️ {printer_name}: parked at ATTENTION during job "
+                            f"{entry.get('job_id')} at ~{(pause_progress or 0.0) * 100:.1f}% "
+                            f"— will check for a spool swap on resume.",
+                            "INFO", "6cb2eb")
                     entry['saw_attention'] = True
                     if pause_progress is not None:
                         entry['pause_progress'] = max(

@@ -8,6 +8,13 @@ Prod: Hosted on a TrueNAS server. Keep deployment, storage, and networking sugge
 ## Testing
 
 - **pytest + Playwright run on the host**, not inside the Docker image. Install once: `pip install -r requirements-dev.txt && playwright install chromium`. All E2E tests then hit `http://localhost:8000` of the running container.
+- **Node.js (`node` on PATH) is also a test prerequisite** (since 2026-09-13). `tests/test_core1_return_ejectall_js.py` runs the real frontend modules under node's `vm` module, with no browser and no container, so it runs under `--offline`. It is the only hermetic proof of the CORE1 Quick-Swap Return and CMD:EJECTALL guard fixes. Without node the module skips and raises a `PytestWarning` in the warnings summary. Set `FCC_REQUIRE_NODE=1` to make a missing node a collection error.
+- **⚠️ A plain `pytest tests/` run is NOT offline — it writes to real dev inventory.** This was mis-documented until 2026-08-03 and is worth internalising, because it silently shaped the whole verify cadence. The two opt-in flags guard **different services**:
+  - `RUN_INTEGRATION=1` / `--run-integration` gates `@pytest.mark.integration` — tests that hit the real dev **Spoolman** on the NAS.
+  - The `require_server` fixture gates tests that hit the local **FCC container** — and it skips *only when that container is DOWN*. So whenever the container is up, ~55 E2E files run on a plain `pytest`, drive a real browser, and mutate Derek's live dev data.
+  - Consequence to remember: an "innocent" verification sweep is a data-mutating event on a shared container, and takes ~27 minutes. It is also the leading suspect for the load-sensitive E2E flake family (a captured traceback showed `test_clone_e2e` failing because a concurrent test had moved the spool it needed — not a UI race).
+- **For a fast, provably hermetic check use `--offline` (or `FCC_OFFLINE=1`)**: `"C:/Python314/python.exe" -m pytest tests/ -p no:cacheprovider -q --offline`. It skips, at collection time, every test requesting a container-touching fixture (`page`, `require_server`, `clean_buffer`, `seed_*`, `scan`, …) — so no browser ever launches and nothing can write to dev. **~42 seconds instead of ~27 minutes.** Use it for iterating; use the full run (which includes the E2E) before committing anything that touches the frontend. Gating `require_server` alone would NOT be enough — a Playwright test can request `page` without it — hence the fixture-name list in `conftest.CONTAINER_FIXTURES`, pinned by `tests/test_offline_mode.py`.
+- **`pytest --reset-dev`** restores dev to the committed seed baseline (non-destructive) before a sweep, "so cross-test contamination can't accumulate". It exists for exactly the shared-data problem above but is not yet part of the routine cadence. ⚠️ It will discard hand-made dev state, so check with Derek before using it.
 - **Windows pip ↔ pytest interpreter mismatch (Derek's machine)**: bare `pip install <pkg>` resolves to `D:\Programming\Languages\Python\Python311\python.exe`, but `pytest` runs under `C:\Python314\python.exe`. Packages installed via bare `pip` are invisible to the sweep. Canonical install command for this machine: `"C:/Python314/python.exe" -m pip install <pkg>` (or `... -r requirements-dev.txt`). This bit the Group 14.5 BS4 install — beautifulsoup4 went into 3.11, the sweep imported under 3.14, and `test_amazon_parser_matching` skipped with `ModuleNotFoundError`.
 - **Visual regression**: baselines live at `inventory-hub/tests/__screenshots__/chromium-1600x1300/` — PIL-backed diff with a 1% pixel tolerance. Set `UPDATE_VISUAL_BASELINES=1` to recapture. The 1600×1300 viewport matches your dev testing window; prod / Framework 12 viewports can be added later without touching the harness.
 - **Shared fixtures**: `inventory-hub/tests/conftest.py` exposes `page`, `api_base_url`, `clean_buffer`, `with_held_spool`, `seed_dryer_box`, `seed_via_ui`, `snapshot`, `scan`, and `require_server` (which skips with a friendly message when the server is down).
@@ -46,6 +53,7 @@ Prod: Hosted on a TrueNAS server. Keep deployment, storage, and networking sugge
     - Inline overlay's Escape closes BOTH the overlay and its host modal → caller is also handling Escape; let `mountOverlay` own it.
     - Overlay lingers after host modal closes → didn't pass `host`.
     - `<select>` dropdown under the host intercepts overlay clicks → didn't pass `occlude`.
+- **Bootstrap gating dialogs (`#confirmModal` / `#safetyModal` / `#actionModal`) — never `.show()` / `.hide()` them directly (2026-09-12).** Go through `requestConfirmation` / `promptSafety` / `promptAction` / `closeModal` (`inv_core.js`). Bootstrap 5.3 silently IGNORES `show()` while a modal is fading out and `hide()` while it is fading in; FCC re-prompts from inside a dialog's own callback (eject → active-print re-confirm → "true unassign"), so a direct call drops the prompt with no error and leaves its callback armed. The helpers track each dialog's phase from Bootstrap's public events and queue the one call Bootstrap would drop. A CONFIRM scan may fire a callback only when `window.isGatingModalOnScreen(id)` (fully shown AND hit-tested visible — a `mountOverlay` panel can cover a Bootstrap modal); a fading dialog is click-inert via `global.css`. Pinned by `tests/test_confirm_chain_reshow_e2e.py`. Symptom of a bypass: "clicked YES, the second prompt never came, and nothing happened".
 - **Keyboard nav idiom**: arrow keys move a `.kb-active` class between focusable items (wraps at edges), Enter confirms, Escape cancels or prompts. Auto-focus the primary input when a modal opens. Force Location modal + Quick-Swap grid are reference implementations.
 - **Activity Log + Toasts**: every scan outcome (success, warning, error, partial) writes an Activity Log entry AND raises a toast. Error toasts use ≥7 s durations so blind-scanning failures don't slip past. Success toasts 4 s. `showToast(msg, type, duration)` where `type` is one of `success` / `error` / `warning` / `info`.
 
@@ -112,13 +120,15 @@ Inventory of current production write surfaces (keep this list updated when addi
 | `print_deduct.py` | print deduct — `_apply_usage_to_printer` | **FCC-native print-usage deduct** (replaced the FilaBridge auto-deduct in the 2026-06-13 Phase-2 cutover). Writes `used_weight` via `update_spool` per toolhead; the shared primitive for BOTH the cancelled-print partial deduct (`deduct_cancelled_print` — decode `.bgcode` + per-tool prefix-parse to the cancel/M73 point) AND the FINISHED completion deduct. Exactly-once via `print_deduct_ledger`; activity-log on failure. |
 | `print_deduct.py` | cancel/ambiguous-review confirm-apply (`api_cancel_deduct_confirm`) | User-confirmed deduct: re-reads CURRENT `used_weight` (so a weigh-out between preview and confirm isn't clobbered), clamps grams to real remaining, writes `used_weight` via `update_spool`; activity-log on success/failure. |
 | `routes_inventory.py` | `PATCH /api/vendors/<id>` Vendor Edit modal save | Uses `update_vendor_or_raise`; merges `extra` against existing record so partial PATCH preserves siblings; activity log on both success and rejection; surfaces Spoolman error body in response JSON for the modal to toast at 7s. |
-| `logic.py:524` | `perform_smart_move` unseat existing | Read-merge-write reference impl; logs failure. |
-| `logic.py:575` | `perform_smart_move` toolhead branch | Activity log on failure with Spoolman body. |
-| `logic.py:603` | `perform_smart_move` dryer branch | Activity log on failure. |
-| `logic.py:628` | `perform_smart_move` generic branch | Activity log on failure. |
-| `logic.py:827` | `perform_smart_eject` return-home | Activity log on failure. |
-| `logic.py:853` | `perform_smart_eject` relocate | Activity log on failure. |
-| `logic.py:1007` | `perform_force_unassign` | Activity log on failure. |
+| `logic.py` | `_perform_smart_move_impl` — unseat existing slot occupant | Read-merge-write reference impl; logs failure. |
+| `logic.py` | `_perform_smart_move_impl` — toolhead branch | Activity log on failure with Spoolman body. The trail comes from `_ghost_trail_from`: a toolhead is NEVER written as `physical_source`, and the 13.6 reverse-binding never claims an occupied slot (2026-09-12). |
+| `logic.py` | `_perform_smart_move_impl` — dryer branch | Activity log on failure. Clears the trail by writing `""` — a `pop()`ed key is KEPT by the extras merge, so pop never cleared it. |
+| `logic.py` | `_perform_smart_move_impl` — generic branch | Activity log on failure. Same `""` rule as the dryer branch. |
+| `logic.py` | `_perform_smart_move_impl` — Smart Load resident unload (via `perform_smart_eject`) | Only a spool whose OWN record is on the head; forwards `confirm_active_print` + `homeless_destination` (the printer's Room, else Unassigned). Only `is True` counts — anything else refuses the whole move (`status: error` + `failures`, ERROR log). Callers must read `failures`, not just `status` (`logic.smart_move_failure`). |
+| `logic.py` | `perform_smart_eject` — return-home | Activity log on failure. A toolhead-valued saved source is treated as stale. The Group 20.2 single-slot box detach runs only AFTER the write lands. |
+| `logic.py` | `perform_smart_eject` — relocate | Activity log on failure. `homeless_destination` (caller-decided, e.g. Smart Load) skips the protected-unassign prompt. ⚠️ Every refusal it returns is truthy — test `is True`. |
+| `logic.py` | `perform_force_unassign` | Activity log on failure. |
+| `logic.py` | `perform_undo` — move + Smart-Load-ejection restore | Restores `location` + `SYSTEM_MANAGED_EXTRAS` via read-merge-write; ERROR log per rejection. An ejected resident goes back onto a single-occupancy head only if the strict read shows it empty; otherwise ERROR + `success: False`. |
 | `inv_details.js:promptEditSlicerProfile` | Pencil overlay on filament details modal | Client-side merges current `extra` from `/api/filaments/<id>` before POST to `/api/update_filament` so siblings (`nozzle_temp_max`, `sheet_link`, `filament_attributes`, etc.) are preserved. Surfaces error in Swal. Fires `add_choice` POST after successful save when user typed a brand-new profile name. |
 
 ### Weight-entry surfaces (known fragmentation hot-spot)
@@ -136,6 +146,24 @@ Until the Config system (Feature-Buglist.md L9) lands, a small number of user pr
 | `fcc.weighEntry.defaultMode` | string | `gross` / `net` / `additive` / `set_used` | `<WeightEntry>` overlay — last mode the user clicked "Set as default" on (or `D` shortcut). Read on overlay open, falls through to the caller-supplied `defaultMode` option when unset/invalid. |
 | `fcc.fab.pos` | JSON `{left,bottom}` | px distances from the viewport's left / bottom edges | `fab_drag.js` (shared `draggable_pill.js` engine) — the draggable global search FAB's parked position (buglist 21.1). Written on drag-end; long-press resets to the default. Loaded + viewport-clamped on page load; absent/invalid → bottom-left cmd-deck-band default (clear of buffer weights + the WEIGH QR). |
 | `fcc.logPill.pos` | JSON `{left,bottom}` | px distances from the viewport's left / bottom edges | `fab_drag.js` (shared `draggable_pill.js` engine) — the draggable Activity-Log "N new" pill's parked position (2026-06-15, `#fcc-log-pill`). Written on drag-end; long-press resets to default. Loaded + viewport-clamped on page load; absent/invalid → a bottom-right default lifted above the cmd-deck band (diagonally opposite the FAB). Position is independent of the pill's JS-toggled show/hide (the separate `fcc.logPill.lastSeenTime` "unseen" gate). |
+| `fcc.bulkMovePill.pos` | JSON `{left,bottom}` | px distances from the viewport's left / bottom edges | `fab_drag.js` (shared `draggable_pill.js` engine) — the draggable 🔀 **bulk-move armed pill**'s parked position (2026-08-03, `#fcc-bulkmove-pill`). Shown for exactly as long as a bulk-move session is armed, so a hidden preview panel can never be lost; tap reopens the panel, long-press resets position. Visibility + label are owned by `updateBulkMoveVisuals` (inv_cmd.js), NOT by this key. Absent/invalid → one lane above the log pill. |
+
+## Multi-agent Workflow budget
+
+**Before launching a multi-agent `Workflow`:** state the agent count + rough cost
+first. **Batch the verify stage** — never one agent per finding (that is what blew
+a usage window on 2026-08-02: 55 findings → 55 verifiers; re-running the same
+review at 14 findings/agent cost 710K tokens instead of 4.4M, with zero agent
+errors and *more* usable signal). If the fan-out is large and the current usage
+window is unknown, ask for quota / reset time / work-headroom before starting.
+
+This subscription is shared with Derek's **paid work** (a separate machine and
+workspace — everything in this repo is a hobby project), so an oversized burst
+here can block real work. Quality is NOT the thing to cut: keep the effort and
+the rigor, shape the fan-out better and defer optional depth to an idle window.
+Night/scheduled work must never sit on the critical path, and scheduled agents
+start with zero context so they need self-contained instructions. Pay-as-you-go
+credits exist but are a **last resort** — propose and discuss, never assume.
 
 ## Working Groups (Batched Tasks)
 
@@ -144,3 +172,13 @@ Tasks from `Feature-Buglist.md` are organized into batched working groups for ef
 - **Index:** `docs/agent_docs/working-groups.md` — status table, recommended order, usage instructions.
 - **Task files:** `docs/agent_docs/tasks/01-*.md` through `11-*.md` — self-contained specs per group.
 - **Commands:** `/project:work-group <N>` to start a group, `/project:finish-group` to wrap up, `/project:refresh-groups` to re-analyze the buglist after adding new items.
+
+### ⏸️ The PENDING DEREK section — always surface it
+
+`Feature-Buglist.md` opens with a **`## ⏸️ PENDING DEREK`** section: work that is blocked only on Derek doing something by hand (a hands-on test pass, capturing an artefact, a cleanup decision), never on code. It was carved out on 2026-10-08 so manual testing could stop gating releases — ~100 commits of fixes, several of them data-loss fixes, had been held behind one feature Derek didn't want to test.
+
+**Whenever you read `Feature-Buglist.md` for pending work, what to do next, or what's outstanding, list these items too** — even when the question was about something else. Derek's standing ask (2026-10-08): *"I'd still like to have them come up anytime I have you look at the Feature-Buglist.md for any pending work or what not. I'll eventually get around to doing it. Just don't know when."* `grep "PENDING DEREK" Feature-Buglist.md` finds them.
+
+Two rules that keep the carve-out honest:
+- **Nothing in that section may block a release.** If something there turns out to gate shipping, that is a bug in the plan — decouple it (a feature flag is the established move; see `fcc.bulkMove.enabled`) rather than re-blocking the release on Derek.
+- **Don't nag.** Surface them as a short list with current state, not a to-do lecture. He knows; he'll get to it.

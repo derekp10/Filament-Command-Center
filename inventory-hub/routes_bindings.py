@@ -259,40 +259,47 @@ def api_put_printer_creds():
     if not ip and api_key_in not in (None, '', config_schema.SECRET_SENTINEL):
         return jsonify({"ok": False,
                         "error": "Enter the printer's IP address too — an API key can't be saved without it."}), 400
-    try:
-        rows = locations_db.load_locations_list()
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"could not read locations: {e}"}), 500
-    if loc_id:
-        return _put_printer_creds_by_id(rows, loc_id, ip, api_key_in)
-    # Confirm the Printer row exists before any write (changed=False is ambiguous —
-    # it also means "value unchanged" — so we can't use it to detect a bad name).
-    if not any(isinstance(r, dict)
-               and str(r.get('Type', '')).strip().lower() == 'printer'
-               and str(r.get('Name', '')) == name
-               for r in (rows or [])):
-        return jsonify({"ok": False, "error": f"No Printer named {name!r}"}), 404
-    # Sentinel = keep the stored key; otherwise take the sent value (blank → None).
-    if api_key_in == config_schema.SECRET_SENTINEL:
-        existing = locations_db.get_printer_credentials(name, rows) or {}
-        api_key = existing.get('api_key')
-    else:
-        api_key = api_key_in if api_key_in else None
-    rows, changed = locations_db.set_printer_credentials(rows, name, ip, api_key)
-    if changed:
-        if not locations_db.save_locations_list(rows):
-            state.add_log_entry(f"🔐 Printer connection save FAILED for {name}", "ERROR", "ff4444")
-            return jsonify({"ok": False, "error": "could not persist printer connection"}), 500
-        # 29.B2 — only log the "updated" INFO line on an ACTUAL change; a no-op
-        # PUT with identical creds no longer emits a misleading "updated" entry.
-        state.add_log_entry(f"🔐 Printer connection updated for {name}", "INFO")
+    # Group 38 follow-up — the whole load→mutate→save cycle is serialized. Both
+    # reads and the write must sit inside one critical section; locking only the
+    # save would leave the interleave (a concurrent writer's snapshot reverting
+    # this one) wide open. Pure CPU in here — no Spoolman I/O — so the lock is
+    # held only for the file operations.
+    with locations_db.locations_write_lock():
+        try:
+            rows = locations_db.load_locations_list()
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"could not read locations: {e}"}), 500
+        if loc_id:
+            return _put_printer_creds_by_id(rows, loc_id, ip, api_key_in)
+        # Confirm the Printer row exists before any write (changed=False is ambiguous —
+        # it also means "value unchanged" — so we can't use it to detect a bad name).
+        if not any(isinstance(r, dict)
+                   and str(r.get('Type', '')).strip().lower() == 'printer'
+                   and str(r.get('Name', '')) == name
+                   for r in (rows or [])):
+            return jsonify({"ok": False, "error": f"No Printer named {name!r}"}), 404
+        # Sentinel = keep the stored key; otherwise take the sent value (blank → None).
+        if api_key_in == config_schema.SECRET_SENTINEL:
+            existing = locations_db.get_printer_credentials(name, rows) or {}
+            api_key = existing.get('api_key')
+        else:
+            api_key = api_key_in if api_key_in else None
+        rows, changed = locations_db.set_printer_credentials(rows, name, ip, api_key)
+        if changed:
+            if not locations_db.save_locations_list(rows):
+                state.add_log_entry(f"🔐 Printer connection save FAILED for {name}", "ERROR", "ff4444")
+                return jsonify({"ok": False, "error": "could not persist printer connection"}), 500
+            # 29.B2 — only log the "updated" INFO line on an ACTUAL change; a no-op
+            # PUT with identical creds no longer emits a misleading "updated" entry.
+            state.add_log_entry(f"🔐 Printer connection updated for {name}", "INFO")
     return jsonify({"ok": True, "error": None})
 
 
 def _put_printer_creds_by_id(rows, loc_id, ip, api_key_in):
     """Hotfix 2026-09-29 — the `location_id` branch of PUT /api/printer_creds.
     Same sentinel, persist-failure and changed-guard contract as the Name branch
-    above, addressed by the Printer row's LocationID."""
+    above, addressed by the Printer row's LocationID. Caller MUST hold
+    locations_write_lock() (it read `rows` inside it and this writes them back)."""
     row = locations_db.find_printer_row(rows, loc_id)
     if row is None:
         return jsonify({"ok": False, "error": f"No Printer with LocationID {loc_id!r}"}), 404
@@ -316,6 +323,27 @@ def _pm_prefix(k):
     matching locations_db._known_printer_prefixes."""
     k = str(k).strip().upper()
     return k.split('-', 1)[0] if '-' in k else k
+
+
+def _printer_row_toolheads(loc_list, loc_id):
+    """L271 — the toolhead LocationIDs a Printer row owns (its toolheads[]),
+    uppercased, in stored order; [] when `loc_id` is not a Printer row.
+
+    The row, not the spelling of its id, says which heads belong to a printer: a
+    toolhead id need not start with "<printer id>-" (a Core One+ row can own
+    CORE1-T1/CORE1-T2), and a head can share the printer's own id (CORE1)."""
+    want = str(loc_id or '').strip().upper()
+    for row in (loc_list or []):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        if str(row.get('LocationID', '')).strip().upper() != want:
+            continue
+        return [str(th.get('location_id', '')).strip().upper()
+                for th in (row.get('toolheads') or [])
+                if isinstance(th, dict) and str(th.get('location_id', '')).strip()]
+    return []
 
 
 def _natural_key(s):
@@ -438,55 +466,60 @@ def api_put_printer_map():
 
     # Persist the edit onto the Printer rows AUTHORITATIVELY — this is the only
     # write now, so a failure to persist is a server 500 (not best-effort).
+    # Group 38 follow-up — one critical section from the read to the write, so a
+    # concurrent writer's snapshot can't revert the printer rows written here.
+    # Pure CPU inside (the migrations are functions over `_locs`), so the lock
+    # is held only for the file I/O.
     try:
-        _locs = locations_db.load_locations_list()
-        # Create a Type:"Printer" row for any brand-new printer first…
-        _locs, _ = locations_db.migrate_printers_to_rows_if_needed(_locs, canonical)
-        # …then re-sync every Printer row's toolheads[] from the edited map (full
-        # re-sync — NOT prime_only — so an edit actually applies; positions kept
-        # verbatim, no auto-renumber).
-        _locs, _ = locations_db.migrate_printer_map_to_toolheads_if_needed(_locs, canonical)
-        # …and sync each Printer row's Name from the edited printer_name (the row
-        # Name is the single source of truth for the display name, so a rename in
-        # the editor must propagate — neither migration above touches Name).
-        _names_by_prefix = {}
-        for _k, _info in canonical.items():
-            _pfx = _k.split('-', 1)[0] if '-' in _k else _k
-            _names_by_prefix.setdefault(_pfx, _info.get('printer_name', ''))
-        for _row in _locs:
-            if not isinstance(_row, dict) or str(_row.get('Type', '')).strip().lower() != 'printer':
-                continue
-            _pid = str(_row.get('LocationID', '')).strip().upper()
-            _new_name = _names_by_prefix.get(_pid)
-            if _new_name and _row.get('Name') != _new_name:
-                _row['Name'] = _new_name
-        # Hotfix 2026-09-29: refuse a save that leaves two printers sharing a
-        # Name this edit sets — creds, status and deducts resolve a printer by
-        # Name. Toolheads of ONE printer share its LocationID prefix, so a second
-        # prefix under the same name is a second printer.
-        _shared = locations_db.shared_printer_names(_locs, set(_names_by_prefix.values()))
-        if _shared:
-            reason = "; ".join(
-                f"printer name {nm!r} would be shared by {' and '.join(ids)}"
-                for nm, ids in sorted(_shared.items()))
-            reason += (" — give each printer its own name (all toolheads of one printer "
-                       "share its ID prefix, e.g. RCOI-1…RCOI-8)")
-            state.add_log_entry(f"⚙️ Printer-map save blocked — {reason}", "ERROR", "ff4444")
-            return jsonify({"ok": False, "error": reason}), 400
-        # …and keep the Location Manager in step: a new toolhead gets its Tool
-        # Head row (spools can only be put on a real location), and a toolhead
-        # the guard just cleared for removal loses its now-empty row.
-        _locs, _created_heads = locations_db.ensure_toolhead_rows(_locs, canonical)
-        # "Removed" = what the re-sync actually took off the Printer rows, not
-        # old-minus-submitted: the re-sync is a no-op for an empty map, and
-        # dropping rows on that basis would orphan heads the printers still list.
-        _still_listed = set(locations_db.build_printer_map_from_rows(_locs))
-        _removed_keys = {str(k).strip().upper() for k in old_map} - _still_listed
-        _locs, _dropped_heads = locations_db.remove_unused_toolhead_rows(_locs, _removed_keys)
-        if not locations_db.save_locations_list(_locs):
-            reason = "could not persist the printer rows"
-            state.add_log_entry(f"⚙️ Printer-map save failed: {reason}", "ERROR", "ff4444")
-            return jsonify({"ok": False, "error": reason}), 500
+        with locations_db.locations_write_lock():
+            _locs = locations_db.load_locations_list()
+            # Create a Type:"Printer" row for any brand-new printer first…
+            _locs, _ = locations_db.migrate_printers_to_rows_if_needed(_locs, canonical)
+            # …then re-sync every Printer row's toolheads[] from the edited map (full
+            # re-sync — NOT prime_only — so an edit actually applies; positions kept
+            # verbatim, no auto-renumber).
+            _locs, _ = locations_db.migrate_printer_map_to_toolheads_if_needed(_locs, canonical)
+            # …and sync each Printer row's Name from the edited printer_name (the row
+            # Name is the single source of truth for the display name, so a rename in
+            # the editor must propagate — neither migration above touches Name).
+            _names_by_prefix = {}
+            for _k, _info in canonical.items():
+                _pfx = _k.split('-', 1)[0] if '-' in _k else _k
+                _names_by_prefix.setdefault(_pfx, _info.get('printer_name', ''))
+            for _row in _locs:
+                if not isinstance(_row, dict) or str(_row.get('Type', '')).strip().lower() != 'printer':
+                    continue
+                _pid = str(_row.get('LocationID', '')).strip().upper()
+                _new_name = _names_by_prefix.get(_pid)
+                if _new_name and _row.get('Name') != _new_name:
+                    _row['Name'] = _new_name
+            # Hotfix 2026-09-29: refuse a save that leaves two printers sharing a
+            # Name this edit sets — creds, status and deducts resolve a printer by
+            # Name. Toolheads of ONE printer share its LocationID prefix, so a second
+            # prefix under the same name is a second printer.
+            _shared = locations_db.shared_printer_names(_locs, set(_names_by_prefix.values()))
+            if _shared:
+                reason = "; ".join(
+                    f"printer name {nm!r} would be shared by {' and '.join(ids)}"
+                    for nm, ids in sorted(_shared.items()))
+                reason += (" — give each printer its own name (all toolheads of one printer "
+                           "share its ID prefix, e.g. RCOI-1…RCOI-8)")
+                state.add_log_entry(f"⚙️ Printer-map save blocked — {reason}", "ERROR", "ff4444")
+                return jsonify({"ok": False, "error": reason}), 400
+            # …and keep the Location Manager in step: a new toolhead gets its Tool
+            # Head row (spools can only be put on a real location), and a toolhead
+            # the guard just cleared for removal loses its now-empty row.
+            _locs, _created_heads = locations_db.ensure_toolhead_rows(_locs, canonical)
+            # "Removed" = what the re-sync actually took off the Printer rows, not
+            # old-minus-submitted: the re-sync is a no-op for an empty map, and
+            # dropping rows on that basis would orphan heads the printers still list.
+            _still_listed = set(locations_db.build_printer_map_from_rows(_locs))
+            _removed_keys = {str(k).strip().upper() for k in old_map} - _still_listed
+            _locs, _dropped_heads = locations_db.remove_unused_toolhead_rows(_locs, _removed_keys)
+            if not locations_db.save_locations_list(_locs):
+                reason = "could not persist the printer rows"
+                state.add_log_entry(f"⚙️ Printer-map save failed: {reason}", "ERROR", "ff4444")
+                return jsonify({"ok": False, "error": reason}), 500
     except Exception as _write_err:
         state.logger.error(f"printer_map row write failed: {_write_err}")
         state.add_log_entry(f"⚙️ Printer-map save failed: {_write_err}", "ERROR", "ff4444")
@@ -596,9 +629,9 @@ def api_quickswap_return():
     and send it back to the first dryer-box slot bound to that toolhead.
 
     Accepts either a specific toolhead location ID (e.g. "XL-1") or a
-    virtual-printer prefix (e.g. "XL") — in the latter case we fan out
-    across every toolhead of that printer and return the first one that
-    has a spool loaded.
+    Printer row / virtual-printer prefix (e.g. "XL") — in the latter case we
+    fan out across every toolhead of that printer and return the first one
+    that has a spool loaded.
     """
     data = request.get_json(silent=True) or {}
     toolhead = str(data.get('toolhead', '')).strip().upper()
@@ -611,22 +644,35 @@ def api_quickswap_return():
 
     # 29.N1 — the vestigial `cfg = config_loader.load_config()` (unused
     # FilaBridge residue) was removed here; printer_map is the sole source.
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
+    # Read locations.json once and hand it to every consumer: the printer_map
+    # build (which would otherwise reload the file itself), the Printer-row
+    # lookup below, and the destination search in step 2.
+    loc_list = locations_db.load_locations_list()
+    printer_map = locations_db.get_active_printer_map(loc_list)  # L271 P4 step 2: Printer-row toolheads[]
 
-    # Build the list of toolhead IDs we should check. For a virtual
-    # printer prefix, this is every toolhead in printer_map that starts
-    # with "<prefix>-". For a specific toolhead, it's just that ID.
+    # Build the list of toolhead IDs we should check:
+    #   * a registered toolhead -> just that ID (the Core One's single head
+    #     shares its Printer row's id, CORE1, and lands here);
+    #   * a Printer row -> the toolheads[] on that row (L271: the row, not a
+    #     "<id>-" spelling, says which heads are its own);
+    #   * anything else -> the legacy "<prefix>-" fan-out, kept until L271
+    #     Phase 5 retires prefix matching.
+    # 29.B1 — natural sort (XL-2 before XL-10), not lexicographic. This order
+    # determines both the probe order and which loaded toolhead the return
+    # acts on when a printer fans out.
     pm_keys_up = {k.upper() for k in printer_map.keys()}
     candidate_toolheads = []
     if toolhead in pm_keys_up:
         candidate_toolheads = [toolhead]
     else:
-        prefix = toolhead + '-'
-        # 29.B1 — natural sort (XL-2 before XL-10), not lexicographic. This
-        # order determines both the probe order and which loaded toolhead the
-        # return acts on when a virtual-printer prefix fans out.
-        candidate_toolheads = sorted(
-            (k for k in pm_keys_up if k.startswith(prefix)), key=_natural_key)
+        row_heads = _printer_row_toolheads(loc_list, toolhead)
+        if row_heads:
+            candidate_toolheads = sorted(
+                {t for t in row_heads if t in pm_keys_up}, key=_natural_key)
+        else:
+            prefix = toolhead + '-'
+            candidate_toolheads = sorted(
+                (k for k in pm_keys_up if k.startswith(prefix)), key=_natural_key)
 
     if not candidate_toolheads:
         state.add_log_entry(
@@ -635,14 +681,50 @@ def api_quickswap_return():
         )
         return jsonify({"action": "return_bad_toolhead", "toolhead": toolhead}), 404
 
-    # 1) Find the first candidate toolhead that has a loaded spool.
-    active_toolhead, spool_id = None, None
+    # 1) Find the first candidate toolhead that has a loaded spool. Only a spool
+    #    whose OWN record says it is on the toolhead counts: the location matcher
+    #    also returns ghosts (a stale physical_source naming the head), and
+    #    Return used to grab one of those off a different head (2026-09-12).
+    active_toolhead, spool_id, spool_data = None, None, {}
+    unreadable_at = {}  # toolhead -> ids Spoolman couldn't return a record for
     for th in candidate_toolheads:
-        residents = spoolman_api.get_spools_at_location(th)
-        if residents:
+        loaded = []
+        for rid in spoolman_api.get_spools_at_location(th):
+            rec = spoolman_api.get_spool(rid)
+            if not rec:
+                unreadable_at.setdefault(th, []).append(int(rid))
+            elif str(rec.get('location') or '').strip().upper() == th:
+                loaded.append((int(rid), rec))
+        if len(loaded) > 1:
+            ids = ", ".join(f"#{sid}" for sid, _ in loaded)
+            msg = f"{th} holds {len(loaded)} spools ({ids}) — eject the wrong one first"
+            state.add_log_entry(f"⚠️ Return: {msg}", "WARNING", "ffaa00")
+            return jsonify({
+                "action": "return_ambiguous",
+                "toolhead": toolhead,
+                "active_toolhead": th,
+                "requested": toolhead,
+                "spools": [sid for sid, _ in loaded],
+                "error": msg,
+            }), 409
+        if loaded:
             active_toolhead = th
-            spool_id = int(residents[0])
+            spool_id, spool_data = loaded[0]
             break
+    if not active_toolhead and unreadable_at:
+        # A spool Spoolman couldn't read is not an empty toolhead (2026-09-12
+        # review): say the read failed rather than "nothing to return".
+        th, ids = next(iter(unreadable_at.items()))
+        msg = (f"could not read {', '.join(f'#{sid}' for sid in ids)} from Spoolman — "
+               f"{th} may still be loaded")
+        state.add_log_entry(f"❌ Return: {msg}", "ERROR", "ff4444")
+        return jsonify({
+            "action": "return_failed",
+            "toolhead": toolhead,
+            "active_toolhead": th,
+            "requested": toolhead,
+            "error": msg,
+        }), 502
     if not active_toolhead:
         names = ", ".join(candidate_toolheads) if len(candidate_toolheads) > 1 else candidate_toolheads[0]
         state.add_log_entry(
@@ -661,12 +743,10 @@ def api_quickswap_return():
     #    user's mental model of "return" maps to, and it handles the
     #    multi-box-per-toolhead case correctly.
     #    Fallback: the first dryer-box slot bound to this toolhead.
-    spool_data = spoolman_api.get_spool(spool_id) or {}
     extra = spool_data.get('extra') or {}
     src_loc = str(extra.get('physical_source', '') or '').strip().strip('"').upper()
     src_slot = str(extra.get('physical_source_slot', '') or '').strip().strip('"')
 
-    loc_list = locations_db.load_locations_list()
     found_box, found_slot, found_source = None, None, None
 
     # Preferred path: physical_source points at a Dryer Box and that slot
@@ -717,7 +797,22 @@ def api_quickswap_return():
             "requested": toolhead,
         }), 404
     # Re-tag toolhead in the response to the actual one we acted on.
+    requested = toolhead
     toolhead = active_toolhead
+
+    # Never unseat a spool already staged in that slot: perform_smart_move's
+    # slot assignment would silently clear its container_slot (2026-09-12
+    # review). Let the engine pick a free slot instead, and say so.
+    if found_slot:
+        taken_by = next((
+            o.get('id') for o in (spoolman_api.get_spools_at_location_detailed(found_box) or [])
+            if str(o.get('id')) != str(spool_id)
+            and str(o.get('slot', '')).strip('"') == str(found_slot)), None)
+        if taken_by is not None:
+            state.add_log_entry(
+                f"⚠️ Return: {found_box} slot {found_slot} already holds #{taken_by} — "
+                f"returning #{spool_id} to a free slot instead", "WARNING", "ffaa00")
+            found_slot = None
 
     # 3) Send the spool back. perform_smart_move handles Filabridge + extras.
     # The destination is a dryer box (not a toolhead), so the destination
@@ -725,10 +820,38 @@ def api_quickswap_return():
     # surfaced by the Quick-Swap confirm overlay's banner before this
     # endpoint was called — backend just passes confirm_active_print=True
     # unconditionally here because the user already saw the warning.
+    # auto_deploy=False (2026-09-12): the slot is normally bound to this same
+    # toolhead, so the auto-deploy chain put the spool straight back onto it
+    # while this route still answered return_done. Every Return was a silent
+    # round trip, and it would have become one mid-print too once the chain
+    # honoured the caller's confirm.
     move_result = logic.perform_smart_move(
         found_box, [spool_id], target_slot=found_slot, origin='quickswap_return',
-        confirm_active_print=True,
+        auto_deploy=False, confirm_active_print=True,
     )
+    move_failed = logic.smart_move_failure(move_result, spool_id)
+    if move_failed:
+        state.add_log_entry(
+            f"❌ Return: Spool #{spool_id} was NOT returned to <b>{found_box}</b> — {move_failed}",
+            "ERROR", "ff4444"
+        )
+        return jsonify({
+            "action": "return_failed",
+            "spool": spool_id,
+            # 29.B3: `toolhead` is the REQUESTED value in every error branch.
+            "toolhead": requested,
+            "active_toolhead": toolhead,
+            "requested": requested,
+            "box": found_box,
+            "slot": found_slot,
+            "error": move_failed,
+            "smart_move": move_result,
+        }), 502
+    if not found_slot:
+        # The engine picked the slot (none was recorded, or the recorded one was
+        # taken): report where the spool actually landed.
+        landed_extra = (spoolman_api.get_spool(spool_id) or {}).get('extra') or {}
+        found_slot = str(landed_extra.get('container_slot') or '').strip().strip('"') or None
     src_note = " (original source)" if found_source == 'physical_source' else " (first bound slot)"
     slot_part = f":SLOT:{found_slot}" if found_slot else ""
     state.add_log_entry(
@@ -816,6 +939,21 @@ def api_quickswap():
         toolhead, [spool_id], target_slot=None, origin='quickswap',
         confirm_active_print=True,
     )
+    # 2026-09-12: a rejected write, or a resident Smart Load could not unload,
+    # used to be logged and answered as quickswap_done.
+    move_failed = logic.smart_move_failure(move_result, spool_id)
+    if move_failed:
+        state.add_log_entry(
+            f"❌ Quick-swap: Spool #{spool_id} was NOT loaded onto <b>{toolhead}</b> — {move_failed}",
+            "ERROR", "ff4444"
+        )
+        return jsonify({
+            "action": "quickswap_failed",
+            "spool": spool_id,
+            "toolhead": toolhead, "box": box, "slot": slot,
+            "error": move_failed,
+            "smart_move": move_result,
+        }), 502
     state.add_log_entry(
         f"⚡ Quick-swap: Spool #{spool_id} from <b>{box}:SLOT:{slot}</b> → <b>{toolhead}</b>",
         "SUCCESS", "00ff00"

@@ -19,6 +19,13 @@ let state = {
     lastScannedLoc: null,
     auditActive: false,
     lastAuditState: null,
+    // L298 Phase 2 — bulk-move scan session. `bulkMoveActive` mirrors the
+    // backend's session flag from the /api/logs heartbeat; `bulkMoveStage`
+    // (idle | awaiting_source | awaiting_dest | preview) drives the deck QR's
+    // shapeshift and is refreshed by the panel's own session poll.
+    bulkMoveActive: false,
+    lastBulkMoveState: null,
+    bulkMoveStage: 'idle',
 
     // Manager
     currentGrid: {},
@@ -31,6 +38,102 @@ let state = {
     pendingConfirm: null,
     pendingSafety: null
 };
+
+// --- SCAN-IN-FLIGHT (the one canonical definition) ---
+// "Is a barcode scanner mid-payload right now?" A scanner types its payload as
+// ordinary keydowns, so ANY key handler that fires on a bare letter, or that
+// treats Enter as a button press, will steal characters out of a scan unless it
+// asks this first.
+//
+// This lived as THREE identical copy-pasted closures (fab_drag.js,
+// inv_cmd.js, shortcuts_registry.js) and the 2026-08-03 scan-path audit was
+// about to add several more. One definition, on `state` so every module can
+// reach it, is the fix — the audit's own recommendation.
+//
+// The 500ms window matters: `scanBuffer` alone is not enough. A buffer left by
+// an abandoned keystroke lingers until the 2s accumulator timeout, and during
+// that window a bare truthiness check would wrongly block real button presses.
+// A scanner delivers its whole payload in well under 500ms.
+const isScanInFlight = () => {
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.length > 0
+        && st.scanStartTime && (Date.now() - st.scanStartTime) < 500);
+};
+window.isScanInFlight = isScanInFlight;
+
+// --- SCAN CAPTURE FROM A FOCUSED FIELD ---
+// The global accumulator bails on `e.target.tagName === 'INPUT'`, so any modal
+// that focuses a text field disarms the scanner. Sometimes dropping the
+// auto-focus is right; sometimes the field genuinely wants the cursor AND the
+// modal genuinely wants to accept scans (Weigh-Out says "scan them now while
+// this window is open" while focusing a weight box; Manage Contents re-focuses
+// its ID field after every add while its own CMD:DONE QR sits below).
+//
+// This lets such a field keep focus and still hand scanner input to the scan
+// path. Two conditions, BOTH required, so ordinary typing is never hijacked:
+//   1. scanner SPEED — the payload lands in under 150ms, the same threshold the
+//      global accumulator uses to classify barcode vs keyboard;
+//   2. the text does not look like something a human would type HERE — supplied
+//      per-caller, because "not a weight" and "not a spool id" differ.
+//
+// One implementation, not one per modal: the 2026-08-03 audit found the same
+// scan-path defect re-written in four separate places, so new copies of this
+// logic are exactly what to avoid.
+//
+//   match(el)          -> is this the field we care about?
+//   isScanPayload(txt) -> is this a scan rather than typing?
+//   onScan(txt, el)    -> what to do with it (default: window.processScan)
+const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
+    let buf = '';
+    let startedAt = 0;
+    let lastAt = 0;
+    let preScanValue = '';   // what the user had typed BEFORE the burst began
+    document.addEventListener('keydown', (e) => {
+        const el = e.target;
+        if (!el || !match(el)) return;
+        const now = Date.now();
+
+        if (e.key === 'Enter') {
+            const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
+            const looksScanned = fast && isScanPayload(buf);
+            const payload = buf;
+            const restore = preScanValue;
+            buf = ''; startedAt = 0; preScanValue = '';
+            if (!looksScanned) return;   // a real entry — let the field's own handler run
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            // RESTORE what the user had typed, don't blank the field. The
+            // scanner's characters were appended to their in-progress value
+            // (this handler doesn't preventDefault on character keys), so
+            // clearing outright silently destroyed an un-submitted weight —
+            // and the Group 31.3 preserve-text snapshot in renderWeighOutList
+            // then captured an already-empty field, so the buffer-updated
+            // redraw could not bring it back either.
+            el.value = restore;
+            if (onScan) onScan(payload, el);
+            else if (window.processScan) window.processScan(payload, 'barcode');
+            return;
+        }
+
+        if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
+        // A gap longer than the scanner threshold means a human — start over,
+        // and re-snapshot what is in the field at the moment a burst begins.
+        if (!buf || (now - lastAt) > 150) {
+            buf = '';
+            startedAt = now;
+            preScanValue = el.value || '';
+        }
+        buf += e.key;
+        lastAt = now;
+    }, true);   // capture: must beat the field's own Enter handler
+};
+window.installFieldScanCapture = installFieldScanCapture;
+
+// A scan payload always carries a prefix marker (`ID:`, `LOC:`, `CMD:`,
+// `FIL:`, `SPOOL:`) or is a URL (Prusament QRs). Nothing a user types into an
+// id/weight box looks like that, which is what makes the distinction safe.
+window.looksLikeScanPayload = (txt) =>
+    /[:/]/.test(txt) || /^https?/i.test(txt);
 
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
@@ -102,6 +205,11 @@ const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
 ));
 const escAttr = escHtml;
 window.escHtml = escHtml;
+// Export escAttr too — cross-module callers (e.g. the Group-34 parent tree
+// picker in inv_loc_mgr.js) reach it via window; without this a
+// `window.escAttr || identity` fallback silently disables attribute escaping
+// (stored-XSS via a LocationID interpolated into a data-* attribute).
+window.escAttr = escAttr;
 
 // 23.4 — Shared delete-sentinel for clearing a Spoolman `extra` field. The
 // backend merge (spoolman_api._merge_extras_with_existing) treats an OMITTED
@@ -208,6 +316,14 @@ window.logsStickyPaused = false;
 const pauseLogs = (isPaused) => {
     state.logsPaused = isPaused;
     window.logsStickyPaused = isPaused;
+    if (!isPaused) {
+        // Resuming: the paused ticks kept storing the content hash without
+        // rewriting the list, so an unchanged-hash payload would short-circuit
+        // and leave the frozen DOM on screen. Drop the hash and force one
+        // render so resume snaps straight to current state.
+        state.lastLogHash = null;
+        if (typeof updateLogState === 'function') updateLogState(true);
+    }
     const el = document.getElementById('log-status');
     if (el) {
         if (isPaused) { el.innerText = "PAUSED ⏸ (click to resume)"; el.style.color = "#fc0"; el.classList.remove('text-light'); }
@@ -511,6 +627,45 @@ const rgbText = (hex) => {
 };
 window.rgbText = rgbText;
 
+// Group-34 Phase 0 — the shared parent_id tree primitive. The
+// LocationID→parent_id walk was duplicated across _renderLocationsPayload (the
+// LM render), _locDescendants (cycle guard) and _locBreadcrumbChain (the Edit
+// modal breadcrumb); extract it once so those three — and the Phase-2
+// add-redesign tree picker — all read identical structure. Returns:
+//   byId       Map(UC id -> row)
+//   parentOf   Map(UC id -> UC parent id | null) — null when the parent isn't a
+//              real row (orphan floats to root); independent of shouldFloat
+//   childrenOf Map(UC parent id -> [rows]) — attached only under real-row
+//              parents, minus any row shouldFloat() pulls to root
+//   roots      [rows] with no real parent (or floated)
+// `uc` defaults to the toUpperCase() both existing call sites already use (no
+// trim, so re-wiring them is byte-identical). `shouldFloat(row)` optionally
+// forces a row to root even under a real parent (the render's pin-printers
+// mode) WITHOUT disturbing parentOf. No sorting — callers order as they need.
+window.buildLocationTree = function buildLocationTree(rows, opts) {
+    opts = opts || {};
+    const uc = opts.uc || ((v) => String(v == null ? '' : v).toUpperCase());
+    const shouldFloat = opts.shouldFloat || null;
+    const list = Array.isArray(rows) ? rows : [];
+    const byId = new Map();
+    list.forEach(r => byId.set(uc(r.LocationID), r));
+    const parentOf = new Map();
+    const childrenOf = new Map();
+    const roots = [];
+    list.forEach(r => {
+        const pid = r.parent_id != null ? uc(r.parent_id) : null;
+        const realParent = !!(pid && byId.has(pid));
+        parentOf.set(uc(r.LocationID), realParent ? pid : null);
+        if (realParent && !(shouldFloat && shouldFloat(r))) {
+            if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+            childrenOf.get(pid).push(r);
+        } else {
+            roots.push(r);
+        }
+    });
+    return { byId, parentOf, childrenOf, roots };
+};
+
 // --- DATA FETCHERS ---
 // L28 polling guard: see updateLogState for rationale. Same pattern.
 // L206: split fetch + render so the bulk-pulse dispatcher can hand
@@ -548,6 +703,23 @@ const _renderLocationsPayload = (d) => {
             const pinPrinters = _readPinPrinters();
             const upper = (v) => String(v == null ? '' : v).toUpperCase();
             const isPrinterRow = (r) => String(r.Type || '').toLowerCase() === 'printer';
+            // Group-34: the per-row "➕ Add child" affordance is offered on shelf/leaf
+            // kinds only. Suppressed on printer topology (Printer + toolhead types —
+            // their source of truth is the printer-map editor, not the parent_id tree,
+            // so a toolhead created via api_save_location would be invisible to
+            // Quick-Swap + print-deduct) and on synthetic/virtual rows.
+            const NO_ADD_CHILD_TYPES = new Set(['printer', 'tool head', 'mmu slot',
+                'no mmu direct load', 'virtual', 'virtual room', 'unknown',
+                'spoolman native', 'unassigned']);
+            const canAddChild = (r) => {
+                // The synthetic Unassigned/UNKNOWN buckets are identified by id (the
+                // UNKNOWN row can carry a non-'Unknown' Type), so guard the id too —
+                // not just the Type suppress-set.
+                const idU = String(r.LocationID || '').trim().toUpperCase();
+                if (idU === 'UNASSIGNED' || idU === 'UNKNOWN') return false;
+                const t = String(r.Type || '').trim().toLowerCase();
+                return !!t && !NO_ADD_CHILD_TYPES.has(t);
+            };
 
             // The always-pinned virtual rows live OUTSIDE the tree.
             const unassignedRow = d.find(l => upper(l.LocationID) === 'UNASSIGNED');
@@ -585,21 +757,13 @@ const _renderLocationsPayload = (d) => {
             // {divider: label}.
             const display = [];
             if (state.locSortBy === 'LocationID') {
-                const byId = new Map();
-                bodyRows.forEach(r => byId.set(upper(r.LocationID), r));
-                const childrenOf = new Map();
-                const roots = [];
-                bodyRows.forEach(r => {
-                    const pid = r.parent_id != null ? upper(r.parent_id) : null;
-                    // A row attaches to its parent UNLESS the parent isn't a real
-                    // row (orphan → root) or pin-mode floats printers to the top.
-                    const attach = pid && byId.has(pid) && !(pinPrinters && isPrinterRow(r));
-                    if (attach) {
-                        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
-                        childrenOf.get(pid).push(r);
-                    } else {
-                        roots.push(r);
-                    }
+                // A row attaches to its parent UNLESS the parent isn't a real
+                // row (orphan → root) or pin-mode floats printers to the top.
+                // buildLocationTree (inv_core Phase-0 helper) owns the walk; the
+                // pin-float is passed as shouldFloat so behavior is unchanged.
+                const { childrenOf, roots } = window.buildLocationTree(bodyRows, {
+                    uc: upper,
+                    shouldFloat: (r) => pinPrinters && isPrinterRow(r),
                 });
                 const visited = new Set();
                 const visit = (row, depth, ancestors) => {
@@ -760,6 +924,7 @@ const _renderLocationsPayload = (d) => {
                     <td class="col-status">${statusHtml}</td>
                     <td class="col-actions text-end" style="white-space: nowrap;">
                         <button class="btn btn-sm btn-outline-light me-1 btn-qr" data-id="${lidEsc}" title="Show QR">📱 QR</button>
+                        ${canAddChild(l) ? `<button class="btn btn-sm btn-outline-success me-1 btn-add-child" data-id="${lidEsc}" title="Add a child location here">➕</button>` : ''}
                         ${l.Type !== 'Virtual' ? `
                         <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>
                         <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>
@@ -975,7 +1140,12 @@ const _renderLogsPayload = (d, force = false) => {
     state.lastLogHash = contentHash;
     // -----------------------
 
-    const logsEl = document.getElementById('live-logs');
+    // THE PAUSE. Everything below this — the pill, the Spoolman dot, the audit
+    // and bulk-move syncs — must keep running while paused; only the visible
+    // list is frozen, so text stays selectable mid-copy. (On resume, pauseLogs
+    // clears lastLogHash and forces a refresh, otherwise the hash check above
+    // would skip the catch-up render and leave the panel stale.)
+    const logsEl = state.logsPaused ? null : document.getElementById('live-logs');
     if (logsEl && d.logs) {
         logsEl.innerHTML = d.logs.map(l => {
             let extraHtml = '';
@@ -1002,12 +1172,45 @@ const _renderLogsPayload = (d, force = false) => {
         state.auditActive = d.audit_active;
         if (window.updateAuditVisuals) window.updateAuditVisuals();
     }
+
+    _syncBulkMoveSignal(d);
 };
+
+// L298 Phase 2/3 — sync the bulk-move session so a session started/ended
+// ANYWHERE (another tab, a page reload, the idle watchdog) repaints this tab's
+// deck QR. Keyed on active+stage together, not just `active`: an active-only
+// edge left a reloaded tab painting 'idle' over a live session, turning the deck
+// button into a disguised Cancel.
+//
+// Phase 3 factored this out of _renderLogsPayload because BOTH heartbeat shapes
+// must apply it. When the Activity Log is paused, _dashboardPulseTick drops the
+// 'logs' section and asks for 'status' instead — so the logs-only sync left a
+// paused tab with no bulk-move signal at all while the server-side idle watchdog
+// (which rides /api/logs) could still cancel the session underneath it.
+const _syncBulkMoveSignal = (src) => {
+    if (!src || src.bulk_move_active === undefined) return;
+    const stage = src.bulk_move_active ? (src.bulk_move_stage || 'awaiting_source') : 'idle';
+    const sig = `${src.bulk_move_active}|${stage}`;
+    if (sig === state.lastBulkMoveState) return;
+    state.lastBulkMoveState = sig;
+    state.bulkMoveActive = src.bulk_move_active;
+    state.bulkMoveStage = stage;
+    if (window.updateBulkMoveVisuals) window.updateBulkMoveVisuals();
+};
+window._syncBulkMoveSignal = _syncBulkMoveSignal;
 window._renderLogsPayload = _renderLogsPayload;
 
 let _updateLogStateInflight = false;
 const updateLogState = (force = false) => {
-    if (state.logsPaused && !force) return;
+    // PAUSE IS A RENDER-FREEZE, NOT A FETCH-FREEZE (2026-08-05).
+    // Pause exists so the displayed list stops moving while you copy an error
+    // out of it — not so the tab goes deaf. It used to early-return here, which
+    // stopped polling entirely, so: the "N new" pill never appeared (its only
+    // call site is inside the render path), and every flag riding this payload
+    // (audit_active, bulk_move_active/stage, undo_available) stopped arriving,
+    // leaving deck tiles stale against sessions the server had already ended.
+    // Keep fetching; _renderLogsPayload skips only the list rewrite.
+    // Load is unchanged — this is the rate an unpaused dashboard already polls.
     if (_updateLogStateInflight) return;
     _updateLogStateInflight = true;
     fetch('/api/logs').then(r => r.json()).then(d => _renderLogsPayload(d, force))
@@ -1016,11 +1219,126 @@ const updateLogState = (force = false) => {
 };
 
 // --- MODAL HELPERS ---
-const closeModal = (id) => { if (modals[id]) modals[id].hide(); state.activeModal = null; };
-const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; modals.confirmModal.show(); state.activeModal = 'confirm'; };
-const confirmAction = (y) => { closeModal('confirmModal'); if (y && state.pendingConfirm) state.pendingConfirm(); state.pendingConfirm = null; };
-const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText = msg; state.pendingSafety = cb; modals.safetyModal.show(); state.activeModal = 'safety'; };
-const confirmSafety = (y) => { closeModal('safetyModal'); if (y && state.pendingSafety) state.pendingSafety(); state.pendingSafety = null; };
+// Bumped every time a gating dialog ARMS. The hidden.bs.modal scan-gate
+// release compares against it so a dialog re-shown from inside a previous
+// dialog's callback can't be torn down by the previous one's `hidden` event.
+let _confirmGeneration = 0;
+
+// --- GATING-DIALOG LIFECYCLE (eject re-prompt drop, 2026-09-12) ---
+// #confirmModal / #safetyModal / #actionModal are single Bootstrap instances
+// that FCC re-shows from inside their OWN callbacks (eject -> active-print
+// re-prompt -> "true unassign"). Bootstrap 5.3 silently IGNORES show() while a
+// modal is still fading out, and hide() while it is still fading in — by
+// design, no event, no error. confirmAction runs its callback in the same tick
+// as hide(), so a backend that answered require_confirm inside the fade had its
+// re-prompt DROPPED: no dialog, no toast, no request, and a still-armed
+// pendingConfirm that a later CMD:CONFIRM scan fired with nothing on screen.
+// The defect is FCC's call order, so respect the lifecycle: track each gating
+// modal's phase from Bootstrap's PUBLIC events (never the private
+// _isTransitioning) and queue the one call Bootstrap would have dropped.
+const SCAN_GATING_MODALS = ['confirmModal', 'safetyModal', 'actionModal'];
+const _gatingPhase = {};    // id -> 'showing' | 'shown' | 'hiding' | 'hidden'
+const _deferredShow = {};   // id -> token of the ONE show queued for hidden.bs.modal
+const _deferredHide = {};   // id -> token of the ONE hide queued for shown.bs.modal
+[['show.bs.modal', 'showing'], ['shown.bs.modal', 'shown'],
+ ['hide.bs.modal', 'hiding'], ['hidden.bs.modal', 'hidden']].forEach(([evt, phase]) => {
+    // Capture phase: the phase is current before ANY element- or document-level
+    // listener (including the queued show/hide below) runs for this event.
+    document.addEventListener(evt, (ev) => {
+        const id = ev.target && ev.target.id;
+        if (!SCAN_GATING_MODALS.includes(id)) return;
+        // A `hidden` from an OLD hide can land after a newer show() already
+        // started (Bootstrap accepts show() during the backdrop-fade tail).
+        if (phase === 'hidden' && _gatingPhase[id] !== 'hiding') return;
+        const prev = _gatingPhase[id];
+        _gatingPhase[id] = phase;
+        // show/hide are cancelable and capture runs first, so re-check after the
+        // dispatch: a later preventDefault() means the transition never started.
+        if (phase === 'showing' || phase === 'hiding') {
+            queueMicrotask(() => { if (ev.defaultPrevented && _gatingPhase[id] === phase) _gatingPhase[id] = prev; });
+        }
+    }, true);
+});
+// Genuinely ON SCREEN: fully faded in and not yet dismissed. The scan router
+// (inv_cmd.js) requires this before a CONFIRM scan may fire a callback.
+const isGatingModalOnScreen = (id) => {
+    const el = document.getElementById(id);
+    if (_gatingPhase[id] !== 'shown' || !el || !el.classList.contains('show')) return false;
+    // Shown is not visible: a mountOverlay panel (z 20000) can sit on top of a
+    // Bootstrap modal (z 1100), e.g. "Clear entire Buffer?" behind the bulk-move
+    // panel. Hit-test the dialog's centre so a CONFIRM scan never fires a dialog
+    // nobody can see (2026-09-12 review).
+    const content = el.querySelector('.modal-content');
+    if (!content) return true;
+    const r = content.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && el.contains(hit);
+};
+window.isGatingModalOnScreen = isGatingModalOnScreen;
+// Showing, shown, or queued to show — lets the scan router tell "not on screen
+// YET" apart from "dismissed".
+window.isGatingModalPending = (id) => _gatingModalPending(id);
+// Still owns the scan gate: showing, shown, or queued to show.
+const _gatingModalPending = (id) => {
+    const el = document.getElementById(id);
+    return !!_deferredShow[id] || _gatingPhase[id] === 'showing' || _gatingPhase[id] === 'shown'
+        || (!!el && el.classList.contains('show'));
+};
+const _showGatingModal = (id) => {
+    const inst = modals[id];
+    const el = document.getElementById(id);
+    if (!inst || !el) return;
+    // A fresh prompt supersedes a hide closeModal queued during the fade-in: the
+    // dialog is already on its way up, so it stays up showing the new text.
+    _deferredHide[id] = null;
+    // `.show` is removed synchronously once a hide really starts, so a stale
+    // 'hiding' (hide prevented) never parks a prompt forever.
+    if (_gatingPhase[id] !== 'hiding' || el.classList.contains('show')) { inst.show(); return; }
+    // Mid-hide: show() would be dropped. Queue exactly ONE show for hidden.bs.modal.
+    // The caller has already re-armed msg + callback synchronously, so if another
+    // prompt arrives before then, the newest text and callback win.
+    if (_deferredShow[id]) return;
+    const token = {};
+    _deferredShow[id] = token;
+    // Element-level, so it runs BEFORE the document-level scan-gate release below
+    // (pinned by tests/test_confirm_chain_reshow_e2e.py).
+    el.addEventListener('hidden.bs.modal', () => {
+        if (_deferredShow[id] !== token) return;   // cancelled by closeModal / superseded
+        _deferredShow[id] = null;
+        inst.show();
+    }, { once: true });
+};
+const closeModal = (id) => {
+    const inst = modals[id];
+    if (inst) {
+        // A queued re-show must not resurrect a prompt that was just closed.
+        _deferredShow[id] = null;
+        const el = document.getElementById(id);
+        if (_gatingPhase[id] === 'showing' && el) {
+            // Mid-fade-in: hide() would be dropped, leaving a dialog on screen
+            // whose callback already ran. Queue ONE hide for shown.bs.modal.
+            if (!_deferredHide[id]) {
+                const token = {};
+                _deferredHide[id] = token;
+                el.addEventListener('shown.bs.modal', () => {
+                    if (_deferredHide[id] !== token) return;   // a new prompt re-armed it
+                    _deferredHide[id] = null;
+                    inst.hide();
+                }, { once: true });
+            }
+        } else {
+            inst.hide();
+        }
+    }
+    state.activeModal = null;
+};
+const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; _confirmGeneration++; _showGatingModal('confirmModal'); state.activeModal = 'confirm'; };
+// Take the callback and null it BEFORE running it: a callback that re-prompts
+// synchronously arms a NEW pendingConfirm, which a trailing null would wipe.
+const confirmAction = (y) => { const cb = state.pendingConfirm; state.pendingConfirm = null; closeModal('confirmModal'); if (y && cb) cb(); };
+const promptSafety = (msg, cb) => { document.getElementById('safety-msg').innerText = msg; state.pendingSafety = cb; _confirmGeneration++; _showGatingModal('safetyModal'); state.activeModal = 'safety'; };
+const confirmSafety = (y) => { const cb = state.pendingSafety; state.pendingSafety = null; closeModal('safetyModal'); if (y && cb) cb(); };
 const promptAction = (t, m, btns) => {
     document.getElementById('action-title').innerText = t;
     document.getElementById('action-msg').innerHTML = m;
@@ -1030,7 +1348,7 @@ const promptAction = (t, m, btns) => {
         return `<div class="modal-action-card" onclick="closeModal('actionModal');state.modalCallbacks[${i}]()"><div id="qr-act-${i}" class="bg-white p-1 rounded mb-2"></div><button class="btn btn-primary modal-action-btn">${b.label}</button></div>`;
     }).join('');
     btns.forEach((_, i) => generateSafeQR(`qr-act-${i}`, `CMD:MODAL:${i}`, 100));
-    modals.actionModal.show(); state.activeModal = 'action';
+    _confirmGeneration++; _showGatingModal('actionModal'); state.activeModal = 'action';
 };
 
 // --- SMART SYNC PROTOCOL (Heartbeat) ---
@@ -1172,11 +1490,10 @@ const _dashboardPulseTick = () => {
     _pulseInflight = true;
 
     const { sections, manageId } = _computePulseInclude();
-    // If logs are paused (user explicitly paused the activity log), still
-    // pull everything else but skip the logs section.
-    const include = state.logsPaused
-        ? sections.filter(s => s !== 'logs').concat('status')
-        : sections;
+    // Logs stay in the heartbeat even while paused (2026-08-05). Dropping the
+    // section used to starve the "N new" pill and every flag riding that
+    // payload; the freeze now happens at the render, not the fetch.
+    const include = sections;
     let url = `/api/dashboard_pulse?include=${encodeURIComponent(include.join(','))}`;
     if (manageId) url += `&manage_id=${encodeURIComponent(manageId)}`;
 
@@ -1208,6 +1525,10 @@ const _dashboardPulseTick = () => {
                     state.auditActive = payload.status.audit_active;
                     if (window.updateAuditVisuals) window.updateAuditVisuals();
                 }
+                // Same bulk-move sync the logs branch runs — this is the branch a
+                // PAUSED Activity Log takes, and it's the only bulk-move signal
+                // such a tab receives (updateLogState early-returns while paused).
+                _syncBulkMoveSignal(payload.status);
             }
             if (payload.locations) _renderLocationsPayload(payload.locations);
             if (payload.manage && payload.manage.contents && window._renderManagePayload) {
@@ -1323,11 +1644,52 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 3. When a modal finishes hiding
-    document.addEventListener('hidden.bs.modal', function () {
+    document.addEventListener('hidden.bs.modal', function (ev) {
         // Bootstrap aggressively strips '.modal-open' from body when *any* modal hides.
         // We must forcefully restore it if there are other modals still 'underneath' it.
         if (document.querySelectorAll('.modal.show').length > 0) {
             document.body.classList.add('modal-open');
+        }
+
+        // --- Scan-gate release (axis-(a) audit, 2026-08-03) ---
+        // `state.activeModal` gates processScan: while it is set, inv_cmd's
+        // router answers only CONFIRM/CANCEL and silently DROPS every spool and
+        // location scan — no toast, no Activity Log line, no request.
+        // It used to be cleared ONLY by closeModal(), i.e. only by the dialogs'
+        // own buttons. Escape and backdrop clicks bypass that (#confirmModal
+        // sets neither data-bs-keyboard="false" nor data-bs-backdrop="static",
+        // and the inv_loc_mgr Escape ladder calls inst.hide() directly), so
+        // cancelling any confirm that way left the flag latched and the scanner
+        // looked DEAD until a page reload.
+        // Releasing here covers every dismissal path at once.
+        // (SCAN_GATING_MODALS + the phase tracker live with the modal helpers.)
+        const hiddenId = ev && ev.target && ev.target.id;
+        if (SCAN_GATING_MODALS.includes(hiddenId)) {
+            // ⚠️ Generation counter, NOT just a `.show` check. A confirm whose
+            // callback raises a SECOND confirm (eject -> "true unassign", or the
+            // active-print re-prompt) re-shows the same element, and Bootstrap
+            // re-adds `.show` ~155ms after show() while this `hidden` event
+            // fires ~310ms after hide(). A plain `.show` test therefore sees
+            // "nothing open" and tore down the dialog that had just re-armed —
+            // its YES button became silently dead. Compare the generation we
+            // captured when this modal was shown against the current one:
+            // if something re-armed since, that newer dialog owns the state.
+            const gen = _confirmGeneration;
+            setTimeout(() => {
+                if (_confirmGeneration !== gen) return;   // re-armed — leave it alone
+                // "Still open" also covers a prompt that is fading in or queued
+                // behind this very hide (_showGatingModal re-arms BEFORE hidden,
+                // so the generation above can't see it). `.show` alone lags:
+                // Bootstrap adds it only after the backdrop fade.
+                if (SCAN_GATING_MODALS.some(_gatingModalPending)) return;
+                // Release the scan gate. Only activeModal — deliberately NOT
+                // pendingConfirm/pendingSafety: clearing those is what killed
+                // the chained re-prompt, and confirmAction/confirmSafety
+                // already null them on the button path. The stale-callback
+                // hazard is handled by the generation bump in
+                // requestConfirmation/promptSafety instead.
+                state.activeModal = null;
+            }, 400);
         }
     });
 });

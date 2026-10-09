@@ -5,12 +5,14 @@ showing spool info on each button.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from unittest.mock import patch, MagicMock
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
-import requests
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -44,6 +46,8 @@ def _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured):
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        # The 13.6 reverse-binding checks the bound slot is free (2026-09-12).
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
         patch.object(logic.spoolman_api, "format_spool_display",
                      return_value={"text": "Test Spool", "color": "ff0000"}),
         patch.object(logic.spoolman_api, "update_spool", side_effect=_fake_update),
@@ -199,11 +203,19 @@ def test_perform_smart_move_sets_physical_source_on_first_deploy():
     assert patch_data["extra"]["physical_source_slot"] == "1"
 
 
-def test_perform_smart_move_overwrites_source_when_moving_to_a_different_toolhead():
+def test_perform_smart_move_head_to_head_move_never_records_a_toolhead_as_source():
     """Spool deployed to XL-3 (physical_source=LR-MDB-1:1). User moves it to
-    XL-1. physical_source should update to XL-3 (the spool's current location
-    before this move), not stay at LR-MDB-1. Otherwise Return-to-Slot would
-    send it to the wrong box."""
+    XL-1. The trail must not stay at LR-MDB-1, or Return-to-Slot from XL-1
+    sends it to a box that feeds XL-3 (why this test exists, 5fe1524). It must
+    not become XL-3 either.
+
+    2026-09-12: this test used to assert physical_source == "XL-3". That
+    toolhead-valued trail made the matcher count the spool as a ghost resident
+    of XL-3, so a later Smart Load onto XL-3 "ejected" it from XL-1 back onto
+    XL-3 (two spools on one head); an eject could return it onto an occupied
+    head; and a print on XL-3 was charged to it. A head -> head move now starts
+    with no trail. The 13.6 reverse-binding fills in XL-1's bound box when it
+    has one (none in this fixture), which is where Return then takes it."""
     printer_map = {
         "XL-1": {"printer_name": "🦝 XL", "position": 0},
         "XL-3": {"printer_name": "🦝 XL", "position": 2},
@@ -229,9 +241,11 @@ def test_perform_smart_move_overwrites_source_when_moving_to_a_different_toolhea
         for m in reversed(ctx): m.stop()
 
     _, patch_data = captured['update']
-    # Moving from XL-3 → XL-1 is a fresh move, not a re-deploy to same place.
-    # physical_source tracks where-from, which is now XL-3.
-    assert patch_data["extra"]["physical_source"] == "XL-3"
+    # Moving from XL-3 → XL-1 is a fresh move, not a re-deploy to same place,
+    # and a toolhead is never a home.
+    assert patch_data["extra"]["physical_source"] not in ("XL-3", "LR-MDB-1")
+    assert patch_data["extra"]["physical_source"] == ""
+    assert patch_data["extra"]["physical_source_slot"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -343,10 +357,12 @@ def test_force_move_to_room_clears_ghost_trail():
     extras = patch_data["extra"]
     # THE regression: the prior ghost trail must be gone now that the user
     # explicitly relocated the spool to a non-toolhead.
-    assert "physical_source" not in extras or extras.get("physical_source") in (None, ""), \
-        f"physical_source should be cleared on force-move to non-toolhead, got {extras.get('physical_source')!r}"
-    assert "physical_source_slot" not in extras or extras.get("physical_source_slot") in (None, ""), \
-        f"physical_source_slot should be cleared, got {extras.get('physical_source_slot')!r}"
+    # Present AND empty, not merely absent: update_spool's merge KEEPS an
+    # omitted key, so the old pop() never cleared anything (2026-09-12).
+    assert extras.get("physical_source", "MISSING") == "", \
+        f"physical_source must be written empty on force-move to non-toolhead, got {extras.get('physical_source', 'MISSING')!r}"
+    assert extras.get("physical_source_slot", "MISSING") == "", \
+        f"physical_source_slot must be written empty, got {extras.get('physical_source_slot', 'MISSING')!r}"
     # Sanity: the destination was actually written.
     assert patch_data["location"] == "LR"
 
@@ -384,39 +400,58 @@ def test_smart_move_to_unbound_toolhead_no_ghost_synthesis():
 TEST_BOX = "PM-DB-1"
 TEST_TOOLHEAD = "XL-1"
 
+# The one spool the loaded-slot render test is allowed to see in TEST_BOX. Same
+# shape `renderQuickSwapSection` consumes in the hermetic visual captures
+# (test_quickswap_visual._spool).
+PINNED_SPOOL = {
+    "id": 990611, "type": "spool",
+    "display": "#990611 FCC Test PLA Fixture Teal",
+    "color": "1b9aaa", "remaining_weight": 640,
+    "location": TEST_BOX, "slot": "1",
+    "details": {"brand": "FCC Test", "material": "PLA", "color_name": "Fixture Teal"},
+}
+
+
+def _pin_box_contents(page: Page, box: str, items: list) -> None:
+    """Pin ONE dryer box's /api/get_contents payload for this page.
+
+    Both render tests below used to read whatever dev happened to hold and
+    `pytest.skip()` when it was the wrong shape, which made them silent
+    no-ops: the loaded-slot case skipped whenever PM-DB-1 was empty (it is, at
+    the fixed baseline this branch pins), and the empty-slot case skipped
+    whenever an earlier test in the same run had left a spool in PM-DB-2 slot
+    1 — so the pair's outcome depended on dev contents AND on run order. What
+    is under test is the grid's RENDER of a slot's occupancy, not the fetch
+    that discovers it, so the occupancy is supplied here instead. Every other
+    request, this box's binding write included, still goes to the real app.
+    """
+    def _handler(route):
+        try:
+            if parse_qs(urlsplit(route.request.url).query).get("id", [""])[0] == box:
+                route.fulfill(status=200, content_type="application/json",
+                              body=json.dumps(items))
+            else:
+                route.continue_()
+        except PlaywrightError as e:
+            # A request still in flight when the context closes.
+            if "closed" not in str(e).lower():
+                raise
+
+    page.route("**/api/get_contents*", _handler)
+
 
 @pytest.fixture
-def bound_and_live(api_base_url):
-    """Bind PM-DB-1 slot 1 → XL-1, skip the test if PM-DB-1 is empty so
-    we can assert on the rendered spool info."""
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": {"1": TEST_TOOLHEAD}},
-        timeout=5,
-    )
-    contents = requests.get(f"{api_base_url}/api/get_contents?id={TEST_BOX}", timeout=5).json()
-    has_slot_1 = any(str(it.get("slot", "")).replace('"', '').strip() == "1"
-                     for it in contents or [])
-    if not has_slot_1:
-        # Put the binding back the way it was and skip.
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-            json={"slot_targets": original},
-            timeout=5,
-        )
-        pytest.skip(f"{TEST_BOX} slot 1 is empty; can't exercise spool-info rendering.")
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+def bound_and_live(borrow_box_bindings):
+    """Bind PM-DB-1 slot 1 → XL-1. The slot's occupancy is pinned by
+    `_pin_box_contents` in the test body, so no dev contents are read; the
+    binding goes back to PM-DB-1's fixed baseline at teardown (conftest
+    `borrow_box_bindings`)."""
+    borrow_box_bindings(TEST_BOX, {"1": TEST_TOOLHEAD})
 
 
 @pytest.mark.usefixtures("require_server", "bound_and_live")
 def test_quickswap_button_shows_spool_info_when_slot_loaded(page: Page, base_url: str):
+    _pin_box_contents(page, TEST_BOX, [PINNED_SPOOL])
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
     page.wait_for_timeout(500)
@@ -431,43 +466,33 @@ def test_quickswap_button_shows_spool_info_when_slot_loaded(page: Page, base_url
     assert "empty slot" not in text.lower(), (
         f"Button text didn't surface spool info: {text!r}"
     )
+    # Now that the occupancy is pinned, assert it is THIS spool that surfaced,
+    # not merely that the button avoided the empty-slot wording.
+    assert str(PINNED_SPOOL["id"]) in text, (
+        f"Button text didn't surface the loaded spool's id: {text!r}"
+    )
 
 
 @pytest.mark.usefixtures("require_server", "clean_buffer")
-def test_quickswap_button_disabled_when_slot_empty(page: Page, base_url: str, api_base_url):
-    # Bind a slot that's known to be empty, verify the rendered button is
+def test_quickswap_button_disabled_when_slot_empty(
+        page: Page, base_url: str, borrow_box_bindings):
+    # Bind a slot that's pinned empty, verify the rendered button is
     # disabled and no-ops on click. Note: the button is only disabled when
     # BOTH the slot AND the user's buffer are empty — a buffered spool
     # flips the same button into a Deposit target.
     victim_box, victim_slot = "PM-DB-2", "1"
-    contents = requests.get(f"{api_base_url}/api/get_contents?id={victim_box}", timeout=5).json()
-    has_spool = any(str(it.get("slot", "")).replace('"', '').strip() == victim_slot
-                    for it in contents or [])
-    if has_spool:
-        pytest.skip(f"{victim_box} slot {victim_slot} has a spool; can't test empty-slot rendering.")
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{victim_box}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{victim_box}/bindings",
-        json={"slot_targets": {victim_slot: TEST_TOOLHEAD}},
-        timeout=5,
-    )
-    try:
-        page.goto(base_url)
-        page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-        page.wait_for_timeout(500)
-        page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
-        expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
-        # Force an empty buffer before asserting disabled — otherwise a
-        # buffered spool would enable the same button as a Deposit target.
-        page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")
-        page.wait_for_timeout(1200)
-        btn = page.locator(f".fcc-qs-slot[data-box='{victim_box}'][data-slot='{victim_slot}']").first
-        expect(btn).to_be_visible(timeout=3000)
-        expect(btn).to_be_disabled()
-    finally:
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{victim_box}/bindings",
-            json={"slot_targets": original},
-            timeout=5,
-        )
+    _pin_box_contents(page, victim_box, [])
+    # Back to PM-DB-2's fixed baseline at teardown.
+    borrow_box_bindings(victim_box, {victim_slot: TEST_TOOLHEAD})
+    page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    page.wait_for_timeout(500)
+    page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
+    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+    # Force an empty buffer before asserting disabled — otherwise a
+    # buffered spool would enable the same button as a Deposit target.
+    page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")
+    page.wait_for_timeout(1200)
+    btn = page.locator(f".fcc-qs-slot[data-box='{victim_box}'][data-slot='{victim_slot}']").first
+    expect(btn).to_be_visible(timeout=3000)
+    expect(btn).to_be_disabled()

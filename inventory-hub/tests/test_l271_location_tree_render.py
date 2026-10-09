@@ -48,7 +48,10 @@ def test_post_stamps_immediate_parent():
     assert "locations_db.immediate_parent_for(" in app, (
         "api_save_location must stamp the immediate parent at write time"
     )
-    assert "derive_parent_id_from_prefix" in app, (
+    # Group-34 Phase 0: the first-segment helper was renamed
+    # derive_parent_id_from_prefix → location_prefix; the synthesizer stamp now
+    # reads the new name.
+    assert "location_prefix" in app, (
         "the Spoolman-native synthesized row still derives a prefix parent_id"
     )
 
@@ -212,8 +215,11 @@ def _js():
 
 def test_tree_built_from_parent_id_children_map():
     js = _js()
+    # Group-34 Phase 0: the parent_id child-map moved into the shared
+    # window.buildLocationTree helper; the render consumes it and still DFS-walks.
     assert "const childrenOf = new Map()" in js, "tree must group children by parent_id"
-    assert "r.parent_id != null ? upper(r.parent_id)" in js, "tree must read row.parent_id"
+    assert "r.parent_id != null ? uc(r.parent_id)" in js, "tree must read row.parent_id"
+    assert "window.buildLocationTree(bodyRows" in js, "render must consume the shared tree helper"
     assert "const visit = (row, depth, ancestors)" in js, "must DFS-render with depth"
 
 

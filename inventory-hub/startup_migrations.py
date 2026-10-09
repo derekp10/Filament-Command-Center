@@ -17,6 +17,7 @@ import state  # type: ignore
 import config_loader  # type: ignore
 import locations_db  # type: ignore
 import cancel_review_store  # type: ignore
+import attr_migration  # type: ignore  # Group 36: unfinished force_reset recovery
 
 
 # L347 follow-up — prune old locations.json.pre-*.bak migration backups.
@@ -96,8 +97,10 @@ def run_startup_migrations():
                     _prune_locations_backups()
                 except Exception as _bk_err:
                     state.logger.warning(f"Could not write pre-migration backup: {_bk_err}")
-                locations_db.save_locations_list(_migrated)
-                state.logger.info("💾 Legacy feeder_map migrated into locations.json — you can safely delete feeder_map from config.json now.")
+                if locations_db.save_locations_list(_migrated):
+                    state.logger.info("💾 Legacy feeder_map migrated into locations.json — you can safely delete feeder_map from config.json now.")
+                else:
+                    state.logger.error("❌ feeder_map migration save FAILED — locations.json left unchanged; will retry next boot.")
     except Exception as _mig_err:
         state.logger.error(f"feeder_map migration skipped due to error: {_mig_err}")
 
@@ -120,8 +123,10 @@ def run_startup_migrations():
                 _prune_locations_backups()
             except Exception as _bk_err:
                 state.logger.warning(f"Could not write pre-parent-id-migration backup: {_bk_err}")
-            locations_db.save_locations_list(_phase1a_migrated)
-            state.logger.info("💾 parent_id backfilled across locations.json — Phase-1A migration complete.")
+            if locations_db.save_locations_list(_phase1a_migrated):
+                state.logger.info("💾 parent_id backfilled across locations.json — Phase-1A migration complete.")
+            else:
+                state.logger.error("❌ Phase-1A parent_id backfill save FAILED — locations.json left unchanged; will retry next boot.")
     except Exception as _p1a_err:
         state.logger.error(f"parent_id migration skipped due to error: {_p1a_err}")
 
@@ -284,3 +289,23 @@ def resurface_pending_cancel_reviews():
             state.logger.info(f"🛑 Re-surfaced {len(_pending_reviews)} pending cancel review(s) from disk.")
     except Exception as _cr_err:
         state.logger.warning(f"pending cancel-review re-surface skipped: {_cr_err}")
+
+
+def resurface_pending_attr_migrations():
+    """Announce any filament-attribute schema migration that never finished.
+
+    Same "never silently lost" contract as the cancel reviews above. A
+    recovery snapshot only survives on disk when its migration failed or died
+    partway, so a leftover file means some filaments are still missing their
+    `filament_attributes` — and before Group 36 that outcome left no durable
+    trace at all beyond a count in a log that rotates within days.
+
+    Deliberately announce rather than auto-replay: a snapshot can be
+    arbitrarily stale, and the restore PATCH writes each record's WHOLE extras
+    dict, so a blind replay would revert every edit made to those filaments
+    since the crash. The file is the recovery data; a human decides.
+    """
+    try:
+        attr_migration.surface_pending_recovery_snapshots()
+    except Exception as _am_err:
+        state.logger.warning(f"pending attr-migration re-surface skipped: {_am_err}")

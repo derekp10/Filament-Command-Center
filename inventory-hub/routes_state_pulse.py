@@ -83,6 +83,11 @@ def api_audit_session():
     return jsonify({
         "active": True,
         "location_id": sess.get('location_id'),
+        # Same contract as the bulk-move snapshot (L298 Phase 3): tell the user
+        # the session expires, DERIVED from the constant so the UI text can't
+        # drift from the watchdog that enforces it. An audit that silently
+        # vanishes mid-shelf reads as a broken app, not as a timeout.
+        "idle_timeout_min": int(state.AUDIT_IDLE_TIMEOUT_SECONDS // 60),
         "expected": expected_rows,
         "rogue": rogue_rows,
         "stats": {
@@ -168,11 +173,61 @@ def _check_audit_idle_timeout():
         state.reset_audit()
 
 
+def _check_bulk_move_idle_timeout():
+    """Auto-cancel a bulk-move session that's gone stale (L298 Phase 2).
+
+    Same rationale + shape as _check_audit_idle_timeout: a closed tab or a
+    server restart can leave BULK_MOVE_SESSION.active=True with a SOURCE
+    already armed — and a stale armed source is worse than a stale audit,
+    because the next person's location scan would land as its destination.
+    Lazily checked on every /api/logs poll (~5s heartbeat) and on the session
+    poll itself; there is no background thread.
+    """
+    if not state.BULK_MOVE_SESSION.get('active'):
+        return
+    # Never wipe a session a commit is actively working on. The watchdog rides
+    # the ~5s /api/logs heartbeat, so a long O(N) commit can cross the idle
+    # deadline mid-flight; resetting there would log "auto-cancelled — no spools
+    # moved" over a move that IS moving spools — the same lie the Phase-3 cancel
+    # guard exists to prevent. The commit clears the session itself when it ends.
+    if logic._BULK_MOVE_COMMIT_LOCK.locked():
+        return
+    last = float(state.BULK_MOVE_SESSION.get('last_activity_ts') or 0.0)
+    if last <= 0:
+        # No timestamp (a session predating this watchdog / hand-built in a
+        # test). Plant `now` so the timer starts NOW rather than insta-cancelling.
+        state.BULK_MOVE_SESSION['last_activity_ts'] = time.time()
+        return
+    if (time.time() - last) > state.BULK_MOVE_IDLE_TIMEOUT_SECONDS:
+        src = state.BULK_MOVE_SESSION.get('source_id') or ''
+        state.add_log_entry(
+            f"🕒 Bulk move auto-cancelled after "
+            f"{state.BULK_MOVE_IDLE_TIMEOUT_SECONDS // 60} min of inactivity"
+            + (f" (was {src})" if src else "")
+            + " — no spools moved.",
+            "WARNING", "ffaa00",
+        )
+        state.reset_bulk_move()
+
+
+@app.route('/api/bulk_move_session', methods=['GET'])
+def api_bulk_move_session():
+    """Poll the active bulk-move session for the deck-QR state + preview panel.
+
+    Returns {active:False, stage:'idle'} when nothing is running (the frontend
+    uses that to shapeshift the deck QR back to idle and close the panel).
+    Runs the idle watchdog first so a direct poll also self-heals.
+    """
+    _check_bulk_move_idle_timeout()
+    return jsonify(logic.bulk_move_session_snapshot())
+
+
 @app.route('/api/logs', methods=['GET'])
 def api_get_logs_route():
     # Cheap pre-flight: clear any abandoned audit session before the
     # frontend sees audit_active=True and auto-opens the panel.
     _check_audit_idle_timeout()
+    _check_bulk_move_idle_timeout()
     sm_url, _ = config_loader.get_api_urls()
     sm_ok = False
     try: sm_ok = requests.get(f"{sm_url}/api/v1/health", timeout=3).ok
@@ -182,6 +237,12 @@ def api_get_logs_route():
         "logs": state.RECENT_LOGS,
         "undo_available": len(state.UNDO_STACK) > 0,
         "audit_active": state.AUDIT_SESSION.get('active', False),
+        "bulk_move_active": state.BULK_MOVE_SESSION.get('active', False),
+        # The STAGE rides along so a reloaded page / second tab can paint the
+        # deck tile correctly. Without it the tile fell back to 'idle' for an
+        # ACTIVE session, and the deck button (which cancels while active) then
+        # read as "arm a bulk move" but silently CANCELLED the armed one.
+        "bulk_move_stage": state.BULK_MOVE_SESSION.get('stage', 'idle'),
         "status": {"spoolman": sm_ok}
     })
 
@@ -385,6 +446,14 @@ def api_dashboard_pulse():
                     'spoolman': logs_payload['status'].get('spoolman', False),
                     'audit_active': logs_payload.get('audit_active', False),
                     'undo_available': logs_payload.get('undo_available', False),
+                    # L298 Phase 3 — the bulk-move signal must ride the DERIVED
+                    # status section too. A paused Activity Log swaps 'logs' out
+                    # for 'status' (inv_core.js _dashboardPulseTick), so without
+                    # these two keys a paused tab got NO bulk-move signal at all:
+                    # the idle watchdog could cancel the session server-side
+                    # while the deck kept painting a live SCAN DEST / COMMIT tile.
+                    'bulk_move_active': logs_payload.get('bulk_move_active', False),
+                    'bulk_move_stage': logs_payload.get('bulk_move_stage', 'idle'),
                 }
 
     if 'locations' in include:

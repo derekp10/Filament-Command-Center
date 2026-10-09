@@ -44,12 +44,25 @@ def test_create_inventory_temps(mock_create_spool, mock_create_filament, client)
     assert fil_call_args.get('settings_extruder_temp') == 220
     assert fil_call_args.get('settings_bed_temp') == 65
 
+@patch('app.spoolman_api.get_spool')
 @patch('app.spoolman_api.update_filament')
 @patch('app.spoolman_api.update_spool')
-def test_edit_spool_wizard(mock_update_spool, mock_update_filament, client):
-    """Ensure Edit Spool endpoint calls update_spool and update_filament cleanly."""
+def test_edit_spool_wizard(mock_update_spool, mock_update_filament, mock_get_spool,
+                           client):
+    """Ensure Edit Spool endpoint calls update_spool and update_filament cleanly.
+
+    Group 38.7 — `get_spool` is mocked HERE now. The handler gained a pre-edit
+    read (27.1: without the original it cannot run the dirty-diff or the
+    SYSTEM_MANAGED strip, so it fails closed rather than shipping a raw
+    overwrite). This test never mocked it, so the "unit" test was quietly
+    reaching the real dev Spoolman on the NAS and passing only because spool
+    100 happened to be readable there. The `--offline` socket guard exposed it.
+    """
     mock_update_spool.return_value = {'id': 100}
     mock_update_filament.return_value = {'id': 1}
+    # The pre-edit snapshot. Empty `extra` keeps the dirty-diff a no-op so the
+    # payload assertions below still describe exactly what the caller sent.
+    mock_get_spool.return_value = {'id': 100, 'extra': {}}
 
     payload = {
         "spool_id": 100,

@@ -169,14 +169,28 @@ def test_synthesizer_no_longer_injects_printers():
 
 @pytest.mark.integration
 def test_printers_are_first_class_on_disk(api_base_url, require_server):
-    """Live: XL and the Core One surface as Type:'Printer' rows, and CORE1
-    carries its real printer name (the fixed quirk), not 'CORE1 (Room)'."""
+    """Live: every on-disk Printer row surfaces through /api/locations as
+    Type:'Printer' carrying its REAL name — not the synthesized '<id> (Room)'
+    quirk this phase fixed.
+
+    Fleet-agnostic on purpose (2026-10-08). It used to name `XL` and `CORE1`
+    literally, and broke the day the Core One was retired for the 8-slot INDX
+    (`RCOI`) — the assertion failed on a printer that no longer exists, which
+    says nothing about the behaviour under test. Swapping CORE1 for RCOI would
+    just re-arm the same trap for the next hardware change, so it now derives
+    the fleet from disk and asserts the property for whatever is there.
+    """
     import requests
     rows = requests.get(f"{api_base_url}/api/locations", timeout=10).json()
+    on_disk = locations_db.load_locations_list() or []
+    printers = [str(r.get("LocationID")) for r in on_disk
+                if str(r.get("Type", "")).strip() == "Printer"]
+    assert printers, "no Printer rows on disk — this phase's whole point is that they exist"
+
     by = {str(r.get("LocationID")): r for r in rows}
-    assert by.get("XL", {}).get("Type") == "Printer"
-    core1 = by.get("CORE1", {})
-    assert core1.get("Type") == "Printer", f"CORE1 should be a Printer, got {core1.get('Type')!r}"
-    assert "(Room)" not in str(core1.get("Name", "")), (
-        f"CORE1 still shows the room-quirk name: {core1.get('Name')!r}"
-    )
+    for pid in printers:
+        row = by.get(pid, {})
+        assert row.get("Type") == "Printer", (
+            f"{pid} is a Printer on disk but surfaced as {row.get('Type')!r}")
+        assert "(Room)" not in str(row.get("Name", "")), (
+            f"{pid} still shows the room-quirk name: {row.get('Name')!r}")

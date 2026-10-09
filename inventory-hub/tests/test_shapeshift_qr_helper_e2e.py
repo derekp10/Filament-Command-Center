@@ -133,3 +133,101 @@ def test_registershapeshiftqr_generic_slot(page: Page):
     # Unknown state is a no-op (no throw, state unchanged).
     page.evaluate("window.__xt.set('nope')")
     assert page.evaluate("window.__xt.current()") == "armed"
+
+
+def test_bulkmove_slot_shapeshifts_between_states(page: Page):
+    """L298 Phase 3 — the 4-state BULK MOVE slot had no coverage, so nothing
+    pinned the label / btnClass / ENCODED COMMAND per state.
+
+    That matters because the block comment above the slot once claimed the two
+    "scan a location label" states encode no cmd, while the shipped table sets
+    CMD:CANCEL for both. Acting on the comment would have made st.cmd falsy —
+    and (pre-fix) a falsy cmd left the PREVIOUS state's QR on screen, which from
+    `preview` strands a scannable CMD:DONE over a half-armed session.
+    """
+    _goto(page)
+    page.evaluate(_STUB_QRCODE)
+    # Keep the panel out of the way — this test is about the deck tile. (Its
+    # own behaviour is covered by tests/test_bulk_move_panel.py.) Arrow-function
+    # form: page.evaluate CALLS a script whose value is a function, so a trailing
+    # `window.x = () => …` would invoke the stub immediately.
+    page.evaluate("""() => {
+        window.openBulkMovePanel = () => {};
+        window.closeBulkMovePanel = () => {};
+    }""")
+
+    expected = {
+        "awaiting_source": ("SCAN SRC", "CMD:CANCEL", "btn-bulkmove-active"),
+        "awaiting_dest": ("SCAN DEST", "CMD:CANCEL", "btn-bulkmove-active"),
+        "preview": ("COMMIT", "CMD:DONE", "btn-bulkmove-ready"),
+    }
+    for stage, (label, cmd, btn_class) in expected.items():
+        # Count BEFORE, and require the count to grow. Matching only the tail
+        # text is satisfied by the PREVIOUS state's call when two states encode
+        # the same command (awaiting_source and awaiting_dest both use
+        # CMD:CANCEL) — so a regression that stopped re-rendering the QR
+        # entirely would still pass.
+        before = page.evaluate(
+            "() => (window.__qrCalls || []).filter(x => x.id === 'qr-bulkmove').length")
+        page.evaluate(
+            "(s) => { state.bulkMoveActive = true; state.bulkMoveStage = s; "
+            "window.updateBulkMoveVisuals(); }", stage)
+        expect(page.locator("#lbl-bulkmove")).to_have_text(label)
+        assert page.evaluate(
+            "(c) => document.getElementById('btn-deck-bulkmove').classList.contains(c)",
+            btn_class) is True
+        assert page.evaluate(
+            "document.getElementById('lbl-bulkmove').classList.contains('label-active-bulkmove')") is True
+        page.wait_for_function(
+            "([t, n]) => { const c = (window.__qrCalls || []).filter(x => x.id === 'qr-bulkmove'); "
+            "return c.length > n && c[c.length-1].text === t; }",
+            arg=[cmd, before], timeout=3_000)
+
+    # --- IDLE: label + cmd revert and the active classes are union-cleared ---
+    page.evaluate("state.bulkMoveActive = false; state.bulkMoveStage = 'idle'; "
+                  "window.updateBulkMoveVisuals();")
+    expect(page.locator("#lbl-bulkmove")).to_have_text("BULK MOVE")
+    assert page.evaluate(
+        "document.getElementById('btn-deck-bulkmove').classList.contains('btn-bulkmove-ready')") is False
+    assert page.evaluate(
+        "document.getElementById('btn-deck-bulkmove').classList.contains('btn-bulkmove-active')") is False
+    page.wait_for_function(
+        "() => { const c = (window.__qrCalls || []).filter(x => x.id === 'qr-bulkmove'); "
+        "return c.length && c[c.length-1].text === 'CMD:BULKMOVE'; }",
+        timeout=3_000)
+
+
+def test_shapeshift_state_without_a_cmd_clears_the_stale_qr(page: Page):
+    """A cmd-less state must CLEAR the QR div, not inherit the previous state's.
+
+    Pre-fix, `if (qrDiv && st.cmd)` skipped the whole block, leaving a scannable
+    command under a label that no longer matches it — a live footgun for any
+    future deck state that legitimately has nothing to encode.
+    """
+    _goto(page)
+    page.evaluate(_STUB_QRCODE)
+    page.evaluate(
+        """() => {
+            const wrap = document.createElement('div');
+            wrap.id = 'btn-deck-ytest';
+            wrap.innerHTML = '<div id="qr-ytest"></div><div id="lbl-ytest">A</div>';
+            document.body.appendChild(wrap);
+            window.__yt = window.registerShapeshiftQR({
+                slot: 'ytest', size: 64, default: 'withcmd',
+                states: {
+                    withcmd: { cmd: 'CMD:YGO', label: 'GO' },
+                    nocmd:   { label: 'WAIT' },
+                },
+            });
+        }"""
+    )
+    page.evaluate("window.__yt.set('withcmd')")
+    page.wait_for_function(
+        "() => (window.__qrCalls || []).some(c => c.id === 'qr-ytest' && c.text === 'CMD:YGO')",
+        timeout=3_000)
+    # Prove something is actually rendered before we assert it goes away.
+    page.evaluate("document.getElementById('qr-ytest').innerHTML = '<canvas></canvas>';")
+
+    page.evaluate("window.__yt.set('nocmd')")
+    expect(page.locator("#lbl-ytest")).to_have_text("WAIT")
+    assert page.evaluate("document.getElementById('qr-ytest').innerHTML.trim()") == ""

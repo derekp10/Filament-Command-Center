@@ -78,6 +78,20 @@ def pytest_addoption(parser):
     # For a FULL sweep, `pytest --reset-dev` restores the committed seed
     # baseline first so cross-test contamination can't accumulate. See
     # setup-and-rebuild/reset_dev.py + docs/agent_docs/tasks/19-*.md.
+    # 2026-08-03 — a genuinely hermetic run. The plain `pytest` invocation was
+    # documented as "the offline sweep" but never was one: --run-integration
+    # gates only the dev-SPOOLMAN tests, while ~55 E2E files reach the local FCC
+    # container via `require_server` (which skips only when it is DOWN) and
+    # mutate real dev inventory on every routine verification. Use --offline
+    # when you want a fast check that provably cannot touch Derek's data.
+    parser.addoption(
+        "--offline",
+        action="store_true",
+        default=False,
+        help="Skip every test that touches the live FCC dev container, for a "
+             "hermetic run that cannot mutate dev inventory. Equivalent env: "
+             "FCC_OFFLINE=1.",
+    )
     parser.addoption(
         "--reset-dev",
         action="store_true",
@@ -96,6 +110,44 @@ def pytest_addoption(parser):
     )
 
 
+# Fixtures that imply "this test drives the live FCC dev container". Requesting
+# any of them means the test cannot run in --offline mode. `page` is the
+# important one: a Playwright test can take it WITHOUT require_server and still
+# launch a browser against localhost:8000.
+CONTAINER_FIXTURES = frozenset({
+    "page", "context", "browser", "browser_context_args",
+    "require_server", "api_base_url",
+    "clean_buffer", "with_held_spool", "seed_dryer_box", "seed_via_ui",
+    "snapshot", "scan", "borrow_box_bindings",
+    "dev_spoolman_url", "throwaway_filament", "throwaway_spool",
+})
+# NOT in the set, deliberately: `playwright` and `isolated_page`. A test may run
+# a browser under --offline only through `isolated_page`, whose browser has no
+# route to any network (HTTP, WebSockets, frames and workers included), so it
+# can render set_content markup but can never reach the container (pinned by
+# test_offline_mode.py::TestIsolatedBrowser).
+
+
+def _offline_mode(config) -> bool:
+    """True when the caller asked for a genuinely hermetic run.
+
+    `--offline` (or FCC_OFFLINE=1) skips every test that touches the live FCC
+    dev container, so a verification run cannot write to Derek's real dev
+    inventory. This exists because the plain `pytest` run was widely believed to
+    be "the offline sweep" and never was: --run-integration gates only the tests
+    that hit the dev SPOOLMAN on the NAS, while ~55 E2E files reach the local
+    container through `require_server`, which skips only when that container is
+    DOWN. Default behaviour is deliberately unchanged — this is opt-in.
+    """
+    try:
+        flag = config.getoption("--offline")
+    except (ValueError, AttributeError):  # option not registered (sub-config)
+        flag = False
+    return bool(flag) or os.environ.get("FCC_OFFLINE", "").lower() in (
+        "1", "true", "yes",
+    )
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip @pytest.mark.integration tests unless explicitly opted in.
 
@@ -103,6 +155,20 @@ def pytest_collection_modifyitems(config, items):
     in the environment. If neither is set, every integration item gets a
     skip marker added so the rest of the suite still runs.
     """
+    # --offline first: deselect at COLLECTION time, not inside a fixture.
+    # Gating only `require_server` isn't enough — a test can take the Playwright
+    # `page` fixture without requesting require_server, and would still launch a
+    # browser and drive the live container. Skipping by fixture name here also
+    # keeps the run genuinely fast (no browser ever starts).
+    if _offline_mode(config):
+        offline_skip = pytest.mark.skip(
+            reason="offline mode (--offline / FCC_OFFLINE=1): touches the live dev container"
+        )
+        for item in items:
+            names = set(getattr(item, "fixturenames", ()))
+            if names & CONTAINER_FIXTURES:
+                item.add_marker(offline_skip)
+
     opted_in = config.getoption("--run-integration") or os.environ.get(
         "RUN_INTEGRATION", ""
     ).lower() in ("1", "true", "yes")
@@ -298,6 +364,172 @@ def seed_via_ui(api_base_url: str):
         pytest.skip("UI bindings path ships with M4; use seed_dryer_box until then.")
 
     return _seed
+
+
+# ---------------------------------------------------------------------------
+# Borrowing a real dev Dryer Box's slot bindings (2026-09-13 sweep triage, item 3)
+# ---------------------------------------------------------------------------
+#
+# Many E2E tests need a binding such as PM-DB-1 slot 1 -> XL-1. They used to
+# snapshot the box's slot_targets at setup and PUT that snapshot back at
+# teardown. That restores whatever was OBSERVED, so one run interrupted before
+# teardown turns its temporary binding into dev state that every later run
+# faithfully restores (dev carried a stale PM-DB-1 slot 1 -> XL-1 until
+# 2026-09-13). Borrowing now works against a FIXED baseline instead:
+#   - before the first write, the box must hold exactly its baseline, or the
+#     test fails loudly WITHOUT touching anything (the leftover might be
+#     deliberate hand-made dev state, so it is never silently overwritten);
+#   - teardown always PUTs the baseline back, never an observed snapshot.
+#
+# Why a baseline and not a test-only box: the tests need a single-slot box that
+# already exists in dev AND the reset-dev seed (a new row would change every
+# location list and visual baseline that renders locations). The PolyMaker boxes
+# fit, and their seed state is unbound, so the baseline is simply "no bindings".
+#
+# Keep this in step with setup-and-rebuild/seeds/locations-seed.json so
+# `pytest --reset-dev` restores exactly this state (pinned by
+# tests/test_box_binding_loans.py). Borrowing a box that isn't listed fails.
+DEV_BOX_BINDING_BASELINES: typing.Dict[str, typing.Dict[str, str]] = {
+    "PM-DB-1": {},
+    "PM-DB-2": {},
+    "PM-DB-4": {},
+    "PM-DB-5": {},
+}
+
+
+def _normalized_slot_targets(slot_targets) -> typing.Dict[str, str]:
+    """Slot keys as strings; unbound slots (None / blank) dropped, the way
+    storage drops them (absence == unassigned)."""
+    if not isinstance(slot_targets, dict):
+        return {}
+    return {
+        str(k): str(v) for k, v in slot_targets.items()
+        if v is not None and str(v).strip() != ""
+    }
+
+
+class BoxBindingLoans:
+    """Tracks the dev Dryer Boxes one test has borrowed; see the section note.
+
+    `http` is injectable so the precondition and restore rules can be unit
+    tested without a container (tests/test_box_binding_loans.py).
+    """
+
+    def __init__(self, api_base_url: str, http=None,
+                 baselines: typing.Optional[typing.Dict[str, dict]] = None):
+        self.api = api_base_url.rstrip("/")
+        self.http = http if http is not None else requests
+        self.baselines = DEV_BOX_BINDING_BASELINES if baselines is None else baselines
+        self.borrowed: typing.List[str] = []
+
+    def _url(self, box: str) -> str:
+        return f"{self.api}/api/dryer_box/{box}/bindings"
+
+    def _current(self, box: str) -> typing.Dict[str, str]:
+        try:
+            r = self.http.get(self._url(box), timeout=5)
+        except requests.RequestException as exc:
+            pytest.fail(f"borrow_box_bindings: could not read {box}'s bindings: {exc}",
+                        pytrace=False)
+        if r.status_code != 200:
+            pytest.fail(
+                f"borrow_box_bindings: GET {self._url(box)} answered {r.status_code} "
+                f"({r.text[:200]!r}). Is {box} still a Dryer Box in dev?",
+                pytrace=False,
+            )
+        return _normalized_slot_targets((r.json() or {}).get("slot_targets"))
+
+    def _put(self, box: str, slot_targets: dict) -> typing.Optional[str]:
+        """PUT `slot_targets`; return None on success, else what went wrong."""
+        try:
+            r = self.http.put(self._url(box), json={"slot_targets": slot_targets}, timeout=5)
+        except requests.RequestException as exc:
+            return f"{exc}"
+        if r.status_code != 200:
+            return f"HTTP {r.status_code}: {r.text[:300]}"
+        return None
+
+    def borrow(self, box: str, slot_targets: typing.Optional[dict] = None) -> dict:
+        """Claim `box` for this test, optionally writing `slot_targets` to it.
+
+        Returns the box's baseline. The first borrow of a box in a test checks
+        that it holds exactly its baseline; later borrows of the same box just
+        write (the test already owns it).
+        """
+        if box not in self.baselines:
+            pytest.fail(
+                f"borrow_box_bindings: {box} has no fixed baseline. Add it to "
+                f"conftest.DEV_BOX_BINDING_BASELINES (matching "
+                f"setup-and-rebuild/seeds/locations-seed.json) before a test may "
+                f"borrow it.",
+                pytrace=False,
+            )
+        baseline = _normalized_slot_targets(self.baselines[box])
+        if box not in self.borrowed:
+            observed = self._current(box)
+            if observed != baseline:
+                pytest.fail(
+                    f"borrow_box_bindings: {box} is not at its test baseline, so "
+                    f"this test did not touch it.\n"
+                    f"  expected slot_targets: {baseline!r}\n"
+                    f"  found slot_targets:    {observed!r}\n"
+                    f"This is usually a binding left behind by an earlier run that "
+                    f"was interrupted before teardown (the old fixtures restored "
+                    f"whatever they found, so a leftover became permanent). If "
+                    f"nobody set it on purpose, put {box} back: Location Manager -> "
+                    f"{box} -> Slot -> Toolhead Feeds -> clear every slot -> Save, "
+                    f"or PUT {{\"slot_targets\": {baseline!r}}} to "
+                    f"/api/dryer_box/{box}/bindings. If it IS deliberate dev "
+                    f"state, leave it and point the test at another box.",
+                    pytrace=False,
+                )
+            # Registered BEFORE the write, so a write that half-lands is still
+            # put back at teardown.
+            self.borrowed.append(box)
+        if slot_targets is not None:
+            problem = self._put(box, slot_targets)
+            if problem:
+                pytest.fail(
+                    f"borrow_box_bindings: could not set {box} slot_targets to "
+                    f"{slot_targets!r}: {problem}",
+                    pytrace=False,
+                )
+        return dict(baseline)
+
+    def restore_all(self) -> None:
+        """PUT every borrowed box back to its baseline (latest borrow first).
+        Tries every box, then fails loudly naming any that could not be restored."""
+        problems = []
+        for box in reversed(self.borrowed):
+            baseline = _normalized_slot_targets(self.baselines[box])
+            problem = self._put(box, baseline)
+            if problem:
+                problems.append(f"  {box} -> {baseline!r}: {problem}")
+        self.borrowed.clear()
+        if problems:
+            pytest.fail(
+                "borrow_box_bindings: teardown could NOT restore these dev boxes to "
+                "their baseline; the next run that borrows them will refuse to "
+                "start until they are put back:\n" + "\n".join(problems),
+                pytrace=False,
+            )
+
+
+@pytest.fixture
+def borrow_box_bindings(api_base_url: str):
+    """Factory: borrow a dev Dryer Box's slot bindings for one test.
+
+        def test_x(borrow_box_bindings):
+            borrow_box_bindings("PM-DB-1", {"1": "XL-1"})   # check baseline, then bind
+            borrow_box_bindings("PM-DB-5")                   # check baseline only
+
+    Fails loudly (and changes nothing) when the box isn't at its fixed baseline
+    in DEV_BOX_BINDING_BASELINES; teardown always restores that baseline, even
+    when the test (or a fixture built on this one) fails or skips.
+    """
+    loans = BoxBindingLoans(api_base_url)
+    yield loans.borrow
+    loans.restore_all()
 
 
 # ---------------------------------------------------------------------------
@@ -695,13 +927,29 @@ def _reset_dev_baseline(request):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session", autouse=False)
-def require_server(api_base_url: str):
+def require_server(api_base_url: str, pytestconfig):
     """Opt-in fixture for tests that need the live server.
 
     Kept autouse=False so unit tests don't hit the network. Request it
     explicitly from E2E tests if you want a friendly skip instead of a
     connection error.
+
+    ⚠️ This is NOT gated by --run-integration. That flag guards the real dev
+    SPOOLMAN on the NAS; this fixture guards the local FCC container, and the
+    two are different services. So whenever the container is UP, ~55 E2E files
+    requesting this fixture run — and mutate real dev inventory — even on a
+    plain `pytest` run. That surprised everyone (2026-08-03) because the build
+    cadence called the plain run "the offline sweep", which it never was.
+
+    `--offline` / FCC_OFFLINE=1 makes that promise real: it skips everything
+    that touches the container, giving a genuinely hermetic sweep that cannot
+    write to Derek's dev data. Default behaviour is unchanged.
     """
+    if _offline_mode(pytestconfig):
+        pytest.skip(
+            "offline mode (--offline / FCC_OFFLINE=1): skipping tests that "
+            "touch the live dev container"
+        )
     try:
         r = requests.get(api_base_url, timeout=3)
         if r.status_code >= 500:
@@ -966,108 +1214,323 @@ def _cleanup_orphan_test_records(request):
 #         page.goto(...)
 #         assert_contrast(page.locator("#fcc-bind-picker-overlay"))
 
+# Background compositing (2026-09-13 sweep triage, item 1). The guard used to
+# take the FIRST ancestor background with alpha > 0.01 and use its RGB as if it
+# were solid. A translucent tint therefore read as the full-strength colour: the
+# printer-status PRINTING chip (#4ade80 text on rgba(16,185,129,0.18)) scored
+# 1.46:1 although it renders at ~9.7:1 over the black dashboard, so both
+# printer-status contrast tests went red whenever a sweep overlapped a real
+# print. PAUSED, ATTENTION and IDLE were false reds too; only OFFLINE passed.
+# Now every translucent layer is painted source-over, bottom up, onto the
+# nearest opaque ancestor background (then the <html> background, then a default
+# dark ground), and the ratio is taken against that composite.
+#
+# The FOREGROUND alpha is still ignored, on purpose. Compositing it the same way
+# is two lines, but it would newly flag the OFFLINE chip (rgba(255,255,255,0.45)
+# text: ~4.4:1 over the widget), which is dev's usual printer state, so turning
+# it on is a design decision about that chip, not a guard fix.
+#
+# Only `background-color` is read. Gradients / images (e.g. .fcc-ps-widget's
+# linear-gradient) count as transparent and the walk continues past them.
+CONTRAST_GUARD_JS = r"""
+(root, opts) => {
+    const { minRatio, skipEmpty } = opts;
+    if (!root) return { error: 'root_not_found' };
+
+    const relLum = (r, g, b) => {
+        const srgb = [r, g, b].map(v => {
+            v = v / 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
+    };
+    const ratio = (l1, l2) => {
+        const a = Math.max(l1, l2), b = Math.min(l1, l2);
+        return (a + 0.05) / (b + 0.05);
+    };
+    const parseColor = (str) => {
+        const m = String(str).match(/rgba?\(([^)]+)\)/);
+        if (!m) return null;
+        const parts = m[1].split(',').map(s => parseFloat(s.trim()));
+        return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+    };
+    const OPAQUE = 0.999;
+    const DEFAULT_GROUND = { r: 18, g: 18, b: 18, a: 1 };
+    // Source-over: `top` (alpha top.a) painted onto an already-opaque `bottom`.
+    const over = (top, bottom) => ({
+        r: top.r * top.a + bottom.r * (1 - top.a),
+        g: top.g * top.a + bottom.g * (1 - top.a),
+        b: top.b * top.a + bottom.b * (1 - top.a),
+        a: 1,
+    });
+    // The colour actually painted behind `el`'s text.
+    const effectiveBg = (el) => {
+        const translucent = [];   // nearest ancestor first
+        let ground = null;
+        for (let cur = el; cur && cur !== document.documentElement; cur = cur.parentElement) {
+            const bg = parseColor(getComputedStyle(cur).backgroundColor);
+            if (!bg || bg.a <= 0.01) continue;
+            if (bg.a >= OPAQUE) { ground = bg; break; }
+            translucent.push(bg);
+        }
+        if (!ground) {
+            const htmlBg = parseColor(getComputedStyle(document.documentElement).backgroundColor);
+            ground = (htmlBg && htmlBg.a >= OPAQUE) ? htmlBg : DEFAULT_GROUND;
+        }
+        let out = { r: ground.r, g: ground.g, b: ground.b, a: 1 };
+        for (let i = translucent.length - 1; i >= 0; i--) out = over(translucent[i], out);
+        return { color: out, layers: translucent.length };
+    };
+
+    const offenders = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    let el;
+    while ((el = walker.nextNode())) {
+        const cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+        const opacity = parseFloat(cs.opacity || '1');
+        if (opacity < 0.05) continue;
+        const hasDirectText = Array.from(el.childNodes).some(n =>
+            n.nodeType === Node.TEXT_NODE && n.textContent.trim().length > 0
+        );
+        if (!hasDirectText) continue;
+        if (skipEmpty && !el.innerText.trim()) continue;
+
+        const fg = parseColor(cs.color);
+        if (!fg) continue;
+        const { color: bg, layers } = effectiveBg(el);
+        const r = ratio(relLum(fg.r, fg.g, fg.b), relLum(bg.r, bg.g, bg.b));
+        if (r < minRatio) {
+            offenders.push({
+                tag: el.tagName.toLowerCase(),
+                id: el.id || null,
+                className: el.className || null,
+                text: (el.innerText || '').trim().slice(0, 80),
+                fg: `rgb(${Math.round(fg.r)}, ${Math.round(fg.g)}, ${Math.round(fg.b)})`,
+                bg: `rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)})`,
+                bgLayers: layers,
+                ratio: Number(r.toFixed(2)),
+            });
+        }
+    }
+    return { offenders };
+}
+"""
+
+
+def contrast_offenders(root_locator, min_ratio: float = 4.5, skip_empty: bool = True) -> list:
+    """Every visible text element under `root_locator` whose contrast against
+    its composited background is below `min_ratio`, as dicts (tag, id,
+    className, text, fg, bg, bgLayers, ratio). Uses locator.evaluate so
+    Playwright hands the real element to the JS; no selector-string extraction."""
+    result = root_locator.evaluate(
+        CONTRAST_GUARD_JS,
+        {"minRatio": min_ratio, "skipEmpty": skip_empty},
+    )
+    if not isinstance(result, dict) or result.get('error') == 'root_not_found':
+        raise AssertionError(f"assert_contrast: could not evaluate on locator {root_locator!r}")
+    return result.get('offenders') or []
+
+
+def check_contrast(root_locator, min_ratio: float = 4.5, skip_empty: bool = True) -> None:
+    """Raise AssertionError naming every offender (see `contrast_offenders`)."""
+    offenders = contrast_offenders(root_locator, min_ratio, skip_empty)
+    if offenders:
+        msg_lines = [f"Contrast < {min_ratio}:1 for {len(offenders)} element(s):"]
+        for o in offenders:
+            label = f"<{o['tag']}"
+            if o.get('id'):
+                label += f" id={o['id']!r}"
+            if o.get('className'):
+                label += f" class={o['className']!r}"
+            label += ">"
+            bg_note = ""
+            if o.get('bgLayers'):
+                bg_note = f" (composited from {o['bgLayers']} translucent layer(s))"
+            msg_lines.append(
+                f"  {label} ratio={o['ratio']}:1  fg={o['fg']}  bg={o['bg']}{bg_note}  text={o['text']!r}"
+            )
+        raise AssertionError("\n".join(msg_lines))
+
+
 @pytest.fixture
 def assert_contrast():
     """Playwright-driven contrast check against WCAG AA thresholds.
 
     Walks every text-bearing element under `root_locator`, reads its
-    resolved foreground color, finds the first non-transparent
-    background color by climbing ancestors, computes the WCAG relative-
+    resolved foreground color, composites the translucent ancestor
+    backgrounds down to the first opaque one, computes the WCAG relative-
     luminance contrast ratio, and asserts every visible piece of text
     meets `min_ratio` (default 4.5:1, AA for normal text).
 
-    Returns the list of offenders when pytest fails so the error message
-    names exactly which selectors violated and by how much.
+    The AssertionError names exactly which elements violated and by how much.
     """
-    _JS_CONTRAST = """
-        (root, opts) => {
-            const { minRatio, skipEmpty } = opts;
-            if (!root) return { error: 'root_not_found' };
+    return check_contrast
 
-            const relLum = (r, g, b) => {
-                const srgb = [r, g, b].map(v => {
-                    v = v / 255;
-                    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-                });
-                return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
-            };
-            const ratio = (l1, l2) => {
-                const a = Math.max(l1, l2), b = Math.min(l1, l2);
-                return (a + 0.05) / (b + 0.05);
-            };
-            const parseColor = (str) => {
-                const m = String(str).match(/rgba?\\(([^)]+)\\)/);
-                if (!m) return null;
-                const parts = m[1].split(',').map(s => parseFloat(s.trim()));
-                return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
-            };
-            const firstOpaqueBg = (el) => {
-                let cur = el;
-                while (cur && cur !== document.documentElement) {
-                    const bg = parseColor(getComputedStyle(cur).backgroundColor);
-                    if (bg && bg.a > 0.01) return bg;
-                    cur = cur.parentElement;
-                }
-                const bodyBg = parseColor(getComputedStyle(document.body).backgroundColor);
-                return bodyBg || { r: 18, g: 18, b: 18, a: 1 };
-            };
 
-            const offenders = [];
-            const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-            let el;
-            while ((el = walker.nextNode())) {
-                const cs = getComputedStyle(el);
-                if (cs.display === 'none' || cs.visibility === 'hidden') continue;
-                const opacity = parseFloat(cs.opacity || '1');
-                if (opacity < 0.05) continue;
-                const hasDirectText = Array.from(el.childNodes).some(n =>
-                    n.nodeType === Node.TEXT_NODE && n.textContent.trim().length > 0
-                );
-                if (!hasDirectText) continue;
-                if (skipEmpty && !el.innerText.trim()) continue;
+# ---------------------------------------------------------------------------
+# A browser that cannot reach anything (for hermetic, --offline browser tests)
+# ---------------------------------------------------------------------------
 
-                const fg = parseColor(cs.color);
-                if (!fg) continue;
-                const bg = firstOpaqueBg(el);
-                const r = ratio(relLum(fg.r, fg.g, fg.b), relLum(bg.r, bg.g, bg.b));
-                if (r < minRatio) {
-                    offenders.push({
-                        tag: el.tagName.toLowerCase(),
-                        id: el.id || null,
-                        className: el.className || null,
-                        text: (el.innerText || '').trim().slice(0, 80),
-                        fg: `rgb(${Math.round(fg.r)}, ${Math.round(fg.g)}, ${Math.round(fg.b)})`,
-                        bg: `rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)})`,
-                        ratio: Number(r.toFixed(2)),
-                    });
-                }
-            }
-            return { offenders };
-        }
-        """
+# The browser-wide network block behind `isolated_page`. `context.route` sees
+# HTTP(S) only: a WebSocket skips it, whether a page, a frame or a worker opens
+# it (review 2026-09-13; a scratch probe had all three reach a local listener).
+# `context.route_web_socket` does not close the hole: it mocks page and frame
+# sockets, but a worker's still connects, and a handler that calls `ws.close()`
+# deadlocks the sync API. So the browser itself is given nowhere to connect:
+# every connection must go through a proxy whose hostname can never resolve,
+# and the resolver rule fails every hostname inside chromium, so not even a DNS
+# query leaves the machine. Loopback goes through the proxy too, which is what
+# covers 127.0.0.1:8000 (TestIsolatedBrowser probes a 127.0.0.1 listener).
+ISOLATED_PROXY = {"server": "http://fcc-offline-proxy.invalid:9"}
+ISOLATED_BROWSER_ARGS = ("--host-resolver-rules=MAP * ~NOTFOUND",)
 
-    def _check(root_locator, min_ratio: float = 4.5, skip_empty: bool = True):
-        # Use locator.evaluate so Playwright hands the real element to the
-        # JS — no fragile selector-string extraction needed.
-        result = root_locator.evaluate(
-            _JS_CONTRAST,
-            {"minRatio": min_ratio, "skipEmpty": skip_empty},
+
+@pytest.fixture(scope="session")
+def _isolated_chromium(playwright):
+    """One private headless chromium for the whole session, with no network.
+
+    Reuses pytest-playwright's session `playwright` instance: starting a second
+    sync_playwright() while the E2E `page` fixture's instance is running fails.
+    Skips (does not fail) when chromium isn't installed on this machine.
+    """
+    try:
+        browser = playwright.chromium.launch(
+            headless=True, proxy=ISOLATED_PROXY, args=list(ISOLATED_BROWSER_ARGS))
+    except Exception as exc:  # noqa: BLE001 - playwright raises its own Error type
+        pytest.skip(
+            f"isolated_page: chromium could not launch ({exc}). Install it with "
+            f"\"C:/Python314/python.exe\" -m playwright install chromium"
         )
-        if not isinstance(result, dict) or result.get('error') == 'root_not_found':
-            raise AssertionError(f"assert_contrast: could not evaluate on locator {root_locator!r}")
-        offenders = result.get('offenders') or []
-        if offenders:
-            msg_lines = [f"Contrast < {min_ratio}:1 for {len(offenders)} element(s):"]
-            for o in offenders:
-                label = f"<{o['tag']}"
-                if o.get('id'):
-                    label += f" id={o['id']!r}"
-                if o.get('className'):
-                    label += f" class={o['className']!r}"
-                label += ">"
-                msg_lines.append(
-                    f"  {label} ratio={o['ratio']}:1  fg={o['fg']}  bg={o['bg']}  text={o['text']!r}"
-                )
-            raise AssertionError("\n".join(msg_lines))
+    yield browser
+    browser.close()
 
-    return _check
+
+@pytest.fixture
+def isolated_page(_isolated_chromium):
+    """A fresh page that cannot reach any network. Build it with
+    `page.set_content(...)`; nothing it references, no `goto`, and no fetch,
+    WebSocket, frame or worker it starts can reach the FCC container, Spoolman
+    or anything else.
+
+    Two layers: the context aborts every HTTP(S) request (an immediate
+    net::ERR_FAILED), and `_isolated_chromium`'s dead proxy stops every other
+    kind of connection, WebSockets included, and would stop HTTP on its own.
+
+    This is the only sanctioned way to use a browser under --offline: the
+    socket guard below polices Python sockets only, not the browser process, so
+    the isolation has to live in the browser itself.
+    """
+    context = _isolated_chromium.new_context(viewport=BASELINE_VIEWPORT)
+    context.route("**/*", lambda route: route.abort())
+    page = context.new_page()
+    try:
+        yield page
+    finally:
+        context.close()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_attr_migration_state(tmp_path, monkeypatch):
+    """Keep Group-36 recovery snapshots + the hidden-choice list out of `data/`.
+
+    `attr_migration` writes a recovery snapshot to `inventory-hub/data/` BEFORE
+    every destructive schema migration and only deletes it when the migration
+    fully succeeds. Unit tests that deliberately drive a restore FAILURE would
+    therefore leave a real `attr_recovery_*.json` behind in the repo — which the
+    boot re-surface then reports as unresolved data loss on every subsequent
+    container start. Same for the hidden-choice list: a test hiding a choice
+    must not hide it in Derek's actual dev UI.
+
+    Autouse and repo-wide on purpose: the failure mode is a test silently
+    mutating real state, which is exactly the class of problem the `--offline`
+    work exists to prevent. Redirecting both paths to `tmp_path` makes it
+    structurally impossible rather than a convention each test must remember.
+
+    Host-side only, so it has no effect on the E2E tests driving the container.
+    """
+    try:
+        import attr_migration  # type: ignore
+    except ImportError:  # pragma: no cover - backend not importable in this env
+        return
+    monkeypatch.setattr(attr_migration, "_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        attr_migration, "_HIDDEN_PATH", str(tmp_path / "attr_hidden_choices.json")
+    )
+
+
+# --- Group 38.7 — make `--offline` structurally airtight ---------------------
+#
+# The collection-time gate skips by FIXTURE NAME, which is the right primary
+# mechanism (it stops a browser ever launching, which is where the ~27min ->
+# ~42s win comes from). But it is only as complete as CONTAINER_FIXTURES: a
+# test that reaches the container with a literal URL and takes none of those
+# fixtures still runs, and still writes to Derek's real dev inventory. That is
+# the whole failure mode `--offline` exists to prevent, so "offline" needs to
+# be enforced, not merely intended.
+#
+# A lint on the string "localhost:8000" was the other option and is strictly
+# weaker — it cannot see an f-string, a value read from an env var, or a URL
+# built in a helper. Blocking at the socket layer catches every spelling.
+#
+# Ports, not hosts: 8000 is the FCC dev container, 7913 dev Spoolman, 7912 PROD
+# Spoolman. Matching on port covers localhost / 127.0.0.1 / ::1 / the NAS IP
+# uniformly (verified: an IPv6 `('::1', 8000, 0, 0)` tuple still exposes the
+# port at index 1).
+_OFFLINE_BLOCKED_PORTS = frozenset({8000, 7912, 7913})
+
+
+class OfflineNetworkAccess(requests.exceptions.ConnectionError):
+    """Raised when an --offline test tries to reach the container or Spoolman.
+
+    Subclasses `requests.exceptions.ConnectionError` deliberately. Several
+    tests already wrap a container call in
+    `except requests.RequestException: pytest.skip("Container not responding")`
+    — and under `--offline` the container IS unreachable, by policy rather than
+    by accident. Inheriting makes those guards do the right thing untouched,
+    instead of every one of them needing to learn about a new exception type.
+
+    A test with NO such guard still fails loudly with the message below, which
+    is the outcome we want: the leak stays visible rather than being silently
+    swallowed.
+    """
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _offline_socket_guard(request):
+    """Under --offline, refuse any TCP connect to the container / Spoolman.
+
+    Session-scoped and autouse so there is nothing for a test author to
+    remember. Outside offline mode this is a no-op, so normal and
+    RUN_INTEGRATION runs are completely unaffected.
+    """
+    if not _offline_mode(request.config):
+        yield
+        return
+
+    import socket as _socket
+
+    real_connect = _socket.socket.connect
+
+    def _guarded_connect(self, address, *args, **kwargs):
+        try:
+            port = address[1]
+        except (TypeError, IndexError, KeyError):
+            # A UNIX socket or anything not (host, port) — not our concern.
+            return real_connect(self, address, *args, **kwargs)
+        if port in _OFFLINE_BLOCKED_PORTS:
+            raise OfflineNetworkAccess(
+                f"offline mode blocked a connection to {address!r}. This test "
+                f"reaches the live dev container or Spoolman without requesting "
+                f"any of CONTAINER_FIXTURES, so the collection-time gate could "
+                f"not see it. Either request a gated fixture (e.g. "
+                f"`require_server`/`api_base_url`) so it skips offline, or mock "
+                f"the call."
+            )
+        return real_connect(self, address, *args, **kwargs)
+
+    _socket.socket.connect = _guarded_connect
+    try:
+        yield
+    finally:
+        _socket.socket.connect = real_connect

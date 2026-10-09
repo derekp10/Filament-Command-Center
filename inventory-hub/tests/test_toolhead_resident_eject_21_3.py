@@ -37,6 +37,10 @@ def _run_move(target_type, *, printer_map=None, resident_id=99, new_id=42):
          "Name": "Core One Direct Load"},
     ]
     spool_data = {"id": new_id, "location": "", "extra": {}}
+    # The resident's OWN record puts it on the head. Smart Load only unloads a
+    # spool whose record says it is there, since a matcher hit can be a ghost
+    # (2026-09-12); this mock used to hand back the incoming spool for every id.
+    resident_data = {"id": resident_id, "location": target, "extra": {}}
     ejected = []
 
     def fake_update(sid, data):
@@ -54,7 +58,8 @@ def _run_move(target_type, *, printer_map=None, resident_id=99, new_id=42):
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
-        patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
+        patch.object(logic.spoolman_api, "get_spool",
+                     side_effect=lambda sid: resident_data if int(sid) == resident_id else spool_data),
         # The resident occupying the head — returned for the Smart-Load probe.
         patch.object(logic.spoolman_api, "get_spools_at_location",
                      return_value=[resident_id]),

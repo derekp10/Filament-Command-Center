@@ -12,8 +12,21 @@ Skips when no spool with a non-empty location is available.
 """
 from __future__ import annotations
 
+import warnings
+
 import pytest
 import requests
+
+# Group 38 — this suite PATCHes the real dev Spoolman on the NAS directly
+# (`{spoolman_url}/api/v1/spool/{sid}`), archiving a real spool and restoring it
+# afterwards. It carried NO marker, and `require_spoolman` only checks
+# REACHABILITY — it is not gated by RUN_INTEGRATION — so a plain `pytest` run
+# with the NAS up mutated Derek's live inventory. CLAUDE.md's contract is
+# explicit that `@pytest.mark.integration` is what gates "tests that hit the
+# real dev Spoolman", so this belongs here. Full sweeps run with
+# RUN_INTEGRATION=1, so sweep coverage is unchanged; what changes is that a
+# plain run no longer touches dev.
+pytestmark = pytest.mark.integration
 
 
 def _get_spool(spoolman_url: str, sid: int) -> dict:
@@ -83,9 +96,36 @@ def spool_with_location(require_spoolman: str):
         breadcrumb = snapshot["extra_breadcrumb"]
         if breadcrumb is None:
             _patch_spool(spoolman_url, snapshot["id"], {"extra": {"fcc_pre_archive_location": '""'}})
-    except Exception:
-        # Best-effort teardown; failures here shouldn't mask test failures.
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # Group 38 — still best-effort (teardown must not mask a test failure),
+        # but no longer SILENT. This test archives a REAL dev spool, so a
+        # swallowed restore leaves Derek's inventory wrong with no trace of
+        # which record or why.
+        warnings.warn(
+            f"archive/unarchive teardown FAILED to restore spool "
+            f"{snapshot['id']}: {exc!r} — it may still be archived, at the "
+            f"wrong location, or at the wrong weight.",
+            stacklevel=2,
+        )
+    else:
+        # Verify the restore actually landed. A PATCH returning 200 is not
+        # proof the value stuck — the same verify-by-re-read discipline Group 36
+        # adopted after silent restore failures drained real filaments.
+        try:
+            after = _get_spool(spoolman_url, snapshot["id"])
+            drift = []
+            if bool(after.get("archived", False)) != snapshot["archived"]:
+                drift.append(f"archived={after.get('archived')} (want {snapshot['archived']})")
+            if (after.get("location") or "").strip() != snapshot["location"].strip():
+                drift.append(f"location={after.get('location')!r} (want {snapshot['location']!r})")
+            if drift:
+                warnings.warn(
+                    f"archive/unarchive teardown did NOT fully restore spool "
+                    f"{snapshot['id']}: " + "; ".join(drift),
+                    stacklevel=2,
+                )
+        except Exception:  # noqa: BLE001
+            pass  # the verification itself must never break teardown
 
 
 def test_archive_then_unarchive_restores_location(

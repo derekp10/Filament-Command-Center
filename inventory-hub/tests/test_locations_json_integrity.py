@@ -32,17 +32,31 @@ def _required_keys_for(row: dict) -> set:
     the minimum-acceptable key set for the row's declared Type so we can
     catch tail-truncation and copy-paste skews without flagging legit
     schema variation as an error.
+
+    Relaxed 2026-10-08. `Location`, `Device Identifier`, `Device Type` and
+    `Order` used to be required here, which made every row created since the
+    original Google-Sheets import fail — the full 11-key shape is that CSV's
+    header (`3D Print Supplies - Locations_BACKUP.csv`), not a schema the app
+    maintains. Four of those six legacy columns have NO reader in app code:
+    nothing sorts by `Order`; every live "Row" is a Type value, not this field;
+    `Label Printed` was superseded by Spoolman's `extra.needs_label_print`; and
+    `Device Identifier`/`Device Type` have one unreachable fallback arm in
+    inv_quickswap.js. `Location` is the pre-L271 free-text room that `parent_id`
+    replaced. Requiring them flagged conformant rows (all of RCOI-1..8, XL-5,
+    PM-DB-9/10) while guarding nothing. `Name` and `Max Spools` stay — those are
+    load-bearing. The deeper fix is a real printer add/configure flow rather
+    than printers-as-generic-locations; see the Feature-Buglist item.
     """
     base = {"LocationID", "Type"}
     t = row.get("Type")
     if t == "Tool Head":
-        return base | {"Location", "Device Identifier", "Device Type", "Order", "Max Spools", "Name"}
+        return base | {"Max Spools", "Name"}
     if t == "Dryer Box":
-        return base | {"Location", "Max Spools", "Name"}
+        return base | {"Max Spools", "Name"}
     if t == "MMU Slot":
-        return base | {"Location", "Order", "Max Spools", "Name"}
+        return base | {"Max Spools", "Name"}
     if t == "No MMU Direct Load":
-        return base | {"Location", "Max Spools", "Name"}
+        return base | {"Max Spools", "Name"}
     if t in {"Cart", "Sliding Drawer"}:
         return base | {"Name"}
     # Rooms / Virtual / Printer / Wall / Row (grouping nodes) — minimum
@@ -104,14 +118,20 @@ def test_each_row_has_minimum_schema_for_its_type(locations_data):
     """Catches the "X-5 truncated to 4 fields while X-4 has 10" pattern
     that happens when a partial overwrite leaves a half-baked row."""
     _, data = locations_data
+    # Collect every offender before asserting. The assert used to sit inside the
+    # loop, so the run died on the first bad row and named only it — fixing that
+    # one row just advanced the error to the next, with no way to see the scale
+    # of the problem from a single run.
+    offenders = []
     for i, row in enumerate(data):
-        required = _required_keys_for(row)
-        present = set(row.keys())
-        missing = required - present
-        assert not missing, (
-            f"row {i} (LocationID={row.get('LocationID')}, Type={row.get('Type')}) "
-            f"is missing required keys for its type: {sorted(missing)}"
-        )
+        missing = _required_keys_for(row) - set(row.keys())
+        if missing:
+            offenders.append(
+                f"  row {i} (LocationID={row.get('LocationID')}, Type={row.get('Type')}): "
+                f"missing {sorted(missing)}")
+    assert not offenders, (
+        f"{len(offenders)} row(s) missing required keys for their type:\n"
+        + "\n".join(offenders))
 
 
 def test_no_unbalanced_quotes_in_string_fields(locations_data):

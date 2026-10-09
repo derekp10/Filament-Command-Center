@@ -1223,12 +1223,17 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                     .then(r => r.json())
                     .then(res => {
                         if (typeof setProcessing === 'function') setProcessing(false);
-                        if(res.status === 'success' || res.success) {
+                        // A rejected write still answers status 'success' and names
+                        // the spool in res.failures (2026-09-12).
+                        const failedWhy = res.status === 'success' ? (res.failures || {})[String(spoolId)] : null;
+                        if (!failedWhy && (res.status === 'success' || res.success)) {
                             showToast('Location updated via override', 'success');
+                            const notDeployed = (res.auto_deploy_skipped || {})[String(spoolId)];
+                            if (notDeployed) showToast(`⚠️ #${spoolId} was placed, but NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
                             document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
                             openSpoolDetails(spoolId, true); 
                         } else {
-                            showToast(res.msg || 'Override failed', 'error');
+                            showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
                         }
                     })
                     .catch(e => {

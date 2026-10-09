@@ -43,7 +43,11 @@ def test_return_overlay_names_specific_toolhead_on_virtual_printer(page: Page, o
     open_manage_modal(VIRTUAL_PRINTER)
     page.locator("#quickswap-return-btn").click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
-    expect(overlay).to_be_visible(timeout=4000)
+    # Group 38.5: same ~3s active-print probe floor as the other confirm-overlay
+    # waits (inv_quickswap.js:340/368, mountOverlay at :468). These two sites
+    # were latent siblings of the 38.5 flake — identical exposure, never yet
+    # red. Raised to match the 8000ms precedent in test_quickswap_ui_e2e.py:79.
+    expect(overlay).to_be_visible(timeout=8000)
     title = page.locator("#fcc-quickswap-confirm-title")
     # Title must name the specific toolhead (e.g. XL-3), NOT the prefix (XL).
     expect(title).to_contain_text(loaded)
@@ -63,7 +67,11 @@ def test_return_overlay_explains_when_virtual_printer_has_no_loaded_toolhead(pag
     open_manage_modal(VIRTUAL_PRINTER)
     page.locator("#quickswap-return-btn").click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
-    expect(overlay).to_be_visible(timeout=4000)
+    # Group 38.5: same ~3s active-print probe floor as the other confirm-overlay
+    # waits (inv_quickswap.js:340/368, mountOverlay at :468). These two sites
+    # were latent siblings of the 38.5 flake — identical exposure, never yet
+    # red. Raised to match the 8000ms precedent in test_quickswap_ui_e2e.py:79.
+    expect(overlay).to_be_visible(timeout=8000)
     body = page.locator("#fcc-quickswap-confirm-body")
     expect(body).to_contain_text("No toolhead")
 
