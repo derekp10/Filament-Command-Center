@@ -214,7 +214,8 @@ def api_update_filament():
 def api_manage_contents():
     data = request.json
     action = data.get('action')
-    loc_id = data.get('location', '').strip().upper()
+    # `or ''`: a JSON null location used to 500 on None.strip().
+    loc_id = str(data.get('location') or '').strip().upper()
     spool_input = data.get('spool_id')
     slot_arg = data.get('slot')
     # Caller opts into the active-print-confirmed branch by passing this
@@ -230,6 +231,20 @@ def api_manage_contents():
         return jsonify({"success": False, "msg": f"Unknown action: {action}"})
 
     if action == 'clear_location':
+        # A blank location is not the Unassigned pile (2026-09-13). The location
+        # matcher treats "" == "" as a direct hit for every spool with no
+        # location, so clear_location("") ejected all of them, and each one still
+        # carrying a physical_source trail was "returned" into that box. A
+        # CMD:EJECTALL scan with the Location Manager closed sent exactly that
+        # (closing the manager blanks #manage-loc-id). Refuse before any read.
+        if not loc_id:
+            state.add_log_entry(
+                "⚠️ Eject All refused: no location was given, so nothing was ejected",
+                "WARNING", "ffaa00")
+            return jsonify({
+                "success": False,
+                "msg": "No location given. Open a location in the Location Manager, then use Eject All.",
+            })
         contents = spoolman_api.get_spools_at_location_detailed(loc_id)
         # Pre-flight: if the box being cleared is itself a toolhead that's
         # actively printing, bail. Individual per-spool checks are bypassed

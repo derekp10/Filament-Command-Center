@@ -18,24 +18,11 @@ TEST_TOOLHEAD = "XL-1"
 
 
 @pytest.fixture
-def bound_xl1(api_base_url):
+def bound_xl1(borrow_box_bindings):
     """Ensure XL-1 has at least one bound source slot so the widget shows
-    a row for the XL printer. Restore the original bindings on teardown."""
-    snap = requests.get(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5
-    ).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": {"1": TEST_TOOLHEAD}},
-        timeout=5,
-    )
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+    a row for the XL printer. PM-DB-1 goes back to its fixed baseline on
+    teardown (conftest `borrow_box_bindings`)."""
+    borrow_box_bindings(TEST_BOX, {"1": TEST_TOOLHEAD})
 
 
 @pytest.mark.usefixtures("require_server", "bound_xl1")
@@ -180,25 +167,30 @@ def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url, ap
     carry the fcc-ps-th-unbound class, so the L140 assert below still
     holds AND the box-bounding regression is pinned: a loaded toolhead
     with no dryer box is no longer masked."""
-    # Snapshot every dryer box's bindings, then clear them.
+    # Snapshot every dryer box's bindings, then clear them. This wipes the
+    # WHOLE fleet — the real boxes included — so the clearing loop has to run
+    # INSIDE the try: a request that fails partway through it used to leave
+    # every already-cleared box wiped with no restore, because `finally` had
+    # not been entered yet. Each box is snapshotted before it is cleared, so
+    # the finally below restores exactly the ones this test touched.
     boxes = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json().get("slots", [])
     box_originals = {}
     seen_boxes = set()
-    for s in boxes:
-        b = s["box"]
-        if b in seen_boxes:
-            continue
-        seen_boxes.add(b)
-        snap = requests.get(
-            f"{api_base_url}/api/dryer_box/{b}/bindings", timeout=5
-        ).json().get("slot_targets", {})
-        box_originals[b] = snap
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{b}/bindings",
-            json={"slot_targets": {}},
-            timeout=5,
-        )
     try:
+        for s in boxes:
+            b = s["box"]
+            if b in seen_boxes:
+                continue
+            seen_boxes.add(b)
+            snap = requests.get(
+                f"{api_base_url}/api/dryer_box/{b}/bindings", timeout=5
+            ).json().get("slot_targets", {})
+            box_originals[b] = snap
+            requests.put(
+                f"{api_base_url}/api/dryer_box/{b}/bindings",
+                json={"slot_targets": {}},
+                timeout=5,
+            )
         page.goto(base_url)
         page.wait_for_selector("#buffer-zone", timeout=10000)
         # Wait for the widget body to populate (aggregation takes a sec).

@@ -1397,6 +1397,24 @@ window.promptPrusamentMatched = (res) => {
     }
 };
 
+// CMD:EJECTALL empties the location open in the Location Manager, and nothing
+// else. Closing the manager blanks #manage-loc-id, so a scan with it closed used
+// to ask "Nuke all unslotted in ?", and FORCE EXECUTE sent clear_location for "",
+// which ejected every Unassigned spool (2026-09-13). Same open-manager rule as
+// CMD:TRASH. Both routes below (the exact client-side match and the backend's
+// substring match) come through here.
+const ejectAllFromScan = () => {
+    const modal = document.getElementById('manageModal');
+    const locEl = document.getElementById('manage-loc-id');
+    const loc = locEl ? String(locEl.value || '').trim() : '';
+    if (!modal || !modal.classList.contains('show') || !loc) {
+        showToast('Eject All ignored: open a location in the Location Manager first', 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent('⚠️ CMD:EJECTALL scan ignored: no location is open in the Location Manager', 'WARNING');
+        return;
+    }
+    triggerEjectAll(loc);
+};
+
 // --- SCAN ROUTER ---
 const processScan = (text, source = 'keyboard') => {
     const upper = text.toUpperCase();
@@ -1427,7 +1445,7 @@ const processScan = (text, source = 'keyboard') => {
     if (upper === 'CMD:WEIGH') { window.openWeighOutModal(); return; }
     if (upper === 'CMD:DROP') { toggleDropMode(); return; }
     if (upper === 'CMD:EJECT') { toggleEjectMode(); return; }
-    if (upper === 'CMD:EJECTALL') { triggerEjectAll(document.getElementById('manage-loc-id').value); return; }
+    if (upper === 'CMD:EJECTALL') { ejectAllFromScan(); return; }
     if (upper === 'CMD:UNDO') { triggerUndo(); return; }
     // Never mid-bulk-move: "Clear entire Buffer?" would open BEHIND the bulk panel
     // and swallow every later scan — the same deadlock the backend-answered
@@ -1495,7 +1513,7 @@ const processScan = (text, source = 'keyboard') => {
                 // match) both reach.
                 else if (res.cmd === 'confirm') { if (state.pendingConfirm && onScreen('confirmModal')) confirmAction(true); else ignoredConfirm('confirmModal', !!state.pendingConfirm); }
                 else if (res.cmd === 'slot') handleSlotInteraction(res.value);
-                else if (res.cmd === 'ejectall') triggerEjectAll(document.getElementById('manage-loc-id').value);
+                else if (res.cmd === 'ejectall') ejectAllFromScan();
             } else if (res.type === 'assignment') {
                 // Backend now handles the load when the buffer is non-empty.
                 // We switch on `action` and let the backend's Activity Log

@@ -28,13 +28,52 @@
         return null;
     };
 
+    // L271: the Printer row, not the spelling of its id, says which toolheads
+    // belong to it. A head can share the printer's own id: the Core One's row is
+    // CORE1 with the single head CORE1, so the old "<ID>-" prefix match found
+    // nothing there and Return on CORE1 never reached the server (2026-09-13).
+    // Lookup order:
+    //   1. the row's toolheads[] (on the object passed in, else its
+    //      state.allLocations row) — the data /api/printer_map is built from;
+    //   2. the printer_map group named after the row (the map is keyed by Name);
+    //   3. the legacy "<ID>-" prefix, only when neither knows the row (kept
+    //      until L271 Phase 5 retires prefix matching).
+    // Returns uppercased toolhead ids in position order, without duplicates.
+    const printerToolheadIds = (loc, printerMap) => {
+        if (!loc) return [];
+        const up = String(loc.LocationID || '').trim().toUpperCase();
+        const inPositionOrder = (list) => {
+            const pos = (e) => (Number.isFinite(Number(e.position)) ? Number(e.position) : Number.MAX_SAFE_INTEGER);
+            const ids = (Array.isArray(list) ? list : [])
+                .filter(e => e && String(e.location_id || '').trim())
+                .map((e, i) => ({ id: String(e.location_id).trim().toUpperCase(), p: pos(e), i }))
+                .sort((a, b) => (a.p - b.p) || (a.i - b.i))
+                .map(e => e.id);
+            return ids.filter((id, i) => ids.indexOf(id) === i);
+        };
+        const row = Array.isArray(loc.toolheads) ? loc
+            : (state.allLocations || []).find(l => String(l.LocationID || '').trim().toUpperCase() === up);
+        const fromRow = inPositionOrder(row && row.toolheads);
+        if (fromRow.length) return fromRow;
+        const fromGroup = inPositionOrder((printerMap || {})[loc.Name]);
+        if (fromGroup.length) return fromGroup;
+        const prefix = up + '-';
+        const legacy = [];
+        for (const entries of Object.values(printerMap || {})) {
+            (entries || []).forEach(e => {
+                const v = String(e.location_id).toUpperCase();
+                if (v.startsWith(prefix) && !legacy.includes(v)) legacy.push(v);
+            });
+        }
+        return legacy;
+    };
+
     const resolvePrinterNameForPrinterLoc = (loc, printerMap) => {
-        // Backend synthesizes virtual Printer locations keyed by the
-        // toolhead prefix (e.g. LocationID="XL" aggregates XL-1, XL-2…).
-        // Match by: any printer whose toolhead IDs start with <LocationID>-.
-        const prefix = String(loc.LocationID || '').trim().toUpperCase() + '-';
+        // The printer_map group that owns this Printer row's toolheads
+        // (printerToolheadIds: toolheads[] first, the legacy prefix last).
+        const heads = printerToolheadIds(loc, printerMap);
         for (const [printerName, entries] of Object.entries(printerMap || {})) {
-            if ((entries || []).some(e => String(e.location_id).toUpperCase().startsWith(prefix))) {
+            if ((entries || []).some(e => heads.includes(String(e.location_id).toUpperCase()))) {
                 return printerName;
             }
         }
@@ -734,27 +773,21 @@
 
     // Resolve which concrete toolhead a Return-to-Slot click is actually
     // going to act on. For a specific toolhead loc (e.g. XL-3) it's that
-    // loc. For a virtual-printer loc (e.g. XL / CORE1) we check each
-    // candidate toolhead's contents and return the first one that's
-    // loaded — which mirrors the backend's own selection logic.
+    // loc. For a Printer loc (e.g. XL / CORE1) we check each of its
+    // toolheads' contents and return the first one that's loaded — which
+    // mirrors the backend's own selection logic. The toolheads come from the
+    // row (printerToolheadIds), so CORE1's single head CORE1 is a candidate.
     const _resolveReturnTarget = (loc) => {
         if (!loc) return Promise.resolve(null);
         const up = String(loc.LocationID).toUpperCase();
         if (loc.Type !== PRINTER_TYPE) {
             return Promise.resolve(up);
         }
-        const pm = state.printerMap || {};
-        const prefix = up + '-';
-        const candidates = [];
-        for (const entries of Object.values(pm)) {
-            (entries || []).forEach(e => {
-                const v = String(e.location_id).toUpperCase();
-                if (v.startsWith(prefix)) candidates.push(v);
-            });
-        }
+        const candidates = printerToolheadIds(loc, state.printerMap || {});
         if (!candidates.length) return Promise.resolve(null);
-        // Check each candidate in printer_map order; first one with
-        // contents wins.
+        // Check each candidate in the order printerToolheadIds returns them
+        // (toolhead position order; printer_map order only on the legacy
+        // prefix fallback); first one with contents wins.
         const check = (i) => {
             if (i >= candidates.length) return null;
             return fetch(`/api/get_contents?id=${encodeURIComponent(candidates[i])}`)
@@ -1113,24 +1146,29 @@
         // user picks explicitly rather than silently defaulting to the first.
         let toolheadOptions = [];
         if (currentLoc.Type === PRINTER_TYPE) {
+            // Same toolhead resolution as Return (printerToolheadIds). The old
+            // prefix-only match left this list empty on CORE1, whose single head
+            // shares the printer's id, so toolheadOptions[0] below threw and the
+            // picker never opened (2026-09-13).
             const pm = state.printerMap || {};
-            const prefix = String(currentLoc.LocationID).toUpperCase() + '-';
-            for (const [printerName, entries] of Object.entries(pm)) {
-                (entries || []).forEach(e => {
-                    if (String(e.location_id).toUpperCase().startsWith(prefix)) {
-                        toolheadOptions.push({
-                            value: String(e.location_id).toUpperCase(),
-                            label: `${e.location_id} — Toolhead ${e.position + 1} on ${printerName}`,
-                        });
-                    }
-                });
-            }
+            printerToolheadIds(currentLoc, pm).forEach(id => {
+                let label = id;
+                for (const [printerName, entries] of Object.entries(pm)) {
+                    const e = (entries || []).find(x => String(x.location_id).toUpperCase() === id);
+                    if (e) { label = `${id} — Toolhead ${e.position + 1} on ${printerName}`; break; }
+                }
+                toolheadOptions.push({ value: id, label });
+            });
             toolheadOptions.sort((a, b) => a.value.localeCompare(b.value));
         } else {
             toolheadOptions = [{
                 value: String(currentLoc.LocationID).toUpperCase(),
                 label: String(currentLoc.LocationID).toUpperCase(),
             }];
+        }
+        if (!toolheadOptions.length) {
+            showToast(`${currentLoc.LocationID} has no toolheads registered — add them in the printer map, then bind a slot.`, 'warning', 7000);
+            return;
         }
 
         if (thRow && thSelect) {

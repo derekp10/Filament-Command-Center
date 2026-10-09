@@ -3,8 +3,8 @@ API-path E2E tests for Phase 2 bindings against the live container.
 
 Exercises the actual /api/dryer_box/.../bindings + /api/machine/.../toolhead_slots
 endpoints to catch wiring regressions unit tests can't. Uses a real Dryer
-Box from the running locations.json. After each test, restores original
-bindings so test runs don't contaminate each other.
+Box from the running locations.json. Each test borrows it from, and returns it
+to, its fixed binding baseline so test runs don't contaminate each other.
 """
 from __future__ import annotations
 
@@ -16,18 +16,11 @@ TEST_PRINTER = "🦝 XL"
 
 
 @pytest.fixture
-def saved_bindings(api_base_url):
-    """Snapshot + restore the bindings for TEST_BOX around a test."""
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {})
-    try:
-        yield original
-    finally:
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-            json={"slot_targets": original},
-            timeout=5,
-        )
+def saved_bindings(borrow_box_bindings):
+    """Borrow TEST_BOX: it must be at its fixed baseline first and is restored
+    to that baseline afterwards (conftest `borrow_box_bindings`). Returns the
+    baseline."""
+    return borrow_box_bindings(TEST_BOX)
 
 
 @pytest.mark.usefixtures("require_server")
