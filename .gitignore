@@ -41,3 +41,4 @@ inventory-hub/.build_info
 
 # L271 Phase 3.5 scratch (A/B baselines, not for commit)
 .l271_p35_tmp/
+config.json.*.bak
