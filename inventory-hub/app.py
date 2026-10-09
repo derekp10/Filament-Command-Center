@@ -186,6 +186,10 @@ def dashboard():
         build_commit_ts=live_ts or 0,
         spoolman_url=sm_url,
         buy_more_template=buy_more_url_template,
+        # Feature gate (2026-10-08): Bulk Moves ships OFF, dev turns it on in
+        # its own config.json. The backend enforces it too — this only decides
+        # whether the affordances render.
+        bulk_move_enabled=bool(cfg.get('fcc.bulkMove.enabled', False)),
     )
 
 # --- HELPER FUNCTIONS ---

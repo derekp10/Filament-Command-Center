@@ -836,22 +836,56 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
 
-def _tool_grams(cum, pos):
+def _norm_pos(pos):
+    """Toolhead positions arrive as ints (footer/usage_map) and as strings
+    (swap_log / start_spools, which round-trip through JSON). Compare on one
+    form so a position is never counted as two."""
+    try:
+        return int(pos)
+    except (TypeError, ValueError):
+        return pos
+
+
+def _printer_is_single_position(printer_name):
+    """True when `printer_name` has exactly ONE toolhead position — the only
+    case where a sole per-tool entry may be folded onto the position being
+    asked about (see `_tool_grams`). Same derivation `_compute_cancel_usage`
+    uses. Fails CLOSED (False) if the map can't be read: not folding costs a
+    degrade to the manual review, folding wrongly writes a wrong weight."""
+    try:
+        pm = locations_db.get_active_printer_map()
+        positions = {info.get('position', 0) for info in pm.values()
+                     if info.get('printer_name') == printer_name}
+        return len(positions) == 1
+    except Exception:
+        return False
+
+
+def _tool_grams(cum, pos, allow_fold=True):
     """Grams at toolhead position `pos` from a per-tool prefix-parse/footer dict.
-    Single-extruder prints fold onto one tool, so a sole entry IS this position."""
+
+    A single-extruder print folds onto one tool, so on a ONE-POSITION printer a
+    sole entry IS this position (an MMU-profile file can mark slot 1 even when
+    one head exists). `allow_fold=False` turns that off, and multi-head callers
+    MUST pass it: on a printer with several positions a sole entry means "tool N
+    was the only one used", NOT "this grams figure belongs to whichever position
+    you asked about" — folding there charges every position the one used tool's
+    full grams. Mirrors the `len(positions) == 1` guard `_compute_cancel_usage`
+    already applies to the same fold.
+    """
     if not cum:
         return 0.0
     if pos in cum:
         return float(cum[pos])
     if str(pos) in cum:
         return float(cum[str(pos)])
-    if len(cum) == 1:
+    if allow_fold and len(cum) == 1:
         return float(next(iter(cum.values())))
     return 0.0
 
 
 def _compute_swap_split(ip_address, api_key, filename, usage_map, swap_log,
-                        start_spools, path_filament_g=0.0):
+                        start_spools, path_filament_g=0.0, single_position=False):
     """22.3(b): compute the per-segment spool→grams split for a COMPLETED print whose
     toolhead spool changed mid-print (runout or a deliberate early swap). Returns
     ``{position: [ {sid, grams, segment, runout}, … ]}`` — one row per spool that fed
@@ -889,12 +923,12 @@ def _compute_swap_split(ip_address, api_key, filename, usage_map, swap_log,
     result = {}
     for pos, evs in by_pos.items():
         evs = sorted(evs, key=lambda e: float(e.get('progress') or 0.0))
-        footer_pos = _tool_grams(footer, pos)
+        footer_pos = _tool_grams(footer, pos, allow_fold=single_position)
         if footer_pos <= 0:
             return None  # no footer grams for a swapped position → don't guess
         seg_grams, prev = [], 0.0
         for ev in evs:
-            c = _tool_grams(cum_by_id.get(id(ev)) or {}, pos)
+            c = _tool_grams(cum_by_id.get(id(ev)) or {}, pos, allow_fold=single_position)
             # Cumulative must be monotonic and within the footer; a bad remap/parse
             # that regresses or overshoots means we can't trust the split.
             if c < prev - 0.01 or c > footer_pos + 0.01:
@@ -1017,15 +1051,45 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
     # gcode can't be fetched/parsed. The confirm loop applies every `spools` row by
     # sid, so there's no confirm-side change either way.
     split_rows = None
+    split = None
     if swap_log and ip_address and api_key:
-        split = _compute_swap_split(
-            ip_address, api_key, filename, usage_map, swap_log,
-            start_spools, path_filament_g=_path_filament_g(printer_name))
-        if split:
-            split_rows = _split_to_review_rows(split)
+        single_pos = _printer_is_single_position(printer_name)
+        if single_pos:
+            # One head: the slicer's tool INDEX legitimately differs from the
+            # printer's POSITION (an MMU-profile file marks slot 1 on a one-head
+            # machine), so positions can't be matched against usage_map here —
+            # that is exactly what the fold is for. Take the swaps as given.
+            live_swaps = list(swap_log)
+        else:
+            # Several heads: index IS position, so a swap on a head the footer
+            # charges nothing for printed nothing. Drop it — left in, it becomes
+            # a segment that the fold would hand another tool's grams.
+            used_positions = {_norm_pos(p) for p, grams in (usage_map or {}).items()
+                              if (grams or 0) > 0}
+            live_swaps = [ev for ev in swap_log
+                          if _norm_pos(ev.get('position', 0)) in used_positions]
+        if live_swaps:
+            split = _compute_swap_split(
+                ip_address, api_key, filename, usage_map, live_swaps,
+                start_spools, path_filament_g=_path_filament_g(printer_name),
+                single_position=single_pos)
+            if split:
+                split_rows = _split_to_review_rows(split)
     auto_split = bool(split_rows)
-    rows = split_rows or _resolve_usage_to_spools(
-        printer_name, usage_map, fb_url, active_locs=active_locs)
+    if split_rows:
+        # The split only covers the positions that were SWAPPED. Every other
+        # position still printed and still has to be charged — short-circuiting
+        # the full-footer resolve here dropped them silently (an 8-head print
+        # with one swap billed one head and lost the other seven).
+        covered = {_norm_pos(p) for p in (split or {})}
+        rest_usage = {p: g for p, g in (usage_map or {}).items()
+                      if _norm_pos(p) not in covered and (g or 0) > 0}
+        rest_rows = _resolve_usage_to_spools(
+            printer_name, rest_usage, fb_url, active_locs=active_locs) if rest_usage else []
+        rows = list(split_rows) + list(rest_rows or [])
+    else:
+        rows = _resolve_usage_to_spools(
+            printer_name, usage_map, fb_url, active_locs=active_locs)
     if not rows:
         # The replacement isn't bound right now — still recoverable via no_spool.
         # (Shouldn't usually reach here: a flagged position has a bound end spool.)

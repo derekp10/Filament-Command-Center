@@ -344,7 +344,15 @@ const _showBulkPanel = () => {
     if (typeof window.openBulkMovePanel === 'function') window.openBulkMovePanel({ user: true });
 };
 const toggleBulkMove = () => {
+    // Already-armed sessions stay reachable even with the flag off, so one
+    // armed before it was turned off can still be opened and cancelled rather
+    // than stranded. Only ARMING a new one is gated.
     if (state.bulkMoveActive) { _showBulkPanel(); return; }
+    if (window.FCC_BULK_MOVE_ENABLED === false) {
+        showToast('Bulk Moves is turned off. Enable it in ⚙️ Settings → Behavior.',
+                  'warning', 7000);
+        return;
+    }
     fetch('/api/bulk_move_session').then(r => r.json()).then((live) => {
         if (live && live.active) {
             window.applyBulkMoveSession(live);
