@@ -4,7 +4,7 @@
 **Estimated effort:** SMALL (~2–3 h, 1 session). Docs only.
 **Risk:** **LOW for code, but it deletes text from Derek's source of truth.** Never archive an item just because a commit exists. Spot-check that the code does what the item asked.
 
-> **Status: `TODO` — filed 2026-10-12 (`/refresh-groups`), not started.**
+> **Status: ✅ `DONE` 2026-10-12** (`chore/group-47-buglist-reconciliation` → `dev`). Every item was verified and settled; see [Outcome](#outcome-2026-10-12) at the end of this file. The per-item record is the Group 47 block at the top of `completed-archive.md`, followed by the Group 38 and Group 36 blocks this group wrote.
 > Derek, 2026-10-12: *"If they truly are done, we should group them in a cleanup and get those worked through and cleaned up… You do the coding, I just pick the targets, so this just got missed somehow either because I failed to wrap up, or didn't realize it was part of a group or something."*
 > **Why it's needed.** Groups 36 and 38 were merged on 2026-08-13 but `/finish-group` never ran for them. Several standalone fixes shipped without their buglist entries being archived. Two months of shipped work still reads as open in `Feature-Buglist.md`, which makes every "what's pending?" answer wrong.
 > **Recommended next target**: it's cheap, and it makes the buglist trustworthy for every later group.
@@ -86,3 +86,53 @@ Put these in ONE question. Give each its background, where he meets it, and the 
 - Update `docs/agent_docs/working-groups.md`. Prune or mark ✅ ARCHIVED the NOT-Grouped rows whose items were archived (the 2026-06-05 cleanup pruned them).
 - Flip this group's row and banner to `DONE`.
 - Commit as one docs commit.
+
+---
+
+## Outcome (2026-10-12)
+
+**How it was verified.** One 8-agent read-only workflow (2.56M tokens, 0 errors): 5 verifiers batched by the sections above, an evidence gatherer for D, a completeness critic over the whole buglist, and one skeptic told to refute every "done" verdict (unproven = not done). The skeptic re-checked 124 SHAs (all ancestors of `main`) and every anchor. It refuted no verdict outright, but it found a new defect and corrected several drafts. Prod was read-only throughout (the share via PowerShell, Spoolman `:7912` GET only). One agent deliberately skipped a GET of the prod dashboard, because that route rewrites `.build_info` on the share.
+
+**Verdicts.**
+- **A (47.1–47.23):** all done. 47.7 and 47.21 came back **PARTIAL**: the shipped part is proven, but a piece is neither done nor owned. Derek kept both residuals: 47.7's two small items stay as a narrowed entry, and 47.21's leftovers went to Group 44.0 (now design question 7 in that task file).
+- **B (47.24–47.25):** both confirmed on prod. Hub.log has zero `removed ['Wood']` lines across 19 boots / 16 deploys since the fix. Prod runs `e5b3a82`, which contains Group 23.
+- **C (47.26–47.29):** done as specified. 47.28 was archived, not narrowed: nothing is left on prod.
+- **D (47.30–47.33):** Derek closed all four. For 47.32 he kept a frontend pass "just in case", so the entry was narrowed to a standalone "Frontend file-size pass" rather than closed outright.
+
+**Spec corrections found while verifying.**
+- 47.21: recommendation #3 was not the only unaddressed L271 recommendation. A printer `model` field, the MMU fields (`mmu_attached` / `mmu_routed`) and rejecting a row with no `Type` on write were never built either.
+- 47.26: the "~9 direct readers" recounts to 10 sites in 9 functions (6 pure reads, 4 read-modify-writes; the frontend has none).
+- 47.27: "Direction 3" is the entry's numbered point 3, the detach ordering, which shipped. Directions (a)–(c) map 1:1 to 42.5a–c.
+- 47.28: the boot cleanup would NOT remove an unused Matte Pro. `FILAMENT_ATTRIBUTES_FLAG_CHOICES` has been empty since `764d0e8` (2026-05-20). It's moot anyway: Matte Pro left prod's schema at the 2026-05-19 boot.
+
+**Beyond the spec (Derek's call, one batched question).**
+- **Six done-but-listed entries the completeness critic found:**
+  - the mid-print swap entry, narrowed to its M600 remainder;
+  - the BS4 On-Hold bullet, narrowed to the botasaurus idea;
+  - the Prusament spool-links sub-bullet;
+  - the 2026-07-07 planning-sprint note;
+  - the L37 corruption watch;
+  - L345's dev Spoolman/FilaBridge ask.
+- **Three new standalone items:**
+  - 🟡 the Bulk Moves flag doesn't gate three backend doors;
+  - 🟡 Group 36's three follow-ups;
+  - the frontend file-size pass.
+- **37 open entries tagged with their owning group**, each checked against that group's task-file table.
+- **49 stale NOT-Grouped rows pruned:** 26 for this group's items and the two closed critic finds, plus 23 left over from the June–July archives.
+
+**Checks run before committing (step 4):**
+- The ⏸️ PENDING DEREK block is byte-identical: sha256 of its 56 CRLF lines, still at line 7.
+- All 42 archived titles are gone from `Feature-Buglist.md` and present in `completed-archive.md`, and 20 kept phrases are still present.
+- Every table row keeps its header's cell count.
+- No link is newly broken. The one broken link in `working-groups.md` predates this group.
+- All 130 SHAs cited in the added text are commits in `main`, apart from Spoolman's own build id `eafbc64`.
+- 120 of the 125 cited files exist; the other five are gitignored runtime data or `perf_trace.py`, which was deleted.
+
+**Left for later (noted, not done here).**
+- Stale text outside the edited files:
+  - `CLAUDE.md`'s "Until the Config system (Feature-Buglist.md L9) lands" line;
+  - `scan-path-integrity-findings.md` still says HOLDING for findings 3, 5 and 7;
+  - the Group 22 task file's header ("22.3 + 22.4 remain");
+  - a few stale code-line links in the Group 29 and 36 task files.
+- Several open buglist entries still say a fix is "on the branch" for `fix/active-print-chain-confirm`, which merged on 2026-09-13.
+- The ⏸️ PENDING DEREK "Core One Return" re-run can't run as written, because no `CORE1` row exists on dev or prod. Surfaced to Derek; the section itself was not touched.

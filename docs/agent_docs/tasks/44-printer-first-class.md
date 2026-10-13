@@ -76,6 +76,7 @@ At minimum, the epic asks:
 4. **What does per-printer runtime state key on?** The latch, pending fetches, reviews, the ledger and per-printer config are all keyed by Name today (44.2).
 5. **The migration for the existing printers.** Prod has `XL` and `RCOI`; `CORE1` is retired there but still referenced by `PRINTER_ROOM_OVERRIDES` and prod's inert `config.json:printer_map`. Dev's fleet differs; see the dev-data refresh in [Group 45](45-sweep-load-tolerance-test-hygiene.md).
 6. **An add/configure flow** that creates the row, its heads and its connection in one place, so Settings and the Location Manager stop being two halves of one job.
+7. **The printer fields L271 promised but never built** _(added 2026-10-12 by [Group 47](47-buglist-reconciliation.md) 47.21, Derek's call)_: a printer `model` field; `mmu_attached` on the Printer row and `mmu_routed` per toolhead, which were meant to make the M0/M1 alias heuristic dissolve (it still sits in `print_deduct.py:47-80`, dormant since the MMU Core One was retired); and rejecting a location row with no `Type` on write (only the orphan-`parent_id` half of L271 recommendation #5 shipped). Decide which still earn their keep in the new model.
 
 Derek wants background before any choice: where he meets it, what it's for, and a worked example with his real printers.
 
