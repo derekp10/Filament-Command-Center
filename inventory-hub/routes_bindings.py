@@ -139,9 +139,16 @@ def api_printer_state(toolhead_id):
     if not printer_name:
         return jsonify({"known": False, "reason": "no_printer_name"})
     _, fb_url = config_loader.get_api_urls()
+    # Group 39.3: "FCC has no login for XL" is not "couldn't reach XL". The probe
+    # returns None for both, so check the Printer row's credentials first (a
+    # locations.json read, no network): the fix is entering the login, not
+    # checking the network.
+    creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
+    if not creds or not creds.get('ip_address'):
+        return jsonify({"known": False, "reason": "no_credentials", "printer_name": printer_name})
     result = prusalink_api.get_printer_state(fb_url, printer_name)
     if not result:
-        return jsonify({"known": False, "reason": "prusalink_unreachable"})
+        return jsonify({"known": False, "reason": "prusalink_unreachable", "printer_name": printer_name})
     return jsonify({
         "known": True,
         "state": result.get('state'),

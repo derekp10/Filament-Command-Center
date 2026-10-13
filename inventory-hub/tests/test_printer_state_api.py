@@ -30,6 +30,17 @@ def client():
     return app_module.app.test_client()
 
 
+@pytest.fixture(autouse=True)
+def _printer_has_a_login():
+    """Group 39.3: the route checks the Printer row's credentials before it
+    probes (no login answers `no_credentials`, pinned in
+    test_printer_state_reasons_39_3.py). These tests are about what the probe
+    answers, so the printer has one."""
+    with patch.object(app_module.prusalink_api, "fetch_printer_credentials",
+                      return_value={"ip_address": "10.0.0.99", "api_key": "test"}):
+        yield
+
+
 def test_printer_state_unknown_toolhead_returns_not_in_printer_map(client):
     resp = client.get("/api/printer_state/NOT-A-TOOLHEAD")
     assert resp.status_code == 200
