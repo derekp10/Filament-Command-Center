@@ -41,6 +41,12 @@ FAKE_LOCATIONS = [
 ]
 
 
+def _in_room(sid):
+    """A moving spool's own record, which the move reads before its confirm
+    (Group 39.4): loose in a room, so it leaves no printer head."""
+    return {"id": sid, "location": "CR", "extra": {}}
+
+
 @pytest.fixture
 def client():
     app_module.app.config["TESTING"] = True
@@ -121,6 +127,9 @@ def test_manage_contents_add_returns_requires_confirm_for_active_toolhead(client
          patch.object(logic.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch("prusalink_api.get_printer_state", return_value={"state": "PRINTING", "is_active": True}), \
          patch.object(logic, "resolve_scan", return_value={"type": "spool", "id": 42}), \
+         patch.object(logic.spoolman_api, "get_spool", return_value=_in_room(42)), \
+         patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict",
+                      return_value=[]), \
          patch.object(app_module.spoolman_api, "update_spool") as upd:
         r = client.post("/api/manage_contents", json={
             "action": "add",
@@ -225,6 +234,9 @@ def test_smart_move_endpoint_returns_requires_confirm_for_active_target(client):
          patch.object(logic.config_loader, "load_config", return_value={"printer_map": FAKE_PRINTER_MAP}), \
          patch.object(logic.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch("prusalink_api.get_printer_state", return_value={"state": "BUSY", "is_active": True}), \
+         patch.object(logic.spoolman_api, "get_spool", return_value=_in_room(99)), \
+         patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict",
+                      return_value=[]), \
          patch.object(app_module.spoolman_api, "update_spool") as upd:
         r = client.post("/api/smart_move", json={
             "location": "CORE1-M0",
@@ -282,6 +294,7 @@ def test_smart_move_checks_slot_binding_for_active_print(client):
          patch.object(logic.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch("prusalink_api.get_printer_state", return_value={"state": "PRINTING", "is_active": True}), \
          patch.object(logic, "resolve_scan", return_value={"type": "spool", "id": 42}), \
+         patch.object(logic.spoolman_api, "get_spool", return_value=_in_room(42)), \
          patch.object(app_module.spoolman_api, "update_spool") as upd:
         r = client.post("/api/manage_contents", json={
             "action": "add",

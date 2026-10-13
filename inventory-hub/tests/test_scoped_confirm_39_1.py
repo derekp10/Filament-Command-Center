@@ -119,7 +119,7 @@ def test_the_answer_has_the_shared_shape():
                                      "role": "destination", "spools": [42]}]
     assert res["active_print"] == {"toolhead": "XL-3", "printer_name": "XL", "state": "PRINTING"}
     assert res["fed_heads"] == [] and res["can_store"] is False and res["target_slot"] is None
-    assert res["msg"] == "XL is PRINTING — moving a spool here will disrupt the print."
+    assert res["msg"] == "XL is PRINTING — moving a spool here will disrupt the print. Continue?"
     assert sm.writes == []
 
 
