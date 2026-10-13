@@ -344,12 +344,13 @@ def _deposit(page: Page) -> None:
 
 @pytest.mark.usefixtures("require_server")
 @pytest.mark.parametrize("how", ["click", "enter", "qr"])
-def test_deposit_confirmed_over_a_printing_banner_sends_confirm_active_print(
+def test_deposit_confirmed_over_a_printing_banner_sends_its_head(
         page: Page, base_url: str, reset_dom_state_js: str, how: str):
     """The overlay showed "<printer> is PRINTING" and the user confirmed it, by
     click, by Enter on the focused Yes (R2-01), or by scanning the overlay's
     CMD:CONFIRM:<sid> QR. FAILS on HEAD for all three: HEAD's deposit sent no
-    confirm_active_print at all, so the backend asked again every time."""
+    confirm at all, so the backend asked again every time. Group 39.1: the
+    confirm names the head the banner was for (`confirmed_toolheads`)."""
     be = FakeBackend(page, printer_active=True, identify=lambda b: DONE)
     _boot(page, base_url, reset_dom_state_js)
     _seed_buffer(page, be, [SPOOL])
@@ -361,8 +362,9 @@ def test_deposit_confirmed_over_a_printing_banner_sends_confirm_active_print(
     _until(page, lambda: be.bodies("/api/identify_scan"), 5_000, f"confirming the deposit via {how} sent nothing")
     body = be.bodies("/api/identify_scan")[0]
     assert body["text"] == f"LOC:{BOX}:SLOT:{SLOT}" and body["source"] == "quickswap_deposit", body
-    assert body.get("confirm_active_print") is True, (
+    assert body.get("confirmed_toolheads") == [TH], (
         f"a deposit confirmed via {how} over the PRINTING banner did not tell the backend: {body}")
+    assert "confirm_active_print" not in body, body
     _until(page, lambda: _held(page) == [], 5_000, "the confirmed deposit did not leave the buffer")
 
 
@@ -384,6 +386,7 @@ def test_deposit_with_the_printer_idle_never_claims_a_confirm(
     _until(page, lambda: be.bodies("/api/identify_scan"), 5_000, f"confirming the deposit via {how} sent nothing")
     body = be.bodies("/api/identify_scan")[0]
     assert body.get("confirm_active_print", False) is False, body
+    assert body.get("confirmed_toolheads") == [], body
     assert be.probes == [TH], be.probes
 
 
@@ -397,18 +400,18 @@ def test_deposit_answered_requires_confirm_reopens_with_the_banner_then_confirms
     """The overlay's probe missed the print (slow/unreachable printer), so no
     banner was shown and the backend answered assignment_requires_confirm. The
     handler must log a WARNING and re-open the confirm with the backend's own
-    active_print as the banner (no second probe); confirming that posts
-    confirm_active_print:true. FAILS on HEAD: no branch for the action, so it
+    active_print as the banner (no second probe); confirming that posts the
+    head it named (confirmed_toolheads). FAILS on HEAD: no branch for the action, so it
     toasted "Deposit failed: assignment_requires_confirm" and stopped."""
     be = FakeBackend(page, printer_active=False,
-                     identify=lambda b: DONE if b.get("confirm_active_print") else NEEDS_CONFIRM)
+                     identify=lambda b: DONE if b.get("confirmed_toolheads") else NEEDS_CONFIRM)
     _boot(page, base_url, reset_dom_state_js)
     _seed_buffer(page, be, [SPOOL])
     _deposit(page)
     _wait_overlay(page, "the deposit confirm never opened", banner=False)
     page.click("#fcc-quickswap-yes")
     _until(page, lambda: be.bodies("/api/identify_scan"), 5_000, "the first deposit POST never went out")
-    assert be.bodies("/api/identify_scan")[0].get("confirm_active_print", False) is False
+    assert be.bodies("/api/identify_scan")[0].get("confirmed_toolheads") == []
 
     ov = _wait_overlay(page, "a deposit answered assignment_requires_confirm did not re-open the confirm "
                              "with the PRINTING banner", banner=True)
@@ -423,7 +426,8 @@ def test_deposit_answered_requires_confirm_reopens_with_the_banner_then_confirms
     page.click("#fcc-quickswap-yes")
     _until(page, lambda: len(be.bodies("/api/identify_scan")) >= 2, 5_000,
            "confirming the re-opened deposit sent nothing")
-    assert be.bodies("/api/identify_scan")[1].get("confirm_active_print") is True, be.bodies("/api/identify_scan")
+    # The head the backend's answer named (Group 39.1).
+    assert be.bodies("/api/identify_scan")[1].get("confirmed_toolheads") == [TH], be.bodies("/api/identify_scan")
     _until(page, lambda: _held(page) == [], 5_000, "the confirmed deposit did not leave the buffer")
 
 
@@ -441,7 +445,7 @@ def test_rejected_assignment_keeps_the_spool_in_the_buffer_with_a_7s_error(
     warning); the confirmed replay -> the msg as a 3 s SUCCESS toast; deposit ->
     "Deposit failed: assignment_failed" (5 s, without the reason)."""
     if path == "scan_confirmed_replay":
-        identify = lambda b: FAILED if b.get("confirm_active_print") else NEEDS_CONFIRM  # noqa: E731
+        identify = lambda b: FAILED if b.get("confirmed_toolheads") else NEEDS_CONFIRM  # noqa: E731
     else:
         identify = lambda b: FAILED  # noqa: E731
     be = FakeBackend(page, identify=identify)
@@ -457,7 +461,7 @@ def test_rejected_assignment_keeps_the_spool_in_the_buffer_with_a_7s_error(
         if path == "scan_confirmed_replay":
             page.wait_for_selector("#fcc-aps-yes", timeout=5_000)
             page.click("#fcc-aps-yes")
-            _until(page, lambda: [b for b in be.bodies("/api/identify_scan") if b.get("confirm_active_print")],
+            _until(page, lambda: [b for b in be.bodies("/api/identify_scan") if b.get("confirmed_toolheads")],
                    5_000, "the confirmed replay never went out")
 
     toast = _toast(page, f"a rejected assignment ({path}) raised no error toast naming the reason",
