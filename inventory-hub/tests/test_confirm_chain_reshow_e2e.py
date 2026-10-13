@@ -373,6 +373,38 @@ def test_three_hop_active_print_then_true_unassign_chain(
 
 
 @pytest.mark.usefixtures("require_server")
+def test_one_yes_answers_both_print_and_unassign(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 39.6: the server now asks "printing" and "no saved home" in ONE
+    answer (`confirm_types`), so the three hops above become two, and the one
+    Yes sends both flags. HEAD proof: the pre-39.6 doEject retried with only
+    confirm_active_print, so a third prompt followed."""
+    combined = dict(ACTIVE, confirm_types=["active_print", "unassign"],
+                    msg=f"#{SID} is loaded on {LOC} and has no saved home. Ejecting it leaves it "
+                        f"Unassigned, and FCC stops charging this print to it. Continue?")
+
+    def backend(b):
+        if b.get("confirmed") and b.get("confirm_active_print"):
+            return OK
+        return UNASSIGN if b.get("confirm_active_print") else combined
+
+    be = FakeBackend(page, backend)
+    _boot(page, base_url, reset_dom_state_js)
+
+    _start_eject(page)
+    page.click(YES)
+    _confirm_visible_with(page, "has no saved home", "the combined prompt was dropped")
+    _wait_shown(page, 2, "the combined prompt never finished showing")
+    page.click(YES)
+
+    _until(page, lambda: len(be.ejects()) >= 2, 5_000, "YES on the combined prompt sent no retry")
+    _js_until(page, "window.__toasts.includes('Ejected')", 5_000, "no 'Ejected' toast")
+    flags = [(b["confirmed"], b["confirm_active_print"]) for b in be.ejects()]
+    assert flags == [(False, False), (True, True)], flags
+    assert _count(page, "shown") == 2, "a third prompt showed"
+
+
+@pytest.mark.usefixtures("require_server")
 def test_double_click_on_yes_never_confirms_the_reprompt_unseen(
         page: Page, base_url: str, reset_dom_state_js: str):
     """FE-1: the second click of a double-click lands on the dialog that is still
@@ -704,6 +736,41 @@ def test_clear_scan_during_a_bulk_move_opens_no_confirm(
     }""")
     _confirm_visible_with(page, "Clear entire Buffer?", "control: CMD:CLEAR outside a bulk move should prompt")
     page.evaluate("confirmAction(false)")   # cancel: never clear anything
+
+
+@pytest.mark.usefixtures("require_server")
+def test_trash_scan_during_a_bulk_move_opens_no_confirm(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 39.9: the CMD:CLEAR guard above, for CMD:TRASH. With a location
+    open and a bulk move armed, the eject's confirm (z 1100) opened BEHIND the
+    bulk panel (z 20000) and swallowed every later scan. Now it explains and
+    opens nothing, and the next location scan still reaches the backend (the
+    bulk-move session's gate). HEAD proof: on the pre-39.9 code the eject
+    confirm shows."""
+    be = FakeBackend(page)
+    _boot(page, base_url, reset_dom_state_js)
+    page.evaluate("""([sid, loc]) => {
+        document.getElementById('manageModal').classList.add('show');
+        document.getElementById('manage-loc-id').value = loc;
+        state.bulkMoveActive = true;
+        processScan('CMD:TRASH:' + sid, 'barcode');
+        window.__afterTrash = { activeModal: state.activeModal };
+    }""", [SID, LOC])
+    page.wait_for_timeout(700)
+    assert page.evaluate("window.__afterTrash") == {"activeModal": None}
+    snap = page.evaluate(SNAPSHOT_JS)
+    assert not snap["confirmShown"] and snap["activeModal"] is None and _count(page, "show") == 0, (
+        f"CMD:TRASH during a bulk move opened a confirm: {snap}")
+    assert not be.ejects(), be.posts
+    _toast_until(page, "Eject waits until the bulk move", "CMD:TRASH during a bulk move gave no explanation")
+    page.evaluate("processScan('LOC:FCC-TEST-BOX', 'barcode')")
+    _until(page, lambda: any("FCC-TEST-BOX" in str(b.get("text", "")) for b in be.bodies("/api/identify_scan")),
+           3_000, "the next location scan never reached the bulk-move session")
+
+    # Control: outside a bulk move the same scan opens the eject confirm.
+    page.evaluate("(sid) => { state.bulkMoveActive = false; processScan('CMD:TRASH:' + sid, 'barcode'); }", SID)
+    _wait_shown(page, 1, "control: CMD:TRASH outside a bulk move should prompt")
+    page.evaluate("confirmAction(false)")   # cancel: never eject anything
 
 
 @pytest.mark.usefixtures("require_server")

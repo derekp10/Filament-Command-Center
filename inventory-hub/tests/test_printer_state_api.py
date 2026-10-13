@@ -30,6 +30,18 @@ def client():
     return app_module.app.test_client()
 
 
+@pytest.fixture(autouse=True)
+def _printer_has_a_login(monkeypatch):
+    """Group 39.3: the route checks the Printer row's credentials before it
+    probes (no login answers `no_credentials`, pinned in
+    test_printer_state_reasons_39_3.py). These tests are about what the probe
+    answers, so the printer has one. monkeypatch, not patch.object: fake_creds
+    re-patches the same attribute with monkeypatch, and two undo stacks
+    restored the fake for the rest of the session (Group 39 review)."""
+    monkeypatch.setattr(app_module.prusalink_api, "fetch_printer_credentials",
+                        lambda *a, **k: {"ip_address": "10.0.0.99", "api_key": "test"})
+
+
 def test_printer_state_unknown_toolhead_returns_not_in_printer_map(client):
     resp = client.get("/api/printer_state/NOT-A-TOOLHEAD")
     assert resp.status_code == 200
@@ -197,7 +209,7 @@ def test_legacy_endpoint_printing_still_blocks(fake_creds, monkeypatch):
 # Live integration — skipped if container is down.
 # ---------------------------------------------------------------------------
 
-def test_printer_state_live_endpoint_returns_well_shaped_body():
+def test_printer_state_live_endpoint_returns_well_shaped_body(require_server):
     """Hit the live container. This test asserts the response shape only,
     since we can't force a real printer into PRINTING during a unit run."""
     base_url = os.environ.get("INVENTORY_HUB_URL", "http://localhost:8000")

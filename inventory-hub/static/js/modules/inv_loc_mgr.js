@@ -421,24 +421,18 @@ const fetchPrinterMap = () => {
 //   window.FCC_DEBUG_ACTIVE_PRINT = true
 // in the DevTools console and rerun the swap. Leaves production quiet.
 window.FCC_DEBUG_ACTIVE_PRINT = window.FCC_DEBUG_ACTIVE_PRINT || false;
+// Group 39.3: a wrapper over window.fetchPrinterStateDetailed (inv_core.js),
+// kept because its null means both "idle" and "couldn't ask", which the banner
+// logic of its callers relies on. New code reads the detailed answer.
 window.fetchPrinterStateForToolhead = (toolheadLocId) => {
     const dbg = (...args) => { if (window.FCC_DEBUG_ACTIVE_PRINT) console.log('[active-print probe]', ...args); };
     if (!toolheadLocId) { dbg('no toolhead id, skipping'); return Promise.resolve(null); }
     dbg('querying', toolheadLocId);
-    return fetch(`/api/printer_state/${encodeURIComponent(toolheadLocId)}`)
-        .then(r => r.ok ? r.json() : null)
-        .then(d => {
-            dbg('response for', toolheadLocId, d);
-            if (!d) return null;
-            if (!d.known) { dbg('backend says unknown:', d.reason); return null; }
-            if (!d.is_active) { dbg('printer is idle:', d.state); return null; }
-            dbg('ACTIVE:', d.printer_name, d.state);
-            return {
-                state: d.state || 'ACTIVE',
-                printer_name: d.printer_name || toolheadLocId,
-            };
-        })
-        .catch((e) => { dbg('probe failed', e); return null; });
+    return window.fetchPrinterStateDetailed(toolheadLocId).then(d => {
+        dbg('response for', toolheadLocId, d);
+        if (!d || !d.active) return null;
+        return { state: d.state || 'ACTIVE', printer_name: d.printer_name || toolheadLocId };
+    });
 };
 
 // Render a searchable combobox backed by a native <select> so existing
@@ -1296,10 +1290,28 @@ window.handleSlotInteraction = (slot) => {
         // Filled slot + empty buffer: direct Pick Up. Eject/Details/Edit/Queue
         // remain on the slot card's explicit action buttons, so this modal is
         // redundant — it used to be a 3-option chooser (Pick/Eject/Details).
-        state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color });
+        // Where it was (Group 39 review, engine-6): doAssign needs to know when a
+        // spool is leaving a printer head. A ghost's own record is its head.
+        state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color,
+                                   location: item.location || locId, is_ghost: !!item.is_ghost,
+                                   deployed_to: item.deployed_to || null });
         if (window.renderBuffer) window.renderBuffer();
         renderManagerNav();
     }
+};
+
+// The printer head a buffered spool's own record sits on, from what the buffer
+// knows (a scan and the Location Manager's pick-up carry location / is_ghost /
+// deployed_to), or null.
+const _ownHeadOf = (spool) => {
+    const sid = String(spool).replace('ID:', '');
+    const held = (state.heldSpools || []).find(s => String(s.id) === sid);
+    if (!held) return null;
+    const own = String((held.is_ghost ? held.deployed_to : held.location) || '').toUpperCase();
+    if (!own) return null;
+    const row = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === own);
+    const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    return row && headTypes.includes(row.Type) ? own : null;
 };
 
 window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
@@ -1322,13 +1334,28 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
         locObjCheck.Type === 'No MMU Direct Load' ||
         locObjCheck.Type === 'Printer'
     );
-    if (isToolheadTarget && window.fetchPrinterStateForToolhead) {
-        return window.fetchPrinterStateForToolhead(loc).then(stateInfo => {
+    // Group 39 review (engine-6): a spool LEAVING a printer head gets ONE answer
+    // from the server, naming both heads in Derek's D6 wording. Confirming the
+    // destination here first made a head -> head move on one printer ask twice
+    // (this prompt, then the server's about the head it leaves).
+    const leaving = isToolheadTarget ? _ownHeadOf(spool) : null;
+    if (leaving && leaving !== String(loc).toUpperCase()) {
+        setProcessing(true, { label: window.printerLabelForTarget ? window.printerLabelForTarget(loc) : null });
+        return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, [], options);
+    }
+    if (isToolheadTarget && window.checkPrinterForHead) {
+        // Group 39.3: the shared printer check: the "⏳ Checking XL…" pill and a
+        // timeout race (this fetch used to wait on the server with no cap).
+        return window.checkPrinterForHead(loc).then(detail => {
+            const stateInfo = detail && detail.active
+                ? { state: detail.state || 'ACTIVE', printer_name: detail.printer_name || loc }
+                : null;
             if (!stateInfo) {
                 // Unknown state → proceed normally.
-                return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, false, options);
+                return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, [], options);
             }
-            // Active print → inline confirm overlay (no nested Swal).
+            // Active print → inline confirm overlay (no nested Swal). Its Yes
+            // confirms this head, the one whose warning it shows (Group 39.1).
             setProcessing(false);
             return _confirmActivePrintAssign({
                 loc,
@@ -1337,11 +1364,12 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
                 isFromBufferFlag,
                 stateInfo,
                 options,
+                heads: [String(loc).toUpperCase()],
             });
         });
     }
 
-    return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, false, options);
+    return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, [], options);
 };
 
 // Inline confirm overlay for "you're moving onto a printer that's actively
@@ -1356,108 +1384,31 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
 // clicks while a print was active. mountOverlay's tier='confirm' sits
 // above any Bootstrap modal and the host=manageModal binding cleans
 // the overlay when the user dismisses the Location Manager.
-const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {} }) => {
-    const escapeHtml = (s) => String(s || '')
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {}, heads = [], msg = '' }) => {
     // Name the spool this confirm writes (Group 46 review): the prompt can
     // outlive a buffer change (a queued CMD:NEXT scan, a re-sync), and the spool
     // captured at the click is the one that moves.
     const sid = String(spool).replace('ID:', '');
     const held = (state.heldSpools || []).find(s => String(s.id) === sid);
     const spoolLabel = `#${sid}${held && held.display ? ` (${held.display})` : ''}`;
-    const content = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:460px; text-align:center;">
-            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${escapeHtml(stateInfo.printer_name)} is ${escapeHtml(stateInfo.state)}</div>
-            <div style="color:#ffc; margin-bottom:14px;">
-                Reassigning <b>${escapeHtml(spoolLabel)}</b> to <b>${escapeHtml(loc)}</b> during an active print will disrupt the print and may leave filabridge/Spoolman in a stale state. Continue anyway?
-            </div>
-            <div style="display:flex; gap:10px; justify-content:center;">
-                <button id="fcc-apc-yes" class="btn btn-warning btn-sm" style="min-width:120px;">Continue Anyway</button>
-                <button id="fcc-apc-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Cancel</button>
-            </div>
-        </div>
-    `;
-    let handle = null;
-    let qrSession = null;
-    const cleanup = () => {
-        if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
-        if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
-    };
-    // After user confirms, call _doAssignFinalize with confirmActivePrint=true
-    // so the backend's safety check doesn't re-prompt. Without this flag,
-    // the backend would see the POST has no confirm and return requires_confirm,
-    // creating an infinite loop.
-    const proceed = () => {
-        cleanup();
-        setProcessing(true);
-        _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true, options);
-    };
-    handle = window.mountOverlay({
-        id: 'fcc-active-print-confirm-overlay',
-        content,
-        tier: 'confirm',
+    // Group 39.4: the shared active-print confirm (inv_core.js) with this
+    // overlay's proven ids. It shows the server's message when the backend asked
+    // (`msg`: Derek's D6 wording, e.g. a spool LEAVING a printing head), else this
+    // door's own sentence. Its Yes finalizes with `heads`: the probed head, or the
+    // answer's heads unioned with any confirmed before (39.1).
+    window.confirmActivePrint({
+        activePrint: stateInfo,
+        msg: msg || `Reassigning ${spoolLabel} to ${loc} during an active print will disrupt the print. Continue anyway?`,
         host: document.getElementById('manageModal'),
-        initialFocus: '#fcc-apc-yes',
-        onEscape: cleanup,
+        ids: { overlay: 'fcc-active-print-confirm-overlay', yes: 'fcc-apc-yes', no: 'fcc-apc-no' },
+        onConfirm: () => {
+            setProcessing(true);
+            _doAssignFinalize(loc, spool, slot, isFromBufferFlag, heads, options);
+        },
     });
-    const ov = handle.element;
-    const yesBtn = ov.querySelector('#fcc-apc-yes');
-    const noBtn = ov.querySelector('#fcc-apc-no');
-    if (yesBtn) yesBtn.onclick = proceed;
-    if (noBtn) noBtn.onclick = cleanup;
-    // Keyboard contract (mirrors _confirmActivePrintScan in inv_cmd.js):
-    // Enter activates the focused button (Yes/No); Tab cycles between
-    // them; Escape always cancels (owned by mountOverlay's onEscape).
-    // Route Enter explicitly because the document capture-phase handler
-    // runs first and the native button activation was inconsistent
-    // across barcode-scanner setups.
-    const keyHandler = (e) => {
-        if (e.key === 'Enter') {
-            // ⚠️ SAFETY (axis-(a) audit, 2026-08-03) — see inv_quickswap.js for the
-            // full rationale. A scan in flight owns this Enter: it terminates the
-            // scan, it is not a button press. YES is focused by initialFocus, so
-            // without this the "📷 Scan to Cancel" QR performed the CONFIRM.
-            if (window.isScanInFlight && window.isScanInFlight()) return;
-            const active = document.activeElement;
-            if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
-            else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
-            return;
-        }
-        if (e.key === 'Tab') {
-            const focusables = [yesBtn, noBtn].filter(Boolean);
-            if (focusables.length === 0) return;
-            const active = document.activeElement;
-            const idx = focusables.indexOf(active);
-            if (idx === -1) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
-                return;
-            }
-            if (e.shiftKey && idx === 0) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[focusables.length - 1].focus();
-            } else if (!e.shiftKey && idx === focusables.length - 1) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[0].focus();
-            }
-        }
-    };
-    ov.addEventListener('keydown', keyHandler, true);
-    if (window.attachConfirmQRs && ov) {
-        qrSession = window.attachConfirmQRs({
-            // Mount inside the dialog PANEL, not the overlay root (a centered
-            // flex-ROW), so the QR row stacks below the buttons instead of
-            // landing beside the panel ("QR codes on the right" bug).
-            host: handle.panel,
-            onConfirm: proceed,
-            onCancel: cleanup,
-            theme: 'warning',
-        });
-    }
 };
 
-const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmActivePrint = false, options = {}) => {
+const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedHeads = [], options = {}) => {
     // FIX: 0-based index correction for MMU/CORE slots
     let finalSlot = slot;
     if (slot !== null) {
@@ -1495,25 +1446,26 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
             spool_id: "ID:" + spool,
             slot: finalSlot,
             origin: isFromBuffer ? 'buffer' : '',
-            // Pass the UI-probe's opt-in through so the backend's safety net
-            // doesn't re-prompt us. Without this, the backend active-print
-            // check would flag the move even after the user already confirmed.
-            confirm_active_print: confirmActivePrint,
+            // The heads whose warning the user confirmed (Group 39.1), so the
+            // backend's safety net doesn't re-prompt for them.
+            confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
         }),
     })
         .then(r => r.json())
         .then(res => {
             setProcessing(false);
             // Backend safety net: if the printer flipped from IDLE to PRINTING
-            // in the race window between our UI probe and the POST, OR the
-            // user's browser skipped the UI probe for any reason (cache, older
-            // bundle), the backend returns requires_confirm. Show our confirm
-            // overlay and retry on user opt-in.
+            // in the race window between our UI probe and the POST, the probe
+            // missed it, or the spool is LEAVING a printing head (39.4), the
+            // backend returns requires_confirm. Show our confirm overlay and
+            // retry with every head confirmed so far.
             if (res.status === 'requires_confirm' && res.confirm_type === 'active_print') {
                 _confirmActivePrintAssign({
                     loc, spool, slot, isFromBufferFlag,
                     stateInfo: res.active_print || { printer_name: loc, state: 'ACTIVE' },
                     options,
+                    msg: res.msg,
+                    heads: window.unionConfirmHeads(confirmedHeads, res),
                 });
                 return;
             }
@@ -1608,10 +1560,14 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
             // and Yes appeared to "do nothing".
             if (res.require_confirm && res.confirm_type === 'active_print') {
                 const stateInfo = res.active_print || { printer_name: loc, state: 'ACTIVE' };
+                // Group 39.6: when the server asks both questions at once
+                // ("printing" + "no saved home"), the one Yes answers both, so
+                // there is no second prompt raised from this one's callback.
+                const both = Array.isArray(res.confirm_types) && res.confirm_types.includes('unassign');
                 requestConfirmation(
                     res.msg
                         || `${stateInfo.printer_name} is ${stateInfo.state} — ejecting will disrupt the print. Continue anyway?`,
-                    () => window.doEject(sid, loc, isConfirmed, true)
+                    () => window.doEject(sid, loc, isConfirmed || both, true)
                 );
                 return;
             }

@@ -49,6 +49,188 @@ def _active_print_info_for_location(location_str, printer_map=None):
     }
 
 
+def _confirm_scope(confirm):
+    """Group 39.1 — what a `confirm_active_print` value covers, as
+    (covers_every_head, covered_heads).
+
+    True covers every head: execute_bulk_move, whose plan re-planned from live
+    state, and the boolean doors (eject, force-unassign). Falsy covers none.
+    An iterable of LocationIDs covers exactly the heads whose active-print
+    warning the user saw (`confirmed_toolheads`), so a stale confirm — a grid
+    whose slot was rebound to another head — is asked again (R2-08)."""
+    if confirm is True:
+        return True, frozenset()
+    if not confirm:
+        return False, frozenset()
+    if isinstance(confirm, (str, bytes)):
+        heads = [confirm]
+    else:
+        try:
+            heads = list(confirm)
+        except TypeError:
+            return True, frozenset()   # any other truthy value is the legacy blanket confirm
+    return False, frozenset(str(h).strip().strip('"').upper() for h in heads if str(h).strip())
+
+
+def confirmed_heads(data):
+    """Group 39.1 — the `confirm_active_print` a browser move request carries:
+    the heads in its `confirmed_toolheads`, i.e. the active-print warnings the
+    user actually saw. A bare legacy `confirm_active_print: true` (a stale
+    cached page) covers NO head, so the user is asked again: the safe direction,
+    and the build-version cache-bust keeps that window short. Used by the five
+    move doors (manage_contents add, /api/smart_move, the identify_scan slot
+    branch, /api/quickswap, /api/quickswap/return); eject, force-unassign,
+    clear-location and the bulk-move commit keep their boolean."""
+    heads = (data or {}).get('confirmed_toolheads')
+    if isinstance(heads, (list, tuple)):
+        return [str(h).strip().strip('"').upper() for h in heads if str(h or '').strip()]
+    return []
+
+
+STALE_PAGE_MSG = ("This FCC page is out of date, so it can't confirm a move during a print. "
+                  "Reload the page (Ctrl+F5) and try again.")
+
+
+def stale_confirm_refusal(data, result):
+    """Group 39 review (frontend-12): a page loaded before Group 39 answers an
+    active-print confirm with a bare `confirm_active_print: true` and never
+    sends `confirmed_toolheads`. The five move doors ignore that flag, so each
+    Yes got the same question back, forever, until the page was reloaded. When
+    such a request is asked again, this logs and returns the message the door
+    answers with instead (as an error, which every old page toasts); otherwise
+    None. A move that no longer needs a confirm goes ahead as usual."""
+    d = data if isinstance(data, dict) else {}
+    if d.get('confirm_active_print') is not True or 'confirmed_toolheads' in d:
+        return None
+    if not (isinstance(result, dict) and result.get('status') == 'requires_confirm'):
+        return None
+    state.add_log_entry(f"⚠️ {STALE_PAGE_MSG}", "WARNING", "ffaa00")
+    return STALE_PAGE_MSG
+
+
+def _confirm_covers(confirm, head):
+    """True when `confirm` covers the active-print warning for `head`."""
+    every, heads = _confirm_scope(confirm)
+    return every or str(head or '').strip().strip('"').upper() in heads
+
+
+def _uncovered_active_heads(touched, confirm, printer_map, spools=None):
+    """Group 39.1 — the actively printing heads this move would touch that the
+    caller's confirm doesn't cover. One list, so a move answers ONE confirm.
+
+    `touched` is [(head_id, role)] or [(head_id, role, spool_ids)], role
+    'destination' (the move's target), 'feeds' (a named slot's bound head,
+    which the auto-deploy chain loads) or 'source' (Group 39.4: the head a
+    moving spool leaves). An entry's spools are its own `spool_ids`, else the
+    move's `spools`. A covered head is never probed. The rest go through
+    _active_print_info_for_location, whose per-move memo (perform_smart_move)
+    probes each printer once, and which fails open: an unreachable printer is
+    not active. Returns [{toolhead, printer_name, state, role, spools}]."""
+    every, covered = _confirm_scope(confirm)
+    if every:
+        return []
+    out, seen = [], set()
+    for item in touched:
+        head, role = item[0], item[1]
+        head_spools = item[2] if len(item) > 2 else spools
+        h = str(head or '').strip().strip('"').upper()
+        if not h or h in seen or h in covered:
+            continue
+        seen.add(h)
+        ap = _active_print_info_for_location(h, printer_map)
+        if ap:
+            out.append({"toolhead": ap['toolhead'], "printer_name": ap['printer_name'],
+                        "state": ap['state'], "role": role,
+                        "spools": [int(s) for s in (head_spools or []) if str(s).isdigit()]})
+    return out
+
+
+def _and_list(items):
+    """'a', 'a and b', 'a, b and c'."""
+    items = [str(i) for i in items]
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _active_print_message(active_prints, target, residents=(), target_slot=None):
+    """The text of an active-print confirm, in Derek's D6 wording (Group 39.4):
+      one source   "#42 is loaded on XL-3. Moving it to CR-CT-2-R1 means FCC
+                    stops charging this print to it. Continue?"
+      several      "#42 is loaded on XL-3 and #57 on XL-1. Moving them to
+                    CR-CT-2-R1 means FCC stops charging this XL print to them.
+                    Continue?"
+      destination  "XL is PRINTING. Loading #57 onto XL-2 unloads #196, so FCC
+                    stops charging this print to #196. Continue?"
+      feeds        "XL is PRINTING. LR-MDB-1 slot 2 feeds XL-2, so this also
+                    loads #42 onto XL-2 and unloads what XL-2 holds. Continue?"
+    A head -> head move on one printer is one message: the source sentence
+    names both heads. A bound slot's head always gets its own sentence naming
+    it: the Yes covers that head, so the user must see it (R2-08). When it is
+    on a source's printer, the spool keeps feeding that print, so the source
+    sentence drops "stops charging". A destination with no resident keeps the
+    sentence the overlays have always shown."""
+    sources = [a for a in active_prints if a.get('role') == 'source']
+    feeds = [a for a in active_prints if a.get('role') == 'feeds']
+    told = {a['printer_name'] for a in sources}
+    out = []
+    if sources:
+        loaded = [(sid, a['toolhead']) for a in sources for sid in (a.get('spools') or [])]
+        if len(loaded) == 1:
+            where, pronoun = f"#{loaded[0][0]} is loaded on {loaded[0][1]}", "it"
+        else:
+            where = _and_list([f"#{loaded[0][0]} is loaded on {loaded[0][1]}"]
+                              + [f"#{s} on {h}" for s, h in loaded[1:]])
+            pronoun = "them"
+        if any(f['printer_name'] in told for f in feeds):
+            out.append(f"{where}.")
+        else:
+            whose = ("this print" if len(loaded) == 1 else
+                     f"this {sources[0]['printer_name']} print" if len(told) == 1 else "these prints")
+            out.append(f"{where}. Moving {pronoun} to {target} means FCC stops charging {whose} to {pronoun}.")
+        if residents:
+            out.append(f"It also unloads {_and_list('#' + str(r) for r in residents)} from {target}.")
+    for a in active_prints:
+        role = a.get('role')
+        if role == 'source':
+            continue
+        if role == 'feeds':
+            moving = _and_list('#' + str(s) for s in a.get('spools') or []) if a.get('spools') else "the spool"
+            slot = f"{target} slot {target_slot}" if target_slot not in (None, '') else target
+            lead = "" if a['printer_name'] in told else f"{a['printer_name']} is {a['state']}. "
+            told.add(a['printer_name'])
+            out.append(f"{lead}{slot} feeds {a['toolhead']}, so this also loads {moving} onto "
+                       f"{a['toolhead']} and unloads what {a['toolhead']} holds.")
+            continue
+        if a['printer_name'] in told:
+            continue
+        told.add(a['printer_name'])
+        if role == 'destination' and residents:
+            gone = _and_list('#' + str(r) for r in residents)
+            moving = _and_list('#' + str(s) for s in a.get('spools') or []) if a.get('spools') else "a spool"
+            out.append(f"{a['printer_name']} is {a['state']}. Loading {moving} onto {a['toolhead']} "
+                       f"unloads {gone}, so FCC stops charging this print to {gone}.")
+        else:
+            out.append(f"{a['printer_name']} is {a['state']} — moving a spool here will disrupt the print.")
+    return " ".join(out) + " Continue?"
+
+
+def _requires_confirm_answer(active_prints, target, target_slot, residents=()):
+    """Group 39.1 — the ONE shape every move confirm answers in. Groups 40-42
+    extend it (40.0c fills fed_heads / can_store); none redefines it.
+    `active_print` keeps the first entry's three original keys for existing
+    consumers; a replay sends back the heads in `active_prints`."""
+    first = active_prints[0]
+    return {
+        "status": "requires_confirm",
+        "confirm_type": "active_print",
+        "active_prints": active_prints,
+        "active_print": {k: first[k] for k in ("toolhead", "printer_name", "state")},
+        "fed_heads": [],
+        "can_store": False,
+        "target_slot": None if target_slot in (None, '') else str(target_slot),
+        "msg": _active_print_message(active_prints, target, residents, target_slot),
+    }
+
+
 def _toolhead_of(location_str, printer_map=None):
     """Resolve a location string to its (printer_name, toolhead_id) tuple.
 
@@ -514,33 +696,152 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
 
     if not spools: return {"status": "error", "msg": "No spools found"}
 
-    # Active-print safety check: if the destination is a toolhead on a
-    # printer that's currently PRINTING/PAUSED/BUSY, bail with a
-    # requires_confirm response so the caller can show a dialog and retry
-    # with confirm_active_print=True. Fail-open via None inside the helper.
-    #
-    # Walks slot-targets too: if target is a Dryer Box and target_slot is
-    # bound to a toolhead, that toolhead is the eventual destination (via
-    # the auto-deploy chain below). Checking it preemptively means the
-    # user gets prompted BEFORE any Spoolman writes happen, instead of
-    # having the recursive call swallow requires_confirm silently.
-    if not confirm_active_print:
-        ap = _active_print_info_for_location(target, printer_map)
-        if not ap:
-            # Check slot-binding's eventual toolhead.
-            tgt_row = loc_info_map.get(target)
-            if tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot:
-                bound = locations_db.bindings_from_row(tgt_row)
-                bound_th = bound.get(str(target_slot)) or bound.get(str(int(target_slot))) if str(target_slot).isdigit() else bound.get(str(target_slot))
-                if bound_th:
-                    ap = _active_print_info_for_location(bound_th, printer_map)
-        if ap:
-            return {
-                "status": "requires_confirm",
-                "confirm_type": "active_print",
-                "active_print": ap,
-                "msg": f"{ap['printer_name']} is {ap['state']} — moving a spool here will disrupt the print.",
-            }
+    # ---- THE SHARED PRE-WRITE CONTRACT (Group 39.1) ----------------------------
+    # Groups 39-42 all edit this section. The order is fixed; extend a step,
+    # never reorder or redefine it:
+    #   1. Resolve the spool list (above).
+    #   2. Structural refusals, no Spoolman or printer I/O, answered as
+    #      {"status": "error", "blocked_reason", "msg", "failures"}: a Printer row
+    #      that is not its own toolhead (40.0a); several spools onto a
+    #      single-occupancy target (42.3a).
+    #   3. Slot choice: auto-slot for a slotless single spool into a multi-slot
+    #      box (40.0e moves it up here).
+    #   4. Strict reads, failing closed (status error, nothing written): the
+    #      moving spools' own records (39.4), the target head's residents (39.7),
+    #      the bound head's residents (40.0c).
+    #   5. ONE confirm answer: _uncovered_active_heads over the destination /
+    #      feeds / source heads (one probe per printer, through the memo), in the
+    #      shape _requires_confirm_answer builds (40.0c adds fed_heads).
+    #   6. Writes, per spool, in this order: Smart Load's resident ejects (from
+    #      a fresh strict list of the head when step 5 could have probed); the
+    #      slot unseat (41.6); the spool's own write (13.6 / record_source at a
+    #      head, 40.0d; the single-slot box release, 42.1); then the chain.
+    # -----------------------------------------------------------------------------
+
+    # Single-occupancy target (Printer/Toolhead): Smart Load (step 6) unloads
+    # its resident before the incoming spool is written.
+    tgt_info = loc_info_map.get(target)
+    is_printer = target in printer_map
+    # 21.3 — single-occupancy = the canonical toolhead type set (Tool Head /
+    # MMU Slot / No MMU Direct Load) plus the dual-role "Printer" row. The old
+    # inline list omitted "No MMU Direct Load" (the Core One direct-load type),
+    # so manually assigning a spool to such a head — when it wasn't ALSO present
+    # in printer_map to be caught by is_printer — skipped the resident auto-eject
+    # and left two spools on one head. Sourced from locations_db.TOOLHEAD_TYPES
+    # so this can't drift out of sync with the rest of the codebase again.
+    # Hotfix 2026-09-29: a Printer row stays single-occupancy only while it owns
+    # no toolhead other than itself — the dual-role Core One, or a one-slot
+    # printer not yet set up in Settings. A multi-head printer (the INDX: RCOI
+    # owns RCOI-1..8) is not a deploy slot, and the resident lookup prefix-
+    # matches its heads — loading onto the printer row used to eject every
+    # spool on all of them.
+    is_toolhead = bool(tgt_info) and tgt_info.get('Type') in locations_db.TOOLHEAD_TYPES
+    if bool(tgt_info) and str(tgt_info.get('Type', '')).strip() == 'Printer':
+        _own_heads = [str(t.get('location_id', '')).strip().upper()
+                      for t in (tgt_info.get('toolheads') or []) if isinstance(t, dict)]
+        try:
+            _one_slot = int(str(tgt_info.get('Max Spools', '0')).strip() or '0') <= 1
+        except (TypeError, ValueError):
+            _one_slot = True
+        is_toolhead = _one_slot and not any(h and h != target for h in _own_heads)
+
+    # sid(str) -> why that spool did not move. Declared before the strict reads
+    # and Smart Load, which can refuse the whole move; see the L298 Phase 3 note
+    # at the write loop.
+    failures: typing.Dict[str, str] = {}
+
+    # Step 4 (Group 39.4): the moving spools' own records. A spool loaded on a
+    # printer head is LEAVING it (role 'source', D6), unless this re-scans it
+    # onto the head it already sits on. Read only when the confirm doesn't
+    # cover every head, so the True path (internal callers, the legacy browser
+    # flag) reads exactly what it always did. The write loop re-reads each
+    # record rather than trust one read before a printer probe.
+    sources: typing.Dict[str, typing.List[int]] = {}
+    # True only when every moving spool's own record already puts it on the
+    # target: a re-scan onto its own head moves nothing, so it isn't asked
+    # about (39.4), unless Smart Load would unload another resident.
+    all_here = False
+    every_head_covered = _confirm_scope(confirm_active_print)[0]
+    if not every_head_covered:
+        unreadable = []
+        here_count = 0
+        for sid in spools:
+            rec = spoolman_api.get_spool(sid)
+            if not rec:
+                unreadable.append(str(sid))
+                continue
+            here = str(rec.get('location') or '').strip().upper()
+            if here == target:
+                here_count += 1
+            if here and here != target and here in printer_map:
+                sources.setdefault(here, []).append(int(sid))
+        all_here = here_count == len(spools)
+        if unreadable:
+            names = ", ".join(f"#{u}" for u in unreadable)
+            for sid in spools:
+                failures[str(sid)] = ("could not read the spool from Spoolman" if str(sid) in unreadable
+                                      else f"not moved: could not read {names} from Spoolman")
+            state.add_log_entry(
+                f"❌ Not moved to <b>{target}</b>: could not read {names} from Spoolman, so FCC "
+                f"can't tell whether it is leaving a printing head", "ERROR", "ff4444")
+            return {"status": "error", "msg": f"Not moved: could not read {names} from Spoolman.",
+                    "failures": failures}
+
+    # Step 4 (Group 39.7, R1-03): the target head's residents, read strictly.
+    # The old fail-open read answered [] on a Spoolman blip, so an occupied
+    # head looked empty and the incoming spool landed on top of its resident.
+    # A resident is a spool whose OWN record says it is on this head: the
+    # matcher also returns ghosts (a stale physical_source naming this head)
+    # and, for a Printer row, every toolhead's spool by prefix. Those are
+    # skipped on the row, with no read of their own (R1-02).
+    def _strict_residents():
+        """(residents, None), or (None, the fail-closed answer)."""
+        try:
+            rows = spoolman_api.get_spools_at_location_detailed_strict(target) or []
+        except Exception as e:
+            state.logger.error(f"Smart Load: resident read failed for {target}: {e}")
+            why = f"could not read {target} from Spoolman"
+            for sid in spools:
+                failures[str(sid)] = why
+                state.add_log_entry(
+                    f"❌ <b>Smart Load:</b> not loading Spool #{sid} onto {target} — {why}",
+                    "ERROR", "ff4444")
+            return None, {"status": "error", "msg": f"Not loaded: {why}.", "failures": failures}
+        incoming = {str(s) for s in spools}
+        return [row.get('id') for row in rows
+                if str(row.get('id')) not in incoming and not row.get('is_ghost')
+                and str(row.get('location') or '').strip().upper() == target], None
+
+    residents: typing.List[typing.Any] = []
+    if is_printer or is_toolhead:
+        residents, refused = _strict_residents()
+        if refused:
+            return refused
+
+    # Step 5. The heads the moving spools leave, the destination, and a named
+    # slot's bound head (the auto-deploy chain loads it) are checked BEFORE any
+    # Spoolman write, so the user is asked once, before anything moves, rather
+    # than the chained call swallowing the answer. `confirm_active_print` is
+    # True (covers every head), falsy (none) or the LocationIDs whose warning
+    # the user saw.
+    touched: typing.List[tuple] = [(head, 'source', sids) for head, sids in sources.items()]
+    if not (all_here and not residents):
+        touched.append((target, 'destination'))
+    tgt_row = tgt_info
+    # The bound head counts only when the chain will load it (I1-06): Return
+    # parks a spool with auto_deploy=False, and must not ask about a head it
+    # never touches.
+    if tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot and auto_deploy:
+        bound = locations_db.bindings_from_row(tgt_row)
+        if str(target_slot).isdigit():
+            bound_th = bound.get(str(target_slot)) or bound.get(str(int(target_slot)))
+        else:
+            bound_th = bound.get(str(target_slot))
+        if bound_th and not locations_db.is_printer_sentinel(bound_th):
+            touched.append((bound_th, 'feeds'))
+    active_prints = _uncovered_active_heads(touched, confirm_active_print, printer_map, spools)
+    if active_prints:
+        return _requires_confirm_answer(active_prints, target, target_slot, residents)
 
     # Whether the CALLER named the slot, before auto-slot fills one in. The
     # pre-flight above probed only an explicit slot's bound toolhead, so only
@@ -580,33 +881,6 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     )
                     break
 
-    # --- SMART LOAD LOGIC (Auto-Eject Resident) ---
-    # Determine if this is a single-occupancy target (Printer/Toolhead)
-    tgt_info = loc_info_map.get(target)
-    is_printer = target in printer_map
-    # 21.3 — single-occupancy = the canonical toolhead type set (Tool Head /
-    # MMU Slot / No MMU Direct Load) plus the dual-role "Printer" row. The old
-    # inline list omitted "No MMU Direct Load" (the Core One direct-load type),
-    # so manually assigning a spool to such a head — when it wasn't ALSO present
-    # in printer_map to be caught by is_printer — skipped the resident auto-eject
-    # and left two spools on one head. Sourced from locations_db.TOOLHEAD_TYPES
-    # so this can't drift out of sync with the rest of the codebase again.
-    # Hotfix 2026-09-29: a Printer row stays single-occupancy only while it owns
-    # no toolhead other than itself — the dual-role Core One, or a one-slot
-    # printer not yet set up in Settings. A multi-head printer (the INDX: RCOI
-    # owns RCOI-1..8) is not a deploy slot, and the resident lookup prefix-
-    # matches its heads — loading onto the printer row used to eject every
-    # spool on all of them.
-    is_toolhead = bool(tgt_info) and tgt_info.get('Type') in locations_db.TOOLHEAD_TYPES
-    if bool(tgt_info) and str(tgt_info.get('Type', '')).strip() == 'Printer':
-        _own_heads = [str(t.get('location_id', '')).strip().upper()
-                      for t in (tgt_info.get('toolheads') or []) if isinstance(t, dict)]
-        try:
-            _one_slot = int(str(tgt_info.get('Max Spools', '0')).strip() or '0') <= 1
-        except (TypeError, ValueError):
-            _one_slot = True
-        is_toolhead = _one_slot and not any(h and h != target for h in _own_heads)
-
     # L298 Phase 0 — undo hardening: `extras` snapshots each moved spool's
     # system-managed extras (container_slot / physical_source /
     # physical_source_slot) as they were BEFORE the move, so perform_undo can
@@ -615,57 +889,48 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # a prerequisite for a trustworthy bulk-move undo.
     undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "extras": {}, "labels": {}, "ejections": {}, "ejection_extras": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
 
-    # sid(str) -> why that spool did not move. Declared before Smart Load, which
-    # can refuse the whole move; see the L298 Phase 3 note at the write loop.
-    failures: typing.Dict[str, str] = {}
+    # Step 6 opens with a fresh strict list of the head (review engine-2): the
+    # step-4 list was read BEFORE the source reads and the printer probe, which
+    # take seconds when a printer is unreachable, and a spool another request
+    # loads onto the head meanwhile must be unloaded too, or the head holds
+    # two. The True path has no probe and no source reads, so it keeps one read.
+    if (is_printer or is_toolhead) and not every_head_covered:
+        residents, refused = _strict_residents()
+        if refused:
+            return refused
 
-    if is_printer or is_toolhead:
+    # --- SMART LOAD LOGIC (Auto-Eject Resident) ---
+    if residents:
         # 2026-09-12: the head must really be empty before the incoming spool is
         # written, or it holds two (Derek's bulk-move active-print testing). The
         # old `if perform_smart_eject(rid):` read the eject's refusals as
         # success: the active-print dict and the "REQUIRE_CONFIRM" string are
         # both truthy, so the resident stayed and the incoming spool landed on
         # top of it.
-        #  - A resident is a spool whose OWN record says it is on this head. The
-        #    location matcher also returns ghosts (a stale physical_source naming
-        #    this head) and, for a Printer row, every toolhead's spool by prefix;
-        #    "ejecting" those pulled spools off other heads.
+        #  - `residents` (step 4) holds only spools whose OWN record puts them on
+        #    this head; "ejecting" a ghost or another head's prefix hit pulled
+        #    spools off other heads.
         #  - The eject carries the caller's confirm (the pre-flight above probed
         #    this head) and a decided home for a resident with none: the Room
         #    its printer sits in, else Unassigned (Derek, 2026-09-12).
         #  - Only True counts. A resident that cannot be moved, or read, refuses
         #    the whole move.
-        #  - Known gap (filed 2026-09-12): the resident LIST read below is
-        #    fail-open, so a Spoolman blip there makes an occupied head look
-        #    empty. The strict reader would close it, but every move test's
-        #    mocks would need reworking first.
-        incoming = {str(s) for s in spools}
         homeless_dest = None
         stuck: typing.Dict[typing.Any, str] = {}
-        matched = None  # the matcher's own view, fetched only when a read fails
-        for rid in spoolman_api.get_spools_at_location(target):
-            if str(rid) in incoming:
-                continue
+        for rid in residents:
             before = spoolman_api.get_spool(rid)
             if not before:
-                # Unreadable. Refuse unless the matcher places it somewhere else:
-                # an unreadable ghost or Printer-row prefix hit must not block a
-                # load onto an empty head (2026-09-12 review).
-                if matched is None:
-                    matched = {str(m.get('id')): m for m in
-                               (spoolman_api.get_spools_at_location_detailed(target) or [])}
-                hit = matched.get(str(rid))
-                if hit is None or (not hit.get('is_ghost')
-                                   and str(hit.get('location') or '').strip().upper() == target):
-                    stuck[rid] = "it could not be read from Spoolman"
+                stuck[rid] = "it could not be read from Spoolman"
                 continue
             if str(before.get('location') or '').strip().upper() != target:
-                continue
+                continue  # it left the head between the two reads
             if homeless_dest is None:
                 homeless_dest = _known_room_of(target, loc_list)
             before_extra = dict(before.get('extra') or {})
+            # perform_smart_eject takes a boolean: covered when the confirm
+            # covers the head this resident is unloaded from (Group 39.1).
             ejected = perform_smart_eject(
-                rid, confirm_active_print=confirm_active_print,
+                rid, confirm_active_print=_confirm_covers(confirm_active_print, target),
                 homeless_destination=homeless_dest,
             )
             if ejected is not True:
@@ -926,7 +1191,9 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     th, to_deploy,
                     target_slot=None, origin=chain_origin,
                     auto_deploy=False,
-                    confirm_active_print=confirm_active_print and explicit_slot,
+                    # Scoped confirms pass through as-is (Group 39.1): `confirm
+                    # and explicit_slot` turned a head list into a blanket True.
+                    confirm_active_print=confirm_active_print if explicit_slot else False,
                 )
             except Exception as _ad_err:
                 state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")
@@ -1297,9 +1564,17 @@ def execute_bulk_move(plan, confirm_active_print=False):
     # way a deliberate single scan does. Confirmed by Derek 2026-07-11 —
     # auto-assigning filament to toolheads mid-bulk "would just make a mess",
     # especially when the source holds more than the destination can take.
+    #
+    # confirm_active_print=True (Group 39 review, engine-3): plan_bulk_move has
+    # just re-planned from live state, skipping every head-loaded spool and
+    # refusing a printer-head destination, and it owns the bulk move's own
+    # active-print prompt. So the engine's per-spool source reads (39.4) have
+    # nothing to find, and their fail-closed refusal would turn one Spoolman
+    # blip into "nothing moved" plus a reset armed session. `confirm_active_print`
+    # stays on the signature for callers; the plan gate above already used it.
     move_result = perform_smart_move(dest, movable_ids, origin='bulk_move',
                                      auto_deploy=False,
-                                     confirm_active_print=confirm_active_print)
+                                     confirm_active_print=True)
     # Defensive backstop: surface any requires_confirm the engine returns (with
     # auto_deploy off + single-occ dests rejected this is currently unreachable,
     # but the contract is honored if perform_smart_move ever changes).
@@ -1751,6 +2026,80 @@ def get_room_from_location(loc_id):
 
     return room
 
+def _eject_destination(spool_data, printer_map, homeless_destination=None):
+    """Group 39.6 — where perform_smart_eject sends a spool, decided without
+    writing anything or probing a printer (it reads locations.json). Returns
+    {"home", "slot", "target", "needs_unassign_confirm"}:
+      - `home`: the saved source (physical_source) when it is a real home, with
+        `slot` its saved slot; None when there is none. Not a home: the place the
+        spool sits now (the loop), anywhere beneath it (a room's own box), or a
+        toolhead (a stale head -> head trail).
+      - `target`: where a homeless spool goes: the caller-decided
+        `homeless_destination`, else '' off a printer (a printer is not a Room),
+        else its Room, else '' (Unassigned).
+      - `needs_unassign_confirm`: the protected unassign. A homeless spool would
+        leave a real location for Unassigned with no caller decision.
+    perform_smart_eject runs this code, so the eject route's combined confirm
+    (one prompt for "printing" + "no saved home") can't drift from it."""
+    current_location = str(spool_data.get('location') or '').strip().upper()
+    extra = spool_data.get('extra') or {}
+    saved_source = extra.get('physical_source')
+
+    # [ALEX FIX] Prevent Infinite Return Loop
+    # If the database thinks we "came from" the place we are currently ejecting from,
+    # we must clear that memory, otherwise we just 'return' to the same box.
+    if saved_source and str(saved_source).strip().upper() == current_location:
+        state.logger.info(f"🛑 Eject Loop Detected: Source is same as Location ({saved_source}). Clearing.")
+        saved_source = None
+
+    # [ALEX FIX] Room hierarchy bypass
+    # If we are currently floating in a room, and the saved_source is a CHILD of this room,
+    # we NEVER bounce back down to the child box. We break the loop and eject to Unassigned.
+    # L271 Phase 3.5: "is saved_source anywhere BENEATH current_location" via
+    # is_descendant instead of a single-hop resolve_parent equality. parent_id
+    # now stores the immediate parent, so a one-hop check would only catch a
+    # DIRECT child — but a saved_source can be a grandchild of the room we're
+    # floating in (room -> cart -> cart-row). is_descendant walks the chain so
+    # the loop-break fires for the whole subtree. On the pre-3.5 flat tree this
+    # reduces to the old single-hop equality (a row's only ancestor is its
+    # first-segment room), so it's byte-identical until the data flip.
+    if current_location and saved_source:
+        if locations_db.is_descendant(str(saved_source).strip('"'), current_location):
+            state.logger.info(f"🛑 Bypassing Saved Source: {saved_source} is inside {current_location}. Ejecting to Unassigned.")
+            saved_source = None
+
+    # A toolhead is never a home. A trail naming one is stale (a head -> head
+    # move used to record the old head), and "returning" there put the spool
+    # onto whatever is loaded on that head now (2026-09-12).
+    if saved_source:
+        _src = str(saved_source).strip().strip('"').upper()
+        if _src in printer_map or _is_single_occupancy(_src, printer_map, {
+                str(r.get('LocationID', '')).strip().upper(): r
+                for r in (locations_db.load_locations_list() or [])}):
+            state.logger.info(
+                f"🛑 Stale ghost trail: #{spool_data.get('id')}'s saved source {_src} is a toolhead — not returning there.")
+            saved_source = None
+
+    if saved_source:
+        home = str(saved_source).strip('"')
+        return {"home": home, "slot": str(extra.get('physical_source_slot', '') or '').strip('"'),
+                "target": home, "needs_unassign_confirm": False}
+
+    if homeless_destination is not None:
+        # The caller already decided where a spool with no home goes.
+        target_loc = str(homeless_destination or '').strip().upper()
+    # Normal unslotted eject with Room Fallback
+    # [Universal Fallback fix] A printer is not a Room. If ejecting from a printer and missing physical_source, default to Unassigned.
+    elif current_location in printer_map:
+        target_loc = ""
+    else:
+        room_fallback = get_room_from_location(current_location)
+        target_loc = room_fallback if room_fallback else ""
+    # Protected Unassign (a caller-decided destination needs no prompt)
+    needs = target_loc == "" and current_location != "" and homeless_destination is None
+    return {"home": None, "slot": "", "target": target_loc, "needs_unassign_confirm": needs}
+
+
 def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print=False,
                         homeless_destination=None):
     """Remove `spool_id` from its current location.
@@ -1808,59 +2157,20 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         except Exception as _de:
             state.logger.warning(f"20.2 box auto-detach skipped: {_de}")
 
-    # Save the original slot before we wipe it for processing
-    orig_container_slot = extra.get('container_slot', '')
-    
     # [ALEX FIX] Explicitly overwrite the slot with empty string.
     # .pop() just removes the key, which causes PATCH to ignore it (keeping the old value).
     extra['container_slot'] = ""
-    
-    saved_source = extra.get('physical_source')
-    
-    # [ALEX FIX] Prevent Infinite Return Loop
-    # If the database thinks we "came from" the place we are currently ejecting from,
-    # we must clear that memory, otherwise we just 'return' to the same box.
-    if saved_source and saved_source.strip().upper() == current_location:
-        state.logger.info(f"🛑 Eject Loop Detected: Source is same as Location ({saved_source}). Clearing.")
-        saved_source = None
-        extra['physical_source'] = "" # Wipe the memory
 
-    # [ALEX FIX] Room hierarchy bypass
-    # If we are currently floating in a room, and the saved_source is a CHILD of this room,
-    # we NEVER bounce back down to the child box. We break the loop and eject to Unassigned.
-    # L271 Phase 3.5: "is saved_source anywhere BENEATH current_location" via
-    # is_descendant instead of a single-hop resolve_parent equality. parent_id
-    # now stores the immediate parent, so a one-hop check would only catch a
-    # DIRECT child — but a saved_source can be a grandchild of the room we're
-    # floating in (room -> cart -> cart-row). is_descendant walks the chain so
-    # the loop-break fires for the whole subtree. On the pre-3.5 flat tree this
-    # reduces to the old single-hop equality (a row's only ancestor is its
-    # first-segment room), so it's byte-identical until the data flip.
-    if current_location and saved_source:
-        if locations_db.is_descendant(saved_source.strip('"'), current_location):
-            state.logger.info(f"🛑 Bypassing Saved Source: {saved_source} is inside {current_location}. Ejecting to Unassigned.")
-            saved_source = None
-
-    # A toolhead is never a home. A trail naming one is stale (a head -> head
-    # move used to record the old head), and "returning" there put the spool
-    # onto whatever is loaded on that head now (2026-09-12).
-    if saved_source:
-        _src = str(saved_source).strip().strip('"').upper()
-        if _src in printer_map or _is_single_occupancy(_src, printer_map, {
-                str(r.get('LocationID', '')).strip().upper(): r
-                for r in (locations_db.load_locations_list() or [])}):
-            state.logger.info(
-                f"🛑 Stale ghost trail: #{spool_id}'s saved source {_src} is a toolhead — not returning there.")
-            saved_source = None
+    # Where it goes: its saved home, else the homeless fallback (Group 39.6's
+    # _eject_destination, which the eject route's combined confirm also runs).
+    dest = _eject_destination(spool_data, printer_map, homeless_destination)
+    saved_source = dest['home']
 
     if saved_source:
-        if saved_source.startswith('"'): saved_source = saved_source.strip('"')
-
         # [ALEX FIX] Retain the assignment slot when returning home.
         # Move the saved slot back into container_slot
-        saved_slot = extra.get('physical_source_slot', '')
-        if saved_slot:
-            saved_slot_clean = str(saved_slot).strip('"')
+        saved_slot_clean = dest['slot']
+        if extra.get('physical_source_slot', ''):
             # 13.2 — Don't recreate a slot binding that's already claimed by
             # another spool (direct OR ghost from a different spool). The
             # auto-deploy chain can leave a ghost in our former slot moments
@@ -1905,21 +2215,10 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
             f"❌ Failed to return Spool #{spool_id} -> {saved_source}: {err}", "ERROR", "ff4444"
         )
     else:
-        if homeless_destination is not None:
-            # The caller already decided where a spool with no home goes.
-            target_loc = str(homeless_destination or '').strip().upper()
-        # Normal unslotted eject with Room Fallback
-        # [Universal Fallback fix] A printer is not a Room. If ejecting from a printer and missing physical_source, default to Unassigned.
-        elif current_location in printer_map:
-            target_loc = ""
-        else:
-            room_fallback = get_room_from_location(current_location)
-            target_loc = room_fallback if room_fallback else ""
-
+        target_loc = dest['target']
         # Protected Unassign (a caller-decided destination needs no prompt)
-        if target_loc == "" and current_location != "" and homeless_destination is None:
-            if not confirmed_unassign:
-                return "REQUIRE_CONFIRM"
+        if dest['needs_unassign_confirm'] and not confirmed_unassign:
+            return "REQUIRE_CONFIRM"
 
         # Strictly clear source bindings so it doesn't become a ghost in its old container
         extra['physical_source'] = ""

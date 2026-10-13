@@ -1465,6 +1465,14 @@ const processScan = (text, source = 'keyboard') => {
     if (upper === 'CMD:PREV') { prevBuffer(); return; }
     if (upper === 'CMD:NEXT') { nextBuffer(); return; }
     if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if (parts[2]) window.printLabel(parts[2]); return; }
+    // Group 39.9 — the CMD:CLEAR guard above, for the eject: its confirm
+    // (requestConfirmation, z 1100) would open BEHIND the bulk panel (z 20000)
+    // and swallow the scans meant for the session.
+    if (upper.startsWith('CMD:TRASH:') && state.bulkMoveActive) {
+        showToast('Eject waits until the bulk move is finished or cancelled', 'info', 4000);
+        if (window.logClientEvent) window.logClientEvent(`ℹ️ ${upper} ignored: a bulk move is armed — finish or cancel it first`, 'INFO');
+        return;
+    }
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if (parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
     // A CONFIRM scan may fire a dialog's callback ONLY while that dialog is
@@ -1491,7 +1499,11 @@ const processScan = (text, source = 'keyboard') => {
     if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? (onScreen('confirmModal') ? confirmAction(true) : ignoredConfirm('confirmModal', !!state.pendingConfirm)) : (upper.includes('CANCEL') ? confirmAction(false) : null);
     if (state.activeModal === 'action') { if (upper.includes('CANCEL')) { closeModal('actionModal'); return; } if (upper.startsWith('CMD:MODAL:')) { if (!onScreen('actionModal')) { ignoredConfirm('actionModal', true); return; } closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
 
-    setProcessing(true);
+    // Group 39.3: a slot scan whose slot feeds a printer head waits on that
+    // printer server-side; the dim says which ("⏳ Checking XL…").
+    const slotScan = /^LOC:([^:]+):SLOT:(\d+)$/i.exec(String(text).trim());
+    setProcessing(true, { label: slotScan && window.printerLabelForTarget
+        ? window.printerLabelForTarget(slotScan[1], slotScan[2]) : null });
     window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source }) })
         .then(r => r.json())
         .then(res => {
@@ -1601,26 +1613,37 @@ const processScan = (text, source = 'keyboard') => {
                     // however many times you rescanned. Every OTHER surface
                     // already prompts; this one just couldn't.
                     // Reuse the same overlay the buffer-assign path uses, then
-                    // replay the ORIGINAL scan with the confirm flag set.
-                    _confirmActivePrintScan({
-                        tid: res.location,
-                        slot: res.slot,
-                        stateInfo: res.active_print
-                            || { printer_name: res.location, state: 'PRINTING' },
+                    // replay the ORIGINAL scan confirming the heads the answer
+                    // named (Group 39.1: a bare flag no longer covers any).
+                    // The replay can be asked AGAIN (Group 39 review, engine-5):
+                    // a printer that failed open on the first probe answers
+                    // PRINTING now, or one starts printing meanwhile. So it
+                    // re-asks with the union of every head confirmed so far, and
+                    // pins the spool the confirm named (`moved`).
+                    const askAndReplay = (answer, prior) => _confirmActivePrintScan({
+                        tid: answer.location || res.location,
+                        slot: answer.slot != null ? answer.slot : res.slot,
+                        stateInfo: answer.active_print
+                            || { printer_name: answer.location || res.location, state: 'PRINTING' },
+                        msg: answer.msg,
                         onConfirm: () => {
-                            setProcessing(true);
+                            const heads = window.unionConfirmHeads(prior, answer);
+                            setProcessing(true, { label: window.printerLabelForTarget
+                                ? window.printerLabelForTarget(res.location, res.slot) : null });
+                            const replay = { text: text, source: source, confirmed_toolheads: heads };
+                            if (answer.moved != null) replay.spool_id = answer.moved;
                             window.fetchT('/api/identify_scan', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    text: text,
-                                    source: source,
-                                    confirm_active_print: true,
-                                }),
+                                body: JSON.stringify(replay),
                             })
                                 .then(r => r.json())
                                 .then(r2 => {
                                     setProcessing(false);
+                                    if (r2 && r2.action === 'assignment_requires_confirm') {
+                                        askAndReplay(r2, heads);
+                                        return;
+                                    }
                                     // Mirror the normal assignment success path
                                     // above. The slot-QR success payload has NO
                                     // `msg` key, so toasting only on r2.msg gave
@@ -1649,13 +1672,16 @@ const processScan = (text, source = 'keyboard') => {
                                     } else if (r2 && r2.action === 'assignment_failed') {
                                         // Rejected write; the spool is still in the buffer.
                                         showToast(`❌ #${r2.spool} was NOT loaded into ${r2.location}:${r2.slot}: ${r2.msg}`, 'error', 7000);
-                                    } else if (r2 && r2.msg) {
-                                        showToast(r2.msg,
-                                            r2.type === 'error' ? 'error' : 'success',
-                                            r2.type === 'error' ? 7000 : 3000);
+                                    } else if (r2 && r2.type === 'error' && r2.msg) {
+                                        showToast(r2.msg, 'error', 7000);
                                     } else {
-                                        showToast('Assign confirmed but the result was unclear — check the Activity Log',
-                                            'warning', 7000);
+                                        // An answer this replay doesn't know is never a
+                                        // success (it used to toast a confirm question
+                                        // green for 3 s while nothing moved).
+                                        const what = (r2 && (r2.msg || r2.action)) || 'no answer';
+                                        showToast(`⚠️ Assign after confirm: ${what} — check the Activity Log`, 'warning', 7000);
+                                        if (window.logClientEvent) window.logClientEvent(
+                                            `⚠️ Slot-scan confirm replay got an unexpected answer: ${what}`, 'WARNING');
                                     }
                                     document.dispatchEvent(
                                         new CustomEvent('inventory:locations-changed'));
@@ -1667,6 +1693,7 @@ const processScan = (text, source = 'keyboard') => {
                                 });
                         },
                     });
+                    askAndReplay(res, []);
                 } else {
                     // Unknown action code — shouldn't happen, but surface it.
                     showToast(`Unknown assignment result: ${res.action || 'none'}`, 'warning', 4000);
@@ -1819,101 +1846,23 @@ const processScan = (text, source = 'keyboard') => {
         .catch((e) => { setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
 };
 
-// Inline confirm overlay for "bulk assign into an active toolhead" — same
-// visual pattern as Location Manager's _confirmActivePrintAssign (no nested
-// Swal). Mounts into body so it floats above the scan UI and any open modal.
-const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
-    // L122 fix: previously rolled its own overlay (createElement +
-    // appendChild + document keydown). Migrated to window.mountOverlay()
-    // so it inherits the canonical z-index ladder, focus guard, and
-    // host-close discipline documented in CLAUDE.md "Project Conventions".
-    // The previous implementation could end up blocked/hidden behind
-    // certain modal stacks (the buglist L122 symptom: "confirm change
-    // modal is being blocked, canceled, or hidden").
-    const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
-    const content = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:460px; text-align:center;">
-            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${escapeHtml(stateInfo.printer_name)} is ${escapeHtml(stateInfo.state)}</div>
-            <div style="color:#ffc; margin-bottom:14px;">
-                Assigning the buffered spool(s) to <b>${escapeHtml(tid)}</b> will disrupt the active print. Continue anyway?
-            </div>
-            <div style="display:flex; gap:10px; justify-content:center;">
-                <button id="fcc-aps-yes" class="btn btn-warning btn-sm" style="min-width:120px;">Continue Anyway</button>
-                <button id="fcc-aps-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Cancel</button>
-            </div>
-        </div>
-    `;
-    let handle = null;
-    let qrSession = null;
-    const cleanup = () => {
-        if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
-        if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
-    };
-    const proceed = () => { cleanup(); onConfirm(); };
-    handle = window.mountOverlay({
-        id: 'fcc-active-print-scan-overlay',
-        content,
-        tier: 'confirm',
-        initialFocus: '#fcc-aps-yes',
-        onEscape: cleanup,
+// The active-print confirm for a scan assign: the shared one (inv_core.js,
+// Group 39.4), with this overlay's proven ids (#fcc-active-print-scan-overlay,
+// #fcc-aps-yes/no). It shows the server's message when the backend asked
+// (`msg`: Derek's D6 wording), else this door's own sentence.
+const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm, msg = '' }) => {
+    window.confirmActivePrint({
+        activePrint: stateInfo,
+        msg: msg || `Assigning the buffered spool(s) to ${tid} will disrupt the active print. Continue anyway?`,
+        ids: { overlay: 'fcc-active-print-scan-overlay', yes: 'fcc-aps-yes', no: 'fcc-aps-no' },
+        onConfirm,
     });
-    const ov = handle.element;
-    const yesBtn = ov.querySelector('#fcc-aps-yes');
-    const noBtn = ov.querySelector('#fcc-aps-no');
-    if (yesBtn) yesBtn.onclick = proceed;
-    if (noBtn) noBtn.onclick = cleanup;
-    // Keyboard contract (matches _confirmActivePrintAssign in inv_loc_mgr):
-    // Enter activates the focused button (Yes/No); Tab cycles between
-    // them; Escape always cancels (owned by mountOverlay's onEscape).
-    const keyHandler = (e) => {
-        if (e.key === 'Enter') {
-            // ⚠️ SAFETY (axis-(a) audit, 2026-08-03) — see inv_quickswap.js for the
-            // full rationale. A scan in flight owns this Enter: it terminates the
-            // scan, it is not a button press. YES is focused by initialFocus, so
-            // without this the "📷 Scan to Cancel" QR performed the CONFIRM.
-            if (window.isScanInFlight && window.isScanInFlight()) return;
-            const active = document.activeElement;
-            if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
-            else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
-            return;
-        }
-        if (e.key === 'Tab') {
-            const focusables = [yesBtn, noBtn].filter(Boolean);
-            if (focusables.length === 0) return;
-            const active = document.activeElement;
-            const idx = focusables.indexOf(active);
-            if (idx === -1) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
-                return;
-            }
-            if (e.shiftKey && idx === 0) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[focusables.length - 1].focus();
-            } else if (!e.shiftKey && idx === focusables.length - 1) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[0].focus();
-            }
-        }
-    };
-    ov.addEventListener('keydown', keyHandler, true);
-    if (window.attachConfirmQRs && ov) {
-        qrSession = window.attachConfirmQRs({
-            // Mount the QR row inside the dialog PANEL, not the overlay root.
-            // The root is a centered flex-ROW (overlay_mount.js), so appending
-            // the QR row there lays it out BESIDE the panel (the "QR codes on
-            // the right" bug). handle.panel makes it stack below the buttons,
-            // matching the Quick-Swap confirm.
-            host: handle.panel,
-            onConfirm: proceed,
-            onCancel: cleanup,
-            theme: 'warning',
-        });
-    }
 };
 
-const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoolIdsOverride = null) => {
-    setProcessing(true);
+// `confirmedHeads`: the heads whose active-print warning the user confirmed
+// (Group 39.1); anything else (the old `false`) confirms none.
+const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOverride = null) => {
+    setProcessing(true, { label: window.printerLabelForTarget ? window.printerLabelForTarget(tid, slot) : null });
     // L124: callers can pass an explicit `spoolIdsOverride` subset (e.g. the
     // single topmost id when the target is a toolhead) so the rest of the
     // buffer stays untouched. Default = entire buffer (the legacy bulk-assign
@@ -1926,7 +1875,7 @@ const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoo
         spools: spoolIds,
         slot: slot,
         origin: 'buffer',
-        confirm_active_print: confirmActivePrint,
+        confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
     };
 
     fetch('/api/smart_move', {
@@ -1937,13 +1886,16 @@ const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoo
         .then(r => r.json())
         .then(res => {
             setProcessing(false);
-            // Backend safety net: target is an active toolhead. Prompt the
-            // user and retry with confirmActivePrint=true on approval.
+            // Backend safety net: the move touches an active head (the target,
+            // a bound slot's head, or a head a spool leaves). Prompt the user
+            // and retry with every head confirmed so far on approval.
             if (res.status === 'requires_confirm' && res.confirm_type === 'active_print') {
                 _confirmActivePrintScan({
                     tid, slot,
                     stateInfo: res.active_print || { printer_name: tid, state: 'ACTIVE' },
-                    onConfirm: () => performContextAssign(tid, slot, true, spoolIdsOverride),
+                    msg: res.msg,
+                    onConfirm: () => performContextAssign(
+                        tid, slot, window.unionConfirmHeads(confirmedHeads, res), spoolIdsOverride),
                 });
                 return;
             }

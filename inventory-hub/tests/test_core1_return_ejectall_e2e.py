@@ -315,7 +315,8 @@ def test_return_on_a_core1_shaped_printer_reaches_the_backend(
 
     page.click("#fcc-quickswap-yes")
     _until(page, lambda: be.bodies("/api/quickswap/return"), 5_000, "confirming the Return sent nothing")
-    assert be.bodies("/api/quickswap/return") == [{"toolhead": PRINTER_ID}]
+    # No banner showed (the printer is idle), so no head is confirmed (Group 39.1).
+    assert be.bodies("/api/quickswap/return") == [{"toolhead": PRINTER_ID, "confirmed_toolheads": []}]
     _toast(page, "no success toast after return_done", type_="success", contains=(str(SPOOL_ID),))
     assert errors == [], errors
 

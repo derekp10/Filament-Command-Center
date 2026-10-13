@@ -1206,40 +1206,69 @@ window.promptEditLocation = (spoolId, currentLoc) => {
             }).then((result) => {
                 if (result.isConfirmed) {
                     const newLoc = result.value;
-                    
-                    if (typeof setProcessing === 'function') setProcessing(true);
-                    const payload = {
-                        action: newLoc === "" ? 'force_unassign' : 'add',
-                        location: newLoc,
-                        spool_id: spoolId,
-                        origin: 'manual_override'
+                    const unassign = newLoc === "";
+
+                    // Group 39.5 — a yes-path. An active-print answer used to land in
+                    // the error branch as a 7 s toast with no way to proceed. `confirm`
+                    // is the heads for an add (39.1), or true for force_unassign,
+                    // whose route keeps the boolean.
+                    const sendOverride = (confirm) => {
+                        if (typeof setProcessing === 'function') setProcessing(true);
+                        const payload = {
+                            action: unassign ? 'force_unassign' : 'add',
+                            location: newLoc,
+                            spool_id: spoolId,
+                            origin: 'manual_override'
+                        };
+                        if (unassign) payload.confirm_active_print = confirm === true;
+                        else payload.confirmed_toolheads = Array.isArray(confirm) ? confirm : [];
+
+                        fetch('/api/manage_contents', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        })
+                        .then(r => r.json())
+                        .then(res => {
+                            if (typeof setProcessing === 'function') setProcessing(false);
+                            // The `add` answer (status requires_confirm) or the
+                            // force_unassign one (require_confirm + confirm_type). The
+                            // Swal has closed by now, so the confirm sits over the
+                            // details modal, and Cancel leaves the details open.
+                            const asks = res && res.confirm_type === 'active_print'
+                                && (res.status === 'requires_confirm' || res.require_confirm);
+                            if (asks) {
+                                if (window.logClientEvent) window.logClientEvent(
+                                    `⚠️ Force Location of #${spoolId} needs an active-print confirm: ${res.msg || 'a printer is printing'}`,
+                                    'WARNING');
+                                window.confirmActivePrint({
+                                    activePrint: res.active_print,
+                                    activePrints: res.active_prints,
+                                    msg: res.msg,
+                                    host: document.getElementById('spoolModal'),
+                                    onConfirm: () => sendOverride(unassign ? true : window.unionConfirmHeads(confirm, res)),
+                                });
+                                return;
+                            }
+                            // A rejected write still answers status 'success' and names
+                            // the spool in res.failures (2026-09-12).
+                            const failedWhy = res.status === 'success' ? (res.failures || {})[String(spoolId)] : null;
+                            if (!failedWhy && (res.status === 'success' || res.success)) {
+                                showToast('Location updated via override', 'success');
+                                const notDeployed = (res.auto_deploy_skipped || {})[String(spoolId)];
+                                if (notDeployed) showToast(`⚠️ #${spoolId} was placed, but NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
+                                document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+                                openSpoolDetails(spoolId, true); 
+                            } else {
+                                showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
+                            }
+                        })
+                        .catch(e => {
+                            if (typeof setProcessing === 'function') setProcessing(false);
+                            showToast('Override Network Error', 'error');
+                        });
                     };
-                    
-                    fetch('/api/manage_contents', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    })
-                    .then(r => r.json())
-                    .then(res => {
-                        if (typeof setProcessing === 'function') setProcessing(false);
-                        // A rejected write still answers status 'success' and names
-                        // the spool in res.failures (2026-09-12).
-                        const failedWhy = res.status === 'success' ? (res.failures || {})[String(spoolId)] : null;
-                        if (!failedWhy && (res.status === 'success' || res.success)) {
-                            showToast('Location updated via override', 'success');
-                            const notDeployed = (res.auto_deploy_skipped || {})[String(spoolId)];
-                            if (notDeployed) showToast(`⚠️ #${spoolId} was placed, but NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
-                            document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-                            openSpoolDetails(spoolId, true); 
-                        } else {
-                            showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
-                        }
-                    })
-                    .catch(e => {
-                        if (typeof setProcessing === 'function') setProcessing(false);
-                        showToast('Override Network Error', 'error');
-                    });
+                    sendOverride(unassign ? false : []);
                 }
             });
         });

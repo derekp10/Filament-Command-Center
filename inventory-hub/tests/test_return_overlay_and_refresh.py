@@ -164,12 +164,22 @@ def test_quickswap_refreshes_manage_view_after_yes(page: Page, open_manage_modal
         f"(residents: {resident_ids})"
     )
 
-    # Restore by returning the spool back to the box.
-    try:
-        requests.post(
-            f"{api_base_url}/api/quickswap/return",
-            json={"toolhead": toolhead},
-            timeout=5,
-        )
-    except Exception:
-        pass
+    # Restore by returning the spool back to the box. Group 39.2: Return now asks
+    # when the printer is printing, and a test must never confirm a real print, so
+    # a printing printer fails loudly here. This used to sit in a bare try/except
+    # with no check, which would have left the spool on the head silently.
+    r = requests.post(
+        f"{api_base_url}/api/quickswap/return",
+        json={"toolhead": toolhead},
+        timeout=15,
+    )
+    body = r.json()
+    if body.get("action") == "return_requires_confirm":
+        printer = (body.get("active_print") or {}).get("printer_name") or toolhead
+        pytest.fail(f"{printer} is printing, so the restore Return needs a confirm, and a test never "
+                    f"confirms a real print. Spool {spool_id} is still on {toolhead}: return it by hand.")
+    assert body.get("action") == "return_done", f"the restore Return failed: {body}"
+    home = body.get("box") or box
+    back = requests.get(f"{api_base_url}/api/get_contents?id={home}", timeout=5).json()
+    assert str(spool_id) in {str(x.get("id")) for x in (back or [])}, (
+        f"spool {spool_id} did not go back to {home} (contents: {back})")

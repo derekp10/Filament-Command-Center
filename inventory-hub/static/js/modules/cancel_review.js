@@ -215,6 +215,39 @@
         }).join('');
     }
 
+    // Group 43.4: the heads a partial review's print used that had no spool when
+    // it ended (emptied mid-print). Each gets a picker like a no_spool line; one
+    // left unpicked is reported as uncharged at Apply instead of vanishing.
+    function unresolvedLinesHtml(rec) {
+        const un = rec.unresolved_usage || {};
+        const keys = Object.keys(un).sort((a, b) => Number(a) - Number(b));
+        if (!keys.length) return '';
+        const atEnd = Array.isArray(rec.heads_at_end) ? rec.heads_at_end : [];
+        const lead = `
+            <div class="fcc-cr-unresolved-note" style="margin-top:8px;color:#e6c074;font-size:0.92rem;">
+                ⚠️ No spool was loaded on ${keys.length === 1 ? 'this head' : 'these heads'} when the print
+                ended. Pick the spool it used, or leave it: its grams are then logged as uncharged.
+            </div>`;
+        return lead + keys.map((pos) => {
+            const head = atEnd.find((h) => String(h.position) === String(pos));
+            const where = head ? `T${esc(pos)} · ${esc(head.toolhead)}` : `T${esc(pos)}`;
+            const line = `pos:${pos}`;
+            return `
+                <div class="fcc-cr-unline" data-pos="${esc(pos)}" data-line="${esc(line)}"
+                     style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #2b2c30;">
+                    <span style="color:#eee;min-width:120px;">${where} used</span>
+                    <div class="input-group input-group-sm" style="width:120px;flex:none;">
+                        <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
+                               data-line="${esc(line)}" value="${fmtG(un[pos])}" step="0.01" min="0"
+                               autocomplete="off" style="font-size:1.05rem;" />
+                        <span class="input-group-text bg-dark text-light border-secondary">g</span>
+                    </div>
+                    <span style="color:#9aa;">→</span>
+                    ${pickSelectHtml(line, null, '', atEnd)}
+                </div>`;
+        }).join('');
+    }
+
     // Unresolved reviews (2026-06-13): usage couldn't be finalized at print-end.
     //   no_spool         — real grams computed, but NO spool was bound to the
     //                      toolhead. Apply RE-RESOLVES to whatever's bound now.
@@ -334,6 +367,7 @@
                     ${banner}
                 </div>
                 ${rows}
+                ${unresolvedLinesHtml(rec)}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
                             data-armed="0"
@@ -630,6 +664,24 @@
                     });
                     if (missing) {
                         toast('Type the #id of the spool to charge (or pick one).', 'warning', 7000);
+                        return;
+                    }
+                    // 43.4: a head that had no spool, picked here, is charged by
+                    // position; one left unpicked is reported as uncharged.
+                    let unNoId = null;
+                    card.querySelectorAll('.fcc-cr-unline').forEach((ln) => {
+                        const line = ln.dataset.line;
+                        const sel = ln.querySelector('.fcc-cr-pick');
+                        const sid = pickedSid(card, line);
+                        if (sel && sel.value === 'other' && sid == null) { unNoId = ln.dataset.pos; return; }
+                        const g = parseFloat((ln.querySelector('.fcc-cr-pgrams') || {}).value);
+                        if (sid && !Number.isNaN(g) && g > 0) {
+                            charges.push({ position: Number(ln.dataset.pos), sid, grams: g });
+                            redirected = true;
+                        }
+                    });
+                    if (unNoId != null) {
+                        toast(`Type the #id of the spool T${unNoId} used (or pick one).`, 'warning', 7000);
                         return;
                     }
                     if (redirected) payload.charges = charges; else payload.updates = updates;

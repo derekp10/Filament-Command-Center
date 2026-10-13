@@ -255,3 +255,33 @@ def test_a_row_with_no_known_capacity_says_so(page: Page, base_url, reset_dom_st
     assert page.evaluate("() => document.querySelector('.fcc-cr-grams').hasAttribute('max')") is False
     page.fill(".fcc-cr-grams", "3")
     page.wait_for_function("document.querySelector('.fcc-cr-preview').textContent.includes('?')", timeout=3_000)
+
+
+# Group 43.4: a partial review keeps the heads that had no spool when it ended.
+PARTIAL_WITH_EMPTY_HEAD = dict(
+    PARTIAL, total_grams=7.5, unresolved_usage={"1": 5.0},
+    heads_at_end=[{"toolhead": "RCOI-1", "position": 0, "sid": None},
+                  {"toolhead": "RCOI-2", "position": 1, "sid": None},
+                  {"toolhead": "RCOI-3", "position": 2, "sid": 97}])
+
+
+def test_an_emptied_head_is_offered_and_its_pick_is_sent_by_position(page: Page, base_url, reset_dom_state_js):
+    """HEAD proof: the card had no line for the emptied head at all."""
+    be = _open(page, base_url, reset_dom_state_js, [PARTIAL_WITH_EMPTY_HEAD])
+    _wait_heads(page, "pos:1")
+    text = page.evaluate("() => document.querySelector('.fcc-cr-card').textContent")
+    assert "T1 · RCOI-2" in text and "No spool was loaded" in text, text
+    page.select_option('.fcc-cr-pick[data-line="pos:1"]', "96")
+    page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
+    _until(page, lambda: be.confirms, 5_000, "Confirm never posted")
+    assert be.confirms[0].get("charges") == [
+        {"row": 97, "sid": 97, "grams": 2.5}, {"position": 1, "sid": 96, "grams": 5.0}], be.confirms[0]
+
+
+def test_an_emptied_head_left_unpicked_keeps_the_updates_shape(page: Page, base_url, reset_dom_state_js):
+    """Unpicked, its grams stay on the server's record, which reports them as
+    uncharged at Apply; the card sends the old shape for the kept row."""
+    be = _open(page, base_url, reset_dom_state_js, [PARTIAL_WITH_EMPTY_HEAD])
+    page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
+    _until(page, lambda: be.confirms, 5_000, "Confirm never posted")
+    assert be.confirms[0].get("updates") == {"97": 2.5} and "charges" not in be.confirms[0], be.confirms[0]

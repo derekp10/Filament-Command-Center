@@ -147,6 +147,9 @@ function prelude() {
     return Promise.resolve({
       ok: status < 400, status,
       json: () => Promise.resolve(JSON.parse(JSON.stringify(payload))),
+      // Like a real Response: Quick-Swap / Return read text and parse it, so a
+      // non-JSON answer can be reported (Group 39.8).
+      text: () => Promise.resolve(JSON.stringify(payload)),
     });
   };
   globalThis.fetchT = (url, opts) => globalThis.fetch(url, opts);
@@ -292,7 +295,7 @@ def test_return_on_core1_reaches_the_backend_for_its_same_named_head(tmp_path):
     assert _titles(res) == ["Return the spool on CORE1?"], res["overlays"]
     assert "CR-DB-1 slot 2" in res["overlays"][0]
     assert _gets(res, "/api/get_contents?id=") == ["/api/get_contents?id=CORE1"] * 2, res["fetches"]
-    assert _posts(res, "/api/quickswap/return") == [{"toolhead": "CORE1"}]
+    assert _posts(res, "/api/quickswap/return") == [{"toolhead": "CORE1", "confirmed_toolheads": []}]
     assert any(t["type"] == "success" for t in res["toasts"]), res["toasts"]
     assert res["unhandled"] == []
 
@@ -307,7 +310,7 @@ def test_return_on_xl_still_picks_its_first_loaded_head(tmp_path):
     assert "virtual printer" in res["overlays"][0]
     assert _gets(res, "/api/get_contents?id=") == [
         "/api/get_contents?id=XL-1", "/api/get_contents?id=XL-2", "/api/get_contents?id=XL-2"], res["fetches"]
-    assert _posts(res, "/api/quickswap/return") == [{"toolhead": "XL-2"}]
+    assert _posts(res, "/api/quickswap/return") == [{"toolhead": "XL-2", "confirmed_toolheads": []}]
     assert res["unhandled"] == []
 
 
