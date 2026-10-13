@@ -15,7 +15,10 @@ _Checkpoint 09:35. The run started at `dev` @ `c895d36` (the plan commit, on top
   "⏳ Checking XL…" while it waits on a printer. ⚠️ **After you deploy it, reload every open FCC tab**: a page
   loaded before Group 39 is told "This FCC page is out of date … reload" when it confirms a mid-print move.
 - **Needs you:** the Questions below (15, each with my recommended answer), the manual checks (Group 39's are
-  new: 39-a to 39-n), and pushing `dev`. Group 45's filler items were not started.
+  new: 39-a to 39-n), and pushing `dev`.
+- **Stopped at 09:40, after Group 39, rather than start Group 45's filler** (45.1(c), the sweep wall-clock
+  warning, is the next item, about 30-45 min). It's a weekday morning and this subscription is shared with your
+  paid work, so I left the rest of the window to you. The main tree is on `dev` @ the latest handoff commit, clean.
 
 ## Landed
 
