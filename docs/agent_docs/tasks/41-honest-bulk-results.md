@@ -8,9 +8,15 @@
 > ([open-decisions-2026-09-13.md](open-decisions-2026-09-13.md)). Nothing has been built yet.
 > All code references were read on `dev` @ `be9f045`. Line numbers drift, so re-read before editing.
 >
-> ⛔ **Hard dependency:** `fix/core1-return-ejectall-guard` (`1fb5678` + `76398cb`, committed locally,
-> not pushed or merged) refuses a blank location in `triggerEjectAll` and `clear_location`, the same
-> two functions 41.1 and 41.2 rewrite. Merge it into `dev` first, then branch from `dev`.
+> ✅ **Hard dependency SATISFIED (2026-10-08):** `fix/core1-return-ejectall-guard` (`1fb5678` + `76398cb`)
+> was merged into `dev` as `25168a8` and released in `main e5b3a82`. It refuses a blank location in
+> `triggerEjectAll` and `clear_location`, the same two functions 41.1 and 41.2 rewrite. Branch from `dev`.
+>
+> **🔄 2026-10-12 (`/refresh-groups`):**
+> - Q1 was answered 2026-09-18 (Unassigned, after one "unassign?" prompt). Q2 is confirm-only. **Q3 and Q4 are still open.**
+> - **41.3 grew:** `DELETE /api/locations` also ignores `save_locations_list()`'s result.
+> - **New 41.9:** three blank/sentinel-input guards from the "More destructive doors" item that no group owned.
+> - The "Placed in Group 22" deduct items now live in [Group 43](43-deduct-recovery.md) 43.3 / 43.4.
 
 ---
 
@@ -34,17 +40,24 @@
 | **41.1** | 🟠 *Found while briefing the six open decisions*, item 3: **"Eject All on a Printer-row view unloads every head mid-print with no prompt."** | Fix direction as filed: *"skip head-loaded spools, as Bulk Move does."* D4's Printer-view block closes the user-facing door. 41.1 also adds that skip underneath. |
 | **41.2** | Same Eject All item, part 1: **"Eject all (`clear_location`…) ignores every eject's result."** | *"Fix direction: branch on the real per-spool result; return `ejected` / `needs_confirm` / `failed` lists; toast failures at ≥ 7 s."* |
 | **41.3** | Same item, part 2: **"Location delete… answers `success: true` when the cascade's unassign writes fail…"** | Same fix direction. |
+| **41.3** | _(added 2026-10-12)_ **"`DELETE /api/locations` ignores `save_locations_list()`'s result — both delete paths report success after a failed or refused save (the 2026-09-29 hotfix fixed only the POST)."** | Same endpoint and the same honesty contract. Branch on the save boolean on both delete paths, and return a failure the frontend toasts at ≥ 7 s. `deleteLoc` (`inv_loc_mgr.js`) must read the response. |
 | **41.4** | Same item, part 3: **"Undo (`perform_undo`) always answers `success: true`…; `triggerUndo` discards the response."** | Same fix direction. |
 | **41.5** | 🟡 *Bulk-move tally and slot unseat can report success for rejected writes*, item 1: **the tally trusts a fail-open readback.** | Filed fix: *"always union `failures` into `failed`; read back with the strict reader and report the tally as unverified on an exception."* |
 | **41.6** | Same item, item 2: **a rejected unseat still seats the incoming spool, so two spools claim one slot.** | Filed fix: *"record a failure and don't seat the incoming spool."* |
 | **41.7** | Same item, item 3: **"Bulk Move's 'source is printing' confirm can never fire on real data."** | *"To decide: whether the confirm is dead code to remove, or should cover a real case."* → **Q3** below. |
 | **41.8** | Derek's principle, under D4: **Room-only spool locations are hard to find.** | *"A spool whose location is only a Room is a pain to find ('assuming it's even still in the room and somehow didn't get a location update'). Bulk filament still in its purchase boxes is the tolerated exception."* Implication to check: *"the eject fallback sends a box/cart/shelf spool with no saved home UP to its Room's loose pile, which creates exactly these Room-only spools."* → **Q1** below. |
+| **41.9** | _(added 2026-10-12)_ 🟠 *More destructive doors found while building and planning the 2026-09-13 follow-ups*, items 3–5. Items 1–2 are already 41.3. **(3)** *"`/api/smart_move` accepts a blank location item… a `""` item expands to everything the matcher returns for `""`: every Unassigned spool directly, plus located spools with no trail as ghosts."* **(4)** *"`clear_location` still accepts `UNASSIGNED`. Its `check_unassigned` path targets every spool with no location, and the blank-location guard on `fix/core1-return-ejectall-guard` doesn't cover it."* **(5)** *"`/api/get_contents?id=` with a blank id returns that same everything-set. Read-only, low risk."* | Reject blank items at the `/api/smart_move` route (filed fix). Refuse `UNASSIGNED` in `clear_location` the same way the blank location is refused, unless Derek wants Eject All on the Unassigned view to mean something; nothing calls it that way today. Answer a blank `get_contents` id with an empty list or a 400. Pin each with a hermetic test that fails on HEAD. |
 
 ### Depended on, not re-planned
 
 - 🟠 *Found while briefing the six open decisions*, item 2: **"A `CMD:EJECTALL` scan with no location open targets the Unassigned pile."** This is being fixed on **`fix/core1-return-ejectall-guard`**. This group assumes that refusal exists and doesn't re-plan it.
 
-### Placed in Group 22, not here
+### Placed in Group 22, not here → now [Group 43](43-deduct-recovery.md)
+
+> **2026-10-12:** the "unblocked 22.5" below was never filed in Group 22's task file. By Derek's call it
+> now lives in [Group 43 — Deduct Recovery](43-deduct-recovery.md) (43.4 = the dropped head, 43.3 = the
+> `no_spool` card that names no spool), so it isn't gated behind Group 22's data blocker. The analysis
+> below is kept as the record.
 
 - 🟡 *Found while briefing the six open decisions*, item 6: **the deduct side** (*"A cancelled print's review silently drops an uncharged head"*; *"A `no_spool` Review card never names a spool"*).
   - **Verdict: [Group 22](22-filabridge-phase2-detection-deduct-followups.md).**

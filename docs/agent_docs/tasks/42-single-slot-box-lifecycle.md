@@ -8,7 +8,12 @@
 > Built from Derek's single-slot box release rule and his one-spool principle ([open-decisions-2026-09-13.md](open-decisions-2026-09-13.md) § D3).
 > Evidence: [active-print-chain-investigation-2026-09-12.md](active-print-chain-investigation-2026-09-12.md) (I5-8, I5-9, I5-10, I5-15, I5-17, and the verifier's "A refused eject still detaches…") and [active-print-chain-diff-reviews-2026-09-12.md](active-print-chain-diff-reviews-2026-09-12.md) (R1-01, R1-03, R3-06).
 > Every `file:line` was re-read on `dev` @ `be9f045`. Re-grep the named function before editing.
-> **Sweep-triage item 3** (the five E2E fixtures that borrow PM-DB-1 → XL-1 and "restore" whatever they saw) is being fixed separately on `test/sweep-reds-hermetic`. This group's tests must not borrow a real dev box either.
+> **Sweep-triage item 3** (the five E2E fixtures that borrow PM-DB-1 → XL-1 and "restore" whatever they saw) is fixed on `test/sweep-reds-hermetic`, merged into `dev` as `75e8279` on 2026-10-08. This group's tests must not borrow a real dev box either: use `conftest.borrow_box_bindings` with its fixed baselines.
+> **🔄 2026-10-12 (`/refresh-groups`):**
+> - **Q-B is answered** (eject that head's one loaded spool).
+> - **Q-A is answered** (the box follows), but with Derek's caveat: remember where the spool was before the box. That is still an **open design question before 42.6** (see the Q-A section).
+> - The standalone "Unattaching a single-spool box (PolyDryer)" index row is folded in as item **G**.
+> - Two related groups were filed: [Group 43](43-deduct-recovery.md) shares the auto-archive edge that 42.3c touches, and [Group 46](46-quick-fix-sweep-2026-10.md) fixes a deposit-card wrong-spool race on the same "one loaded spool" theme.
 
 ---
 

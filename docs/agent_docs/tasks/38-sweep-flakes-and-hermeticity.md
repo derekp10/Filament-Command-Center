@@ -4,7 +4,13 @@
 **Estimated effort:** ~4–7 hours (6 flakes + 5 test-infra residuals)
 **Risk:** **LOW.** Test-infra only — no product code expected.
 
-> **Status: `PARTIAL`** — filed 2026-08-06; **hermeticity residuals DONE 2026-08-07**
+> **Status: ✅ `DONE` — merged to `dev` 2026-08-13 (`367e9c9`), released to `main` 2026-10-08 (`e5b3a82`).**
+> _(Flipped by the 2026-10-12 `/refresh-groups`; the `PARTIAL` history below is kept. `/finish-group` never
+> ran, so this group's buglist items are still unarchived. That bookkeeping is
+> [Group 47](47-buglist-reconciliation.md) item 47.2. The 37.1 fix now lives in
+> [Group 46](46-quick-fix-sweep-2026-10.md) 46.5.)_
+>
+> Filed 2026-08-06; **hermeticity residuals DONE 2026-08-07**
 > (`2d36a62`, branch `feature/group-38-hermeticity-residuals`, stacked on Group 36).
 > **38.7 / 38.8 / 38.9 / 38.10 / 38.11 are all closed** (38.9 by Group 36).
 >

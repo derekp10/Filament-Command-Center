@@ -4,7 +4,10 @@
 **Effort spent:** ~1 session (grounding + build + adversarial review + fixes)
 **Risk:** HIGH blast radius, MEDIUM change size — every change here had to be provably value-preserving.
 
-> **Status: ✅ BUILT, pending merge to `dev`.** Commits `43389c6` (the fix) and
+> **Status: ✅ DONE — merged to `dev` 2026-08-13 (`415822b`), released to `main` 2026-10-08 (`e5b3a82`).**
+> _(Status flipped by the 2026-10-12 `/refresh-groups`; `/finish-group` never ran for this group, so its
+> buglist item is still unarchived. That bookkeeping is [Group 47](47-buglist-reconciliation.md) item 47.1.)_
+> Commits `43389c6` (the fix) and
 > `a9a582d` (adversarial-review fixes). Full offline sweep **1654 passed / 1 failed** —
 > the failure is the pre-existing blank-`LocationID` repro row kept for [Group 37.1](37-location-system-redesign.md).
 >
@@ -46,6 +49,8 @@ which is feature drift, not loss. Genuinely suspicious: **#4** (extras entirely 
 Dev is missing sibling extras that **prod still has**, from that already-fixed historical bug.
 A read-only prod→dev restore would recover them. Filed as a follow-up, not part of this group —
 prod (`:7912`) is the reference, and *never guess-restore*.
+_(2026-10-12: it never actually reached the buglist. It is now routed to [Group 45](45-sweep-load-tolerance-test-hygiene.md)
+45.6, the dev-data refresh from prod.)_
 
 ---
 

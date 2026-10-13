@@ -6,6 +6,11 @@
 
 > **Status: `TODO`.** Planned 2026-09-13 from Derek's D1 and D6 answers
 > ([open-decisions-2026-09-13.md](open-decisions-2026-09-13.md)). Nothing has been built yet.
+> **🔄 2026-10-12 (`/refresh-groups`):** unblocked.
+> - Both prerequisite branches merged into `dev` on 2026-10-08 (`fix/core1-return-ejectall-guard` → `25168a8`, `test/sweep-reds-hermetic` → `75e8279`) and were released in `main e5b3a82`.
+> - Q1 was answered 2026-09-18 (keep today's overlay).
+> - The "unblocked 22.5" companion to 39.4 now lives in [Group 43](43-deduct-recovery.md) 43.4.
+> - The deposit-card wrong-spool race (Derek, 2026-10-08) is in [Group 46](46-quick-fix-sweep-2026-10.md) 46.1. It touches `doAssign`'s caller, but not this group's confirm contract.
 > All code references were read on `dev` @ `be9f045`. Line numbers drift, so re-read before editing.
 
 ---

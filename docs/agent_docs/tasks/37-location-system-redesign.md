@@ -9,6 +9,12 @@ prerequisite for any data-touching phase.
 
 > **Status: `TODO` — SCOPED, NOT STARTED.** Filed 2026-08-06 (`/refresh-groups`); scoped 2026-08-03.
 > **Forks 2, 3 and 4 were DECIDED 2026-08-07 (see below); only fork 1 remains open.**
+> **🔄 2026-10-12 (`/refresh-groups`):**
+> - **37.1 moved to [Group 46](46-quick-fix-sweep-2026-10.md) 46.5** (Derek's call). It was root-caused 2026-10-08, its fix doesn't depend on fork 1, and it carries the two standing sweep reds.
+> - **Prod has a blank-ID row too:** `"Unknown Location"` (Virtual Room), hand-made, not dev-only test residue. Both blank rows stay until Derek says otherwise.
+> - **New cross-references:**
+>   - On-device filament storage (evaluate here, per the buglist).
+>   - [Group 44](44-printer-first-class.md)'s "what identifies a printer?", which is **fork 1 applied to printers**. Decide them together.
 > Derek's framing: *"I think we might need a refactor on how this whole location system works and
 > displays… I feel like things need a re-design before we dig deep into developing a
 > preserve-row-structure path."*
@@ -69,13 +75,15 @@ I move* / *what may I destroy*). **Only the third needs to stay flat.**
 
 | # | Item | Notes |
 |---|---|---|
-| **37.1** | **Blank LocationID is accepted, then "already exists" on re-edit** — with no value visible on the field or in the Location List | ⚠️ **Derek's repro row is LIVE in `data/locations.json`** — index 0, `{"LocationID": "", "Name": "TestCart", "Type": "Cart", "Max Spools": "0", "parent_id": "CR"}`. **Do NOT delete it without asking.** It costs **TWO reds on every full sweep** (see below). |
+| **37.1** | **Blank LocationID is accepted, then "already exists" on re-edit** — with no value visible on the field or in the Location List | ➡️ **MOVED to [Group 46](46-quick-fix-sweep-2026-10.md) 46.5 on 2026-10-12** (root-caused 2026-10-08; its minimal fix doesn't depend on fork 1). Kept here as the record. ⚠️ **Derek's repro row is LIVE in `data/locations.json`** — index 0, `{"LocationID": "", "Name": "TestCart", "Type": "Cart", "Max Spools": "0", "parent_id": "CR"}`. **Do NOT delete it without asking.** It costs **TWO reds on every full sweep** (see below). |
 | **37.2** | **Unassigned list overflow on a new location's Manage view** — the list pushes UI elements off the visible screen | Wants: scrollable within the available viewport + easily collapsible from anywhere in the list, so the user can always reach the lower UI elements. |
 | **37.3** | **Parent/child creation is still tedious** | The `+` on a parent doesn't autofill the child. Derek also wants **smart LocationID suggestions** and is openly questioning whether human-readable composite ids are still the right model (`CR-TC-R1` is hard to remember, set up, and track when each new row must be created from scratch). |
 | **37.4** | **Cart-display fix** (a cart shows a transitive Total but lists zero contents) | ✅ **Decision 2026-08-03: folded in here rather than shipped as a point fix** — the redesign changes those semantics anyway. |
 | _(x-ref)_ | Group 34 **auto-gen-id finickiness** — breadcrumb-id doesn't re-sync on parent change; numbering isn't topology-aware (always `R1`, never `R2`) | Owned by **Group 34**; land it after this group settles the model. |
 | _(x-ref)_ | Group 34 **S5** (add-redesign phase 4 — "create missing levels" + demote the shelf-grouping boot migration) | Owned by **Group 34**; ⏸️ deferred, and its plan **mandates a `locations.json` backup as step 1**. |
 | _(x-ref)_ | The older buglist item *"adding sub-locations is messy"* | Same surface as 37.3. |
+| _(x-ref, 2026-10-12)_ | **On-device filament storage** — Derek: *"Printers sometimes have on device filament storage, spool roll holders, etc. Perhaps we should make a new slot type, or virtual slot…"* The 2026-09-29 investigation: *"a new storage Type (e.g. 'Spool Holder') parented under the Printer row, NOT added to `TOOLHEAD_TYPES`; if it should feed toolheads, widen the Dryer-Box-only feeder checks (`== DRYER_BOX_TYPE`) to a feeder-type set and reuse `slot_targets`. Evaluate with the location-system redesign."* | Evaluate here. If it's adopted, it attaches to the printer model that [Group 44](44-printer-first-class.md) defines. |
+| _(x-ref, 2026-10-12)_ | [Group 44](44-printer-first-class.md)'s **"what identifies a printer?"** | This is **fork 1 applied to printers**. Decide them together, or at least consistently. |
 
 ### 🧪 The two sweep reds 37.1 currently causes
 
