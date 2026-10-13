@@ -754,7 +754,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     touched: typing.List[tuple] = [(head, 'source', sids) for head, sids in sources.items()]
     touched.append((target, 'destination'))
     tgt_row = tgt_info
-    if tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot:
+    # The bound head counts only when the chain will load it (I1-06): Return
+    # parks a spool with auto_deploy=False, and must not ask about a head it
+    # never touches.
+    if tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot and auto_deploy:
         bound = locations_db.bindings_from_row(tgt_row)
         if str(target_slot).isdigit():
             bound_th = bound.get(str(target_slot)) or bound.get(str(int(target_slot)))
