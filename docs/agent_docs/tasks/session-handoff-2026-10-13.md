@@ -5,13 +5,14 @@ it is updated after every milestone and committed on `dev` at every merge.
 
 ## Morning summary
 
-_Checkpoint 05:35. The run started at `dev` @ `c895d36` (the plan commit, on top of `e818d0c`)._
+_Checkpoint 06:05. The run started at `dev` @ `c895d36` (the plan commit, on top of `e818d0c`)._
 
 - **Landed on `dev` (nothing pushed):** Group 46 (`PARTIAL`, only 46.3 left), both standalone fixes, and Group 43
   (`PARTIAL`: 43.1, 43.5, 43.3's review-card spool picker and 43.6, plus 16 fixes from its adversarial review;
   43.2 and 43.4 left). Each merge passed offline, targeted E2E and, where the frontend changed, a triaged full sweep.
-- **Group 39 (confirm on every door):** parked on `feature/group-39-confirm-on-every-door`. Every engine change is
-  done and tested; most of the frontend is written but **not yet run** (see Parked for the exact list and order).
+- **Group 39 (confirm on every door):** parked on `feature/group-39-confirm-on-every-door`, about three quarters
+  built and **all of it tested** (offline + the 21 E2E files for the doors it changes). Left: 39.3's "Checking XL…"
+  pill, 39.4's overlay unification, 43.4, then its review and sweep (see Parked).
 - **Needs you:** the Questions below (15, each with my recommended answer); the manual checks; and pushing `dev`.
 
 ## Landed
@@ -89,44 +90,38 @@ _Checkpoint 05:35. The run started at `dev` @ `c895d36` (the plan commit, on top
 
 ### Group 39 — Confirm on Every Door → parked on `feature/group-39-confirm-on-every-door`
 
-Built in a git worktree (`<scratchpad>/wt-g39`, branch based on dev `35d439b`), because the main tree was busy with
-Group 43's review and sweep. **The engine changes are tested; the frontend and route halves are written but have
-not run** (each untested commit says so in its message). The worktree's `--offline` run (as of `6335b00`) is
-green apart from the 2 `test_external_parsers` tests, which need the git-ignored data/config a worktree doesn't have.
+The branch is checked out in the main tree, rebased on `dev` @ `d9f954b` (after Group 43). It was started in a
+scratchpad worktree while Group 43 owned the main tree; that worktree is now detached and can be deleted.
+**Everything below is tested** unless the row says otherwise: `--offline` 2028 passed (the TestCart red only), and
+the 21 E2E files that drive a changed door pass apart from two Quick-Swap button tests that fail only after other
+tests (3/3 solo). Every new pin was proven red on `dev`'s code first. No adversarial review or full sweep yet.
 
-| Commit | Sub-task | What it does | Pin (proven red on the pre-change code) |
+| Commit | Sub-task | What it does | Pin |
 |---|---|---|---|
-| `1e5127d` | 39.1 prep | Extracts the real-engine harness into `tests/move_engine_harness.py` (FakeSpoolman / WireSpoolman / run_move) | (refactor; the chain-confirm file passes unchanged) |
-| `73c0752` | 39.1 engine | `confirm_active_print` is True / falsy / **a list of head ids**; `_uncovered_active_heads` asks ONE confirm over destination + feeds heads, never probes a covered head; the shared answer shape (`active_prints`, `fed_heads`, `can_store`, `target_slot`); the pre-write contract comment block | `tests/test_scoped_confirm_39_1.py` |
-| `b427549` | 39.7 | Smart Load's resident list is read **strictly**: a Spoolman blip refuses the load (`status: error`, a failure per spool, ERROR log) instead of stacking two spools on a head. Mock pass found by a probe plugin (18 tests in 6 files) | `tests/test_smart_load_fail_closed_39_7.py` |
-| `7cc343a` | 39.4 engine | **Ask before moving a spool OFF a printing head (D6)**: step 4 reads each moving spool's record (only when the confirm doesn't cover every head) → role `source`; one answer over source/destination/feeds; Derek's wording ("#42 is loaded on XL-3. Moving it to CR-CT-2-R1 means FCC stops charging this print to it. Continue?"); an unreadable record fails closed; the 39.7 resident read moved up to step 4 so the message can name the spool a load unloads | `tests/test_source_confirm_39_4.py` |
-| `b679182` | 39.2 engine | I1-06: a named slot's binding is walked only when the move auto-deploys (Return parks with `auto_deploy=False`) | `tests/test_bound_slot_walk_39_2.py` |
-| `6335b00` | 39.6 backend | `_eject_destination` (pure; `perform_smart_eject` runs it); the eject route asks "printing" + "no saved home" in ONE answer (`confirm_types`); the unassign prompt names the spool and where it is (old-text pin flipped) | `tests/test_one_eject_confirm_39_6.py` |
-| `d5ebe94` | 39.1 wire + 39.2 routes | ⚠️ **WIP, UNTESTED** (written while Group 43's sweep owned the container). `logic.confirmed_heads` on the five move doors (a bare `confirm_active_print: true` covers no head); Quick-Swap/Return drop their hard-coded `True` and answer `quickswap_requires_confirm` / `return_requires_confirm`; the frontend sends `confirmed_toolheads` everywhere, always the UNION of heads confirmed so far (`window.unionConfirmHeads`, so two printing heads can't ping-pong the user) | none yet |
-| `792ae51` | 39.9 | `CMD:TRASH` while a bulk move is armed: an info toast + log, no confirm behind the panel | `test_trash_scan_during_a_bulk_move_opens_no_confirm` (⚠️ **not yet run**) |
-| `c59c8b8` | 39.6 frontend | `doEject`'s one Yes answers a combined prompt (both flags) | `test_one_yes_answers_both_print_and_unassign` (⚠️ **not yet run**) |
-| `ee561b8` | 39.8 | `return_failed` / `quickswap_failed` answer 409 (bodies unchanged; 4 pins flipped); Quick-Swap/Return read a non-JSON answer as "server answered 502" | pins flipped, ⚠️ **not yet run**; the failure-toast E2E is still to write |
-| `52ef054` | 39.5 + 39.4's shared confirm | `window.confirmActivePrint` (inv_core.js): the ONE shared active-print confirm (server `msg`, QR pair, the proven keyboard contract, once-only); Force Location is its first caller: its `add` / `force_unassign` active-print answers get a yes-path instead of a dead-end 7 s error | 3 route-stubbed pins in `test_move_result_consumers_e2e.py` (⚠️ **not yet run**) |
-| `e10d4f4` | 39.3 backend | `/api/printer_state` answers `no_credentials` (checked before probing) instead of "unreachable" for a printer with no login | `tests/test_printer_state_reasons_39_3.py` (⚠️ **not yet run**) |
+| `8074d0c` | 39.1 prep | The real-engine move harness, extracted to `tests/move_engine_harness.py` | (refactor) |
+| `0a47e42` | 39.1 engine | `confirm_active_print` is True / falsy / **a list of head ids**; `_uncovered_active_heads` asks ONE confirm and never probes a covered head; the shared answer shape; the pre-write contract comment block | `test_scoped_confirm_39_1.py` |
+| `8390b39` | 39.7 | Smart Load's resident list is read **strictly**: a Spoolman blip refuses the load instead of stacking two spools on one head | `test_smart_load_fail_closed_39_7.py` |
+| `fb7a077` | 39.4 engine | **Ask before moving a spool OFF a printing head (D6)**, in your wording ("#42 is loaded on XL-3. Moving it to CR-CT-2-R1 means FCC stops charging this print to it. Continue?"); an unreadable record fails closed | `test_source_confirm_39_4.py` |
+| `e92440a` | 39.2 engine | A named slot's binding is walked only when the move deploys (I1-06) | `test_bound_slot_walk_39_2.py` |
+| `804ca88` + `9360ff6` | 39.6 | `_eject_destination` (pure, the code `perform_smart_eject` runs); ejecting a homeless spool off a printing head is ONE prompt and one Yes, not three | `test_one_eject_confirm_39_6.py`, `test_one_yes_answers_both_print_and_unassign` |
+| `364c035` + `1c92673` + `81ebc7c` | 39.1 wire, 39.2 routes | The five move doors read `confirmed_toolheads`; a bare legacy `true` covers no head; Quick-Swap and Return re-check on the server (`quickswap_requires_confirm` / `return_requires_confirm`); every Yes sends the UNION of heads confirmed so far. ⚠️ `364c035` says "UNTESTED" in its message; `1c92673` and `81ebc7c` are its tests | `test_confirmed_heads_routes_39_1.py`, the flipped pins |
+| `98748d5` | 39.9 | `CMD:TRASH` while a bulk move is armed explains instead of opening a confirm behind the panel | `test_trash_scan_during_a_bulk_move_opens_no_confirm` |
+| `5810179` + `3ce3c43` | 39.8 | Quick-Swap/Return failures answer 409; a non-JSON answer reads "server answered 502" | the failure-toast E2E (5) |
+| `a446bcc` | 39.5 + the shared confirm | `window.confirmActivePrint` (inv_core.js), the one shared active-print confirm; Force Location gets a yes-path through it | 3 Force Location E2E |
+| `e7818e0` | 39.3 backend | `/api/printer_state` answers `no_credentials` for a printer with no login (it said "unreachable") | `test_printer_state_reasons_39_3.py` |
+| `ee89219` | 39.2 test hygiene | The Return-overlay test's restore asserts it landed (it was a silent `try/except`) | — |
+| `70d1bd9` | docs | CLAUDE.md: "Move confirms name their heads", plus the two engine rows | — |
 
-**Next, in order** (all in the main tree, where E2E runs):
+**Next, in order:**
 
-1. Rebase onto `dev` (Group 43 merged; no file overlap expected) and move the branch into the main tree.
-2. **Test `d5ebe94`.** Flip the exact-kwargs pins that hold the old boolean (`test_quickswap_api.py`,
-   `test_l316_charact_bindings_errors.py`, `test_active_print_backend_enforcement.py`); add the 39.1/39.2 route pins
-   from the task file (a stale grid's `["XL-3"]` is asked about XL-2; a bare `true` on `/api/quickswap` is asked
-   again; Return from a printing head answers `return_requires_confirm` with zero writes); update
-   `test_move_result_consumers_e2e.py`'s deposit / slot-QR payload asserts (`confirmed_toolheads`); run the move
-   E2E files. ⚠️ The backend and frontend halves must ship together: the backend alone would loop the browser
-   through confirms forever.
-3. Run every unrun pin above (39.3, 39.5, 39.6, 39.8, 39.9) and write 39.8's failure-toast E2E.
-4. **39.3 client half**: `withPrinterCheck` (the "⏳ Checking XL…" pill after 300 ms), `fetchPrinterStateDetailed`
-   (passes `reason` through; "FCC has no login for XL" vs "Couldn't reach XL"), `setProcessing(true, {label})`,
-   the timeout race for `doAssign`, with its E2E (Group 38's in-page fetch-delay lever).
-5. **39.4 frontend**: move the three older overlays (`showConfirmOverlay`'s banner, `_confirmActivePrintAssign`,
-   `_confirmActivePrintScan`) onto `window.confirmActivePrint`, rendering the engine's `msg`.
-6. **43.4** (a cancel review keeps every head) lands with or after 39.4, so it moves to this branch's tail.
-7. Adversarial review, full sweep, merge. The group merges only whole (the plan's rule).
+1. **39.3 client half**: `withPrinterCheck` (the "⏳ Checking XL…" pill after 300 ms), `fetchPrinterStateDetailed`
+   (passes `reason` through: "FCC has no login for XL" vs "Couldn't reach XL"), `setProcessing(true, {label})`, the
+   timeout race for `doAssign`, with its E2E (Group 38's in-page fetch-delay lever).
+2. **39.4 frontend**: move the three older overlays (`showConfirmOverlay`'s banner, `_confirmActivePrintAssign`,
+   `_confirmActivePrintScan`) onto `window.confirmActivePrint`, so they show the engine's D6 wording. Today they
+   still show their own destination sentence, though they already send the right heads.
+3. **43.4** (a cancel review keeps every head) lands with or after 39.4, so it belongs at this branch's tail.
+4. Adversarial review, full sweep, merge. The group merges only whole (the plan's rule).
 
 ## Notes from the run
 
