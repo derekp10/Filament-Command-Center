@@ -167,6 +167,28 @@ def sanitize_outbound_data(data):
     data['extra'] = clean_extra
     return data
 
+def effective_initial_weight(spool):
+    """A spool record's net capacity in grams, or None when it is unknown.
+
+    Its own `initial_weight`, else its filament's net `weight` — how Spoolman
+    computes `remaining_weight`, and the same fallback `_auto_archive_on_empty`
+    and `_auto_unarchive_on_refill` apply (31.2). Only None falls through: an
+    own `initial_weight` of 0 is a real 0, as it is for the cap in update_spool.
+    The print deduct clamps against this (Group 43.1).
+    """
+    if not isinstance(spool, dict):
+        return None
+    raw = spool.get('initial_weight')
+    if raw is None:
+        raw = (spool.get('filament') or {}).get('weight')
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _auto_archive_on_empty(data, existing_initial, existing_used, existing_location=None,
                            existing_filament_weight=None):
     """Mutates `data` in-place to add {archived: True, location: ''} when the
@@ -260,9 +282,11 @@ def _auto_unarchive_on_refill(data, existing):
     manually via the normal scan/move flow.
 
     The caller's explicit intent always wins: if the payload already sets
-    `archived` or `location`, we leave those keys alone.
+    `archived` or `location`, we leave those keys alone. A payload that sets
+    `archived: True` keeps the spool archived, so it gets no location restore
+    either (a deduct charging an archived spool is not a refill; Group 43 review).
     """
-    if not existing or not existing.get('archived'):
+    if not existing or not existing.get('archived') or data.get('archived') is True:
         return
     new_used = data.get('used_weight', existing.get('used_weight'))
     new_initial = data.get('initial_weight', existing.get('initial_weight'))

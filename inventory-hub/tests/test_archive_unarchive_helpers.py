@@ -378,6 +378,10 @@ class TestAutoUnarchiveOnRefill:
         data = {"used_weight": 200, "archived": True}  # caller wants to keep archived
         sm._auto_unarchive_on_refill(data, existing)
         assert data["archived"] is True
+        # Kept archived, so not put back where it was before (a deduct charging
+        # an archived spool sends this; Group 43 review). It used to restore the
+        # pre-archive location onto a spool that stayed archived.
+        assert "location" not in data
 
     def test_caller_location_intent_wins(self):
         existing = {
