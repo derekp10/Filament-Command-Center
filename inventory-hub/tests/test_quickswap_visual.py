@@ -216,9 +216,10 @@ def _open_confirm_overlay(page: Page, open_manage_modal, bound_loaded_slot, prob
     )
     open_manage_modal(toolhead)
     # Pin the active-print probe BEFORE the slot click (showConfirmOverlay reads
-    # window.fetchPrinterStateForToolhead at click time) so the overlay renders
-    # a deterministic variant regardless of what the real fleet is doing.
-    page.evaluate(f"window.fetchPrinterStateForToolhead = {probe_stub_js};")
+    # window.fetchPrinterStateDetailed at click time, since Group 39.3) so the
+    # overlay renders a deterministic variant regardless of what the real fleet
+    # is doing.
+    page.evaluate(f"window.fetchPrinterStateDetailed = {probe_stub_js};")
     page.locator(f".fcc-qs-slot[data-box='{box}'][data-slot='{slot}']").first.click()
     expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=8000)
     # Snapshot the bounded confirm CARD, not the full-viewport backdrop: the
@@ -233,11 +234,12 @@ def _open_confirm_overlay(page: Page, open_manage_modal, bound_loaded_slot, prob
 
 @pytest.mark.usefixtures("require_server")
 def test_visual_quickswap_confirm_overlay(page: Page, open_manage_modal, snapshot, bound_loaded_slot):
-    # Base variant: probe fails open (null) → plain confirm card, no banner/QRs.
+    # Base variant: the printer answers idle → plain confirm card, no banner/QRs.
     # Matches the long-standing baseline captured when dev printers were idle.
+    # (An UNKNOWN answer now adds a "couldn't reach" line, Group 39.3.)
     card = _open_confirm_overlay(
         page, open_manage_modal, bound_loaded_slot,
-        "() => Promise.resolve(null)",
+        "() => Promise.resolve({ active: false, known: true, reason: null, state: 'IDLE', printer_name: 'DEV-PRINTER' })",
     )
     snapshot(card, "quickswap-confirm-overlay")
 
@@ -250,7 +252,7 @@ def test_visual_quickswap_confirm_overlay_active_print(page: Page, open_manage_m
     # is caught, and so this layout is captured deterministically.
     card = _open_confirm_overlay(
         page, open_manage_modal, bound_loaded_slot,
-        "() => Promise.resolve({ state: 'PRINTING', printer_name: 'DEV-PRINTER' })",
+        "() => Promise.resolve({ active: true, known: true, reason: null, state: 'PRINTING', printer_name: 'DEV-PRINTER' })",
     )
     # The QR pair renders async into the banner; wait for both codes to paint so
     # the card reaches its final height before capture (attachConfirmQRs draws a
