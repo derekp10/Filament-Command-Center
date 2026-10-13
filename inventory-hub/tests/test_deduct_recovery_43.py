@@ -270,3 +270,94 @@ def test_review_confirm_charges_an_inherit_weight_spool(logs):
     assert sm.used(100) == 150.0
     entry = print_deduct_ledger._load()[print_deduct_ledger._key("XL", "J-434")]
     assert entry["grams"] == 50.0
+
+
+# --------------------------------------------------------------------------- #
+# 43.5 — deduct log lines name the printer and the toolhead                   #
+# --------------------------------------------------------------------------- #
+# Derek: "Because I'm running multiple printers with multiple toolheads we
+# should probably change these log messages to report the toolhead/location and
+# printer so it's clearer where the deduction occurred."
+
+INDX = "🦝 Core One INDX"
+
+
+def _full_spool(used=43.4, initial=1000.0):
+    return {"used_weight": used, "initial_weight": initial, "archived": False,
+            "location": "RCOI-2", "filament": {"weight": 1000.0}, "extra": {}}
+
+
+def _msgs(logs):
+    return [m for m, _ in logs]
+
+
+def test_per_spool_line_names_printer_and_toolhead(logs):
+    sm = WeightWireSpoolman({96: _full_spool()})
+    _, details, _ = _apply(sm, {1: 7.4}, toolheads=(("RCOI-2", 1),), at={"RCOI-2": [96]}, printer=INDX)
+    line = next(m for m in _msgs(logs) if "Spool #96" in m)
+    assert line.startswith(f"✔️ {INDX} RCOI-2: auto-deducted 7.4g from Spool #96 (Complete)"), line
+    assert details[0]["toolhead"] == "RCOI-2"
+
+
+def test_failed_write_line_names_printer_and_toolhead(logs):
+    sm = WeightWireSpoolman({96: _full_spool()}, patch_fails={96})
+    with patch.object(spoolman_api, "get_spool", side_effect=lambda sid: {"id": 96, **_full_spool()}):
+        updated, _, _ = _apply(sm, {1: 7.4}, toolheads=(("RCOI-2", 1),), at={"RCOI-2": [96]}, printer=INDX)
+    assert updated == 0
+    line = next(m for m in _msgs(logs) if m.startswith("❌"))
+    assert line.startswith(f"❌ {INDX} RCOI-2: failed to auto-deduct from Spool #96"), line
+
+
+def _summary_ctx(sm, usage_map, at, toolheads, printer):
+    ctx = _wire_ctx(sm, at=at, toolheads=toolheads, printer=printer)
+    ctx += [
+        patch.object(print_deduct, "_compute_cancel_usage", return_value=(usage_map, None)),
+        patch.object(print_deduct.prusalink_api, "fetch_printer_credentials",
+                     return_value={"ip_address": "10.0.0.9", "api_key": "k"}),
+    ]
+    return ctx
+
+
+def test_completion_summary_lists_the_toolheads_charged(logs):
+    sm = WeightWireSpoolman({96: _full_spool(), 97: _full_spool()})
+    ctx = _summary_ctx(sm, {1: 7.4, 3: 2.0}, at={"RCOI-2": [96], "RCOI-4": [97]},
+                       toolheads=(("RCOI-2", 1), ("RCOI-4", 3)), printer=INDX)
+    _start(ctx)
+    try:
+        res = print_deduct.deduct_completed_print(INDX, "/usb/STAND(~1.BGC", "J-435")
+    finally:
+        _stop(ctx)
+    assert res["status"] == "deducted", res
+    line = next(m for m in _msgs(logs) if m.startswith("✅ Completed-print deduct"))
+    assert line.startswith(f"✅ Completed-print deduct on {INDX} [RCOI-2, RCOI-4]: 9.4g across 2 spool(s)"), line
+
+
+def test_cancel_summary_lists_the_toolheads_charged(logs):
+    sm = WeightWireSpoolman({96: _full_spool()})
+    ctx = _summary_ctx(sm, {1: 3.3}, at={"RCOI-2": [96]}, toolheads=(("RCOI-2", 1),), printer=INDX)
+    _start(ctx)
+    try:
+        res = print_deduct.deduct_cancelled_print(INDX, "/usb/X.BGC", "J-436", 0.4)
+    finally:
+        _stop(ctx)
+    assert res["status"] == "deducted", res
+    line = next(m for m in _msgs(logs) if m.startswith("🛑 Cancelled-print partial deduct"))
+    assert line.startswith(f"🛑 Cancelled-print partial deduct on {INDX} [RCOI-2]: 3.3g across 1 spool(s)"), line
+
+
+def test_review_confirm_line_names_printer_and_toolhead(logs):
+    sm = WeightWireSpoolman({96: _full_spool()})
+    cancel_review_store.add_pending({
+        "printer_name": INDX, "job_id": "J-437", "filename": "f.bgcode", "progress": 0.5,
+        "total_grams": 2.5, "ambiguous": False, "created": "2026-10-13 00:00:00",
+        "spools": [{"sid": 96, "toolhead": "RCOI-2", "position": 1, "grams": 2.5}]})
+    ctx = _wire_ctx(sm, at={"RCOI-2": [96]}, toolheads=(("RCOI-2", 1),), printer=INDX)
+    _start(ctx)
+    try:
+        r = app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": INDX, "job_id": "J-437", "updates": {"96": 2.5}})
+    finally:
+        _stop(ctx)
+    assert r.get_json()["status"] == "confirmed"
+    line = next(m for m in _msgs(logs) if "Spool #96" in m)
+    assert line.startswith(f"✔️ {INDX} RCOI-2: cancel-deduct 2.50g from Spool #96 (confirmed)"), line

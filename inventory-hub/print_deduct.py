@@ -361,14 +361,19 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                                 f"weight; {new_used:.1f}g used so far]")
                     else:
                         tail = f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]"
+                    # 43.5 — name the printer and toolhead: with several printers
+                    # and heads, "Auto-deducted 7.4g from Spool #96" didn't say where.
                     state.add_log_entry(
-                        f"✔️ Auto-deducted {actual_g:.1f}g from Spool #{sid} ({label}): {tail}",
+                        f"✔️ {printer_name} {str(loc_id).upper()}: auto-deducted {actual_g:.1f}g "
+                        f"from Spool #{sid} ({label}) {tail}",
                         "SUCCESS", info['color'])
-                    details.append({"sid": sid, "grams": actual_g, "remaining": new_remaining})
+                    details.append({"sid": sid, "grams": actual_g, "remaining": new_remaining,
+                                    "toolhead": str(loc_id).upper()})
                 else:
                     err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
                     state.add_log_entry(
-                        f"❌ Failed to auto-deduct from Spool #{sid}: {err}", "ERROR", "ff4444")
+                        f"❌ {printer_name} {str(loc_id).upper()}: failed to auto-deduct from "
+                        f"Spool #{sid}: {err}", "ERROR", "ff4444")
     # Surface gcode tool indices that don't correspond to ANY of this printer's
     # toolhead positions (a cross-machine gcode, or a tool↔position mismatch) —
     # those grams can't be deducted, so make the loss visible instead of
@@ -384,6 +389,17 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
             f"map to no toolhead position on this printer — not deducted "
             f"(weigh the spool if this looks wrong).", "WARNING", "ffaa00")
     return spools_updated, details, known_positions
+
+
+def _toolheads_charged(details):
+    """`[RCOI-2, RCOI-4]`: the heads a deduct charged, in the order it charged
+    them, for the summary log lines (43.5). '' when no detail names a head."""
+    heads = []
+    for d in details or []:
+        th = d.get('toolhead')
+        if th and th not in heads:
+            heads.append(th)
+    return f" [{', '.join(heads)}]" if heads else ""
 
 
 def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
@@ -701,7 +717,7 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
                                         usage_map=usage_map, no_spool=True)
     total = round(sum(d["grams"] for d in details), 1)
     state.add_log_entry(
-        f"🛑 Cancelled-print partial deduct on {printer_name}: {total:.1f}g across "
+        f"🛑 Cancelled-print partial deduct on {printer_name}{_toolheads_charged(details)}: {total:.1f}g across "
         f"{spools_updated} spool(s) at ~{pct:.0f}% progress ('{filename}').",
         "WARNING")
     # Record the APPLIED grams (was sum(usage_map) = the full requested — the drift
@@ -843,7 +859,7 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     # to avoid a double-warn — 22.4(2)/(3)).
     applied = round(sum(d["grams"] for d in details), 2)
     state.add_log_entry(
-        f"✅ Completed-print deduct on {printer_name}: {applied:.1f}g across "
+        f"✅ Completed-print deduct on {printer_name}{_toolheads_charged(details)}: {applied:.1f}g across "
         f"{spools_updated} spool(s) ('{filename}').", "SUCCESS")
     _record_applied_deduct(
         printer_name, job_id, filename=filename, scale=1.0, details=details,
@@ -1528,7 +1544,7 @@ def _confirm_no_spool_review(printer, job_id, rec):
     total = round(sum(d["grams"] for d in details), 2)
     state.add_log_entry(
         f"✔️ Cancel-review deduct {total:.2f}g across {spools_updated} spool(s) on "
-        f"{printer} (toolhead now bound).", "SUCCESS")
+        f"{printer}{_toolheads_charged(details)} (toolhead now bound).", "SUCCESS")
     # Record applied + surface any shortfall via the shared helper (records confirmed,
     # 2dp warn matching the shortfall_g field, orphan-excluded — 22.4(2)/(3)/(4)).
     _, shortfall = _record_applied_deduct(
@@ -1627,8 +1643,11 @@ def api_cancel_deduct_confirm():
             remaining = None if capacity is None else max(0.0, capacity - new_used)
             info = spoolman_api.format_spool_display(spool)
             tail = "[no known capacity]" if remaining is None else f"[➔ {remaining:.1f}g remaining]"
+            # 43.5 — name the printer and the head the reviewed row was charged for.
+            th = str(rec_rows[sid].get('toolhead') or '').upper()
+            where = f"{printer} {th}" if th else str(printer)
             state.add_log_entry(
-                f"✔️ Cancel-deduct {grams:.2f}g from Spool #{sid} (confirmed): {tail}",
+                f"✔️ {where}: cancel-deduct {grams:.2f}g from Spool #{sid} (confirmed) {tail}",
                 "SUCCESS", info.get('color', '888888'))
             applied.append({"sid": sid, "grams": round(grams, 2),
                             "remaining": None if remaining is None else round(remaining, 1)})
