@@ -494,8 +494,20 @@ def bindings_from_row(row):
         return {}
     targets = extra.get('slot_targets')
     if isinstance(targets, dict):
-        return {str(k): (None if v in (None, '') else str(v)) for k, v in targets.items()}
+        return {str(k): _binding_target(v) for k, v in targets.items()}
     return {}
+
+
+def _binding_target(value):
+    """A slot's bound target, or None for "unbound". EVERY falsy value is unbound
+    (None, '', False, 0, an empty list), as the raw `targets.get(slot)` reads this
+    helper replaced treated it, and so is a blank string. Stringifying `False`
+    to "False" made a hand-edited `{"1": false}` auto-deploy the spool to a
+    location named "FALSE" (2026-10-13 review)."""
+    if not value:
+        return None
+    text = str(value)
+    return text if text.strip() else None
 
 
 # Back-compat alias: the helper was private until 2026-08-03, when logic.py

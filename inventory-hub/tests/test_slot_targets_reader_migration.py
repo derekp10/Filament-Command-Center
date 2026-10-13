@@ -87,12 +87,16 @@ MOVE_LOCS = [
 ]
 
 
-def _move_into_poisoned_box(confirm_active_print, auto_deploy):
-    """The REAL engine, Spoolman faked: spool #42 (in CR) into PM-DB-BAD slot 1."""
+def _move_into_poisoned_box(confirm_active_print, auto_deploy, box_row=None):
+    """The REAL engine, Spoolman faked: spool #42 (in CR) into PM-DB-BAD slot 1.
+    `box_row` replaces the poisoned box (same LocationID) for other malformations."""
     writes = []
+    locs = [dict(r) for r in MOVE_LOCS]
+    if box_row is not None:
+        locs[0] = dict(box_row)
     with contextlib.ExitStack() as st:
         st.enter_context(patch.object(logic.locations_db, "load_locations_list",
-                                      return_value=[dict(r) for r in MOVE_LOCS]))
+                                      return_value=locs))
         st.enter_context(patch.object(logic.locations_db, "get_active_printer_map",
                                       return_value={"XL-1": {"printer_name": "XL", "position": 0}}))
         st.enter_context(patch.object(logic.config_loader, "load_config", return_value={}))
@@ -127,6 +131,21 @@ def test_smart_move_auto_deploy_lookup_survives_a_poisoned_target_box():
     assert isinstance(result, dict), result
     assert not result.get("auto_deployed_to"), "nothing is bound, so nothing deploys"
     assert len(writes) == 1 and writes[0][1].get("location") == "PM-DB-BAD", writes
+
+
+@pytest.mark.parametrize("value", [False, 0, 0.0, [], "   "])
+def test_a_falsy_binding_is_unbound_not_a_phantom_toolhead(value):
+    """Review finding (2026-10-13): routing the auto-deploy read through
+    bindings_from_row stringified a falsy non-string binding (False -> "False",
+    0 -> "0"), so a hand-edited `{"1": false}` meant to say "unassigned" chained
+    a SECOND write that moved the spool to a location named "FALSE". The raw read
+    it replaced treated every falsy value as unbound; so must the helper."""
+    box = {"LocationID": "PM-DB-BAD", "Type": BOX, "Max Spools": "4", "Name": "PM-DB-BAD",
+           "extra": {"slot_targets": {"1": value, "2": "XL-1"}}}
+    result, writes = _move_into_poisoned_box(confirm_active_print=True, auto_deploy=True, box_row=box)
+    assert len(writes) == 1 and writes[0][1].get("location") == "PM-DB-BAD", writes
+    assert not result.get("auto_deployed_to"), result
+    assert locations_db.bindings_from_row(box) == {"1": None, "2": "XL-1"}
 
 
 def test_settings_toolhead_removal_guard_is_not_failed_closed_by_a_bad_row(monkeypatch):
