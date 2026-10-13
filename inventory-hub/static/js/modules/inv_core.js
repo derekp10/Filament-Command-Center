@@ -495,14 +495,29 @@ window.fetchPrinterStateDetailed = (toolheadLocId) => {
         .catch(() => none('unreachable'));
 };
 
-// The printer that owns a head, from state.printerMap ({name: [{location_id}]}),
-// so the pill can name it before the probe answers. null when not loaded/known.
+// The printer that owns a head, so the pill can name it before the probe
+// answers: state.printerMap ({name: [{location_id}]}) when a view loaded it,
+// else the Printer rows in state.allLocations (Group 39 review, frontend-13:
+// only the Feeds editor and a toolhead's Quick-Swap view fill printerMap, so a
+// fresh dashboard's dim named no printer). A Printer row carries Name and
+// toolheads[].location_id; a dual-role printer (the Core One) is its own head.
+// null when unknown.
 window.printerNameForHead = (locId) => {
-    const pm = (typeof state !== 'undefined' && state && state.printerMap) || null;
     const id = String(locId || '').toUpperCase();
-    if (pm && id) {
+    if (!id) return null;
+    const pm = (typeof state !== 'undefined' && state && state.printerMap) || null;
+    if (pm) {
         for (const [name, heads] of Object.entries(pm)) {
             if ((heads || []).some(h => String((h && h.location_id) || '').toUpperCase() === id)) return name;
+        }
+    }
+    const rows = (typeof state !== 'undefined' && state && Array.isArray(state.allLocations)) ? state.allLocations : [];
+    for (const row of rows) {
+        if (!row || row.Type !== 'Printer') continue;
+        const heads = Array.isArray(row.toolheads) ? row.toolheads : [];
+        if (String(row.LocationID || '').toUpperCase() === id
+            || heads.some(h => String((h && h.location_id) || '').toUpperCase() === id)) {
+            return row.Name || row.LocationID;
         }
     }
     return null;

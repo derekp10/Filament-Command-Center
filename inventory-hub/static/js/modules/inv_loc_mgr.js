@@ -1290,10 +1290,28 @@ window.handleSlotInteraction = (slot) => {
         // Filled slot + empty buffer: direct Pick Up. Eject/Details/Edit/Queue
         // remain on the slot card's explicit action buttons, so this modal is
         // redundant — it used to be a 3-option chooser (Pick/Eject/Details).
-        state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color });
+        // Where it was (Group 39 review, engine-6): doAssign needs to know when a
+        // spool is leaving a printer head. A ghost's own record is its head.
+        state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color,
+                                   location: item.location || locId, is_ghost: !!item.is_ghost,
+                                   deployed_to: item.deployed_to || null });
         if (window.renderBuffer) window.renderBuffer();
         renderManagerNav();
     }
+};
+
+// The printer head a buffered spool's own record sits on, from what the buffer
+// knows (a scan and the Location Manager's pick-up carry location / is_ghost /
+// deployed_to), or null.
+const _ownHeadOf = (spool) => {
+    const sid = String(spool).replace('ID:', '');
+    const held = (state.heldSpools || []).find(s => String(s.id) === sid);
+    if (!held) return null;
+    const own = String((held.is_ghost ? held.deployed_to : held.location) || '').toUpperCase();
+    if (!own) return null;
+    const row = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === own);
+    const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    return row && headTypes.includes(row.Type) ? own : null;
 };
 
 window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
@@ -1316,6 +1334,15 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
         locObjCheck.Type === 'No MMU Direct Load' ||
         locObjCheck.Type === 'Printer'
     );
+    // Group 39 review (engine-6): a spool LEAVING a printer head gets ONE answer
+    // from the server, naming both heads in Derek's D6 wording. Confirming the
+    // destination here first made a head -> head move on one printer ask twice
+    // (this prompt, then the server's about the head it leaves).
+    const leaving = isToolheadTarget ? _ownHeadOf(spool) : null;
+    if (leaving && leaving !== String(loc).toUpperCase()) {
+        setProcessing(true, { label: window.printerLabelForTarget ? window.printerLabelForTarget(loc) : null });
+        return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, [], options);
+    }
     if (isToolheadTarget && window.checkPrinterForHead) {
         // Group 39.3: the shared printer check: the "⏳ Checking XL…" pill and a
         // timeout race (this fetch used to wait on the server with no cap).

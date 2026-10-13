@@ -1615,27 +1615,35 @@ const processScan = (text, source = 'keyboard') => {
                     // Reuse the same overlay the buffer-assign path uses, then
                     // replay the ORIGINAL scan confirming the heads the answer
                     // named (Group 39.1: a bare flag no longer covers any).
-                    _confirmActivePrintScan({
-                        tid: res.location,
-                        slot: res.slot,
-                        stateInfo: res.active_print
-                            || { printer_name: res.location, state: 'PRINTING' },
-                        msg: res.msg,
+                    // The replay can be asked AGAIN (Group 39 review, engine-5):
+                    // a printer that failed open on the first probe answers
+                    // PRINTING now, or one starts printing meanwhile. So it
+                    // re-asks with the union of every head confirmed so far, and
+                    // pins the spool the confirm named (`moved`).
+                    const askAndReplay = (answer, prior) => _confirmActivePrintScan({
+                        tid: answer.location || res.location,
+                        slot: answer.slot != null ? answer.slot : res.slot,
+                        stateInfo: answer.active_print
+                            || { printer_name: answer.location || res.location, state: 'PRINTING' },
+                        msg: answer.msg,
                         onConfirm: () => {
+                            const heads = window.unionConfirmHeads(prior, answer);
                             setProcessing(true, { label: window.printerLabelForTarget
                                 ? window.printerLabelForTarget(res.location, res.slot) : null });
+                            const replay = { text: text, source: source, confirmed_toolheads: heads };
+                            if (answer.moved != null) replay.spool_id = answer.moved;
                             window.fetchT('/api/identify_scan', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    text: text,
-                                    source: source,
-                                    confirmed_toolheads: window.unionConfirmHeads([], res),
-                                }),
+                                body: JSON.stringify(replay),
                             })
                                 .then(r => r.json())
                                 .then(r2 => {
                                     setProcessing(false);
+                                    if (r2 && r2.action === 'assignment_requires_confirm') {
+                                        askAndReplay(r2, heads);
+                                        return;
+                                    }
                                     // Mirror the normal assignment success path
                                     // above. The slot-QR success payload has NO
                                     // `msg` key, so toasting only on r2.msg gave
@@ -1664,13 +1672,16 @@ const processScan = (text, source = 'keyboard') => {
                                     } else if (r2 && r2.action === 'assignment_failed') {
                                         // Rejected write; the spool is still in the buffer.
                                         showToast(`❌ #${r2.spool} was NOT loaded into ${r2.location}:${r2.slot}: ${r2.msg}`, 'error', 7000);
-                                    } else if (r2 && r2.msg) {
-                                        showToast(r2.msg,
-                                            r2.type === 'error' ? 'error' : 'success',
-                                            r2.type === 'error' ? 7000 : 3000);
+                                    } else if (r2 && r2.type === 'error' && r2.msg) {
+                                        showToast(r2.msg, 'error', 7000);
                                     } else {
-                                        showToast('Assign confirmed but the result was unclear — check the Activity Log',
-                                            'warning', 7000);
+                                        // An answer this replay doesn't know is never a
+                                        // success (it used to toast a confirm question
+                                        // green for 3 s while nothing moved).
+                                        const what = (r2 && (r2.msg || r2.action)) || 'no answer';
+                                        showToast(`⚠️ Assign after confirm: ${what} — check the Activity Log`, 'warning', 7000);
+                                        if (window.logClientEvent) window.logClientEvent(
+                                            `⚠️ Slot-scan confirm replay got an unexpected answer: ${what}`, 'WARNING');
                                     }
                                     document.dispatchEvent(
                                         new CustomEvent('inventory:locations-changed'));
@@ -1682,6 +1693,7 @@ const processScan = (text, source = 'keyboard') => {
                                 });
                         },
                     });
+                    askAndReplay(res, []);
                 } else {
                     // Unknown action code — shouldn't happen, but surface it.
                     showToast(`Unknown assignment result: ${res.action || 'none'}`, 'warning', 4000);
