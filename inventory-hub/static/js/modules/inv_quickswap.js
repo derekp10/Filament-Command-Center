@@ -376,15 +376,15 @@
     // longer to round-trip through backend → filabridge credential lookup →
     // PrusaLink. Backend itself has a 2s per-endpoint timeout inside
     // `get_printer_state`, so 3s gives headroom plus network overhead.
+    // Group 39.3: the detailed answer ({active, known, reason, ...}, or null with
+    // no head), through the shared printer check: the "⏳ Checking XL…" pill and
+    // the same timeout race every client probe gets.
     const _probeWithTimeout = (toolheadId, timeoutMs = 3000) => {
         const dbg = (...args) => { if (window.FCC_DEBUG_ACTIVE_PRINT) console.log('[active-print overlay]', ...args); };
         if (!toolheadId) { dbg('no toolhead id, skipping probe'); return Promise.resolve(null); }
-        if (!window.fetchPrinterStateForToolhead) { dbg('helper missing — stale cached JS?'); return Promise.resolve(null); }
+        if (!window.checkPrinterForHead) { dbg('helper missing — stale cached JS?'); return Promise.resolve(null); }
         dbg('probing', toolheadId, 'with timeout', timeoutMs + 'ms');
-        return Promise.race([
-            window.fetchPrinterStateForToolhead(toolheadId),
-            new Promise(resolve => setTimeout(() => { dbg('probe timeout for', toolheadId); resolve(null); }, timeoutMs)),
-        ]).catch((e) => { dbg('probe error', e); return null; });
+        return window.checkPrinterForHead(toolheadId, { timeoutMs }).catch((e) => { dbg('probe error', e); return null; });
     };
 
     const _escapeHtml = (s) => String(s == null ? '' : s)
@@ -407,17 +407,26 @@
         // fails open — null means "unknown, show overlay normally."
         // opts.knownState: the backend has just said the printer is active, so
         // show that banner without re-probing (the probe is what missed it).
-        const stateInfo = opts.knownState || await _probeWithTimeout(opts.toolhead);
+        const detail = opts.knownState ? null : await _probeWithTimeout(opts.toolhead);
+        const stateInfo = opts.knownState || (detail && detail.active
+            ? { state: detail.state || 'ACTIVE', printer_name: detail.printer_name || opts.toolhead }
+            : null);
         const warningBanner = stateInfo
             ? `<div class="alert alert-warning py-2 px-3 mb-2" style="font-size:0.95em;">`
                 + `⚠️ <b>${_escapeHtml(stateInfo.printer_name)} is ${_escapeHtml(stateInfo.state)}</b> — loading a new spool now will disrupt the print.`
                 + `</div>`
             : '';
+        // Group 39.3: when FCC couldn't ask the printer (no login, unreachable, a
+        // timeout), say so in one line instead of looking like an idle printer.
+        const note = (!stateInfo && window.printerCheckNote) ? window.printerCheckNote(detail, opts.toolhead) : '';
+        const noteHtml = note
+            ? `<div class="fcc-printer-note text-info mb-2" style="font-size:0.95em;">${_escapeHtml(note)}</div>`
+            : '';
 
         const titleText = opts.title || `Swap ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`;
         const defaultBody = 'This moves the spool currently in that slot into the active toolhead. ' +
                             'Any spool already on the toolhead will be auto-ejected back to its source.';
-        const bodyHtml = warningBanner + (opts.body || defaultBody);
+        const bodyHtml = warningBanner + noteHtml + (opts.body || defaultBody);
 
         const panelHtml = `
             <div class="bg-dark border border-info rounded p-4 shadow-lg"

@@ -135,10 +135,13 @@ class FakeBackend:
 
     def __init__(self, page: Page, *, printer_active=False, identify=None, manage_contents=None,
                  smart_move=None, contents=None, spools=None, dryer_slots=None, extra_locations=(),
-                 responders=None):
+                 responders=None, printer_state=None):
         # responders: {path: body -> (status, payload)}, payload a dict (JSON) or
         # a str (served as text/html, like a proxy's error page). Group 39.8.
         self.responders = dict(responders or {})
+        # printer_state: toolhead -> the /api/printer_state answer (Group 39.3),
+        # overriding the printer_active default.
+        self._printer_state = printer_state
         self.posts: list[tuple[str, dict]] = []
         self.buffer: list = []
         self.probes: list[str] = []
@@ -175,6 +178,9 @@ class FakeBackend:
                 return
             if path.startswith("/api/printer_state/"):
                 self.probes.append(unquote(path[len("/api/printer_state/"):]))
+                if self._printer_state is not None:
+                    self._json(route, self._printer_state(self.probes[-1]))
+                    return
                 state = "PRINTING" if self.printer_active else "IDLE"
                 self._json(route, {"known": True, "is_active": self.printer_active,
                                    "state": state, "printer_name": PRINTER})
@@ -767,3 +773,94 @@ def test_return_overlay_previews_the_spools_recorded_source_box(
     page.click("#fcc-quickswap-no")
     page.wait_for_timeout(300)
     assert not be.bodies("/api/quickswap/return"), be.posts
+
+
+# ---------------------------------------------------------------------------
+# (i) Group 39.3: "Checking XL…" whenever FCC waits on a printer
+# ---------------------------------------------------------------------------
+# Group 38's lever: delay the request in-page, never by sleeping in a route
+# handler (that stalls Playwright's sync dispatcher).
+DELAY_FETCH_JS = """([prefix, ms]) => {
+    const orig = window.fetch;
+    window.fetch = (url, opts) => {
+        const u = typeof url === 'string' ? url : (url && url.url) || '';
+        if (u.startsWith(prefix)) {
+            return new Promise(resolve => setTimeout(() => resolve(orig(url, opts)), ms));
+        }
+        return orig(url, opts);
+    };
+}"""
+PILL = "#fcc-printer-check-pill"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_slow_printer_check_shows_the_pill_then_clears_it(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """A ~2 s probe used to show nothing new until the overlay mounted. Now a
+    pinned pill says so after 300 ms and goes when the answer lands. HEAD
+    proof: there is no pill."""
+    FakeBackend(page, printer_active=False)
+    _boot(page, base_url, reset_dom_state_js)
+    page.evaluate(DELAY_FETCH_JS, ["/api/printer_state/", 2_000])
+    page.evaluate(OPEN_TAP_JS, [BOX, SLOT, TH])
+    page.wait_for_selector(PILL, state="visible", timeout=1_500)
+    assert "Checking" in page.text_content(PILL)
+    assert page.evaluate(f"() => !document.querySelector('{PILL}').classList.contains('toast-msg')"), (
+        "the pill must not be a .toast-msg: Escape dismisses the newest toast")
+    _wait_overlay(page, "the Quick-Swap overlay never opened", banner=False)
+    _js_until(page, f"!document.querySelector('{PILL}')", 2_000, "the pill outlived the answer")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_printer_that_never_answers_is_named_in_the_overlay(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Past the client's 3 s cap the probe gives up: the pill says the printer
+    didn't answer, a WARNING is logged, and the overlay says FCC couldn't tell,
+    rather than looking like an idle printer. HEAD proof: no note, no WARNING."""
+    be = FakeBackend(page, printer_active=False)
+    _boot(page, base_url, reset_dom_state_js)
+    page.evaluate(DELAY_FETCH_JS, ["/api/printer_state/", 4_500])
+    page.evaluate(OPEN_TAP_JS, [BOX, SLOT, TH])
+    ov = _wait_overlay(page, "the Quick-Swap overlay never opened", banner=False, timeout_ms=8_000)
+    assert "Couldn't reach" in ov["body"], ov
+    assert "didn't answer" in (page.text_content(PILL) or ""), "the pill did not say the printer didn't answer"
+    _until(page, lambda: [b for b in be.bodies("/api/log_event")
+                          if b.get("level") == "WARNING" and "didn't answer" in (b.get("msg") or "")],
+           3_000, "the timeout wrote no Activity Log WARNING")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_printer_with_no_login_says_so_not_unreachable(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """The fix for "no credentials" is entering them, so the overlay says that
+    (the route's new reason, Group 39.3)."""
+    FakeBackend(page, printer_state=lambda th: {"known": False, "reason": "no_credentials",
+                                                "printer_name": PRINTER})
+    _boot(page, base_url, reset_dom_state_js)
+    page.evaluate(OPEN_TAP_JS, [BOX, SLOT, TH])
+    ov = _wait_overlay(page, "the Quick-Swap overlay never opened", banner=False)
+    assert f"FCC has no login for {PRINTER}" in ov["body"], ov
+    assert "Couldn't reach" not in ov["body"], ov
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_slot_scan_labels_the_dim_with_the_printer_it_waits_on(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """A scan has no button to spin. A slot scan whose slot feeds a head waits
+    on that printer server-side, so the dim says which. HEAD proof: a bare dim."""
+    FakeBackend(page, identify=lambda b: DONE)
+    _boot(page, base_url, reset_dom_state_js)
+    page.evaluate(DELAY_FETCH_JS, ["/api/identify_scan", 2_000])
+    # One task: inject the map/binding and scan, so no heartbeat refresh lands between.
+    page.evaluate("""([box, slot, th, printer]) => {
+        state.printerMap = { [printer]: [{ location_id: th, position: 0 }] };
+        state.allLocations = (state.allLocations || []).filter(l => l.LocationID !== box)
+            .concat([{ LocationID: box, Type: 'Dryer Box', 'Max Spools': '4',
+                       extra: { slot_targets: { [slot]: th } } }]);
+        processScan(`LOC:${box}:SLOT:${slot}`, 'barcode');
+    }""", [BOX, SLOT, TH, PRINTER])
+    page.wait_for_selector("#processing-overlay .fcc-processing-label", state="visible", timeout=1_500)
+    assert f"Checking {PRINTER}" in page.text_content("#processing-overlay .fcc-processing-label")
+    _js_until(page, "!document.querySelector('#processing-overlay .fcc-processing-label')"
+                    " || document.getElementById('processing-overlay').style.display === 'none'",
+              5_000, "the dim's label outlived the answer")

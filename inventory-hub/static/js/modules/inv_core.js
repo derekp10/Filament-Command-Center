@@ -415,10 +415,162 @@ if (!window.__fccToastEscapeBound) {
     }, true);
 }
 
-const setProcessing = (s) => {
+// --- PRINTER CHECK (Group 39.3) ---
+// "⏳ Checking XL…" whenever FCC waits on a printer. The probe can take ~2 s for a
+// powered-down printer and ~4 s for a wrong key, and the screen used to show
+// nothing new. One pinned pill for clicks and scans alike (a scan has no pressed
+// control to spin): it shows after PRINTER_CHECK_DELAY_MS (a fast answer never
+// flashes it), goes when the probe settles, and on a client timeout says the
+// printer didn't answer and logs a WARNING. Deliberately NOT a .toast-msg:
+// Escape dismisses the newest toast, and the pill must never swallow an Escape
+// meant for a modal. Server-side waits label the processing dim instead
+// (setProcessing's `label`, from printerLabelForTarget).
+const PRINTER_CHECK_DELAY_MS = 300;
+const PRINTER_CHECK_TIMEOUT_MS = 3000;
+window.PRINTER_CHECK_DELAY_MS = PRINTER_CHECK_DELAY_MS;
+window.PRINTER_CHECK_TIMEOUT_MS = PRINTER_CHECK_TIMEOUT_MS;
+let _printerPillGen = 0;
+const _printerCheckPill = (text, tone) => {
+    let pill = document.getElementById('fcc-printer-check-pill');
+    if (!text) { if (pill) pill.remove(); return; }
+    if (!pill) {
+        pill = document.createElement('div');
+        pill.id = 'fcc-printer-check-pill';
+        pill.setAttribute('role', 'status');
+        pill.style.cssText = 'position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:11000;'
+            + ' padding:6px 16px; border-radius:16px; font-weight:bold; font-size:0.95rem;'
+            + ' box-shadow:0 2px 10px rgba(0,0,0,0.5); pointer-events:none;';
+        document.body.appendChild(pill);
+    }
+    const warn = tone === 'warn';
+    pill.textContent = text;
+    pill.style.background = warn ? '#4a3200' : '#1f3b57';
+    pill.style.color = warn ? '#ffd27a' : '#cfe6ff';
+    pill.style.border = warn ? '1px solid #ffb74d' : '1px solid #5ba7e8';
+};
+
+// Resolve to what `promise` resolves to, or to `fallback` when it rejects or
+// the client gives up after `timeoutMs` (then the pill warns and a WARNING is
+// logged). The probe fails open either way: callers never block a move on it.
+window.withPrinterCheck = (printerName, promise, { timeoutMs = PRINTER_CHECK_TIMEOUT_MS, fallback = null } = {}) => {
+    const name = printerName || 'the printer';
+    const gen = ++_printerPillGen;
+    const showTimer = setTimeout(() => { if (gen === _printerPillGen) _printerCheckPill(`⏳ Checking ${name}…`); },
+        PRINTER_CHECK_DELAY_MS);
+    let giveUpTimer = null;
+    const giveUp = new Promise((resolve) => { giveUpTimer = setTimeout(() => resolve({ __timedOut: true }), timeoutMs); });
+    return Promise.race([Promise.resolve(promise).catch(() => fallback), giveUp]).then((v) => {
+        clearTimeout(showTimer);
+        clearTimeout(giveUpTimer);
+        if (v && v.__timedOut) {
+            if (gen === _printerPillGen) {
+                _printerCheckPill(`⚠️ ${name} didn't answer — FCC couldn't check whether it is printing`, 'warn');
+                setTimeout(() => { if (gen === _printerPillGen) _printerCheckPill(null); }, 4000);
+            }
+            if (window.logClientEvent) window.logClientEvent(
+                `⚠️ ${name} didn't answer within ${Math.round(timeoutMs / 1000)} s — FCC couldn't check whether it is printing`,
+                'WARNING');
+            return fallback;
+        }
+        if (gen === _printerPillGen) _printerCheckPill(null);
+        return v;
+    });
+};
+
+// /api/printer_state, telling "idle" apart from "couldn't ask":
+// {active, known, reason, state, printer_name}. `reason` is the route's
+// (no_credentials, prusalink_unreachable, not_in_printer_map, ...).
+window.fetchPrinterStateDetailed = (toolheadLocId) => {
+    const none = (reason) => ({ active: false, known: false, reason, state: null, printer_name: null });
+    if (!toolheadLocId) return Promise.resolve(none('no_toolhead'));
+    return fetch(`/api/printer_state/${encodeURIComponent(toolheadLocId)}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => (d ? {
+            active: !!(d.known && d.is_active),
+            known: !!d.known,
+            reason: d.reason || null,
+            state: d.state || null,
+            printer_name: d.printer_name || null,
+        } : none('http_error')))
+        .catch(() => none('unreachable'));
+};
+
+// The printer that owns a head, from state.printerMap ({name: [{location_id}]}),
+// so the pill can name it before the probe answers. null when not loaded/known.
+window.printerNameForHead = (locId) => {
+    const pm = (typeof state !== 'undefined' && state && state.printerMap) || null;
+    const id = String(locId || '').toUpperCase();
+    if (pm && id) {
+        for (const [name, heads] of Object.entries(pm)) {
+            if ((heads || []).some(h => String((h && h.location_id) || '').toUpperCase() === id)) return name;
+        }
+    }
+    return null;
+};
+
+// A client probe of a head, with the pill and the timeout race (every client
+// probe gets it; doAssign's used to wait on the server with no cap).
+window.checkPrinterForHead = (locId, { timeoutMs = PRINTER_CHECK_TIMEOUT_MS } = {}) => {
+    const name = window.printerNameForHead(locId) || locId;
+    return window.withPrinterCheck(name, window.fetchPrinterStateDetailed(locId), {
+        timeoutMs,
+        fallback: { active: false, known: false, reason: 'timeout', state: null, printer_name: name },
+    });
+};
+
+// The one line an overlay adds when FCC couldn't ask the printer, or '' when it
+// could (or the target isn't a printer head). No login is not "unreachable":
+// the fix is entering it, not checking the network.
+window.printerCheckNote = (detail, fallbackName) => {
+    if (!detail || detail.known || detail.reason === 'not_in_printer_map' || detail.reason === 'no_toolhead') return '';
+    const name = detail.printer_name || fallbackName || 'the printer';
+    if (detail.reason === 'no_credentials') {
+        return `ℹ️ FCC has no login for ${name} — add it in Config's printer credentials.`;
+    }
+    return `ℹ️ Couldn't reach ${name} — FCC can't tell whether it is printing.`;
+};
+
+// The dim's label for a server-side wait that implies a printer: a toolhead
+// gives its printer; a Dryer Box slot gives its bound head's printer. null
+// (no label, the dim exactly as before) when no printer is implied.
+window.printerLabelForTarget = (locId, slot = null) => {
+    const id = String(locId || '').toUpperCase();
+    if (!id) return null;
+    let head = id;
+    const rows = (typeof state !== 'undefined' && state && state.allLocations) || [];
+    const row = rows.find(l => String(l.LocationID || '').toUpperCase() === id);
+    if (row && row.Type === 'Dryer Box') {
+        const extra = (row.extra && typeof row.extra === 'object') ? row.extra : {};
+        const targets = (extra.slot_targets && typeof extra.slot_targets === 'object') ? extra.slot_targets : {};
+        head = slot != null ? (targets[String(slot)] || null) : null;
+    }
+    const name = head ? window.printerNameForHead(head) : null;
+    return name ? `⏳ Checking ${name}…` : null;
+};
+
+// `opts.label` (Group 39.3): a label centred on the dim after
+// PRINTER_CHECK_DELAY_MS, naming the printer FCC waits on. No label leaves the
+// dim exactly as before; the old one-argument call still works.
+const setProcessing = (s, opts = {}) => {
     let ov = document.getElementById('processing-overlay');
     if (!ov) { ov = document.createElement('div'); ov.id = 'processing-overlay'; ov.style.cssText = "display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999;"; document.body.appendChild(ov); }
     state.processing = s; ov.style.display = s ? 'block' : 'none';
+    clearTimeout(setProcessing._labelTimer);
+    const old = ov.querySelector('.fcc-processing-label');
+    if (old) old.remove();
+    if (s && opts && opts.label) {
+        setProcessing._labelTimer = setTimeout(() => {
+            if (!state.processing) return;
+            const el = document.createElement('div');
+            el.className = 'fcc-processing-label';
+            el.setAttribute('role', 'status');
+            el.textContent = opts.label;
+            el.style.cssText = 'position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);'
+                + ' background:#1f3b57; color:#cfe6ff; border:1px solid #5ba7e8; padding:10px 18px;'
+                + ' border-radius:18px; font-weight:bold; font-size:1.05rem;';
+            ov.appendChild(el);
+        }, PRINTER_CHECK_DELAY_MS);
+    }
 };
 
 // UI-lockout guard (2026-06-12): fetch with a hard wall-clock timeout so a hung

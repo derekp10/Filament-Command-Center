@@ -421,24 +421,18 @@ const fetchPrinterMap = () => {
 //   window.FCC_DEBUG_ACTIVE_PRINT = true
 // in the DevTools console and rerun the swap. Leaves production quiet.
 window.FCC_DEBUG_ACTIVE_PRINT = window.FCC_DEBUG_ACTIVE_PRINT || false;
+// Group 39.3: a wrapper over window.fetchPrinterStateDetailed (inv_core.js),
+// kept because its null means both "idle" and "couldn't ask", which the banner
+// logic of its callers relies on. New code reads the detailed answer.
 window.fetchPrinterStateForToolhead = (toolheadLocId) => {
     const dbg = (...args) => { if (window.FCC_DEBUG_ACTIVE_PRINT) console.log('[active-print probe]', ...args); };
     if (!toolheadLocId) { dbg('no toolhead id, skipping'); return Promise.resolve(null); }
     dbg('querying', toolheadLocId);
-    return fetch(`/api/printer_state/${encodeURIComponent(toolheadLocId)}`)
-        .then(r => r.ok ? r.json() : null)
-        .then(d => {
-            dbg('response for', toolheadLocId, d);
-            if (!d) return null;
-            if (!d.known) { dbg('backend says unknown:', d.reason); return null; }
-            if (!d.is_active) { dbg('printer is idle:', d.state); return null; }
-            dbg('ACTIVE:', d.printer_name, d.state);
-            return {
-                state: d.state || 'ACTIVE',
-                printer_name: d.printer_name || toolheadLocId,
-            };
-        })
-        .catch((e) => { dbg('probe failed', e); return null; });
+    return window.fetchPrinterStateDetailed(toolheadLocId).then(d => {
+        dbg('response for', toolheadLocId, d);
+        if (!d || !d.active) return null;
+        return { state: d.state || 'ACTIVE', printer_name: d.printer_name || toolheadLocId };
+    });
 };
 
 // Render a searchable combobox backed by a native <select> so existing
@@ -1322,8 +1316,13 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
         locObjCheck.Type === 'No MMU Direct Load' ||
         locObjCheck.Type === 'Printer'
     );
-    if (isToolheadTarget && window.fetchPrinterStateForToolhead) {
-        return window.fetchPrinterStateForToolhead(loc).then(stateInfo => {
+    if (isToolheadTarget && window.checkPrinterForHead) {
+        // Group 39.3: the shared printer check: the "⏳ Checking XL…" pill and a
+        // timeout race (this fetch used to wait on the server with no cap).
+        return window.checkPrinterForHead(loc).then(detail => {
+            const stateInfo = detail && detail.active
+                ? { state: detail.state || 'ACTIVE', printer_name: detail.printer_name || loc }
+                : null;
             if (!stateInfo) {
                 // Unknown state → proceed normally.
                 return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, [], options);

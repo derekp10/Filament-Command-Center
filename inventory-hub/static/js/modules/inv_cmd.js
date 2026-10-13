@@ -1499,7 +1499,11 @@ const processScan = (text, source = 'keyboard') => {
     if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? (onScreen('confirmModal') ? confirmAction(true) : ignoredConfirm('confirmModal', !!state.pendingConfirm)) : (upper.includes('CANCEL') ? confirmAction(false) : null);
     if (state.activeModal === 'action') { if (upper.includes('CANCEL')) { closeModal('actionModal'); return; } if (upper.startsWith('CMD:MODAL:')) { if (!onScreen('actionModal')) { ignoredConfirm('actionModal', true); return; } closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
 
-    setProcessing(true);
+    // Group 39.3: a slot scan whose slot feeds a printer head waits on that
+    // printer server-side; the dim says which ("⏳ Checking XL…").
+    const slotScan = /^LOC:([^:]+):SLOT:(\d+)$/i.exec(String(text).trim());
+    setProcessing(true, { label: slotScan && window.printerLabelForTarget
+        ? window.printerLabelForTarget(slotScan[1], slotScan[2]) : null });
     window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source }) })
         .then(r => r.json())
         .then(res => {
@@ -1618,7 +1622,8 @@ const processScan = (text, source = 'keyboard') => {
                             || { printer_name: res.location, state: 'PRINTING' },
                         msg: res.msg,
                         onConfirm: () => {
-                            setProcessing(true);
+                            setProcessing(true, { label: window.printerLabelForTarget
+                                ? window.printerLabelForTarget(res.location, res.slot) : null });
                             window.fetchT('/api/identify_scan', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -1845,7 +1850,7 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm, msg = '' }) 
 // `confirmedHeads`: the heads whose active-print warning the user confirmed
 // (Group 39.1); anything else (the old `false`) confirms none.
 const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOverride = null) => {
-    setProcessing(true);
+    setProcessing(true, { label: window.printerLabelForTarget ? window.printerLabelForTarget(tid, slot) : null });
     // L124: callers can pass an explicit `spoolIdsOverride` subset (e.g. the
     // single topmost id when the target is a toolhead) so the rest of the
     // buffer stays untouched. Default = entire buffer (the legacy bulk-assign
