@@ -552,12 +552,82 @@ def test_force_location_override_with_a_failure_shows_the_error(
     page.dispatch_event(item, "dblclick")
     _until(page, lambda: be.bodies("/api/manage_contents"), 5_000, "the override sent nothing")
     assert be.bodies("/api/manage_contents")[0] == {
-        "action": "add", "location": BOX, "spool_id": 999401, "origin": "manual_override"}
+        "action": "add", "location": BOX, "spool_id": 999401, "origin": "manual_override",
+        "confirmed_toolheads": []}
 
     err = _toast(page, "a failed override raised no error toast", type_="error", contains=("#999401", REJECT))
     assert err["duration"] and err["duration"] >= 7000, err
     page.wait_for_timeout(500)
     assert not [t for t in _toasts(page) if "Location updated via override" in (t["text"] or "")], _toasts(page)
+
+
+_FORCE_ASK = {"status": "requires_confirm", "confirm_type": "active_print",
+              "active_print": {"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING"},
+              "active_prints": [{"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING",
+                                 "role": "source", "spools": [999401]}],
+              "msg": f"#999401 is loaded on {TH}. Moving it to {BOX} means FCC stops charging this print to it. Continue?"}
+
+
+def _force_to_box(page: Page) -> None:
+    page.evaluate("(sid) => window.promptEditLocation(sid, 'Unassigned')", 999401)
+    item = f".swal-loc-item[data-id='{BOX}']"
+    page.wait_for_selector(item, state="attached", timeout=10_000)
+    page.dispatch_event(item, "dblclick")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_force_location_asks_on_an_active_print_then_moves_with_the_head(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 39.5: a requires_confirm answer used to be a dead-end 7 s error. Now
+    the shared confirm shows the server's message, and Yes retries confirming the
+    head it named. HEAD proof: no confirm, an error toast."""
+    be = FakeBackend(page, manage_contents=lambda b: (
+        {"status": "success"} if b.get("confirmed_toolheads") else _FORCE_ASK), extra_locations=[BOX_ROW])
+    _boot(page, base_url, reset_dom_state_js)
+    _force_to_box(page)
+    page.wait_for_selector("#fcc-active-print-confirm-overlay .fcc-apc-yes", state="visible", timeout=5_000)
+    assert "stops charging this print" in page.text_content("#fcc-active-print-confirm-overlay .fcc-apc-msg")
+    page.click("#fcc-active-print-confirm-overlay .fcc-apc-yes")
+    _until(page, lambda: len(be.bodies("/api/manage_contents")) >= 2, 5_000, "Yes sent no retry")
+    assert be.bodies("/api/manage_contents")[1]["confirmed_toolheads"] == [TH], be.bodies("/api/manage_contents")
+    _toast(page, "the confirmed override raised no success toast", type_="success",
+           contains=("Location updated via override",))
+
+
+@pytest.mark.usefixtures("require_server")
+def test_force_location_cancelled_sends_nothing_more(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    be = FakeBackend(page, manage_contents=lambda b: _FORCE_ASK, extra_locations=[BOX_ROW])
+    _boot(page, base_url, reset_dom_state_js)
+    _force_to_box(page)
+    page.wait_for_selector("#fcc-active-print-confirm-overlay .fcc-apc-no", state="visible", timeout=5_000)
+    page.click("#fcc-active-print-confirm-overlay .fcc-apc-no")
+    page.wait_for_timeout(600)
+    assert len(be.bodies("/api/manage_contents")) == 1, be.bodies("/api/manage_contents")
+    assert page.evaluate("() => !document.getElementById('fcc-active-print-confirm-overlay')")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_force_unassign_asks_on_an_active_print_then_retries_with_the_flag(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """The force_unassign answer has its own shape (require_confirm +
+    confirm_type) and its route keeps the boolean."""
+    ask = {"success": False, "require_confirm": True, "confirm_type": "active_print",
+           "active_print": {"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING"},
+           "msg": f"{PRINTER} is PRINTING — force-unassigning from this toolhead will disrupt the print."}
+    be = FakeBackend(page, manage_contents=lambda b: {"success": True} if b.get("confirm_active_print") else ask,
+                     extra_locations=[BOX_ROW])
+    _boot(page, base_url, reset_dom_state_js)
+    page.evaluate("(sid) => window.promptEditLocation(sid, 'Unassigned')", 999401)
+    item = ".swal-loc-item[data-id='']"
+    page.wait_for_selector(item, state="attached", timeout=10_000)
+    page.dispatch_event(item, "dblclick")
+    page.wait_for_selector("#fcc-active-print-confirm-overlay .fcc-apc-yes", state="visible", timeout=5_000)
+    page.click("#fcc-active-print-confirm-overlay .fcc-apc-yes")
+    _until(page, lambda: len(be.bodies("/api/manage_contents")) >= 2, 5_000, "Yes sent no retry")
+    first, second = be.bodies("/api/manage_contents")[:2]
+    assert first["action"] == "force_unassign" and first["confirm_active_print"] is False, first
+    assert second["confirm_active_print"] is True, second
 
 
 # ---------------------------------------------------------------------------

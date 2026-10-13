@@ -111,6 +111,77 @@ const unionConfirmHeads = (prior, answer) => {
 };
 window.unionConfirmHeads = unionConfirmHeads;
 
+// --- ACTIVE-PRINT CONFIRM (Group 39.4) ---
+// The one confirm a door shows when a move touches a printing head: the
+// server's `msg` (Derek's D6 wording), Yes / Cancel, the scan-to-confirm QR pair,
+// and the proven keyboard contract of the overlays it replaces (Enter on the
+// focused button unless a scan is in flight; Tab cycles; Escape cancels through
+// mountOverlay). Group 39.5's Force Location is its first caller; the Quick-Swap,
+// Location Manager and scan-assign overlays move onto it in 39.4's frontend step.
+// `host`: the Bootstrap modal it sits over, so it never outlives it.
+window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
+                               onConfirm = null, onCancel = null } = {}) => {
+    const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const first = activePrint || (Array.isArray(activePrints) && activePrints[0]) || {};
+    const content = `
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:480px; text-align:center;">
+            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${esc(first.printer_name || 'A printer')} is ${esc(first.state || 'PRINTING')}</div>
+            <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;">${esc(msg || 'Moving a spool now will disrupt the print. Continue?')}</div>
+            <div style="display:flex; gap:10px; justify-content:center;">
+                <button type="button" class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">Continue Anyway</button>
+                <button type="button" class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:120px;">Cancel</button>
+            </div>
+        </div>`;
+    let handle = null;
+    let qrSession = null;
+    let settled = false;
+    const cleanup = () => {
+        if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
+        if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
+    };
+    // Once only: a double click, or a click racing a scan, must not move twice.
+    const yes = () => { if (settled) return; settled = true; cleanup(); if (onConfirm) onConfirm(); };
+    const no = () => { if (settled) return; settled = true; cleanup(); if (onCancel) onCancel(); };
+    handle = window.mountOverlay({
+        id: 'fcc-active-print-confirm-overlay',
+        content,
+        tier: 'confirm',
+        host: host || undefined,
+        initialFocus: '.fcc-apc-yes',
+        onEscape: no,
+    });
+    const ov = handle.element;
+    const yesBtn = ov.querySelector('.fcc-apc-yes');
+    const noBtn = ov.querySelector('.fcc-apc-no');
+    if (yesBtn) yesBtn.onclick = yes;
+    if (noBtn) noBtn.onclick = no;
+    ov.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            // A scan in flight owns this Enter: it terminates the scan (a
+            // "Scan to Cancel" QR must never perform the CONFIRM).
+            if (window.isScanInFlight && window.isScanInFlight()) return;
+            if (document.activeElement === yesBtn) { e.preventDefault(); e.stopPropagation(); yes(); }
+            else if (document.activeElement === noBtn) { e.preventDefault(); e.stopPropagation(); no(); }
+            return;
+        }
+        if (e.key === 'Tab') {
+            const order = [yesBtn, noBtn].filter(Boolean);
+            const idx = order.indexOf(document.activeElement);
+            const next = idx === -1 ? (e.shiftKey ? order.length - 1 : 0)
+                : (idx + (e.shiftKey ? order.length - 1 : 1)) % order.length;
+            e.preventDefault(); e.stopPropagation();
+            order[next].focus();
+        }
+    }, true);
+    if (window.attachConfirmQRs) {
+        // Inside the dialog PANEL, so the QR row stacks below the buttons.
+        qrSession = window.attachConfirmQRs({ host: handle.panel, onConfirm: yes, onCancel: no, theme: 'warning' });
+    }
+    return { close: no };
+};
+
 // --- SCAN CAPTURE FROM A FOCUSED FIELD ---
 // The global accumulator bails on `e.target.tagName === 'INPUT'`, so any modal
 // that focuses a text field disarms the scanner. Sometimes dropping the
