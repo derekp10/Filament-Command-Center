@@ -4,7 +4,7 @@
 **Estimated effort:** SMALL–MEDIUM (~4–7 h, 1 session).
 **Risk:** **LOW–MEDIUM.** Each item is small and already specified. 46.1 is on Derek's daily path and writes spool locations, so it needs a reproduction and an E2E pin.
 
-> **Status: `TODO` — filed 2026-10-12 (`/refresh-groups`), not started.**
+> **Status: `PARTIAL` — 46.1, 46.2, 46.4 and 46.5 shipped in the 2026-10-13 overnight run (merged to `dev`, `36d7318`; see `completed-archive.md`). Left: 46.3, which needs Derek's "Tool 1" vs "T0" call.**
 > Small, specified fixes that shouldn't wait behind the large design-blocked groups (37, 39–42, 44). It has the Option-B standalone-sweep shape.
 > 46.5 (37.1) was pulled out of [Group 37](37-location-system-redesign.md) by Derek's call on 2026-10-12: it's root-caused and doesn't depend on fork 1.
 > Code anchors were read on `dev` @ `3949aba`. Re-grep before editing.
