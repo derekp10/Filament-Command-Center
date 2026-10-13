@@ -328,25 +328,41 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
         for sid in loc_spools:
             spool_data = spoolman_api.get_spool(sid)
             if spool_data and weight_used > 0:
-                used = float(spool_data.get('used_weight', 0))
-                initial = float(spool_data.get('initial_weight', 0) or 0)
-                remaining = max(0, initial - used)
-                new_remaining = max(0, remaining - weight_used)
-                new_used = used + weight_used
+                used = float(spool_data.get('used_weight', 0) or 0)
+                # 43.1 — clamp against the EFFECTIVE capacity: the spool's own
+                # initial_weight, else its filament's net weight (how Spoolman
+                # computes remaining_weight). This read `initial_weight or 0`, so an
+                # inherit-weight spool recorded 0 g applied while update_spool —
+                # which caps only an OWN initial_weight — charged it in full: a
+                # wrong ledger today, a double-deduct once a shortfall is
+                # recoverable (43.2). The write is clamped to the same capacity,
+                # so the spool absorbs exactly what the ledger records.
+                capacity = spoolman_api.effective_initial_weight(spool_data)
+                if capacity is None:
+                    # Neither the spool nor its filament has a weight: the
+                    # remaining is unknown. Charge as before and record it all.
+                    remaining = new_remaining = None
+                    actual_g = float(weight_used)
+                else:
+                    remaining = max(0.0, capacity - used)
+                    actual_g = min(float(weight_used), remaining)
+                    new_remaining = max(0.0, remaining - actual_g)
+                new_used = used + actual_g
                 if spoolman_api.update_spool(sid, {"used_weight": new_used}):
                     spools_updated += 1
-                    # Spoolman caps used_weight ≤ initial, so a near-empty spool
-                    # absorbs only `remaining`, not the full `weight_used`. Record the
-                    # ACTUALLY-absorbed grams (= remaining - new_remaining) so the
-                    # ledger and the callers' shortfall math reflect reality — else an
+                    # Record the ACTUALLY-absorbed grams so the ledger and the
+                    # callers' shortfall math reflect reality — else an
                     # over-capacity deduct reads as fully applied and the gap is
                     # silently lost (the clamp the partial-confirm loop also guards).
-                    actual_g = min(float(weight_used), remaining)
                     info = spoolman_api.format_spool_display(spool_data)
                     label = strategy_label or "Auto-deduct"
+                    if capacity is None:
+                        tail = (f"[no known capacity — neither the spool nor its filament has a "
+                                f"weight; {new_used:.1f}g used so far]")
+                    else:
+                        tail = f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]"
                     state.add_log_entry(
-                        f"✔️ Auto-deducted {actual_g:.1f}g from Spool #{sid} ({label}): "
-                        f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]",
+                        f"✔️ Auto-deducted {actual_g:.1f}g from Spool #{sid} ({label}): {tail}",
                         "SUCCESS", info['color'])
                     details.append({"sid": sid, "grams": actual_g, "remaining": new_remaining})
                 else:
@@ -1175,9 +1191,15 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None):
             if not spool:
                 continue
             used = float(spool.get('used_weight', 0) or 0)
-            initial = float(spool.get('initial_weight', 0) or 0)
-            remaining_before = max(0.0, initial - used)
-            remaining_after = max(0.0, remaining_before - grams)
+            # 43.1 — the same effective capacity the apply loop clamps against
+            # (own initial_weight, else the filament's). `initial_weight or 0`
+            # showed "0 g left" for every inherit-weight spool. None = unknown.
+            capacity = spoolman_api.effective_initial_weight(spool)
+            if capacity is None:
+                remaining_before = remaining_after = None
+            else:
+                remaining_before = max(0.0, capacity - used)
+                remaining_after = max(0.0, remaining_before - grams)
             disp = spoolman_api.format_spool_display(spool)
             rows.append({
                 'sid': sid,
@@ -1185,9 +1207,9 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None):
                 'position': pos,
                 'grams': round(float(grams), 2),
                 'current_used': round(used, 2),
-                'initial_weight': round(initial, 2),
-                'remaining_before': round(remaining_before, 1),
-                'remaining_after': round(remaining_after, 1),
+                'initial_weight': None if capacity is None else round(capacity, 2),
+                'remaining_before': None if remaining_before is None else round(remaining_before, 1),
+                'remaining_after': None if remaining_after is None else round(remaining_after, 1),
                 'display': disp.get('text', f"#{sid}"),
                 'color': disp.get('color', '888888'),
                 'ambiguous': bool(ambiguous),
@@ -1208,7 +1230,8 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None):
             merged[r['sid']] = r
         else:
             m['grams'] = round(m['grams'] + r['grams'], 2)
-            m['remaining_after'] = round(max(0.0, m['remaining_before'] - m['grams']), 1)
+            if m['remaining_before'] is not None:
+                m['remaining_after'] = round(max(0.0, m['remaining_before'] - m['grams']), 1)
             if str(r['toolhead']) not in str(m['toolhead']).split(', '):
                 m['toolhead'] = f"{m['toolhead']}, {r['toolhead']}"
             # Same-sid rows can't differ in `ambiguous` by construction (a 2+-distinct
@@ -1587,20 +1610,28 @@ def api_cancel_deduct_confirm():
         # never exceeds capacity and the reported figures match what Spoolman
         # actually stores (update_spool silently caps used_weight ≤ initial).
         used = float(spool.get('used_weight', 0) or 0)
-        initial = float(spool.get('initial_weight', 0) or 0)
-        grams = min(grams, max(0.0, initial - used))
+        # 43.1 — clamp against the effective capacity (own initial_weight, else
+        # the filament's). `initial_weight or 0` clamped an inherit-weight
+        # spool's grams to nothing, so its confirmed review charged 0 g and still
+        # burned the ledger. An unknown capacity isn't clamped (the apply loop's
+        # rule).
+        capacity = spoolman_api.effective_initial_weight(spool)
+        if capacity is not None:
+            grams = min(grams, max(0.0, capacity - used))
         if grams <= 0:
             # Spool already empty — nothing to deduct, but it's not a failure.
             applied.append({"sid": sid, "grams": 0.0, "remaining": 0.0})
             continue
         new_used = used + grams
         if spoolman_api.update_spool(sid, {"used_weight": new_used}):
-            remaining = max(0.0, initial - new_used)
+            remaining = None if capacity is None else max(0.0, capacity - new_used)
             info = spoolman_api.format_spool_display(spool)
+            tail = "[no known capacity]" if remaining is None else f"[➔ {remaining:.1f}g remaining]"
             state.add_log_entry(
-                f"✔️ Cancel-deduct {grams:.2f}g from Spool #{sid} (confirmed): "
-                f"[➔ {remaining:.1f}g remaining]", "SUCCESS", info.get('color', '888888'))
-            applied.append({"sid": sid, "grams": round(grams, 2), "remaining": round(remaining, 1)})
+                f"✔️ Cancel-deduct {grams:.2f}g from Spool #{sid} (confirmed): {tail}",
+                "SUCCESS", info.get('color', '888888'))
+            applied.append({"sid": sid, "grams": round(grams, 2),
+                            "remaining": None if remaining is None else round(remaining, 1)})
         else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
             errors.append({"sid": sid, "error": err})
