@@ -390,11 +390,15 @@ def api_manage_contents():
         origin = data.get('origin', '')
         # Group 39.1: a move confirms by head (`confirmed_toolheads`); the
         # boolean above stays for remove / force_unassign / clear_location.
-        return jsonify(logic.perform_smart_move(
+        result = logic.perform_smart_move(
             loc_id, [spool_id],
             target_slot=slot_arg, origin=origin,
             confirm_active_print=logic.confirmed_heads(data),
-        ))
+        )
+        stale = logic.stale_confirm_refusal(data, result)
+        if stale:
+            return jsonify({"status": "error", "msg": stale, "stale_page": True})
+        return jsonify(result)
     # 28.C1 — the action set is validated at the top, so control never reaches
     # here; a defensive JSON error keeps Flask from returning None if it ever did.
     return jsonify({"success": False, "msg": f"Unknown action: {action}"})
@@ -1272,6 +1276,16 @@ def api_identify_scan():
         # confirmation prompt to the client. Frontend slot-QR path (scan
         # handler) renders this as a modal and retries on confirm, sending
         # back the heads in `active_prints`.
+        stale = logic.stale_confirm_refusal(request.json, move_result)
+        if stale:
+            return jsonify({
+                "type": "assignment",
+                "action": "assignment_failed",
+                "location": target, "slot": slot,
+                "spool": spool_id,
+                "msg": stale,
+                "stale_page": True,
+            }), 200
         if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
             state.add_log_entry(
                 f"⚠️ Spool #{spool_id} → <b>{target}:SLOT:{slot}</b> waits for a confirm: "

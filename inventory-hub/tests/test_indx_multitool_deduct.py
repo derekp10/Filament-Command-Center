@@ -125,9 +125,12 @@ def test_swap_on_one_head_still_charges_the_other_heads():
     seg = {"footer": dict(RACOON_FOOTER), "cums": [{1: 10.0}]}
     seen = {}
 
-    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None):
+    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None):
         seen["usage"] = dict(usage_map)
-        return [{"sid": 300 + p, "grams": g, "position": p} for p, g in sorted(usage_map.items())]
+        rows = [{"sid": 300 + p, "grams": g, "position": p} for p, g in sorted(usage_map.items())]
+        if charged_out is not None:   # as the real resolver does (43.4)
+            charged_out.update(r["position"] for r in rows)
+        return rows
 
     with patch.object(prusalink_api, "compute_segment_usage", return_value=seg), \
          patch.object(locations_db, "get_active_printer_map", return_value=_map(8)), \
@@ -158,8 +161,11 @@ def test_swap_split_total_covers_every_printing_head():
     swap_log = [{"position": 1, "progress": 0.5, "from_sid": 201, "to_sid": 202}]
     seg = {"footer": dict(RACOON_FOOTER), "cums": [{1: 10.0}]}
 
-    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None):
-        return [{"sid": 300 + p, "grams": g, "position": p} for p, g in sorted(usage_map.items())]
+    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None):
+        rows = [{"sid": 300 + p, "grams": g, "position": p} for p, g in sorted(usage_map.items())]
+        if charged_out is not None:   # as the real resolver does (43.4)
+            charged_out.update(r["position"] for r in rows)
+        return rows
 
     with patch.object(prusalink_api, "compute_segment_usage", return_value=seg), \
          patch.object(locations_db, "get_active_printer_map", return_value=_map(8)), \
@@ -190,7 +196,7 @@ def test_swap_on_a_head_that_printed_nothing_is_ignored():
     ]
     seg = {"footer": dict(usage), "cums": [{3: 20.0}]}
 
-    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None):
+    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None):
         return []
 
     with patch.object(prusalink_api, "compute_segment_usage", return_value=seg), \

@@ -842,6 +842,19 @@ def api_quickswap_return():
         found_box, [spool_id], target_slot=found_slot, origin='quickswap_return',
         auto_deploy=False, confirm_active_print=logic.confirmed_heads(data),
     )
+    stale = logic.stale_confirm_refusal(data, move_result)
+    if stale:
+        return jsonify({
+            "action": "return_failed",
+            "spool": spool_id,
+            "toolhead": requested,
+            "active_toolhead": toolhead,
+            "requested": requested,
+            "box": found_box,
+            "slot": found_slot,
+            "error": stale,
+            "stale_page": True,
+        }), 409
     if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
         state.add_log_entry(
             f"⚠️ Return: Spool #{spool_id} off <b>{toolhead}</b> waits for a confirm: "
@@ -972,6 +985,15 @@ def api_quickswap():
         toolhead, [spool_id], target_slot=None, origin='quickswap',
         confirm_active_print=logic.confirmed_heads(data),
     )
+    stale = logic.stale_confirm_refusal(data, move_result)
+    if stale:
+        return jsonify({
+            "action": "quickswap_failed",
+            "spool": spool_id,
+            "toolhead": toolhead, "box": box, "slot": slot,
+            "error": stale,
+            "stale_page": True,
+        }), 409
     if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
         state.add_log_entry(
             f"⚠️ Quick-swap: Spool #{spool_id} → <b>{toolhead}</b> waits for a confirm: "

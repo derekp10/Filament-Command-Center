@@ -53,8 +53,8 @@ def _confirm_scope(confirm):
     """Group 39.1 — what a `confirm_active_print` value covers, as
     (covers_every_head, covered_heads).
 
-    True covers every head: internal callers (the bulk-move commit, which
-    re-plans from live state) and the legacy browser flag. Falsy covers none.
+    True covers every head: execute_bulk_move, whose plan re-planned from live
+    state, and the boolean doors (eject, force-unassign). Falsy covers none.
     An iterable of LocationIDs covers exactly the heads whose active-print
     warning the user saw (`confirmed_toolheads`), so a stale confirm — a grid
     whose slot was rebound to another head — is asked again (R2-08)."""
@@ -85,6 +85,27 @@ def confirmed_heads(data):
     if isinstance(heads, (list, tuple)):
         return [str(h).strip().strip('"').upper() for h in heads if str(h or '').strip()]
     return []
+
+
+STALE_PAGE_MSG = ("This FCC page is out of date, so it can't confirm a move during a print. "
+                  "Reload the page (Ctrl+F5) and try again.")
+
+
+def stale_confirm_refusal(data, result):
+    """Group 39 review (frontend-12): a page loaded before Group 39 answers an
+    active-print confirm with a bare `confirm_active_print: true` and never
+    sends `confirmed_toolheads`. The five move doors ignore that flag, so each
+    Yes got the same question back, forever, until the page was reloaded. When
+    such a request is asked again, this logs and returns the message the door
+    answers with instead (as an error, which every old page toasts); otherwise
+    None. A move that no longer needs a confirm goes ahead as usual."""
+    d = data if isinstance(data, dict) else {}
+    if d.get('confirm_active_print') is not True or 'confirmed_toolheads' in d:
+        return None
+    if not (isinstance(result, dict) and result.get('status') == 'requires_confirm'):
+        return None
+    state.add_log_entry(f"⚠️ {STALE_PAGE_MSG}", "WARNING", "ffaa00")
+    return STALE_PAGE_MSG
 
 
 def _confirm_covers(confirm, head):
@@ -130,7 +151,7 @@ def _and_list(items):
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def _active_print_message(active_prints, target, residents=()):
+def _active_print_message(active_prints, target, residents=(), target_slot=None):
     """The text of an active-print confirm, in Derek's D6 wording (Group 39.4):
       one source   "#42 is loaded on XL-3. Moving it to CR-CT-2-R1 means FCC
                     stops charging this print to it. Continue?"
@@ -139,29 +160,50 @@ def _active_print_message(active_prints, target, residents=()):
                     Continue?"
       destination  "XL is PRINTING. Loading #57 onto XL-2 unloads #196, so FCC
                     stops charging this print to #196. Continue?"
+      feeds        "XL is PRINTING. LR-MDB-1 slot 2 feeds XL-2, so this also
+                    loads #42 onto XL-2 and unloads what XL-2 holds. Continue?"
     A head -> head move on one printer is one message: the source sentence
-    names both heads. A destination with no resident, or a bound slot's head,
-    keeps the sentence the overlays have always shown."""
+    names both heads. A bound slot's head always gets its own sentence naming
+    it: the Yes covers that head, so the user must see it (R2-08). When it is
+    on a source's printer, the spool keeps feeding that print, so the source
+    sentence drops "stops charging". A destination with no resident keeps the
+    sentence the overlays have always shown."""
     sources = [a for a in active_prints if a.get('role') == 'source']
+    feeds = [a for a in active_prints if a.get('role') == 'feeds']
     told = {a['printer_name'] for a in sources}
     out = []
     if sources:
         loaded = [(sid, a['toolhead']) for a in sources for sid in (a.get('spools') or [])]
         if len(loaded) == 1:
-            out.append(f"#{loaded[0][0]} is loaded on {loaded[0][1]}. Moving it to {target} "
-                       f"means FCC stops charging this print to it.")
+            where, pronoun = f"#{loaded[0][0]} is loaded on {loaded[0][1]}", "it"
         else:
-            where = [f"#{loaded[0][0]} is loaded on {loaded[0][1]}"] + [f"#{s} on {h}" for s, h in loaded[1:]]
-            whose = f"this {sources[0]['printer_name']} print" if len(told) == 1 else "these prints"
-            out.append(f"{_and_list(where)}. Moving them to {target} means FCC stops charging "
-                       f"{whose} to them.")
+            where = _and_list([f"#{loaded[0][0]} is loaded on {loaded[0][1]}"]
+                              + [f"#{s} on {h}" for s, h in loaded[1:]])
+            pronoun = "them"
+        if any(f['printer_name'] in told for f in feeds):
+            out.append(f"{where}.")
+        else:
+            whose = ("this print" if len(loaded) == 1 else
+                     f"this {sources[0]['printer_name']} print" if len(told) == 1 else "these prints")
+            out.append(f"{where}. Moving {pronoun} to {target} means FCC stops charging {whose} to {pronoun}.")
         if residents:
             out.append(f"It also unloads {_and_list('#' + str(r) for r in residents)} from {target}.")
     for a in active_prints:
+        role = a.get('role')
+        if role == 'source':
+            continue
+        if role == 'feeds':
+            moving = _and_list('#' + str(s) for s in a.get('spools') or []) if a.get('spools') else "the spool"
+            slot = f"{target} slot {target_slot}" if target_slot not in (None, '') else target
+            lead = "" if a['printer_name'] in told else f"{a['printer_name']} is {a['state']}. "
+            told.add(a['printer_name'])
+            out.append(f"{lead}{slot} feeds {a['toolhead']}, so this also loads {moving} onto "
+                       f"{a['toolhead']} and unloads what {a['toolhead']} holds.")
+            continue
         if a['printer_name'] in told:
             continue
         told.add(a['printer_name'])
-        if a.get('role') == 'destination' and residents:
+        if role == 'destination' and residents:
             gone = _and_list('#' + str(r) for r in residents)
             moving = _and_list('#' + str(s) for s in a.get('spools') or []) if a.get('spools') else "a spool"
             out.append(f"{a['printer_name']} is {a['state']}. Loading {moving} onto {a['toolhead']} "
@@ -185,7 +227,7 @@ def _requires_confirm_answer(active_prints, target, target_slot, residents=()):
         "fed_heads": [],
         "can_store": False,
         "target_slot": None if target_slot in (None, '') else str(target_slot),
-        "msg": _active_print_message(active_prints, target, residents),
+        "msg": _active_print_message(active_prints, target, residents, target_slot),
     }
 
 
@@ -670,7 +712,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     #   5. ONE confirm answer: _uncovered_active_heads over the destination /
     #      feeds / source heads (one probe per printer, through the memo), in the
     #      shape _requires_confirm_answer builds (40.0c adds fed_heads).
-    #   6. Writes, per spool, in this order: Smart Load's resident ejects; the
+    #   6. Writes, per spool, in this order: Smart Load's resident ejects (from
+    #      a fresh strict list of the head when step 5 could have probed); the
     #      slot unseat (41.6); the spool's own write (13.6 / record_source at a
     #      head, 40.0d; the single-slot box release, 42.1); then the chain.
     # -----------------------------------------------------------------------------
@@ -714,16 +757,25 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # flag) reads exactly what it always did. The write loop re-reads each
     # record rather than trust one read before a printer probe.
     sources: typing.Dict[str, typing.List[int]] = {}
-    if not _confirm_scope(confirm_active_print)[0]:
+    # True only when every moving spool's own record already puts it on the
+    # target: a re-scan onto its own head moves nothing, so it isn't asked
+    # about (39.4), unless Smart Load would unload another resident.
+    all_here = False
+    every_head_covered = _confirm_scope(confirm_active_print)[0]
+    if not every_head_covered:
         unreadable = []
+        here_count = 0
         for sid in spools:
             rec = spoolman_api.get_spool(sid)
             if not rec:
                 unreadable.append(str(sid))
                 continue
             here = str(rec.get('location') or '').strip().upper()
+            if here == target:
+                here_count += 1
             if here and here != target and here in printer_map:
                 sources.setdefault(here, []).append(int(sid))
+        all_here = here_count == len(spools)
         if unreadable:
             names = ", ".join(f"#{u}" for u in unreadable)
             for sid in spools:
@@ -742,8 +794,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # matcher also returns ghosts (a stale physical_source naming this head)
     # and, for a Printer row, every toolhead's spool by prefix. Those are
     # skipped on the row, with no read of their own (R1-02).
-    residents: typing.List[typing.Any] = []
-    if is_printer or is_toolhead:
+    def _strict_residents():
+        """(residents, None), or (None, the fail-closed answer)."""
         try:
             rows = spoolman_api.get_spools_at_location_detailed_strict(target) or []
         except Exception as e:
@@ -754,11 +806,17 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 state.add_log_entry(
                     f"❌ <b>Smart Load:</b> not loading Spool #{sid} onto {target} — {why}",
                     "ERROR", "ff4444")
-            return {"status": "error", "msg": f"Not loaded: {why}.", "failures": failures}
+            return None, {"status": "error", "msg": f"Not loaded: {why}.", "failures": failures}
         incoming = {str(s) for s in spools}
-        residents = [row.get('id') for row in rows
-                     if str(row.get('id')) not in incoming and not row.get('is_ghost')
-                     and str(row.get('location') or '').strip().upper() == target]
+        return [row.get('id') for row in rows
+                if str(row.get('id')) not in incoming and not row.get('is_ghost')
+                and str(row.get('location') or '').strip().upper() == target], None
+
+    residents: typing.List[typing.Any] = []
+    if is_printer or is_toolhead:
+        residents, refused = _strict_residents()
+        if refused:
+            return refused
 
     # Step 5. The heads the moving spools leave, the destination, and a named
     # slot's bound head (the auto-deploy chain loads it) are checked BEFORE any
@@ -767,7 +825,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # True (covers every head), falsy (none) or the LocationIDs whose warning
     # the user saw.
     touched: typing.List[tuple] = [(head, 'source', sids) for head, sids in sources.items()]
-    touched.append((target, 'destination'))
+    if not (all_here and not residents):
+        touched.append((target, 'destination'))
     tgt_row = tgt_info
     # The bound head counts only when the chain will load it (I1-06): Return
     # parks a spool with auto_deploy=False, and must not ask about a head it
@@ -829,6 +888,16 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # spool returns to its exact slot + ghost state). Benefits single moves too;
     # a prerequisite for a trustworthy bulk-move undo.
     undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "extras": {}, "labels": {}, "ejections": {}, "ejection_extras": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
+
+    # Step 6 opens with a fresh strict list of the head (review engine-2): the
+    # step-4 list was read BEFORE the source reads and the printer probe, which
+    # take seconds when a printer is unreachable, and a spool another request
+    # loads onto the head meanwhile must be unloaded too, or the head holds
+    # two. The True path has no probe and no source reads, so it keeps one read.
+    if (is_printer or is_toolhead) and not every_head_covered:
+        residents, refused = _strict_residents()
+        if refused:
+            return refused
 
     # --- SMART LOAD LOGIC (Auto-Eject Resident) ---
     if residents:
@@ -1495,9 +1564,17 @@ def execute_bulk_move(plan, confirm_active_print=False):
     # way a deliberate single scan does. Confirmed by Derek 2026-07-11 —
     # auto-assigning filament to toolheads mid-bulk "would just make a mess",
     # especially when the source holds more than the destination can take.
+    #
+    # confirm_active_print=True (Group 39 review, engine-3): plan_bulk_move has
+    # just re-planned from live state, skipping every head-loaded spool and
+    # refusing a printer-head destination, and it owns the bulk move's own
+    # active-print prompt. So the engine's per-spool source reads (39.4) have
+    # nothing to find, and their fail-closed refusal would turn one Spoolman
+    # blip into "nothing moved" plus a reset armed session. `confirm_active_print`
+    # stays on the signature for callers; the plan gate above already used it.
     move_result = perform_smart_move(dest, movable_ids, origin='bulk_move',
                                      auto_deploy=False,
-                                     confirm_active_print=confirm_active_print)
+                                     confirm_active_print=True)
     # Defensive backstop: surface any requires_confirm the engine returns (with
     # auto_deploy off + single-occ dests rejected this is currently unreachable,
     # but the contract is honored if perform_smart_move ever changes).

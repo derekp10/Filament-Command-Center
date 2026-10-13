@@ -144,12 +144,15 @@ def test_happy_path_moves_all_movable(client):
     assert body["moved_ids"] == [1, 2]
     assert body["skipped"] == []
     assert body["failed"] == []
-    # Delegated exactly once with (dest, movable_ids) and the opt-in flag.
+    # Delegated exactly once with (dest, movable_ids). The engine gets True
+    # (Group 39 review, engine-3): the plan already skipped every loaded spool
+    # and refused a printer-head destination, so the engine's per-spool source
+    # reads have nothing to find and must not refuse the batch on one blip.
     mv.assert_called_once()
     args, kwargs = mv.call_args
     assert args[0] == "SHELF-B"
     assert args[1] == [1, 2]
-    assert kwargs.get("confirm_active_print") is False
+    assert kwargs.get("confirm_active_print") is True
     assert kwargs.get("origin") == "bulk_move"
     # A bulk move parks/relocates — it must NOT chain-deploy onto a live toolhead.
     assert kwargs.get("auto_deploy") is False

@@ -132,12 +132,28 @@ def test_smart_move_with_two_spools_on_two_heads_is_one_answer(client):
 
 
 def test_a_rescan_onto_its_own_head_does_not_ask():
+    """Nothing confirmed (review engine-4: this pin used to pre-confirm XL-3, so
+    it could not fail). A re-scan moves nothing, so neither the source nor the
+    destination is asked about, and the ghost trail survives."""
     sm = WireSpoolman({42: {"location": "XL-3", "extra": {"physical_source": "LR-MDB-1",
                                                           "physical_source_slot": "3"}}})
     probe, calls = _state_probe({"XL"})
-    res = _run(sm, probe, target="XL-3", raw_spools=[42], confirm_active_print=["XL-3"])
+    res = _run(sm, probe, target="XL-3", raw_spools=[42], confirm_active_print=[])
     assert res.get("status") == "success", res
     assert calls == [], "a re-scan onto the head the spool sits on probed the printer"
+    assert sm.spools[42]["extra"].get("physical_source") == "LR-MDB-1"
+
+
+def test_a_rescan_that_would_unload_another_spool_still_asks():
+    """XL-3 somehow holds #57 too: Smart Load would unload it, so it asks."""
+    sm = WireSpoolman({42: {"location": "XL-3", "extra": {}},
+                       57: {"location": "XL-3", "extra": {}}})
+    probe, _ = _state_probe({"XL"})
+    res = _run(sm, probe, target="XL-3", raw_spools=[42], confirm_active_print=[])
+    assert res.get("status") == "requires_confirm", res
+    assert [(a["toolhead"], a["role"]) for a in res["active_prints"]] == [("XL-3", "destination")]
+    assert "unloads #57" in res["msg"], res["msg"]
+    assert sm.patch_bodies == []
 
 
 def test_confirming_both_heads_moves_both():
@@ -186,8 +202,8 @@ def test_an_unreadable_moving_spool_refuses_before_any_probe():
 
 
 def test_the_true_path_reads_nothing_extra():
-    """Internal callers (bulk-move commit, the chain) pass True: no source pass,
-    no probe, and the move goes ahead even off a printing head."""
+    """True (execute_bulk_move, whose plan already skipped every loaded spool):
+    no source pass, no probe, and the move goes ahead even off a printing head."""
     sm = WireSpoolman({42: {"location": "XL-3", "extra": {}}})
     reads = []
     real_get = sm.get_spool
@@ -202,3 +218,84 @@ def test_the_true_path_reads_nothing_extra():
     assert calls == []
     # The write loop's read plus update_spool's own read-merge, as before 39.4.
     assert reads.count(42) == 2, f"#42 read {reads.count(42)} times: the True path gained a read"
+
+
+# ---- Group 39 review fixes ---------------------------------------------------
+
+BOX_LOCATIONS = LOCATIONS + [
+    {"LocationID": "LR-MDB-1", "Type": "Dryer Box", "Max Spools": "4", "Name": "LR MDB",
+     "extra": {"slot_targets": {"2": "XL-1"}}},
+]
+
+
+def test_a_same_printer_source_and_bound_head_names_the_bound_head():
+    """Review engine-1. #42 leaves XL-3 for LR-MDB-1 slot 2, which feeds XL-1 on
+    the same printing XL. The Yes covers XL-1 too (the replay sends every head in
+    active_prints), so the message must name it, and it must not claim FCC stops
+    charging the print to #42: the chain loads #42 onto XL-1."""
+    sm = WireSpoolman({42: {"location": "XL-3", "extra": {}},
+                       196: {"location": "XL-1", "extra": {}}})
+    probe, calls = _state_probe({"XL"})
+    res = run_move(sm, probe=probe, locations=BOX_LOCATIONS, printer_map=PRINTER_MAP,
+                   target="LR-MDB-1", raw_spools=[42], target_slot="2", confirm_active_print=[])
+    assert res.get("status") == "requires_confirm", res
+    assert [(a["toolhead"], a["role"]) for a in res["active_prints"]] == [
+        ("XL-3", "source"), ("XL-1", "feeds")]
+    assert res["msg"] == ("#42 is loaded on XL-3. LR-MDB-1 slot 2 feeds XL-1, so this also loads #42 "
+                          "onto XL-1 and unloads what XL-1 holds. Continue?")
+    assert calls == ["XL"]
+    assert sm.patch_bodies == []
+
+
+def test_a_bound_head_alone_is_named_too():
+    """No source: the feeds sentence names the printer AND the head it loads."""
+    sm = WireSpoolman({57: {"location": "CR", "extra": {}},
+                       196: {"location": "XL-1", "extra": {}}})
+    probe, _ = _state_probe({"XL"})
+    res = run_move(sm, probe=probe, locations=BOX_LOCATIONS, printer_map=PRINTER_MAP,
+                   target="LR-MDB-1", raw_spools=[57], target_slot="2", confirm_active_print=[])
+    assert res.get("status") == "requires_confirm", res
+    assert res["msg"] == ("XL is PRINTING. LR-MDB-1 slot 2 feeds XL-1, so this also loads #57 onto XL-1 "
+                          "and unloads what XL-1 holds. Continue?")
+
+
+def test_a_bound_head_on_another_printer_keeps_the_source_sentence():
+    """#42 leaves the printing Core One for a slot that feeds the printing XL:
+    the Core One print really does stop being charged to #42."""
+    sm = WireSpoolman({42: {"location": "CORE1-M0", "extra": {}}})
+    probe, _ = _state_probe({"XL", "Core One"})
+    res = run_move(sm, probe=probe, locations=BOX_LOCATIONS, printer_map=PRINTER_MAP,
+                   target="LR-MDB-1", raw_spools=[42], target_slot="2", confirm_active_print=[])
+    assert res.get("status") == "requires_confirm", res
+    assert res["msg"] == ("#42 is loaded on CORE1-M0. Moving it to LR-MDB-1 means FCC stops charging "
+                          "this print to it. XL is PRINTING. LR-MDB-1 slot 2 feeds XL-1, so this also "
+                          "loads #42 onto XL-1 and unloads what XL-1 holds. Continue?")
+
+
+@pytest.fixture
+def bulk_session():
+    prior = dict(state.BULK_MOVE_SESSION)
+    try:
+        yield state.BULK_MOVE_SESSION
+    finally:
+        state.BULK_MOVE_SESSION.clear()
+        state.BULK_MOVE_SESSION.update(prior)
+
+
+def test_a_bulk_commit_is_not_refused_by_one_unreadable_spool(bulk_session):
+    """Review engine-3. The bulk commit passed False, so the 39.4 source pass ran
+    and one unreadable spool refused the whole batch and reset the armed
+    session. The plan already skipped every loaded spool: the readable spools
+    move and the unreadable one is that spool's own failure."""
+    import logic
+    sm = WireSpoolman({1: {"location": "CR-CT-2-R1", "extra": {}},
+                       2: {"location": "CR-CT-2-R1", "extra": {}},
+                       3: {"location": "CR-CT-2-R1", "extra": {}}}, unreadable=[2])
+    shelf = {"LocationID": "SHELF-B", "Type": "Shelf", "Max Spools": "0", "Name": "Shelf B"}
+    bulk_session.update({"active": True, "stage": "preview",
+                         "source_id": "CR-CT-2-R1", "dest_id": "SHELF-B"})
+    probe, calls = _state_probe(set())
+    run_move(sm, probe=probe, locations=LOCATIONS + [shelf], printer_map=PRINTER_MAP,
+             call=lambda: logic.commit_bulk_move_session())
+    assert sm.direct_at("SHELF-B") == [1, 3], f"SHELF-B holds {sm.direct_at('SHELF-B')}"
+    assert sm.spools[2]["location"] == "CR-CT-2-R1"

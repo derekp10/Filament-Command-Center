@@ -299,6 +299,10 @@ def test_move_result_carries_per_spool_failures():
         m.start()
     try:
         result = logic.perform_smart_move("SHELF-B", [1, 2, 3], origin="test")
+        # ...and the global is None by the end, which is exactly why reading it
+        # after the loop mislabelled the failure. Read before `prior` is put
+        # back, or a stale error left by an earlier test fails this one.
+        global_after_move = logic.spoolman_api.LAST_SPOOLMAN_ERROR
     finally:
         for m in reversed(ctx):
             m.stop()
@@ -306,9 +310,7 @@ def test_move_result_carries_per_spool_failures():
 
     assert result["status"] == "success"          # unchanged bare-success contract
     assert result["failures"] == {"2": "HTTP 400: bad location"}
-    # ...and the global is None by the end, which is exactly why reading it
-    # after the loop mislabelled the failure.
-    assert logic.spoolman_api.LAST_SPOOLMAN_ERROR is None
+    assert global_after_move is None
 
 
 def test_move_result_failures_is_present_and_empty_on_a_clean_move():

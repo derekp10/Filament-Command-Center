@@ -27,6 +27,7 @@ import cancel_fetch_store  # noqa: E402
 import cancel_review_store  # noqa: E402
 import print_deduct  # noqa: E402
 import print_deduct_ledger  # noqa: E402
+import spoolman_api  # noqa: E402
 import state  # noqa: E402
 from deduct_wire_harness import WeightWireSpoolman, _start, _stop, _wire_ctx  # noqa: E402
 
@@ -40,6 +41,8 @@ def _isolated_stores(tmp_path, monkeypatch):
     monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "pending.json"))
     monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetches.json"))
     monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
+    # A lost PATCH leaves the module global set; don't hand it to the next test.
+    monkeypatch.setattr(spoolman_api, "LAST_SPOOLMAN_ERROR", None)
 
 
 @pytest.fixture
@@ -137,3 +140,105 @@ def test_a_retry_does_not_offer_a_picked_head_again(logs):
     assert [r["sid"] for r in rec["spools"]] == [97], rec
     assert not rec.get("unresolved_usage"), rec
     assert rec.get("requested_total") == pytest.approx(15.0), rec
+
+
+# ---- Group 39 review fixes ---------------------------------------------------
+
+def _sm3():
+    """#95 on RCOI-1 (T0), #96 on RCOI-2 (T1), RCOI-3 (T2) empty."""
+    return WeightWireSpoolman({95: _spool(500.0, "RCOI-1"), 96: _spool(900.0, "RCOI-2")})
+
+
+def _ctx3(sm):
+    return _wire_ctx(sm, at={"RCOI-1": [95], "RCOI-2": [96]}, toolheads=HEADS, printer=INDX)
+
+
+def _stash3(sm, usage):
+    ctx = _ctx3(sm) + [
+        patch.object(print_deduct.prusalink_api, "fetch_printer_credentials",
+                     return_value={"ip_address": "1.2.3.4", "api_key": "k"}),
+        patch.object(print_deduct, "_compute_cancel_usage", return_value=(usage, None)),
+    ]
+    _start(ctx)
+    try:
+        return print_deduct._create_pending_cancel_review(INDX, "f.bgcode", JOB, 0.5, fb_url="http://fb")
+    finally:
+        _stop(ctx)
+
+
+def _confirm3(sm, body):
+    ctx = _ctx3(sm)
+    _start(ctx)
+    try:
+        return app_module.app.test_client().post("/api/cancel_deduct/confirm",
+                                                 json={"printer_name": INDX, "job_id": JOB, **body}).get_json()
+    finally:
+        _stop(ctx)
+
+
+def test_a_completion_review_keeps_a_head_with_no_spool(logs):
+    """Review deduct-and-tests-15. A COMPLETED print whose T0 spool changed
+    mid-print goes to a spool_changed review; T2 was emptied mid-print. Its 5 g
+    used to vanish from the rows, the total, the log line and the shortfall."""
+    sm = _sm3()
+    ctx = _ctx3(sm)
+    _start(ctx)
+    try:
+        out = print_deduct._route_completion_to_review(
+            INDX, "f.bgcode", JOB, {0: 7.0, 1: 10.0, 2: 5.0}, "http://fb", [0])
+    finally:
+        _stop(ctx)
+    assert out["status"] == "pending_spool_changed", out
+    rec = _rec()
+    assert [r["sid"] for r in rec["spools"]] == [95, 96]
+    assert rec.get("unresolved_usage") == {"2": 5.0}, rec
+    assert rec["total_grams"] == pytest.approx(22.0)
+    assert any(h["toolhead"] == "RCOI-3" for h in rec.get("heads_at_end") or []), rec
+    assert any("spool changed mid-print" in m and "5.00g on T2" in m for m, _ in logs), logs
+    body = _confirm3(sm, {"updates": {"95": 7.0, "96": 10.0}})
+    assert body["status"] == "confirmed", body
+    assert body.get("shortfall_g") == pytest.approx(5.0), body
+
+
+def test_a_stale_card_cannot_drop_a_review_whose_rows_all_applied(logs):
+    """Review deduct-and-tests-16. Device A's Apply charges #95 and loses #96's
+    write, leaving a retry review (#96 only, T2 still uncharged). A card still
+    open on device B posts the original {95, 96}: #96 is charged, #95 is refused
+    as not on the review. The job is done, so it commits: the ledger is
+    recorded and T2's 5 g is reported, not dropped with the review."""
+    sm = _sm3()
+    _stash3(sm, {0: 7.0, 1: 10.0, 2: 5.0})
+    sm.patch_lost.add(96)
+    first = _confirm3(sm, {"updates": {"95": 7.0, "96": 10.0}})
+    assert first["errors"], first
+    assert [r["sid"] for r in _rec()["spools"]] == [96]
+    sm.patch_lost.discard(96)
+    body = _confirm3(sm, {"updates": {"95": 7.0, "96": 10.0}})
+    assert body["status"] == "confirmed", body
+    assert sm.used(95) == pytest.approx(507.0) and sm.used(96) == pytest.approx(910.0)
+    assert _rec() is None
+    assert print_deduct_ledger.was_deducted(INDX, JOB), "the review vanished with no ledger entry"
+    assert body.get("shortfall_g") == pytest.approx(5.0), body
+    assert any("ignored #95" in m for m, _ in logs), logs
+
+
+def test_one_spool_on_two_heads_leaves_no_head_uncharged(logs):
+    """Review deduct-and-tests-20. #96 feeds T0 and T1 (the shared-spool
+    config): the merge keeps one row, but both heads are charged, so nothing is
+    "no spool loaded" and the total is the merged row's grams."""
+    sm = WeightWireSpoolman({96: _spool(900.0, "RCOI-1")})
+    ctx = _wire_ctx(sm, at={"RCOI-1": [96], "RCOI-2": [96]}, toolheads=HEADS, printer=INDX) + [
+        patch.object(print_deduct.prusalink_api, "fetch_printer_credentials",
+                     return_value={"ip_address": "1.2.3.4", "api_key": "k"}),
+        patch.object(print_deduct, "_compute_cancel_usage", return_value=({0: 0.8, 1: 0.85}, None)),
+    ]
+    _start(ctx)
+    try:
+        out = print_deduct._create_pending_cancel_review(INDX, "f.bgcode", JOB, 0.5, fb_url="http://fb")
+    finally:
+        _stop(ctx)
+    assert out["status"] == "pending", out
+    rec = _rec()
+    assert [(r["sid"], r["grams"]) for r in rec["spools"]] == [(96, 1.65)]
+    assert not rec.get("unresolved_usage"), rec
+    assert rec["total_grams"] == pytest.approx(1.65)

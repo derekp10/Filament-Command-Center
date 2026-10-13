@@ -106,13 +106,16 @@ def test_the_replay_naming_that_head_deposits_and_deploys(client):
     assert sm.spools[42]["location"] == "XL-2"
 
 
-def test_a_bare_legacy_confirm_on_quickswap_is_asked_again(client):
+def test_a_bare_legacy_confirm_on_quickswap_is_told_to_reload(client):
+    """A bare `true` covers no head, so the server would ask again. A page that
+    sends it predates Group 39 and can never answer, so it is told to reload
+    instead of looping (review frontend-12). Nothing moves either way."""
     sm = WireSpoolman({240: {"location": "LR-MDB-1", "extra": {"container_slot": "3"}}})
     r = _run(sm, _probe_for({"XL"}), lambda: client.post("/api/quickswap", json={
         "toolhead": "XL-3", "box": "LR-MDB-1", "slot": "3", "confirm_active_print": True}))
     body = r.get_json()
-    assert r.status_code == 200 and body["action"] == "quickswap_requires_confirm", body
-    assert [(a["toolhead"], a["role"]) for a in body["active_prints"]] == [("XL-3", "destination")], body
+    assert r.status_code == 409 and body["action"] == "quickswap_failed", body
+    assert body.get("stale_page") is True and "Reload the page" in body["error"], body
     assert sm.patch_bodies == [] and sm.spools[240]["location"] == "LR-MDB-1"
 
 
@@ -149,3 +152,65 @@ def test_a_paused_printer_lets_return_through(client):
     body = r.get_json()
     assert body["action"] == "return_done", body
     assert sm.spools[240]["location"] == "LR-MDB-1"
+
+
+# ---- Group 39 review (frontend-12): a page loaded before Group 39 ----------------
+# Its Yes sends a bare `confirm_active_print: true`, which these doors ignore, so
+# each Yes got the same question back until the page was reloaded. Each door now
+# answers its own error shape with the reload message (every old page toasts it).
+
+
+def _stale_reload(text):
+    return "Reload the page" in (text or "")
+
+
+def test_a_stale_page_assign_is_told_to_reload(client):
+    sm = WireSpoolman({42: {"location": "CR", "extra": {}}})
+    r = _run(sm, _probe_for({"XL"}), lambda: client.post("/api/manage_contents", json={
+        "action": "add", "location": "XL-3", "spool_id": "ID:42", "confirm_active_print": True}))
+    body = r.get_json()
+    assert body["status"] == "error" and body.get("stale_page") is True and _stale_reload(body["msg"]), body
+    assert sm.patch_bodies == []
+    assert any(_stale_reload(e.get("msg")) for e in state.RECENT_LOGS), state.RECENT_LOGS
+
+
+def test_a_stale_page_buffer_scan_is_told_to_reload(client):
+    sm = WireSpoolman({42: {"location": "CR", "extra": {}}})
+    r = _run(sm, _probe_for({"XL"}), lambda: client.post("/api/smart_move", json={
+        "location": "XL-3", "spools": [42], "confirm_active_print": True}))
+    body = r.get_json()
+    assert body["status"] == "error" and body.get("stale_page") is True and _stale_reload(body["msg"]), body
+    assert sm.patch_bodies == []
+
+
+def test_a_stale_page_slot_scan_replay_is_told_to_reload(client):
+    state.GLOBAL_BUFFER = [{"id": 42, "display": "#42"}]
+    sm = WireSpoolman({42: {"location": "CR", "extra": {}}})
+    r = _run(sm, _probe_for({"XL"}), lambda: client.post("/api/identify_scan", json={
+        "text": "LOC:LR-MDB-1:SLOT:3", "source": "keyboard", "confirm_active_print": True}))
+    body = r.get_json()
+    assert body["action"] == "assignment_failed" and body.get("stale_page") is True, body
+    assert _stale_reload(body["msg"]), body
+    assert sm.patch_bodies == [] and [i["id"] for i in state.GLOBAL_BUFFER] == [42]
+
+
+def test_a_stale_page_return_is_told_to_reload(client):
+    sm = WireSpoolman({240: {"location": "XL-3", "extra": {
+        "physical_source": "LR-MDB-1", "physical_source_slot": "3", "container_slot": ""}}})
+    r = _run(sm, _probe_for({"XL"}), lambda: client.post("/api/quickswap/return", json={
+        "toolhead": "XL-3", "confirm_active_print": True}))
+    body = r.get_json()
+    assert r.status_code == 409 and body["action"] == "return_failed", body
+    assert body.get("stale_page") is True and _stale_reload(body["error"]), body
+    assert sm.spools[240]["location"] == "XL-3"
+
+
+def test_a_stale_page_move_that_needs_no_confirm_still_goes_ahead(client):
+    """The guard answers only a request the server would ask again: with the
+    printer idle the old page's move lands as it always did."""
+    sm = WireSpoolman({42: {"location": "CR", "extra": {}}})
+    r = _run(sm, _probe_for(set()), lambda: client.post("/api/manage_contents", json={
+        "action": "add", "location": "XL-3", "spool_id": "ID:42", "confirm_active_print": True}))
+    body = r.get_json()
+    assert body.get("status") == "success", body
+    assert sm.spools[42]["location"] == "XL-3"

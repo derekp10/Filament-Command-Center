@@ -121,3 +121,23 @@ def test_a_resident_whose_own_read_fails_still_refuses():
     assert "could not be read" in res["failures"]["42"], res
     assert sm.direct_at("XL-1") == [99]
     assert sm.patch_bodies == []
+
+
+def test_a_spool_loaded_during_the_printer_probe_is_unloaded_too():
+    """Review engine-2. The resident list is read in step 4, before the printer
+    probe, which waits seconds on an unreachable printer. Another request that
+    loads #57 onto XL-1 meanwhile (#196 out, #57 in) must not leave XL-1 holding
+    #42 and #57: step 6 re-lists the head strictly after the probe."""
+    sm = WireSpoolman({42: {"location": "CR", "extra": {}},
+                       57: {"location": "CR", "extra": {}},
+                       196: {"location": "XL-1", "extra": {}}})
+
+    def offline_probe_with_a_concurrent_load(_url, _name):
+        sm.spools[196]["location"] = "CR"
+        sm.spools[57]["location"] = "XL-1"
+        return None   # unreachable: fail open
+
+    res = run_move(sm, probe=offline_probe_with_a_concurrent_load, locations=LOCATIONS,
+                   printer_map=PRINTER_MAP, target="XL-1", raw_spools=[42], confirm_active_print=[])
+    assert res.get("status") == "success", res
+    assert sm.direct_at("XL-1") == [42], f"XL-1 holds {sm.direct_at('XL-1')}"
