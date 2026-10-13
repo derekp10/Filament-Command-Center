@@ -71,7 +71,10 @@ def run_startup_migrations():
     # One-time feeder_map → slot_targets migration. Kept behind an explicit
     # `feeder_map` key check so old installs that still have it get upgraded
     # automatically the first time they boot the new code. No-op on modern
-    # installs where the key has been removed.
+    # installs where the key has been removed, AND retired once any Dryer Box
+    # carries slot_targets (Group 46.4, inside migrate_feeder_map_if_needed): a
+    # box whose slots were all cleared saves `{}`, which the old per-box check
+    # read as "never migrated" and re-bound from the stale seed on restart.
     #
     # Safety: the migration is purely additive (only sets extra.slot_targets
     # on Dryer Box records; never removes keys). Spool data lives in

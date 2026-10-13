@@ -61,6 +61,21 @@ const isScanInFlight = () => {
 };
 window.isScanInFlight = isScanInFlight;
 
+// --- SCANNER BURST (the accumulator's barcode test, as a predicate) ---
+// "Did what is in scanBuffer arrive at scanner speed?" The accumulator
+// (scripts.html) calls a payload 'barcode' when it lands in under 150ms, and
+// installFieldScanCapture below uses the same threshold with a 3-character
+// floor. Narrower than isScanInFlight (500ms, any length): a typeahead letter
+// followed by Enter is "in flight" for 500ms but is never a burst. For a key
+// handler that owns a human's Enter yet must leave a real scan to the
+// accumulator (Group 46.2, the location editor).
+const isScannerBurst = () => {
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.length >= 3
+        && st.scanStartTime && (Date.now() - st.scanStartTime) < 150);
+};
+window.isScannerBurst = isScannerBurst;
+
 // --- SCAN CAPTURE FROM A FOCUSED FIELD ---
 // The global accumulator bails on `e.target.tagName === 'INPUT'`, so any modal
 // that focuses a text field disarms the scanner. Sometimes dropping the

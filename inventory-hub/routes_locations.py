@@ -310,6 +310,15 @@ def api_save_location():
     data = request.json
     old_id = data.get('old_id')
     new_entry = data.get('new_data')
+    # Group 46.5 — refuse a blank LocationID. One used to be accepted, and the
+    # row could never be repaired: `if old_id:` is falsy for it, so renaming it
+    # appended a second row and left the blank one behind (and the next rename
+    # collided with that copy: "already exists"). Existing blank rows are left
+    # alone — prod has a hand-made one — and are removed through the explicit
+    # DELETE ?blank_id=1 path below, not a migration.
+    if not isinstance(new_entry, dict) or not str(new_entry.get('LocationID') or '').strip():
+        return jsonify({"success": False,
+                        "error": "A location needs a LocationID — enter one before saving."}), 400
     # Group 38 follow-up — serialize the whole load→mutate→save cycle. Split into
     # a private helper purely so the long body keeps its indentation and the diff
     # stays reviewable; the route and its endpoint name are unchanged, so
@@ -497,9 +506,44 @@ def _api_save_location_locked(old_id, new_entry):
         return jsonify({"success": True, "warning": _reg_warning})
     return jsonify({"success": True})
 
+def _is_blank_id_row(row):
+    return isinstance(row, dict) and not str(row.get('LocationID') or '').strip()
+
+
+def _delete_blank_id_rows():
+    """Group 46.5 — remove every row whose LocationID is blank or whitespace.
+
+    The explicit repair path for a row saved before the save guard existed
+    (dev's "TestCart" repro, prod's hand-made "Unknown Location"); `?id=` can't
+    name such a row. `/api/locations` shows two blank rows as one, so one delete
+    removes them all. Deliberately NO Spoolman cascade: a blank location is how
+    Spoolman spells "unassigned", so the generic cascade's
+    get_spools_at_location('') could reach every unassigned spool.
+    """
+    with locations_db.locations_write_lock():
+        current = locations_db.load_locations_list()
+        blank = [r for r in current if _is_blank_id_row(r)]
+        if not blank:
+            return jsonify({"success": False, "msg": "No location has a blank LocationID."}), 404
+        if not locations_db.save_locations_list([r for r in current if not _is_blank_id_row(r)]):
+            state.add_log_entry("❌ Deleting the location row(s) with a blank LocationID FAILED — "
+                                "locations.json was not written", "ERROR", "ff4444")
+            return jsonify({"success": False, "msg": "could not save locations.json",
+                            "error": "could not save locations.json"}), 500
+    names = ", ".join(repr(str(r.get('Name') or '')) for r in blank)
+    state.add_log_entry(f"🗑️ Deleted {len(blank)} location row(s) with a blank LocationID ({names})", "WARNING")
+    return jsonify({"success": True, "deleted": len(blank)})
+
+
 @app.route('/api/locations', methods=['DELETE'])
 def api_delete_location():
     target = request.args.get('id', '').strip()
+    # Group 46.5 — the blank-LocationID row is deleted only when asked for by
+    # name (?blank_id=1), never because an id went missing.
+    if request.args.get('blank_id', '').strip().lower() in ('1', 'true', 'yes'):
+        if target:
+            return jsonify({"success": False, "msg": "Send either id or blank_id, not both."}), 400
+        return _delete_blank_id_rows()
     # 28.B1 — a missing/blank id is a client validation error: answer 400 with a
     # message rather than a bare 200 {"success": false}.
     if not target: return jsonify({"success": False, "msg": "No location id provided."}), 400

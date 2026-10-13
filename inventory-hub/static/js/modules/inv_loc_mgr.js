@@ -5,6 +5,9 @@ document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
     if (modal && modal.classList.contains('show')) {
         renderManagerNav();
+        // Group 46.1 — redraw the DEPOSIT card now, in step with the carousel.
+        // Waiting for refreshManageView's fetch left it naming the previous spool.
+        _syncDepositCard();
         // Refresh to update Deposit button visibility
         const id = document.getElementById('manage-loc-id').value;
         if (id) refreshManageView(id);
@@ -1000,6 +1003,72 @@ const renderGrid = (data, max) => {
     else un.style.display = 'none';
 };
 
+// --- GREEN ZONE: DEPOSIT CARD ---
+// Group 46.1 — the card must always act on the spool in the centre of the
+// carousel. It used to capture state.heldSpools[0] when renderList built it,
+// and was rebuilt only when refreshManageView's /api/get_contents fetch
+// landed, so prev/next followed by a quick click deposited the PREVIOUS spool
+// (Derek, prod 2026-10-08). Its click now resolves the spool when it happens,
+// and the buffer-updated listener repaints it synchronously (_syncDepositCard).
+// Its QR is the location's (LOC:<id>) and never depends on the spool.
+const _paintDepositCard = (card, item) => {
+    const styles = getFilamentStyle(item.color, item.color_direction || 'longitudinal');
+    card.style.background = styles.frame;
+    const inner = card.querySelector('.list-inner-gold');
+    if (inner) inner.style.background = styles.inner;
+    const label = card.querySelector('.js-deposit-spool');
+    if (label) label.textContent = `#${item.id} - ${item.display}`;
+};
+
+const _buildDepositCard = (locId) => {
+    const depositCard = document.createElement('div');
+    depositCard.id = 'manage-deposit-card';
+    depositCard.className = "cham-card manage-list-item";
+    depositCard.style.cssText = `border: 2px dashed #fff; cursor: pointer; margin-bottom: 15px;`;
+    depositCard.onclick = () => {
+        const top = state.heldSpools[0];
+        if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); return; }
+        doAssign(locId, top.id, null);
+    };
+
+    depositCard.innerHTML = `
+        <div class="list-inner-gold" style="justify-content: center; align-items: center; flex-direction: column; padding: 15px;">
+            <div class="text-pop" style="font-size: 1.5rem; font-weight: 900; color: #fff; text-transform: uppercase;">
+                ⬇️ DEPOSIT HERE
+            </div>
+            <div id="qr-deposit-trigger" class="bg-white p-2 rounded mb-2 mt-2" style="box-shadow: 0 4px 10px rgba(0,0,0,0.5);"></div>
+
+            <div class="text-pop-light js-deposit-spool" style="color: #fff; margin-top: 5px; font-weight: bold;"></div>
+        </div>`;
+    _paintDepositCard(depositCard, state.heldSpools[0]);
+    return depositCard;
+};
+
+// Repaint, add or remove the DEPOSIT card from the live buffer, without
+// waiting for /api/get_contents. List view only: the grid has no deposit card,
+// and its slots resolve the buffered spool when tapped (handleSlotInteraction).
+const _syncDepositCard = () => {
+    const listView = document.getElementById('manage-list-view');
+    const list = document.getElementById('manage-contents-list');
+    if (!list || !listView || listView.style.display === 'none') return;
+    const card = document.getElementById('manage-deposit-card');
+    const emptyMsg = document.getElementById('manage-empty-msg');
+    const item = state.heldSpools[0];
+    if (item && card) {
+        _paintDepositCard(card, item);
+    } else if (item) {
+        const locId = document.getElementById('manage-loc-id').value;
+        if (!locId) return;
+        list.insertBefore(_buildDepositCard(locId), list.firstChild);
+        if (emptyMsg) emptyMsg.style.display = 'none';
+        const safeId = String(locId).replace(/['"]/g, '');
+        requestAnimationFrame(() => generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85));
+    } else if (card) {
+        card.remove();
+        if (emptyMsg && list.children.length === 0) emptyMsg.style.display = 'block';
+    }
+};
+
 // --- GREEN ZONE: LIST RENDERER ---
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
@@ -1009,29 +1078,8 @@ const renderList = (data, locId) => {
 
     // 1. DEPOSIT CARD
     if (state.heldSpools.length > 0) {
-        const item = state.heldSpools[0];
-        const styles = getFilamentStyle(item.color, item.color_direction || 'longitudinal');
-
         if (emptyMsg) emptyMsg.style.display = 'none';
-
-        const depositCard = document.createElement('div');
-        depositCard.className = "cham-card manage-list-item";
-        depositCard.style.cssText = `background:${styles.frame}; border: 2px dashed #fff; cursor: pointer; margin-bottom: 15px;`;
-        depositCard.onclick = () => doAssign(locId, item.id, null);
-
-        depositCard.innerHTML = `
-            <div class="list-inner-gold" style="background: ${styles.inner}; justify-content: center; align-items: center; flex-direction: column; padding: 15px;">
-                <div class="text-pop" style="font-size: 1.5rem; font-weight: 900; color: #fff; text-transform: uppercase;">
-                    ⬇️ DEPOSIT HERE
-                </div>
-                <div id="qr-deposit-trigger" class="bg-white p-2 rounded mb-2 mt-2" style="box-shadow: 0 4px 10px rgba(0,0,0,0.5);"></div>
-                
-                <div class="text-pop-light" style="color: #fff; margin-top: 5px; font-weight: bold;">
-                    #${item.id} - ${item.display}
-                </div>
-            </div>`;
-
-        list.appendChild(depositCard);
+        list.appendChild(_buildDepositCard(locId));
     }
     else {
         if (data.length === 0) {
@@ -1984,6 +2032,15 @@ window.openEdit = (id) => {
 window.closeEdit = () => { modals.locModal.hide(); modals.locMgrModal.show(); };
 
 window.saveLocation = () => {
+    // Group 46.5 — a blank LocationID is refused here and by the server (400).
+    // Checked before anything else, so a refused save persists no custom Type.
+    const _idEl = document.getElementById('edit-id');
+    if (!String((_idEl && _idEl.value) || '').trim()) {
+        const msg = 'Enter a Location ID before saving.';
+        if (typeof showToast === 'function') showToast(msg, 'error', 7000); else alert(msg);
+        if (_idEl) _idEl.focus();
+        return;
+    }
     // L271 Phase 5: a non-empty free-text custom Type wins over the dropdown so
     // you can add a brand-new type on the fly (persisted for next time).
     const _customType = (document.getElementById('edit-type-custom') || {}).value;
@@ -2029,6 +2086,58 @@ window.saveLocation = () => {
             if (typeof showToast === 'function') showToast(msg, 'error', 7000); else alert(msg);
         });
 };
+
+// Group 46.2 — Enter on a field of the location editor saves it (the CLAUDE.md
+// "Enter confirms" idiom). The editor had no Enter-to-save, and the global scan
+// accumulator (scripts.html) skips only INPUT/TEXTAREA targets, so a letter
+// typed on the Type <select> (native typeahead) landed in state.scanBuffer and
+// Enter then submitted it as a scan of "t".
+// Deliberately NOT a global "ignore SELECT" in the scanner: a focused dropdown
+// would then swallow a blind barcode scan. For the same reason a scanner burst
+// (window.isScannerBurst: the accumulator's own <150 ms rule, plus a minimum
+// length no typeahead reaches) is left to the accumulator here.
+// Buttons keep their own Enter. The parent tree picker mounts on document.body,
+// so its keys never pass through #locModal.
+const _installLocEditorEnterToSave = () => {
+    const modalEl = document.getElementById('locModal');
+    if (!modalEl || modalEl._fccEnterToSave) return;
+    modalEl._fccEnterToSave = true;
+    modalEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+        const tag = ((e.target && e.target.tagName) || '').toUpperCase();
+        if (tag !== 'INPUT' && tag !== 'SELECT') return;
+        if (window.isScannerBurst && window.isScannerBurst()) return;
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        e.preventDefault();
+        // The accumulator is a bubble-phase listener on `document`, so stopping
+        // here keeps it from seeing this Enter. Clear what the typeahead letters
+        // already put in it, now and again after this tick (the L298 idiom: the
+        // deferred clear doesn't depend on listener order).
+        e.stopImmediatePropagation();
+        const _clearScanBuffer = () => {
+            if (!st) return;
+            st.scanBuffer = '';
+            st.scanStartTime = 0;
+            try { clearTimeout(st.bufferTimeout); } catch (_) { /* noop */ }
+        };
+        _clearScanBuffer();
+        setTimeout(_clearScanBuffer, 0);
+        window.saveLocation();
+    });
+    if (window.registerShortcut) {
+        window.registerShortcut({
+            id: 'loc-edit-enter-save', scope: 'Location Editor', keys: ['Enter'],
+            description: 'Save the location from any field, including the Type and Parent dropdowns.',
+        });
+    }
+};
+// After load: #locModal must exist, and scripts.html loads this file BEFORE
+// shortcuts_registry.js (the fab_drag.js / inv_cmd.js registration idiom).
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _installLocEditorEnterToSave);
+} else {
+    _installLocEditorEnterToSave();
+}
 
 // Group-34 add-redesign (S2/S4): infer a child's Type + Max Spools from the
 // parent's kind, and auto-generate an editable LocationID from parent + type +
@@ -2306,20 +2415,35 @@ function _announcePrinterMapChange() {
 
 // Hotfix 2026-09-29 — surface a refused delete (e.g. a printer that still has
 // toolheads) instead of silently re-listing as if it had worked.
-window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-    .then(async (r) => {
-        let body = {};
-        try { body = await r.json(); } catch (_) { /* non-JSON */ }
-        if (!r.ok || body.success === false) {
-            const msg = body.error || body.msg || `Delete failed (HTTP ${r.status})`;
-            if (typeof showToast === 'function') showToast(msg, 'error', 8000);
-            return;
-        }
-        const _row = (state.allLocations || []).find((l) => l.LocationID == id);
-        if (_row && _isPrinterTopologyType(_row.Type)) _announcePrinterMapChange();
-    })
-    .catch((e) => {
-        if (typeof showToast === 'function') showToast('Delete failed: ' + (e && e.message ? e.message : e), 'error', 7000);
-    })
-    .then(fetchLocations));
+// Group 46.5 — a row saved before the blank-id guard has LocationID "", which
+// ?id= can't name (the server answers 400). It goes to the explicit
+// ?blank_id=1 path instead, which removes only the blank row(s).
+const _deleteLocRequest = (id) => {
+    if (String(id == null ? '' : id).trim()) {
+        return { prompt: `Delete ${id}?`, url: `/api/locations?id=${encodeURIComponent(id)}` };
+    }
+    const row = (state.allLocations || []).find((l) => !String(l.LocationID || '').trim());
+    const name = row && row.Name ? ` ("${row.Name}")` : '';
+    return { prompt: `Delete the location with a blank Location ID${name}?`, url: '/api/locations?blank_id=1' };
+};
+
+window.deleteLoc = (id) => {
+    const req = _deleteLocRequest(id);
+    return requestConfirmation(req.prompt, () => fetch(req.url, { method: 'DELETE' })
+        .then(async (r) => {
+            let body = {};
+            try { body = await r.json(); } catch (_) { /* non-JSON */ }
+            if (!r.ok || body.success === false) {
+                const msg = body.error || body.msg || `Delete failed (HTTP ${r.status})`;
+                if (typeof showToast === 'function') showToast(msg, 'error', 8000);
+                return;
+            }
+            const _row = (state.allLocations || []).find((l) => l.LocationID == id);
+            if (_row && _isPrinterTopologyType(_row.Type)) _announcePrinterMapChange();
+        })
+        .catch((e) => {
+            if (typeof showToast === 'function') showToast('Delete failed: ' + (e && e.message ? e.message : e), 'error', 7000);
+        })
+        .then(fetchLocations));
+};
 
