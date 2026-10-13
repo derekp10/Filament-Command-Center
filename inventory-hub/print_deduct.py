@@ -1246,7 +1246,7 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
             "job_id": str(job_id), "auto_split": auto_split}
 
 
-def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None):
+def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None, charged_out=None):
     """Read-only resolution of {toolhead_position: grams} → the per-spool rows a
     deduct WOULD touch — the cancel-review PREVIEW (no write). Mirrors
     _apply_usage_to_printer's MMU-alias/dedup AND ghost-vs-current resolution
@@ -1259,6 +1259,9 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None):
     used and applies additively, so a weigh-out between preview and confirm can't be
     clobbered. `active_locs` may be passed pre-resolved to share an MMU probe with a
     paired _apply_usage_to_printer call (22.4(5)); None re-resolves it here.
+    `charged_out` (a set), when given, receives every position that produced a
+    row: the merge below keeps only one position per spool, and Group 43.4 needs
+    the heads that got none.
     """
     if active_locs is None:
         printer_map = locations_db.get_active_printer_map()
@@ -1322,6 +1325,8 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None):
     # (found 2026-06-12: job 690 previewed 1.65g but only ~0.8g applied). Sum the
     # grams here so there's exactly one row per spool: the spool loses filament
     # once, totalled across every position it fed.
+    if charged_out is not None:
+        charged_out.update(r['position'] for r in rows)
     merged = {}
     for r in rows:
         m = merged.get(r['sid'])
@@ -1541,7 +1546,8 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
                     "job_id": job_id}
         return terminal
 
-    rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url)
+    charged = set()
+    rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url, charged_out=charged)
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
     lead = ("❓ Print on {p} reached idle (~{pct:.0f}%, couldn't confirm cancel vs "
             "complete)").format(p=printer_name, pct=pct) if ambiguous else \
@@ -1562,7 +1568,15 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     if print_deduct_ledger.was_deducted(printer_name, job_id):
         return {"status": "skipped", "reason": "already processed", "job_id": job_id}
 
-    total = round(sum(r['grams'] for r in rows), 2)
+    # Group 43.4 (was 22.5): every head the print used keeps its grams on the
+    # review. A head that resolved to no spool (emptied mid-print, e.g. by a
+    # confirmed move off it, Group 39.4) used to be dropped from the rows and the
+    # total with no warning at all. It rides along as `unresolved_usage` for the
+    # card's picker; confirm reports whatever nobody picks as the job's shortfall.
+    charged_pos = {_norm_pos(p) for p in charged}
+    unresolved = {str(p): round(float(g), 2) for p, g in (usage_map or {}).items()
+                  if (g or 0) > 0 and _norm_pos(p) not in charged_pos}
+    total = round(sum(r['grams'] for r in rows) + sum(unresolved.values()), 2)
     record = {
         "printer_name": printer_name,
         "job_id": str(job_id),
@@ -1573,10 +1587,17 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         "ambiguous": bool(ambiguous),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if unresolved:
+        record["unresolved_usage"] = unresolved
+        record["heads_at_end"] = _heads_snapshot(printer_name, fb_url)
     cancel_review_store.add_pending(record)
+    uncharged = ""
+    if unresolved:
+        uncharged = " — " + ", ".join(f"{g:.2f}g on T{p}" for p, g in unresolved.items()) + \
+                    " had no spool loaded (pick it in the review)"
     state.add_log_entry(
         f"{lead} — review {'computed' if ambiguous else 'partial'} "
-        f"deduct: {total:.2f}g across {len(rows)} spool(s) ('{filename}').",
+        f"deduct: {total:.2f}g across {len(rows)} spool(s) ('{filename}'){uncharged}.",
         "WARNING", rows[0]['color'],
         meta={"type": "cancel_deduct_pending",
               "printer_name": printer_name, "job_id": str(job_id)})
@@ -1637,6 +1658,8 @@ def _rows_from_charges(rec, kind, charges):
     if not isinstance(charges, list) or not charges:
         return None, "no spool was picked"
     usage = {str(k): v for k, v in (rec.get("usage_map") or {}).items()}
+    # 43.4 — a partial review's heads that resolved to no spool.
+    unresolved = {str(k): v for k, v in (rec.get("unresolved_usage") or {}).items()}
     by_row = {str(r.get("sid")): r for r in (rec.get("spools") or []) if isinstance(r, dict)}
     heads = {str(h.get("position")): h.get("toolhead") for h in (rec.get("heads_at_end") or [])
              if isinstance(h, dict) and h.get("toolhead")}
@@ -1655,14 +1678,22 @@ def _rows_from_charges(rec, kind, charges):
             if line not in usage:
                 return None, f"this print didn't use tool {line}"
             original = {}
+            seen_key = ("tool", line)
+        elif pick.get("row") is None and pick.get("position") is not None:
+            line = str(pick.get("position"))
+            if line not in unresolved:
+                return None, f"tool {line} has no uncharged grams on this review"
+            original = {}
+            seen_key = ("tool", line)
         else:
             line = str(pick.get("row"))
             if line not in by_row:
                 return None, f"spool #{line} isn't a row of this review"
             original = by_row[line]
-        if line in seen:
-            return None, f"{'tool' if kind == 'no_spool' else 'row'} {line} was picked twice"
-        seen.add(line)
+            seen_key = ("row", line)
+        if seen_key in seen:
+            return None, f"{seen_key[0]} {line} was picked twice"
+        seen.add(seen_key)
         kept = bool(original) and str(sid) == line
         stamped = bool(original) and original.get("attempt_used_before") is not None
         if stamped and not kept:
@@ -1819,6 +1850,13 @@ def api_cancel_deduct_confirm():
         rec["kind"] = "partial"    # the user's picks are this review's rows from now on
         rec["spools"] = picked
         rec.pop("usage_map", None)
+        # 43.4 — a picked uncharged head is a row now; the rest stay uncharged (a
+        # retry still offers them, and the job's shortfall counts them).
+        picked_tools = {str(c.get("position")) for c in charges
+                        if isinstance(c, dict) and c.get("row") is None and c.get("position") is not None}
+        if rec.get("unresolved_usage"):
+            rec["unresolved_usage"] = {k: v for k, v in rec["unresolved_usage"].items()
+                                       if str(k) not in picked_tools}
         updates = {str(r["sid"]): r["grams"] for r in picked}
         kind = "partial"
     if kind == "no_spool":
@@ -1858,8 +1896,15 @@ def api_cancel_deduct_confirm():
         return (sid_, g_) if math.isfinite(g_) and g_ > 0 else (None, None)
 
     if requested_total is None:
+        # What this Apply charges, plus 43.4's heads nobody picked a spool for.
+        uncharged = 0.0
+        for v in (rec.get("unresolved_usage") or {}).values():
+            try:
+                uncharged += float(v)
+            except (TypeError, ValueError):
+                continue
         requested_total = round(sum(g for s, g in (_grams_of(k, v) for k, v in updates.items())
-                                    if s in rec_rows), 2)
+                                    if s in rec_rows) + uncharged, 2)
     prior_g = float(rec.get("applied_g") or 0)
 
     applied, errors = [], []
