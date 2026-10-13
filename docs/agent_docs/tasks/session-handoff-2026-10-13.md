@@ -5,14 +5,14 @@ it is updated after every milestone and committed on `dev` at every merge.
 
 ## Morning summary
 
-_Checkpoint 06:40. The run started at `dev` @ `c895d36` (the plan commit, on top of `e818d0c`)._
+_Checkpoint 07:40. The run started at `dev` @ `c895d36` (the plan commit, on top of `e818d0c`)._
 
 - **Landed on `dev` (nothing pushed):** Group 46 (`PARTIAL`, only 46.3 left), both standalone fixes, and Group 43
   (`PARTIAL`: 43.1, 43.5, 43.3's review-card spool picker and 43.6, plus 16 fixes from its adversarial review;
   43.2 and 43.4 left). Each merge passed offline, targeted E2E and, where the frontend changed, a triaged full sweep.
-- **Group 39 (confirm on every door):** parked on `feature/group-39-confirm-on-every-door`, about three quarters
-  built and **all of it tested** (offline + the 21 E2E files for the doors it changes). Left: 39.3's "Checking XL…"
-  pill, 39.4's overlay unification, 43.4, then its review and sweep (see Parked).
+- **Group 39 (confirm on every door):** on `feature/group-39-confirm-on-every-door`, **fully built** (39.1-39.9
+  plus 43.4) and tested (offline + the E2E files for every changed door). Its adversarial review found 16
+  confirmed issues (3 medium); I'm fixing those now, then the full sweep, then the merge (see Parked).
 - **Needs you:** the Questions below (15, each with my recommended answer); the manual checks; and pushing `dev`.
 
 ## Landed
@@ -113,14 +113,18 @@ tests (3/3 solo). Every new pin was proven red on `dev`'s code first. No adversa
 | `70d1bd9` | docs | CLAUDE.md: "Move confirms name their heads", plus the two engine rows | — |
 | `715c352` | 39.4 frontend | The Location Manager and scan-assign confirms render through `window.confirmActivePrint` (their DOM ids kept) and show the server's D6 message when the backend asked. The scan-path canary now counts guard LINES (counting occurrences let inv_cmd.js's Shift+B line alone satisfy the old minimum) | `test_the_shared_active_print_confirm_owns_the_enter_guard` |
 | `d7164e9` + `cf31aeb` | 39.3 client | The "⏳ Checking XL…" pill (after 300 ms; "XL didn't answer" + a WARNING past 3 s), `fetchPrinterStateDetailed`, the overlay's "FCC has no login for XL" / "Couldn't reach XL" line, the dim's label on slot scans and buffer location scans. The Quick-Swap visuals stub the new probe seam (baselines unchanged) | 4 E2E with the fetch-delay lever, `test_printer_check_budgets_39_3.py` |
+| `795529c` | 43.4 | A cancel review keeps every head: a head with no spool (emptied mid-print, the everyday case once D6 lets you move a spool off a printing head) is carried as `unresolved_usage` with the heads at the end; the card offers 43.3's picker for it (`{position, sid, grams}`), and whatever nobody picks is the job's reported shortfall instead of vanishing | `test_cancel_review_keeps_every_head_43_4.py`, 2 picker E2E |
 
 **Next, in order:**
 
-1. **43.4** (a cancel review keeps every head), which D6 now makes urgent: a confirmed move off a printing head
-   leaves that head empty, and today a cancel review drops its grams silently. (Started after the 06:40
-   checkpoint; see the branch log.)
-2. Adversarial review (≤ 8 agents, batched verify), a full `RUN_INTEGRATION` sweep, then merge. The group merges
-   only whole (the plan's rule).
+1. **Fix the review's 16 confirmed findings** (`wf_d989c332-cda`; the medium ones first): a same-printer
+   "feeds" sentence the message dropped; the Quick-Swap deposit re-ask showing stale text instead of the
+   server's; a `spool_changed` completion review dropping its empty heads (the 43.4 hole on the other path);
+   plus 13 lows (a stale pre-39 browser tab looping on a bare `true`; the dim label naming no printer before
+   the printer map loads; a double tap leaking a keydown handler; a bulk commit refusing a whole batch on one
+   unreadable spool; the slot-QR replay missing a second ask; an LM head-to-head move asking twice; a stale
+   cancel-review row deleting the review without its ledger entry; four test-hygiene items).
+2. The full `RUN_INTEGRATION` sweep, then merge. The group merges only whole (the plan's rule).
 3. Small leftovers: the "no login" line could link to Config's credentials grid; the scratchpad worktree
    (`git worktree list`) is detached and can be removed with `git worktree remove --force <path>`.
 
@@ -254,3 +258,4 @@ worktree; see Parked).
 | `wf_0e44faf0-934` review-group-46 | Group 46 | 5 (4 lenses + 1 batched skeptic) | 1,311,429 subagent | 41 min, 311 tool calls; 13 findings → 12 confirmed + 1 plausible, 0 refuted, all fixed |
 | `wf_4a2dec42-133` review-standalone | Standalone fixes | 4 (3 lenses + 1 batched skeptic) | 828,479 subagent | 35 min, 229 tool calls; 1 finding, confirmed (low), fixed |
 | `wf_4573e3ac-aca` review-group-43 | Group 43 | 5 (4 lenses + 1 batched skeptic) | 1,346,059 subagent | 34 min, 236 tool calls; 32 raw findings → 15 confirmed + 1 plausible; the 16 refuted were duplicates (15) or not a defect (1); all 16 fixed |
+| `wf_d989c332-cda` review-group-39 | Group 39 | 5 (4 lenses + 1 batched skeptic) | 2,022,606 subagent | 49 min, 431 tool calls; 22 raw findings → 16 confirmed (3 medium), 6 refuted (all duplicates) |
