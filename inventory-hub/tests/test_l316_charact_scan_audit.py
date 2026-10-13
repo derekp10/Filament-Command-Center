@@ -501,7 +501,7 @@ def test_add_returns_perform_smart_move_result_verbatim(client):
     assert kwargs == {
         "target_slot": "2",
         "origin": "buffer",
-        "confirm_active_print": False,
+        "confirm_active_print": [],
     }
 
 

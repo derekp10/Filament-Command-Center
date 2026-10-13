@@ -146,8 +146,13 @@ def test_manage_contents_add_returns_requires_confirm_for_active_toolhead(client
     upd.assert_not_called()
 
 
-def test_manage_contents_add_proceeds_when_confirm_active_print_true(client):
-    """Same request with confirm_active_print=True should flow through."""
+@pytest.mark.parametrize("body,expected", [
+    ({"confirmed_toolheads": ["xl-1"]}, ["XL-1"]),
+    # Group 39.1: a bare legacy flag (a stale cached page) covers NO head, so the
+    # engine asks again. It used to be passed through as a blanket True.
+    ({"confirm_active_print": True}, []),
+], ids=["confirmed_heads", "legacy_bare_true"])
+def test_manage_contents_add_threads_the_confirmed_heads(client, body, expected):
     with patch.object(logic.locations_db, "load_locations_list", return_value=FAKE_LOCATIONS), \
          patch.object(logic.config_loader, "load_config", return_value={"printer_map": FAKE_PRINTER_MAP}), \
          patch.object(logic.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
@@ -159,13 +164,12 @@ def test_manage_contents_add_proceeds_when_confirm_active_print_true(client):
             "location": "XL-1",
             "spool_id": "ID:42",
             "origin": "buffer",
-            "confirm_active_print": True,
+            **body,
         })
     assert r.status_code == 200
     assert r.get_json() == {"status": "success"}
-    # perform_smart_move received the opt-in flag.
     _, kwargs = mv.call_args
-    assert kwargs.get("confirm_active_print") is True
+    assert kwargs.get("confirm_active_print") == expected
 
 
 def test_manage_contents_remove_returns_requires_confirm_for_active_source(client):
@@ -249,7 +253,11 @@ def test_smart_move_endpoint_returns_requires_confirm_for_active_target(client):
     upd.assert_not_called()
 
 
-def test_smart_move_endpoint_threads_confirm_flag_through(client):
+@pytest.mark.parametrize("body,expected", [
+    ({"confirmed_toolheads": ["CORE1-M0"]}, ["CORE1-M0"]),
+    ({"confirm_active_print": True}, []),    # Group 39.1: a bare legacy flag covers no head
+], ids=["confirmed_heads", "legacy_bare_true"])
+def test_smart_move_endpoint_threads_the_confirmed_heads(client, body, expected):
     with patch.object(logic.locations_db, "load_locations_list", return_value=FAKE_LOCATIONS), \
          patch.object(logic.config_loader, "load_config", return_value={"printer_map": FAKE_PRINTER_MAP}), \
          patch.object(logic.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
@@ -258,11 +266,11 @@ def test_smart_move_endpoint_threads_confirm_flag_through(client):
             "location": "CORE1-M0",
             "spools": [99],
             "origin": "buffer",
-            "confirm_active_print": True,
+            **body,
         })
     assert r.status_code == 200
     _, kwargs = mv.call_args
-    assert kwargs.get("confirm_active_print") is True
+    assert kwargs.get("confirm_active_print") == expected
 
 
 # ---------------------------------------------------------------------------

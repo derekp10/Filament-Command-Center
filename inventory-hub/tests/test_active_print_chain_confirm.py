@@ -716,8 +716,11 @@ def test_quickswap_return_parks_the_spool_in_its_box(client, printing):
     sm = FakeSpoolman({240: {"location": "XL-3", "extra": {
         "physical_source": "LR-MDB-1", "physical_source_slot": "3", "container_slot": ""}}})
 
+    # Mid-print, the overlay showed the banner and the user confirmed XL-3
+    # (Group 39.1/39.2: Return now reads `confirmed_toolheads`).
     r = _run(sm, probe=_probe_for({"XL"} if printing else set()),
-             call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-3"}))
+             call=lambda: client.post("/api/quickswap/return", json={
+                 "toolhead": "XL-3", "confirmed_toolheads": ["XL-3"] if printing else []}))
 
     body = r.get_json()
     assert r.status_code == 200 and body["action"] == "return_done", body
@@ -725,6 +728,24 @@ def test_quickswap_return_parks_the_spool_in_its_box(client, printing):
     assert (sm.spools[240].get("extra") or {}).get("container_slot") == "3", sm.spools[240]
     assert sm.direct_at("XL-3") == [], sm.writes
     assert not _logs("Auto-deployed"), state.RECENT_LOGS
+
+
+def test_quickswap_return_off_a_printing_head_asks_first(client):
+    """Group 39.2: Return passed confirm_active_print=True unconditionally, so a
+    Return whose overlay probe missed the print (it fails open on a timeout)
+    emptied a printing head with no warning. 39.4's source check now probes the
+    head Return empties and answers return_requires_confirm, in the 29.B3 shape,
+    before any write. HEAD proof: return_done."""
+    sm = FakeSpoolman({240: {"location": "XL-3", "extra": {
+        "physical_source": "LR-MDB-1", "physical_source_slot": "3", "container_slot": ""}}})
+    r = _run(sm, probe=_probe_for({"XL"}),
+             call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-3"}))
+    body = r.get_json()
+    assert r.status_code == 200 and body["action"] == "return_requires_confirm", body
+    assert body["toolhead"] == "XL-3" and body["active_toolhead"] == "XL-3" and body["requested"] == "XL-3"
+    assert [(a["toolhead"], a["role"]) for a in body["active_prints"]] == [("XL-3", "source")], body
+    assert sm.writes == [] and sm.spools[240]["location"] == "XL-3", sm.writes
+    assert _logs("waits for a confirm"), state.RECENT_LOGS
 
 
 def test_quickswap_return_does_not_unseat_a_spool_staged_in_its_slot(client):
