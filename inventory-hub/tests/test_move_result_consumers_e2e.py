@@ -134,7 +134,11 @@ class FakeBackend:
     real dev data would make these tests nondeterministic."""
 
     def __init__(self, page: Page, *, printer_active=False, identify=None, manage_contents=None,
-                 smart_move=None, contents=None, spools=None, dryer_slots=None, extra_locations=()):
+                 smart_move=None, contents=None, spools=None, dryer_slots=None, extra_locations=(),
+                 responders=None):
+        # responders: {path: body -> (status, payload)}, payload a dict (JSON) or
+        # a str (served as text/html, like a proxy's error page). Group 39.8.
+        self.responders = dict(responders or {})
         self.posts: list[tuple[str, dict]] = []
         self.buffer: list = []
         self.probes: list[str] = []
@@ -208,6 +212,13 @@ class FakeBackend:
         if not isinstance(body, dict):
             body = {"_raw": body}
         self.posts.append((path, body))
+        if path in self.responders:
+            status, payload = self.responders[path](body)
+            if isinstance(payload, str):
+                route.fulfill(status=status, content_type="text/html", body=payload)
+            else:
+                self._json(route, payload, status=status)
+            return
         if path == "/api/state/buffer":
             buf = body.get("buffer")
             self.buffer = buf if isinstance(buf, list) else []
@@ -668,6 +679,55 @@ def test_return_overlay_offers_nothing_the_backend_would_refuse(
     page.wait_for_timeout(500)
     assert not be.bodies("/api/quickswap/return"), be.posts
     assert page.evaluate("!document.getElementById('fcc-quickswap-confirm-overlay')"), "the no-op overlay did not close"
+
+
+_RETURN_RESIDENT = {"id": 999531, "display": "FCC Test #999531", "location": TH, "slot": ""}
+OPEN_TAP_JS = """([box, slot, th]) => {
+    const btn = document.createElement('button');
+    btn.dataset.box = box; btn.dataset.slot = slot; btn.dataset.toolhead = th;
+    btn.dataset.spoolLabel = 'FCC Test spool';
+    window.quickSwapTap(btn);
+}"""
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("status,payload,expect", [
+    (409, {"action": "return_failed", "error": REJECT}, f"Return failed: {REJECT}"),
+    (409, {"action": "return_ambiguous", "error": f"{TH} holds 2 spools — eject the wrong one first"},
+     "eject the wrong one first"),
+    (502, "<html><body>502 Bad Gateway</body></html>", "server answered 502"),
+], ids=["return_failed", "return_ambiguous", "non_json_502"])
+def test_return_failures_raise_a_7s_error_toast(
+        page: Page, base_url: str, reset_dom_state_js: str, status, payload, expect):
+    """Move-pipeline follow-ups item 6 / Group 39.8: no test drove these toasts.
+    The non-JSON case FAILS on HEAD: r.json() threw and the catch toasted
+    "Return — network error" for a server that did answer."""
+    be = FakeBackend(page, contents={TH: [_RETURN_RESIDENT]}, dryer_slots=BINDINGS,
+                     responders={"/api/quickswap/return": lambda b: (status, payload)})
+    _boot(page, base_url, reset_dom_state_js)
+    page.evaluate(OPEN_RETURN_JS, TH)
+    _wait_overlay(page, "the Return overlay never opened", title_contains="Return the spool on")
+    page.click("#fcc-quickswap-yes")
+    _until(page, lambda: be.bodies("/api/quickswap/return"), 5_000, "Yes sent no Return")
+    err = _toast(page, f"no error toast for {payload!r}", type_="error", contains=(expect,))
+    assert err["duration"] and err["duration"] >= 7000, err
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("status,payload,expect", [
+    (409, {"action": "quickswap_failed", "error": REJECT}, f"Quick-swap failed: {REJECT}"),
+    (502, "<html><body>502 Bad Gateway</body></html>", "server answered 502"),
+], ids=["quickswap_failed", "non_json_502"])
+def test_quickswap_failures_raise_a_7s_error_toast(
+        page: Page, base_url: str, reset_dom_state_js: str, status, payload, expect):
+    be = FakeBackend(page, responders={"/api/quickswap": lambda b: (status, payload)})
+    _boot(page, base_url, reset_dom_state_js)
+    page.evaluate(OPEN_TAP_JS, [BOX, SLOT, TH])
+    _wait_overlay(page, "the Quick-Swap overlay never opened", title_contains="Load ")
+    page.click("#fcc-quickswap-yes")
+    _until(page, lambda: be.bodies("/api/quickswap"), 5_000, "Yes sent no Quick-Swap")
+    err = _toast(page, f"no error toast for {payload!r}", type_="error", contains=(expect,))
+    assert err["duration"] and err["duration"] >= 7000, err
 
 
 @pytest.mark.usefixtures("require_server")
