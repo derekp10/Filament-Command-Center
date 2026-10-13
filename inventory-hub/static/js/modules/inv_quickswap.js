@@ -401,8 +401,9 @@
 
         // Active-print probe must complete BEFORE the overlay becomes visible —
         // otherwise a fast-clicking user can confirm before the banner lands
-        // (the async-append pattern we tried first lost that race). 1s cap
-        // keeps the delay bounded when the printer is offline. The probe
+        // (the async-append pattern we tried first lost that race). The 3 s cap
+        // (_probeWithTimeout's default) keeps the delay bounded when the printer
+        // is offline. The probe
         // fails open — null means "unknown, show overlay normally."
         // opts.knownState: the backend has just said the printer is active, so
         // show that banner without re-probing (the probe is what missed it).
@@ -646,7 +647,14 @@
     window.quickSwapDeposit = (btn) => {
         if (!btn) return;
         const held = (state.heldSpools || []);
-        const buffered = held[0];
+        // Group 46 review — the spool this deposit names is the one it writes. A
+        // re-open after assignment_requires_confirm keeps the spool the user
+        // already confirmed rather than re-reading the (possibly rotated) buffer.
+        const pinned = btn.dataset.depositSpool;
+        delete btn.dataset.depositSpool;
+        const buffered = pinned
+            ? (held.find(s => String(s.id) === pinned) || { id: Number(pinned), display: `#${pinned}` })
+            : held[0];
         if (!buffered) {
             showToast('Buffer is empty — scan a spool first', 'warning', 3500);
             return;
@@ -681,6 +689,12 @@
                         // failed", so a deposit during a print never worked
                         // (2026-09-12).
                         confirm_active_print: !!stateInfo,
+                        // Group 46 review — deposit the spool this overlay NAMED.
+                        // Without it the server took the first spool of its buffer
+                        // replica, which can differ by the time Yes is pressed: the
+                        // overlay waits up to 3 s on the printer probe while the
+                        // carousel stays clickable.
+                        spool_id: buffered.id,
                     }),
                 })
                     .then(async r => ({ ok: r.ok, body: await r.json() }))
@@ -689,11 +703,14 @@
                             const destNote = body.auto_deployed_to
                                 ? ` → ${body.auto_deployed_to}`
                                 : '';
+                            // Name what the server says it moved, never just what was asked.
+                            const movedLabel = (body.moved != null && String(body.moved) !== String(buffered.id))
+                                ? `#${body.moved}` : bsDisplay;
                             if (body.not_deployed) {
                                 // In the box, but the chain did not deploy it.
-                                showToast(`⚠️ ${bsDisplay} → ${box}:SLOT:${slot}, but NOT deployed to ${body.not_deployed_target || toolhead}: ${body.not_deployed}`, 'warning', 7000);
+                                showToast(`⚠️ ${movedLabel} → ${box}:SLOT:${slot}, but NOT deployed to ${body.not_deployed_target || toolhead}: ${body.not_deployed}`, 'warning', 7000);
                             } else {
-                                showToast(`⬇️ ${bsDisplay} → ${box}:SLOT:${slot}${destNote}`, 'success', 2500);
+                                showToast(`⬇️ ${movedLabel} → ${box}:SLOT:${slot}${destNote}`, 'success', 2500);
                             }
                             // Mirror backend's buffer mutation on the frontend
                             // so the user doesn't briefly see the old spool.
@@ -715,6 +732,8 @@
                                 'WARNING');
                             btn.dataset.knownActivePrint = JSON.stringify(
                                 body.active_print || { printer_name: toolhead, state: 'PRINTING' });
+                            // Re-open for the SAME spool the user already confirmed.
+                            btn.dataset.depositSpool = String(buffered.id);
                             window.quickSwapDeposit(btn);
                         } else {
                             // Includes assignment_failed: the spool stays in the buffer.

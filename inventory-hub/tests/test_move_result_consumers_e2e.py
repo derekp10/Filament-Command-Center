@@ -229,8 +229,13 @@ class FakeBackend:
 @pytest.fixture(autouse=True)
 def _drop_routes_in_flight(page: Page):
     """A route callback still running at context close otherwise surfaces its
-    TargetClosedError in the NEXT test's setup."""
+    TargetClosedError in the NEXT test's setup. Close the page FIRST: un-routing a
+    live page lets its next buffer poll or persist reach the real dev server."""
     yield
+    try:
+        page.close()
+    except PlaywrightError:
+        pass
     try:
         page.context.unroute_all(behavior="ignoreErrors")
     except PlaywrightError:

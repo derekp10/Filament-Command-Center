@@ -503,14 +503,43 @@ def bindings_from_row(row):
 _bindings_from_row = bindings_from_row
 
 
+def dryer_bindings_are_authoritative(loc_list):
+    """True while any Dryer Box row carries a ``slot_targets`` key, even ``{}``.
+
+    While it holds, the per-box bindings (edited in the Feeds section) are the
+    source of truth, and the legacy config.json:feeder_map seed doesn't write
+    to them (Group 46.4). Clearing every slot of a box saves
+    ``slot_targets: {}``; the old per-box truthiness check read that as "never
+    migrated" and re-bound the box from the stale seed on the next restart. The
+    same retirement as ``printer_rows_are_authoritative`` (hotfix 2026-09-29).
+    It is a LIVE predicate, not a latch: re-typing the only keyed box away from
+    Dryer Box (the save pops its slot_targets) or deleting it turns it False
+    again. Harmless while no install carries a feeder_map (dev's and prod's are
+    empty); deleting the import outright is the durable fix, and Derek's call.
+    A non-dict row or ``extra`` doesn't count, and never raises.
+    """
+    for row in (loc_list or []):
+        if not isinstance(row, dict) or row.get('Type') != DRYER_BOX_TYPE:
+            continue
+        extra = row.get('extra')
+        if isinstance(extra, dict) and 'slot_targets' in extra:
+            return True
+    return False
+
+
 def migrate_feeder_map_if_needed(loc_list, feeder_map):
     """One-time import: seed each Dryer Box's slot_targets from the legacy
     `feeder_map` entry (`PM-DB-1: XL-1` becomes `slot_targets: {"1": "XL-1"}`).
 
-    Idempotent — skips boxes that already have slot_targets on disk.
-    Returns (mutated_list, changed_bool).
+    Skipped while the bindings model is live (`dryer_bindings_are_authoritative`):
+    a no-op while any Dryer Box carries slot_targets, so a box whose slots were
+    all cleared stays cleared across restarts (Group 46.4). On an install that
+    has never had bindings it still imports, which is the upgrade path it exists
+    for. Returns (mutated_list, changed_bool).
     """
     if not feeder_map:
+        return loc_list, False
+    if dryer_bindings_are_authoritative(loc_list):
         return loc_list, False
 
     changed = False
