@@ -603,6 +603,18 @@
         });
     };
 
+    // Group 39.8 — read an answer that may not be JSON (a proxy's HTML error
+    // page): `r.json()` threw, and the catch toasted "network error" for a
+    // server that did answer. Now it reads "server answered 502".
+    const _readAnswer = async (r) => {
+        const text = await r.text();
+        try {
+            return { ok: r.ok, body: JSON.parse(text) };
+        } catch (_) {
+            return { ok: false, body: { action: 'http_error', error: `server answered ${r.status}` } };
+        }
+    };
+
     const performSwap = (opts, stateInfo = null, prior = []) => {
         const sent = _headsShown(prior, stateInfo, opts.toolhead);
         fetch('/api/quickswap', {
@@ -610,7 +622,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...opts, confirmed_toolheads: sent }),
         })
-            .then(async r => ({ ok: r.ok, body: await r.json() }))
+            .then(_readAnswer)
             .then(({ ok, body }) => {
                 if (ok && body.action === 'quickswap_done') {
                     showToast(`⚡ Spool #${body.moved} → ${opts.toolhead}`, 'success', 2500);
@@ -647,7 +659,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...opts, confirmed_toolheads: sent }),
         })
-            .then(async r => ({ ok: r.ok, body: await r.json() }))
+            .then(_readAnswer)
             .then(({ ok, body }) => {
                 if (ok && body.action === 'return_done') {
                     showToast(`↩️ Spool #${body.moved} → ${body.box}:SLOT:${body.slot}`, 'success', 2500);

@@ -794,7 +794,7 @@ def test_quickswap_return_reports_a_rejected_box_write(client):
              call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-3"}))
 
     body = r.get_json()
-    assert r.status_code == 502 and body["action"] == "return_failed", body
+    assert r.status_code == 409 and body["action"] == "return_failed", body
     assert sm.spools[240]["location"] == "XL-3", sm.writes
     assert not _logs("Return: Spool", types={"SUCCESS"}), state.RECENT_LOGS
 
@@ -810,7 +810,7 @@ def test_quickswap_return_failure_names_the_requested_toolhead(client):
              call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL"}))
 
     body = r.get_json()
-    assert r.status_code == 502 and body["action"] == "return_failed", body
+    assert r.status_code == 409 and body["action"] == "return_failed", body
     assert (body["toolhead"], body["requested"], body["active_toolhead"]) == ("XL", "XL", "XL-3"), body
 
 
@@ -824,7 +824,7 @@ def test_quickswap_return_reports_an_unreadable_resident_as_a_failure(client):
              call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-3"}))
 
     body = r.get_json()
-    assert r.status_code == 502 and body["action"] == "return_failed", body
+    assert r.status_code == 409 and body["action"] == "return_failed", body
     assert body["active_toolhead"] == "XL-3" and "could not read #240" in body["error"], body
     assert not sm.writes, sm.writes
 
@@ -878,6 +878,6 @@ def test_quickswap_reports_a_rejected_toolhead_write(client):
         "/api/quickswap", json={"toolhead": "XL-3", "box": "LR-MDB-1", "slot": "3"}))
 
     body = r.get_json()
-    assert r.status_code == 502 and body["action"] == "quickswap_failed", body
+    assert r.status_code == 409 and body["action"] == "quickswap_failed", body
     assert sm.spools[240]["location"] == "LR-MDB-1", sm.writes
     assert not _logs("Quick-swap: Spool", types={"SUCCESS"}), state.RECENT_LOGS

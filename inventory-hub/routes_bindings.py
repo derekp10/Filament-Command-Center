@@ -728,7 +728,7 @@ def api_quickswap_return():
             "active_toolhead": th,
             "requested": toolhead,
             "error": msg,
-        }), 502
+        }), 409
     if not active_toolhead:
         names = ", ".join(candidate_toolheads) if len(candidate_toolheads) > 1 else candidate_toolheads[0]
         state.add_log_entry(
@@ -870,7 +870,7 @@ def api_quickswap_return():
             "slot": found_slot,
             "error": move_failed,
             "smart_move": move_result,
-        }), 502
+        }), 409
     if not found_slot:
         # The engine picked the slot (none was recorded, or the recorded one was
         # taken): report where the spool actually landed.
@@ -992,7 +992,7 @@ def api_quickswap():
             "toolhead": toolhead, "box": box, "slot": slot,
             "error": move_failed,
             "smart_move": move_result,
-        }), 502
+        }), 409
     state.add_log_entry(
         f"⚡ Quick-swap: Spool #{spool_id} from <b>{box}:SLOT:{slot}</b> → <b>{toolhead}</b>",
         "SUCCESS", "00ff00"
